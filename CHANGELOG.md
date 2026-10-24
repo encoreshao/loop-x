@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The dashboard chat showed "Something went wrong - try again." even though the assistant had answered: the live reply stream (`/activity/chat-stream`) was never served, so the page's connection got a 404. The reply is now streamed as it is written.
+
 ### Added
 
 - The Mac app's Settings window follows the dashboard's Appearance choice: the sidebar and cards take the selected accent (Default, Indigo, Blue, Green, Red, Gray) and the window follows Light, Dark or Auto. The About tab shows the author.

@@ -59,6 +59,15 @@ pub async fn try_serve(
     req: Request<Body>,
 ) -> Result<Response<Body>, Request<Body>> {
     let path = req.uri().path().to_string();
+    // The chat reply stream is a long-lived SSE response, not a page the registry renders.
+    if req.method() == axum::http::Method::GET && path == "/activity/chat-stream" {
+        if !host_allowed(req.headers()) {
+            return Ok(into_response(UiResponse::text(403, "forbidden host")));
+        }
+        return Ok(super::pages::chat::chat_stream_response(
+            req.uri().query().unwrap_or(""),
+        ));
+    }
     if !ui.registry.serves(ui.as_ref(), req.method(), &path) {
         return Err(req);
     }

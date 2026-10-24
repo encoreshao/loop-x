@@ -520,6 +520,29 @@ mod tests {
         assert_eq!(code, 404);
     }
 
+    #[tokio::test]
+    async fn the_chat_reply_stream_is_served() {
+        let d = tempfile::tempdir().unwrap();
+        let jobs = crate::ui::pages::chat::jobs();
+        let key = jobs.create();
+        jobs.append(&key, "Hi");
+        jobs.finish(&key, None, Some("Hi there".into()));
+        let resp = router(state(d.path()))
+            .oneshot(get_req(&format!("/activity/chat-stream?reply_key={key}")))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            200,
+            "the page's EventSource needs this route"
+        );
+        assert_eq!(resp.headers()["content-type"], "text/event-stream");
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("event: chunk"), "{text}");
+        assert!(text.contains("event: done"), "{text}");
+    }
+
     #[test]
     fn token_comparison_is_exact() {
         assert!(constant_time_eq("abc", "abc"));
