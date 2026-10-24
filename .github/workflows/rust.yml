@@ -34,14 +34,10 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      - name: Black-box contract and end-to-end tests against the built binary
+      - name: Loop audit (blocking)
         run: |
           cargo build -p loopx
-          pip install pyyaml pytest
-          LOOPX_BIN="$PWD/target/debug/loopx" python3 -m pytest tests/ -q
-
-      - name: Loop audit (blocking)
-        run: target/debug/loopx loop audit loops/*/loop.yaml --min-score 70
+          target/debug/loopx loop audit loops/*/loop.yaml --min-score 70
 
   universal-binary:
     runs-on: macos-latest

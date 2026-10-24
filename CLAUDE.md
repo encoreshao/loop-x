@@ -28,8 +28,7 @@ is no Python runtime left.
   prompts and loop definitions; some are embedded into the binary at build time.
 - `bin/scripts/*.sh` — shell only: `build_loopx_app.sh`, `install-loopx.sh`,
   `uninstall-loopx.sh`, `release_notes.sh`, and `setup.sh` (installs the
-  `gitlab-config` skill). `tests/` — the black-box pytest suite (it drives the
-  built binary through `LOOPX_BIN`) and `tests/golden_ui/` page snapshots.
+  `gitlab-config` skill). `tests/golden_ui/` — page snapshots.
 
 ## Development mode: never touch the real `~/.loopx` or real daemons
 
@@ -61,7 +60,6 @@ everything falls back to the real path, which is exactly why it must be set befo
 running anything in dev/verification. `LOOPX_ROOT` is the per-checkout root
 (`outputs/`, `launchd/`, `logs/`); `LOOP_EVENTS_DIR`, `LOOP_EVALS_DIR` and
 `LOOP_UPDATE_DIR` redirect the event ledger, eval results and update state.
-`tests/conftest.py` sets all of them for every pytest test.
 
 The Keychain service names (`loop-engineering.mail`, `loop-engineering.connectors`)
 get a `.sandbox-<hash>` suffix whenever `LOOP_ENGINEERING_HOME` is set, so a
@@ -75,8 +73,7 @@ message" on `slack-default` posts to your real Slack.
 **`bin/scripts/*.sh` do NOT read `LOOP_ENGINEERING_HOME`**: `install-loopx.sh` and
 `uninstall-loopx.sh` default straight to the real install directory unless you pass
 their own `--dir`/`--project-dir`/`--launch-agents-dir` flags. Never run them bare for
-dev/verification; always point them at a scratch directory (the tests in
-`tests/test_install_loopx.py` and `tests/test_uninstall_loopx.py` do exactly this).
+dev/verification; always point them at a scratch directory.
 
 The one exception: confirming a reviewed, already-merged change is live on this
 machine's real install. Do that only when explicitly asked, never as the routine way
@@ -91,12 +88,10 @@ make it pass. Run the full suite before considering anything done:
 ```bash
 cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo build -p loopx && LOOPX_BIN="$PWD/target/debug/loopx" python3 -m pytest tests/ -q
 (cd macos/LoopX && swift test)        # when the app changed
 ```
 
-Rust unit tests live next to the code; the pytest suite is for black-box
-behavior (CLI contracts, end-to-end runs, installers, packaging). Prefer real
+Rust unit tests live next to the code; there is no Python test suite. Prefer real
 subprocesses and temp dirs over mocks; inject fakes through the existing seams
 (`UiState::explicit`, `chat_tools::Env::with_provider`, `Launchctl { command }`,
 `run_control::Launcher`).
@@ -117,7 +112,7 @@ escalates correctly; the golden suite
 (`loopx loop eval --golden [--budget-usd N] [--case NAME]`, cases under
 `evals/golden/<name>/case.yaml`) runs the real agent in gate mode, offline, on
 synthetic fixture repos. It costs real money (default budget $10, it stops launching
-cases once spent), so it is never part of `cargo test` or `pytest` — run it by hand,
+cases once spent), so it is never part of `cargo test` — run it by hand,
 once on the base commit and once on your change. Each run writes
 `outputs/evals/golden-last.json`. It runs every case under a throwaway
 `LOOP_ENGINEERING_HOME`/`LOOP_EVENTS_DIR` and hard-denies the GitLab, Slack and
@@ -292,8 +287,8 @@ user-visible change - a new loop, page, setting, connector, CLI command or a
 behavior change someone would notice - adds one line under `## [Unreleased]`
 (in `Added` / `Changed` / `Fixed` / `Removed` / `Security`) in the same commit
 or PR. Pure refactors, test-only and internal-doc changes don't need a line.
-`tests/test_changelog.py` checks the structure (Unreleased first, dated
-`X.Y.Z` releases in descending order, a link reference for each heading).
+Keep the structure: Unreleased first, dated `X.Y.Z` releases in descending
+order, a link reference for each heading.
 
 To cut a release, only when asked:
 

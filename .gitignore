@@ -1,6 +1,5 @@
 __pycache__/
 *.pyc
-.pytest_cache/
 
 # Live run state - personal/instance-specific, never source. Real GitLab
 # issue content and Activity messages live here; keep them out of a public

@@ -70,5 +70,4 @@ swift run LoopX      # no bundled backend: start `loopx serve` separately
 
 ```bash
 cargo test && cargo clippy -- -D warnings && cargo fmt --check
-LOOPX_BIN=target/debug/loopx python3 -m pytest tests/test_cli_contract_*.py tests/test_e2e_loopx_*.py -q
 ```

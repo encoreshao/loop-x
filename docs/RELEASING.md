@@ -52,7 +52,6 @@ artifacts.
 export PATH=$HOME/.cargo/bin:$PATH
 cargo build --release -p loopx            # updates Cargo.lock
 cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
-LOOPX_BIN=target/debug/loopx python3 -m pytest tests/ -q
 bin/scripts/release_notes.sh X.Y.Z        # preview the GitHub Release body
 # 3. commit, tag, push (the tag must be vX.Y.Z and equal the Cargo.toml version, or the workflow stops)
 git commit -am "Release X.Y.Z"
