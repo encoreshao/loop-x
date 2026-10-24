@@ -56,9 +56,10 @@ curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/
 
 Prefer an app? [**Download the latest `LoopX-<version>.dmg`**](https://github.com/encoreshao/loop-x/releases/latest), open it and drag LoopX onto Applications. Or run `brew install encoreshao/tap/loopx`.
 
-**2. Check your setup**
+**2. Check your setup.** The installer puts the binary at `~/.loopx/bin/loopx` and does not change your `PATH`, so add it first (or call it by full path):
 
 ```bash
+echo 'export PATH="$HOME/.loopx/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 loopx doctor
 ```
 
