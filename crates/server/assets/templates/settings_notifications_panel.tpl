@@ -309,6 +309,9 @@
     nameInput.value = name === '__new__' ? '' : name;
     originalNameHidden.value = name === '__new__' ? '' : name;
     notificationKeySelect.value = tmpl.notification_key || '';
+    templateSelect.value = templates[name] ? name : '__new__';
+    templateSelect.dispatchEvent(new Event('loopx:sync'));
+    notificationKeySelect.dispatchEvent(new Event('loopx:sync'));
     renderBlockList();
   }
 
@@ -334,6 +337,8 @@
   nameInput.addEventListener('input', renderPreview);
   notificationKeySelect.addEventListener('change', renderPreview);
 
+  window.loopxCustomSelect(templateSelect);
+  window.loopxCustomSelect(notificationKeySelect);
   loadTemplate('__new__');
 })();
 </script>

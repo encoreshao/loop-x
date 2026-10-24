@@ -1087,6 +1087,9 @@ html .chat-page.is-empty .activity-composer {
   stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.15em; display: inline-block; }
 .nav-icon .icon,
 .section-header .icon { font-size: 18px; }
+/* A pill or button inside a section header keeps its own text colour for its
+   icon - the header's accent colour is unreadable on a dark success/error pill. */
+.section-header :is(.pill, .btn) .icon { color: inherit; }
 .pill .icon { font-size: 14px; }
 .btn .icon { font-size: 16px; }
 .section-header h2 { margin: 0; }
@@ -2501,6 +2504,18 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   flex-shrink: 0;
   color: var(--md-on-surface-variant);
 }
+.block-builder-row .custom-select { flex: 0 0 auto; }
+/* Settings -> Chat tools: one bordered row per write tool - checkbox, a
+   title with the tool id as a chip, and the explanation underneath. */
+.chat-tool-list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.chat-tool-row { border: 0.5px solid color-mix(in srgb, var(--md-outline) 35%, transparent); border-radius: 10px; background: var(--md-surface-container-low); transition: background-color 120ms ease; }
+.chat-tool-row:hover { background: var(--md-surface-container-high); }
+.chat-tool-row .md-checkbox { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.7rem 0.9rem; }
+.chat-tool-row .md-checkbox input { margin-top: 0.15rem; flex-shrink: 0; }
+.chat-tool-text { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.chat-tool-title { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.9rem; color: var(--md-on-surface); }
+.chat-tool-title code { font-size: 0.72rem; font-weight: 500; padding: 0.1rem 0.45rem; border-radius: 999px; background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); }
+.chat-tool-desc { font-size: 0.82rem; line-height: 1.4; color: var(--md-on-surface-variant); }
 .custom-select-menu {
   /* position: fixed (not absolute) so this isn't clipped by .table-wrap's
      scroll boundary - top/left/min-width are computed from the trigger's

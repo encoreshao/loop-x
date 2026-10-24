@@ -1037,5 +1037,13 @@
   "Could not create the worktree root: {error}": "Impossible de créer la racine des worktrees : {error}",
   "Topic History": "Historique des sujets",
   "Every saved topic briefing, most recent first.": "Tous les briefings de sujets enregistrés, du plus récent au plus ancien.",
-  "Briefings": "Briefings"
+  "Briefings": "Briefings",
+  "Create calendar event": "Créer un événement d'agenda",
+  "Adds an event to your Google Calendar and invites the attendees.": "Ajoute un événement à votre Google Agenda et invite les participants.",
+  "Comment on GitHub": "Commenter sur GitHub",
+  "Posts a comment on a GitHub issue or pull request.": "Publie un commentaire sur une issue ou une pull request GitHub.",
+  "Comment on GitLab": "Commenter sur GitLab",
+  "Posts a comment on a GitLab issue.": "Publie un commentaire sur une issue GitLab.",
+  "Send email": "Envoyer un e-mail",
+  "Sends a plain-text email from your Gmail mailbox, to at most 10 recipients.": "Envoie un e-mail en texte brut depuis votre boîte Gmail, à 10 destinataires au maximum."
 }

@@ -55,6 +55,39 @@
       if (trigger) trigger.setAttribute('aria-expanded', 'false');
     });
   }
+  // Turns a native <select> into the same pop-up menu the server-rendered
+  // .custom-select uses, for selects that are filled in by page scripts
+  // (e.g. the Block Kit Builder's). Dispatch 'loopx:sync' on the select after
+  // changing its options or value from script to refresh the menu and label.
+  window.loopxCustomSelect = function(native) {
+    var root = native.parentNode.classList.contains('custom-select') ? native.parentNode : null;
+    if (!root) {
+      root = document.createElement('div');
+      root.className = 'custom-select';
+      native.parentNode.insertBefore(root, native);
+      root.appendChild(native);
+      native.classList.add('custom-select-native');
+      root.insertAdjacentHTML('beforeend',
+        "<button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'>" +
+        "<span class='custom-select-value'></span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button>" +
+        "<div class='custom-select-menu' role='listbox' hidden></div>");
+      native.addEventListener('loopx:sync', function() { window.loopxCustomSelect(native); });
+    }
+    var menu = root.querySelector('.custom-select-menu');
+    menu.textContent = '';
+    var label = '';
+    Array.prototype.forEach.call(native.options, function(opt) {
+      var div = document.createElement('div');
+      div.className = 'custom-select-option' + (opt.value === native.value ? ' is-selected' : '');
+      div.setAttribute('role', 'option');
+      div.tabIndex = -1;
+      div.setAttribute('data-value', opt.value);
+      div.textContent = opt.textContent;
+      if (opt.value === native.value) label = opt.textContent;
+      menu.appendChild(div);
+    });
+    root.querySelector('.custom-select-value').textContent = label;
+  };
   function selectOption(root, option) {
     var native = root.querySelector('.custom-select-native');
     var valueEl = root.querySelector('.custom-select-value');

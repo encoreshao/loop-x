@@ -1037,5 +1037,13 @@
   "Could not create the worktree root: {error}": "ワークツリーのルートを作成できませんでした: {error}",
   "Topic History": "トピック履歴",
   "Every saved topic briefing, most recent first.": "保存されたトピックのブリーフィングを新しい順に表示します。",
-  "Briefings": "ブリーフィング"
+  "Briefings": "ブリーフィング",
+  "Create calendar event": "カレンダーの予定を作成",
+  "Adds an event to your Google Calendar and invites the attendees.": "Google カレンダーに予定を追加し、参加者を招待します。",
+  "Comment on GitHub": "GitHub にコメント",
+  "Posts a comment on a GitHub issue or pull request.": "GitHub の issue またはプルリクエストにコメントを投稿します。",
+  "Comment on GitLab": "GitLab にコメント",
+  "Posts a comment on a GitLab issue.": "GitLab の issue にコメントを投稿します。",
+  "Send email": "メールを送信",
+  "Sends a plain-text email from your Gmail mailbox, to at most 10 recipients.": "Gmail のメールボックスからプレーンテキストのメールを送信します(宛先は最大 10 件)。"
 }

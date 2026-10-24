@@ -108,11 +108,32 @@ pub fn chat_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     let chosen = store::auto_approved(&chat_tools_path(ctx));
     let rows: String = store::CHAT_WRITE_TOOLS
         .iter()
-        .map(|(name, description)| {
+        .map(|(name, _)| {
+            let (title, description) = match *name {
+                "calendar.create_event" => (
+                    ctx.t("Create calendar event"),
+                    ctx.t("Adds an event to your Google Calendar and invites the attendees."),
+                ),
+                "github.comment" => (
+                    ctx.t("Comment on GitHub"),
+                    ctx.t("Posts a comment on a GitHub issue or pull request."),
+                ),
+                "gitlab.comment" => (
+                    ctx.t("Comment on GitLab"),
+                    ctx.t("Posts a comment on a GitLab issue."),
+                ),
+                "mail.send" => (
+                    ctx.t("Send email"),
+                    ctx.t("Sends a plain-text email from your Gmail mailbox, to at most 10 recipients."),
+                ),
+                other => (other.to_string(), String::new()),
+            };
             format!(
-                "<li><label class='md-checkbox'><input type='checkbox' name='auto_approve' value='{n}'{}> <code>{n}</code> <span class='muted'>{}</span></label></li>",
+                "<li class='chat-tool-row'><label class='md-checkbox'><input type='checkbox' name='auto_approve' value='{n}'{}> \
+<span class='chat-tool-text'><span class='chat-tool-title'>{}<code>{n}</code></span><span class='chat-tool-desc'>{}</span></span></label></li>",
                 if chosen.iter().any(|c| c == name) { " checked" } else { "" },
-                pyfmt::escape(description),
+                pyfmt::escape(&title),
+                pyfmt::escape(&description),
                 n = pyfmt::escape(name)
             )
         })

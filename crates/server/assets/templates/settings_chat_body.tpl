@@ -11,7 +11,7 @@
 <div class="section-header"><h2>⟦html.escape(_t('Skip review for these actions'))⟧</h2></div>
 <form method="POST" action="/settings/chat-tools">
 ⟦csrf_input⟧
-<ul class="plain-list">⟦rows⟧</ul>
+<ul class="chat-tool-list">⟦rows⟧</ul>
 <button type="submit" class="btn btn-primary">⟦html.escape(_t('Save'))⟧</button>
 </form>
 </section>

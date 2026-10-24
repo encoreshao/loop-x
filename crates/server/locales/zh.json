@@ -1037,5 +1037,13 @@
   "Could not create the worktree root: {error}": "无法创建工作树根目录:{error}",
   "Topic History": "主题历史",
   "Every saved topic briefing, most recent first.": "按时间倒序显示所有已保存的主题简报。",
-  "Briefings": "简报"
+  "Briefings": "简报",
+  "Create calendar event": "创建日历事件",
+  "Adds an event to your Google Calendar and invites the attendees.": "向你的 Google 日历添加事件并邀请参与者。",
+  "Comment on GitHub": "在 GitHub 上评论",
+  "Posts a comment on a GitHub issue or pull request.": "在 GitHub issue 或拉取请求上发表评论。",
+  "Comment on GitLab": "在 GitLab 上评论",
+  "Posts a comment on a GitLab issue.": "在 GitLab issue 上发表评论。",
+  "Send email": "发送邮件",
+  "Sends a plain-text email from your Gmail mailbox, to at most 10 recipients.": "通过你的 Gmail 邮箱发送纯文本邮件,最多 10 位收件人。"
 }

@@ -39,6 +39,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 - The Mac app's Settings → About tab has an Author card with name and email.
 
+### Fixed
+
+- Settings → Chat tools: each tool has a translated title and description (ja, zh, fr) in a bordered, card-style row.
+- Block Kit Builder dropdowns use the new pop-up menu style.
+- Status pill icons in card headers (GitLab Live, Daily Digest, Meeting Prep) are readable in dark mode.
+
 ## [0.7.0] - 2026-10-24
 
 ### Fixed
