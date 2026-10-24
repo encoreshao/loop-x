@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- The Mac app's Settings window now has tabs (General, Display, Accounts, Command Line, Backend, About) with more detail: startup and scheduler notes, the command line link and its target, backend address, version and pid, the data folder with Reveal in Finder and Open Logs, app and loopx versions, and project links.
 - The Mac app's menu bar has **Loops**, **Observe** and **System** menus (mirroring the dashboard sidebar, plus direct entries for Logs, History, Cost, Budget, Memory, Daemons and Skills) and a **Developer** menu (reload, back/forward, Web Inspector, open in browser, copy URL, reveal `~/.loopx`, install the command line tool, and links to the GitHub repository, releases and issues). The same page menus are in the status icon's menu.
 
 ## [0.6.0] - 2026-10-24
