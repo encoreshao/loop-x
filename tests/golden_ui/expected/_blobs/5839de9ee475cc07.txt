@@ -1098,6 +1098,8 @@ html .chat-page.is-empty .activity-composer {
   vertical-align: middle;
   user-select: none;
 }
+.icon { width: 1em; height: 1em; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75;
+  stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.15em; display: inline-block; }
 .nav-icon .material-symbols-outlined,
 .section-header .material-symbols-outlined { font-size: 18px; }
 .pill .material-symbols-outlined { font-size: 14px; }
