@@ -699,12 +699,7 @@ fn inbox_action(ctx: &UiCtx) -> UiResponse {
     };
     let label = s(&inbox, "label");
     match verb {
-        "connect" if s(&inbox, "provider") == "google" => google_connect(ctx, name, &inbox),
-        "connect" => UiResponse::flash_redirect(
-            false,
-            &ctx.tf("{label}: Outlook sign-in isn't available yet - connect a Gmail inbox for now", &[("label", &label)]),
-            INBOXES_TAB,
-        ),
+        "connect" => connect(ctx, name, &inbox),
         "test" => test_connection(ctx, &inbox),
         "pause" => {
             let (ok, message) = inbox_config::set_enabled(name, !enabled(&inbox), &config_path);
@@ -727,6 +722,21 @@ fn inbox_action(ctx: &UiCtx) -> UiResponse {
             UiResponse::flash_redirect(ok, &message, INBOXES_TAB)
         }
     }
+}
+
+/// `POST /inbox/inboxes/<name>/connect`: Gmail signs in through Google; Outlook is not built yet.
+fn connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
+    if s(inbox, "provider") == "gmail" {
+        return google_connect(ctx, name, inbox);
+    }
+    UiResponse::flash_redirect(
+        false,
+        &ctx.tf(
+            "{label}: Outlook sign-in isn't available yet - connect a Gmail inbox for now",
+            &[("label", &s(inbox, "label"))],
+        ),
+        INBOXES_TAB,
+    )
 }
 
 /// Pending-state kind for a Gmail inbox sign-in.
@@ -822,4 +832,47 @@ fn test_connection(ctx: &UiCtx, inbox: &Value) -> UiResponse {
         Ok(address) => (true, ctx.tf("{label}: connected as {address}", &[("label", &label), ("address", &address)])),
     };
     UiResponse::flash_redirect(ok, &message, INBOXES_TAB)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+    use crate::ui::state::UiState;
+
+    fn sandbox() -> (tempfile::TempDir, UiState) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mail_oauth.json"),
+            r#"{"google":{"client_id":"cid","client_secret":"cs"}}"#,
+        )
+        .unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        (dir, state)
+    }
+
+    #[test]
+    fn connect_on_a_gmail_inbox_goes_to_google_with_the_gmail_scope() {
+        let (_dir, state) = sandbox();
+        let req = UiRequest::get("/").with_header("host", "127.0.0.1:8420");
+        let inbox = json!({"name": "work", "label": "Work", "provider": "gmail", "account": "me@example.com"});
+        let resp = connect(&UiCtx::new(&state, &req), "work", &inbox);
+        assert_eq!(resp.status, 303);
+        let location = resp.header("Location").unwrap().to_string();
+        assert!(location.starts_with("https://accounts.google.com/"), "{location}");
+        assert!(location.contains("gmail.modify"), "{location}");
+        assert!(location.contains("login_hint=me%40example.com"), "{location}");
+        assert!(location.contains("127.0.0.1%3A8420%2Foauth%2Fgoogle%2Fcallback"), "{location}");
+    }
+
+    #[test]
+    fn connect_on_an_outlook_inbox_says_it_is_not_available() {
+        let (_dir, state) = sandbox();
+        let req = UiRequest::get("/");
+        let inbox = json!({"name": "o", "label": "Outlook", "provider": "outlook", "account": "me@example.com"});
+        let resp = connect(&UiCtx::new(&state, &req), "o", &inbox);
+        let location = resp.header("Location").unwrap_or_default().to_string();
+        assert!(location.contains("flash"), "{location}");
+        assert!(!location.contains("accounts.google.com"), "{location}");
+    }
 }
