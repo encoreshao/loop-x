@@ -1,0 +1,6 @@
+html.escape(_t('Skills'))
+html.escape(_t('External skills this loop depends on, and whether each is installed on this machine. Click a row for details.'))
+flash_html
+_SECTION_ICON_SKILLS
+html.escape(_t('Required skills'))
+skills_html

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.loop-engineering-dashboard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{LOOPX}}</string>
+    <string>serve</string>
+    <string>--port</string>
+    <string>{{PORT}}</string>
+    <string>--no-legacy</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LOOP_ENGINEERING_HOME</key>
+    <string>{{LOOP_DIR}}</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:{{HOME}}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>{{LOOP_DIR}}/outputs/history/dashboard.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOOP_DIR}}/outputs/history/dashboard.err.log</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+</dict>
+</plist>

@@ -1,0 +1,50 @@
+{
+  "run_id": "run_20260114_120000",
+  "loop_id": "loop_20260114_120000",
+  "definition_name": "<b>odd & loop</b>",
+  "final_state": "failed",
+  "stop_reason": "max_iterations",
+  "iterations": [
+    {
+      "iteration": 1,
+      "state": "failed",
+      "verification_results": [
+        {
+          "name": "tests",
+          "passed": true,
+          "evidence": {
+            "observed_passed": false
+          }
+        },
+        {
+          "name": "lint",
+          "passed": false,
+          "evidence": {}
+        }
+      ],
+      "budget": {
+        "cost": {
+          "used_usd": 0.5
+        },
+        "runtime": {
+          "used_seconds": 60
+        },
+        "overall": "ok"
+      }
+    },
+    {
+      "iteration": 2,
+      "state": "failed",
+      "verification_results": [],
+      "budget": {
+        "cost": {
+          "used_usd": 0.5
+        },
+        "runtime": {
+          "used_seconds": 60
+        },
+        "overall": "ok"
+      }
+    }
+  ]
+}

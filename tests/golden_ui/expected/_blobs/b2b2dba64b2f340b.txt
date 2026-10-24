@@ -1,0 +1,1070 @@
+
+window.__loopTextReveal = function(onRender) {
+  var target = '', shown = 0, frame = null, onDone = null;
+  var reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  function settle() {
+    if (shown < target.length) { shown = target.length; onRender(target); }
+    if (onDone) { var cb = onDone; onDone = null; cb(); }
+  }
+  function tick() {
+    frame = null;
+    var backlog = target.length - shown;
+    if (backlog <= 0) { settle(); return; }
+    shown += Math.max(1, Math.ceil(backlog / 40));
+    onRender(target.slice(0, shown));
+    frame = window.requestAnimationFrame(tick);
+  }
+  function kick() {
+    if (reduce || document.hidden) { if (frame) { window.cancelAnimationFrame(frame); frame = null; } settle(); return; }
+    if (!frame) frame = window.requestAnimationFrame(tick);
+  }
+  return {
+    set: function(full) { target = full; kick(); },
+    finish: function(cb) { onDone = cb; kick(); },
+    stop: function() { if (frame) window.cancelAnimationFrame(frame); frame = null; onDone = null; }
+  };
+};
+
+
+window.__loopToolLabels = {"gitlab.read_issue": "Lecture du ticket", "gitlab.list_issues": "Liste des tickets", "gitlab.comment": "Commentaire sur le ticket", "github.read_issue": "Lecture du ticket", "github.read_pr": "Lecture de la pull request", "github.comment": "Commentaire en cours", "rss.read_feed": "Lecture du flux", "calendar.list_events": "Lecture de l'agenda", "mail.search": "Recherche de courriels", "mail.read": "Lecture du courriel", "mail.send": "Envoi du courriel", "calendar.create_event": "Cr\u00e9ation de l'\u00e9v\u00e9nement", "docs.save": "Enregistrement du document"};
+window.__loopToolStatusText = "Analyse des r\u00e9sultats\u2026";
+window.__loopToolChips = function(host, getSession) {
+  var chips = {};
+  var row = null;
+  var status = null;
+  // Once every call has returned, the model still has to read the data and
+  // write the reply - a quiet gap. This line (hidden by CSS as soon as reply
+  // text appears) shows that work is happening. textContent only.
+  function setStatus(on) {
+    if (!row) return;
+    if (!on) { if (status) { status.remove(); status = null; } return; }
+    if (status) { row.appendChild(status); return; }
+    status = document.createElement('div');
+    status.className = 'tool-status';
+    status.setAttribute('role', 'status');
+    var sIcon = document.createElement('span');
+    sIcon.className = 'material-symbols-outlined tool-status-icon';
+    sIcon.setAttribute('aria-hidden', 'true');
+    sIcon.textContent = 'auto_awesome';
+    var sText = document.createElement('span');
+    sText.className = 'tool-status-text';
+    sText.textContent = window.__loopToolStatusText;
+    status.appendChild(sIcon);
+    status.appendChild(sText);
+    row.appendChild(status);
+  }
+  return function(ev) {
+    if (!ev || typeof ev !== 'object') return;
+    var chip = chips[ev.id];
+    if (ev.kind === 'start') {
+      setStatus(false);
+      if (!row) {
+        var container = typeof host === 'function' ? host() : host;
+        if (!container) return;
+        row = document.createElement('div');
+        row.className = 'tool-chips';
+        var anchor = container.querySelector('.message-text');
+        if (anchor && anchor.parentNode === container) container.insertBefore(row, anchor);
+        else container.insertBefore(row, container.firstChild);
+      }
+      chip = document.createElement('span');
+      chip.className = 'tool-chip tool-chip-run';
+      var icon = document.createElement('span');
+      icon.className = 'material-symbols-outlined tool-chip-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.textContent = 'autorenew';
+      var text = document.createElement('span');
+      text.className = 'tool-chip-text';
+      text.textContent = (window.__loopToolLabels[ev.name] || ev.name) + (ev.summary ? ' \u00b7 ' + ev.summary : '');
+      chip.appendChild(icon);
+      chip.appendChild(text);
+      chips[ev.id] = chip;
+      row.appendChild(chip);
+    } else if (ev.kind === 'result' && chip) {
+      chip.className = 'tool-chip ' + (ev.ok ? 'tool-chip-ok' : 'tool-chip-err');
+      chip.querySelector('.tool-chip-icon').textContent = ev.ok ? 'check_circle' : 'error';
+      var running = row.querySelector('.tool-chip-run');
+      setStatus(!running);
+    } else if (ev.kind === 'pending' && row && window.__loopPendingCard) {
+      row.parentNode.insertBefore(window.__loopPendingCard(ev, getSession ? getSession() : ''), row.nextSibling);
+    }
+  };
+};
+
+
+window.__loopPendingCard = function(ev, session) {
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text) node.textContent = text;
+    return node;
+  }
+  function icon(name) {
+    var node = el('span', 'material-symbols-outlined', name);
+    node.setAttribute('aria-hidden', 'true');
+    return node;
+  }
+  var card = el('div', 'pending-card');
+  card.setAttribute('data-pending-id', String(ev.pending_id || ''));
+  card.setAttribute('data-pending-session', String(session || ''));
+  var head = el('div', 'pending-card-head');
+  head.appendChild(icon('schedule'));
+  head.appendChild(el('span', '', "En attente de votre approbation"));
+  card.appendChild(head);
+  card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
+  if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
+  card.appendChild(el('pre', 'pending-card-args', JSON.stringify(ev.args || {}, null, 2)));
+  var actions = el('div', 'pending-card-actions');
+  var approve = el('button', 'btn btn-primary');
+  approve.type = 'button';
+  approve.setAttribute('data-pending-approve', '');
+  approve.appendChild(icon('check'));
+  approve.appendChild(document.createTextNode("Approuver"));
+  var reject = el('button', 'btn btn-neutral');
+  reject.type = 'button';
+  reject.setAttribute('data-pending-reject', '');
+  reject.appendChild(icon('close'));
+  reject.appendChild(document.createTextNode("Rejeter"));
+  actions.appendChild(approve);
+  actions.appendChild(reject);
+  card.appendChild(actions);
+  var status = el('div', 'pending-card-status');
+  status.setAttribute('aria-live', 'polite');
+  card.appendChild(status);
+  return card;
+};
+if (!window.__loopPendingCardClicks) {
+  window.__loopPendingCardClicks = true;
+  document.addEventListener('click', function(ev) {
+    var target = ev.target;
+    var button = target && target.closest ? target.closest('[data-pending-approve], [data-pending-reject]') : null;
+    if (!button) return;
+    var card = button.closest('.pending-card');
+    if (!card || card.getAttribute('data-busy') === '1') return;
+    var approving = button.hasAttribute('data-pending-approve');
+    var status = card.querySelector('.pending-card-status');
+    var buttons = card.querySelectorAll('.pending-card-actions button');
+    var token = document.querySelector("input[name='csrf_token']");
+    var params = new URLSearchParams();
+    params.set('id', card.getAttribute('data-pending-id') || '');
+    params.set('session', card.getAttribute('data-pending-session') || '');
+    params.set('csrf_token', token ? token.value : '');
+    card.setAttribute('data-busy', '1');
+    buttons.forEach(function(b) { b.disabled = true; });
+    fetch(approving ? '/activity/chat/approve' : '/activity/chat/reject', { method: 'POST', body: params })
+      .then(function(response) { return response.json(); })
+      .then(function(data) {
+        var ok = data && data.ok;
+        if (status) status.textContent = ok ? (approving ? "Approuv\u00e9." : "Rejet\u00e9.") : ((data && data.error) || "Une erreur s'est produite - r\u00e9essayez.");
+        card.classList.add('is-handled');
+        var actions = card.querySelector('.pending-card-actions');
+        if (actions) actions.remove();
+        card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
+      })
+      .catch(function() {
+        if (status) status.textContent = "Une erreur s'est produite - r\u00e9essayez.";
+        card.removeAttribute('data-busy');
+        buttons.forEach(function(b) { b.disabled = false; });
+      });
+  });
+}
+
+(function() {
+  if (localStorage.getItem('loop-dashboard-sidebar') === '1') {
+    document.documentElement.classList.add('collapsed');
+  }
+  // AI side panel (see _ai_panel_html): reopen it, at its saved width,
+  // before first paint so navigating between pages never flashes it shut.
+  try {
+    if (localStorage.getItem('loop-ai-panel-open') === '1') {
+      document.documentElement.classList.add('ai-panel-open');
+    }
+    var aiPanelWidth = parseInt(localStorage.getItem('loop-ai-panel-width'), 10);
+    if (aiPanelWidth >= 320 && aiPanelWidth <= 720) {
+      document.documentElement.style.setProperty('--ai-panel-width', aiPanelWidth + 'px');
+    }
+  } catch (e) {}
+  // Settings page's Appearance tab (see render_general_settings_page): color mode stays
+  // absent for "Auto" - only an explicit light/dark choice ever gets
+  // written here, so @media (prefers-color-scheme) in _STYLE keeps
+  // driving the "Auto" case untouched. Accent and font both always get
+  // set (defaulting to 'default'/'roboto' - today's original look - when
+  // nothing's been chosen yet), since every choice for either, including
+  // the defaults, is its own named CSS attribute selector with no
+  // "absence" branch.
+  var colorMode = localStorage.getItem('loop-dashboard-color-mode');
+  if (colorMode === 'light' || colorMode === 'dark') {
+    document.documentElement.setAttribute('data-color-mode', colorMode);
+  }
+  var accent = localStorage.getItem('loop-dashboard-accent');
+  document.documentElement.setAttribute('data-accent', accent || 'indigo');
+  var font = localStorage.getItem('loop-dashboard-font');
+  document.documentElement.setAttribute('data-font', font || 'roboto');
+  var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
+  (function __loopScheduleRefresh() {
+    setTimeout(function() {
+      if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
+      var indicator = document.getElementById('gitlab-refresh-indicator');
+      if (indicator) { indicator.style.display = ''; }
+      Promise.all(Array.prototype.map.call(
+        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
+      )).then(function() {
+        if (indicator) { indicator.style.display = 'none'; }
+        __loopScheduleRefresh();
+      });
+    }, refreshSeconds * 1000);
+  })();
+})();
+(function() {
+  document.addEventListener('DOMContentLoaded', function() {
+    var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
+    var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
+    var el = document.getElementById('refresh-note-text');
+    if (el) el.textContent = "actualisation auto toutes les {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
+  });
+})();
+(function() {
+  function closeAll(except) {
+    document.querySelectorAll('.custom-select.is-open').forEach(function(root) {
+      if (root === except) return;
+      root.classList.remove('is-open');
+      var menu = root.querySelector('.custom-select-menu');
+      if (menu) menu.hidden = true;
+      var trigger = root.querySelector('.custom-select-trigger');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+  function selectOption(root, option) {
+    var native = root.querySelector('.custom-select-native');
+    var valueEl = root.querySelector('.custom-select-value');
+    root.querySelectorAll('.custom-select-option').forEach(function(o) { o.classList.remove('is-selected'); });
+    option.classList.add('is-selected');
+    if (native) {
+      native.value = option.getAttribute('data-value');
+      // Setting .value in JS never fires a native 'change' event, so any
+      // onchange="..." attribute on the <select> itself (e.g. the schedule
+      // editor's frequency dropdown) would otherwise never run when picked
+      // through this custom UI - only via direct keyboard/native use.
+      native.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (valueEl) valueEl.textContent = option.textContent;
+  }
+  document.addEventListener('click', function(ev) {
+    var trigger = ev.target.closest('.custom-select-trigger');
+    if (trigger) {
+      var root = trigger.closest('.custom-select');
+      var wasOpen = root.classList.contains('is-open');
+      closeAll(root);
+      root.classList.toggle('is-open', !wasOpen);
+      var menu = root.querySelector('.custom-select-menu');
+      if (menu) {
+        if (!wasOpen) {
+          var rect = trigger.getBoundingClientRect();
+          menu.style.top = (rect.bottom + 4) + 'px';
+          menu.style.left = rect.left + 'px';
+          menu.style.width = rect.width + 'px';
+          // Move focus into the listbox itself (selected option, or the
+          // first one) - without this, a keyboard user who opens the menu
+          // via Enter/Space has no way to reach the options at all, since
+          // the real <select> behind them is display:none and the options
+          // themselves aren't in the tab order until the menu is open.
+          var toFocus = menu.querySelector('.is-selected') || menu.querySelector('.custom-select-option');
+          if (toFocus) toFocus.focus();
+        }
+        menu.hidden = wasOpen;
+      }
+      trigger.setAttribute('aria-expanded', String(!wasOpen));
+      return;
+    }
+    var option = ev.target.closest('.custom-select-option');
+    if (option) {
+      selectOption(option.closest('.custom-select'), option);
+      closeAll(null);
+      return;
+    }
+    if (!ev.target.closest('.custom-select')) closeAll(null);
+  });
+  // Tabbing away from an open menu (rather than clicking outside, or
+  // Escape) reached no code path at all before this - the menu would stay
+  // open, detached from whatever now has focus.
+  document.addEventListener('focusout', function(ev) {
+    var root = ev.target.closest && ev.target.closest('.custom-select');
+    if (!root) return;
+    setTimeout(function() {
+      if (!root.contains(document.activeElement)) closeAll(null);
+    }, 0);
+  });
+  document.addEventListener('keydown', function(ev) {
+    var option = ev.target.closest('.custom-select-option');
+    if (option) {
+      var root = option.closest('.custom-select');
+      var trigger = root.querySelector('.custom-select-trigger');
+      var opts = Array.prototype.slice.call(root.querySelectorAll('.custom-select-option'));
+      var idx = opts.indexOf(option);
+      if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        (opts[idx + 1] || opts[0]).focus();
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        (opts[idx - 1] || opts[opts.length - 1]).focus();
+      } else if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        selectOption(root, option);
+        closeAll(null);
+        if (trigger) trigger.focus();
+      } else if (ev.key === 'Escape') {
+        ev.preventDefault();
+        closeAll(null);
+        if (trigger) trigger.focus();
+      } else if (ev.key === 'Tab') {
+        closeAll(null);
+      }
+      return;
+    }
+    var trigger = ev.target.closest('.custom-select-trigger');
+    if (trigger && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')) {
+      var root = trigger.closest('.custom-select');
+      if (!root.classList.contains('is-open')) {
+        ev.preventDefault();
+        trigger.click();
+      }
+      return;
+    }
+    if (ev.key === 'Escape') closeAll(null);
+  });
+  // The schedule editor's Daily/Weekly/Monthly frequency dropdown toggles
+  // which of its own sibling controls (the weekday checkboxes vs. the
+  // day-of-month dropdown) are visible - delegated the same way every
+  // other interactive bit on this page is, rather than an inline
+  // onchange="..." attribute, since picking a custom-dropdown option only
+  // fires a real 'change' event on the underlying native <select> (see
+  // selectOption above), which this listener catches either way.
+  document.addEventListener('change', function(ev) {
+    var select = ev.target.closest("select[name='frequency']");
+    if (!select) return;
+    var form = select.closest('form');
+    if (!form) return;
+    var freq = select.value.toLowerCase();
+    var weekly = form.querySelector('.weekly-controls');
+    var monthly = form.querySelector('.monthly-controls');
+    var hourly = form.querySelector('.hourly-controls');
+    var time = form.querySelector('.time-control');
+    if (weekly) weekly.style.display = (freq === 'weekly') ? '' : 'none';
+    if (monthly) monthly.style.display = (freq === 'monthly') ? '' : 'none';
+    if (hourly) hourly.style.display = (freq === 'hourly') ? '' : 'none';
+    if (time) time.style.display = (freq === 'hourly') ? 'none' : '';
+  });
+})();
+(function() {
+  // Deferred to DOMContentLoaded because this whole <script> block is
+  // emitted in <head> (see _render_shell), before #activity-composer-form
+  // and #activity-message-list exist further down the rendered page -
+  // looking them up eagerly here would always find null and the guard
+  // below would silently no-op on every page load, matching the pattern
+  // already used elsewhere in this file (e.g. the topbar-page-title and
+  // data-lazy-load blocks).
+  document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('activity-composer-form');
+    var list = document.getElementById('activity-message-list');
+    if (!form || !list) return;
+
+    // The Dashboard thread scrolls with the main card (#main-scroll, see
+    // .main-scroll), not inside its own panel, so "bottom" means the
+    // card's bottom.
+    var chatPage = document.querySelector('.chat-page');
+    var scroller = document.getElementById('main-scroll');
+    function scrollToBottom() {
+      scroller.scrollTo(0, scroller.scrollHeight);
+    }
+    // Saved-document links (/chat-docs/<name>) open in the right-hand panel
+    // rather than downloading; the panel's own button still downloads.
+    // Server-rendered, sanitized markdown goes in via innerHTML; the title is
+    // link text, set via textContent.
+    var docPanel = document.getElementById('doc-panel');
+    if (docPanel) {
+      var docRoot = document.documentElement;
+      var docTitle = docPanel.querySelector('[data-doc-title]');
+      var docBody = docPanel.querySelector('[data-doc-body]');
+      var docDownload = docPanel.querySelector('[data-doc-download]');
+      var docFailed = "Impossible de charger le document.";
+      var docCopy = docPanel.querySelector('[data-doc-copy]');
+      var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon]');
+      var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
+      var docCopyText = docCopyLabel.textContent;
+      var docCopiedText = "Copi\u00e9";
+      var docRaw = '';
+      var docCopyTimer = null;
+      function resetCopy() {
+        clearTimeout(docCopyTimer);
+        docCopyIcon.textContent = 'content_copy';
+        docCopyLabel.textContent = docCopyText;
+      }
+      docCopy.addEventListener('click', function() {
+        // Raw markdown, so pasting elsewhere keeps the document's own formatting.
+        var text = docRaw || docBody.innerText;
+        var done = function() {
+          docCopyIcon.textContent = 'check';
+          docCopyLabel.textContent = docCopiedText;
+          clearTimeout(docCopyTimer);
+          docCopyTimer = setTimeout(resetCopy, 1800);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function() {});
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { if (document.execCommand('copy')) done(); } catch (e) {}
+          document.body.removeChild(ta);
+        }
+      });
+      function closeDoc() { docRoot.classList.remove('doc-panel-open'); }
+      docPanel.querySelector('[data-doc-close]').addEventListener('click', closeDoc);
+      document.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') closeDoc(); });
+      document.addEventListener('click', function(ev) {
+        var link = ev.target.closest && ev.target.closest('a[href^="/chat-docs/"]');
+        if (!link || !link.closest('.chat-thread') || ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+        ev.preventDefault();
+        var href = link.getAttribute('href');
+        docTitle.textContent = link.textContent.trim() || href.split('/').pop();
+        docDownload.setAttribute('href', href);
+        docDownload.setAttribute('download', href.split('/').pop());
+        docBody.textContent = '';
+        docRaw = '';
+        resetCopy();
+        docRoot.classList.add('doc-panel-open');
+        fetch(href).then(function(r) { return r.ok ? r.text() : ''; })
+          .then(function(raw) { docRaw = raw; }).catch(function() {});
+        fetch(href + '?fragment=1').then(function(r) {
+          if (!r.ok) throw new Error(r.status);
+          return r.text();
+        }).then(function(markup) { docBody.innerHTML = markup; })
+          .catch(function() { docBody.textContent = docFailed; });
+      });
+    }
+
+    // Open on the most recent messages, not the top of a long thread.
+    if (!chatPage || !chatPage.classList.contains('is-empty')) scrollToBottom();
+
+    // Suggestion chips pre-fill the composer rather than sending, so a
+    // chip like "Run an issue" can never kick off a real run by itself -
+    // the user still reviews/completes the text and presses send.
+    var composerTextarea = form.querySelector("[name='text']");
+    function autoGrow() {
+      if (!composerTextarea) return;
+      composerTextarea.style.height = 'auto';
+      composerTextarea.style.height = composerTextarea.scrollHeight + 'px';
+    }
+    if (composerTextarea) composerTextarea.addEventListener('input', autoGrow);
+    form.querySelectorAll('[data-chat-suggestion]').forEach(function(chip) {
+      chip.addEventListener('click', function() {
+        if (!composerTextarea) return;
+        composerTextarea.value = chip.getAttribute('data-chat-suggestion');
+        autoGrow();
+        composerTextarea.focus();
+        composerTextarea.setSelectionRange(composerTextarea.value.length, composerTextarea.value.length);
+      });
+    });
+
+    // .activity-composer is pinned to the viewport bottom (see that CSS
+    // rule) so the input box is always visible without scrolling - this
+    // keeps .activity-messages-grid's reserved margin-bottom equal to the
+    // composer's actual rendered height, instead of a guessed constant
+    // that goes stale (and starts hiding the last message(s) behind the
+    // composer) the moment the composer's height changes - dragging the
+    // textarea's resize handle taller, the window resizing, or the
+    // sidebar collapsing/expanding all change that height.
+    var composer = document.querySelector('.activity-composer');
+    var messagesGrid = document.querySelector('.activity-messages-grid');
+    if (composer && messagesGrid) {
+      var syncComposerSpacing = function() {
+        messagesGrid.style.marginBottom = (composer.offsetHeight + 24) + 'px';
+      };
+      syncComposerSpacing();
+      if (window.ResizeObserver) {
+        new ResizeObserver(syncComposerSpacing).observe(composer);
+      } else {
+        window.addEventListener('resize', syncComposerSpacing);
+      }
+    }
+
+    function appendBubble(className, whoHtml, text) {
+      var ul = list.querySelector('.message-list');
+      if (!ul) {
+        ul = document.createElement('ul');
+        ul.className = 'message-list';
+        list.innerHTML = '';
+        list.appendChild(ul);
+      }
+      var li = document.createElement('li');
+      li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
+      li.innerHTML =
+        "<div class='message-bubble " + className + "'>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u00e0 l&#x27;instant" + "</span></div>" +
+        "<div class='message-text'></div>" +
+        "</div>";
+      li.querySelector('.message-text').textContent = text;
+      ul.appendChild(li);
+      scrollToBottom();
+      return li.querySelector('.message-text');
+    }
+
+    // A bubble built by appendBubble above is a plain-text placeholder for
+    // a message that isn't persisted yet - it never gets markdown
+    // formatting or a delete button, since building those client-side
+    // would duplicate render_markdown and the delete-form markup in JS.
+    // This instead re-fetches '/activity/messages/fragment' - the exact
+    // same server-rendered markup render_overview_page uses - and swaps
+    // it in wholesale, once the message it's waiting on is actually saved
+    // (see the two call sites below: right after the user's own message
+    // is persisted, and again once the reply finishes streaming).
+    // Which chat session this page is showing - '' for a new chat until
+    // the server assigns an id on the first send (see POST /activity/chat).
+    var sessionInput = form.querySelector("input[name='session']");
+    function sessionQuery() {
+      return '?session=' + encodeURIComponent(sessionInput ? sessionInput.value : '');
+    }
+    // The history drawer's list: refreshed after sends so a new session
+    // shows up, and again a little later for its AI title, which is
+    // generated in the background after the first reply.
+    function refreshHistory() {
+      var historyList = document.getElementById('chat-history-list');
+      if (!historyList) return;
+      fetch('/activity/sessions/fragment' + sessionQuery())
+        .then(function(response) { return response.text(); })
+        .then(function(responseHtml) { historyList.innerHTML = responseHtml; });
+    }
+
+    function refreshMessageList() {
+      return fetch('/activity/messages/fragment' + sessionQuery())
+        .then(function(response) { return response.text(); })
+        .then(function(responseHtml) {
+          list.innerHTML = responseHtml;
+          scrollToBottom();
+        });
+    }
+
+    // Per-message actions, delegated on the list because
+    // refreshMessageList swaps its whole innerHTML after every send.
+    // Copy writes the rendered HTML (text/html, so pasting into Slack/Docs
+    // keeps bold, lists, code) alongside the raw markdown (text/plain,
+    // from data-raw). navigator.clipboard only exists in a secure context -
+    // a dashboard reached over plain http through nginx has none - so the
+    // fallback selects a rendered copy and uses execCommand('copy'), which
+    // still carries the formatting.
+    function copyMessage(textEl) {
+      var raw = textEl.getAttribute('data-raw') || textEl.innerText;
+      var richHtml = textEl.innerHTML;
+      if (navigator.clipboard && window.ClipboardItem && window.isSecureContext) {
+        return navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([richHtml], { type: 'text/html' }),
+          'text/plain': new Blob([raw], { type: 'text/plain' })
+        })]);
+      }
+      return new Promise(function(resolve, reject) {
+        var holder = document.createElement('div');
+        holder.innerHTML = richHtml;
+        holder.style.position = 'fixed';
+        holder.style.left = '-9999px';
+        document.body.appendChild(holder);
+        var range = document.createRange();
+        range.selectNodeContents(holder);
+        var selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) {}
+        selection.removeAllRanges();
+        holder.remove();
+        ok ? resolve() : reject();
+      });
+    }
+
+    function flashIcon(button, iconName) {
+      var icon = button.querySelector('.material-symbols-outlined');
+      if (!icon) return;
+      var original = icon.textContent;
+      icon.textContent = iconName;
+      button.classList.add('is-done');
+      setTimeout(function() { icon.textContent = original; button.classList.remove('is-done'); }, 1500);
+    }
+
+    // Editing a sent message re-asks: the edited text goes out through
+    // the composer's normal submit path (live reply and all) as a new
+    // turn, and the original stays in the thread untouched.
+    function openEditor(row) {
+      var bubble = row.querySelector('.message-bubble');
+      var textEl = row.querySelector('.message-text');
+      if (!bubble || !textEl || row.querySelector('.message-edit-form')) return;
+      row.classList.add('is-editing');
+      var editor = document.createElement('form');
+      editor.className = 'message-edit-form';
+      editor.innerHTML =
+        "<textarea class='message-edit-input' aria-label='" + "Modifier le message" + "'></textarea>" +
+        "<div class='message-edit-actions'>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Annuler" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "Envoyer" + "</button>" +
+        "</div>";
+      var editInput = editor.querySelector('textarea');
+      editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
+      bubble.after(editor);
+      function close() { editor.remove(); row.classList.remove('is-editing'); }
+      function grow() { editInput.style.height = 'auto'; editInput.style.height = editInput.scrollHeight + 'px'; }
+      editInput.addEventListener('input', grow);
+      editInput.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Escape') { close(); }
+        if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); editor.requestSubmit ? editor.requestSubmit() : editor.dispatchEvent(new Event('submit', { cancelable: true })); }
+      });
+      editor.querySelector('[data-edit-cancel]').addEventListener('click', close);
+      editor.addEventListener('submit', function(ev) {
+        ev.preventDefault();
+        var edited = editInput.value.trim();
+        if (!edited) return;
+        close();
+        composerTextarea.value = edited;
+        form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true }));
+      });
+      grow();
+      editInput.focus();
+      editInput.setSelectionRange(editInput.value.length, editInput.value.length);
+    }
+
+    // An approval card was handled (see _CHAT_PENDING_CARD_JS): reload the
+    // thread for its follow-up message - unless a reply is still streaming,
+    // whose own done handler reloads it.
+    list.addEventListener('loop-chat-refresh', function() {
+      if (!window.__loopActivityChatStreaming) refreshMessageList();
+    });
+
+    list.addEventListener('click', function(ev) {
+      var copyBtn = ev.target.closest('[data-copy-message]');
+      if (copyBtn) {
+        var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
+        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); }, function() { flashIcon(copyBtn, 'error'); });
+        return;
+      }
+      var editBtn = ev.target.closest('[data-edit-message]');
+      if (editBtn) openEditor(editBtn.closest('.message-row'));
+    });
+
+    var composerInput = form.querySelector("[name='text']");
+    if (composerInput) {
+      // Textarea default is a literal newline on Enter; match the old
+      // single-line input's submit-on-Enter behavior and reserve
+      // Shift+Enter for an actual line break.
+      composerInput.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter' && !ev.shiftKey) {
+          ev.preventDefault();
+          form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true }));
+        }
+      });
+    }
+
+    form.addEventListener('submit', function(ev) {
+      ev.preventDefault();
+      var input = form.querySelector("[name='text']");
+      var button = form.querySelector("button[type='submit']");
+      var text = input.value.trim();
+      if (!text) return;
+      var csrfToken = form.querySelector("input[name='csrf_token']").value;
+
+      // First message of an empty thread: leave the centered hero for
+      // the session layout (thread + composer pinned to the bottom).
+      if (chatPage) chatPage.classList.remove('is-empty');
+      appendBubble('message-bubble-user', "<span class='k'>" + "Vous" + "</span>", text);
+      input.value = '';
+      autoGrow();
+      button.disabled = true;
+
+      // The same "Thinking..." indicator as the AI panel (_AI_THINKING_HTML)
+      // until the reply's first words arrive; then the reply bubble takes
+      // its place, with a blinking caret while it's still streaming.
+      function appendPendingLoopBubble() {
+        var ul = list.querySelector('.message-list');
+        if (!ul) {
+          ul = document.createElement('ul');
+          ul.className = 'message-list';
+          list.innerHTML = '';
+          list.appendChild(ul);
+        }
+        var thinking = document.createElement('li');
+        thinking.className = 'message-row message-row-loop ai-thinking-row';
+        thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><span class='material-symbols-outlined' aria-hidden='true'>auto_awesome</span></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
+        thinking.querySelector('.ai-thinking-label').textContent = "R\u00e9flexion\u2026";
+        ul.appendChild(thinking);
+        scrollToBottom();
+        var textEl = null;
+        var caret = document.createElement('span');
+        caret.className = 'ai-stream-caret';
+        caret.setAttribute('aria-hidden', 'true');
+        return {
+          show: function(value, streaming) {
+            if (!textEl) {
+              thinking.remove();
+              textEl = appendBubble('message-bubble-loop', "<span class='k' aria-label='Loop X'>" + "<svg class='message-brand-icon' viewBox='0 0 24 24' width='20' height='20' fill='none' stroke-width='2.6' stroke-linecap='round' aria-hidden='true'><path d='M8.97 4.16A8.4 8.4 0 0 1 15.03 4.16' stroke='#2F5BFF'/><path d='M19.84 8.97A8.4 8.4 0 0 1 19.84 15.03' stroke='#0FA37F'/><path d='M15.03 19.84A8.4 8.4 0 0 1 8.97 19.84' stroke='#E8336F'/><path d='M4.16 15.03A8.4 8.4 0 0 1 4.16 8.97' stroke='#FF8A00'/><path d='M6.06 6.06L17.94 17.94' stroke='currentColor'/><path d='M17.94 6.06L6.06 17.94' stroke='currentColor'/></svg>" + "</span>", '');
+            }
+            textEl.textContent = value;
+            if (streaming) textEl.appendChild(caret); else caret.remove();
+            scrollToBottom();
+          },
+          // The bubble the tool chips go into; created on the first tool call.
+          host: function() {
+            if (!textEl) {
+              thinking.remove();
+              textEl = appendBubble('message-bubble-loop', "<span class='k' aria-label='Loop X'>" + "<svg class='message-brand-icon' viewBox='0 0 24 24' width='20' height='20' fill='none' stroke-width='2.6' stroke-linecap='round' aria-hidden='true'><path d='M8.97 4.16A8.4 8.4 0 0 1 15.03 4.16' stroke='#2F5BFF'/><path d='M19.84 8.97A8.4 8.4 0 0 1 19.84 15.03' stroke='#0FA37F'/><path d='M15.03 19.84A8.4 8.4 0 0 1 8.97 19.84' stroke='#E8336F'/><path d='M4.16 15.03A8.4 8.4 0 0 1 4.16 8.97' stroke='#FF8A00'/><path d='M6.06 6.06L17.94 17.94' stroke='currentColor'/><path d='M17.94 6.06L6.06 17.94' stroke='currentColor'/></svg>" + "</span>", '');
+            }
+            return textEl.parentNode;
+          }
+        };
+      }
+
+      var pending = appendPendingLoopBubble();
+      var reveal = window.__loopTextReveal(function(text) { pending.show(text, true); });
+
+      var body = new URLSearchParams();
+      body.set('text', text);
+      body.set('csrf_token', csrfToken);
+
+      // Checked by the auto-refresh timer (see refresh_schedule_script in
+      // _render_shell) so a routine 30s page reload never tears down this
+      // stream mid-reply - cleared on every terminal path below (the
+      // request itself failing, and the stream's own done/error events).
+      window.__loopActivityChatStreaming = true;
+      window.__loopChatStreaming = true;
+      // A reply still streaming is saved once it finishes - after a "New
+      // chat" marker set meanwhile - so it would surface in the new
+      // session. Starting a new chat waits until the reply is done.
+      var newChatBtn = document.querySelector('.chat-new-btn');
+      if (newChatBtn) newChatBtn.disabled = true;
+      function stopStreamingFlag() {
+        window.__loopActivityChatStreaming = false;
+        window.__loopChatStreaming = !!window.__loopPanelChatStreaming;
+        if (newChatBtn) newChatBtn.disabled = false;
+      }
+
+      function startStream(replyKey) {
+        var source = new EventSource('/activity/chat-stream?reply_key=' + encodeURIComponent(replyKey));
+        var accumulated = '';
+        source.addEventListener('chunk', function(ev) {
+          accumulated += JSON.parse(ev.data);
+          reveal.set(accumulated);
+        });
+        var onTool = window.__loopToolChips(pending.host, function() {
+          return sessionInput ? sessionInput.value : '';
+        });
+        source.addEventListener('tool', function(ev) {
+          try { onTool(JSON.parse(ev.data)); } catch (e) {}
+        });
+        source.addEventListener('done', function(ev) {
+          source.close();
+          // Let the paced reveal (see _TEXT_REVEAL_SCRIPT) catch up first.
+          reveal.finish(function() {
+            button.disabled = false;
+            stopStreamingFlag();
+            // The reply is now persisted (see _chat_job_finish/append_message
+            // on the server) - refresh so its bubble picks up markdown
+            // rendering and a delete button immediately, instead of only
+            // after a full page reload.
+            refreshMessageList();
+            refreshHistory();
+            setTimeout(refreshHistory, 8000);
+            setTimeout(refreshHistory, 20000);
+          });
+        });
+        source.addEventListener('error', function(ev) {
+          var message = "Une erreur s'est produite - r\u00e9essayez.";
+          try { message = JSON.parse(ev.data) || message; } catch (e) {}
+          reveal.stop();
+          if (accumulated === '') {
+            pending.show(message, false);
+          } else {
+            // Partial text already streamed into the bubble - a failed
+            // or timed-out reply must never look like a normal, complete
+            // answer that will simply vanish on the next reload (nothing
+            // partial was ever saved via append_message), so this marks
+            // it visibly rather than leaving the bubble unchanged.
+            pending.show(accumulated + ' ' + "(r\u00e9ponse interrompue)", false);
+          }
+          button.disabled = false;
+          stopStreamingFlag();
+          source.close();
+        });
+      }
+
+      fetch('/activity/chat', { method: 'POST', body: body })
+        .then(function(response) { return response.json().then(function(data) { return { ok: response.ok, data: data }; }); })
+        .then(function(result) {
+          if (!result.ok) {
+            pending.show(result.data.error || "Une erreur s'est produite.", false);
+            button.disabled = false;
+            stopStreamingFlag();
+            return;
+          }
+          // The user's own message is already persisted at this point (see
+          // send_user_message inside POST /activity/chat) - refresh now so
+          // it picks up its delete button and markdown rendering without
+          // waiting for the whole reply to finish streaming. This redraws
+          // the entire list from disk, which necessarily discards the
+          // pending loop bubble above too, so a fresh one is re-appended
+          // right after for the still-in-flight reply.
+          if (sessionInput && result.data.session && sessionInput.value !== result.data.session) {
+            sessionInput.value = result.data.session;
+            // A reload or a shared link reopens this same session.
+            history.replaceState(null, '', '/?session=' + encodeURIComponent(result.data.session));
+          }
+          refreshHistory();
+          refreshMessageList().then(function() {
+            pending = appendPendingLoopBubble();
+            reveal.stop();
+            reveal = window.__loopTextReveal(function(text) { pending.show(text, true); });
+            startStream(result.data.reply_key);
+          });
+        })
+        .catch(function() {
+          pending.show("Une erreur s'est produite - r\u00e9essayez.", false);
+          button.disabled = false;
+          stopStreamingFlag();
+        });
+    });
+  });
+})();
+(function() {
+  // Chat history drawer on the Dashboard. Deferred for the same reason as
+  // the composer script: this <script> is emitted in <head>.
+  document.addEventListener('DOMContentLoaded', function() {
+    var drawer = document.getElementById('chat-history');
+    var opener = document.querySelector('[data-chat-history-open]');
+    var backdrop = document.querySelector('.chat-history-backdrop');
+    if (!drawer || !opener || !backdrop) return;
+    function setOpen(open) {
+      drawer.hidden = !open;
+      backdrop.hidden = !open;
+      opener.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        var target = drawer.querySelector('.chat-history-item.is-active') || drawer.querySelector('.chat-history-item') || drawer.querySelector('[data-chat-history-close]');
+        if (target) target.focus();
+      } else {
+        opener.focus();
+      }
+    }
+    opener.addEventListener('click', function() { setOpen(drawer.hidden); });
+    // After deleting a chat the redirect carries history=1: reopen the
+    // drawer so deleting several in a row doesn't mean reopening it each
+    // time, then drop the param so a reload doesn't pop it open again.
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('history') === '1') {
+      setOpen(true);
+      params.delete('history');
+      var query = params.toString();
+      history.replaceState(null, '', window.location.pathname + (query ? '?' + query : ''));
+    }
+    document.querySelectorAll('[data-chat-history-close]').forEach(function(el) {
+      el.addEventListener('click', function() { setOpen(false); });
+    });
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && !drawer.hidden) setOpen(false);
+    });
+  });
+})();
+(function() {
+  function showFieldError(field) {
+    var bubble = document.getElementById('field-error-bubble');
+    if (!bubble) return;
+    var text = bubble.querySelector('.field-error-bubble-text');
+    if (text) text.textContent = field.validationMessage || "Veuillez remplir ce champ.";
+    var rect = field.getBoundingClientRect();
+    bubble.style.left = rect.left + 'px';
+    bubble.style.top = (rect.bottom + 6) + 'px';
+    bubble.hidden = false;
+  }
+  function hideFieldError() {
+    var bubble = document.getElementById('field-error-bubble');
+    if (bubble) bubble.hidden = true;
+  }
+  // Native form validation fires 'invalid' on every invalid control in one
+  // submit attempt (that's what blocks submission) but only shows its
+  // bubble UI for the first one. preventDefault() suppresses that native,
+  // unstyled bubble; invalidBatchActive replicates "first one only" so we
+  // don't flash through every invalid field's message in the same tick.
+  var invalidBatchActive = false;
+  document.addEventListener('invalid', function(ev) {
+    ev.preventDefault();
+    if (invalidBatchActive) return;
+    invalidBatchActive = true;
+    showFieldError(ev.target);
+    ev.target.focus();
+    setTimeout(function() { invalidBatchActive = false; }, 0);
+  }, true);
+  document.addEventListener('input', hideFieldError);
+  document.addEventListener('click', function(ev) {
+    if (!ev.target.closest('.field-error-bubble')) hideFieldError();
+  });
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape') hideFieldError();
+  });
+})();
+(function() {
+  var pendingForm = null;
+  document.addEventListener('click', function(ev) {
+    var trigger = ev.target.closest('[data-confirm]');
+    if (trigger) {
+      ev.preventDefault();
+      var dialog = document.getElementById('confirm-dialog');
+      if (!dialog) return;
+      var messageEl = dialog.querySelector('.confirm-dialog-message');
+      if (messageEl) messageEl.textContent = trigger.getAttribute('data-confirm');
+      pendingForm = trigger.closest('form');
+      dialog.showModal();
+      return;
+    }
+    if (ev.target.closest('[data-confirm-cancel]')) {
+      var dialog = document.getElementById('confirm-dialog');
+      if (dialog) dialog.close();
+      pendingForm = null;
+      return;
+    }
+    if (ev.target.closest('[data-confirm-ok]')) {
+      var dialog = document.getElementById('confirm-dialog');
+      if (dialog) dialog.close();
+      if (pendingForm) pendingForm.submit();
+      pendingForm = null;
+      return;
+    }
+  });
+})();
+(function() {
+  // Any element with data-lazy-load="/some/url" starts empty (or holding a
+  // loading placeholder, e.g. render_gitlab_page's spinner) and gets its
+  // content fetched and swapped in after the page has already painted -
+  // for a page whose real data (get_live_gitlab_state, a subprocess + real
+  // GitLab API call per configured project) is too slow to block the page
+  // switch on. One generic handler here rather than a per-page <script>,
+  // so any future slow page can opt in with just the attribute.
+  function loadLazyContent(el) {
+    // Returns its promise chain (rather than fire-and-forget) so
+    // lazy_refresh's timer can Promise.all() every fragment on the page and
+    // know when they've all actually finished, to hide its refresh
+    // indicator at the right time - see refresh_schedule_script above.
+    return fetch(el.getAttribute('data-lazy-load'))
+      .then(function(response) { return response.text(); })
+      .then(function(html) { el.innerHTML = html; })
+      .catch(function() {
+        el.innerHTML = "<p class='inline-error'><span class='material-symbols-outlined' aria-hidden='true'>error</span> " + "Impossible de charger cette section." + "</p>";
+      });
+  }
+  // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
+  // (see refresh_schedule_script above) can reuse this exact fetch-and-swap
+  // logic to re-fetch a page's lazy-loaded fragments in place, instead of
+  // reloading the whole page.
+  window.__loopLoadLazyContent = loadLazyContent;
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('[data-lazy-load]').forEach(loadLazyContent);
+  });
+})();
+(function() {
+  // Reveals #topbar-page-title (see .topbar-page-title in _STYLE) once
+  // the page's own <h1> has scrolled out of the main card (#main-scroll,
+  // the observer's root) - otherwise scrolling down leaves the topbar
+  // with no indication of which page this is at all.
+  document.addEventListener('DOMContentLoaded', function() {
+    var titleEl = document.getElementById('topbar-page-title');
+    var topbar = document.querySelector('.topbar');
+    var h1 = document.querySelector('.content-area h1');
+    if (!titleEl || !topbar || !h1 || !window.IntersectionObserver) return;
+    titleEl.textContent = h1.textContent.trim();
+    var observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        titleEl.classList.toggle('is-visible', !entry.isIntersecting);
+      });
+    }, { root: document.getElementById('main-scroll') });
+    observer.observe(h1);
+  });
+})();
+(function() {
+  // Generic tab switcher: any [data-tabs] container with [data-tab-target]
+  // buttons and matching [data-tab-panel] sections - one click listener
+  // here covers every tab group on any page, the same "opt in with just
+  // the attribute" pattern as the data-lazy-load handler above.
+  document.addEventListener('click', function(ev) {
+    var button = ev.target.closest('[data-tab-target]');
+    if (!button) return;
+    var group = button.closest('[data-tabs]');
+    if (!group) return;
+    var target = button.getAttribute('data-tab-target');
+    group.querySelectorAll('[data-tab-target]').forEach(function(b) {
+      var isActive = b === button;
+      b.classList.toggle('is-active', isActive);
+      b.setAttribute('aria-selected', String(isActive));
+    });
+    group.querySelectorAll('[data-tab-panel]').forEach(function(panel) {
+      panel.hidden = panel.getAttribute('data-tab-panel') !== target;
+    });
+  });
+})();
+(function() {
+  // Every .daemon-action-form is a plain `method='post'` form (no fetch/JS
+  // submit interception), so saving one is a full POST-redirect-GET - a
+  // fresh page load that the browser scrolls to the top of by default.
+  // That's jarring for a form living far down a long page (e.g. the loop
+  // settings form at the bottom of /settings) when the redirect lands
+  // back on the same page. Stash the scroll offset in sessionStorage,
+  // keyed by the page being submitted from, and restore it if the next
+  // page load is that same page.
+  var SCROLL_KEY_PREFIX = 'daemon-action-scroll:';
+  document.addEventListener('submit', function(ev) {
+    if (!ev.target.matches || !ev.target.matches('.daemon-action-form')) return;
+    var scroller = document.getElementById('main-scroll');
+    try {
+      sessionStorage.setItem(SCROLL_KEY_PREFIX + location.pathname, String(scroller.scrollTop));
+    } catch (e) {}
+  });
+  document.addEventListener('DOMContentLoaded', function() {
+    var key = SCROLL_KEY_PREFIX + location.pathname;
+    var saved;
+    try { saved = sessionStorage.getItem(key); } catch (e) { saved = null; }
+    if (saved === null) return;
+    try { sessionStorage.removeItem(key); } catch (e) {}
+    document.getElementById('main-scroll').scrollTo(0, parseInt(saved, 10) || 0);
+  });
+})();
+(function() {
+  // The Live GitLab per-issue tracking switch (see
+  // _issue_tracking_toggle_html) is the one .daemon-action-form that must
+  // NOT do a plain POST-redirect-GET - flipping it must never reload the
+  // whole page (the point of the feature). Intercept its submit, POST via
+  // fetch, and flip the button's own state from the JSON response (see
+  // do_POST's /gitlab/issues/<alias>/<iid>/enable|disable) instead of
+  // navigating anywhere. On any failure (bad CSRF, network error), the
+  // switch is simply left as-is and re-enabled so the user can retry.
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target;
+    if (!form.matches || !form.matches('.issue-tracking-toggle')) return;
+    ev.preventDefault();
+    var button = form.querySelector('button[type="submit"]');
+    var issueIid = form.getAttribute('data-issue-iid');
+    if (button) button.disabled = true;
+    fetch(form.getAttribute('action'), {
+      method: 'POST',
+      body: new URLSearchParams(new FormData(form)),
+    })
+      .then(function(response) { return response.json(); })
+      .then(function(result) {
+        if (!result.ok) throw new Error('toggle failed');
+        var enabled = result.enabled;
+        var otherAction = enabled ? 'disable' : 'enable';
+        form.setAttribute('action', form.getAttribute('action').replace(/\/(enable|disable)$/, '/' + otherAction));
+        if (button) {
+          button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
+          button.setAttribute('aria-checked', enabled ? 'true' : 'false');
+          var label = (enabled ? "Arr\u00eater le suivi de #{iid}" : "Suivre \u00e0 nouveau #{iid}").replace('{iid}', issueIid);
+          button.setAttribute('aria-label', label);
+          button.setAttribute('title', label);
+        }
+      })
+      .catch(function() {})
+      .then(function() { if (button) button.disabled = false; });
+  });
+})();

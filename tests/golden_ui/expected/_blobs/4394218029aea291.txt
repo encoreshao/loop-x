@@ -1,0 +1,31 @@
+
+(function() {
+  // Styled replacement for the nav links' native title tooltip, shown only
+  // while the sidebar is the icon rail (labels hidden). The title moves to
+  // aria-label so the link keeps its accessible name once .nav-label is
+  // display:none, and the browser's own tooltip doesn't double up.
+  var tip = document.getElementById('nav-tooltip');
+  var rail = window.matchMedia('(max-width: 720px)');
+  function isRail() { return document.documentElement.classList.contains('collapsed') || rail.matches; }
+  function show(link) {
+    if (!isRail()) return;
+    var rect = link.getBoundingClientRect();
+    tip.textContent = link.getAttribute('aria-label');
+    tip.style.left = (rect.right + 10) + 'px';
+    tip.style.top = (rect.top + rect.height / 2) + 'px';
+    tip.hidden = false;
+  }
+  function hide() { tip.hidden = true; }
+  document.querySelectorAll('.sidebar-nav a[title]').forEach(function(link) {
+    link.setAttribute('aria-label', link.getAttribute('title'));
+    link.removeAttribute('title');
+    link.addEventListener('mouseenter', function() { show(link); });
+    link.addEventListener('focus', function() { show(link); });
+    link.addEventListener('mouseleave', hide);
+    link.addEventListener('blur', hide);
+  });
+  var nav = document.querySelector('.sidebar-nav');
+  if (nav) nav.addEventListener('scroll', hide);
+  var toggle = document.querySelector('.sidebar-toggle');
+  if (toggle) toggle.addEventListener('click', hide);
+})();

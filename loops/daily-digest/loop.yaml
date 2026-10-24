@@ -1,0 +1,42 @@
+# Definition for the Daily Digest loop (bin/loop_plugins/daily_digest.py,
+# run through LoopKit). Read-only data gathering plus one notification.
+name: daily-digest-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "30 9 * * 1-5"
+
+goal:
+  type: daily_digest
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - connector_data
+    - loop_x_events
+
+actions:
+  - fetch_connector_data
+  - summarize
+  - send_notification
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 2
+  max_runtime_minutes: 5
+  max_cost_usd: 0.5
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

@@ -1,0 +1,12 @@
+# The user turned review off for gitlab.comment in Settings, so the call really runs.
+name: skip-review-runs-directly
+prompt: "Post a comment saying 'Thanks, this is fixed in the next release' on https://gitlab.example.com/acme/shop/-/issues/12"
+fixture:
+  auto_approve: [gitlab.comment]
+  issue: {iid: 12, title: "Checkout button unresponsive on Safari", web_url: "https://gitlab.example.com/acme/shop/-/issues/12", description: "Clicking Pay does nothing on Safari 17. Works on Chrome. Console shows a TypeError in checkout.js."}
+  notes: [{author: {username: "dev1"}, created_at: "2026-10-01T09:00:00Z", body: "Reproduced. Looks like a missing polyfill."}]
+expect:
+  calls_required: [gitlab.comment]
+  max_calls: {gitlab.comment: 1}
+  effects: [gitlab.comment]
+  reply_forbidden: ["waiting for (your )?approval", "pending approval"]

@@ -1,0 +1,4 @@
+code
+'true' if code == current_lang else 'false'
+i18n.html_lang(code)
+html.escape(name)

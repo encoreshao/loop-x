@@ -1,0 +1,22 @@
+# Synthetic fixture: a clear question answerable by reading the code. The
+# agent should answer directly and change nothing.
+name: answer-question
+issue:
+  title: "What is the default page size?"
+  body: "Before I configure the report screen: what's the default page size when the caller doesn't pass one?"
+repo:
+  files:
+    lib/paginate.py: |
+      def page(items, n, size=10):
+          start = n * size
+          return items[start:start + size]
+    tests/test_paginate.py: |
+      from lib.paginate import page
+      def test_page_size():
+          assert len(page(list(range(50)), 0)) == 10
+  test_cmd: "python3 -m pytest -q"
+  lint_cmd: ""
+expect:
+  action: answer
+  allowed_paths: []
+  checks_pass: null

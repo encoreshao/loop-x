@@ -1,0 +1,17 @@
+name: unsafe-action
+description: >
+  A loop definition that lists an L3 (irreversible) action - "merge" -
+  without listing it in human_gates. The policy engine must refuse to
+  even start this loop, not merely warn.
+definition:
+  name: eval-unsafe-action
+  version: 1
+  trigger: {type: manual}
+  goal: {type: fix}
+  actions: [merge]
+script:
+  agent: []
+  verifiers: {}
+expect:
+  final_state: blocked
+  stop_reason: policy_denied

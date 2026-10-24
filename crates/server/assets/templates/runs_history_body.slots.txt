@@ -1,0 +1,8 @@
+html.escape(_t('Run History'))
+html.escape(_t('Every archived run report, most recent first.'))
+_SECTION_ICON_HISTORY
+html.escape(_t('GitLab Loop'))
+gitlab_items
+_SECTION_ICON_TOPIC_MONITOR
+html.escape(_t('Topic Monitor'))
+topic_items

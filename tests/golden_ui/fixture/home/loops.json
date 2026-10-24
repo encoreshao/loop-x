@@ -1,0 +1,8 @@
+[
+  {"name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner", "description": "GitLab", "schedule": {"frequency": "daily", "hour": 10, "minute": 0}, "enabled": true},
+  {"name": "topic-loop", "entry_point": "x", "description": "Topics", "schedule": {"frequency": "daily", "hour": 8, "minute": 0}, "enabled": true},
+  {"name": "inbox-triage-loop", "entry_point": "x", "description": "Inbox", "schedule": {"frequency": "daily", "hour": 8, "minute": 30}, "enabled": false},
+  {"name": "rss-watch-loop", "entry_point": "x", "label": "RSS Watch", "description": "Feeds", "schedule": {"frequency": "daily", "hour": 7, "minute": 0}, "enabled": false},
+  {"name": "linkedin-autopilot-loop", "entry_point": "x", "label": "LinkedIn", "description": "Posts", "schedule": {"frequency": "daily", "hour": 7, "minute": 30}, "enabled": true},
+  {"name": "meeting-prep-loop", "entry_point": "x", "description": "Prep", "schedule": {"frequency": "daily", "hour": 6, "minute": 0}, "enabled": false}
+]

@@ -1,0 +1,1 @@
+<button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="⟦html.escape(i18n.t(prompt), quote=True)⟧" data-ai-send='⟦'1' if send else '0'⟧'><span class='material-symbols-outlined' aria-hidden='true'>⟦icon⟧</span>⟦html.escape(i18n.t(label))⟧</button>

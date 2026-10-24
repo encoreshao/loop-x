@@ -1,0 +1,3 @@
+html.escape(_t('Iteration {number}', number=iteration['iteration']))
+html.escape(iteration['state'])
+verifier_items

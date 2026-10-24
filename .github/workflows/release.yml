@@ -1,0 +1,348 @@
+name: Release
+
+# Cut a release by pushing a tag: git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z
+# (docs/RELEASING.md has the full procedure and the secrets this needs).
+# Every signing/notarizing/Sparkle/tap step is skipped with a log line when its
+# secrets are missing, so the same workflow also works on a fork or a dry run
+# and still produces unsigned artifacts.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.5.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  binary:
+    name: loopx (universal, signed, notarized)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Tag matches the crate version and the changelog
+        run: |
+          version="${TAG#v}"
+          crate="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p;}' Cargo.toml | head -1)"
+          if [ "$crate" != "$version" ]; then
+            echo "::error::tag $TAG does not match the workspace version $crate in Cargo.toml"
+            exit 1
+          fi
+          bin/scripts/release_notes.sh "$version" > /dev/null
+
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build arm64 + x86_64
+        run: |
+          cargo build --release -p loopx --target aarch64-apple-darwin
+          cargo build --release -p loopx --target x86_64-apple-darwin
+
+      - name: Detect signing credentials
+        id: creds
+        env:
+          CERT: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$CERT_PASSWORD" ] && [ -n "$IDENTITY" ]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Developer ID secrets are not set - building UNSIGNED binaries (APPLE_CERT_P12_BASE64, APPLE_CERT_PASSWORD, APPLE_SIGNING_IDENTITY)."
+          fi
+          if [ -n "$API_KEY" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ]; then
+            echo "notarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notarize=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::notarytool secrets are not set - skipping notarization (APPLE_API_KEY_P8_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER)."
+          fi
+
+      - name: Import the Developer ID certificate
+        if: steps.creds.outputs.sign == 'true'
+        env:
+          CERT: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          pw="$(uuidgen)"
+          security create-keychain -p "$pw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$pw" "$keychain"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Assemble, sign and package
+        env:
+          SIGN: ${{ steps.creds.outputs.sign }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          mkdir -p dist stage
+          cp target/aarch64-apple-darwin/release/loopx stage/loopx-arm64
+          cp target/x86_64-apple-darwin/release/loopx stage/loopx-x86_64
+          if [ "$SIGN" = "true" ]; then
+            for f in stage/loopx-arm64 stage/loopx-x86_64; do
+              codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+            done
+          fi
+          lipo -create -output stage/loopx-universal stage/loopx-arm64 stage/loopx-x86_64
+          lipo -info stage/loopx-universal
+          if [ "$SIGN" = "true" ]; then
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" stage/loopx-universal
+            codesign --verify --strict --verbose=2 stage/loopx-universal
+          fi
+          for arch in arm64 x86_64 universal; do
+            mkdir -p "stage/pkg-$arch"
+            cp "stage/loopx-$arch" "stage/pkg-$arch/loopx"
+            tar -czf "dist/loopx-darwin-$arch.tar.gz" -C "stage/pkg-$arch" loopx
+          done
+          tar -czf dist/loopx-support.tar.gz config/*.template launchd/loopx/*.plist.template
+          tar -tzf dist/loopx-support.tar.gz
+
+      - name: Notarize the binaries
+        if: steps.creds.outputs.sign == 'true' && steps.creds.outputs.notarize == 'true'
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+          # A bare Mach-O cannot be stapled; notarization is still recorded
+          # online and Gatekeeper finds it by the binary's hash.
+          ditto -c -k stage/loopx-universal "$RUNNER_TEMP/loopx-universal.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/loopx-universal.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER" --wait
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopx-dist
+          path: dist/*
+
+  app:
+    name: LoopX.app + DMG (signed, notarized, Sparkle)
+    runs-on: macos-latest
+    needs: binary
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Is there an app to build?
+        id: has_app
+        run: |
+          if [ -x bin/scripts/build_loopx_app.sh ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::bin/scripts/build_loopx_app.sh does not exist (yet) - releasing the loopx binary only."
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.has_app.outputs.build == 'true'
+        with:
+          name: loopx-dist
+          path: dist
+
+      - name: Detect signing credentials
+        id: creds
+        if: steps.has_app.outputs.build == 'true'
+        env:
+          CERT: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          [ -n "$CERT" ] && [ -n "$CERT_PASSWORD" ] && [ -n "$IDENTITY" ] && echo "sign=true" >> "$GITHUB_OUTPUT" || { echo "sign=false" >> "$GITHUB_OUTPUT"; echo "::notice::Developer ID secrets not set - the app is built UNSIGNED."; }
+          [ -n "$API_KEY" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ] && echo "notarize=true" >> "$GITHUB_OUTPUT" || { echo "notarize=false" >> "$GITHUB_OUTPUT"; echo "::notice::notarytool secrets not set - the app is not notarized."; }
+          [ -n "$SPARKLE_KEY" ] && echo "sparkle=true" >> "$GITHUB_OUTPUT" || { echo "sparkle=false" >> "$GITHUB_OUTPUT"; echo "::notice::SPARKLE_ED_PRIVATE_KEY not set - skipping the Sparkle appcast."; }
+
+      - name: Import the Developer ID certificate
+        if: steps.has_app.outputs.build == 'true' && steps.creds.outputs.sign == 'true'
+        env:
+          CERT: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          pw="$(uuidgen)"
+          security create-keychain -p "$pw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$pw" "$keychain"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Build LoopX.app with the freshly built loopx inside
+        if: steps.has_app.outputs.build == 'true'
+        env:
+          CODESIGN_IDENTITY: ${{ steps.creds.outputs.sign == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+        run: |
+          mkdir -p dist/app loopx-bin
+          tar -xzf dist/loopx-darwin-universal.tar.gz -C loopx-bin
+          # The script ad-hoc signs; re-sign with Developer ID (hardened runtime,
+          # inside-out) when the signing identity is available.
+          bin/scripts/build_loopx_app.sh "$PWD/loopx-bin/loopx" --out dist/app/LoopX.app
+          if [ -n "$CODESIGN_IDENTITY" ]; then
+            codesign --force --options runtime --timestamp -s "$CODESIGN_IDENTITY" dist/app/LoopX.app/Contents/Helpers/loopx
+            codesign --force --deep --options runtime --timestamp -s "$CODESIGN_IDENTITY" dist/app/LoopX.app
+          else
+            echo "::notice::no signing identity: shipping the ad-hoc signed app"
+          fi
+          test -d dist/app/LoopX.app
+
+      - name: DMG, notarize and staple
+        if: steps.has_app.outputs.build == 'true'
+        env:
+          SIGN: ${{ steps.creds.outputs.sign }}
+          NOTARIZE: ${{ steps.creds.outputs.notarize }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          version="${TAG#v}"
+          mkdir -p dmg-src
+          cp -R dist/app/LoopX.app dmg-src/
+          ln -s /Applications dmg-src/Applications
+          hdiutil create -volname "LoopX" -srcfolder dmg-src -ov -format UDZO "dist/LoopX-$version.dmg"
+          if [ "$SIGN" = "true" ]; then
+            codesign --force --timestamp --sign "$IDENTITY" "dist/LoopX-$version.dmg"
+          fi
+          if [ "$SIGN" = "true" ] && [ "$NOTARIZE" = "true" ]; then
+            echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+            xcrun notarytool submit "dist/LoopX-$version.dmg" \
+              --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER" --wait
+            xcrun stapler staple "dist/LoopX-$version.dmg"
+            rm -f "$RUNNER_TEMP/AuthKey.p8"
+          fi
+          ditto -c -k --keepParent dist/app/LoopX.app "dist/LoopX-$version.app.zip"
+
+      - name: Sparkle appcast
+        if: steps.has_app.outputs.build == 'true' && steps.creds.outputs.sparkle == 'true'
+        env:
+          SPARKLE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          SPARKLE_VERSION: "2.6.4"
+        run: |
+          version="${TAG#v}"
+          curl -fsSL -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          mkdir sparkle && tar -xf sparkle.tar.xz -C sparkle
+          mkdir -p appcast-src
+          cp "dist/LoopX-$version.dmg" appcast-src/
+          bin/scripts/release_notes.sh "$version" > "appcast-src/LoopX-$version.md"
+          echo "$SPARKLE_KEY" | sparkle/bin/generate_appcast --ed-key-file - \
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/$TAG/" \
+            --embed-release-notes -o dist/appcast.xml appcast-src
+          test -s dist/appcast.xml
+
+      - uses: actions/upload-artifact@v4
+        if: steps.has_app.outputs.build == 'true'
+        with:
+          name: loopx-app
+          path: |
+            dist/LoopX-*.dmg
+            dist/LoopX-*.app.zip
+            dist/appcast.xml
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [binary, app]
+    outputs:
+      sha_universal: ${{ steps.sums.outputs.sha_universal }}
+      sha_support: ${{ steps.sums.outputs.sha_support }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: SHA256SUMS
+        id: sums
+        run: |
+          cd artifacts
+          ls -l
+          shasum -a 256 $(ls | grep -v '^SHA256SUMS$' | sort) > SHA256SUMS
+          cat SHA256SUMS
+          echo "sha_universal=$(awk '$2=="loopx-darwin-universal.tar.gz"{print $1}' SHA256SUMS)" >> "$GITHUB_OUTPUT"
+          echo "sha_support=$(awk '$2=="loopx-support.tar.gz"{print $1}' SHA256SUMS)" >> "$GITHUB_OUTPUT"
+
+      - name: Release notes from CHANGELOG.md
+        run: bin/scripts/release_notes.sh "${TAG#v}" > RELEASE_NOTES.md
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$TAG" in *-*) flags="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+            gh release edit "$TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" artifacts/* --title "$TAG" --notes-file RELEASE_NOTES.md $flags
+          fi
+
+  homebrew:
+    name: Update the Homebrew tap
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Render the formula and push it to the tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_REPO: ${{ vars.TAP_REPO || 'encoreshao/homebrew-tap' }}
+          SHA_UNIVERSAL: ${{ needs.release.outputs.sha_universal }}
+          SHA_SUPPORT: ${{ needs.release.outputs.sha_support }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::TAP_GITHUB_TOKEN is not set - skipping the Homebrew tap update. Render the formula by hand: packaging/homebrew/render_formula.sh"
+            exit 0
+          fi
+          version="${TAG#v}"
+          packaging/homebrew/render_formula.sh "$version" "$SHA_UNIVERSAL" "$SHA_SUPPORT" "${{ github.repository }}" > loopx.rb
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp loopx.rb tap/Formula/loopx.rb
+          cd tap
+          git config user.name "loopx-release"
+          git config user.email "loopx-release@users.noreply.github.com"
+          git add Formula/loopx.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+          else
+            git commit -m "loopx $version"
+            git push origin HEAD
+          fi

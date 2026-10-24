@@ -1,0 +1,1 @@
+{"checked_at": "2026-01-15T09:00:00+00:00", "branch": "main", "behind": 2, "ahead": 0, "commits": [{"sha": "abc1234", "subject": "Add <b>feature</b>"}, {"sha": "def5678", "subject": "Fix bug & more"}], "current": "v0.4.0", "latest_tag": "v0.5.0", "new_release": true, "origin_sha": "deadbeef", "clean": true, "can_fast_forward": true, "error": null}

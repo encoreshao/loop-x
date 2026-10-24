@@ -1,0 +1,24 @@
+' is-empty' if is_empty else ''
+html.escape(_t('History'))
+csrf_input
+html.escape(_t('New chat'))
+html.escape(_t('Document'))
+html.escape(_t('Copy'))
+html.escape(_t('Download'))
+html.escape(_t('Close document'))
+html.escape(_t('Chat history'))
+html.escape(_t('Chats'))
+html.escape(_t('Close history'))
+history_html
+flash_html
+html.escape(announce_text)
+hero_title_html
+messages_html
+session_input
+html.escape(_t('Ask the loop anything, or paste a GitLab issue link'))
+html.escape(_t('Message the loop'))
+suggestions_html
+html.escape(_t('Send'))
+html.escape(_t('Loop activity'))
+html.escape(_t('Live GitLab'))
+_overview_live_links_html()

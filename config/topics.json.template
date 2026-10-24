@@ -1,0 +1,20 @@
+[
+  {
+    "name": "ai-news",
+    "label": "AI News",
+    "brief": "Major model releases, funding rounds, notable research papers, and product launches in AI, from the last 24 hours. Skip developer-tooling-specific releases (covered by ai-coding-tools) and policy/regulatory items (covered by ai-policy-safety).",
+    "slack_bundle": null
+  },
+  {
+    "name": "ai-coding-tools",
+    "label": "AI Coding Tools",
+    "brief": "New releases, notable updates, and announcements for AI coding agents and developer tooling - Claude Code, Cursor, GitHub Copilot, agent frameworks, and MCP servers/ecosystem - from the last 24 hours. Skip general-purpose model or funding news not tied to a specific dev tool.",
+    "slack_bundle": null
+  },
+  {
+    "name": "ai-policy-safety",
+    "label": "AI Policy & Safety",
+    "brief": "Government regulation, policy proposals, notable safety/alignment research, and publicized safety incidents involving AI, from the last 24 hours. Skip product launches and funding rounds even if safety is mentioned in passing.",
+    "slack_bundle": null
+  }
+]

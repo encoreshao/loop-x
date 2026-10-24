@@ -1,0 +1,44 @@
+i18n.html_lang(current_lang)
+html.escape(title)
+_favicon_version()
+_GOOGLE_FONTS_FAMILIES_PARAM
+_MATERIAL_SYMBOLS_ICON_NAMES
+_STYLE
+_TEXT_REVEAL_SCRIPT
+_chat_tool_chips_js()
+_chat_pending_card_js()
+refresh_schedule_script
+refresh_note_script
+json.dumps(_t('Could not load the document.'))
+json.dumps(_t('Copied'))
+json.dumps(html.escape(_t('just now')))
+json.dumps(html.escape(_t('Edit message')))
+json.dumps(html.escape(_t('Cancel')))
+json.dumps(html.escape(_t('Send')))
+json.dumps(html.escape(_t('You')))
+json.dumps(_AI_THINKING_HTML)
+json.dumps(_t('Thinking…'))
+json.dumps(_MESSAGE_BRAND_ICON)
+json.dumps(_t('Something went wrong - try again.'))
+json.dumps(_t('(reply interrupted)'))
+json.dumps(_t('Something went wrong.'))
+json.dumps(_t('Please fill out this field.'))
+json.dumps(html.escape(_t("Couldn't load this section."), quote=False))
+json.dumps(_t('Stop tracking #{iid}'))
+json.dumps(_t('Track #{iid} again'))
+html.escape(_t('Cancel'))
+html.escape(_t('Confirm'))
+_sidebar_html(active_page)
+' is-active' if 'md-spinner' in status_badge_html else ''
+update_chip_html
+ai_trigger_html
+ai_cli_badge_html
+status_badge_html
+refresh_html
+lang_switch_html
+help_link_html
+update_banner_html
+body_html
+_ai_panel_html(active_page)
+ai_panel_script
+i18n.COOKIE_NAME

@@ -1,0 +1,2 @@
+_AI_CLI_LOGOS[selected_cli]
+html.escape(ai_cli_name)

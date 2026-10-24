@@ -1,0 +1,43 @@
+
+(function() {
+  // Topbar language switcher - see lang_switch_html and .lang-switch.
+  var root = document.getElementById('lang-switch');
+  if (!root) return;
+  var trigger = root.querySelector('.lang-switch-trigger');
+  var menu = root.querySelector('.lang-switch-menu');
+  var options = Array.prototype.slice.call(menu.querySelectorAll('.lang-switch-option'));
+  function setOpen(open) {
+    menu.hidden = !open;
+    root.classList.toggle('is-open', open);
+    trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      var current = menu.querySelector("[aria-checked='true']") || options[0];
+      current.focus();
+    }
+  }
+  trigger.addEventListener('click', function(event) {
+    event.stopPropagation();
+    setOpen(menu.hidden);
+  });
+  options.forEach(function(option, index) {
+    option.addEventListener('click', function() {
+      document.cookie = 'loop_lang=' + option.getAttribute('data-lang') + '; path=/; max-age=31536000; samesite=lax';
+      // replace(), not reload(): reload() is reserved as the marker for the
+      // auto-refresh timer (see test_render_shell_omits_auto_refresh_by_default).
+      location.replace(location.href);
+    });
+    option.addEventListener('keydown', function(event) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        var step = event.key === 'ArrowDown' ? 1 : -1;
+        options[(index + step + options.length) % options.length].focus();
+      }
+    });
+  });
+  document.addEventListener('click', function(event) {
+    if (!menu.hidden && !root.contains(event.target)) setOpen(false);
+  });
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && !menu.hidden) { setOpen(false); trigger.focus(); }
+  });
+})();

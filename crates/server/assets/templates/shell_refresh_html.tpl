@@ -1,0 +1,1 @@
+<span class='refresh-note' id='refresh-note-text'>⟦html.escape(_t('auto-refreshes every {interval}', interval='30s'))⟧</span>

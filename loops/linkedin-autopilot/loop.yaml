@@ -1,0 +1,41 @@
+# Definition for the LinkedIn Autopilot loop (bin/loop_plugins/linkedin_autopilot.py,
+# run through LoopKit). Stage 1 is read-only: it browses, summarizes and notifies.
+name: linkedin-autopilot-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 9 * * *"
+
+goal:
+  type: feed_ranking
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - connector_data
+
+actions:
+  - fetch_connector_data
+  - rank_entries
+  - send_notification
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 2
+  max_runtime_minutes: 5
+  max_cost_usd: 1
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

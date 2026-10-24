@@ -1,0 +1,15 @@
+{
+  "notification_key": "gitlab_wrapup_failed",
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": ":rotating_light: Daily GitLab Loop — Wrap-up Failed" } },
+    { "type": "divider" },
+    { "type": "section", "fields": [
+        { "type": "mrkdwn", "text": "*Loop*\nGitLab issue loop" },
+        { "type": "mrkdwn", "text": "*Stage*\nEnd-of-run wrap-up" }
+    ] },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":memo: Failure detail" } ] },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "{{message}}" } },
+    { "type": "divider" },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":page_facing_up: See outputs/history/ and logs/loop-engineering.log for the full trace." } ] }
+  ]
+}

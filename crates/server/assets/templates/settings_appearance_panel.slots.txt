@@ -1,0 +1,16 @@
+html.escape(_t('Appearance settings for this browser - saved locally, not shared across devices.'))
+_SECTION_ICON_PREFERENCES
+html.escape(_t('Color mode'))
+html.escape(_t('Choose how the interface looks - light, dark, or match your system setting.'))
+mode_buttons
+html.escape(_t('Theme'))
+html.escape(_t('Select the accent color for the application interface.'))
+html.escape(_t('Accent color'))
+swatch_buttons
+html.escape(_t('Font'))
+html.escape(_t('Choose the typeface used across the dashboard.'))
+font_buttons
+html.escape(_t('Auto-refresh'))
+html.escape(_t('How often pages reload themselves to show live status.'))
+html.escape(_t('Auto-refresh interval'))
+refresh_buttons

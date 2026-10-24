@@ -1,0 +1,32 @@
+# Investigates a triggered incident and reports findings. Read-mostly
+# (post_public_comment is L2/policy-controlled); add it to human_gates if
+# incident comms should be approved before posting.
+name: incident-response
+version: 1
+
+trigger:
+  type: webhook
+
+goal:
+  type: incident_response
+
+actions:
+  - inspect_repository
+  - post_public_comment
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 15
+  max_cost_usd: 2
+  no_progress_iterations: 1
+
+human_gates: []
+
+retry:
+  enabled: false
+  max_attempts: 1

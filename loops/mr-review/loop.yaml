@@ -1,0 +1,42 @@
+# Definition for the MR Review loop (bin/loop_plugins/mr_review.py, run
+# through LoopKit). Reads MR diffs; the only writes are GitLab draft notes.
+name: mr-review-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 */2 * * *"
+
+goal:
+  type: mr_review
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - connector_data
+
+actions:
+  - fetch_connector_data
+  - review_diff
+  - create_draft_review_note
+  - send_notification
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 2
+  max_runtime_minutes: 6
+  max_cost_usd: 1
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

@@ -1,0 +1,40 @@
+# Definition for the Stale Work Sweeper loop (bin/loop_plugins/stale_sweeper.py,
+# run through LoopKit). Read-only and deterministic: no model call, notifies only.
+name: stale-sweeper-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 9 * * 1"
+
+goal:
+  type: stale_work_report
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - connector_data
+
+actions:
+  - fetch_connector_data
+  - send_notification
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 2
+  max_runtime_minutes: 5
+  max_cost_usd: 0.05
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

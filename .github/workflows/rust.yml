@@ -1,0 +1,71 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Black-box contract and end-to-end tests against the built binary
+        run: |
+          cargo build -p loopx
+          pip install pyyaml pytest
+          LOOPX_BIN="$PWD/target/debug/loopx" python3 -m pytest tests/ -q
+
+      - name: Loop audit (blocking)
+        run: target/debug/loopx loop audit loops/*/loop.yaml --min-score 70
+
+  universal-binary:
+    runs-on: macos-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (from rust-toolchain.toml)
+        run: rustup show
+
+      - name: Build arm64 + x86_64
+        run: |
+          cargo build --release -p loopx --target aarch64-apple-darwin
+          cargo build --release -p loopx --target x86_64-apple-darwin
+
+      - name: Combine into a universal binary
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/loopx \
+            target/aarch64-apple-darwin/release/loopx \
+            target/x86_64-apple-darwin/release/loopx
+          lipo -info dist/loopx
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopx-universal
+          path: dist/loopx

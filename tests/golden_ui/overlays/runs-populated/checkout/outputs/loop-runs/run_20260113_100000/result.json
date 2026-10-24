@@ -1,0 +1,54 @@
+{
+  "run_id": "run_20260113_100000",
+  "loop_id": "loop_20260113_100000",
+  "definition_name": "sample-loop",
+  "final_state": "completed",
+  "stop_reason": "verifiers_passed",
+  "iterations": [
+    {
+      "iteration": 1,
+      "state": "failed",
+      "verification_results": [
+        {
+          "name": "pytest",
+          "passed": false,
+          "evidence": {}
+        }
+      ],
+      "budget": {
+        "cost": {
+          "used_usd": 0.5
+        },
+        "runtime": {
+          "used_seconds": 60
+        },
+        "overall": "ok"
+      }
+    },
+    {
+      "iteration": 2,
+      "state": "completed",
+      "verification_results": [
+        {
+          "name": "pytest",
+          "passed": true,
+          "evidence": {}
+        },
+        {
+          "name": "lint",
+          "passed": true,
+          "evidence": {}
+        }
+      ],
+      "budget": {
+        "cost": {
+          "used_usd": 0.5
+        },
+        "runtime": {
+          "used_seconds": 60
+        },
+        "overall": "ok"
+      }
+    }
+  ]
+}

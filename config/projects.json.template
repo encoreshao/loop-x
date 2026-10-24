@@ -1,0 +1,32 @@
+{
+  "gitlab_instance": "loop",
+  "assignee_username": "YOUR_GITLAB_USERNAME",
+  "worktree_root": "{{HOME}}/.loopx/worktrees",
+  "projects": {
+    "brightleaf.web": {
+      "project_id": "loop/brightleaf/brightleaf.web",
+      "local_path": "/absolute/path/to/your/brightleaf.web/checkout",
+      "target_branch": "staging",
+      "install_cmd": "bundle check || bundle install",
+      "lint_cmd": "bundle exec rubocop",
+      "test_cmd": "RAILS_ENV=test bundle exec rspec"
+    },
+    "orchard": {
+      "project_id": "loop/brightleaf/orchard",
+      "local_path": "/absolute/path/to/your/orchard/checkout",
+      "target_branch": "staging",
+      "install_cmd": "yarn install --frozen-lockfile",
+      "lint_cmd": "npm run lint",
+      "test_cmd": "npm run test"
+    },
+    "harbor": {
+      "project_id": "other-org/harbor",
+      "local_path": "/absolute/path/to/your/harbor/checkout",
+      "target_branch": "staging",
+      "install_cmd": "npm ci",
+      "lint_cmd": "npm run lint",
+      "test_cmd": "npm run test",
+      "instance": "other-gitlab-instance"
+    }
+  }
+}

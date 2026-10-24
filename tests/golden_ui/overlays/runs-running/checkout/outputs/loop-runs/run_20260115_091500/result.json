@@ -1,0 +1,29 @@
+{
+  "run_id": "run_20260115_091500",
+  "loop_id": "loop_20260115_091500",
+  "definition_name": "live-loop",
+  "final_state": "running",
+  "stop_reason": "in_progress",
+  "iterations": [
+    {
+      "iteration": 1,
+      "state": "running",
+      "verification_results": [
+        {
+          "name": "pytest",
+          "passed": true,
+          "evidence": {}
+        }
+      ],
+      "budget": {
+        "cost": {
+          "used_usd": 0.5
+        },
+        "runtime": {
+          "used_seconds": 60
+        },
+        "overall": "ok"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+disabled_class
+_topic_action_html(topic, csrf_input)
+edit_form_id
+csrf_input
+safe_name
+html.escape(topic.get('label', ''))
+html.escape(_t('label'))
+html.escape(_t('topic name'))
+_custom_select('slack_bundle', bundles, topic.get('slack_bundle') or '', empty_label=_t('(use default webhook)'))
+html.escape(_t('what counts as notable'))
+html.escape(topic.get('brief', ''))
+html.escape(_t('Save'))
+url_safe_name
+delete_form_id
+delete_confirm
+html.escape(_t('Delete'))

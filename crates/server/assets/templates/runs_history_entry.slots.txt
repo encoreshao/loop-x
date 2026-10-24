@@ -1,0 +1,8 @@
+detail_href
+safe_name
+tags_html
+delete_href
+csrf_input
+delete_confirm
+html.escape(_t('Delete {name}', name=name))
+html.escape(overview)

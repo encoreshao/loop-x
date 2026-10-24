@@ -1,0 +1,46 @@
+# Bumps dependencies and verifies tests still pass. `diff_scope`'s
+# allowed_paths is intentionally narrow (lockfiles/manifests only) - edit
+# it to match your project's real dependency files before use.
+name: dependency-updater
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 6 * * 1"
+
+goal:
+  type: dependency_update
+
+actions:
+  - inspect_repository
+  - modify_code
+  - run_tests
+  - create_merge_request
+
+verification:
+  required:
+    - tests
+    - diff_scope
+
+verifiers:
+  - name: tests
+    type: command
+    command: "make test"
+  - name: diff_scope
+    type: git_diff
+    allowed_paths:
+      - package.json
+      - package-lock.json
+      - requirements.txt
+
+stop_conditions:
+  max_iterations: 3
+  max_runtime_minutes: 30
+  max_cost_usd: 5
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

@@ -1,0 +1,40 @@
+_SECTION_ICON_SLACK
+html.escape(_t('View and manage where this loop sends run notifications. Slack is currently the only channel.'))
+html.escape(_t('Default webhook:'))
+webhook_display
+csrf_input
+html.escape(_t('paste new Slack webhook URL'))
+html.escape(_t('Save'))
+_SECTION_ICON_BLOCK_KIT_BUILDER
+bkb_subtitle
+block_templates_json
+default_only_names_json
+html.escape(_t('Template'))
+html.escape(_t('Name'))
+html.escape(_t('Bind to notification'))
+html.escape(_t('(none)'))
+notification_key_options
+html.escape(_t('JSON preview'))
+html.escape(_t('Delete'))
+html.escape(_t('Send test message'))
+json.dumps(_t('+ Add'))
+json.dumps(_t('Label'))
+json.dumps(_t('+ Add button'))
+json.dumps(_t('Hero image URL'))
+json.dumps(_t('Hero image alt text'))
+json.dumps(_t('Title'))
+json.dumps(_t('Subtitle'))
+json.dumps(_t('Body ({token} available)', token='{{message}}'))
+json.dumps(_t('Button label'))
+json.dumps(_t('Button URL'))
+json.dumps(_t('Remove card'))
+json.dumps(_t('+ Add card'))
+json.dumps(_t('Markdown text ({token} available)', token='{{message}}'))
+json.dumps(_t('No fields.'))
+json.dumps(_t('Image URL'))
+json.dumps(_t('Alt text'))
+json.dumps(_t('Context text elements'))
+json.dumps(_t('Fields'))
+json.dumps(_t('Text ({token} available)', token='{{message}}'))
+json.dumps(_t('+ New template'))
+json.dumps(_t('(default)'))

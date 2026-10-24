@@ -1,0 +1,59 @@
+# The REAL definition the scheduled topic monitor loop runs through
+# (bin/topic_monitor_runner.py). Unlike loops/gitlab-issue/loop.yaml,
+# `verifiers: []` here is NOT a known limitation - there is no
+# code-mutating action in `actions` below, so bin/loop_audit.py's
+# existing "no code-mutating actions declared - nothing to verify"
+# branch applies and this passes audit cleanly. See
+# docs/superpowers/specs/2026-09-07-topic-monitor-runtime-wiring-design.md.
+name: topic-monitor-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 10 * * *"
+
+goal:
+  type: topic_monitoring
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - topic_brief
+    - seen_items
+
+actions:
+  - research_topic
+  - write_briefing
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 30
+  # max_cost_usd is passed to the Claude CLI as a per-call
+  # --max-budget-usd cap (bin/cost.py budget_args), so Claude itself stops
+  # the single topic call at this spend; Codex has no equivalent flag and
+  # runs uncapped. The CLI runs with --output-format json, so
+  # invoke_topic_agent returns Claude's total_cost_usd (None under Codex, so
+  # the ledger records an unknown cost, not $0). With
+  # max_iterations 1 the BudgetController is only consulted around the
+  # single call, and no-progress detection needs at least two iterations.
+  # The per-topic subprocess timeout derived from max_runtime_minutes is the
+  # enforced runtime bound.
+  max_cost_usd: 3
+  no_progress_iterations: 2
+
+human_gates: []
+
+# Retry is meaningless with no external verifier to disagree with the
+# agent's own self-report - explicitly disabled rather than left at the
+# library default of enabled/2 attempts.
+retry:
+  enabled: false
+  max_attempts: 1

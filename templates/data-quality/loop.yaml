@@ -1,0 +1,37 @@
+# Runs a data-quality check command on a schedule and escalates if it
+# fails. Edit the `data_checks` verifier's `command` to your project's
+# real check before use.
+name: data-quality
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 3 * * *"
+
+goal:
+  type: data_quality_check
+
+actions:
+  - inspect_repository
+  - run_tests
+
+verification:
+  required:
+    - data_checks
+
+verifiers:
+  - name: data_checks
+    type: command
+    command: "make data-quality-check"
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 20
+  max_cost_usd: 2
+  no_progress_iterations: 1
+
+human_gates: []
+
+retry:
+  enabled: false
+  max_attempts: 1

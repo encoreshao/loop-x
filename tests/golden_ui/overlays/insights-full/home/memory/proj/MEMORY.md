@@ -1,0 +1,3 @@
+- [#101 run the migration before the specs](101-run-the-migration-before-the-specs.md) — Run the migration before the specs. It fixes a flaky **setup** failure.
+- [#102 prefer rg over grep for repo](102-prefer-rg-over-grep-for-repo.md) — Prefer `rg` over grep for repo search.
+- [#103 a lesson with no category b](103-a-lesson-with-no-category-b.md) — A lesson with no category & <b>markup</b>.

@@ -1,0 +1,17 @@
+{
+  "notification_key": null,
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": ":test_tube: Example — Rich Incident Report" } },
+    { "type": "divider" },
+    { "type": "section",
+      "text": { "type": "mrkdwn", "text": "*Source*\nLoop Engineering" },
+      "accessory": { "type": "image", "image_url": "https://api.slack.com/img/blocks/bkb_template_images/redwood-suite.png", "alt_text": "placeholder — swap for your own icon" }
+    },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":memo: Summary" } ] },
+    { "type": "divider" },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "{{message}}" } },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":bulb: Suggested next step" } ] },
+    { "type": "divider" },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "Open `outputs/loop-runs/` for per-issue results, or `logs/loop-engineering.log` for the full trace." } }
+  ]
+}

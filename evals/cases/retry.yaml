@@ -1,0 +1,20 @@
+name: retry
+description: >
+  A verifier that fails once and then passes - the loop should retry
+  exactly once and land on COMPLETED, proving a retry actually re-runs
+  verification rather than looping forever or giving up early.
+definition:
+  name: eval-retry
+  version: 1
+  trigger: {type: manual}
+  goal: {type: fix}
+script:
+  agent:
+    - {changed: true, cost_usd: 0.05}
+    - {changed: true, cost_usd: 0.05}
+  verifiers:
+    tests: [false, true]
+expect:
+  final_state: completed
+  stop_reason: completed
+  iterations: 2

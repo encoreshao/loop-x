@@ -1,0 +1,15 @@
+{
+  "_comment": "render_shell() called directly (Python vs Rust) with these arguments; status is the status.json dict fed to the topbar pill.",
+  "variants": [
+    {"id": "plain", "title": "README · Loop X Engineering", "active_page": "readme", "status": {"state": "idle"}, "body": "<p>body</p>"},
+    {"id": "overview-running", "title": "Dashboard · Loop X Engineering", "active_page": "overview", "status": {"state": "running", "current_issue": "proj #12", "current_step": "analyzing"}, "body": "<div>x</div>", "refresh": true, "refresh_note": true},
+    {"id": "lazy", "title": "GitLab · Loop X Engineering", "active_page": "loop:gitlab-loop", "status": {"state": "failed"}, "body": "", "refresh": true, "refresh_note": true, "lazy_refresh": true},
+    {"id": "runs", "title": "Runs · Loop X Engineering", "active_page": "history", "status": {"state": "never_run"}, "body": "<b>&amp;</b>"},
+    {"id": "insights", "title": "Insights · Loop X Engineering", "active_page": "cost", "status": {"state": "stopped"}, "body": ""},
+    {"id": "harness", "title": "Harness · Loop X Engineering", "active_page": "harness", "status": {"state": "idle"}, "body": ""},
+    {"id": "connectors", "title": "Connectors · Loop X Engineering", "active_page": "connectors", "status": {"state": "idle"}, "body": ""},
+    {"id": "settings", "title": "Settings · Loop X Engineering", "active_page": "settings", "status": {"state": "weird_state"}, "body": ""},
+    {"id": "generic-loop", "title": "RSS Watch · Loop X Engineering", "active_page": "loop:rss-watch-loop", "status": {"state": "idle"}, "body": ""},
+    {"id": "no-sep-title", "title": "Loops", "active_page": "loops", "status": {"state": "idle"}, "body": ""}
+  ]
+}

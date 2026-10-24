@@ -1,0 +1,8 @@
+html.escape(_t('Topic Monitor'))
+topic_monitor_subtitle
+flash_html
+_SECTION_ICON_TOPIC_MONITOR
+html.escape(_t('Topics'))
+topics_html
+run_now_form
+latest_data_section

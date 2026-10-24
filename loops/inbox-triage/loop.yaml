@@ -1,0 +1,46 @@
+# The REAL definition the scheduled Inbox Triage loop runs through
+# (bin/inbox_triage_runner.py). No code-mutating action, so
+# bin/loop_audit.py's "nothing to verify" branch applies. See
+# docs/superpowers/specs/2026-09-27-inbox-triage-design.md.
+name: inbox-triage-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 9 * * 1-5"
+
+goal:
+  type: inbox_triage
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - mailbox
+    - urgent_brief
+
+actions:
+  - read_mailbox
+  - classify_messages
+  - label_messages
+  - create_reply_drafts
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  # Per-inbox bound; the AI subprocess timeout is derived from this.
+  max_runtime_minutes: 15
+  max_cost_usd: 2
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: false
+  max_attempts: 1

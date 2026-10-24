@@ -1,0 +1,1 @@
+<a class='pill pill-ai-cli' href='/settings?tab=ai-cli'>⟦_AI_CLI_LOGOS[selected_cli]⟧⟦html.escape(ai_cli_name)⟧</a>

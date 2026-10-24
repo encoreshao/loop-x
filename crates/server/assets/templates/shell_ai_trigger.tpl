@@ -1,0 +1,1 @@
+<button type='button' class='ai-panel-trigger' id='ai-panel-trigger' aria-controls='ai-panel' aria-expanded='false' aria-label='⟦ai_label⟧' title='⟦ai_label⟧'><span class='material-symbols-outlined' aria-hidden='true'>auto_awesome</span></button>

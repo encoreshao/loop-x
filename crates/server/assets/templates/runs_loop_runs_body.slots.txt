@@ -1,0 +1,7 @@
+html.escape(_t('Loop Runs'))
+html.escape(_t('Every recorded LoopRuntime run, most recent first.'))
+_loop_runs_overview_html(summary)
+_SECTION_ICON_LOOP_RUNS
+html.escape(_t('Runs'))
+''.join(rows)
+_incomplete_runs_html()

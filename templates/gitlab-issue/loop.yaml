@@ -1,0 +1,64 @@
+# Matches this repo's own real GitLab issue loop's shape (see
+# docs/tasks/gitlab-issue-loop.md) - not yet wired to LoopRuntime (that
+# loop still runs as one freeform agent call via run-loop.sh; see
+# docs/superpowers/specs/2026-09-06-loop-runtime-foundation-design.md's
+# "Constraint that shapes this design"). Useful today as a reference
+# LoopDefinition and for `loop audit`/`loop validate` against the real
+# loop's stop conditions.
+name: gitlab-issue-fixer
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 10 * * 1-5"
+
+goal:
+  type: issue_resolution
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - issue
+    - repository
+    - project_memory
+    - task_memory
+
+actions:
+  - inspect_issue
+  - inspect_repository
+  - modify_code
+  - run_tests
+  - create_merge_request
+
+verification:
+  required:
+    - tests
+    - lint
+    - diff_scope
+
+verifiers:
+  - name: tests
+    type: command
+    command: pytest
+  - name: diff_scope
+    type: git_diff
+    allowed_paths:
+      - src/
+      - tests/
+
+stop_conditions:
+  max_iterations: 3
+  max_runtime_minutes: 30
+  max_cost_usd: 5
+  no_progress_iterations: 2
+
+human_gates:
+  - merge
+  - production_deploy
+
+retry:
+  enabled: true
+  max_attempts: 2

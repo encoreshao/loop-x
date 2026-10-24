@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/server", "crates/cli"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+loopx-core = { path = "crates/core" }
+loopx-server = { path = "crates/server" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+ureq = "2"
+percent-encoding = "2"
+libc = "0.2"
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "process", "fs"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+notify = "6"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+tower = { version = "0.4", features = ["util"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde_norway = "0.9"
+shlex = "1"
+uuid = { version = "1", features = ["v4"] }
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

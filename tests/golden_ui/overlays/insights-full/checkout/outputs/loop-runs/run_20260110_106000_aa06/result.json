@@ -1,0 +1,30 @@
+{
+ "run_id": "run_20260110_106000_aa06",
+ "definition_name": "gitlab-issue-loop",
+ "final_state": "completed",
+ "stop_reason": "verified",
+ "iterations": [
+  {
+   "iteration": 1,
+   "state": "completed",
+   "budget": {
+    "overall": "ok",
+    "iterations": {
+     "used": 1,
+     "limit": 3,
+     "status": "ok"
+    },
+    "runtime": {
+     "used_seconds": 120.5,
+     "limit_seconds": 600.0,
+     "status": "ok"
+    },
+    "cost": {
+     "used_usd": 0.8,
+     "limit_usd": 1.0,
+     "status": "ok"
+    }
+   }
+  }
+ ]
+}

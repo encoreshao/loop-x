@@ -1,0 +1,1 @@
+{"state": "failed", "pid": 1, "started": "2026-01-15T09:20:00+00:00", "finished": "2026-01-15T09:21:00+00:00", "error": "build: exited with status 2", "from": "v0.4.0", "to": "", "steps": [{"name": "fetch", "status": "done", "started": null, "finished": null, "log": ""}, {"name": "build", "status": "failed", "started": null, "finished": null, "log": "boom"}]}

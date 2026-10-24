@@ -1,0 +1,3 @@
+_SECTION_ICON_TOPIC_MONITOR
+html.escape(_t('Latest Data'))
+_topic_latest_data_html(topics)

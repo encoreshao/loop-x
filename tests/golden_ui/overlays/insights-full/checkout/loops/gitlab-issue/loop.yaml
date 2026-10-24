@@ -1,0 +1,86 @@
+# The REAL definition the scheduled GitLab issue loop runs through
+# (bin/gitlab_loop_runner.py) - distinct from templates/gitlab-issue/loop.yaml,
+# which stays a generic loop-init/audit reference (its pytest/git_diff
+# verifiers don't match any real project's actual test_cmd/lint_cmd from
+# projects.json). See
+# docs/superpowers/specs/2026-09-07-gitlab-loop-runtime-wiring-design.md.
+name: gitlab-issue-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 10 * * 1-5"
+
+goal:
+  type: issue_resolution
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - issue
+    - repository
+    - project_memory
+    - task_memory
+
+actions:
+  - inspect_issue
+  - inspect_repository
+  - modify_code
+  - run_tests
+  - create_merge_request
+
+# `project_commands` is resolved per issue at runtime: it re-runs the issue
+# project's own test_cmd/lint_cmd (from projects.json) inside the worktree the
+# agent used, via bin/loop_verifiers.py's ProjectCommandsVerifier. No worktree
+# (the agent made no code change) is a vacuous pass, not a failure.
+# mode: observe records the real result in the iteration's evidence
+# (`observed_passed`) but always passes, so outcomes are unchanged; mode: gate
+# makes a failure fail the iteration, and LoopRuntime retries with the failing
+# output as feedback. Stay on observe until the Harness page shows the agent's
+# own "fixed" claim agreeing with this check; flipping is a one-line change.
+verification:
+  required: [project_commands]
+  mode: observe
+
+verifiers:
+  - name: project_commands
+    type: project_commands
+
+stop_conditions:
+  max_iterations: 2
+  # Bounds each issue independently, nested inside the scheduler's outer
+  # 43200s (12h) whole-batch sanity timeout (gitlab-loop's timeout_seconds in
+  # config/loops.json.template) - which is sized to leave room
+  # for a double-digit issue count at this budget plus the end-of-run
+  # wrap-up call, and must be raised alongside this value if this ever
+  # grows. 30 matches this repo's own LoopDefinition/
+  # BudgetController default and templates/gitlab-issue/loop.yaml's value,
+  # chosen for that established basis pending real observed run-time data
+  # (a project's own bundle install + rspec suite is the dominant cost and
+  # has never been measured here).
+  max_runtime_minutes: 30
+  # Each iteration is one agent call plus the verifier's test_cmd and
+  # lint_cmd runs, each bounded by this same value, so the worst-case
+  # per-issue ceiling is max_iterations x 3 x this value (6x with the
+  # current 2 iterations); in observe mode only one iteration ever runs.
+  # max_cost_usd is also enforced inside each Claude call: every agent call
+  # gets --max-budget-usd = this value minus what earlier iterations of the
+  # same issue already spent (cost.remaining_budget), and a budget-stopped
+  # call's spend still counts. Codex calls have no per-call cap and report
+  # no cost (ledger total_cost_usd None), so for them the budget is only a
+  # between-iterations check on $0.
+  max_cost_usd: 3
+  no_progress_iterations: 2
+
+human_gates:
+  - merge
+  - production_deploy
+
+# Retry only ever triggers in gate mode (observe-mode verification always
+# passes); the retry carries the failing command output as feedback.
+retry:
+  enabled: true
+  max_attempts: 2

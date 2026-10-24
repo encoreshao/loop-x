@@ -1,0 +1,6 @@
+html.escape(_t('Topic Settings'))
+topic_settings_subtitle
+flash_html
+_SECTION_ICON_SETTINGS
+settings_html
+add_topic_form

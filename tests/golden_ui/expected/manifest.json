@@ -1,0 +1,1908 @@
+{
+ "clock": "2026-01-15T09:30:00Z",
+ "csrf_token": "golden-csrf-token",
+ "pages": [
+  {
+   "id": "readme",
+   "path": "/readme",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/readme.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/readme.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/readme.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/readme.html"
+    }
+   }
+  },
+  {
+   "id": "update",
+   "path": "/update",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/update.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/update.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/update.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/update.html"
+    }
+   }
+  },
+  {
+   "id": "update-progress",
+   "path": "/update/progress",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "application/json; charset=utf-8",
+     "location": null,
+     "file": "en/update-progress.json"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "application/json; charset=utf-8",
+     "location": null,
+     "file": "ja/update-progress.json"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "application/json; charset=utf-8",
+     "location": null,
+     "file": "zh/update-progress.json"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "application/json; charset=utf-8",
+     "location": null,
+     "file": "fr/update-progress.json"
+    }
+   }
+  },
+  {
+   "id": "update-behind",
+   "path": "/update",
+   "overlay": "update-behind",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/update-behind.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/update-behind.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/update-behind.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/update-behind.html"
+    }
+   }
+  },
+  {
+   "id": "update-behind-progress",
+   "path": "/update/progress",
+   "overlay": "update-behind",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "application/json; charset=utf-8",
+     "location": null,
+     "file": "en/update-behind-progress.json"
+    }
+   }
+  },
+  {
+   "id": "update-dirty",
+   "path": "/update",
+   "overlay": "update-dirty",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/update-dirty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/update-dirty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/update-dirty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/update-dirty.html"
+    }
+   }
+  },
+  {
+   "id": "update-running",
+   "path": "/update",
+   "overlay": "update-running",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/update-running.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/update-running.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/update-running.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/update-running.html"
+    }
+   }
+  },
+  {
+   "id": "update-running-progress",
+   "path": "/update/progress",
+   "overlay": "update-running",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "application/json; charset=utf-8",
+     "location": null,
+     "file": "en/update-running-progress.json"
+    }
+   }
+  },
+  {
+   "id": "update-failed",
+   "path": "/update",
+   "overlay": "update-failed",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/update-failed.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/update-failed.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/update-failed.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/update-failed.html"
+    }
+   }
+  },
+  {
+   "id": "update-done",
+   "path": "/update",
+   "overlay": "update-done",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/update-done.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/update-done.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/update-done.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/update-done.html"
+    }
+   }
+  },
+  {
+   "id": "banner-on-readme",
+   "path": "/readme",
+   "overlay": "update-behind",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/banner-on-readme.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/banner-on-readme.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/banner-on-readme.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/banner-on-readme.html"
+    }
+   }
+  },
+  {
+   "id": "banner-in-flight-on-readme",
+   "path": "/readme",
+   "overlay": "update-running",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/banner-in-flight-on-readme.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/banner-in-flight-on-readme.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/banner-in-flight-on-readme.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/banner-in-flight-on-readme.html"
+    }
+   }
+  },
+  {
+   "id": "redirect-gitlab",
+   "path": "/gitlab",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/gitlab-loop"
+    },
+    "ja": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/gitlab-loop"
+    },
+    "zh": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/gitlab-loop"
+    },
+    "fr": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/gitlab-loop"
+    }
+   }
+  },
+  {
+   "id": "redirect-logs-query",
+   "path": "/logs?x=1",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 301,
+     "content_type": "",
+     "location": "/runs?view=logs&x=1"
+    },
+    "ja": {
+     "status": 301,
+     "content_type": "",
+     "location": "/runs?view=logs&x=1"
+    },
+    "zh": {
+     "status": 301,
+     "content_type": "",
+     "location": "/runs?view=logs&x=1"
+    },
+    "fr": {
+     "status": 301,
+     "content_type": "",
+     "location": "/runs?view=logs&x=1"
+    }
+   }
+  },
+  {
+   "id": "redirect-topic-settings",
+   "path": "/topic-monitor/settings",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/topic-loop?view=topics"
+    },
+    "ja": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/topic-loop?view=topics"
+    },
+    "zh": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/topic-loop?view=topics"
+    },
+    "fr": {
+     "status": 301,
+     "content_type": "",
+     "location": "/loops/topic-loop?view=topics"
+    }
+   }
+  },
+  {
+   "id": "redirect-learnings",
+   "path": "/learnings?x=1",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 301,
+     "content_type": "",
+     "location": "/insights?view=memory"
+    },
+    "ja": {
+     "status": 301,
+     "content_type": "",
+     "location": "/insights?view=memory"
+    },
+    "zh": {
+     "status": 301,
+     "content_type": "",
+     "location": "/insights?view=memory"
+    },
+    "fr": {
+     "status": 301,
+     "content_type": "",
+     "location": "/insights?view=memory"
+    }
+   }
+  },
+  {
+   "id": "favicon",
+   "path": "/favicon.ico",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "image/x-icon",
+     "location": null,
+     "file": "en/favicon.bin"
+    }
+   }
+  },
+  {
+   "id": "hub-overview",
+   "path": "/",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-overview.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-overview.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-overview.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-overview.html"
+    }
+   }
+  },
+  {
+   "id": "hub-runs-history",
+   "path": "/runs?view=history",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-runs-history.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-runs-history.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-runs-history.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-runs-history.html"
+    }
+   }
+  },
+  {
+   "id": "hub-insights",
+   "path": "/insights",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-insights.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-insights.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-insights.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-insights.html"
+    }
+   }
+  },
+  {
+   "id": "hub-harness",
+   "path": "/harness",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-harness.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-harness.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-harness.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-harness.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-empty",
+   "path": "/insights",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-empty.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-days-bad",
+   "path": "/insights?days=abc",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-days-bad.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-days-bad.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-days-bad.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-days-bad.html"
+    }
+   }
+  },
+  {
+   "id": "ins-cost-empty",
+   "path": "/insights?view=cost",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-cost-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-cost-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-cost-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-cost-empty.html"
+    }
+   }
+  },
+  {
+   "id": "ins-budget-empty",
+   "path": "/insights?view=budget",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-budget-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-budget-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-budget-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-budget-empty.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-empty",
+   "path": "/insights?view=memory",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-empty.html"
+    }
+   }
+  },
+  {
+   "id": "ins-unknown-view",
+   "path": "/insights?view=nope",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-unknown-view.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-unknown-view.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-unknown-view.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-unknown-view.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-noprojects",
+   "path": "/insights?view=memory",
+   "overlay": "insights-noprojects",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-noprojects.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-noprojects.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-noprojects.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-noprojects.html"
+    }
+   }
+  },
+  {
+   "id": "har-gates-empty",
+   "path": "/harness",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/har-gates-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/har-gates-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/har-gates-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/har-gates-empty.html"
+    }
+   }
+  },
+  {
+   "id": "har-evals-empty",
+   "path": "/harness?view=evals",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/har-evals-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/har-evals-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/har-evals-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/har-evals-empty.html"
+    }
+   }
+  },
+  {
+   "id": "har-audit-empty",
+   "path": "/harness?view=audit",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/har-audit-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/har-audit-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/har-audit-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/har-audit-empty.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-full",
+   "path": "/insights",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-full.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-full.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-full.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-full.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-full-d30",
+   "path": "/insights?days=30",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-full-d30.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-full-d30.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-full-d30.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-full-d30.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-full-d90",
+   "path": "/insights?days=90",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-full-d90.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-full-d90.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-full-d90.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-full-d90.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-full-d5",
+   "path": "/insights?days=5",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-full-d5.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-full-d5.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-full-d5.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-full-d5.html"
+    }
+   }
+  },
+  {
+   "id": "ins-analytics-full-dabc",
+   "path": "/insights?days=abc",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-analytics-full-dabc.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-analytics-full-dabc.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-analytics-full-dabc.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-analytics-full-dabc.html"
+    }
+   }
+  },
+  {
+   "id": "ins-cost-full-d7",
+   "path": "/insights?view=cost&days=7",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-cost-full-d7.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-cost-full-d7.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-cost-full-d7.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-cost-full-d7.html"
+    }
+   }
+  },
+  {
+   "id": "ins-cost-full-d30",
+   "path": "/insights?view=cost&days=30",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-cost-full-d30.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-cost-full-d30.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-cost-full-d30.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-cost-full-d30.html"
+    }
+   }
+  },
+  {
+   "id": "ins-cost-full-d90",
+   "path": "/insights?view=cost&days=90",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-cost-full-d90.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-cost-full-d90.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-cost-full-d90.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-cost-full-d90.html"
+    }
+   }
+  },
+  {
+   "id": "ins-budget-full",
+   "path": "/insights?view=budget",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-budget-full.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-budget-full.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-budget-full.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-budget-full.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-full",
+   "path": "/insights?view=memory",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-full.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-full.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-full.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-full.html"
+    }
+   }
+  },
+  {
+   "id": "har-gates-full",
+   "path": "/harness",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/har-gates-full.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/har-gates-full.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/har-gates-full.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/har-gates-full.html"
+    }
+   }
+  },
+  {
+   "id": "har-evals-full",
+   "path": "/harness?view=evals",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/har-evals-full.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/har-evals-full.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/har-evals-full.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/har-evals-full.html"
+    }
+   }
+  },
+  {
+   "id": "har-audit-full",
+   "path": "/harness?view=audit",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/har-audit-full.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/har-audit-full.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/har-audit-full.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/har-audit-full.html"
+    }
+   }
+  },
+  {
+   "id": "hub-settings",
+   "path": "/settings",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-settings.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-settings.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-settings.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-settings.html"
+    }
+   }
+  },
+  {
+   "id": "hub-connectors",
+   "path": "/connectors",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-connectors.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-connectors.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-connectors.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-connectors.html"
+    }
+   }
+  },
+  {
+   "id": "loops-catalog",
+   "path": "/loops",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/loops-catalog.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/loops-catalog.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/loops-catalog.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/loops-catalog.html"
+    }
+   }
+  },
+  {
+   "id": "runs-empty-loop-runs",
+   "path": "/runs",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-empty-loop-runs.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-empty-loop-runs.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-empty-loop-runs.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-empty-loop-runs.html"
+    }
+   }
+  },
+  {
+   "id": "runs-empty-logs",
+   "path": "/runs?view=logs",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-empty-logs.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-empty-logs.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-empty-logs.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-empty-logs.html"
+    }
+   }
+  },
+  {
+   "id": "runs-unknown-view",
+   "path": "/runs?view=nope",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-unknown-view.html"
+    }
+   }
+  },
+  {
+   "id": "runs-run-404",
+   "path": "/loop-runs/nope",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "en/runs-run-404.txt"
+    },
+    "ja": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-run-404.txt"
+    }
+   }
+  },
+  {
+   "id": "runs-history-404",
+   "path": "/history/missing.md",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "en/runs-history-404.txt"
+    },
+    "ja": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-history-404.txt"
+    }
+   }
+  },
+  {
+   "id": "runs-topic-history-404",
+   "path": "/topic-monitor/history/missing.md",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "en/runs-topic-history-404.txt"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-loop-runs",
+   "path": "/runs",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-loop-runs.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-loop-runs.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-loop-runs.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-loop-runs.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history",
+   "path": "/runs?view=history",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-history.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-history.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-history.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history-flash",
+   "path": "/runs?view=history&flash=Deleted+2026-01-12.md&ok=1",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history-flash.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-logs",
+   "path": "/runs?view=logs",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-logs.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-logs.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-logs.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-logs.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-run-completed",
+   "path": "/loop-runs/run_20260113_100000",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-run-completed.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-run-completed.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-run-completed.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-run-completed.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-run-failed",
+   "path": "/loop-runs/run_20260114_120000",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-run-failed.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-run-failed.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-run-failed.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-run-failed.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-run-running",
+   "path": "/loop-runs/run_20260115_090000",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-run-running.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history-file",
+   "path": "/history/2026-01-13.md?x=1",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history-file.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-history-file.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-history-file.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-history-file.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history-file-quiet",
+   "path": "/history/2026-01-14.md",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history-file-quiet.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history-subpath",
+   "path": "/history/sub/2026-01-13.md",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history-subpath.html"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history-notmd",
+   "path": "/history/notes.txt",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history-notmd.txt"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-history-escaped",
+   "path": "/history/..%2F2026-01-13.md",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 404,
+     "content_type": "text/plain; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-history-escaped.txt"
+    }
+   }
+  },
+  {
+   "id": "runs-populated-topic-history-file",
+   "path": "/topic-monitor/history/2026-01-14-ai-news.md",
+   "overlay": "runs-populated",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-populated-topic-history-file.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-populated-topic-history-file.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-populated-topic-history-file.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-populated-topic-history-file.html"
+    }
+   }
+  },
+  {
+   "id": "runs-running-loop-runs",
+   "path": "/runs?view=loop-runs",
+   "overlay": "runs-running",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-running-loop-runs.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-running-loop-runs.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-running-loop-runs.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-running-loop-runs.html"
+    }
+   }
+  },
+  {
+   "id": "runs-running-logs",
+   "path": "/runs?view=logs",
+   "overlay": "runs-running",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-running-logs.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-running-logs.html"
+    }
+   }
+  },
+  {
+   "id": "runs-incomplete-only",
+   "path": "/runs",
+   "overlay": "runs-incomplete-only",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-incomplete-only.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/runs-incomplete-only.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/runs-incomplete-only.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/runs-incomplete-only.html"
+    }
+   }
+  },
+  {
+   "id": "runs-claude-logs",
+   "path": "/runs?view=logs",
+   "overlay": "runs-claude",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/runs-claude-logs.html"
+    }
+   }
+  }
+ ]
+}

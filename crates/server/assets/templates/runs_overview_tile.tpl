@@ -1,0 +1,1 @@
+<div class='dash-stat-tile'><span class='material-symbols-outlined dash-stat-icon' aria-hidden='true'>⟦icon⟧</span><span class='dash-stat-value'>⟦value⟧</span><span class='dash-stat-label'>⟦html.escape(label)⟧</span></div>

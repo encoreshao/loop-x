@@ -1,0 +1,6 @@
+html.escape(data['definition_name'])
+html.escape(data['run_id'])
+pill_class
+html.escape(data['final_state'])
+html.escape(_t('Stop reason: {reason}', reason=data['stop_reason']))
+''.join(iteration_blocks)

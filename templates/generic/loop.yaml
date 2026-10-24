@@ -1,0 +1,30 @@
+# Bare-minimum LoopDefinition template - a starting point with no
+# actions/verifiers configured yet. Fill in `actions`, `verifiers`, and
+# `human_gates` before using `loop run` for anything real.
+name: my-loop
+version: 1
+
+trigger:
+  type: manual
+
+goal:
+  type: self_check
+
+actions: []
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 3
+  max_runtime_minutes: 30
+  max_cost_usd: 5
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

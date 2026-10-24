@@ -1,0 +1,1 @@
+{"state": "done", "pid": 1, "started": "2026-01-15T09:20:00+00:00", "finished": "2026-01-15T09:25:00+00:00", "error": null, "from": "v0.4.0", "to": "v0.5.0", "steps": [{"name": "fetch", "status": "done", "started": null, "finished": null, "log": ""}]}

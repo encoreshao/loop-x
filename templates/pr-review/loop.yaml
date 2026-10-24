@@ -1,0 +1,32 @@
+# Reviews an open PR/MR and posts a comment. post_public_comment is L2
+# (policy-controlled) - left ungated by default here; add it to
+# human_gates if your team wants review comments approved before posting.
+name: pr-review
+version: 1
+
+trigger:
+  type: webhook
+
+goal:
+  type: pr_review
+
+actions:
+  - inspect_repository
+  - post_public_comment
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 15
+  max_cost_usd: 2
+  no_progress_iterations: 1
+
+human_gates: []
+
+retry:
+  enabled: false
+  max_attempts: 1

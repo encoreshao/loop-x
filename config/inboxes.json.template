@@ -1,0 +1,23 @@
+{
+  "default_categories": [
+    {"key": "urgent", "label": "Loop/Urgent", "draft": true, "description": "Needs a response today: a direct ask from a real person with a deadline, a blocker, or a client/boss escalation."},
+    {"key": "action", "label": "Loop/Action", "draft": false, "description": "Needs a reply or task from the user, but not today."},
+    {"key": "fyi", "label": "Loop/FYI", "draft": false, "description": "Worth reading, no action: updates, CCs, announcements."},
+    {"key": "notifications", "label": "Loop/Notifications", "draft": false, "description": "Automated mail: GitLab, CI, calendar, SaaS alerts."},
+    {"key": "newsletters", "label": "Loop/Newsletters", "draft": false, "description": "Marketing, digests, subscriptions."}
+  ],
+  "inboxes": [
+    {
+      "name": "work-gmail",
+      "label": "Work Gmail",
+      "provider": "gmail",
+      "account": "you@example.com",
+      "enabled": false,
+      "urgent_brief": "Mail from clients, or anything about a production outage, is always urgent.",
+      "vip_senders": [],
+      "exclude_senders": [],
+      "categories": null,
+      "slack_bundle": null
+    }
+  ]
+}

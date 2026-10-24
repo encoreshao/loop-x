@@ -1,0 +1,32 @@
+# Read-only (L0) monitoring loop - conceptually related to this repo's
+# own bin/topic_config.py/bin/topic_seen.py, but expressed as a
+# LoopDefinition rather than the topic-monitor's own bespoke script.
+name: research-monitor
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 * * * *"
+
+goal:
+  type: research_monitor
+
+actions:
+  - inspect_repository
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 10
+  max_cost_usd: 1
+  no_progress_iterations: 1
+
+human_gates: []
+
+retry:
+  enabled: false
+  max_attempts: 1

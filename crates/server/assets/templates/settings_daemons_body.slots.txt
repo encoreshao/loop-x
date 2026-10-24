@@ -1,0 +1,8 @@
+html.escape(_t('Launchd Daemons'))
+html.escape(_t('Load state, schedule, and enable/disable controls for every launchd daemon in this project.'))
+flash_html
+_SECTION_ICON_DAEMONS
+daemons_html
+html.escape(_t('Registered Loops'))
+registered_loops_subtitle
+registered_loops_html

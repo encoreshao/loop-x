@@ -1,0 +1,9 @@
+{
+  "notification_key": null,
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": ":tada: Example — Loop Completed Successfully" } },
+    { "type": "divider" },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "{{message}}" } },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":sparkles: No action needed — posted automatically." } ] }
+  ]
+}

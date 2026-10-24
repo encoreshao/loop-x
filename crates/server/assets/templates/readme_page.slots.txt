@@ -1,0 +1,3 @@
+readme_subtitle
+quicknav_html
+render_markdown(content)

@@ -1,0 +1,35 @@
+# Synthetic fixture: the obvious fix (`total // size + 1`) makes the
+# reported case pass but breaks the exact-multiple and empty cases, so a
+# careless first attempt fails the gate's re-run of the checks and has to
+# be retried with the failure output as feedback.
+name: failing-test-fix
+issue:
+  title: "Page count drops the last partial page"
+  body: "With 25 items and a page size of 10 the pager shows 2 pages, so items 21-25 are unreachable. It should show 3."
+repo:
+  files:
+    lib/pages.py: |
+      def page_count(total, size=10):
+          return total // size
+    tests/test_pages.py: |
+      from lib.pages import page_count
+
+
+      def test_partial_last_page_counts():
+          assert page_count(25) == 3
+
+
+      def test_exact_multiple():
+          assert page_count(20) == 2
+
+
+      def test_empty():
+          assert page_count(0) == 0
+  test_cmd: "python3 -m pytest -q"
+  lint_cmd: ""
+expect:
+  action: fix
+  allowed_paths: ["lib/**", "tests/**"]
+  # New regression tests are welcome; editing the fixture's own tests is not.
+  protected_paths: ["tests/**"]
+  checks_pass: true

@@ -1,0 +1,2803 @@
+
+:root {
+  --font-family-stack: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --md-primary: #9CC0FC;
+  --md-on-primary: #032763;
+  --md-primary-container: #043B95;
+  --md-on-primary-container: #CDE0FE;
+
+  --md-surface-dim: #1D1D1F;
+  --md-surface: #232529;
+  --md-surface-container-lowest: #17181B;
+  --md-surface-container-low: #2A2D32;
+  --md-surface-container: #2F3237;
+  --md-surface-container-high: #383C43;
+  --md-surface-container-highest: #454A52;
+  --md-on-surface: #E3E5E8;
+  --md-on-surface-variant: #C7CBD1;
+  --md-outline: #8F97A3;
+  --md-outline-variant: #454B54;
+
+  --md-success: #B5E3C6;
+  --md-on-success: #1C4A2D;
+  --md-success-container: #2A6F43;
+  --md-on-success-container: #D9F2E2;
+  --md-warning: #E8CCB0;
+  --md-on-warning: #4F3317;
+  --md-warning-container: #774C22;
+  --md-on-warning-container: #F5E6D6;
+  --md-error: #E8B4B0;
+  --md-on-error: #4F1B17;
+  --md-error-container: #772822;
+  --md-on-error-container: #F5D8D6;
+}
+
+/* Theme/accent color (Preferences page): a fixed, mode-independent wash
+   for the sidebar/topbar background - unlike --md-primary above (the
+   app's single fixed accent for buttons/links/etc, unaffected by this
+   choice), these are deliberately light, flat colors used exactly as
+   given regardless of light/dark color mode, the way a workspace/
+   sidebar accent works in many real apps (Notion, Linear, Slack) rather
+   than a mode-aware semantic palette. `data-accent` is always present on
+   <html> (defaulted to "default" by _render_shell's pre-paint script if
+   localStorage has no saved choice yet), so "Default" - no tint, the
+   original neutral sidebar - is a plain named selector like every other
+   choice, not a special-cased absence branch.
+
+   Four tokens per accent:
+   - --md-nav-surface: the sidebar/topbar background itself.
+   - --md-nav-on-surface: text/icons living directly on that background
+     (brand, nav labels, the sidebar toggle) - these washes are all very
+     light, so this needs to be a dark, legible color even while the
+     rest of the page is in dark mode, hence not reusing --md-on-surface.
+   - --md-nav-active-surface / --md-nav-active-on-surface: the current
+     page's nav link and hover state - a distinctly different, slightly
+     deeper tint of the same hue, so the active item doesn't disappear
+     into the sidebar's own background color. */
+:root[data-accent="default"] {
+  --md-nav-surface: var(--md-surface-container-low);
+  --md-nav-on-surface: var(--md-on-surface-variant);
+  --md-nav-active-surface: var(--md-surface-container-highest);
+  --md-nav-active-on-surface: var(--md-primary);
+}
+:root[data-accent="indigo"] {
+  --md-nav-surface: #f4f0ff;
+  --md-nav-on-surface: #3A3550;
+  --md-nav-active-surface: #E0D6FF;
+  --md-nav-active-on-surface: #4B3FA8;
+}
+:root[data-accent="blue"] {
+  --md-nav-surface: #e9f3fc;
+  --md-nav-on-surface: #2C3E4A;
+  --md-nav-active-surface: #CFE7FB;
+  --md-nav-active-on-surface: #0B57D0;
+}
+:root[data-accent="green"] {
+  --md-nav-surface: #ecf4ee;
+  --md-nav-on-surface: #2A3B2D;
+  --md-nav-active-surface: #D2E8D6;
+  --md-nav-active-on-surface: #2E7D3C;
+}
+:root[data-accent="red"] {
+  --md-nav-surface: #fcf1ef;
+  --md-nav-on-surface: #4A2F2B;
+  --md-nav-active-surface: #F7D9D3;
+  --md-nav-active-on-surface: #B3261E;
+}
+:root[data-accent="gray"] {
+  --md-nav-surface: #ececef;
+  --md-nav-on-surface: #3A3A3D;
+  --md-nav-active-surface: #D6D6DB;
+  --md-nav-active-on-surface: #3A3A3D;
+}
+
+/* Font (Preferences page): one rule per non-default choice, generated from
+   _FONT_CHOICES - "Roboto" needs no rule of its own since it's already the
+   bare :root default above. */
+:root[data-font="inter"] { --font-family-stack: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+:root[data-font="open-sans"] { --font-family-stack: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+:root[data-font="nunito-sans"] { --font-family-stack: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+:root[data-font="source-sans-3"] { --font-family-stack: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+:root[data-font="ibm-plex-sans"] { --font-family-stack: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+/* Color mode (Preferences page): dark is the base scheme above (this
+   app's original, unchanged default). Light is layered on two ways -
+   "Auto" (no explicit data-color-mode) follows the OS via the media
+   query, guarded so an explicit "Dark" choice can't be overridden by a
+   light OS preference; an explicit "Light" choice applies regardless of
+   OS preference via the plain attribute selector below. Every non-accent
+   token from the dark :root block gets a light counterpart here - most
+   are a genuinely new light palette, but success/warning/error simply
+   swap each dark pair's two halves (light mode's "container" is what was
+   dark mode's "on-container" hue, and vice versa). */
+@media (prefers-color-scheme: light) {
+  :root:not([data-color-mode="dark"]) {
+    --md-primary: #0B57D0;
+    --md-on-primary: #FFFFFF;
+    --md-primary-container: #D3E3FD;
+    --md-on-primary-container: #041E49;
+
+    --md-surface-dim: #FFF;
+    --md-surface: #FBF8FA;
+    --md-surface-container-lowest: #FFFFFF;
+    --md-surface-container-low: #F5F1F4;
+    --md-surface-container: #EFEBEE;
+    --md-surface-container-high: #E9E4E8;
+    --md-surface-container-highest: #E3DEE2;
+    --md-on-surface: #1C1B1E;
+    --md-on-surface-variant: #47464A;
+    --md-outline: #77767A;
+    --md-outline-variant: #C7C5CA;
+
+    --md-success: #1C4A2D;
+    --md-on-success: #B5E3C6;
+    --md-success-container: #D9F2E2;
+    --md-on-success-container: #2A6F43;
+    --md-warning: #4F3317;
+    --md-on-warning: #E8CCB0;
+    --md-warning-container: #F5E6D6;
+    --md-on-warning-container: #774C22;
+    --md-error: #4F1B17;
+    --md-on-error: #E8B4B0;
+    --md-error-container: #F5D8D6;
+    --md-on-error-container: #772822;
+  }
+}
+:root[data-color-mode="light"] {
+  --md-primary: #0B57D0;
+  --md-on-primary: #FFFFFF;
+  --md-primary-container: #D3E3FD;
+  --md-on-primary-container: #041E49;
+
+  --md-surface-dim: #FFF;
+  --md-surface: #FBF8FA;
+  --md-surface-container-lowest: #FFFFFF;
+  --md-surface-container-low: #F5F1F4;
+  --md-surface-container: #EFEBEE;
+  --md-surface-container-high: #E9E4E8;
+  --md-surface-container-highest: #E3DEE2;
+  --md-on-surface: #1C1B1E;
+  --md-on-surface-variant: #47464A;
+  --md-outline: #77767A;
+  --md-outline-variant: #C7C5CA;
+
+  --md-success: #1C4A2D;
+  --md-on-success: #B5E3C6;
+  --md-success-container: #D9F2E2;
+  --md-on-success-container: #2A6F43;
+  --md-warning: #4F3317;
+  --md-on-warning: #E8CCB0;
+  --md-warning-container: #F5E6D6;
+  --md-on-warning-container: #774C22;
+  --md-error: #4F1B17;
+  --md-on-error: #E8B4B0;
+  --md-error-container: #F5D8D6;
+  --md-on-error-container: #772822;
+}
+
+* { box-sizing: border-box; }
+
+/* The window never scrolls - #main-scroll (the rounded main card) is the
+   only page-level scroller, so the scrollbar lives inside the main view
+   and the sidebar/topbar frame stays put, Gmail-style. */
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--md-nav-surface);
+  color: var(--md-on-surface-variant);
+  font-family: var(--font-family-stack);
+  line-height: 1.55;
+  font-size: 16px;
+}
+
+.wrap { max-width: clamp(1080px, 90%, 2400px); margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+
+h1, h2, h3 { font-family: var(--font-family-stack); color: var(--md-on-surface); font-weight: 500; margin: 0 0 0.5rem; }
+/* Page titles (h1) get a size step up from h2/h3 - stays at the same
+   500 weight as every other heading (this app's MD3 restyle deliberately
+   keeps to 400/500/700 only, see test_no_font_weight_600_remains), just
+   larger, so a page's own title reads as a clear step above a card's
+   section heading one size down. */
+h1 { font-size: 1.65rem; }
+h2 { font-size: 1.05rem; margin: 0 0 0.85rem; }
+h3 { font-size: 0.95rem; margin: 1rem 0 0.35rem; }
+h3:first-child { margin-top: 0; }
+
+p { margin: 0 0 0.5rem; }
+
+a {
+  color: var(--md-primary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+a:hover { color: var(--md-primary); text-decoration: underline; }
+/* A link carrying an icon (Material Symbol or inline SVG) lines the glyph
+   up with its text instead of sitting it on the baseline, sizes it to the
+   text, and skips the underline, which would otherwise run under the
+   icon too. :where() keeps this at zero specificity so any component's
+   own rule (.btn, .pill, .sidebar-nav a, ...) still wins. */
+:where(a:has(> .material-symbols-outlined, > svg)) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+}
+:where(a:has(> .material-symbols-outlined, > svg) > .material-symbols-outlined) { font-size: 1.2em; }
+:where(a:has(> .material-symbols-outlined, > svg)):hover { text-decoration: none; }
+
+/* One keyboard-focus treatment for every plain interactive element that
+   doesn't already define its own (form inputs, the custom-select trigger,
+   and the md-checkbox all set a more specific :focus-visible/:focus rule
+   below, which wins on specificity over this element-level one). Without
+   this, tabbing to a nav link, .btn, tab, pref swatch/segmented option, or
+   the Daemons page's on/off switch fell back to whatever the browser's
+   default focus ring happens to be - inconsistent with the deliberate
+   ring used everywhere else, and in some browsers barely visible against
+   these surface colors at all. */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+
+/* Fixed left sidebar (brand + nav), shared by every page this server
+   renders. Collapses to an icon-only rail either by user toggle
+   (html.collapsed, set/read via localStorage - see _render_shell's head
+   script and _sidebar_html's toggle button) or automatically below the
+   mobile breakpoint. */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 220px;
+  height: 100vh;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  transition: width 150ms ease;
+  z-index: 100;
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: var(--shell-top);
+  padding: 0 1rem;
+  flex-shrink: 0;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--md-nav-on-surface);
+  font-family: var(--font-family-stack);
+  font-weight: 700;
+  font-size: 1.05rem;
+  min-width: 0;
+  overflow: hidden;
+}
+.brand:hover { color: var(--md-nav-on-surface); text-decoration: none; }
+.brand-mark { display: inline-flex; width: 45px; height: 45px; color: var(--md-nav-on-surface); flex-shrink: 0; }
+.brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.sidebar-toggle {
+  background: none;
+  border: none;
+  color: var(--md-nav-on-surface);
+  cursor: pointer;
+  padding: 0.3rem;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.sidebar-toggle:hover { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
+.sidebar-toggle .material-symbols-outlined { transition: transform 150ms ease; font-size: 18px; }
+
+.sidebar-nav { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.5rem; overflow-y: auto; }
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  color: var(--md-nav-on-surface);
+  font-weight: 500;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+/* Hover and active share the same tinted highlight - the sidebar's own
+   background is now a fixed, mode-independent wash (--md-nav-surface,
+   see .sidebar above), so a dark-mode-oriented color like
+   --md-surface-dim would look inverted/wrong sitting on top of it. */
+.sidebar-nav a:hover { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); text-decoration: none; }
+.sidebar-nav a.active { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
+.nav-icon { display: inline-flex; flex-shrink: 0; }
+.nav-label { overflow: hidden; text-overflow: ellipsis; }
+/* One per _NAV_GROUPS entry that has a label (Overview stays label-less,
+   it's the landing page rather than part of a category). Hidden when
+   collapsed like every other nav label - see .sidebar-nav a below. */
+.sidebar-group-label {
+  margin: 0.9rem 0.9rem 0.25rem;
+  font-family: var(--font-family-stack);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--md-nav-on-surface);
+  opacity: 0.6;
+}
+.sidebar-group-label:first-child { margin-top: 0.25rem; }
+
+.content-area {
+  margin-left: var(--shell-left);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  transition: margin-left 150ms ease;
+}
+/* overflow (unlike position: fixed or a z-index) creates no stacking
+   context, so the fixed composer, chat toolbar and history drawer inside
+   it still layer against the sidebar exactly as before. */
+.main-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 var(--shell-right) var(--shell-gap) 0;
+  border-radius: var(--shell-radius);
+}
+
+.topbar {
+  position: relative;
+  z-index: 90;
+  flex: 0 0 auto;
+  height: var(--shell-top);
+  padding: 0 calc(var(--shell-gap) + 0.5rem) 0 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.topbar .header-right { justify-content: flex-end; flex-shrink: 0; }
+
+/* Shown once the page's own <h1> has scrolled out of the main card below this
+   topbar (see the IntersectionObserver script in _render_shell), so
+   scrolling down a page never leaves the topbar with no indication of
+   which page you're on. */
+.topbar-page-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--md-nav-on-surface);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 150ms ease, transform 150ms ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.topbar-page-title.is-visible { opacity: 1; transform: translateY(0); }
+
+.header-right { display: flex; align-items: center; gap: 0.65rem; }
+.refresh-note { font-size: 0.75rem; color: var(--md-nav-on-surface); white-space: nowrap; }
+
+/* Topbar language switcher (see lang_switch_html in _render_shell): a
+   translate-icon button opening a small menu of the languages bin/i18n.py
+   supports. Picking one sets the loop_lang cookie and reloads - the server
+   renders every page in that language, nothing is translated client-side. */
+.lang-switch { position: relative; flex-shrink: 0; }
+.lang-switch-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  height: 40px;
+  padding: 0 0.75rem;
+  border: none;
+  border-radius: 20px;
+  background: none;
+  color: var(--md-nav-on-surface);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.lang-switch-trigger .material-symbols-outlined { font-size: 20px; }
+.lang-switch-trigger:hover,
+.lang-switch.is-open .lang-switch-trigger { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
+.lang-switch-trigger:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+.lang-switch-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  min-width: 10rem;
+  padding: 0.25rem;
+  background: var(--md-surface-container);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+.lang-switch-menu[hidden] { display: none; }
+.lang-switch-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--md-on-surface);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.lang-switch-option .material-symbols-outlined { font-size: 16px; visibility: hidden; color: var(--md-primary); }
+.lang-switch-option[aria-checked='true'] { color: var(--md-primary); font-weight: 500; }
+.lang-switch-option[aria-checked='true'] .material-symbols-outlined { visibility: visible; }
+.lang-switch-option:hover,
+.lang-switch-option:focus-visible { background: var(--md-surface-container-high); outline: none; }
+
+/* Topbar AI button (see ai_trigger_html in _render_shell) - Gemini-style:
+   a round icon button that turns into a tinted "on" chip while the AI
+   side panel is open. */
+.ai-panel-trigger {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--md-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 150ms ease;
+}
+.topbar-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--md-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-decoration: none;
+  transition: background-color 150ms ease;
+}
+.topbar-icon .material-symbols-outlined { font-size: 22px; }
+.topbar-icon:hover { background: var(--md-nav-active-surface); text-decoration: none; }
+.sidebar-nav a.nav-child { padding-left: 2.1rem; font-size: 0.8rem; }
+html.collapsed .sidebar-nav a.nav-child { padding-left: 0.9rem; }
+.ai-panel-trigger .material-symbols-outlined { font-size: 22px; }
+.ai-panel-trigger:hover { background: var(--md-nav-active-surface); }
+html.ai-panel-open .ai-panel-trigger {
+  background: color-mix(in srgb, var(--md-primary) 16%, var(--md-nav-surface));
+  font-variation-settings: 'FILL' 1;
+}
+html.ai-panel-open .ai-panel-trigger .material-symbols-outlined { font-variation-settings: 'FILL' 1; }
+
+/* The AI side panel: a second rounded card to the right of the main one,
+   below the topbar, like Gmail's Gemini panel. Open/closed and width
+   live on <html> (html.ai-panel-open, --ai-panel-width) so the head
+   script can restore both before first paint, and the main card simply
+   moves its right inset over by --shell-right. */
+html.ai-panel-open { --shell-right: calc(var(--ai-panel-width) + var(--shell-gap) * 2); }
+.ai-panel {
+  position: fixed;
+  top: var(--shell-top);
+  right: var(--shell-gap);
+  bottom: var(--shell-gap);
+  width: var(--ai-panel-width);
+  z-index: 95;
+  display: none;
+  flex-direction: column;
+  background: var(--md-surface);
+  border-radius: var(--shell-radius);
+  color: var(--md-on-surface);
+  overflow: hidden;
+}
+html.ai-panel-open .ai-panel { display: flex; }
+.ai-panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.ai-panel-resizer::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 4px;
+  height: 40px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: var(--md-outline-variant);
+  opacity: 0;
+  transition: opacity 150ms ease, background-color 150ms ease;
+}
+.ai-panel:hover .ai-panel-resizer::after { opacity: 1; }
+.ai-panel-resizer:hover::after,
+.ai-panel-resizer:focus-visible::after,
+html.ai-panel-resizing .ai-panel-resizer::after { opacity: 1; background: var(--md-primary); }
+.ai-panel-resizer:focus-visible { outline: none; }
+html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important; user-select: none; }
+.ai-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 0.75rem 0.5rem 1.25rem;
+  flex-shrink: 0;
+}
+.ai-panel-title { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 1.05rem; font-weight: 500; }
+.ai-panel-title .material-symbols-outlined { color: var(--md-primary); font-size: 22px; }
+.ai-panel-header-actions { display: flex; align-items: center; gap: 0.15rem; }
+.ai-panel.is-history [data-ai-history-toggle] { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
+/* Chat history view: replaces the thread and composer while open. It
+   lists every chat session - started from the panel on any page or from
+   the Dashboard - via the same fragment as the Dashboard's drawer. */
+.ai-panel-history { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 0.75rem 1rem; }
+.ai-panel-history[hidden],
+.ai-panel.is-history .ai-panel-body,
+.ai-panel.is-history .ai-panel-footer { display: none; }
+.ai-panel-history-heading { margin: 0.25rem 0.5rem 0.75rem; font-size: 0.95rem; }
+.ai-panel .chat-history-delete-form { display: none; }
+.ai-panel .chat-history-row:hover .chat-history-time,
+.ai-panel .chat-history-row:focus-within .chat-history-time { visibility: visible; }
+.ai-panel-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.ai-panel-icon-btn:hover { background: var(--md-surface-container-high); color: var(--md-on-surface); }
+.ai-panel-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ai-panel-icon-btn .material-symbols-outlined { font-size: 20px; }
+.ai-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0.5rem 1rem 1rem 1.25rem; }
+.ai-panel-empty {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0.4rem;
+  padding: 1rem;
+}
+.ai-panel.has-messages .ai-panel-empty,
+.ai-panel.has-messages .ai-panel-prompts { display: none; }
+.ai-panel-greeting {
+  font-size: 1.75rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-wrap: balance;
+  background: linear-gradient(90deg, var(--md-primary), color-mix(in srgb, var(--md-primary) 45%, #a142f4));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.ai-panel-context { margin: 0; font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.ai-panel .message-bubble { max-width: 92%; }
+.ai-panel .message-row-user .message-body { max-width: 92%; }
+.ai-panel .message-text { font-size: 0.875rem; overflow-wrap: anywhere; }
+/* Thinking indicator (see appendThinking in _AI_PANEL_SCRIPT). Its
+   animations are deliberately NOT inside the prefers-reduced-motion
+   block - see CLAUDE.md on loading spinners. */
+.ai-thinking { display: flex; align-items: flex-start; gap: 0.75rem; width: 100%; padding: 0.25rem 0; }
+.ai-thinking-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md-primary);
+}
+.ai-thinking-avatar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  padding: 2px;
+  background: conic-gradient(from 0deg, var(--md-primary), #a142f4, #24c1e0, transparent 70%, var(--md-primary));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: ai-thinking-spin 1.1s linear infinite;
+}
+.ai-thinking-avatar .material-symbols-outlined {
+  font-size: 18px;
+  font-variation-settings: 'FILL' 1;
+  animation: ai-thinking-pulse 1.4s ease-in-out infinite;
+}
+.ai-thinking-body { flex: 1 1 auto; min-width: 0; max-width: 34rem; display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.4rem; }
+.ai-thinking-label {
+  font-size: 0.9rem;
+  font-weight: 500;
+  background: linear-gradient(90deg, var(--md-on-surface-variant) 0%, var(--md-primary) 45%, #a142f4 55%, var(--md-on-surface-variant) 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ai-shimmer 1.6s linear infinite;
+}
+.ai-thinking-bar {
+  display: block;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--md-primary) 10%, var(--md-surface-container-high)) 0%,
+    color-mix(in srgb, var(--md-primary) 28%, var(--md-surface-container-high)) 50%,
+    color-mix(in srgb, var(--md-primary) 10%, var(--md-surface-container-high)) 100%);
+  background-size: 250% 100%;
+  animation: ai-shimmer 1.6s linear infinite;
+}
+.ai-thinking-bar:nth-of-type(2) { width: 92%; }
+.ai-thinking-bar:nth-of-type(3) { width: 76%; animation-delay: 0.15s; }
+.ai-thinking-bar:nth-of-type(4) { width: 52%; animation-delay: 0.3s; }
+.ai-stream-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 2px;
+  background: var(--md-primary);
+  animation: ai-caret-blink 1s steps(1) infinite;
+}
+@keyframes ai-thinking-spin { to { transform: rotate(360deg); } }
+@keyframes ai-thinking-pulse { 0%, 100% { transform: scale(0.85); opacity: 0.75; } 50% { transform: scale(1.08); opacity: 1; } }
+@keyframes ai-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes ai-caret-blink { 50% { opacity: 0; } }
+/* Only Copy makes sense here - edit/delete belong to the Dashboard's
+   own thread (their forms redirect back to it). */
+.ai-panel [data-edit-message],
+.ai-panel .message-delete-form { display: none; }
+.ai-panel-footer { flex-shrink: 0; padding: 0 1rem 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.ai-panel-prompts { display: flex; flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+.ai-panel-prompts .ai-panel-chip { max-width: 100%; text-align: left; justify-content: flex-start; }
+.ai-panel-composer {
+  margin: 0;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 20px;
+  background: var(--md-surface);
+  padding: 0.65rem 0.65rem 0.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.ai-panel-composer:focus-within {
+  border-color: color-mix(in srgb, var(--md-primary) 55%, var(--md-outline-variant));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--md-primary) 12%, transparent);
+}
+.ai-panel-composer textarea {
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--md-on-surface);
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  min-height: 1.5em;
+  max-height: 40vh;
+  padding: 0;
+}
+.ai-panel-composer textarea::placeholder { color: var(--md-on-surface-variant); opacity: 0.8; }
+.ai-panel-composer-toolbar { display: flex; justify-content: flex-end; }
+.ai-panel-send {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: opacity 150ms ease;
+}
+.ai-panel-send:disabled { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); cursor: not-allowed; }
+.ai-panel-send .material-symbols-outlined { font-size: 20px; }
+.ai-panel-disclaimer { margin: 0; text-align: center; font-size: 0.72rem; color: var(--md-on-surface-variant); }
+@media (max-width: 720px) {
+  /* Too narrow for two cards side by side: the panel overlays the main
+     card instead of pushing it, and isn't resizable. */
+  html.ai-panel-open:root { --shell-right: var(--shell-gap); }
+  .ai-panel { left: var(--shell-gap); width: auto; z-index: 110; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2); }
+  .ai-panel-resizer { display: none; }
+}
+
+html.collapsed { --shell-left: 64px; }
+html.collapsed .sidebar { width: 64px; }
+html.collapsed .brand-name,
+html.collapsed .nav-label,
+html.collapsed .sidebar-group-label { display: none; }
+html.collapsed .sidebar-toggle .material-symbols-outlined { transform: rotate(180deg); }
+html.collapsed .sidebar-nav a { justify-content: center; }
+html.collapsed .sidebar-top {
+  /* Side-by-side, the brand icon and the toggle button (~20px + gap +
+     ~28px ≈ 56px) don't fit the 64px collapsed rail's ~32px content box
+     once padding is subtracted - .sidebar-toggle refuses to shrink
+     (flex-shrink: 0), so .brand absorbed the entire overflow and got
+     crushed by its own overflow: hidden, clipping the icon down to
+     nothing. Stacking them means neither has to shrink at all. */
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+/* Label bubble shown beside a nav icon on hover/focus while the sidebar is
+   the 64px icon rail (collapsed, or forced narrow below 720px) - see the
+   "nav-tooltip" script in _render_shell. position: fixed so the sidebar's
+   own overflow (.sidebar, .sidebar-nav, .sidebar-nav a all clip) can't cut
+   it off; the script positions it from the link's bounding rect. */
+.nav-tooltip {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  transform: translateY(-50%);
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  background: var(--md-on-surface);
+  color: var(--md-surface);
+  font-size: 0.8rem;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+@media (max-width: 720px) {
+  html:root { --shell-left: 64px; }
+  .sidebar { width: 64px; }
+  .brand-name, .nav-label, .sidebar-group-label { display: none; }
+  .sidebar-toggle { display: none; }
+  .sidebar-nav a { justify-content: center; }
+  .sidebar-top { justify-content: center; }
+}
+
+/* The Dashboard page's stats section - tracked-projects/configured-topics
+   setup counts plus GitLab-loop run totals (see _gitlab_loop_stats),
+   sitting above the message thread as a quick-glance summary. Kept
+   deliberately compact (small padding/gap/font sizes here) so it never
+   competes with the Conversation section below for vertical room - this
+   is a glance strip, not a focal point. */
+.dash-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.dash-stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  background: var(--md-surface-container-high);
+}
+.dash-stat-icon { color: var(--md-primary); font-size: 17px; }
+.dash-stat-value { font-size: 1.15rem; font-weight: 700; }
+.dash-stat-label { font-size: 0.72rem; color: var(--md-on-surface-variant); }
+.dash-stat-detail { font-size: 0.68rem; color: var(--md-on-surface-variant); opacity: 0.85; }
+.analytics-days-selector { display: flex; gap: 0.5rem; margin: 0 0 1rem 0; }
+.analytics-days-selector a { padding: 0.3rem 0.75rem; border-radius: 6px; background: var(--md-surface-container-low); color: var(--md-on-surface-variant); text-decoration: none; font-size: 0.85rem; }
+.analytics-days-selector a.active { background: var(--md-primary); color: var(--md-on-primary); }
+.analytics-health-score { font-size: 2.5rem; font-weight: 700; margin: 0.25rem 0; }
+.analytics-health-note { font-size: 0.8rem; color: var(--md-on-surface-variant); margin: 0 0 0.75rem 0; }
+.analytics-breakdown-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 1rem; margin-top: 0.75rem; }
+.analytics-breakdown-columns h3 { font-size: 0.8rem; font-weight: 500; margin: 0 0 0.35rem; color: var(--md-on-surface-variant); }
+.trend-charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 1rem; }
+.trend-chart { background: var(--md-surface-container-low); border-radius: 8px; padding: 0.75rem; }
+.trend-chart-title { font-size: 0.85rem; font-weight: 500; margin: 0 0 0.5rem 0; color: var(--md-on-surface-variant); }
+.trend-chart-note { font-size: 0.75rem; color: var(--md-on-surface-variant); margin: 0 0 0.5rem 0; }
+.trend-chart-empty p:last-child { font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.dash-activity-strip-row { display: flex; align-items: center; gap: 0.6rem; }
+.dash-activity-strip-label { font-size: 0.78rem; color: var(--md-on-surface-variant); }
+/* One bar per day, oldest first - color is the day's outcome (see
+   _gitlab_loop_stats: escalation > mr > quiet), an outline-only bar means
+   no run was logged that day at all. */
+.activity-strip { display: flex; gap: 0.3rem; }
+.activity-bar { width: 22px; height: 22px; border-radius: 6px; }
+.activity-bar-quiet { background: var(--md-success-container); }
+.activity-bar-mr { background: var(--md-primary-container); }
+.activity-bar-escalation { background: var(--md-warning-container); }
+.activity-bar-none { background: none; border: 1px dashed var(--md-outline-variant); }
+/* The Dashboard page is a chat-only view styled after chatbot landing
+   pages (see render_overview_page). Two layouts, switched by .is-empty
+   on .chat-page (dropped client-side on the first send):
+   - empty: a vertically centered hero - status announcement, headline,
+     one large rounded composer, quick-link pills.
+   - session: a centered reading-width thread (the main card scrolls, not an
+     inner scroll panel) with the same composer pinned to the viewport
+     bottom. Its reserved space below the thread is kept in sync with the
+     composer's actual height by the ResizeObserver in the
+     "activity-composer-form" IIFE below, never a guessed constant - a
+     fixed margin once let the pinned composer hide the last message(s)
+     whenever its height changed. `left` matches .content-area's
+     margin-left, including the collapsed/mobile widths above. */
+.chat-page {
+  --chat-width: 820px;
+  --chat-accent: var(--md-primary);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+/* Soft blurred color fields plus a faint grid behind every page (rendered
+   once by _render_shell), derived from the theme's own primary color so
+   every palette and dark mode get a matching wash instead of hardcoded
+   blues. z-index -1 paints it above the body's own background but below
+   all page content without giving .content-area a stacking context of its
+   own (which would trap the chat history drawer beneath the sidebar). It
+   only fills the rounded main card - the sidebar and topbar sit
+   transparently on the body's plain nav wash around it. */
+/* Grid tokens defined on :root so --md-outline-variant resolves per
+   color mode. */
+:root {
+  /* Gmail-style shell: the sidebar and topbar share the body's nav wash
+     with no borders between them, and the page sits in a rounded card
+     (.app-bg, scrolled by .main-scroll) inset by these from the viewport
+     edges. */
+  --shell-top: 64px;
+  --shell-left: 220px;
+  --shell-gap: 16px;
+  /* Right inset of the main card: just the gap, or the gap plus the AI
+     side panel (see .ai-panel) while html.ai-panel-open. */
+  --shell-right: var(--shell-gap);
+  --ai-panel-width: 400px;
+  --shell-radius: 16px;
+  --app-grid-size: 16px;
+  --app-grid-lines:
+    linear-gradient(color-mix(in srgb, var(--md-outline-variant) 22%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--md-outline-variant) 22%, transparent) 1px, transparent 1px);
+}
+.app-bg {
+  position: fixed;
+  top: var(--shell-top);
+  left: var(--shell-left);
+  right: var(--shell-right);
+  bottom: var(--shell-gap);
+  border-radius: var(--shell-radius);
+  pointer-events: none;
+  transition: left 150ms ease;
+  z-index: -1;
+  overflow: hidden;
+  background:
+    radial-gradient(40% 35% at 70% 12%, color-mix(in srgb, var(--md-primary) 22%, transparent), transparent 70%),
+    radial-gradient(35% 30% at 22% 42%, color-mix(in srgb, var(--md-primary) 14%, transparent), transparent 70%),
+    radial-gradient(45% 40% at 90% 60%, color-mix(in srgb, var(--md-primary) 10%, transparent), transparent 70%),
+    var(--md-surface-dim);
+}
+.app-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: var(--app-grid-lines);
+  background-size: var(--app-grid-size) var(--app-grid-size);
+}
+.chat-page > .flash, .chat-hero, .chat-thread, .chat-hero-links { position: relative; z-index: 1; width: 100%; max-width: var(--chat-width); }
+.chat-hero, .chat-hero-links { display: none; }
+
+.chat-page.is-empty { min-height: calc(100vh - var(--shell-top) - var(--shell-gap) - 6rem); justify-content: center; padding-bottom: 6vh; }
+.chat-page.is-empty .chat-hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 1.75rem; margin-bottom: 2.25rem; }
+.chat-page.is-empty .chat-thread { display: none; }
+.chat-page.is-empty .chat-hero-links { display: flex; justify-content: center; flex-wrap: wrap; gap: 1rem; margin-top: 2.25rem; }
+
+.chat-announce {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 34rem;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--md-on-surface);
+  text-decoration: none;
+}
+.chat-announce:hover { text-decoration: none; }
+.chat-announce:hover .chat-announce-text { text-decoration: underline; text-underline-offset: 3px; }
+.chat-announce .material-symbols-outlined { font-size: 18px; color: var(--chat-accent); }
+.chat-announce .chat-announce-arrow { font-size: 16px; color: inherit; transition: transform 150ms ease; }
+.chat-announce:hover .chat-announce-arrow { transform: translateX(2px); }
+.chat-hero-title {
+  margin: 0;
+  font-size: clamp(2.4rem, 5.5vw, 4.25rem);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  line-height: 1.1;
+  color: var(--md-on-surface);
+}
+/* The hero's key word: a clipped gradient fill derived from the theme's
+   primary (drifting through violet and teal), so it reads as the focal
+   point without hardcoding one palette. background-size 200% leaves room
+   for the slow sheen in the prefers-reduced-motion block; without motion
+   it simply rests on the first half of the gradient. */
+.chat-hero-accent {
+  font-weight: 500;
+  background: linear-gradient(110deg,
+    var(--md-primary) 0%,
+    color-mix(in srgb, var(--md-primary) 45%, #8B5CF6) 35%,
+    color-mix(in srgb, var(--md-primary) 40%, #14B8A6) 65%,
+    var(--md-primary) 100%);
+  background-size: 200% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--md-primary);
+}
+
+.btn.chat-link-pill { background: color-mix(in srgb, var(--md-surface) 70%, transparent); backdrop-filter: blur(8px); }
+.btn.chat-link-pill:hover { background: var(--md-surface-container-high); text-decoration: none; }
+
+.activity-composer {
+  position: fixed;
+  left: var(--shell-left);
+  right: var(--shell-right);
+  bottom: var(--shell-gap);
+  z-index: 80;
+  padding: 1.25rem 1.25rem 1rem;
+  border-radius: 0 0 var(--shell-radius) var(--shell-radius);
+  background: linear-gradient(to top, var(--md-surface) 65%, transparent);
+  transition: left 150ms ease;
+}
+html .chat-page.is-empty .activity-composer {
+  position: relative;
+  left: auto;
+  right: auto;
+  z-index: 1;
+  width: 100%;
+  max-width: calc(var(--chat-width) + 2.5rem);
+  box-sizing: border-box;
+  background: none;
+  padding: 0 1.25rem;
+}
+.activity-composer-inner { max-width: var(--chat-width, 820px); margin: 0 auto; }
+.activity-composer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.9rem 0.9rem 0.75rem;
+  border-radius: 24px;
+  border: 1px solid var(--md-outline-variant);
+  background: color-mix(in srgb, var(--md-surface-container-lowest) 80%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--chat-accent, #0B57D0) 10%, transparent);
+  backdrop-filter: blur(12px);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.activity-composer-form:focus-within { border-color: color-mix(in srgb, var(--md-primary) 55%, var(--md-outline-variant)); }
+.activity-composer-form textarea.activity-composer-input {
+  width: 100%;
+  min-height: calc(1.5em * 2);
+  max-height: 40vh;
+  padding: 0.2rem 0.35rem;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--md-on-surface);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  box-shadow: none;
+}
+.chat-page.is-empty .activity-composer-form textarea.activity-composer-input { min-height: calc(1.5em * 3); }
+.activity-composer-form textarea.activity-composer-input::placeholder { color: var(--md-on-surface-variant); opacity: 0.8; }
+.chat-composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.chat-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
+.btn.chat-chip { white-space: nowrap; }
+.chat-send-btn {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  cursor: pointer;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.chat-send-btn:hover { transform: translateY(-1px); }
+.chat-send-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.chat-send-btn .material-symbols-outlined { font-size: 22px; }
+
+@media (max-width: 720px) {
+  /* Restated here because the base .activity-composer rule above comes
+     after the shared mobile block and would otherwise win at 220px. */
+  .activity-composer { padding-left: 0.75rem; padding-right: 0.75rem; }
+  .chat-hero-title { font-size: 2.2rem; }
+  .chat-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+}
+
+.page-title { margin: 0.25rem 0 1.5rem; }
+.page-title h1 { margin-bottom: 0.35rem; }
+.page-title .subtitle { margin: 0; font-size: 0.95rem; }
+
+.section-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.85rem; }
+.section-header .material-symbols-outlined,
+.section-header .slack-mark,
+.section-header .gitlab-mark { color: var(--md-primary); flex-shrink: 0; }
+/* Preferences page's Theme section only - larger than every other
+   section-header icon on the dashboard, since this one doubles as a
+   preview of the palette icon it represents. */
+.pref-theme-icon .material-symbols-outlined { font-size: 28px; }
+.section-subtitle { margin: 0 0 0.85rem; font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  vertical-align: middle;
+  user-select: none;
+}
+.nav-icon .material-symbols-outlined,
+.section-header .material-symbols-outlined { font-size: 18px; }
+.pill .material-symbols-outlined { font-size: 14px; }
+.btn .material-symbols-outlined { font-size: 16px; }
+.section-header h2 { margin: 0; }
+
+.grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+
+/* Analytics page only: its 8 sections are bare <section class="card">
+   elements (not each wrapped in its own .grid like other pages, since
+   they're always a single full-width column, never a multi-column
+   layout) - render_analytics_page wraps the whole stack in one
+   .analytics-sections container instead, so consecutive cards get the
+   same gap as everywhere else without a redundant per-section wrapper. */
+.analytics-sections { display: flex; flex-direction: column; gap: 1.25rem; }
+
+/* Activity page only: a narrow column of status cards (this loop
+   actually runs two independent daemons, GitLab issue review and topic
+   monitoring - see .activity-card-stack below) beside a wide column of
+   the loop's own review reports - unlike every other page's single-card
+   .grid, this one is worth actually using as a grid once there's room
+   for it. Stays single-column below the sidebar-collapse breakpoint used
+   elsewhere in this file. */
+.overview-layout { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin-bottom: 1.25rem; align-items: start; }
+@media (min-width: 901px) {
+  .overview-layout { grid-template-columns: minmax(280px, 360px) 1fr; }
+}
+/* Shared by both .overview-layout columns: the left column stacks
+   GitLab Monitor and Topic Monitor as their own always-visible cards
+   (they used to share one tabbed card, so switching tabs is never
+   required to see either one's status); the right column stacks the
+   GitLab loop's Latest Run Review above the topic monitor's Latest
+   Topic Run Review the same way. */
+.activity-card-stack { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+
+.card {
+  background: var(--md-nav-surface);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  min-width: 0;
+}
+/* Page-level blocks in normal flow get the same 1.25rem gap the grid and
+   flex stacks use. Scoped to direct children of .wrap so cards inside a
+   grid/flex container (which use gap, and where item margins would
+   misalign rows) are untouched. Vertical margins collapse, so a following
+   element with its own margin-top isn't doubled. */
+.wrap > .card + * { margin-top: 1.25rem; }
+/* Settings > Notifications: the Block Kit Builder card sits directly
+   under the Slack card, so give it the same 1.25rem gap the card
+   stacks use elsewhere. */
+.block-kit-card { margin-top: 1.25rem; }
+
+/* Every page section's background now matches the sidebar/topbar's own
+   accent wash (--md-nav-surface) instead of the mode-based surface tiers
+   - see .card above. For the "Default" accent that's a no-op in practice
+   (--md-nav-surface already resolves to --md-surface-container-low, a
+   mode-based tone from the same ladder .card used before), but the five
+   named accents are a fixed, mode-independent light wash (see the
+   :root[data-accent="..."] blocks above) - unlike the sidebar, which has
+   always had its own dedicated on-surface/active tokens for exactly this
+   reason, ordinary card content (headings, body text, links, buttons,
+   inputs, nested chips like .learning-item/.gitlab-item, code blocks)
+   reads its color from the plain mode-based --md-on-surface(-variant) and
+   --md-primary tokens - in dark mode those are light colors meant to sit
+   on a dark surface, so left alone they'd go straight to unreadable
+   against this now-light card background.
+   Redirecting the surface/text/primary custom properties themselves,
+   scoped to .card, fixes every one of those nested rules at once without
+   touching each individually - CSS custom properties resolve using the
+   cascade at the element that *uses* them, so anything inside .card that
+   asks for var(--md-on-surface) etc. picks up these instead. Scoped to
+   the five named accents only (not [data-accent="default"] or its
+   absence): default's own --md-nav-active-on-surface is itself defined
+   as var(--md-primary) (see :root[data-accent="default"] above), so
+   applying this same remap there would make --md-primary depend on
+   itself through --md-nav-active-on-surface - a circular custom property,
+   which computes to invalid and would blank out every link/icon/button
+   that uses it. Default doesn't need the remap anyway, since its wash
+   already tracks the current color mode.
+   --md-outline/--md-outline-variant join the same redirect for the same
+   reason: left as the plain mode-based grays, every border inside a
+   tinted card (table rows, the Dashboard's "no run logged" dashed
+   activity-bar outline) would sit as a flat gray line on top of a
+   colored wash instead of picking up the accent family like everything
+   else in the card - the "no run" bars in the Last 7 days strip were the
+   most visible instance of this. --md-success-container/
+   --md-warning-container (the strip's "quiet"/"escalation" bars) are
+   deliberately NOT redirected here - those need to stay their fixed
+   green/amber regardless of accent so the strip's outcome color-coding
+   stays legible; only --md-primary-container (the "mr" bar) is meant to
+   track the chosen accent. */
+:root[data-accent="indigo"] .card,
+:root[data-accent="blue"] .card,
+:root[data-accent="green"] .card,
+:root[data-accent="red"] .card,
+:root[data-accent="gray"] .card {
+  --md-surface-dim: var(--md-nav-active-surface);
+  --md-surface: var(--md-nav-active-surface);
+  --md-surface-container-lowest: var(--md-nav-surface);
+  --md-surface-container-low: var(--md-nav-active-surface);
+  --md-surface-container: var(--md-nav-active-surface);
+  --md-surface-container-high: var(--md-nav-active-surface);
+  --md-surface-container-highest: var(--md-nav-active-surface);
+  --md-on-surface: var(--md-nav-on-surface);
+  --md-on-surface-variant: var(--md-nav-on-surface);
+  --md-outline: var(--md-nav-on-surface);
+  --md-outline-variant: var(--md-nav-active-surface);
+  --md-primary: var(--md-nav-active-on-surface);
+  --md-on-primary: var(--md-nav-surface);
+  --md-primary-container: var(--md-nav-active-surface);
+  --md-on-primary-container: var(--md-nav-active-on-surface);
+  color: var(--md-nav-on-surface);
+}
+
+/* Generic tabbed-card styling for the data-tabs/data-tab-target/
+   data-tab-panel script in _render_shell - used by the Settings page
+   (render_general_settings_page). The Activity page's GitLab Monitor /
+   Topic Monitor tabs took a different route (two always-visible stacked
+   cards, see .activity-card-stack) since neither needed hiding, but this
+   mechanism stays available for any page that genuinely needs only one
+   panel visible at a time. Generous horizontal padding (1.1rem) and
+   list gap (0.5rem) - the first real use of this control surfaced how
+   cramped the original placeholder values (0.25rem padding/gap) looked
+   once actual multi-word labels ("Notifications", "AI CLI") sat in it. */
+.tab-list { display: flex; gap: 0.5rem; margin: -0.25rem 0 1rem; border-bottom: 1px solid var(--md-outline-variant); overflow-x: auto; scrollbar-width: none; }
+.tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.75rem 1.1rem;
+  font-family: var(--font-family-stack);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.tab-button:hover { color: var(--md-on-surface); }
+.tab-button.is-active { color: var(--md-primary); border-bottom-color: var(--md-primary); }
+.tab-button .material-symbols-outlined { font-size: 16px; }
+/* Hub pages (render_hub_page): one sidebar entry, several tabbed views, each
+   a plain link (?view=<key>) rather than a JS tab. Same tokens as .tab-list. */
+.hub-tabs { display: flex; gap: 0.25rem; margin: -0.25rem 0 1rem; border-bottom: 1px solid var(--md-outline-variant); overflow-x: auto; }
+.hub-tab { padding: 0.75rem 1.1rem; margin-bottom: -1px; color: var(--md-on-surface-variant); text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; font-size: 0.85rem; font-weight: 500; transition: color 150ms ease, border-color 150ms ease; }
+.hub-tab:hover { color: var(--md-on-surface); }
+.hub-tab.active { color: var(--md-primary); border-bottom-color: var(--md-primary); }
+/* The GitLab Monitor tab's SVG mark - sized down from its 18px default
+   (see _SECTION_ICON_GITLAB) to match the Topic Monitor tab's 16px
+   Material Symbols glyph right next to it. */
+.tab-button svg { width: 16px; height: 16px; }
+
+/* Overview page's GitLab Monitor / Topic Monitor tab panels: the state
+   pill (see .pill-lg below) carries the one value that matters at a
+   glance, so it's pulled out of the field list entirely rather than
+   sitting in it at the same weight as "Updated at". */
+.status-hero { margin: 0.25rem 0 1rem; }
+
+.field-list { display: grid; gap: 0; margin: 0 0 0.5rem; padding: 0; list-style: none; }
+.field-list li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--md-outline-variant);
+}
+.field-list li:first-child { border-top: none; padding-top: 0; }
+.field-list .k { font-weight: 500; color: var(--md-on-surface-variant); }
+
+/* Run now's own action area (see _run_now_action_html) - shared by
+   render_overview_page's two loop cards and render_topic_monitor_page's
+   own button, not overview-specific despite the name it started with -
+   visually separated from whatever's above it rather than just trailing
+   off the bottom of the card, and sized to its label rather than
+   stretched across the card. */
+.run-now-action { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--md-outline-variant); }
+.run-now-action button { justify-content: center; }
+.run-now-action button:disabled { opacity: 0.5; cursor: not-allowed; }
+.run-now-hint { margin: 0.6rem 0 0; font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.message-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.message-row { display: flex; align-items: flex-end; gap: 0.35rem; }
+.message-row-user { justify-content: flex-end; }
+.message-row-loop { justify-content: flex-start; }
+.message-bubble {
+  max-width: 75%;
+  border-radius: 16px;
+  padding: 0.6rem 0.85rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+/* A chat-bubble "tail" corner (the flat corner nearest the thread's own
+   edge) instead of a uniformly rounded rectangle - user messages sit
+   flush-right so their tail is bottom-right; loop messages sit
+   flush-left so theirs is bottom-left. */
+.message-bubble-user { background: var(--md-primary-container); color: var(--md-on-primary-container); border-bottom-right-radius: 4px; }
+.message-bubble-loop { background: var(--md-surface-container-highest); color: var(--md-on-surface); border-bottom-left-radius: 4px; }
+.message-meta { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.15rem; }
+.message-brand-icon { color: var(--md-primary); vertical-align: middle; }
+.message-meta .k { font-size: 0.78rem; font-weight: 500; }
+.message-time { font-size: 0.72rem; opacity: 0.75; }
+/* A centered date label between messages sent on different days (see
+   _message_date/_day_separator_label) - the same convention as
+   full-featured chat UIs, so a long thread reads as a timeline rather
+   than one undifferentiated stack of bubbles. */
+.message-day-sep { display: flex; justify-content: center; margin: 0.4rem 0; }
+.message-day-sep span {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+  background: var(--md-surface-container-high);
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+}
+/* Consecutive messages from the same sender (no day separator between
+   them) sit closer together than a sender change does, so the thread
+   groups by "who's talking" instead of every bubble having identical
+   breathing room. */
+.message-row-consecutive { margin-top: -0.25rem; }
+.message-text { font-size: 0.9rem; }
+.message-text.markdown > :last-child { margin-bottom: 0; }
+.message-delete-form { margin: 0; }
+
+/* History + New chat, reachable at any point in either layout: fixed
+   just under the topbar, right-aligned. New chat hides on the empty hero,
+   which already is a new chat. */
+/* Chat doc panel: clicking a saved-document link in the thread opens it in a
+   right-hand panel (like Claude/ChatGPT) instead of downloading. Opening it
+   narrows the main card via --shell-right (so the toolbar and composer follow)
+   and left-aligns the thread; below 900px it overlays the whole card instead. */
+:root { --doc-panel-width: min(46vw, 760px); }
+html.doc-panel-open { --shell-right: calc(var(--doc-panel-width) + var(--shell-gap) * 2); }
+html.doc-panel-open .chat-page { align-items: flex-start; }
+html.doc-panel-open .activity-composer-inner { margin: 0; }
+.doc-panel {
+  position: fixed; top: var(--shell-top); right: var(--shell-gap); bottom: var(--shell-gap);
+  width: var(--doc-panel-width); z-index: 90; display: none; flex-direction: column;
+  border-radius: var(--shell-radius); border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface); overflow: hidden;
+}
+html.doc-panel-open .doc-panel { display: flex; }
+.doc-panel-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem 0.6rem 1.1rem; border-bottom: 1px solid var(--md-outline-variant); }
+.doc-panel-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.doc-panel-body { flex: 1 1 auto; overflow: auto; padding: 1rem 1.25rem 1.5rem; }
+.doc-panel-body .markdown > :first-child { margin-top: 0; }
+@media (max-width: 900px) {
+  html.doc-panel-open { --shell-right: var(--shell-gap); }
+  .doc-panel { left: var(--shell-gap); width: auto; z-index: 120; }
+}
+.tool-chips { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-bottom: 0.75rem; max-width: 100%; border: 1px solid var(--md-outline-variant); border-radius: 12px; background: var(--md-surface-container-low); overflow: hidden; }
+.tool-chip { display: flex; align-items: center; gap: 0.5rem; min-width: 0; font-size: 0.82rem; padding: 0.45rem 0.75rem; color: var(--md-on-surface-variant); }
+.tool-chip + .tool-chip, .tool-chip + .tool-status { border-top: 1px solid var(--md-outline-variant); }
+.tool-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-chip-icon { flex: none; font-size: 1.1rem; }
+.tool-chip-ok .tool-chip-icon { color: var(--md-primary); }
+.tool-chip-err { color: var(--md-error); }
+.tool-chip-err .tool-chip-icon { color: var(--md-error); }
+.tool-chip-run { color: var(--md-on-surface); }
+.tool-chip-run .tool-chip-icon { animation: tool-chip-spin 1s linear infinite; }
+@keyframes tool-chip-spin { to { transform: rotate(360deg); } }
+.tool-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.75rem; font-size: 0.82rem; color: var(--md-on-surface-variant); }
+.tool-status-icon { flex: none; font-size: 1.1rem; color: var(--md-primary); animation: ai-thinking-pulse 1.4s ease-in-out infinite; }
+.tool-status-text { background: linear-gradient(90deg, var(--md-on-surface-variant) 0%, var(--md-on-surface) 50%, var(--md-on-surface-variant) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: tool-status-sheen 1.8s linear infinite; }
+@keyframes tool-status-sheen { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+/* The reply started streaming: the "Analyzing" line has done its job. */
+.message-body:has(.message-text:not(:empty)) .tool-status { display: none; }
+.pending-card { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.75rem; border-radius: 12px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container); }
+.pending-card-head { display: flex; align-items: center; gap: 0.4rem; font-weight: 500; }
+.pending-card-head .material-symbols-outlined { font-size: 1.1rem; color: var(--md-primary); }
+.pending-card-tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+.pending-card-summary { font-size: 0.85rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+.pending-card-args { margin: 0; max-height: 16rem; overflow: auto; padding: 0.5rem; border-radius: 8px; background: var(--md-surface-container-high); font-size: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pending-card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.pending-card-actions .material-symbols-outlined { font-size: 1rem; }
+.pending-card-status { font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.pending-card-status:empty { display: none; }
+.chat-toolbar { position: fixed; top: calc(var(--shell-top) + 0.75rem); right: calc(var(--shell-right) + 0.75rem); z-index: 85; display: flex; gap: 0.5rem; }
+.chat-new-form { margin: 0; display: inline-flex; }
+.chat-page.is-empty .chat-new-form { display: none; }
+/* Global .btn .btn-neutral look (see .btn), plus a frosted fill since
+   these float over the hero's grid background. */
+.btn.chat-tool-btn { background: color-mix(in srgb, var(--md-surface) 85%, transparent); backdrop-filter: blur(8px); }
+.btn.chat-tool-btn:hover { background: var(--md-surface-container-high); }
+.btn.chat-tool-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The history drawer slides over everything (sidebar included) from the
+   right; its list is render_chat_history_fragment. */
+.chat-history-backdrop { position: fixed; inset: 0; z-index: 110; background: rgba(0, 0, 0, 0.28); }
+.chat-history-backdrop[hidden], .chat-history[hidden] { display: none; }
+.chat-history {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 120;
+  width: min(340px, 88vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--md-surface);
+  border-left: 1px solid var(--md-outline-variant);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.12);
+}
+.chat-history-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1rem 0.5rem 1.25rem; }
+.chat-history-header h2 { margin: 0; font-size: 1.05rem; }
+#chat-history-list { flex: 1 1 auto; overflow-y: auto; padding: 0 0.75rem 1rem; }
+.chat-history-group { margin: 1rem 0.5rem 0.35rem; font-size: 0.75rem; font-weight: 500; color: var(--md-on-surface-variant); }
+/* Each chat row: the link plus a delete button that shows on hover or
+   keyboard focus (always on touch screens), like chatbot sidebars. */
+.chat-history-row { position: relative; display: flex; align-items: center; }
+.chat-history-row .chat-history-item { flex: 1 1 auto; min-width: 0; }
+.chat-history-delete-form { position: absolute; right: 0.3rem; margin: 0; opacity: 0; transition: opacity 150ms ease; }
+.chat-history-row:hover .chat-history-delete-form,
+.chat-history-row:focus-within .chat-history-delete-form { opacity: 1; }
+.chat-history-row:hover .chat-history-time,
+.chat-history-row:focus-within .chat-history-time { visibility: hidden; }
+.chat-history-delete-form .message-action-btn { background: var(--md-surface-container-high); }
+.chat-history-delete-form .message-action-btn:hover { color: var(--md-error); }
+@media (hover: none) {
+  .chat-history-delete-form { position: static; opacity: 1; }
+  .chat-history-row .chat-history-time { visibility: visible; }
+}
+.chat-history-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  color: var(--md-on-surface);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.chat-history-item:hover { background: var(--md-surface-container-high); }
+.chat-history-item:hover, .chat-history-item:focus { text-decoration: none; }
+.chat-history-item:focus-visible { outline: 2px solid var(--md-primary); outline-offset: -2px; }
+.chat-history-item.is-active { background: color-mix(in srgb, var(--md-primary) 14%, transparent); color: var(--md-primary); font-weight: 500; }
+.chat-history-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-history-time { flex: 0 0 auto; font-size: 0.72rem; color: var(--md-on-surface-variant); font-weight: 400; }
+.chat-history-empty { margin: 1rem 0.5rem; color: var(--md-on-surface-variant); font-size: 0.9rem; }
+
+/* Session thread: assistant replies read as plain text beside the brand
+   mark (no bubble), user messages as soft right-aligned bubbles - the
+   usual chatbot session layout. */
+.chat-thread { margin-bottom: 9rem; }
+.chat-thread .message-list { gap: 1.1rem; padding-top: 0.5rem; }
+.chat-thread .message-bubble { max-width: 85%; box-shadow: none; }
+.chat-thread .message-bubble-loop { background: none; padding-left: 0; padding-right: 0; max-width: 100%; }
+.chat-thread .message-bubble-user { border-radius: 20px; background: color-mix(in srgb, var(--md-primary) 14%, var(--md-surface-container-lowest)); color: var(--md-on-surface); }
+.chat-thread .message-text { font-size: 0.97rem; line-height: 1.65; overflow-wrap: anywhere; min-width: 0; }
+/* Long markdown (wide tables, code, URLs) wraps inside the column instead of
+   growing a horizontal scrollbar. */
+.chat-thread .markdown .table-wrap, .ai-panel .markdown .table-wrap { overflow-x: visible; }
+.chat-thread .markdown table, .ai-panel .markdown table { table-layout: auto; width: 100%; }
+.chat-thread .markdown th, .chat-thread .markdown td, .ai-panel .markdown th, .ai-panel .markdown td { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.chat-thread .markdown pre, .ai-panel .markdown pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
+.chat-thread .markdown code, .ai-panel .markdown code { overflow-wrap: anywhere; }
+/* Each message is a column: bubble, then an action bar (copy, edit on
+   your own messages, delete). The bar stays visible under replies, as in
+   chatbot UIs, but appears on hover/focus under your own messages -
+   always visible on touch screens, which have no hover. */
+.message-body { display: flex; flex-direction: column; min-width: 0; }
+.message-row-user .message-body { align-items: flex-end; max-width: 85%; }
+.message-row-loop .message-body { align-items: flex-start; flex: 1 1 auto; }
+.chat-thread .message-body .message-bubble { max-width: 100%; }
+.message-actions { display: flex; align-items: center; gap: 0.1rem; margin-top: 0.2rem; transition: opacity 150ms ease; }
+.message-row-user .message-actions { opacity: 0; }
+.message-row-user:hover .message-actions,
+.message-row-user:focus-within .message-actions { opacity: 1; }
+@media (hover: none) { .message-row-user .message-actions { opacity: 1; } }
+.message-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--md-on-surface-variant);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  transition: background 150ms ease, color 150ms ease;
+}
+.message-action-btn:hover { background: var(--md-surface-container-high); color: var(--md-on-surface); }
+.message-delete-form .message-action-btn:hover { color: var(--md-error); }
+.message-action-btn.is-done { color: var(--md-primary); }
+.message-action-btn .material-symbols-outlined { font-size: 18px; }
+.message-row.is-editing .message-body { width: 85%; }
+.message-row.is-editing .message-bubble,
+.message-row.is-editing .message-actions { display: none; }
+.message-edit-form {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--md-primary) 55%, var(--md-outline-variant));
+  background: var(--md-surface-container-lowest);
+}
+.message-edit-input {
+  width: 100%;
+  min-height: 3em;
+  max-height: 40vh;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--md-on-surface);
+  font: inherit;
+  font-size: 0.97rem;
+  line-height: 1.6;
+}
+.message-edit-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.chat-thread > p { display: none; }
+
+
+pre.log {
+  background: var(--md-surface-dim);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.5rem 0 0;
+  line-height: 1.5;
+  color: var(--md-on-surface-variant);
+}
+
+/* Logs page: each append_unified_log call (see _parse_unified_log_entries,
+   _log_entry_html) gets its own bordered block instead of one continuous
+   <pre> dump, so a reader can see at a glance where one call's output
+   ends and the next begins. */
+.log-entries { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem; }
+.log-entry {
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.log-entry-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: var(--md-surface-container-highest);
+  font-size: 0.8rem;
+}
+.log-entry-source { font-weight: 500; color: var(--md-on-surface); }
+.log-entry-detail { color: var(--md-on-surface-variant); }
+.log-entry-time { margin-left: auto; color: var(--md-on-surface-variant); opacity: 0.75; font-size: 0.75rem; white-space: nowrap; }
+.log-entry-meta { color: var(--md-on-surface-variant); font-style: italic; font-size: 0.8rem; }
+.log-entry-body {
+  background: var(--md-surface-dim);
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  color: var(--md-on-surface-variant);
+}
+.log-entry-body.markdown > :last-child { margin-bottom: 0; }
+
+.markdown {
+  color: var(--md-on-surface-variant);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin-top: 0.5rem;
+}
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
+  color: var(--md-on-surface);
+  margin: 1.1rem 0 0.5rem;
+}
+.markdown > :first-child { margin-top: 0; }
+.markdown p { margin: 0 0 0.75rem; }
+.markdown ul, .markdown ol { margin: 0 0 0.75rem; padding-left: 1.4rem; }
+.markdown li { margin: 0.2rem 0; }
+.markdown strong { color: var(--md-on-surface); }
+.markdown a { color: var(--md-primary); }
+.markdown code {
+  background: var(--md-surface-dim);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.85em;
+}
+.markdown pre {
+  background: var(--md-surface-dim);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin: 0 0 0.75rem;
+}
+.markdown pre code { background: none; border: none; padding: 0; }
+.markdown img { max-width: 100%; height: auto; }
+
+ul.plain { list-style: none; margin: 0.35rem 0 0; padding: 0; display: grid; gap: 0.35rem; }
+ul.plain li { font-size: 0.9rem; }
+
+.learning-item {
+  background: var(--md-surface-container);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+}
+.learning-item .markdown { font-size: 0.9rem; }
+.learning-item .markdown > :last-child { margin-bottom: 0; }
+.status-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.85rem; }
+.status-head .section-header { margin-bottom: 0; }
+.status-head .run-now-action { margin: 0; padding: 0; border: 0; }
+.stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr)); gap: 0.75rem; }
+.stat-tile { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.75rem 1rem; border-radius: 12px; background: var(--md-surface-container-low); }
+.stat-label { font-size: 0.75rem; color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: 0.04em; }
+.stat-value { font-size: 1.25rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.stat-sub { font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.stat-failed .stat-value { color: var(--md-on-error-container, #900); }
+.status-link { margin: 0.85rem 0 0; font-size: 0.9rem; }
+.result-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.result-row { padding: 0.75rem 1rem; border-radius: 12px; background: var(--md-surface-container-low); border-left: 3px solid var(--md-outline-variant, currentColor); }
+.result-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.result-title { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.result-summary { margin: 0.35rem 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--md-on-surface-variant); }
+.meeting-list, .history-runs, .history-items { list-style: none; margin: 0; padding: 0; }
+.meeting-row { display: grid; grid-template-columns: 7.5rem 1fr auto auto; gap: 0.75rem; align-items: center;
+  padding: 0.6rem 0.85rem; border-left: 4px solid transparent; border-radius: 8px; }
+.meeting-row + .meeting-row { margin-top: 0.35rem; }
+.meeting-time { font-variant-numeric: tabular-nums; font-weight: 500; }
+.meeting-title a { display: inline-flex; align-items: center; gap: 0.35rem; }
+.meeting-title .material-symbols-outlined { font-size: 18px; }
+.meeting-when { font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.meeting-pills { display: inline-flex; gap: 0.35rem; justify-self: end; }
+.draft-body, .content-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 0.5rem 0 0; }
+.content-list { margin: 0.25rem 0 0.75rem; padding-left: 1.25rem; }
+.people-list { list-style: none; margin: 0.75rem 0 0; padding: 0; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr)); }
+.person { display: flex; gap: 0.75rem; align-items: center; padding: 0.75rem; border: 1px solid var(--md-outline-variant); border-radius: 12px; min-width: 0; }
+.person-avatar { width: 48px; height: 48px; border-radius: 50%; flex: 0 0 48px; object-fit: cover; display: flex; align-items: center; justify-content: center; background: var(--md-surface-container-high); font-weight: 500; }
+.person-body { min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
+.person-body a { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-meta { font-size: 0.85rem; color: var(--md-on-surface-variant); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.content-heading { margin: 0.75rem 0 0; font-size: 0.95rem; }
+.meeting-summary { grid-column: 2 / -1; margin: 0; font-size: 0.9rem; line-height: 1.4; }
+.meeting-brief-ready { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.meeting-brief-pending, .meeting-brief-none { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+.meeting-ongoing .meeting-brief-ready { background: var(--md-surface); color: var(--md-on-surface); }
+.meeting-pill { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+.meeting-past { opacity: 0.55; }
+.meeting-past .meeting-title { text-decoration: line-through; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+.meeting-ongoing { background: var(--md-primary-container); color: var(--md-on-primary-container); border-left-color: var(--md-primary); }
+.meeting-ongoing .meeting-when { color: inherit; }
+.meeting-ongoing .meeting-pill { background: var(--md-primary); color: var(--md-on-primary); }
+.meeting-upcoming { background: var(--md-surface-container-low); border-left-color: var(--md-outline-variant, currentColor); }
+@media (max-width: 640px) {
+  .meeting-row { grid-template-columns: 1fr auto; }
+  .meeting-time, .meeting-summary { grid-column: 1 / -1; }
+}
+.day-group { border-top: 1px solid var(--md-outline-variant, rgba(128,128,128,0.3)); padding: 0.4rem 0; }
+.day-group:first-of-type { border-top: 0; }
+.day-group > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: baseline; padding: 0.4rem 0; }
+.day-title { font-weight: 500; }
+.day-summary { font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.history-run { padding: 0.55rem 0 0.55rem 0.9rem; border-left: 3px solid var(--md-surface-container-high); margin: 0.35rem 0 0.35rem 0.25rem; }
+.history-run-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.history-time { font-weight: 500; font-variant-numeric: tabular-nums; }
+.history-file { font-weight: 400; font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.history-done { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.history-failed { background: var(--md-error-container, #fdd); color: var(--md-on-error-container, #900); }
+.history-skipped { background: var(--md-surface-container-high); color: var(--md-on-surface-variant); }
+.history-items { margin-top: 0.3rem; font-size: 0.9rem; }
+.history-item { padding: 0.1rem 0; }
+.history-item-failed { color: var(--md-error, #b3261e); }
+.history-more { color: var(--md-on-surface-variant); font-size: 0.85rem; }
+.pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
+
+.gitlab-list { gap: 0.15rem; }
+.gitlab-item {
+  background: var(--md-surface-container);
+  border-radius: 8px;
+  padding: 0.3rem 0.65rem;
+}
+.gitlab-item-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+.gitlab-item-title { font-weight: 500; color: var(--md-on-surface); text-decoration: none; flex: 1 1 auto; min-width: 0; }
+.gitlab-item-title:hover { color: var(--md-primary); text-decoration: underline; }
+.gitlab-item-meta { font-size: 0.78rem; color: var(--md-on-surface-variant); flex-shrink: 0; white-space: nowrap; text-align: right; }
+/* My Queue's per-row meta line (just "updated Xh ago") once the alias and
+   assignee name move up into the group's own .attn-group-title - a block
+   below the labels instead of sharing .gitlab-item-row's flex line with
+   the title. */
+.gitlab-item-meta-standalone { text-align: left; white-space: normal; margin-top: 0.2rem; }
+
+/* My Queue's per-project sub-groups (only rendered once 2+ projects have
+   items assigned to you - see render_gitlab_live_fragment). */
+.attn-group + .attn-group { margin-top: 0.85rem; }
+.attn-group-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* /loops catalog: active loops as a managed list, available loops as
+   cards. Each loop's schedule shows as one readable line; the editor sits
+   in a <details> so rows stay short and scannable. */
+.loop-section-hint { margin: -0.35rem 0 1rem; color: var(--md-on-surface-variant); font-size: 0.87rem; }
+.loop-empty { margin: 0; color: var(--md-on-surface-variant); }
+.loop-list, .loop-gallery { list-style: none; margin: 0; padding: 0; }
+.loop-list { display: flex; flex-direction: column; gap: 0.75rem; }
+.loop-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 0.85rem; }
+.loop-row, .loop-tile {
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 16px;
+  background: var(--md-surface);
+  min-width: 0;
+}
+.loop-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.25rem 1rem; padding: 1rem 1.1rem; align-items: start; }
+.loop-tile { display: flex; flex-direction: column; gap: 0.6rem; padding: 1rem; }
+.loop-icon {
+  width: 40px; height: 40px; border-radius: 12px; flex: 0 0 40px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--md-surface-container-highest); color: var(--md-on-surface-variant);
+}
+.loop-icon svg { width: 22px; height: 22px; }
+.loop-icon .material-symbols-outlined { font-size: 22px; }
+.loop-main { min-width: 0; }
+.loop-heading, .loop-tile-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.loop-tile-head { flex-wrap: nowrap; gap: 0.75rem; }
+.loop-title { font-size: 1rem; font-weight: 500; color: var(--md-on-surface); text-decoration: none; }
+a.loop-title:hover, a.loop-title:focus-visible { color: var(--md-primary); text-decoration: underline; }
+.loop-description { margin: 0.25rem 0 0; color: var(--md-on-surface-variant); font-size: 0.87rem; line-height: 1.45; }
+.loop-tile .loop-description { margin: 0; flex: 1 1 auto; }
+.loop-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; margin-top: 0.6rem; font-size: 0.82rem; color: var(--md-on-surface-variant); }
+.loop-tile .loop-meta { margin-top: 0; }
+.loop-meta-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+.loop-meta-item .material-symbols-outlined { font-size: 16px; }
+.loop-actions { display: flex; align-items: center; gap: 0.75rem; }
+.loop-toggle { display: inline-flex; align-items: center; gap: 0.45rem; }
+.loop-toggle .switch[disabled] { opacity: 0.45; cursor: not-allowed; }
+.loop-toggle-text { font-size: 0.82rem; font-weight: 500; color: var(--md-on-surface-variant); min-width: 1.6rem; }
+.loop-tile-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding-top: 0.6rem; border-top: 1px solid var(--md-outline-variant); }
+.loop-needs { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.loop-needs-hint { font-size: 0.78rem; color: var(--md-on-surface-variant); }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.22rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 500; line-height: 1.2;
+  background: var(--md-warning-container); color: var(--md-on-warning-container); text-decoration: none; white-space: nowrap;
+}
+.chip .material-symbols-outlined { font-size: 14px; }
+a.chip:hover, a.chip:focus-visible { text-decoration: underline; }
+.loop-settings { margin-top: 0.6rem; }
+.loop-settings > summary {
+  display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; list-style: none;
+  font-size: 0.82rem; font-weight: 500; color: var(--md-primary); border-radius: 8px; padding: 0.15rem 0.2rem;
+}
+.loop-settings > summary::-webkit-details-marker { display: none; }
+.loop-settings > summary .material-symbols-outlined { font-size: 16px; }
+.loop-settings[open] > summary { margin-bottom: 0.5rem; }
+.loop-settings-body { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.75rem; border-radius: 12px; background: var(--md-surface-container-low); }
+@media (max-width: 720px) {
+  .loop-row { grid-template-columns: auto minmax(0, 1fr); }
+  .loop-actions { grid-column: 1 / -1; justify-content: space-between; padding-top: 0.6rem; border-top: 1px solid var(--md-outline-variant); }
+}
+table.daemons { border-collapse: collapse; width: 100%; font-size: 0.87rem; }
+table.daemons th {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 2px solid var(--md-outline-variant);
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface);
+  font-family: var(--font-family-stack);
+  font-weight: 500;
+}
+table.daemons td { text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid var(--md-outline-variant); vertical-align: top; }
+table.daemons tbody tr { transition: background-color 150ms ease; }
+table.daemons tbody tr:hover { background: var(--md-surface-container-low); }
+table.daemons code {
+  font-size: 0.85em;
+  word-break: break-all;
+  background: var(--md-surface-dim);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
+.table-wrap { overflow-x: auto; }
+
+/* Skills page: Used-by/Path aren't columns - each skill's summary row
+   (name/status/description) is immediately followed by its own detail
+   row, hidden until that summary row gets .is-expanded (see
+   render_skills_page's onclick). The `+` sibling selector is why the
+   detail row must come directly after its own summary row in the HTML. */
+table.skills tr.skill-row { cursor: pointer; }
+table.skills tr.skill-detail-row { display: none; }
+table.skills tr.skill-row.is-expanded + tr.skill-detail-row { display: table-row; }
+table.skills tr.skill-detail-row td { background: var(--md-surface-container-low); }
+table.skills tr.skill-detail-row p { margin: 0 0 0.2rem; }
+table.skills tr.skill-detail-row p:not(:first-child) { margin-top: 0.6rem; }
+.skill-expand-icon { font-size: 16px; vertical-align: middle; color: var(--md-outline); transition: transform 150ms ease; }
+table.skills tr.skill-row.is-expanded .skill-expand-icon { transform: rotate(180deg); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.pill-blue { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+/* A pill that's also a link (e.g. the Project Memory page's issue-
+   number badge, once it resolves to a real GitLab URL - see
+   render_memory_page) - same colors as .pill-blue so a reader can
+   tell "this one is clickable" apart from a plain .pill-grey tag,
+   underlining only on hover/focus so the pill shape alone doesn't read
+   as a wall of underlined text. */
+.pill-link { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.pill-link:hover, .pill-link:focus-visible { text-decoration: underline; }
+.pill-green { background: var(--md-success-container); color: var(--md-on-success-container); }
+.pill-red { background: var(--md-error-container); color: var(--md-on-error-container); }
+.pill-grey { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); }
+/* Topbar AI CLI badge (the selected CLI's name): tinted with the theme
+   accent chosen on the Preferences page - the same active-nav tokens the
+   sidebar's current page link uses - so it follows the selected theme. */
+.pill-ai-cli { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
+.pill-ai-cli .ai-cli-logo { width: 18px; height: 18px; flex-shrink: 0; }
+/* In the topbar's right group the pills match the AI button and the
+   language switcher (all 40px tall), so the row reads as one set of
+   controls rather than small badges next to big buttons. */
+.topbar .header-right .pill { height: 40px; padding: 0 1rem; font-size: 0.8rem; gap: 0.45rem; }
+.topbar .header-right .pill .material-symbols-outlined { font-size: 18px; }
+@media (max-width: 720px) { /* narrow topbar */
+  /* A phone leaves the topbar ~330px: let its controls shrink and scroll
+     sideways instead of being clipped off the right edge. */
+  .topbar { gap: 0.4rem; padding-right: var(--shell-gap); }
+  /* flex-start + an auto margin, not flex-end: content overflowing on the
+     start side of a flex-end row can never be scrolled into view. */
+  .topbar .header-right { flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; gap: 0.4rem;
+    justify-content: flex-start; }
+  .topbar .header-right > :first-child { margin-left: auto; }
+  .topbar .header-right::-webkit-scrollbar { display: none; }
+  .topbar .header-right > * { flex-shrink: 0; }
+  .topbar .header-right .pill { padding: 0 0.7rem; }
+}
+/* Overview page's status-hero pill: the same state pill shown small in
+   the topbar on every page, sized up since here it's the Latest Run
+   card's headline value, not a small persistent indicator. */
+.pill-lg { font-size: 0.95rem; padding: 0.5rem 1rem; gap: 0.45rem; }
+.pill-lg .material-symbols-outlined { font-size: 18px; }
+
+.badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.project-block + .project-block { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--md-outline-variant); }
+
+/* Connector gallery + brand logos (see brand_logos.py). Logos sit on a light
+   chip so dark brand colors (Slack purple, Notion black) stay legible in dark mode. */
+.brand-logo { flex: none; box-sizing: content-box; padding: 4px; border-radius: 8px; background: #ffffffd9; vertical-align: middle; }
+svg.brand-logo[fill="currentColor"] { color: #181717; }
+.brand-lettermark { display: inline-flex; align-items: center; justify-content: center; box-sizing: content-box; padding: 4px; border-radius: 50%; background: var(--brand, var(--md-primary)); color: #fff; font-size: 0.8rem; font-weight: 700; }
+.connector-row-title { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+/* Connectors > Accounts: one row per account - identity and status pills on
+   the left, actions on the right (wrapping underneath on narrow screens). */
+.connector-accounts .section-header { padding-bottom: 0.75rem; margin-bottom: 0.25rem; border-bottom: 1px solid var(--md-outline-variant); }
+.connector-accounts .section-header h2 { font-size: 1.05rem; }
+.account-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem 1.5rem;
+  margin: 0 -0.75rem; padding: 0.9rem 0.75rem; border-radius: 12px; transition: background-color 0.15s; }
+.account-row:hover { background: var(--md-surface-container-low); }
+.project-block.account-row + .project-block.account-row { margin-top: 0; padding-top: 0.9rem; border-top: 0; }
+.account-row + .account-row { box-shadow: 0 -1px 0 var(--md-outline-variant); }
+.account-main { flex: 1 1 18rem; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.account-main .connector-row-title { flex-wrap: nowrap; min-width: 0; }
+.account-main .connector-row-title strong { font-size: 0.95rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-main .connector-row-title code { font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 6px;
+  background: var(--md-surface-container-high); color: var(--md-on-surface-variant); white-space: nowrap; }
+.account-main .pill-row { margin-top: 0; gap: 0.3rem; }
+.account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; flex: 0 1 auto; }
+.account-actions .btn[class] { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
+.account-actions .btn .material-symbols-outlined { font-size: 16px; }
+/* Connector gallery cards. Tiles (.connector-tile), the search box and the
+   form's brand header (.connector-hero) read the --cg-* tokens below, which
+   derive from the theme accent (--md-nav-*), so picking another accent on
+   Settings > Appearance recolors the whole gallery. Dark mode (the base
+   scheme) mixes only a little accent into the dark surfaces; light mode
+   uses the accent wash itself. Plain values come first and color-mix()
+   overrides them inside @supports, so an older engine still gets a
+   coherent neutral card. Each tile also carries style='--brand:#hex'
+   (brand_logos.brand_color) for its logo glow and top edge. */
+.connector-gallery, .connector-hero {
+  --cg-card: var(--md-surface-container-low);
+  --cg-card-hover: var(--md-surface-container);
+  --cg-panel: var(--md-surface-container-lowest);
+  --cg-border: var(--md-outline-variant);
+  --cg-accent: var(--md-nav-active-on-surface);
+  --cg-chip-bg: var(--md-surface-container-highest);
+  --cg-chip-fg: var(--md-on-surface-variant);
+  --cg-glow: transparent;
+  --cg-shadow: rgba(0, 0, 0, 0.35);
+  --cg-badge-bg: var(--cg-chip-bg);
+  --cg-badge-fg: var(--cg-chip-fg);
+  --cg-rule: transparent;
+}
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  .connector-gallery, .connector-hero {
+    --cg-card: color-mix(in srgb, var(--md-nav-active-surface) 16%, var(--md-surface-container-low));
+    --cg-card-hover: color-mix(in srgb, var(--md-nav-active-surface) 24%, var(--md-surface-container));
+    --cg-panel: color-mix(in srgb, var(--md-nav-active-surface) 7%, var(--md-surface-container-lowest));
+    --cg-border: color-mix(in srgb, var(--md-nav-active-surface) 32%, var(--md-outline-variant));
+    --cg-accent: color-mix(in srgb, var(--md-nav-active-on-surface) 50%, #FFFFFF);
+    --cg-chip-bg: color-mix(in srgb, var(--md-nav-active-surface) 18%, var(--md-surface-container-high));
+    --cg-glow-mix: 38%;
+    --cg-shadow-base: rgba(0, 0, 0, 0.55);
+  }
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-color-mode="dark"]) .connector-gallery,
+  :root:not([data-color-mode="dark"]) .connector-hero {
+    --cg-card: var(--md-surface-container-lowest);
+    --cg-card-hover: var(--md-surface-container-lowest);
+    --cg-panel: var(--md-nav-surface);
+    --cg-border: var(--md-outline-variant);
+    --cg-accent: var(--md-nav-active-on-surface);
+    --cg-chip-bg: var(--md-nav-active-surface);
+    --cg-chip-fg: var(--md-nav-on-surface);
+    --cg-shadow: rgba(30, 30, 40, 0.16);
+    --cg-badge-bg: var(--md-nav-active-on-surface);
+    --cg-badge-fg: #FFFFFF;
+    --cg-rule: var(--md-nav-active-on-surface);
+  }
+  @supports (color: color-mix(in srgb, red 50%, blue)) {
+    :root:not([data-color-mode="dark"]) .connector-gallery,
+    :root:not([data-color-mode="dark"]) .connector-hero {
+      --cg-card: color-mix(in srgb, var(--md-nav-active-surface) 35%, #FFFFFF);
+      --cg-card-hover: color-mix(in srgb, var(--md-nav-active-surface) 20%, #FFFFFF);
+      --cg-panel: color-mix(in srgb, var(--md-nav-active-surface) 60%, var(--md-nav-surface));
+      --cg-border: color-mix(in srgb, var(--md-nav-active-on-surface) 28%, var(--md-nav-active-surface));
+      --cg-chip-bg: color-mix(in srgb, var(--md-nav-active-surface) 82%, var(--md-nav-active-on-surface));
+      --cg-glow-mix: 26%;
+      --cg-shadow-base: rgba(30, 30, 40, 0.14);
+    }
+  }
+}
+:root[data-color-mode="light"] .connector-gallery,
+:root[data-color-mode="light"] .connector-hero {
+  --cg-card: var(--md-surface-container-lowest);
+  --cg-card-hover: var(--md-surface-container-lowest);
+  --cg-panel: var(--md-nav-surface);
+  --cg-border: var(--md-outline-variant);
+  --cg-accent: var(--md-nav-active-on-surface);
+  --cg-chip-bg: var(--md-nav-active-surface);
+  --cg-chip-fg: var(--md-nav-on-surface);
+  --cg-shadow: rgba(30, 30, 40, 0.16);
+  --cg-badge-bg: var(--md-nav-active-on-surface);
+  --cg-badge-fg: #FFFFFF;
+  --cg-rule: var(--md-nav-active-on-surface);
+}
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  :root[data-color-mode="light"] .connector-gallery,
+  :root[data-color-mode="light"] .connector-hero {
+    --cg-card: color-mix(in srgb, var(--md-nav-active-surface) 35%, #FFFFFF);
+    --cg-card-hover: color-mix(in srgb, var(--md-nav-active-surface) 20%, #FFFFFF);
+    --cg-panel: color-mix(in srgb, var(--md-nav-active-surface) 60%, var(--md-nav-surface));
+    --cg-border: color-mix(in srgb, var(--md-nav-active-on-surface) 28%, var(--md-nav-active-surface));
+    --cg-chip-bg: color-mix(in srgb, var(--md-nav-active-surface) 82%, var(--md-nav-active-on-surface));
+    --cg-glow-mix: 26%;
+    --cg-shadow-base: rgba(30, 30, 40, 0.14);
+  }
+}
+/* --brand is set on each tile/hero, so the brand-derived tokens must be
+   computed there too (a custom property resolves var() where it's declared). */
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  .connector-tile, .connector-hero {
+    --cg-glow: color-mix(in srgb, var(--brand, transparent) var(--cg-glow-mix, 40%), transparent);
+    --cg-shadow: color-mix(in srgb, var(--brand, #000) 28%, var(--cg-shadow-base, rgba(0, 0, 0, 0.4)));
+  }
+}
+.connector-gallery-intro { margin: 0 0 0.75rem; }
+.connector-search-wrap { position: relative; display: flex; align-items: center; max-width: 26rem; margin: 0 0 1.5rem; }
+.connector-search-wrap .material-symbols-outlined { position: absolute; left: 0.9rem; font-size: 20px; color: var(--md-on-surface-variant); pointer-events: none; }
+.connector-search { width: 100%; height: 2.75rem; padding: 0 1rem 0 2.75rem; border: 1px solid var(--cg-border); border-radius: 999px; background: var(--cg-card); color: var(--md-on-surface); font: inherit; font-size: 0.92rem; box-sizing: border-box; transition: border-color 150ms ease, box-shadow 150ms ease; }
+.connector-search::placeholder { color: var(--md-on-surface-variant); }
+.connector-search:focus, .connector-search:focus-visible { outline: 2px solid transparent; border-color: var(--cg-accent); box-shadow: 0 0 0 3px var(--md-outline-variant); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cg-accent) 25%, transparent); }
+.connector-category { margin: 0 0 1.75rem; }
+.connector-category[hidden], .connector-tile[hidden] { display: none; }
+.connector-category h2 { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.85rem; padding-bottom: 0.45rem; background: linear-gradient(var(--cg-rule), var(--cg-rule)) left bottom / 2rem 2px no-repeat; font-size: 1rem; font-weight: 500; color: var(--md-on-surface); }
+.connector-category h2 .brand-logo { padding: 0; background: none; }
+.connector-count { display: inline-flex; align-items: center; justify-content: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.4rem; box-sizing: border-box; border-radius: 999px; background: var(--cg-badge-bg); color: var(--cg-badge-fg); font-size: 0.72rem; font-weight: 500; }
+/* Google leads the gallery: its section sits on its own accent panel. */
+.connector-category[data-category="google"] { padding: 1.1rem 1.25rem 1.25rem; border: 1px solid var(--cg-border); border-radius: 20px; background: var(--cg-panel); }
+.connector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr)); gap: 1rem; }
+.connector-tile {
+  position: relative; isolation: isolate; overflow: hidden;
+  display: flex; flex-direction: column; gap: 0.6rem;
+  min-height: 10.5rem; padding: 1.1rem 1.1rem 1rem; box-sizing: border-box;
+  border: 1px solid var(--cg-border); border-radius: 16px;
+  background: var(--cg-card); color: var(--md-on-surface);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease;
+}
+/* No link styling anywhere inside a card, in any state: the card itself is the link. */
+.connector-tile, .connector-tile *, .connector-tile:hover, .connector-tile:hover *,
+.connector-tile:focus, .connector-tile:focus *, .connector-tile:visited, .connector-tile:visited * {
+  text-decoration: none;
+}
+.connector-tile:hover, .connector-tile:focus, .connector-tile:visited { color: var(--md-on-surface); }
+/* Brand edge along the top, strongest at the logo end. */
+.connector-tile::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+  background: linear-gradient(90deg, var(--brand, var(--cg-accent)), transparent 75%);
+  opacity: 0.7; transition: opacity 180ms ease;
+}
+/* Soft brand glow pooled behind the logo chip. */
+.connector-tile::after {
+  content: ""; position: absolute; z-index: -1; left: -3rem; top: -3.75rem; width: 11.5rem; height: 10.5rem;
+  border-radius: 50%; background: radial-gradient(closest-side, var(--cg-glow), transparent);
+  opacity: 0.8; transition: opacity 180ms ease, transform 180ms ease;
+}
+.connector-tile:hover, .connector-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: var(--cg-accent);
+  background: var(--cg-card-hover);
+  box-shadow: 0 14px 28px -16px var(--cg-shadow), 0 2px 6px -2px var(--cg-shadow);
+}
+.connector-tile:hover::before, .connector-tile:focus-visible::before { opacity: 1; }
+.connector-tile:hover::after, .connector-tile:focus-visible::after { opacity: 1; transform: scale(1.2); }
+.connector-tile:focus-visible { outline: 2px solid var(--cg-accent); outline-offset: 3px; }
+.connector-tile-head { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+.connector-tile-mark {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 2.75rem; height: 2.75rem; border-radius: 12px; background: #FFFFFF; color: #181717;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 6px 14px -6px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand, #000) 16%, rgba(0, 0, 0, 0.06)),
+              0 6px 14px -6px color-mix(in srgb, var(--brand, #000) 55%, transparent);
+}
+.connector-tile-mark .brand-logo { padding: 0; background: none; border-radius: 0; }
+.connector-tile-mark .brand-lettermark { padding: 0; border-radius: 9px; background: var(--brand); font-size: 0.75rem; }
+.connector-tile-mark .material-symbols-outlined { font-size: 24px; color: var(--brand, #181717); }
+.connector-tile-name { min-width: 0; font-size: 1rem; font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
+.connector-tile-desc {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  font-size: 0.85rem; line-height: 1.45; color: var(--md-on-surface-variant);
+}
+.connector-tile-caps { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: auto; padding-top: 0.25rem; }
+.connector-tile-caps .pill { padding: 0.28rem 0.65rem; font-size: 0.72rem; background: var(--cg-chip-bg); color: var(--cg-chip-fg); }
+/* The form's brand header: same card language as the gallery tile. */
+.connector-hero {
+  position: relative; isolation: isolate; overflow: hidden;
+  display: flex; align-items: center; gap: 1rem; margin: 0 0 0.75rem; padding: 1.1rem 1.25rem;
+  border: 1px solid var(--cg-accent); border-radius: 16px; background: var(--cg-card);
+}
+.connector-hero::before {
+  content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+  background: linear-gradient(90deg, var(--brand, var(--cg-accent)), transparent 75%);
+}
+.connector-hero::after {
+  content: ""; position: absolute; z-index: -1; left: -3rem; top: -3.5rem; width: 11rem; height: 11rem;
+  border-radius: 50%; background: radial-gradient(closest-side, var(--cg-glow), transparent);
+}
+.connector-hero .connector-tile-mark { width: 3.25rem; height: 3.25rem; border-radius: 14px; }
+.connector-hero-text { min-width: 0; }
+.connector-hero-text h2 { margin: 0 0 0.2rem; }
+.connector-hero-text .section-subtitle { margin: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .connector-tile, .connector-tile::before, .connector-tile::after, .connector-search { transition: none; }
+  .connector-tile:hover, .connector-tile:focus-visible,
+  .connector-tile:hover::after, .connector-tile:focus-visible::after { transform: none; }
+}
+.connector-fixed-value { display: inline-flex; gap: 0.6rem; align-items: center; }
+.section-header .brand-logo { margin-right: 0.25rem; }
+/* Connector add/edit form (_connector_form_body): labels above full-width
+   inputs, short fields two-up from 900px, required marked by a glyph. */
+.connector-form { display: flex; flex-direction: column; gap: 1.25rem; margin-top: 1rem; }
+.connector-section { border: 0; margin: 0; padding: 0; min-width: 0; }
+.connector-section legend { padding: 0; margin-bottom: 0.6rem; font-weight: 500; font-size: 0.95rem; color: var(--md-on-surface); }
+.connector-fields { display: grid; grid-template-columns: 1fr; gap: 0.9rem 1.25rem; }
+@media (min-width: 900px) { .connector-fields { grid-template-columns: 1fr 1fr; } .connector-field-wide { grid-column: 1 / -1; } }
+.connector-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.connector-field label, .connector-field-label { font-size: 0.85rem; font-weight: 500; color: var(--md-on-surface); }
+.field-required { color: var(--md-error); font-weight: 700; }
+.field-optional { font-weight: 400; color: var(--md-on-surface-variant); }
+.field-help { font-size: 0.8rem; }
+.connector-field input, .connector-field select, .connector-field textarea {
+  box-sizing: border-box; width: 100%; padding: 0.55rem 0.75rem; border: 1px solid var(--md-outline);
+  border-radius: 8px; background: var(--md-surface-container-lowest); color: var(--md-on-surface); font: inherit; }
+.connector-field textarea { resize: vertical; }
+.connector-field input:focus-visible, .connector-field select:focus-visible, .connector-field textarea:focus-visible {
+  outline: 2px solid var(--md-primary); outline-offset: 1px; border-color: var(--md-primary); }
+.connector-field input:user-invalid, .connector-field textarea:user-invalid { border-color: var(--md-error); }
+.secret-input-row { display: flex; gap: 0.5rem; align-items: center; }
+.secret-input-row input { flex: 1 1 auto; }
+.secret-toggle { flex: none; }
+.secret-toggle[hidden] { display: none; }
+.connector-docs-link { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; }
+.connector-docs-link .material-symbols-outlined { font-size: 1rem; }
+.connector-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.connector-cancel { background: transparent; color: var(--md-primary); }
+.connector-cancel:hover { background: var(--md-surface-container-high); }
+
+/* Shared "nothing to show because setup is missing" state - see
+   _empty_state_html - used by the Live GitLab and Memory pages in
+   place of a bare "(no projects configured)" line, since the fix here
+   is always the same one click away (the GitLab settings page) and a
+   plain text line was too easy to skim past. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1.5rem;
+  color: var(--md-on-surface-variant);
+}
+.empty-state-icon { color: var(--md-outline); }
+.empty-state-icon .material-symbols-outlined { font-size: 40px; }
+.empty-state-message { margin: 0; font-size: 0.9rem; max-width: 32rem; }
+.empty-state-action { margin-top: 0.5rem; text-decoration: none; }
+
+.history-entry + .history-entry { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--md-outline-variant); }
+.history-entry-header { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.history-entry-header .pill-row { margin-top: 0; flex: 1 1 auto; }
+.history-entry-header form { margin: 0; }
+.history-delete-btn { padding: 0.3rem; }
+.history-entry-overview { margin: 0.3rem 0 0; color: var(--md-on-surface-variant); font-size: 0.85rem; }
+.learning-reuse-stats { font-size: 0.8rem; color: var(--md-on-surface-variant); margin: 0.35rem 0 0; }
+
+/* "last run 3h ago" beside a Topic Monitor heading: secondary information
+   next to the state pill, so it reads at the weight of metadata rather
+   than competing with the topic's own name. */
+.topic-last-run { font-size: 0.78rem; font-weight: 400; color: var(--md-on-surface-variant); }
+
+/* Topic Monitor's Latest Data section: each topic's summary block is
+   immediately followed by its own detail block, hidden until the summary
+   gets .is-expanded (see render_topic_monitor_page's onclick) - same
+   sibling-selector convention as table.skills's summary/detail rows, just
+   with divs instead of table rows since a full rendered briefing needs to
+   flow rather than sit in a table cell. */
+.topic-latest-item + .topic-latest-item { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--md-outline-variant); }
+.topic-latest-summary { cursor: pointer; }
+.topic-latest-summary .skill-expand-icon { margin-left: 0.2rem; }
+.topic-latest-summary.is-expanded .skill-expand-icon { transform: rotate(180deg); }
+.topic-latest-overview { margin: 0.3rem 0 0; color: var(--md-on-surface-variant); font-size: 0.85rem; }
+.topic-latest-detail { display: none; margin-top: 0.75rem; }
+.topic-latest-summary.is-expanded + .topic-latest-detail { display: block; }
+
+.flash {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.flash-success {
+  background: var(--md-success-container);
+  border-color: var(--md-success-container);
+  color: var(--md-on-success-container);
+}
+.flash-danger {
+  background: var(--md-error-container);
+  border-color: var(--md-error-container);
+  color: var(--md-on-error-container);
+}
+
+/* A single inbox's last-run error (Inbox Triage page) - inline, next to
+   that inbox's own card, rather than a full-width .flash banner which
+   would read as this whole page having failed. */
+.error-text { color: var(--md-error); font-size: 0.85rem; margin: 0.35rem 0; }
+
+/* Replaces the browser's native "Please fill out this field."-style
+   validation bubble (unstyled OS chrome, can't be restyled with CSS) with
+   an MD3-styled one built by JS - same color pairing as .flash-danger,
+   positioned like a tooltip next to the invalid field. position: fixed
+   for the same reason .custom-select-menu uses it: escapes any ancestor's
+   overflow clipping (e.g. .table-wrap). */
+.field-error-bubble {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  max-width: 320px;
+}
+.field-error-bubble .material-symbols-outlined { font-size: 18px; flex-shrink: 0; }
+.field-error-bubble[hidden] { display: none; }
+
+/* Replaces the browser's native, unstyled confirmation popup for every
+   destructive action - Delete/Clear/Enable buttons carry a
+   data-confirm="<message>" attribute instead of an inline click handler
+   that calls the native dialog directly; JS in _render_shell intercepts
+   the click, fills in this dialog, and submits the button's own form only
+   once the user accepts. <dialog> gives real modal behavior (focus trap,
+   Escape to close, backdrop) for free - no custom overlay/z-index
+   management. */
+.confirm-dialog {
+  border: none;
+  border-radius: 24px;
+  padding: 2rem;
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface);
+  width: 90vw;
+  max-width: 520px;
+  min-width: 360px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
+.confirm-dialog-icon { color: var(--md-error); margin-bottom: 0.75rem; }
+.confirm-dialog-icon .material-symbols-outlined { font-size: 36px; }
+.confirm-dialog-message { margin: 0 0 2rem; font-size: 1.1rem; line-height: 1.5; }
+.confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
+.confirm-dialog-actions button { padding: 0.55rem 1.25rem; font-size: 0.9rem; }
+
+.inline-error {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--md-error);
+  font-size: 0.8rem;
+  margin: 0.25rem 0 0.5rem;
+}
+.inline-error .material-symbols-outlined { font-size: 16px; flex-shrink: 0; }
+
+.daemon-action-form { margin: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+/* The "add a new instance/project" row sits directly under a table with no
+   gap of its own - give it some breathing room from the last table row
+   above it. */
+.daemon-action-form.add-row-form { margin-top: 0.85rem; }
+/* Topic Settings row (render_topic_settings_page): the enable/disable
+   switch leads the row (its own single-button <form>), then the editable
+   fields span two lines - label input + read-only name chip + Slack
+   bundle share line 1, the "what counts as notable" description gets its
+   own full-width textarea as line 2, big enough to actually write a brief
+   in rather than scroll a single-line input sideways - and Save/Delete
+   sit together as one button column on the right rather than Delete
+   trailing below in its own separate row. The Delete <form> itself
+   renders with no visible content (just its CSRF input) - its button
+   lives in .topic-row-actions and targets it via `form=`, the same trick
+   used for Save targeting the edit form it isn't nested inside. */
+.topic-row { display: flex; gap: 0.75rem; align-items: flex-start; }
+.topic-row-switch { flex: 0 0 auto; margin: 0.15rem 0 0; }
+/* The Add-topic row has nothing to enable/disable yet, but keeps this
+   same-width empty spacer in the switch's column so its fields line up
+   with every edited topic row above it. */
+.topic-row-switch-spacer { flex: 0 0 auto; width: 40px; }
+.topic-row-fields { flex: 1 1 auto; min-width: 0; }
+.topic-row-line1 { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
+.topic-row-name-input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; flex: 0 1 160px; min-width: 110px; }
+/* Wide enough for the longest option label ("(use default webhook)") to
+   render on one line without the .custom-select-value ellipsis kicking in
+   under normal row widths. */
+.topic-row-line1 .custom-select { flex: 1 1 220px; min-width: 200px; }
+.topic-row-fields .topic-row-brief { display: block; width: 100%; min-height: 3.2em; resize: vertical; }
+.topic-row-actions { display: flex; flex-direction: column; gap: 0.4rem; flex: 0 0 auto; margin: 0; }
+.topic-row-actions form { margin: 0; }
+/* Disabled topics stay fully legible (never opacity so low it reads as
+   "broken"), just visibly muted while scanning the list. */
+.topic-settings-row.is-disabled { opacity: 0.6; }
+.daemon-action-form input[type='text'],
+.daemon-action-form input[type='password'],
+.daemon-action-form input[type='time'],
+.daemon-action-form select,
+.daemon-action-form textarea {
+  font-family: var(--font-family-stack);
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--md-outline);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  flex: 1 1 160px;
+  min-width: 120px;
+  transition: border-color 150ms ease;
+}
+.daemon-action-form input[type='time'] { flex: 0 0 auto; min-width: 0; }
+/* A multi-select (e.g. "Notify via") never grows past ~5 rows however many
+   options it has, and its label sits beside it rather than at the bottom. */
+.daemon-action-form select[multiple] { flex: 0 1 auto; min-width: 200px; max-height: 7.5rem; overflow-y: auto; padding: 0.2rem; }
+.daemon-action-form select[multiple] option { padding: 0.2rem 0.4rem; border-radius: 4px; }
+.daemon-action-form label.notify-via { display: inline-flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.weekday-checks { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.weekday-check { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.78rem; }
+.monthly-controls { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--md-on-surface-variant); }
+/* A Material Design 3 style filled checkbox (18px box, rounded corners,
+   a CSS-only checkmark via clip-path - no image asset) in place of the
+   browser's native checkbox, for the schedule editor's weekday picker.
+   `appearance: none` strips all native styling so these three rules are
+   the checkbox's entire visual, in both the unchecked and checked state. */
+.md-checkbox { cursor: pointer; user-select: none; }
+.md-checkbox input[type='checkbox'] {
+  appearance: none; -webkit-appearance: none;
+  width: 18px; height: 18px; margin: 0;
+  border: 2px solid var(--md-outline);
+  border-radius: 3px;
+  background: transparent;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.md-checkbox input[type='checkbox']::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  transform: scale(0);
+  transition: transform 100ms ease;
+  background: var(--md-on-primary);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+.md-checkbox input[type='checkbox']:checked { background: var(--md-primary); border-color: var(--md-primary); }
+.md-checkbox input[type='checkbox']:checked::before { transform: scale(1); }
+.md-checkbox input[type='checkbox']:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+/* The Instructions textarea is the only multi-line field in any form
+   here - it needs the full width of the card and its own line, not to
+   compete for space in a row of short fields like every other input. */
+.daemon-action-form textarea {
+  flex-basis: 100%;
+  font-family: var(--font-family-stack);
+  resize: vertical;
+}
+/* Bigger than a generic form textarea: this is a page you write real
+   prose into (potentially many paragraphs of standing instructions), not
+   a short parameter field, so it gets a roomier font size and a tall
+   minimum height in addition to its 24-row default. */
+.instructions-textarea {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  min-height: 420px;
+}
+.block-builder { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.75rem; }
+.block-builder-row { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.block-builder-row label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; flex: 1 1 min(200px, 100%); min-width: 0; }
+.block-builder-row input, .block-builder-row select {
+  padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container-low); color: var(--md-on-surface);
+}
+.block-builder-palette { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.block-builder-palette button {
+  padding: 0.35rem 0.7rem; border-radius: 999px; border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container); color: var(--md-on-surface); cursor: pointer;
+}
+.block-builder-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.block-builder-card {
+  border: 1px solid var(--md-outline-variant); border-radius: 10px; padding: 0.6rem 0.75rem;
+  background: var(--md-surface-container-low);
+}
+.block-builder-card-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.block-builder-card-header strong { flex: 1 1 auto; text-transform: capitalize; }
+.block-builder-card-header button {
+  border: 1px solid var(--md-outline-variant); background: transparent; color: var(--md-on-surface);
+  border-radius: 6px; cursor: pointer; padding: 0.1rem 0.45rem;
+}
+.block-builder-card-body { display: flex; flex-direction: column; gap: 0.5rem; }
+.block-builder-field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
+.block-builder-field input, .block-builder-field textarea {
+  padding: 0.35rem 0.55rem; border-radius: 8px; border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container); color: var(--md-on-surface); font-family: inherit;
+}
+.block-builder-list-field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; }
+.block-builder-list-row { display: flex; gap: 0.4rem; align-items: center; }
+.block-builder-list-row input { flex: 1 1 auto; }
+.block-builder-subcard {
+  border: 1px dashed var(--md-outline-variant); border-radius: 8px; padding: 0.5rem; display: flex;
+  flex-direction: column; gap: 0.4rem;
+}
+.block-builder-note { color: var(--md-on-surface-variant); font-size: 0.85rem; margin: 0; }
+.block-builder-json {
+  background: var(--md-surface-container-lowest); border: 1px solid var(--md-outline-variant);
+  border-radius: 8px; padding: 0.75rem; overflow-x: auto; font-size: 0.8rem; max-height: 320px;
+}
+.block-builder-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+/* A line with exactly one field and one button: fix the button's width so
+   every remaining pixel on the line goes to the field instead of the field
+   sizing to its placeholder text. */
+.daemon-action-form.single-field { flex-wrap: nowrap; }
+.daemon-action-form.single-field input,
+.daemon-action-form.single-field .custom-select { flex: 1 1 auto; min-width: 0; }
+.daemon-action-form.single-field button[type='submit'] { flex: 0 0 120px; justify-content: center; }
+
+/* Inbox Setup's per-inbox/OAuth-client forms (see inbox_pages.py's
+   _client_form/_inbox_form) - a vertically stacked form of several
+   full-width labeled fields, unlike .daemon-action-form's single
+   horizontal row of inline controls. Same input/textarea/select
+   treatment as .block-builder-field, just not scoped to the block
+   builder. */
+.stack-form { display: flex; flex-direction: column; gap: 0.75rem; max-width: 32rem; }
+.stack-form label, .stack-form .stack-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; }
+/* A .custom-select's own flex: 1 1 160px is meant for a row; in this
+   column it would become a 160px-tall basis. .stack-field (not <label>)
+   wraps it because a label forwards clicks on its menu options back to
+   the trigger button, reopening the menu. */
+.stack-form .custom-select { flex: 0 0 auto; }
+.stack-form .field-label { font-weight: 500; color: var(--md-on-surface); }
+.stack-form .field-hint { font-size: 0.78rem; line-height: 1.4; color: var(--md-on-surface-variant); }
+.stack-form .field-hint code { font-size: 0.75rem; }
+/* Inbox Setup's per-inbox card: labelled Account / Triage rules /
+   Notifications / Connection sections, then a Save-left, Delete-right
+   footer (buttons target their forms via form=, like Topic Settings). */
+.inbox-section { padding-top: 0.75rem; margin-top: 0.75rem; border-top: 1px solid var(--md-outline-variant); }
+.inbox-section:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+.inbox-card-footer { display: flex; justify-content: space-between; gap: 0.5rem; margin-top: 1rem; }
+/* Inbox Triage page's status cards: title block left, actions right
+   (wraps under on narrow screens), category counts as small tiles, and
+   each urgent message as subject-over-sender with its action at the end. */
+.inbox-card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 0.75rem 1.5rem; }
+.inbox-card-head .section-header { margin-bottom: 0.25rem; }
+.inbox-card-head .section-subtitle { margin: 0; }
+.inbox-card-head + .inbox-section, .inbox-card-head + .flash { margin-top: 1rem; }
+.inbox-section h3 { margin: 0 0 0.6rem; font-size: 0.95rem; }
+.inbox-count { display: inline-block; min-width: 1.4rem; padding: 0 0.4rem; margin-left: 0.25rem; border-radius: 999px;
+  background: var(--md-surface-container-high); color: var(--md-on-surface-variant); font-size: 0.75rem; font-weight: 500; text-align: center; vertical-align: middle; }
+.inbox-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(8.5rem, 100%), 1fr)); gap: 0.75rem; }
+.inbox-stat { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.75rem 1rem; border-radius: 10px;
+  background: var(--md-surface-container-lowest, var(--md-surface)); border: 1px solid var(--md-outline-variant); }
+.inbox-stat-value { font-size: 1.5rem; font-weight: 500; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.inbox-stat-label { font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.inbox-urgent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.inbox-urgent-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem;
+  padding: 0.75rem 1rem; border-radius: 10px; background: var(--md-surface-container-lowest, var(--md-surface)); border: 1px solid var(--md-outline-variant); }
+.inbox-urgent-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; flex: 1 1 16rem; }
+.inbox-urgent-subject { font-weight: 500; overflow-wrap: anywhere; }
+.inbox-urgent-from { font-size: 0.8rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+.stack-form input, .stack-form select, .stack-form textarea {
+  padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container-low); color: var(--md-on-surface); font-family: inherit;
+}
+.stack-form textarea { resize: vertical; }
+
+/* Inbox Setup's numbered "how to register an OAuth app" steps (Google/
+   Microsoft) - plain ordered list, spaced like the rest of this app's
+   prose rather than the browser's cramped default list spacing. */
+.wizard-steps { list-style: none; counter-reset: wizard; display: flex; flex-direction: column; gap: 0.35rem; margin: 0.75rem 0 1.25rem; padding: 0; font-size: 0.875rem; line-height: 1.55; }
+.wizard-steps li { counter-increment: wizard; position: relative; padding: 0.6rem 0.9rem 0.6rem 2.9rem; border-radius: 10px;
+  background: var(--md-surface-container-low); }
+.wizard-steps li::before { content: counter(wizard); position: absolute; left: 0.8rem; top: 0.65rem; width: 1.55rem; height: 1.55rem;
+  display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 0.78rem; font-weight: 500;
+  background: var(--md-primary-container, var(--md-surface-container-high)); color: var(--md-on-primary-container, var(--md-on-surface)); }
+.wizard-steps code { font-size: 0.78rem; overflow-wrap: anywhere; }
+/* Inbox Setup forms: wider than a single 32rem column. Short fields pair up
+   two-to-a-row, long ones (textareas, hints) span the full width. */
+.stack-form { max-width: 46rem; }
+.stack-form h3 { display: flex; align-items: center; gap: 0.5rem; margin: 0; font-size: 1rem; }
+.inbox-section .section-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr)); gap: 1rem 1.25rem; align-items: start; }
+.inbox-section.is-wide .section-fields { grid-template-columns: 1fr; }
+.inbox-section { padding-top: 1.25rem; margin-top: 1.25rem; }
+.inbox-section > h3 { margin: 0 0 0.9rem; font-size: 0.95rem; font-weight: 500; }
+.stack-form input:focus, .stack-form select:focus, .stack-form textarea:focus { outline: 2px solid var(--md-primary); outline-offset: -1px; }
+.stack-form input, .stack-form select, .stack-form textarea { padding: 0.55rem 0.75rem; }
+.inbox-card-footer { padding-top: 1rem; border-top: 1px solid var(--md-outline-variant); margin-top: 1.5rem; }
+.wizard-client { padding: 1.1rem 1.25rem; border-radius: 12px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container-lowest, var(--md-surface)); }
+
+/* Outlook's device-code sign-in flow (see _DEVICE_FLOW_SCRIPT in
+   inbox_pages.py) - hidden until the connect button's poll finds a
+   pending flow, then shows the verification URL/code inline next to
+   that inbox's own connect form instead of a popup. */
+.device-flow {
+  margin-top: 0.5rem; padding: 0.6rem 0.75rem; border: 1px dashed var(--md-outline-variant);
+  border-radius: 8px; background: var(--md-surface-container-low);
+}
+
+/* Custom-styled dropdown: replaces the browser's native <select> popup
+   (which can't be restyled - it always renders with the OS's own menu
+   chrome) with a JS-driven trigger + listbox built from this dashboard's
+   own tokens. The real <select> stays in the DOM, just hidden, so form
+   submission works exactly like a plain <select> would. */
+.custom-select { position: relative; display: inline-flex; flex: 1 1 160px; min-width: 120px; }
+.custom-select-native { display: none; }
+.custom-select-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-family-stack);
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--md-outline);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+/* Without this, the selected-value span wraps to two lines the moment its
+   flex sibling (a label input, say) leaves it less width than its text
+   needs - truncate with an ellipsis instead, same as any other single-line
+   control. */
+.custom-select-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.custom-select-trigger:hover { background: var(--md-surface-container-high); }
+.custom-select-trigger:focus-visible { border-color: var(--md-primary); border-width: 2px; outline: none; }
+.custom-select.is-open .custom-select-trigger { border-color: var(--md-primary); border-width: 2px; }
+.custom-select-trigger .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--md-on-surface-variant);
+  transition: transform 150ms ease;
+}
+.custom-select.is-open .custom-select-trigger .material-symbols-outlined { transform: rotate(180deg); }
+.custom-select-menu {
+  /* position: fixed (not absolute) so this isn't clipped by .table-wrap's
+     scroll boundary - top/left/width are computed from the trigger's
+     getBoundingClientRect() in JS when the menu opens, since fixed
+     positioning has no relation to the trigger's location otherwise. */
+  position: fixed;
+  z-index: 20;
+  background: var(--md-surface-container);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 0.25rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.custom-select-menu[hidden] { display: none; }
+.custom-select-option {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--md-on-surface);
+  cursor: pointer;
+}
+.custom-select-option:hover { background: var(--md-surface-container-high); }
+.custom-select-option.is-selected { color: var(--md-primary); font-weight: 500; }
+/* Keyboard focus while the listbox is open (see the ArrowUp/ArrowDown
+   handling in _render_shell's script) - outline-offset is negative since
+   these sit flush against the menu's own padding, an outward ring would
+   get clipped by .custom-select-menu's overflow-y: auto. */
+.custom-select-option:focus-visible { background: var(--md-surface-container-high); outline: 2px solid var(--md-primary); outline-offset: -2px; }
+.daemon-action-form input[type='text']:focus,
+.daemon-action-form input[type='password']:focus,
+.daemon-action-form select:focus,
+.daemon-action-form textarea:focus {
+  border-color: var(--md-primary);
+  border-width: 2px;
+  outline: none;
+}
+.btn {
+  font-family: var(--font-family-stack);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+.btn-warning {
+  background: var(--md-warning-container);
+  color: var(--md-on-warning-container);
+  border-color: var(--md-warning-container);
+}
+.btn-warning:hover { background: var(--md-warning); color: var(--md-on-warning); }
+.btn-neutral {
+  background: transparent;
+  color: var(--md-on-surface);
+  border-color: var(--md-outline);
+}
+.btn-neutral:hover { background: var(--md-surface-container-high); }
+.btn-primary {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  border-color: var(--md-primary);
+}
+.btn-primary:hover { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+
+.switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--md-outline);
+  background: var(--md-surface-container-highest);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.switch-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--md-on-surface-variant);
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+.switch.is-on {
+  background: var(--md-success-container);
+  border-color: var(--md-success-container);
+}
+.switch.is-on .switch-thumb {
+  transform: translateX(18px);
+  background: var(--md-on-success-container);
+}
+.switch.is-off:hover { border-color: var(--md-warning); }
+.switch.is-off:hover .switch-thumb { background: var(--md-warning); }
+
+.progress-pulse { display: inline-flex; align-items: center; margin-right: 0.4rem; vertical-align: middle; }
+
+/* A moving gradient sliver under the topbar - visible on every page, not
+   just Activity - so switching away from Activity while the loop is
+   running doesn't lose the "something is actively happening" signal. Its
+   .is-active class is set in _render_shell from the same "running" check
+   that already drives the status pill's pulsing dot, not a separate
+   state check. */
+.topbar-progress-bar { position: absolute; bottom: -1px; left: 0; right: 0; height: 3px; overflow: hidden; }
+.topbar-progress-bar.is-active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -50%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, var(--md-primary), var(--md-primary-container), transparent);
+}
+
+/* A page section loaded via data-lazy-load (see _render_shell's script)
+   shows this in place of its real content until the fetch resolves - a
+   layered, two-ring indeterminate spinner, plain CSS, no assets. The
+   element itself draws no border; ::before/::after each draw one ring so
+   they can spin in opposite directions at different speeds - reads as a
+   genuine "orbiting" loader rather than one ring going around. */
+.lazy-loading { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 3rem 0; }
+.md-spinner { position: relative; width: 88px; height: 88px; }
+.md-spinner::before,
+.md-spinner::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  border-style: solid;
+  border-color: transparent;
+}
+.md-spinner::before {
+  inset: 0;
+  border-width: 7px;
+  border-top-color: var(--md-primary);
+  border-right-color: var(--md-primary-container);
+}
+.md-spinner::after {
+  inset: 18px;
+  border-width: 6px;
+  border-bottom-color: var(--md-success);
+  border-left-color: var(--md-success-container);
+}
+.loading-text { margin: 0; font-size: 0.85rem; color: var(--md-on-surface-variant); }
+/* Static and fully visible by default ("Loading live GitLab data...") -
+   only animated (each dot fading in turn) under
+   prefers-reduced-motion: no-preference, below. */
+.loading-dots span { opacity: 1; }
+
+/* A small inline variant of the same spinner, for a status line that
+   needs a "something's actively happening" signal without the full
+   88px loading-placeholder version - e.g. the Activity page's Current
+   Progress line. */
+.md-spinner.md-spinner-sm { width: 20px; height: 20px; }
+.md-spinner.md-spinner-sm::before { border-width: 3px; }
+.md-spinner.md-spinner-sm::after { inset: 5px; border-width: 2px; }
+
+/* _SPINNER_ICON: the same spinner again, sized in em rather than a fixed
+   px, for every "running"/"in progress" pill (the header status badge,
+   the Dashboard page's hero pills, per-topic badges, the Skills page's
+   "setup in progress" pill) - one variant that scales with whichever
+   pill's own font-size it lands in (.pill's 0.75rem or .pill-lg's
+   0.95rem) instead of needing a separate fixed-px size per pill. This
+   replaced a plain pulsing dot, which read as much less "alive" than
+   this already-established spinner treatment. */
+.md-spinner.md-spinner-pill { width: 0.9em; height: 0.9em; }
+.md-spinner.md-spinner-pill::before { border-width: 0.14em; }
+.md-spinner.md-spinner-pill::after { inset: 0.16em; border-width: 0.12em; }
+
+/* README page: a floating "on this page" card, built from the doc's own
+   H2 headings, fixed to the top-right of the viewport so it stays
+   reachable no matter how far down the README you've scrolled - rather
+   than a row of chips that scrolls away with the content above it. */
+.readme-quicknav {
+  position: fixed;
+  top: 4.75rem;
+  right: 1.5rem;
+  z-index: 85;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 200px;
+  max-height: calc(100vh - 7rem);
+  overflow-y: auto;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.readme-quicknav-title {
+  margin: 0 0 0.35rem;
+  padding: 0 0.6rem;
+  font-family: var(--font-family-stack);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--md-outline);
+}
+.readme-quicknav-link {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  color: var(--md-on-surface-variant);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.readme-quicknav-link:hover { background: var(--md-primary-container); color: var(--md-on-primary-container); text-decoration: none; }
+
+@media (max-width: 900px) {
+  .readme-quicknav { display: none; }
+}
+
+/* Settings page's Appearance tab: a segmented control for color mode, a
+   row of swatches for accent - both apply instantly via a page-local
+   <script> (see render_general_settings_page), no page reload, no
+   server round-trip. */
+.pref-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: 999px;
+  padding: 0.2rem;
+  gap: 0.2rem;
+}
+.pref-segmented-option {
+  border: none;
+  background: none;
+  color: var(--md-on-surface-variant);
+  font-family: var(--font-family-stack);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.4rem 1.1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.pref-segmented-option:hover { background: var(--md-surface-container-high); }
+.pref-segmented-option.is-active { background: var(--md-primary-container); color: var(--md-on-primary-container); }
+
+.pref-swatches { display: flex; flex-wrap: wrap; gap: 1rem; }
+.pref-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  border: 2px solid transparent;
+  background: none;
+  color: var(--md-on-surface-variant);
+  font-family: var(--font-family-stack);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.75rem;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.pref-swatch:hover { background: var(--md-surface-container-high); }
+.pref-swatch.is-active { border-color: var(--md-primary); background: var(--md-surface-container-high); }
+/* A miniature sidebar+content layout, not a plain color dot - shows how
+   the page will actually look with this accent, not just its color. */
+.pref-swatch-preview {
+  display: flex;
+  width: 140px;
+  height: 100px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--md-outline-variant);
+}
+.pref-swatch-preview-nav { width: 32%; }
+.pref-swatch-preview-content { flex: 1; background: var(--md-surface); }
+
+/* The loading spinner always spins, deliberately not gated behind
+   prefers-reduced-motion like the decorative animations below - its
+   motion is the only signal that the page is still working, not mere
+   decoration, and an OS-level reduce-motion preference would otherwise
+   make it look permanently frozen/broken rather than just calmer.
+   The outer ring spins clockwise, the inner ring counter-clockwise and
+   faster - two independently moving, differently colored rings read as
+   a much livelier "orbiting" loader than a single ring ever could. */
+.md-spinner::before { animation: md-spin-cw 1.1s linear infinite; }
+.md-spinner::after { animation: md-spin-ccw 0.75s linear infinite; }
+@keyframes md-spin-cw { to { transform: rotate(360deg); } }
+@keyframes md-spin-ccw { to { transform: rotate(-360deg); } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-hero-accent { animation: chat-hero-sheen 9s ease-in-out infinite alternate; }
+  @keyframes chat-hero-sheen { 0% { background-position: 0% 50%; } 100% { background-position: 100% 50%; } }
+  .topbar-progress-bar.is-active::before { animation: topbar-progress-slide 1.6s linear infinite; }
+  @keyframes topbar-progress-slide { 0% { left: -50%; } 100% { left: 100%; } }
+  /* Each dot fades in and out in turn (staggered via animation-delay) -
+     the classic "still working" typing-indicator look, instead of a
+     single static "…" character. */
+  .loading-dots span { animation: loading-dots-fade 1.4s infinite; }
+  .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes loading-dots-fade { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
+}

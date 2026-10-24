@@ -1,0 +1,4 @@
+html.escape(_t('Loop Runs'))
+html.escape(_t('Every recorded LoopRuntime run, most recent first.'))
+_t('No runs yet - run {command} to produce one.', command='<code>loopx loop run &lt;loop.yaml&gt;</code>')
+_incomplete_runs_html()

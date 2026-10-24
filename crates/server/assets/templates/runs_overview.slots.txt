@@ -1,0 +1,2 @@
+tiles_html
+html.escape(_t('Average duration: not tracked yet - LoopResult has no start/finish timestamp.'))

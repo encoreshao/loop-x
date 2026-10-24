@@ -1,0 +1,4 @@
+html.escape(_t('Logs'))
+html.escape(_t('The most recent output from every {cli} invocation - the GitLab loop, the topic monitor loop, and the chat assistant.', cli=ai_cli_name))
+_SECTION_ICON_LOGS
+log_html

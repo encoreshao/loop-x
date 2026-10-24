@@ -1,0 +1,33 @@
+# Read-only (L0) triage loop: inspects issues on a schedule and reports,
+# makes no changes. No verifiers needed - there is nothing to verify when
+# nothing is modified.
+name: daily-triage
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "0 9 * * 1-5"
+
+goal:
+  type: triage
+
+actions:
+  - inspect_issue
+  - inspect_repository
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 15
+  max_cost_usd: 2
+  no_progress_iterations: 1
+
+human_gates: []
+
+retry:
+  enabled: false
+  max_attempts: 1

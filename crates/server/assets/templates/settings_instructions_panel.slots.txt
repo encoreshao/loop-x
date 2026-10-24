@@ -1,0 +1,7 @@
+_SECTION_ICON_INSTRUCTIONS
+html.escape(_t('Your instructions'))
+instructions_subtitle
+csrf_input
+html.escape(_t('e.g. Prefer descriptive commit messages. Never touch files under vendor/.'))
+html.escape(current_text)
+html.escape(_t('Save'))

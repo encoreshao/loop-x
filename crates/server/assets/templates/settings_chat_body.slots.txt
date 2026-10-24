@@ -1,0 +1,7 @@
+html.escape(_t('Chat tools'))
+html.escape(_t('Read tools run straight away. Tools that create, comment or send wait for your Approve click in the chat. Tick a tool to skip that review - it then runs as soon as the assistant calls it.'))
+flash_html
+html.escape(_t('Skip review for these actions'))
+csrf_input
+rows
+html.escape(_t('Save'))

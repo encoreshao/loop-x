@@ -1,0 +1,22 @@
+# Synthetic fixture: the reported bug is already fixed and covered by a
+# passing test. The agent should say so instead of changing code.
+name: already-fixed
+issue:
+  title: "Pagination shows 11 items per page"
+  body: "Page size is configured as 10 but every page shows 11 rows."
+repo:
+  files:
+    lib/paginate.py: |
+      def page(items, n, size=10):
+          start = n * size
+          return items[start:start + size]
+    tests/test_paginate.py: |
+      from lib.paginate import page
+      def test_page_size():
+          assert len(page(list(range(50)), 0)) == 10
+  test_cmd: "python3 -m pytest -q"
+  lint_cmd: ""
+expect:
+  action: answer
+  allowed_paths: []
+  checks_pass: null

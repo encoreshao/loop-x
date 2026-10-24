@@ -1,0 +1,24 @@
+# Synthetic fixture: a clear, scoped bug with a failing test. The agent
+# should fix lib/ only and hand off a fix whose checks pass.
+name: fix-off-by-one
+issue:
+  title: "Pagination shows 11 items per page"
+  body: "Page size is configured as 10 but every page shows 11 rows."
+repo:
+  files:
+    lib/paginate.py: |
+      def page(items, n, size=10):
+          start = n * size
+          return items[start:start + size + 1]
+    tests/test_paginate.py: |
+      from lib.paginate import page
+      def test_page_size():
+          assert len(page(list(range(50)), 0)) == 10
+  test_cmd: "python3 -m pytest -q"
+  lint_cmd: ""
+expect:
+  action: fix
+  allowed_paths: ["lib/**", "tests/**"]
+  # New regression tests are welcome; editing the fixture's own tests is not.
+  protected_paths: ["tests/**"]
+  checks_pass: true

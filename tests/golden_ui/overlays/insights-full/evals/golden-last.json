@@ -1,0 +1,1 @@
+{"finished_at": "2026-01-13T12:30:00Z", "spent_usd": 2.345, "budget_usd": 10, "not_run": ["case-c", "case-d"], "results": [{"name": "fixes-null-check", "passed": true, "cost_usd": 0.8125}, {"name": "answers-question", "passed": false, "cost_usd": 1.5325, "reasons": ["did not answer"]}]}

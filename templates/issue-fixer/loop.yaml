@@ -1,0 +1,46 @@
+# Generic (not GitLab-specific) issue-fixer loop - same shape as
+# templates/gitlab-issue, kept separate since a real issue tracker
+# integration (GitHub, Linear, Jira, ...) is a different agent/action
+# adapter than the GitLab-specific one.
+name: issue-fixer
+version: 1
+
+trigger:
+  type: manual
+
+goal:
+  type: issue_resolution
+
+actions:
+  - inspect_issue
+  - inspect_repository
+  - modify_code
+  - run_tests
+  - create_merge_request
+
+verification:
+  required:
+    - tests
+    - diff_scope
+
+verifiers:
+  - name: tests
+    type: command
+    command: "make test"
+  - name: diff_scope
+    type: git_diff
+    allowed_paths:
+      - src/
+      - tests/
+
+stop_conditions:
+  max_iterations: 3
+  max_runtime_minutes: 30
+  max_cost_usd: 5
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

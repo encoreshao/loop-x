@@ -1,0 +1,1 @@
+{"finished_at": "2026-01-14T18:00:00Z", "results": [{"name": "fix-simple-bug", "passed": true, "cost_usd": 0.0, "reasons": []}, {"name": "escalate-ambiguous", "passed": false, "cost_usd": 0.0, "reasons": ["expected escalation", "no comment posted <x>"]}, {"name": "legacy-case", "passed": true, "reasons": []}]}

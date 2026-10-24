@@ -1,0 +1,37 @@
+# Fixes a failing CI run. Edit the `tests` verifier's `command` to match
+# your project's real test command before use.
+name: ci-fixer
+version: 1
+
+trigger:
+  type: webhook
+
+goal:
+  type: ci_fix
+
+actions:
+  - inspect_repository
+  - modify_code
+  - run_tests
+  - create_merge_request
+
+verification:
+  required:
+    - tests
+
+verifiers:
+  - name: tests
+    type: command
+    command: "make test"
+
+stop_conditions:
+  max_iterations: 3
+  max_runtime_minutes: 30
+  max_cost_usd: 5
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

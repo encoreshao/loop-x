@@ -1,0 +1,336 @@
+
+(function() {
+  var root = document.documentElement;
+  var panel = document.getElementById('ai-panel');
+  var trigger = document.getElementById('ai-panel-trigger');
+  if (!panel || !trigger) return;
+  var form = document.getElementById('ai-panel-form');
+  var input = form.querySelector("[name='text']");
+  var sendBtn = form.querySelector("button[type='submit']");
+  var body = document.getElementById('ai-panel-body');
+  var thread = document.getElementById('ai-panel-thread');
+  var resizer = panel.querySelector('.ai-panel-resizer');
+  var newChatBtn = panel.querySelector('[data-ai-new-chat]');
+  var historyToggle = panel.querySelector('[data-ai-history-toggle]');
+  var historyView = document.getElementById('ai-panel-history');
+  var historyList = document.getElementById('ai-panel-history-list');
+  var KEY_OPEN = 'loop-ai-panel-open', KEY_WIDTH = 'loop-ai-panel-width', KEY_SESSION = 'loop-ai-panel-session';
+  var MIN_WIDTH = 320, MAX_WIDTH = 720, DEFAULT_WIDTH = 400;
+  var busy = false;
+
+  function load(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+  function store(key, value) {
+    try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch (e) {}
+  }
+  var session = load(KEY_SESSION) || '';
+
+  // Width: clamped so the main card always keeps a usable ~480px.
+  function maxWidth() { return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 480)); }
+  var width = parseInt(load(KEY_WIDTH), 10) || DEFAULT_WIDTH;
+  function applyWidth(w) {
+    var clamped = Math.round(Math.min(maxWidth(), Math.max(MIN_WIDTH, w)));
+    root.style.setProperty('--ai-panel-width', clamped + 'px');
+    resizer.setAttribute('aria-valuenow', String(clamped));
+    return clamped;
+  }
+  function setWidth(w) { width = applyWidth(w); store(KEY_WIDTH, String(width)); }
+  applyWidth(width);
+  window.addEventListener('resize', function() { applyWidth(width); });
+
+  resizer.addEventListener('pointerdown', function(ev) {
+    ev.preventDefault();
+    resizer.setPointerCapture(ev.pointerId);
+    root.classList.add('ai-panel-resizing');
+    var gap = parseFloat(getComputedStyle(root).getPropertyValue('--shell-gap')) || 16;
+    function move(e) { width = applyWidth(window.innerWidth - e.clientX - gap); }
+    function up() {
+      root.classList.remove('ai-panel-resizing');
+      resizer.removeEventListener('pointermove', move);
+      resizer.removeEventListener('pointerup', up);
+      resizer.removeEventListener('pointercancel', up);
+      setWidth(width);
+    }
+    resizer.addEventListener('pointermove', move);
+    resizer.addEventListener('pointerup', up);
+    resizer.addEventListener('pointercancel', up);
+  });
+  resizer.addEventListener('keydown', function(ev) {
+    // The handle sits on the panel's left edge: moving it left widens.
+    var step = ev.shiftKey ? 64 : 16;
+    if (ev.key === 'ArrowLeft') { setWidth(width + step); ev.preventDefault(); }
+    else if (ev.key === 'ArrowRight') { setWidth(width - step); ev.preventDefault(); }
+    else if (ev.key === 'Home') { setWidth(MIN_WIDTH); ev.preventDefault(); }
+    else if (ev.key === 'End') { setWidth(MAX_WIDTH); ev.preventDefault(); }
+  });
+  resizer.addEventListener('dblclick', function() { setWidth(DEFAULT_WIDTH); });
+
+  function isOpen() { return root.classList.contains('ai-panel-open'); }
+  function setOpen(open) {
+    root.classList.toggle('ai-panel-open', open);
+    trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    store(KEY_OPEN, open ? '1' : null);
+    if (open) {
+      loadThread();
+      input.focus();
+    } else if (panel.contains(document.activeElement)) {
+      trigger.focus();
+    }
+  }
+  trigger.addEventListener('click', function() { setOpen(!isOpen()); });
+  panel.querySelector('[data-ai-close]').addEventListener('click', function() { setOpen(false); });
+  panel.addEventListener('keydown', function(ev) {
+    if (ev.key !== 'Escape') return;
+    if (isHistory()) { showHistory(false); historyToggle.focus(); } else { setOpen(false); }
+  });
+
+  // Chat history: every saved session, whichever page (or the Dashboard)
+  // it started on. Picking one continues it right here in the panel.
+  function isHistory() { return panel.classList.contains('is-history'); }
+  function showHistory(show) {
+    panel.classList.toggle('is-history', show);
+    historyView.hidden = !show;
+    historyToggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+    if (!show) return;
+    fetch('/activity/sessions/fragment?session=' + encodeURIComponent(session))
+      .then(function(response) { return response.text(); })
+      .then(function(markup) { historyList.innerHTML = markup; })
+      .catch(function() {});
+  }
+  historyToggle.addEventListener('click', function() { showHistory(!isHistory()); });
+  historyList.addEventListener('click', function(ev) {
+    var item = ev.target.closest('.chat-history-item');
+    if (!item) return;
+    ev.preventDefault();
+    if (busy) return;
+    var picked = new URL(item.getAttribute('href'), location.href).searchParams.get('session');
+    if (!picked) return;
+    session = picked;
+    store(KEY_SESSION, session);
+    showHistory(false);
+    loadThread(true);
+    input.focus();
+  });
+
+  function scrollToBottom() { body.scrollTop = body.scrollHeight; }
+  function setHasMessages(has) { panel.classList.toggle('has-messages', has); }
+
+  // Persisted messages are drawn by the server's own fragment, so they
+  // get the same markdown rendering as the Dashboard thread.
+  var loaded = false;
+  function loadThread(force) {
+    if (!session) { thread.innerHTML = ''; setHasMessages(false); return Promise.resolve(); }
+    if (loaded && !force) return Promise.resolve();
+    return fetch('/activity/messages/fragment?session=' + encodeURIComponent(session))
+      .then(function(response) { return response.text(); })
+      .then(function(markup) {
+        loaded = true;
+        thread.innerHTML = markup;
+        var has = !!thread.querySelector('.message-row');
+        if (!has) { thread.innerHTML = ''; session = ''; store(KEY_SESSION, null); }
+        setHasMessages(has);
+        scrollToBottom();
+      })
+      .catch(function() {});
+  }
+
+  function messageList() {
+    var list = thread.querySelector('.message-list');
+    if (!list) {
+      thread.innerHTML = '';
+      list = document.createElement('ul');
+      list.className = 'message-list';
+      thread.appendChild(list);
+    }
+    return list;
+  }
+  // Same shape as render_activity_messages_fragment's saved bubbles
+  // (meta row with "You" / the Loop X icon), so nothing jumps when the
+  // thread is re-fetched once the reply is saved.
+  var BRAND_ICON = "<svg class='message-brand-icon' viewBox='0 0 24 24' width='20' height='20' fill='none' stroke-width='2.6' stroke-linecap='round' aria-hidden='true'><path d='M8.97 4.16A8.4 8.4 0 0 1 15.03 4.16' stroke='#2F5BFF'/><path d='M19.84 8.97A8.4 8.4 0 0 1 19.84 15.03' stroke='#0FA37F'/><path d='M15.03 19.84A8.4 8.4 0 0 1 8.97 19.84' stroke='#E8336F'/><path d='M4.16 15.03A8.4 8.4 0 0 1 4.16 8.97' stroke='#FF8A00'/><path d='M6.06 6.06L17.94 17.94' stroke='currentColor'/><path d='M17.94 6.06L6.06 17.94' stroke='currentColor'/></svg>";
+  var YOU_LABEL = "You";
+  function appendBubble(fromUser, text) {
+    var row = document.createElement('li');
+    row.className = 'message-row ' + (fromUser ? 'message-row-user' : 'message-row-loop');
+    var bodyEl = document.createElement('div');
+    bodyEl.className = 'message-body';
+    var bubble = document.createElement('div');
+    bubble.className = 'message-bubble ' + (fromUser ? 'message-bubble-user' : 'message-bubble-loop');
+    var meta = document.createElement('div');
+    meta.className = 'message-meta';
+    var who = document.createElement('span');
+    who.className = 'k';
+    if (fromUser) { who.textContent = YOU_LABEL; } else { who.setAttribute('aria-label', 'Loop X'); who.innerHTML = BRAND_ICON; }
+    meta.appendChild(who);
+    var textEl = document.createElement('div');
+    textEl.className = 'message-text';
+    textEl.textContent = text;
+    bubble.appendChild(meta);
+    bubble.appendChild(textEl);
+    bodyEl.appendChild(bubble);
+    row.appendChild(bodyEl);
+    messageList().appendChild(row);
+    scrollToBottom();
+    return textEl;
+  }
+
+  // Shown until the first words of a reply arrive: the AI sparkle in a
+  // spinning gradient ring, a shimmering "Thinking..." and placeholder
+  // lines. Its motion is the only sign a reply is on the way, so (like
+  // .md-spinner) it is not gated behind prefers-reduced-motion.
+  function appendThinking() {
+    var row = document.createElement('li');
+    row.className = 'message-row message-row-loop ai-thinking-row';
+    row.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><span class='material-symbols-outlined' aria-hidden='true'>auto_awesome</span></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
+    row.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
+    messageList().appendChild(row);
+    scrollToBottom();
+    return row;
+  }
+
+  function autoGrow() {
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+    sendBtn.disabled = busy || !input.value.trim();
+  }
+  input.addEventListener('input', autoGrow);
+  input.addEventListener('keydown', function(ev) {
+    // Enter sends, Shift+Enter is a newline - but never mid-IME
+    // composition, where Enter only confirms the Japanese/Chinese text.
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
+      ev.preventDefault();
+      send(input.value);
+    }
+  });
+  form.addEventListener('submit', function(ev) { ev.preventDefault(); send(input.value); });
+
+  panel.querySelectorAll('[data-ai-prompt]').forEach(function(chip) {
+    chip.addEventListener('click', function() {
+      var prompt = chip.getAttribute('data-ai-prompt');
+      if (chip.getAttribute('data-ai-send') === '1') { send(prompt); return; }
+      input.value = prompt;
+      autoGrow();
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  });
+
+  newChatBtn.addEventListener('click', function() {
+    if (busy) return;
+    session = '';
+    store(KEY_SESSION, null);
+    thread.innerHTML = '';
+    setHasMessages(false);
+    showHistory(false);
+    input.focus();
+  });
+
+  // An approval card was handled: reload the thread for the follow-up
+  // message - unless a reply is still streaming, which reloads it when done.
+  thread.addEventListener('loop-chat-refresh', function() { if (!busy) loadThread(true); });
+
+  thread.addEventListener('click', function(ev) {
+    var copyBtn = ev.target.closest('[data-copy-message]');
+    if (!copyBtn) return;
+    var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
+    var raw = textEl.getAttribute('data-raw') || textEl.innerText;
+    var icon = copyBtn.querySelector('.material-symbols-outlined');
+    navigator.clipboard.writeText(raw).then(function() {
+      icon.textContent = 'check';
+      setTimeout(function() { icon.textContent = 'content_copy'; }, 1500);
+    }, function() {});
+  });
+
+  function setBusy(value) {
+    busy = value;
+    window.__loopPanelChatStreaming = value;
+    window.__loopChatStreaming = !!(value || window.__loopActivityChatStreaming);
+    newChatBtn.disabled = value;
+    sendBtn.disabled = value || !input.value.trim();
+  }
+
+  function send(text) {
+    text = (text || '').trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setHasMessages(true);
+    if (!thread.querySelector('.message-list')) thread.innerHTML = '';
+    appendBubble(true, text);
+    var thinking = appendThinking();
+    var pendingText = null;
+    var caret = null;
+    // The reply bubble replaces the thinking indicator once there's text
+    // to show (or an error to explain).
+    function replyBubble() {
+      if (!pendingText) {
+        thinking.remove();
+        pendingText = appendBubble(false, '');
+        caret = document.createElement('span');
+        caret.className = 'ai-stream-caret';
+        caret.setAttribute('aria-hidden', 'true');
+      }
+      return pendingText;
+    }
+    function showReply(value, streaming) {
+      var el = replyBubble();
+      el.textContent = value;
+      if (streaming) el.appendChild(caret); else if (caret) caret.remove();
+      scrollToBottom();
+    }
+    input.value = '';
+    autoGrow();
+
+    var reveal = window.__loopTextReveal(function(text) { showReply(text, true); });
+    function fail(message) {
+      reveal.stop();
+      showReply(message || "Something went wrong - try again.", false);
+      setBusy(false);
+    }
+
+    var params = new URLSearchParams();
+    params.set('text', text);
+    params.set('csrf_token', form.querySelector("input[name='csrf_token']").value);
+    params.set('session', session);
+    params.set('page', panel.getAttribute('data-page') || '');
+    fetch('/activity/chat', { method: 'POST', body: params })
+      .then(function(response) { return response.json().then(function(data) { return { ok: response.ok, data: data }; }); })
+      .then(function(result) {
+        if (!result.ok) { fail(result.data.error); return; }
+        session = result.data.session || session;
+        store(KEY_SESSION, session);
+        var source = new EventSource('/activity/chat-stream?reply_key=' + encodeURIComponent(result.data.reply_key));
+        var accumulated = '';
+        var changed = false;
+        source.addEventListener('chunk', function(ev) {
+          accumulated += JSON.parse(ev.data);
+          reveal.set(accumulated);
+        });
+        var onTool = window.__loopToolChips(function() { return replyBubble().parentNode; },
+                                            function() { return session; });
+        source.addEventListener('tool', function(ev) {
+          try { onTool(JSON.parse(ev.data)); } catch (e) {}
+        });
+        // The reply added/changed something (a topic, a project, a loop's
+        // state...): reload once it's shown, so the page reflects it. The
+        // panel reopens on the same conversation (see KEY_OPEN/KEY_SESSION).
+        source.addEventListener('changed', function() { changed = true; });
+        source.addEventListener('done', function() {
+          source.close();
+          reveal.finish(function() {
+            setBusy(false);
+            if (changed) { location.replace(location.href); return; }
+            loadThread(true);
+          });
+        });
+        source.addEventListener('error', function(ev) {
+          source.close();
+          var message = "Something went wrong - try again.";
+          try { message = JSON.parse(ev.data) || message; } catch (e) {}
+          fail(accumulated ? accumulated + ' ' + "(reply interrupted)" : message);
+        });
+      })
+      .catch(function() { fail(); });
+  }
+
+  trigger.setAttribute('aria-expanded', isOpen() ? 'true' : 'false');
+  if (isOpen()) loadThread();
+})();

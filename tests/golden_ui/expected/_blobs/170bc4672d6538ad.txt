@@ -1,0 +1,57 @@
+
+(function() {
+  function apply() {
+    var mode = localStorage.getItem('loop-dashboard-color-mode') || 'auto';
+    var accent = localStorage.getItem('loop-dashboard-accent') || 'indigo';
+    var font = localStorage.getItem('loop-dashboard-font') || 'roboto';
+    var refreshSeconds = localStorage.getItem('loop-dashboard-refresh-interval') || '30';
+    document.querySelectorAll('[data-color-mode-choice]').forEach(function(btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-color-mode-choice') === mode);
+    });
+    document.querySelectorAll('[data-accent-choice]').forEach(function(btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-accent-choice') === accent);
+    });
+    document.querySelectorAll('[data-font-choice]').forEach(function(btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-font-choice') === font);
+    });
+    document.querySelectorAll('[data-refresh-choice]').forEach(function(btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-refresh-choice') === refreshSeconds);
+    });
+  }
+  document.querySelectorAll('[data-color-mode-choice]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var mode = btn.getAttribute('data-color-mode-choice');
+      if (mode === 'auto') {
+        localStorage.removeItem('loop-dashboard-color-mode');
+        document.documentElement.removeAttribute('data-color-mode');
+      } else {
+        localStorage.setItem('loop-dashboard-color-mode', mode);
+        document.documentElement.setAttribute('data-color-mode', mode);
+      }
+      apply();
+    });
+  });
+  document.querySelectorAll('[data-accent-choice]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var accent = btn.getAttribute('data-accent-choice');
+      localStorage.setItem('loop-dashboard-accent', accent);
+      document.documentElement.setAttribute('data-accent', accent);
+      apply();
+    });
+  });
+  document.querySelectorAll('[data-font-choice]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var font = btn.getAttribute('data-font-choice');
+      localStorage.setItem('loop-dashboard-font', font);
+      document.documentElement.setAttribute('data-font', font);
+      apply();
+    });
+  });
+  document.querySelectorAll('[data-refresh-choice]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      localStorage.setItem('loop-dashboard-refresh-interval', btn.getAttribute('data-refresh-choice'));
+      apply();
+    });
+  });
+  apply();
+})();

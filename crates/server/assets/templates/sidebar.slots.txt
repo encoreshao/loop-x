@@ -1,0 +1,5 @@
+_BRAND_MARK_ICON
+html.escape(_t('Toggle sidebar'))
+_SIDEBAR_TOGGLE_ICON
+html.escape(_t('Pages'))
+nav_html

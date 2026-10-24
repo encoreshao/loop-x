@@ -1,0 +1,5 @@
+html.escape(_t('Settings'))
+html.escape(_t('Notifications, AI CLI selection, appearance, and custom instructions.'))
+flash_html
+tab_buttons
+tab_panels

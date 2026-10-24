@@ -1,0 +1,7 @@
+run_href
+html.escape(data['definition_name'])
+pill_class
+html.escape(data['final_state'])
+html.escape(data['run_id'])
+html.escape(_t('{count} iteration(s)', count=len(data['iterations'])))
+html.escape(data['stop_reason'])

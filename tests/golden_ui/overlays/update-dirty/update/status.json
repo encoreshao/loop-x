@@ -1,0 +1,1 @@
+{"checked_at": "2026-01-15T09:00:00+00:00", "branch": "main", "behind": 3, "ahead": 1, "commits": [{"sha": "abc1234", "subject": "One"}], "current": "v0.4.0", "latest_tag": "v0.4.0", "new_release": false, "origin_sha": "deadbeef", "clean": false, "can_fast_forward": false, "error": null}

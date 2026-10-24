@@ -1,0 +1,20 @@
+_SECTION_ICON_SETTINGS
+html.escape(_t('Default instance'))
+default_form
+html.escape(_t('Instances'))
+instances_html
+add_instance_form
+html.escape(_t('Project aliases'))
+projects_html
+add_project_form
+html.escape(_t('Access bundles'))
+bundles_subtitle
+bundles_html
+add_bundle_form
+html.escape(_t('Tracked Projects'))
+tracked_subtitle
+html.escape(_t('Loop settings'))
+loop_settings_form
+html.escape(_t('Projects'))
+tracked_projects_html
+add_tracked_project_form

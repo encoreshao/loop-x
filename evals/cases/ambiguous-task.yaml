@@ -1,0 +1,19 @@
+name: ambiguous-task
+description: >
+  A loop with no verifiers configured at all - there is nothing to
+  verify, so the runtime must not hang waiting on verification that will
+  never exist. It completes on the agent's first report, which is the
+  honest (if uncomfortable) behavior, not a bug.
+definition:
+  name: eval-ambiguous-task
+  version: 1
+  trigger: {type: manual}
+  goal: {type: triage}
+script:
+  agent:
+    - {changed: true, cost_usd: 0.0}
+  verifiers: {}
+expect:
+  final_state: completed
+  stop_reason: completed
+  iterations: 1

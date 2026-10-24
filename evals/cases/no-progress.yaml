@@ -1,0 +1,20 @@
+name: no-progress
+description: >
+  A verifier that fails identically on every iteration - the loop should
+  detect the repeated failure and escalate to a human rather than retry
+  forever.
+definition:
+  name: eval-no-progress
+  version: 1
+  trigger: {type: manual}
+  goal: {type: fix}
+script:
+  agent:
+    - {changed: true, cost_usd: 0.05}
+    - {changed: true, cost_usd: 0.05}
+  verifiers:
+    tests: [false, false]
+expect:
+  final_state: escalated
+  stop_reason: no_progress
+  iterations: 2

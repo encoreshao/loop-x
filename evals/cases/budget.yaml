@@ -1,0 +1,21 @@
+name: budget
+description: >
+  A single iteration whose reported cost already exceeds the loop's own
+  cost ceiling - the loop should stop on the very next budget check
+  instead of ever running past the ceiling.
+definition:
+  name: eval-budget
+  version: 1
+  trigger: {type: manual}
+  goal: {type: fix}
+  stop_conditions:
+    max_cost_usd: 0.15
+script:
+  agent:
+    - {changed: true, cost_usd: 0.20}
+  verifiers:
+    tests: [false]
+expect:
+  final_state: stopped
+  stop_reason: budget_exceeded
+  iterations: 2

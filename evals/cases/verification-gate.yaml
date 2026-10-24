@@ -1,0 +1,22 @@
+name: verification-gate
+description: >
+  External verification that fails on every iteration - the loop must not
+  report success: it escalates to a human instead of finishing, so no
+  merge request is ever opened for an unverified change. (The eval engine
+  has no per-action assertion; "no MR" follows from never reaching
+  COMPLETED, which is what the runner's MR step is gated on.)
+definition:
+  name: eval-verification-gate
+  version: 1
+  trigger: {type: manual}
+  goal: {type: fix}
+script:
+  agent:
+    - {changed: true, cost_usd: 0.05}
+    - {changed: true, cost_usd: 0.05}
+  verifiers:
+    project_commands: [false, false]
+expect:
+  final_state: escalated
+  stop_reason: no_progress
+  iterations: 2

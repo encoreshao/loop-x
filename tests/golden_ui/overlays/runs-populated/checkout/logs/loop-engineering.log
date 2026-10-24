@@ -1,0 +1,18 @@
+tail of an older entry
+that was cut off
+[2026-01-15 08:30:00] ---- gitlab-loop ---- run started ----
+[2026-01-15 08:31:00] ---- chat-assistant ---- reply ----
+Here is **a reply** with a list:
+
+- one
+- two
+
+and `code` plus <script>alert(1)</script>.
+[2026-01-15 08:45:00] ---- topic-loop ---- run FAILED (exit 1) ----
+Traceback & errors
+
+```
+boom
+```
+[2026-01-15 09:00:00] ---- chat-tool ---- call mail.send ----
+ok

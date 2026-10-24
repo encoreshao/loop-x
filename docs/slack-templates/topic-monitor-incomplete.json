@@ -1,0 +1,15 @@
+{
+  "notification_key": "topic_monitor_incomplete",
+  "blocks": [
+    { "type": "header", "text": { "type": "plain_text", "text": ":warning: Topic Monitor Loop — Topics Incomplete" } },
+    { "type": "divider" },
+    { "type": "section", "fields": [
+        { "type": "mrkdwn", "text": "*Loop*\nTopic monitor loop" },
+        { "type": "mrkdwn", "text": "*Status*\n:x: Incomplete" }
+    ] },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":clipboard: Run detail" } ] },
+    { "type": "section", "text": { "type": "mrkdwn", "text": "{{message}}" } },
+    { "type": "divider" },
+    { "type": "context", "elements": [ { "type": "mrkdwn", "text": ":robot_face: Posted automatically by the Topic monitor loop's end-of-run check." } ] }
+  ]
+}

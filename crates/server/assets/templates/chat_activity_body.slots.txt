@@ -1,0 +1,19 @@
+html.escape(_t('Activity'))
+activity_subtitle
+flash_html
+_SECTION_ICON_GITLAB
+html.escape(_t('GitLab Monitor'))
+state_hero_html
+''.join(status_lines)
+gitlab_run_now_html
+log_html
+_SECTION_ICON_TOPIC_MONITOR
+html.escape(_t('Topic Monitor'))
+topic_state_hero_html
+''.join(topic_fields)
+topic_run_now_html
+_SECTION_ICON_OVERVIEW
+html.escape(_t('Latest Run Review'))
+render_markdown(review)
+html.escape(_t('Latest Topic Run Review'))
+_topic_latest_data_html(topics)

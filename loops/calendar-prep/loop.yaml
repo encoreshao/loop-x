@@ -1,0 +1,42 @@
+# Definition for the Meeting Prep loop (bin/loop_plugins/calendar_prep.py,
+# run through LoopKit). Read-only: reads calendar, GitLab and mail, notifies only.
+name: meeting-prep-loop
+version: 1
+
+trigger:
+  type: schedule
+  schedule: "*/15 * * * *"
+
+goal:
+  type: meeting_prep
+
+agent:
+  provider: claude
+  model: default
+
+context:
+  sources:
+    - connector_data
+
+actions:
+  - fetch_connector_data
+  - read_mailbox
+  - summarize
+  - send_notification
+
+verification:
+  required: []
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 2
+  max_runtime_minutes: 5
+  max_cost_usd: 1
+  no_progress_iterations: 2
+
+human_gates: []
+
+retry:
+  enabled: true
+  max_attempts: 2

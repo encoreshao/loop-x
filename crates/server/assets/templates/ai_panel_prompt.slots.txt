@@ -1,0 +1,4 @@
+html.escape(i18n.t(prompt), quote=True)
+'1' if send else '0'
+icon
+html.escape(i18n.t(label))

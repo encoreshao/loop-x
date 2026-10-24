@@ -1,0 +1,6 @@
+csrf_input
+html.escape(_t('topic name'))
+html.escape(_t('label'))
+_custom_select('slack_bundle', bundles, None, empty_label=_t('(use default webhook)'))
+html.escape(_t('what counts as notable'))
+html.escape(_t('Add topic'))

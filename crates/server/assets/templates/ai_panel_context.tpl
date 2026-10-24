@@ -1,0 +1,1 @@
+<p class='ai-panel-context'>⟦html.escape(_t('Suggestions for {page}', page=i18n.t(page_label)))⟧</p>

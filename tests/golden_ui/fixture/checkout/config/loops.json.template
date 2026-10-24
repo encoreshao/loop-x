@@ -1,0 +1,4 @@
+[
+  {"name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner", "description": "GitLab", "schedule": {"frequency": "daily", "hour": 10, "minute": 0}, "enabled": true},
+  {"name": "release-notes-loop", "entry_point": "x", "label": "Release Notes", "description": "Notes", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}, "enabled": true}
+]

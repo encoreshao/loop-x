@@ -1,0 +1,2 @@
+{"state": "running", "pid": "@PID@", "started": "2026-01-15T09:20:00+00:00", "finished": null, "error": null, "from": "v0.4.0", "to": "", "steps": [{"name": "fetch", "status": "done", "started": null, "finished": null, "log": "fetched"}, {"name": "pull", "status": "running", "started": null, "finished": null, "log": "Updating abc..def
+Fast-forward <ok>"}, {"name": "build", "status": "pending", "started": null, "finished": null, "log": ""}]}

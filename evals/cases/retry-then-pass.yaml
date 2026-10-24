@@ -1,0 +1,21 @@
+name: retry-then-pass
+description: >
+  One verifier fails on the first attempt while another passes, then both
+  pass on the retry - the loop should re-run verification and complete in
+  exactly two iterations, as the gate's retry-with-feedback path expects.
+definition:
+  name: eval-retry-then-pass
+  version: 1
+  trigger: {type: manual}
+  goal: {type: fix}
+script:
+  agent:
+    - {changed: true, cost_usd: 0.05}
+    - {changed: true, cost_usd: 0.05}
+  verifiers:
+    tests: [false, true]
+    lint: [true, true]
+expect:
+  final_state: completed
+  stop_reason: completed
+  iterations: 2

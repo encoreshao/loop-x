@@ -1,0 +1,1 @@
+{"schema_version": 1, "event_id": "evt_010000ted", "timestamp": "2026-01-14T01:00:00.000Z", "event_type": "loop.started", "run_id": "run_20260114_010000", "issue_run_id": null, "project": null, "issue_iid": null, "data": {"loop_id": "l", "definition": "crashy"}}
