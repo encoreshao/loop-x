@@ -108,5 +108,24 @@ mod tests {
             css.contains("@supports not (backdrop-filter"),
             "opaque fallback"
         );
+        let a = css.find("a:focus-visible,").expect("global focus rule");
+        let block = &css[a..a + css[a..].find('}').unwrap()];
+        assert!(
+            !block.contains("border-radius"),
+            "global focus ring must not reshape pills/switches"
+        );
+        let ring = "inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent)";
+        assert!(
+            css.contains(&format!(
+                ".tab-button:focus-visible, .hub-tab:focus-visible {{ box-shadow: {ring}; }}"
+            )),
+            "inset tab ring"
+        );
+        assert!(
+            css.contains(&format!(
+                ".tab-button.is-active:focus-visible, .hub-tab.active:focus-visible {{ box-shadow: var(--shadow-1), {ring}; }}"
+            )),
+            "active tab keeps its raised shadow under focus"
+        );
     }
 }
