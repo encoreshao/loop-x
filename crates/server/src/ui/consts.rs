@@ -92,4 +92,21 @@ mod tests {
         assert!(ds("_FONT_FACE_VARS").contains(":root[data-font=\"roboto\"]"));
         assert_eq!(list("dashboard_server", "_FONT_CHOICES")[0][0], "system");
     }
+
+    #[test]
+    fn stylesheet_has_macos_component_rules() {
+        let css = ds("_STYLE");
+        for needle in [
+            "backdrop-filter: saturate(180%) blur(20px)",
+            "box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent)",
+            ".tab-list, .hub-tabs {",
+            "background: var(--md-surface-container-high); border-radius: 9px",
+        ] {
+            assert!(css.contains(needle), "missing: {needle}");
+        }
+        assert!(
+            css.contains("@supports not (backdrop-filter"),
+            "opaque fallback"
+        );
+    }
 }
