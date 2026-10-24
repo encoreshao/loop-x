@@ -63,6 +63,13 @@ import Testing
         #expect(i.install(run: { _ in false }) == .notInstalled)
     }
 
+    @Test func everyStatusHasAPlainEnglishSummary() {
+        #expect(CLIInstaller.Status.notInstalled.summary == "Not installed")
+        #expect(CLIInstaller.Status.installed.summary == "Installed")
+        #expect(CLIInstaller.Status.outdated.summary == "Linked to another copy of LoopX")
+        #expect(CLIInstaller.Status.conflict("/opt/homebrew/bin/loopx").summary == "Another loopx is in the way: /opt/homebrew/bin/loopx")
+    }
+
     @Test func promptIsOfferedOnlyOnce() {
         let s = SettingsStore(defaults: UserDefaults(suiteName: "cli-\(UUID().uuidString)")!)
         #expect(s.cliPromptShown == false)

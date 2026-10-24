@@ -10,6 +10,15 @@ public struct CLIInstaller: Equatable, Sendable {
         case outdated
         /// Something else owns the path; carries what it points at (or the path itself for a regular file).
         case conflict(String)
+
+        public var summary: String {
+            switch self {
+            case .notInstalled: return "Not installed"
+            case .installed: return "Installed"
+            case .outdated: return "Linked to another copy of LoopX"
+            case .conflict(let p): return "Another loopx is in the way: \(p)"
+            }
+        }
     }
 
     public static let defaultLinkPath = "/usr/local/bin/loopx"
