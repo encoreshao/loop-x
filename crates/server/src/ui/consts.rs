@@ -98,7 +98,7 @@ mod tests {
         let css = ds("_STYLE");
         for needle in [
             "backdrop-filter: saturate(180%) blur(20px)",
-            "box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent)",
+            "box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent)",
             ".tab-list, .hub-tabs {",
             "background: var(--md-surface-container-high); border-radius: 9px",
         ] {
@@ -114,7 +114,7 @@ mod tests {
             !block.contains("border-radius"),
             "global focus ring must not reshape pills/switches"
         );
-        let ring = "inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent)";
+        let ring = "inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent)";
         assert!(
             css.contains(&format!(
                 ".tab-button:focus-visible, .hub-tab:focus-visible {{ box-shadow: {ring}; }}"
@@ -127,5 +127,68 @@ mod tests {
             )),
             "active tab keeps its raised shadow under focus"
         );
+    }
+
+    #[test]
+    fn focus_rings_are_strong_and_survive_forced_colors() {
+        let css = ds("_STYLE");
+        assert!(!css.contains("var(--md-primary) 35%, transparent)"));
+        assert!(!css.contains("var(--md-primary) 55%, transparent)"));
+        assert!(!css.contains("var(--cg-accent) 35%, transparent)"));
+        let a = css.find("a:focus-visible,").expect("global focus rule");
+        let block = &css[a..a + css[a..].find('}').unwrap()];
+        assert!(block.contains("outline: 2px solid transparent;"), "{block}");
+        assert!(!block.contains("outline: none"));
+    }
+
+    #[test]
+    fn form_fields_stand_out_inside_tinted_cards() {
+        let css = ds("_STYLE");
+        assert!(
+            !css.contains("border: 0.5px solid var(--md-outline-variant);\n  border-radius: 8px; background: var(--md-surface-container-lowest)")
+        );
+        for line in css.lines().filter(|l| l.contains("border: 0.5px solid")) {
+            assert!(
+                !line.contains("var(--md-outline-variant)"),
+                "field border collapses into the card tint: {line}"
+            );
+        }
+        // fill must not be the colour the card itself remaps to
+        let tinted = css.find(":root[data-accent=\"indigo\"] .card,").unwrap();
+        let remap = &css[tinted..tinted + css[tinted..].find('}').unwrap()];
+        assert!(remap.contains("--md-surface-container-lowest: var(--md-nav-surface)"));
+        assert!(
+            css.matches("background: var(--md-surface);").count() >= 3,
+            "daemon, select and connector fields fill with --md-surface"
+        );
+    }
+
+    #[test]
+    fn default_accent_selected_nav_item_uses_the_primary_container() {
+        let css = ds("_STYLE");
+        let a = css.find(":root[data-accent=\"default\"] {").unwrap();
+        let block = &css[a..a + css[a..].find('}').unwrap()];
+        assert!(block.contains("--md-nav-active-surface: var(--md-primary-container);"));
+        assert!(block.contains("--md-nav-active-on-surface: var(--md-on-primary-container);"));
+    }
+
+    #[test]
+    fn segmented_active_tab_is_lighter_than_the_track_in_light_mode() {
+        let css = ds("_STYLE");
+        assert!(css.contains("background: var(--seg-active-bg)"));
+        assert!(css.contains("--seg-active-bg: var(--md-surface-container-highest);"));
+        assert_eq!(
+            css.matches("--seg-active-bg: var(--md-surface-container-lowest);")
+                .count(),
+            2,
+            "both light blocks"
+        );
+    }
+
+    #[test]
+    fn stylesheet_comments_are_current() {
+        let css = ds("_STYLE");
+        assert!(!css.contains("Material Symbols glyph"));
+        assert!(!css.contains("500 weight as every other heading"));
     }
 }

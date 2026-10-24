@@ -221,7 +221,7 @@ fn assert_icons_resolve(page: &str) {
 }
 
 fn blessing() -> bool {
-    std::env::var("LOOPX_GOLDEN_BLESS").is_ok()
+    std::env::var("LOOPX_GOLDEN_BLESS").as_deref() == Ok("1")
 }
 
 /// Delete `_blobs` files no expected page references any more.

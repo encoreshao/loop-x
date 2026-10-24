@@ -15,7 +15,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 - The dashboard uses the macOS palette (system blue, grey surfaces, hairline separators) and the system SF font by default; Roboto stays selectable in Preferences.
 - Buttons, tabs (now a segmented control), sidebar (translucent), inputs, switches and focus rings follow macOS conventions.
-- The Mac app's settings and island use the same macOS palette, rounded continuous corners and system materials as the dashboard.
+- The Mac app's settings window uses the same macOS palette as the dashboard, with continuous corners and a system-material sidebar.
 - Icons are a built-in outline set instead of a downloaded Material font, so the dashboard looks the same offline.
 - The Mac app's start screen has a water scene: soft ripples spread from the logo, two translucent waves drift along the bottom over a slow colour wash. The orbiting ring has a glowing blue-to-pink edge over a dashed track, and the Retry button has a gradient outline. With Reduce Motion on, the ripples and waves still run, smaller and slower.
 

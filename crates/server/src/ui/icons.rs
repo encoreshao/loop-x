@@ -74,7 +74,11 @@ pub const NAMES: &[&str] = &[
 ];
 
 pub fn is_known(name: &str) -> bool {
-    SPRITE.contains(&format!("id=\"i-{name}\""))
+    let plain = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    plain && SPRITE.contains(&format!("id=\"i-{name}\""))
 }
 
 pub fn icon(name: &str) -> String {
@@ -94,6 +98,15 @@ pub fn icon_with(name: &str, extra_class: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_known_rejects_names_that_are_not_plain_identifiers() {
+        assert!(is_known("settings"));
+        assert!(!is_known(""));
+        assert!(!is_known("settings\" "));
+        assert!(!is_known("i-settings\" id=\"i-settings"));
+        assert!(!is_known("Settings"));
+    }
 
     #[test]
     fn every_material_name_the_ui_used_has_a_symbol() {

@@ -7,6 +7,7 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
   --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 
+  --seg-active-bg: var(--md-surface-container-highest);
   --md-primary: #0A84FF;
   --md-on-primary: #FFFFFF;
   --md-primary-container: #1B3A5E;
@@ -63,8 +64,8 @@
 :root[data-accent="default"] {
   --md-nav-surface: var(--md-surface-container-low);
   --md-nav-on-surface: var(--md-on-surface-variant);
-  --md-nav-active-surface: var(--md-surface-container-highest);
-  --md-nav-active-on-surface: var(--md-primary);
+  --md-nav-active-surface: var(--md-primary-container);
+  --md-nav-active-on-surface: var(--md-on-primary-container);
 }
 :root[data-accent="indigo"] {
   --md-nav-surface: #f4f0ff;
@@ -135,6 +136,7 @@
     --md-on-surface-variant: #6E6E73;
     --md-outline: #8E8E93;
     --md-outline-variant: #D1D1D6;
+    --seg-active-bg: var(--md-surface-container-lowest);
 
     --md-success: #1F6B35;
     --md-on-success: #D6F5DF;
@@ -170,6 +172,7 @@
   --md-on-surface-variant: #6E6E73;
   --md-outline: #8E8E93;
   --md-outline-variant: #D1D1D6;
+  --seg-active-bg: var(--md-surface-container-lowest);
 
   --md-success: #1F6B35;
   --md-on-success: #D6F5DF;
@@ -210,10 +213,9 @@ body {
 .wrap { max-width: clamp(1080px, 90%, 2400px); margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 
 h1, h2, h3 { font-family: var(--font-family-stack); color: var(--md-on-surface); font-weight: 500; margin: 0 0 0.5rem; }
-/* Page titles (h1) get a size step up from h2/h3 - stays at the same
-   500 weight as every other heading (this app's MD3 restyle deliberately
-   keeps to 400/500/700 only, see test_no_font_weight_600_remains), just
-   larger, so a page's own title reads as a clear step above a card's
+/* Page titles (h1) get a size step up from h2/h3 - gets 700 weight
+   (this app's restyle deliberately keeps to 400/500/700 only, see
+   test_no_font_weight_600_remains) on top of being larger, so a page's own title reads as a clear step above a card's
    section heading one size down. */
 h1 { font-size: 1.7rem; letter-spacing: -0.022em; font-weight: 700; }
 h2 { font-size: 1.05rem; letter-spacing: -0.014em; margin: 0 0 0.85rem; }
@@ -255,8 +257,8 @@ a:focus-visible,
 button:focus-visible,
 [role="button"]:focus-visible,
 [tabindex]:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent);
+  outline: 2px solid transparent;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent);
 }
 
 /* Fixed left sidebar (brand + nav), shared by every page this server
@@ -439,7 +441,7 @@ button:focus-visible,
 .lang-switch-trigger .icon { font-size: 20px; }
 .lang-switch-trigger:hover,
 .lang-switch.is-open .lang-switch-trigger { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
-.lang-switch-trigger:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
+.lang-switch-trigger:focus-visible { outline: 2px solid transparent; box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .lang-switch-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -475,7 +477,7 @@ button:focus-visible,
 .lang-switch-option[aria-checked='true'] { color: var(--md-primary); font-weight: 500; }
 .lang-switch-option[aria-checked='true'] .icon { visibility: visible; }
 .lang-switch-option:hover,
-.lang-switch-option:focus-visible { background: var(--md-surface-container-high); outline: none; }
+.lang-switch-option:focus-visible { background: var(--md-surface-container-high); outline: 2px solid transparent; }
 
 /* Topbar AI button (see ai_trigger_html in _render_shell) - Gemini-style:
    a round icon button that turns into a tinted "on" chip while the AI
@@ -564,7 +566,7 @@ html.ai-panel-open .ai-panel { display: flex; }
 .ai-panel-resizer:hover::after,
 .ai-panel-resizer:focus-visible::after,
 html.ai-panel-resizing .ai-panel-resizer::after { opacity: 1; background: var(--md-primary); }
-.ai-panel-resizer:focus-visible { outline: none; }
+.ai-panel-resizer:focus-visible { outline: 2px solid transparent; }
 html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important; user-select: none; }
 .ai-panel-header {
   display: flex;
@@ -1214,16 +1216,16 @@ html .chat-page.is-empty .activity-composer {
   padding: 0.3rem 0.9rem; font-family: var(--font-family-stack); font-size: 0.82rem; font-weight: 500; color: var(--md-on-surface-variant); background: transparent;
   white-space: nowrap; text-decoration: none; cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
 .tab-button:hover, .hub-tab:hover { color: var(--md-on-surface); }
-.tab-button.is-active, .hub-tab.active { background: var(--md-surface-container-highest); color: var(--md-on-surface); box-shadow: var(--shadow-1); }
+.tab-button.is-active, .hub-tab.active { background: var(--seg-active-bg); color: var(--md-on-surface); box-shadow: var(--shadow-1); }
 /* Inset ring: the tab strip scrolls (overflow-x), which would clip an outer one. */
-.tab-button:focus-visible, .hub-tab:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent); }
-.tab-button.is-active:focus-visible, .hub-tab.active:focus-visible { box-shadow: var(--shadow-1), inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent); }
+.tab-button:focus-visible, .hub-tab:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
+.tab-button.is-active:focus-visible, .hub-tab.active:focus-visible { box-shadow: var(--shadow-1), inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .tab-button .icon { font-size: 16px; }
 /* Hub pages (render_hub_page): one sidebar entry, several tabbed views, each
    a plain link (?view=<key>) rather than a JS tab. Same tokens as .tab-list. */
 /* The GitLab Monitor tab's SVG mark - sized down from its 18px default
    (see _SECTION_ICON_GITLAB) to match the Topic Monitor tab's 16px
-   Material Symbols glyph right next to it. */
+   icon right next to it. */
 .tab-button svg { width: 16px; height: 16px; }
 
 /* Overview page's GitLab Monitor / Topic Monitor tab panels: the state
@@ -1407,7 +1409,7 @@ html.doc-panel-open .doc-panel { display: flex; }
 }
 .chat-history-item:hover { background: var(--md-surface-container-high); }
 .chat-history-item:hover, .chat-history-item:focus { text-decoration: none; }
-.chat-history-item:focus-visible { outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent); }
+.chat-history-item:focus-visible { outline: 2px solid transparent; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .chat-history-item.is-active { background: color-mix(in srgb, var(--md-primary) 14%, transparent); color: var(--md-primary); font-weight: 500; }
 .chat-history-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-history-time { flex: 0 0 auto; font-size: 0.72rem; color: var(--md-on-surface-variant); font-weight: 400; }
@@ -2011,7 +2013,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 }
 .connector-tile:hover::before, .connector-tile:focus-visible::before { opacity: 1; }
 .connector-tile:hover::after, .connector-tile:focus-visible::after { opacity: 1; transform: scale(1.2); }
-.connector-tile:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--cg-accent) 35%, transparent); }
+.connector-tile:focus-visible { outline: 2px solid transparent; box-shadow: 0 0 0 3px color-mix(in srgb, var(--cg-accent) 60%, transparent); }
 .connector-tile-head { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
 .connector-tile-mark {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
@@ -2068,11 +2070,11 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .field-optional { font-weight: 400; color: var(--md-on-surface-variant); }
 .field-help { font-size: 0.8rem; }
 .connector-field input, .connector-field select, .connector-field textarea {
-  box-sizing: border-box; width: 100%; padding: 0.55rem 0.75rem; border: 0.5px solid var(--md-outline-variant);
-  border-radius: 8px; background: var(--md-surface-container-lowest); color: var(--md-on-surface); font: inherit; }
+  box-sizing: border-box; width: 100%; padding: 0.55rem 0.75rem; border: 0.5px solid color-mix(in srgb, var(--md-outline) 50%, transparent);
+  border-radius: 8px; background: var(--md-surface); color: var(--md-on-surface); font: inherit; }
 .connector-field textarea { resize: vertical; }
 .connector-field input:focus-visible, .connector-field select:focus-visible, .connector-field textarea:focus-visible {
-  outline: none; border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
+  outline: none; border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .connector-field input:user-invalid, .connector-field textarea:user-invalid { border-color: var(--md-error); }
 .secret-input-row { display: flex; gap: 0.5rem; align-items: center; }
 .secret-input-row input { flex: 1 1 auto; }
@@ -2258,8 +2260,8 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   font-size: 0.8rem;
   padding: 0.4rem 0.65rem;
   border-radius: var(--radius-sm);
-  border: 0.5px solid var(--md-outline-variant);
-  background: var(--md-surface-container-lowest);
+  border: 0.5px solid color-mix(in srgb, var(--md-outline) 50%, transparent);
+  background: var(--md-surface);
   color: var(--md-on-surface);
   flex: 1 1 160px;
   min-width: 120px;
@@ -2303,7 +2305,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 }
 .md-checkbox input[type='checkbox']:checked { background: var(--md-primary); border-color: var(--md-primary); }
 .md-checkbox input[type='checkbox']:checked::before { transform: scale(1); }
-.md-checkbox input[type='checkbox']:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
+.md-checkbox input[type='checkbox']:focus-visible { outline: 2px solid transparent; box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 /* The Instructions textarea is the only multi-line field in any form
    here - it needs the full width of the card and its own line, not to
    compete for space in a row of short fields like every other input. */
@@ -2415,7 +2417,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .inbox-urgent-subject { font-weight: 500; overflow-wrap: anywhere; }
 .inbox-urgent-from { font-size: 0.8rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
 .stack-form input, .stack-form select, .stack-form textarea {
-  padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid var(--md-outline-variant);
+  padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--md-outline) 50%, transparent);
   background: var(--md-surface-container-low); color: var(--md-on-surface); font-family: inherit;
 }
 .stack-form textarea { resize: vertical; }
@@ -2438,7 +2440,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .inbox-section.is-wide .section-fields { grid-template-columns: 1fr; }
 .inbox-section { padding-top: 1.25rem; margin-top: 1.25rem; }
 .inbox-section > h3 { margin: 0 0 0.9rem; font-size: 0.95rem; font-weight: 500; }
-.stack-form input:focus, .stack-form select:focus, .stack-form textarea:focus { outline: none; border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
+.stack-form input:focus, .stack-form select:focus, .stack-form textarea:focus { outline: 2px solid transparent; border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .stack-form input, .stack-form select, .stack-form textarea { padding: 0.55rem 0.75rem; }
 .inbox-card-footer { padding-top: 1rem; border-top: 1px solid var(--md-outline-variant); margin-top: 1.5rem; }
 .wizard-client { padding: 1.1rem 1.25rem; border-radius: 12px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container-lowest, var(--md-surface)); }
@@ -2469,8 +2471,8 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   font-size: 0.8rem;
   padding: 0.4rem 0.65rem;
   border-radius: var(--radius-sm);
-  border: 0.5px solid var(--md-outline-variant);
-  background: var(--md-surface-container-lowest);
+  border: 0.5px solid color-mix(in srgb, var(--md-outline) 50%, transparent);
+  background: var(--md-surface);
   color: var(--md-on-surface);
   cursor: pointer;
   transition: border-color 150ms ease, background-color 150ms ease;
@@ -2481,8 +2483,8 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
    control. */
 .custom-select-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .custom-select-trigger:hover { background: var(--md-surface-container-high); }
-.custom-select-trigger:focus-visible { border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); outline: none; }
-.custom-select.is-open .custom-select-trigger { border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
+.custom-select-trigger:focus-visible { border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent); outline: 2px solid transparent; }
+.custom-select.is-open .custom-select-trigger { border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .custom-select-trigger .icon {
   font-size: 18px;
   color: var(--md-on-surface-variant);
@@ -2520,14 +2522,14 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
    handling in _render_shell's script) - outline-offset is negative since
    these sit flush against the menu's own padding, an outward ring would
    get clipped by .custom-select-menu's overflow-y: auto. */
-.custom-select-option:focus-visible { background: var(--md-surface-container-high); outline: none; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent); }
+.custom-select-option:focus-visible { background: var(--md-surface-container-high); outline: 2px solid transparent; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
 .daemon-action-form input[type='text']:focus,
 .daemon-action-form input[type='password']:focus,
 .daemon-action-form select:focus,
 .daemon-action-form textarea:focus {
   border-color: var(--md-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent);
-  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent);
+  outline: 2px solid transparent;
 }
 .btn {
   font-family: var(--font-family-stack);

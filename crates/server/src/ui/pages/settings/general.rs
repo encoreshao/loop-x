@@ -180,6 +180,33 @@ fn scope_label(labels: &[(String, String)], current: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The Appearance tab's font buttons. The label goes through the translator
+/// (catalog misses fall back to the English text); `system-ui` is the generic
+/// keyword and must stay unquoted, a quoted name would be a font *named* so.
+fn font_buttons(lang: i18n::Lang) -> String {
+    let fallback = consts::ds("_FALLBACK_FONT_STACK");
+    consts::list("dashboard_server", "_FONT_CHOICES")
+        .iter()
+        .map(|c| {
+            let (key, label, name) = (
+                c[0].as_str().unwrap_or(""),
+                c[1].as_str().unwrap_or(""),
+                c[2].as_str().unwrap_or(""),
+            );
+            let family = if name == "system-ui" {
+                name.to_string()
+            } else {
+                format!("'{name}'")
+            };
+            format!(
+                "<button type='button' class='pref-segmented-option' data-font-choice=\"{key}\" \
+style=\"font-family: {family}, {fallback}\">{}</button>",
+                pyfmt::escape(&i18n::t(lang, label, &[]))
+            )
+        })
+        .collect()
+}
+
 fn appearance_panel(ctx: &UiCtx) -> String {
     let mode_buttons: String = [("light", "Light"), ("dark", "Dark"), ("auto", "Auto")]
         .iter()
@@ -208,21 +235,7 @@ fn appearance_panel(ctx: &UiCtx) -> String {
             )
         })
         .collect();
-    let fallback = consts::ds("_FALLBACK_FONT_STACK");
-    let fonts: String = consts::list("dashboard_server", "_FONT_CHOICES")
-        .iter()
-        .map(|c| {
-            let (key, label, name) = (
-                c[0].as_str().unwrap_or(""),
-                c[1].as_str().unwrap_or(""),
-                c[2].as_str().unwrap_or(""),
-            );
-            format!(
-                "<button type='button' class='pref-segmented-option' data-font-choice=\"{key}\" \
-style=\"font-family: '{name}', {fallback}\">{label}</button>"
-            )
-        })
-        .collect();
+    let fonts = font_buttons(ctx.lang);
     let refresh: String = [
         ("5", ctx.tf("{n}s", &[("n", "5")])),
         ("11", ctx.tf("{n}s", &[("n", "11")])),
@@ -306,4 +319,20 @@ pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, tab: &str) -> Stri
         .var("tab_buttons", buttons)
         .var("tab_panels", panels);
     render("settings_general_body", &scope)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::i18n::Lang;
+
+    #[test]
+    fn font_labels_are_translated_and_system_previews_in_the_generic_stack() {
+        let fr = font_buttons(Lang::Fr);
+        assert!(fr.contains(">Système</button>"), "{fr}");
+        assert!(fr.contains(">Roboto</button>"), "missing key falls back to English");
+        assert!(fr.contains("font-family: system-ui, "), "{fr}");
+        assert!(!fr.contains("'system-ui'"));
+        assert!(font_buttons(Lang::En).contains(">System</button>"));
+    }
 }

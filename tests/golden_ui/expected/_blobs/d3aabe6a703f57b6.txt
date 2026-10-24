@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document"};
-window.__loopToolStatusText = "Analyzing results\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "gitlab.list_issues": "\u6b63\u5728\u5217\u51fa\u8bae\u9898", "gitlab.comment": "\u6b63\u5728\u8bc4\u8bba\u8bae\u9898", "github.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "github.read_pr": "\u6b63\u5728\u8bfb\u53d6\u62c9\u53d6\u8bf7\u6c42", "github.comment": "\u6b63\u5728\u8bc4\u8bba", "rss.read_feed": "\u6b63\u5728\u8bfb\u53d6\u8ba2\u9605\u6e90", "calendar.list_events": "\u6b63\u5728\u8bfb\u53d6\u65e5\u5386", "mail.search": "\u6b63\u5728\u641c\u7d22\u90ae\u4ef6", "mail.read": "\u6b63\u5728\u8bfb\u53d6\u90ae\u4ef6", "mail.send": "\u6b63\u5728\u53d1\u9001\u90ae\u4ef6", "calendar.create_event": "\u6b63\u5728\u521b\u5efa\u65e5\u7a0b", "docs.save": "\u6b63\u5728\u4fdd\u5b58\u6587\u6863"};
+window.__loopToolStatusText = "\u6b63\u5728\u5206\u6790\u7ed3\u679c\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -118,7 +118,7 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "Waiting for your approval"));
+  head.appendChild(el('span', '', "\u7b49\u5f85\u4f60\u7684\u6279\u51c6"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
@@ -128,12 +128,12 @@ window.__loopPendingCard = function(ev, session) {
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("Approve"));
+  approve.appendChild(document.createTextNode("\u6279\u51c6"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("Reject"));
+  reject.appendChild(document.createTextNode("\u62d2\u7edd"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -164,14 +164,14 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "Approved." : "Rejected.") : ((data && data.error) || "Something went wrong - try again.");
+        if (status) status.textContent = ok ? (approving ? "\u5df2\u6279\u51c6\u3002" : "\u5df2\u62d2\u7edd\u3002") : ((data && data.error) || "\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "Something went wrong - try again.";
+        if (status) status.textContent = "\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -197,7 +197,7 @@ if (!window.__loopPendingCardClicks) {
   // absent for "Auto" - only an explicit light/dark choice ever gets
   // written here, so @media (prefers-color-scheme) in _STYLE keeps
   // driving the "Auto" case untouched. Accent and font both always get
-  // set (defaulting to 'default'/'system' - today's original look - when
+  // set (defaulting to 'default'/'system' - the SF system font on the macOS palette - when
   // nothing's been chosen yet), since every choice for either, including
   // the defaults, is its own named CSS attribute selector with no
   // "absence" branch.
@@ -209,6 +209,21 @@ if (!window.__loopPendingCardClicks) {
   document.documentElement.setAttribute('data-accent', accent || 'indigo');
   var font = localStorage.getItem('loop-dashboard-font');
   document.documentElement.setAttribute('data-font', font || 'system');
+  var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
+  (function __loopScheduleRefresh() {
+    setTimeout(function() {
+      if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
+      location.reload();
+    }, refreshSeconds * 1000);
+  })();
+})();
+(function() {
+  document.addEventListener('DOMContentLoaded', function() {
+    var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
+    var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
+    var el = document.getElementById('refresh-note-text');
+    if (el) el.textContent = "\u6bcf {interval} \u81ea\u52a8\u5237\u65b0".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
+  });
 })();
 (function() {
   function closeAll(except) {
@@ -373,12 +388,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "Could not load the document.";
+      var docFailed = "\u65e0\u6cd5\u52a0\u8f7d\u6587\u6863\u3002";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "Copied";
+      var docCopiedText = "\u5df2\u590d\u5236";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -490,7 +505,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "just now" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u521a\u521a" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -590,10 +605,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "Edit message" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "\u7f16\u8f91\u6d88\u606f" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Cancel" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "Send" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "\u53d6\u6d88" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "\u53d1\u9001" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -661,7 +676,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "You" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "\u4f60" + "</span>", text);
       input.value = '';
       autoGrow();
       button.disabled = true;
@@ -680,7 +695,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "\u601d\u8003\u4e2d\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -762,7 +777,7 @@ if (!window.__loopPendingCardClicks) {
           });
         });
         source.addEventListener('error', function(ev) {
-          var message = "Something went wrong - try again.";
+          var message = "\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -773,7 +788,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "(reply interrupted)", false);
+            pending.show(accumulated + ' ' + "\uff08\u56de\u590d\u5df2\u4e2d\u65ad\uff09", false);
           }
           button.disabled = false;
           stopStreamingFlag();
@@ -785,7 +800,7 @@ if (!window.__loopPendingCardClicks) {
         .then(function(response) { return response.json().then(function(data) { return { ok: response.ok, data: data }; }); })
         .then(function(result) {
           if (!result.ok) {
-            pending.show(result.data.error || "Something went wrong.", false);
+            pending.show(result.data.error || "\u51fa\u4e86\u70b9\u95ee\u9898\u3002", false);
             button.disabled = false;
             stopStreamingFlag();
             return;
@@ -811,7 +826,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("Something went wrong - try again.", false);
+          pending.show("\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002", false);
           button.disabled = false;
           stopStreamingFlag();
         });
@@ -861,7 +876,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "Please fill out this field.";
+    if (text) text.textContent = field.validationMessage || "\u8bf7\u586b\u5199\u6b64\u5b57\u6bb5\u3002";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -939,7 +954,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Couldn't load this section." + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "\u65e0\u6cd5\u52a0\u8f7d\u6b64\u90e8\u5206\u3002" + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1046,7 +1061,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "Stop tracking #{iid}" : "Track #{iid} again").replace('{iid}', issueIid);
+          var label = (enabled ? "\u505c\u6b62\u8ddf\u8e2a #{iid}" : "\u91cd\u65b0\u8ddf\u8e2a #{iid}").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }
