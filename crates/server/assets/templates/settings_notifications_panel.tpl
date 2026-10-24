@@ -45,7 +45,7 @@
   <h3>⟦html.escape(_t('JSON preview'))⟧</h3>
   <pre id="bkb-json-preview" class="block-builder-json"></pre>
   <div class="block-builder-actions">
-    <form method="post" action="/notifications/block-templates" class="daemon-action-form single-field" id="bkb-save-form">
+    <form method="post" action="/notifications/block-templates" id="bkb-save-form">
     ⟦csrf_input⟧
     <input type="hidden" name="original_name" id="bkb-original-name" value="">
     <input type="hidden" name="name" id="bkb-name-hidden" value="">

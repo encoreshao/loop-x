@@ -277,7 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showSettings() {
         dashboard.readTheme()
         if settingsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+            let w = NSWindow(contentRect: NSRect(origin: .zero, size: SettingsView.windowSize),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
             w.title = "LoopX Settings"
             w.contentView = NSHostingView(rootView: SettingsView(settings: settingsModel, app: model))

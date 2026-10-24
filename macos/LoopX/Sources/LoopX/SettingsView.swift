@@ -104,6 +104,7 @@ final class SettingsModel: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var settings: SettingsModel
     @ObservedObject var app: AppModel
+    static let windowSize = CGSize(width: 920, height: 700)
     private var tab: Tab { Tab.allCases[min(settings.tabIndex, Tab.allCases.count - 1)] }
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -136,7 +137,7 @@ struct SettingsView: View {
             .background(MD.surface)
         }
         .environment(\.accent, settings.accent)
-        .frame(width: 760, height: 520)
+        .frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
         .tint(MD.primary)
         .onAppear {
             settings.refreshAccounts(lock: app.lock)

@@ -42,6 +42,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Dark mode: toggle and dropdown labels in the Mac app's Settings are readable on the tinted cards, the Settings window is larger, and the dashboard's Block Kit Builder dropdowns and buttons are legible, with Save and Delete no longer overlapping.
 - The Mac app could sit on "Starting the backend…" after an update or restart: the old backend stopped listening but stayed alive while a dashboard tab held its live event stream open, so the app believed it was still running. The backend now exits within three seconds of being asked to stop.
 - Inbox Triage → Connect on a Gmail inbox no longer answers "signing in is not available in the Mac app yet": it now sends you to Google to sign in and stores the refresh token for the inbox.
 - The dashboard chat showed "Something went wrong - try again." even though the assistant had answered: the live reply stream (`/activity/chat-stream`) was never served, so the page's connection got a 404. The reply is now streamed as it is written.

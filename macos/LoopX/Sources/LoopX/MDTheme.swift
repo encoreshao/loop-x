@@ -64,6 +64,16 @@ struct MDCard<Content: View>: View {
         .padding(.horizontal, 20).padding(.vertical, 16)
         .background(MD.card(accent), in: RoundedRectangle(cornerRadius: MD.cardRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: MD.cardRadius, style: .continuous).stroke(MD.outlineVariant.opacity(0.5), lineWidth: 0.5))
+        .modifier(TintedCardScheme(tinted: accent != .default))
+    }
+}
+
+/// A tinted card is a light wash even in dark mode, so its system controls (toggle and picker labels,
+/// checkboxes) render with the light scheme instead of white text on the wash.
+private struct TintedCardScheme: ViewModifier {
+    let tinted: Bool
+    func body(content: Content) -> some View {
+        if tinted { content.environment(\.colorScheme, .light) } else { content }
     }
 }
 

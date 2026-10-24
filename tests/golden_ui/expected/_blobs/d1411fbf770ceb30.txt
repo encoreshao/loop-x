@@ -2327,14 +2327,21 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .block-builder-row { display: flex; flex-wrap: wrap; gap: 0.75rem; }
 .block-builder-row label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; flex: 1 1 min(200px, 100%); min-width: 0; }
 .block-builder-row input, .block-builder-row select {
-  padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid var(--md-outline-variant);
+  box-sizing: border-box; min-height: 2.1rem;
+  font-family: var(--font-family-stack); font-size: 0.8rem; color-scheme: light dark;
+  padding: 0.4rem 0.6rem; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--md-outline) 45%, transparent);
   background: var(--md-surface-container-low); color: var(--md-on-surface);
 }
+.block-builder-row input::placeholder { color: var(--md-on-surface-variant); opacity: 0.75; }
 .block-builder-palette { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .block-builder-palette button {
-  padding: 0.35rem 0.7rem; border-radius: 999px; border: 1px solid var(--md-outline-variant);
+  font-family: var(--font-family-stack); font-size: 0.8rem; font-weight: 500;
+  padding: 0.35rem 0.7rem; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--md-outline) 45%, transparent);
   background: var(--md-surface-container); color: var(--md-on-surface); cursor: pointer;
 }
+.block-builder-palette button:hover { background: var(--md-surface-container-highest); }
 .block-builder-list { display: flex; flex-direction: column; gap: 0.6rem; }
 .block-builder-card {
   border: 1px solid var(--md-outline-variant); border-radius: 10px; padding: 0.6rem 0.75rem;
@@ -2364,7 +2371,11 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   background: var(--md-surface-container-lowest); border: 1px solid var(--md-outline-variant);
   border-radius: 8px; padding: 0.75rem; overflow-x: auto; font-size: 0.8rem; max-height: 320px;
 }
-.block-builder-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.block-builder-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.block-builder-actions form { margin: 0; flex: 0 0 auto; }
+/* Neutral buttons share the tinted card's surface, so give them an edge and keep a disabled one legible. */
+.card .btn-neutral { border-color: color-mix(in srgb, var(--md-outline) 35%, transparent); }
+.card .btn-neutral:disabled { opacity: 0.6; }
 /* A line with exactly one field and one button: fix the button's width so
    every remaining pixel on the line goes to the field instead of the field
    sizing to its placeholder text. */
