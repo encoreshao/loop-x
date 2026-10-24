@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if updater.isEnabled { settingsModel.onCheckForUpdates = { [weak self] in self?.updater.checkForUpdates() } }
         status.onOpenSettings = { [weak self] in self?.showSettings() }
         status.onOpenPage = { [weak self] p in self?.dashboard.open(path: p) }
+        status.onRunLoop = { [weak self] l in self?.confirmAndRun(l) }
         if updater.isEnabled { status.onCheckForUpdates = { [weak self] in self?.updater.checkForUpdates() } }
         status.onToggleHidden = { [weak self] in self?.notch.toggleHidden() }
         status.isHidden = { [weak self] in self?.notch.isHidden ?? false }
@@ -69,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.notch.refresh()
             self.hotkey.register(self.settingsModel.hotkey)
             self.scheduler.setEnabled(self.settingsModel.runScheduler)
+            self.model.refreshKeepAwake()
         }
         hotkey.onPress = { [weak self] in self?.notch.toggleHidden() }
     }
@@ -187,6 +189,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .installed, .conflict: break
         }
         showSettings()
+    }
+
+    /// `loopx://run/<loop>` and `loopx://open/<page>`; anything `LoopXURL` does not accept is ignored.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for case let action? in urls.map(LoopXURL.parse) {
+            switch action {
+            case .open(let path): dashboard.open(path: path)
+            case .run(let loop): confirmAndRun(loop, fromLink: true)
+            }
+        }
+    }
+
+    /// Starting a loop acts on real GitLab, Slack or mail, so every entry point asks first.
+    func confirmAndRun(_ loop: String, fromLink: Bool = false) {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = IslandStarts.confirmText(loop: loop)
+        a.informativeText = fromLink ? "This was requested by a loopx:// link." : ""
+        a.addButton(withTitle: "Run")
+        a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        guard let lock = model.lock else { return showRunError(IslandAPIError.unreachable("no backend").message) }
+        Task { @MainActor in
+            do { try await IslandAPI(lock: lock).runLoop(loop) }
+            catch let e as IslandAPIError { showRunError(e.message) }
+            catch { showRunError(error.localizedDescription) }
+        }
+    }
+
+    private func showRunError(_ message: String) {
+        let a = NSAlert()
+        a.alertStyle = .warning
+        a.messageText = "Could not start the loop"
+        a.informativeText = message
+        a.runModal()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

@@ -11,6 +11,13 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- The Mac app keeps your Mac from idle sleep while a loop or topic is running, so long runs are not cut off. Turn it off in Settings → Power; the screen can still turn off and closing the lid still sleeps the Mac.
+
+- The Mac app's menu bar menu has a Run submenu that starts the GitLab loop, Topic Monitor or Inbox Triage (after a confirmation).
+- The Mac app answers `loopx://` links, so Shortcuts ("Open URL"), Spotlight or a script can drive it: `loopx://run/gitlab-loop` (also `topic-loop`, `inbox-triage-loop`; always asks first) and `loopx://open/runs?view=logs` (any page in the app's menus; `loopx://open` for the dashboard).
+
 ### Changed
 
 - The dashboard uses the macOS palette (system blue, grey surfaces, hairline separators) and the system SF font by default; Roboto stays selectable in Preferences.

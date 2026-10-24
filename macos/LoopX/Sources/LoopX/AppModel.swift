@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
 
     let settings: SettingsStore
     let backendConfig: BackendConfig
+    private let keepAwake = KeepAwake()
     private var dismissed = Set<String>()
     private var sse: SSEClient?
     private var streamTask: Task<Void, Never>?
@@ -72,6 +73,7 @@ final class AppModel: ObservableObject {
     func stop() {
         streamTask?.cancel(); streamTask = nil
         recoveryTask?.cancel(); ticker?.invalidate(); ticker = nil
+        keepAwake.release()
     }
 
     func ensureBackend() async {
@@ -147,7 +149,13 @@ final class AppModel: ObservableObject {
             if !changes.isEmpty { onTaskNotifications(changes) }
         }
         snapshot = s
+        refreshKeepAwake()
         recompute()
+    }
+
+    /// Also called when the setting changes, so the toggle takes effect without waiting for a snapshot.
+    func refreshKeepAwake() {
+        keepAwake.update(snapshot: hasSnapshot ? snapshot : nil, enabled: settings.keepAwakeWhileRunning)
     }
 
     func recompute(now: Date = Date()) {

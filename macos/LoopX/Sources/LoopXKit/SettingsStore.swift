@@ -61,6 +61,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: "notifyTasks") }
     }
 
+    /// Whether the Mac is kept from idle sleep while a loop or topic is running.
+    public var keepAwakeWhileRunning: Bool {
+        get { defaults.object(forKey: "keepAwakeWhileRunning") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "keepAwakeWhileRunning") }
+    }
+
     /// The dashboard's accent and color mode as last seen in its web view (the dashboard keeps them in its
     /// own localStorage); native windows follow them.
     public var accent: Accent {

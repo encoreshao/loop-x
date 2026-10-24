@@ -117,6 +117,11 @@ $ICON_KEY
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LoopXBundledVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>CFBundleURLTypes</key>
+  <array><dict>
+    <key>CFBundleURLName</key><string>$BUNDLE_ID</string>
+    <key>CFBundleURLSchemes</key><array><string>loopx</string></array>
+  </dict></array>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 $SPARKLE_KEYS

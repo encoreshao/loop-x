@@ -10,6 +10,7 @@ final class StatusItemController: NSObject {
     var onOpenSettings: () -> Void = {}
     var onOpenPage: (String) -> Void = { _ in }
     var onCheckForUpdates: (() -> Void)?
+    var onRunLoop: (String) -> Void = { _ in }
     var onToggleHidden: () -> Void = {}
     var onModeChange: (DisplayMode) -> Void = { _ in }
     var isHidden: () -> Bool = { false }
@@ -77,6 +78,18 @@ extension StatusItemController: NSMenuDelegate {
         }
         if !st.approvals.isEmpty { menu.addItem(.separator()) }
         add("Open Dashboard", #selector(openDashboard), "d")
+        let starts = IslandStarts.available(tasks: st.tasks)
+        if !starts.isEmpty {
+            let run = NSMenu()
+            for s in starts {
+                let i = NSMenuItem(title: s.title, action: #selector(runLoop(_:)), keyEquivalent: "")
+                i.representedObject = s.loop; i.target = self
+                i.image = NSImage(systemSymbolName: s.symbol, accessibilityDescription: nil)
+                run.addItem(i)
+            }
+            let host = NSMenuItem(title: "Run", action: nil, keyEquivalent: ""); host.submenu = run
+            menu.addItem(host)
+        }
         let hide = add(isHidden() ? "Show Notch" : "Hide Notch", #selector(toggleHidden), "")
         hide.isEnabled = model.settings.displayMode != .off
         let modes = NSMenu()
@@ -114,6 +127,7 @@ extension StatusItemController: NSMenuDelegate {
     private func add(_ title: String, _ sel: Selector, _ key: String) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: sel, keyEquivalent: key); i.target = self; menu.addItem(i); return i
     }
+    @objc private func runLoop(_ s: NSMenuItem) { if let l = s.representedObject as? String { onRunLoop(l) } }
     @objc private func approve(_ s: NSMenuItem) { if let id = s.representedObject as? String { model.perform(.approve(id: id)) } }
     @objc private func deny(_ s: NSMenuItem) { if let id = s.representedObject as? String { model.perform(.deny(id: id)) } }
 }
