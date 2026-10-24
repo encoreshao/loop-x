@@ -67,4 +67,29 @@ mod tests {
         assert_eq!(list("dashboard_server", "_NAV_ITEMS").len(), 7);
         assert!(get_str("dashboard_server", "_NOPE").is_none());
     }
+
+    #[test]
+    fn stylesheet_uses_the_macos_palette_and_system_font() {
+        let css = ds("_STYLE");
+        assert!(
+            css.contains("--md-primary: #0A84FF;"),
+            "dark primary is system blue"
+        );
+        assert_eq!(
+            css.matches("--md-primary: #007AFF;").count(),
+            2,
+            "light primary in both light blocks"
+        );
+        assert!(
+            css.contains("--font-family-stack: -apple-system"),
+            "SF is the default font"
+        );
+        assert!(!css.contains("--font-family-stack: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;\n\n  --md-primary"));
+        assert!(
+            css.contains(":root[data-font=\"roboto\"]"),
+            "Roboto stays selectable"
+        );
+        assert!(ds("_FONT_FACE_VARS").contains(":root[data-font=\"roboto\"]"));
+        assert_eq!(list("dashboard_server", "_FONT_CHOICES")[0][0], "system");
+    }
 }

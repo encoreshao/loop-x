@@ -188,7 +188,7 @@ if (!window.__loopPendingCardClicks) {
   // absent for "Auto" - only an explicit light/dark choice ever gets
   // written here, so @media (prefers-color-scheme) in _STYLE keeps
   // driving the "Auto" case untouched. Accent and font both always get
-  // set (defaulting to 'default'/'roboto' - today's original look - when
+  // set (defaulting to 'default'/'system' - today's original look - when
   // nothing's been chosen yet), since every choice for either, including
   // the defaults, is its own named CSS attribute selector with no
   // "absence" branch.
@@ -199,22 +199,7 @@ if (!window.__loopPendingCardClicks) {
   var accent = localStorage.getItem('loop-dashboard-accent');
   document.documentElement.setAttribute('data-accent', accent || 'indigo');
   var font = localStorage.getItem('loop-dashboard-font');
-  document.documentElement.setAttribute('data-font', font || 'roboto');
-  var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
-  (function __loopScheduleRefresh() {
-    setTimeout(function() {
-      if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      location.reload();
-    }, refreshSeconds * 1000);
-  })();
-})();
-(function() {
-  document.addEventListener('DOMContentLoaded', function() {
-    var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
-    var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
-    var el = document.getElementById('refresh-note-text');
-    if (el) el.textContent = "auto-refreshes every {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
-  });
+  document.documentElement.setAttribute('data-font', font || 'system');
 })();
 (function() {
   function closeAll(except) {

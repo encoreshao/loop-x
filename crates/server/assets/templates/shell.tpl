@@ -32,7 +32,7 @@
   // absent for "Auto" - only an explicit light/dark choice ever gets
   // written here, so @media (prefers-color-scheme) in _STYLE keeps
   // driving the "Auto" case untouched. Accent and font both always get
-  // set (defaulting to 'default'/'roboto' - today's original look - when
+  // set (defaulting to 'default'/'system' - today's original look - when
   // nothing's been chosen yet), since every choice for either, including
   // the defaults, is its own named CSS attribute selector with no
   // "absence" branch.
@@ -43,7 +43,7 @@
   var accent = localStorage.getItem('loop-dashboard-accent');
   document.documentElement.setAttribute('data-accent', accent || 'indigo');
   var font = localStorage.getItem('loop-dashboard-font');
-  document.documentElement.setAttribute('data-font', font || 'roboto');⟦refresh_schedule_script⟧
+  document.documentElement.setAttribute('data-font', font || 'system');⟦refresh_schedule_script⟧
 })();⟦refresh_note_script⟧
 (function() {
   function closeAll(except) {

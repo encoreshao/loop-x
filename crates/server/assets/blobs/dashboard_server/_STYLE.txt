@@ -1,36 +1,41 @@
 
 :root {
-  --font-family-stack: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-family-stack: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', sans-serif;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 
-  --md-primary: #9CC0FC;
-  --md-on-primary: #032763;
-  --md-primary-container: #043B95;
-  --md-on-primary-container: #CDE0FE;
+  --md-primary: #0A84FF;
+  --md-on-primary: #FFFFFF;
+  --md-primary-container: #1B3A5E;
+  --md-on-primary-container: #64B1FF;
 
-  --md-surface-dim: #1D1D1F;
-  --md-surface: #232529;
-  --md-surface-container-lowest: #17181B;
-  --md-surface-container-low: #2A2D32;
-  --md-surface-container: #2F3237;
-  --md-surface-container-high: #383C43;
-  --md-surface-container-highest: #454A52;
-  --md-on-surface: #E3E5E8;
-  --md-on-surface-variant: #C7CBD1;
-  --md-outline: #8F97A3;
-  --md-outline-variant: #454B54;
+  --md-surface-dim: #1C1C1E;
+  --md-surface: #242426;
+  --md-surface-container-lowest: #141416;
+  --md-surface-container-low: #2C2C2E;
+  --md-surface-container: #323234;
+  --md-surface-container-high: #3A3A3C;
+  --md-surface-container-highest: #48484A;
+  --md-on-surface: #F5F5F7;
+  --md-on-surface-variant: #AEAEB2;
+  --md-outline: #636366;
+  --md-outline-variant: #3A3A3C;
 
-  --md-success: #B5E3C6;
-  --md-on-success: #1C4A2D;
-  --md-success-container: #2A6F43;
-  --md-on-success-container: #D9F2E2;
-  --md-warning: #E8CCB0;
-  --md-on-warning: #4F3317;
-  --md-warning-container: #774C22;
-  --md-on-warning-container: #F5E6D6;
-  --md-error: #E8B4B0;
-  --md-on-error: #4F1B17;
-  --md-error-container: #772822;
-  --md-on-error-container: #F5D8D6;
+  --md-success: #8CE6A1;
+  --md-on-success: #0B3A1B;
+  --md-success-container: #1F6B35;
+  --md-on-success-container: #D6F5DF;
+  --md-warning: #FFB454;
+  --md-on-warning: #4A2A00;
+  --md-warning-container: #7A4A0A;
+  --md-on-warning-container: #FFE6C2;
+  --md-error: #FF8A84;
+  --md-on-error: #4F0F0B;
+  --md-error-container: #8C2A24;
+  --md-on-error-container: #FFD9D6;
 }
 
 /* Theme/accent color (Preferences page): a fixed, mode-independent wash
@@ -93,8 +98,9 @@
 }
 
 /* Font (Preferences page): one rule per non-default choice, generated from
-   _FONT_CHOICES - "Roboto" needs no rule of its own since it's already the
-   bare :root default above. */
+   _FONT_CHOICES - "System" needs no rule of its own since it's already the
+   bare :root default above (the SF stack). */
+:root[data-font="roboto"] { --font-family-stack: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 :root[data-font="inter"] { --font-family-stack: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 :root[data-font="open-sans"] { --font-family-stack: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 :root[data-font="nunito-sans"] { --font-family-stack: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
@@ -113,67 +119,73 @@
    dark mode's "on-container" hue, and vice versa). */
 @media (prefers-color-scheme: light) {
   :root:not([data-color-mode="dark"]) {
-    --md-primary: #0B57D0;
+    --md-primary: #007AFF;
     --md-on-primary: #FFFFFF;
-    --md-primary-container: #D3E3FD;
-    --md-on-primary-container: #041E49;
+    --md-primary-container: #D6E8FF;
+    --md-on-primary-container: #002B66;
 
-    --md-surface-dim: #FFF;
-    --md-surface: #FBF8FA;
+    --md-surface-dim: #FFFFFF;
+    --md-surface: #F5F5F7;
     --md-surface-container-lowest: #FFFFFF;
-    --md-surface-container-low: #F5F1F4;
-    --md-surface-container: #EFEBEE;
-    --md-surface-container-high: #E9E4E8;
-    --md-surface-container-highest: #E3DEE2;
-    --md-on-surface: #1C1B1E;
-    --md-on-surface-variant: #47464A;
-    --md-outline: #77767A;
-    --md-outline-variant: #C7C5CA;
+    --md-surface-container-low: #F2F2F7;
+    --md-surface-container: #EBEBF0;
+    --md-surface-container-high: #E5E5EA;
+    --md-surface-container-highest: #D8D8DE;
+    --md-on-surface: #1D1D1F;
+    --md-on-surface-variant: #6E6E73;
+    --md-outline: #8E8E93;
+    --md-outline-variant: #D1D1D6;
 
-    --md-success: #1C4A2D;
-    --md-on-success: #B5E3C6;
-    --md-success-container: #D9F2E2;
-    --md-on-success-container: #2A6F43;
-    --md-warning: #4F3317;
-    --md-on-warning: #E8CCB0;
-    --md-warning-container: #F5E6D6;
-    --md-on-warning-container: #774C22;
-    --md-error: #4F1B17;
-    --md-on-error: #E8B4B0;
-    --md-error-container: #F5D8D6;
-    --md-on-error-container: #772822;
+    --md-success: #1F6B35;
+    --md-on-success: #D6F5DF;
+    --md-success-container: #D6F5DF;
+    --md-on-success-container: #1F6B35;
+    --md-warning: #7A4A0A;
+    --md-on-warning: #FFE6C2;
+    --md-warning-container: #FFE6C2;
+    --md-on-warning-container: #7A4A0A;
+    --md-error: #8C2A24;
+    --md-on-error: #FFD9D6;
+    --md-error-container: #FFD9D6;
+    --md-on-error-container: #8C2A24;
+
+    --shadow-1: 0 1px 2px rgba(0,0,0,.08), 0 0 0 .5px rgba(0,0,0,.06);
+    --shadow-2: 0 8px 28px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08);
   }
 }
 :root[data-color-mode="light"] {
-  --md-primary: #0B57D0;
+  --md-primary: #007AFF;
   --md-on-primary: #FFFFFF;
-  --md-primary-container: #D3E3FD;
-  --md-on-primary-container: #041E49;
+  --md-primary-container: #D6E8FF;
+  --md-on-primary-container: #002B66;
 
-  --md-surface-dim: #FFF;
-  --md-surface: #FBF8FA;
+  --md-surface-dim: #FFFFFF;
+  --md-surface: #F5F5F7;
   --md-surface-container-lowest: #FFFFFF;
-  --md-surface-container-low: #F5F1F4;
-  --md-surface-container: #EFEBEE;
-  --md-surface-container-high: #E9E4E8;
-  --md-surface-container-highest: #E3DEE2;
-  --md-on-surface: #1C1B1E;
-  --md-on-surface-variant: #47464A;
-  --md-outline: #77767A;
-  --md-outline-variant: #C7C5CA;
+  --md-surface-container-low: #F2F2F7;
+  --md-surface-container: #EBEBF0;
+  --md-surface-container-high: #E5E5EA;
+  --md-surface-container-highest: #D8D8DE;
+  --md-on-surface: #1D1D1F;
+  --md-on-surface-variant: #6E6E73;
+  --md-outline: #8E8E93;
+  --md-outline-variant: #D1D1D6;
 
-  --md-success: #1C4A2D;
-  --md-on-success: #B5E3C6;
-  --md-success-container: #D9F2E2;
-  --md-on-success-container: #2A6F43;
-  --md-warning: #4F3317;
-  --md-on-warning: #E8CCB0;
-  --md-warning-container: #F5E6D6;
-  --md-on-warning-container: #774C22;
-  --md-error: #4F1B17;
-  --md-on-error: #E8B4B0;
-  --md-error-container: #F5D8D6;
-  --md-on-error-container: #772822;
+  --md-success: #1F6B35;
+  --md-on-success: #D6F5DF;
+  --md-success-container: #D6F5DF;
+  --md-on-success-container: #1F6B35;
+  --md-warning: #7A4A0A;
+  --md-on-warning: #FFE6C2;
+  --md-warning-container: #FFE6C2;
+  --md-on-warning-container: #7A4A0A;
+  --md-error: #8C2A24;
+  --md-on-error: #FFD9D6;
+  --md-error-container: #FFD9D6;
+  --md-on-error-container: #8C2A24;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,.08), 0 0 0 .5px rgba(0,0,0,.06);
+  --shadow-2: 0 8px 28px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08);
 }
 
 * { box-sizing: border-box; }
@@ -189,8 +201,10 @@ body {
   background: var(--md-nav-surface);
   color: var(--md-on-surface-variant);
   font-family: var(--font-family-stack);
-  line-height: 1.55;
-  font-size: 16px;
+  line-height: 1.5;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
 }
 
 .wrap { max-width: clamp(1080px, 90%, 2400px); margin: 0 auto; padding: 2rem 1.25rem 4rem; }
@@ -201,8 +215,8 @@ h1, h2, h3 { font-family: var(--font-family-stack); color: var(--md-on-surface);
    keeps to 400/500/700 only, see test_no_font_weight_600_remains), just
    larger, so a page's own title reads as a clear step above a card's
    section heading one size down. */
-h1 { font-size: 1.65rem; }
-h2 { font-size: 1.05rem; margin: 0 0 0.85rem; }
+h1 { font-size: 1.7rem; letter-spacing: -0.022em; font-weight: 700; }
+h2 { font-size: 1.05rem; letter-spacing: -0.014em; margin: 0 0 0.85rem; }
 h3 { font-size: 0.95rem; margin: 1rem 0 0.35rem; }
 h3:first-child { margin-top: 0; }
 

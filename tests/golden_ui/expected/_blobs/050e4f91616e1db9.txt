@@ -3,7 +3,7 @@
   function apply() {
     var mode = localStorage.getItem('loop-dashboard-color-mode') || 'auto';
     var accent = localStorage.getItem('loop-dashboard-accent') || 'indigo';
-    var font = localStorage.getItem('loop-dashboard-font') || 'roboto';
+    var font = localStorage.getItem('loop-dashboard-font') || 'system';
     var refreshSeconds = localStorage.getItem('loop-dashboard-refresh-interval') || '30';
     document.querySelectorAll('[data-color-mode-choice]').forEach(function(btn) {
       btn.classList.toggle('is-active', btn.getAttribute('data-color-mode-choice') === mode);

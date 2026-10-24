@@ -146,6 +146,11 @@
   ],
   "_FONT_CHOICES": [
    [
+    "system",
+    "System",
+    "system-ui"
+   ],
+   [
     "roboto",
     "Roboto",
     "Roboto"
@@ -176,9 +181,9 @@
     "IBM Plex Sans"
    ]
   ],
-  "_FALLBACK_FONT_STACK": "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  "_FALLBACK_FONT_STACK": "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif",
   "_GOOGLE_FONTS_FAMILIES_PARAM": "family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700",
-  "_FONT_FACE_VARS": ":root[data-font=\"inter\"] { --font-family-stack: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"open-sans\"] { --font-family-stack: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"nunito-sans\"] { --font-family-stack: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"source-sans-3\"] { --font-family-stack: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"ibm-plex-sans\"] { --font-family-stack: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }",
+  "_FONT_FACE_VARS": ":root[data-font=\"roboto\"] { --font-family-stack: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"inter\"] { --font-family-stack: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"open-sans\"] { --font-family-stack: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"nunito-sans\"] { --font-family-stack: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"source-sans-3\"] { --font-family-stack: 'Source Sans 3', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n:root[data-font=\"ibm-plex-sans\"] { --font-family-stack: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }",
   "_MATERIAL_SYMBOLS_ICON_NAMES": "account_balance_wallet,add,add_comment,arrow_forward,arrow_upward,auto_awesome,autorenew,bolt,calendar_month,cancel,check,check_circle,chevron_left,circle,close,code,content_copy,delete,description,dns,download,edit,edit_note,email,error,expand_more,extension,fact_check,folder,folder_off,forum,group,help,history,hub,lightbulb,login,loop,mail,merge,monitoring,newspaper,open_in_new,palette,payments,rss_feed,save,schedule,search,send,settings,smart_toy,space_dashboard,speed,summarize,system_update,task_alt,terminal,topic,translate,tune,videocam,warning,webhook,widgets",
   "_STYLE": {
    "$blob": "blobs/dashboard_server/_STYLE.txt"
