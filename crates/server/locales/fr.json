@@ -1040,5 +1040,8 @@
   "The checkout at {path} has no origin remote to fetch from": "Le dépôt situé à {path} n'a pas de remote origin à récupérer",
   "Worktree root must be an absolute path": "La racine des worktrees doit être un chemin absolu",
   "Worktree root must be outside the project checkout {path}": "La racine des worktrees doit se trouver en dehors du dépôt du projet {path}",
-  "Could not create the worktree root: {error}": "Impossible de créer la racine des worktrees : {error}"
+  "Could not create the worktree root: {error}": "Impossible de créer la racine des worktrees : {error}",
+  "Topic History": "Historique des sujets",
+  "Every saved topic briefing, most recent first.": "Tous les briefings de sujets enregistrés, du plus récent au plus ancien.",
+  "Briefings": "Briefings"
 }

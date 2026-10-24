@@ -1040,5 +1040,8 @@
   "The checkout at {path} has no origin remote to fetch from": "{path} 处的检出没有可供拉取的 origin 远程仓库",
   "Worktree root must be an absolute path": "工作树根目录必须是绝对路径",
   "Worktree root must be outside the project checkout {path}": "工作树根目录必须位于项目检出 {path} 之外",
-  "Could not create the worktree root: {error}": "无法创建工作树根目录:{error}"
+  "Could not create the worktree root: {error}": "无法创建工作树根目录:{error}",
+  "Topic History": "主题历史",
+  "Every saved topic briefing, most recent first.": "按时间倒序显示所有已保存的主题简报。",
+  "Briefings": "简报"
 }

@@ -19,6 +19,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Topic Monitor has a **History** tab listing every saved briefing, newest first, with delete.
+- The Mac app's notch/HUD lists every loop and topic with its status and what it is doing (issue, step), running first; the collapsed HUD names the running task and the notch counts several running at once.
+- The Mac app posts macOS notifications when a loop or topic starts, completes or fails, and when an approval is waiting. Turn it off under Settings → General → Notifications.
 - Connectors → Accounts: Gmail inboxes (the Mailbox accounts) show a Connected / Not connected marker and a **Connect with Google** / **Reconnect** button, like Google Calendar, and you return to Connectors after signing in.
 - The Mac app's start screen (shown while the backend starts) has a larger logo inside a slowly orbiting ring, with a soft glow and entrance animation, a one-line mission, the app version, and the author, Encore Shao, with a mail link.
 - The Mac app's Settings window follows the dashboard's Appearance choice: the sidebar and cards take the selected accent (Default, Indigo, Blue, Green, Red, Gray) and the window follows Light, Dark or Auto. The About tab shows the author.

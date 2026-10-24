@@ -118,3 +118,31 @@ import Testing
         #expect(Set(states.map(\.style.symbol)).count == states.count)
     }
 }
+
+@Suite struct NotchTaskListTests {
+    let now = Timestamps.parse("2026-10-22T08:20:30.000Z")!
+
+    @Test func notchCarriesEveryTaskWithItsMessage() {
+        let s = Snapshot(appState: .running,
+                         loops: ["gitlab-loop": LoopStatus(state: "running", currentIssue: "web #7", currentStep: "analyzing")],
+                         topics: ["ai-news": TopicStatus(state: "idle")])
+        let n = NotchState.make(from: s, now: now)
+        #expect(n.tasks.map(\.name) == ["gitlab-loop", "ai-news"])
+        #expect(n.tasks.first?.detail == "web #7 · analyzing")
+    }
+
+    @Test func aRunningTopicAloneMakesTheNotchRunning() {
+        let s = Snapshot(topics: ["ai-news": TopicStatus(state: "running", currentStep: "fetching")])
+        let n = NotchState.make(from: s, now: now)
+        #expect(n.kind == .running)
+        #expect(n.title == "ai-news running")
+        #expect(n.subtitle == "fetching")
+    }
+
+    @Test func severalRunningTasksAreCountedAndNamed() {
+        let s = Snapshot(loops: ["a": LoopStatus(state: "running")], topics: ["b": TopicStatus(state: "running")])
+        let n = NotchState.make(from: s, now: now)
+        #expect(n.title == "2 tasks running")
+        #expect(n.subtitle == "a, b")
+    }
+}

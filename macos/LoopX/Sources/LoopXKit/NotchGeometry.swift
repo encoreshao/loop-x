@@ -46,9 +46,9 @@ public struct NotchLayout: Equatable, Sendable {
     /// Width added to each side of the notch while collapsed (room for the status glyph).
     public var wing: CGFloat = 36
     public var expandedWidth: CGFloat = 400
-    public var expandedContentHeight: CGFloat = 150
+    public var expandedContentHeight: CGFloat = 200
     public var hudCollapsed = CGSize(width: 230, height: 34)
-    public var hudExpanded = CGSize(width: 380, height: 170)
+    public var hudExpanded = CGSize(width: 380, height: 220)
     public var hudTopMargin: CGFloat = 8
     public var snapThreshold: CGFloat = 28
     public var edgeMargin: CGFloat = 8

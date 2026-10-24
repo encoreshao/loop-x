@@ -43,6 +43,8 @@ final class AppModel: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private var ticker: Timer?
 
+    private var hasSnapshot = false
+    var onTaskNotifications: ([TaskNotification]) -> Void = { _ in }
     var openDashboard: () -> Void = {}
     var onNotchChange: (NotchState, NotchState) -> Void = { _, _ in }
 
@@ -138,6 +140,12 @@ final class AppModel: ObservableObject {
     // MARK: state
 
     private func update(_ s: Snapshot) {
+        let old = hasSnapshot ? snapshot : nil
+        hasSnapshot = true
+        if settings.notifyTasks {
+            let changes = TaskNotifications.changes(from: old, to: s)
+            if !changes.isEmpty { onTaskNotifications(changes) }
+        }
         snapshot = s
         recompute()
     }

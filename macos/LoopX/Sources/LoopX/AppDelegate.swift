@@ -5,6 +5,7 @@ import LoopXKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: AppModel
+    let notifier = TaskNotifier()
     let notch: NotchController
     let status: StatusItemController
     let dashboard = DashboardWindowController()
@@ -42,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await self.model.ensureBackend() }
         }
         model.openDashboard = { [weak self] in self?.dashboard.show() }
+        notifier.onActivate = { [weak self] in self?.dashboard.show() }
+        model.onTaskNotifications = { [weak self] in self?.notifier.post($0) }
         let previous = model.onNotchChange
         model.onNotchChange = { [weak self] old, new in
             previous(old, new)
@@ -74,6 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch.refresh()
         hotkey.register(settingsModel.hotkey)
         scheduler.setEnabled(settingsModel.runScheduler)
+        notifier.requestAuthorization()
         model.start()
         if !settingsModel.launchAtLogin { dashboard.show() }
         offerCLIInstall()

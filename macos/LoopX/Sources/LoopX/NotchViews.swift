@@ -108,6 +108,9 @@ struct CollapsedContent: View {
             HStack(spacing: 8) {
                 StatusGlyph(style: n.style)
                 Text(n.title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                if n.kind == .running, let s = n.subtitle, !s.isEmpty {
+                    Text(s).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1).truncationMode(.tail)
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)
@@ -117,6 +120,11 @@ struct CollapsedContent: View {
             HStack {
                 StatusGlyph(style: n.style).padding(.leading, 12)
                 Spacer()
+                let running = n.tasks.filter { $0.state == .running }.count
+                if n.approvals.isEmpty, running > 1 {
+                    Text("\(running)").font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(n.style.accent.color).padding(.trailing, 12)
+                }
                 if n.approvals.count > 0 {
                     Text("\(n.approvals.count)").font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(n.style.accent.color).padding(.trailing, 12)
@@ -149,6 +157,7 @@ struct ExpandedContent: View {
             } else {
                 if case .reconnecting = model.connection { Text(model.connection.text).font(.system(size: 10)).foregroundStyle(.orange) }
                 if case .failed(let m) = model.connection { Text(m).font(.system(size: 10)).foregroundStyle(.red).lineLimit(3) }
+                TaskList(tasks: n.tasks)
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
                     ForEach(Array(n.actions.enumerated()), id: \.offset) { _, action in
@@ -185,6 +194,48 @@ struct ExpandedContent: View {
                 .padding(.horizontal, 9).padding(.vertical, 4)
                 .background(Capsule().fill(Color.white.opacity(0.14)))
         }.buttonStyle(.plain).foregroundStyle(.white)
+    }
+}
+
+/// Every loop and topic with its status and what it is doing, running first; extras fold into "+N more".
+struct TaskList: View {
+    let tasks: [NotchTask]
+    static let maxRows = 4
+
+    var body: some View {
+        if tasks.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(tasks.prefix(Self.maxRows)) { row($0) }
+                if tasks.count > Self.maxRows {
+                    Text("+\(tasks.count - Self.maxRows) more").font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
+                }
+            }
+        }
+    }
+
+    func row(_ t: NotchTask) -> some View {
+        let style = Self.style(t.state)
+        return HStack(spacing: 6) {
+            StatusGlyph(style: style, size: 10).frame(width: 12)
+            Text(t.name).font(.system(size: 11, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+            Text(t.detail ?? Self.label(t.state)).font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.55)).lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+    }
+
+    static func label(_ s: NotchTask.State) -> String {
+        switch s { case .running: return "running"; case .failed: return "failed"; case .idle: return "idle" }
+    }
+
+    static func style(_ s: NotchTask.State) -> NotchStyle {
+        switch s {
+        case .running: return NotchStyle(accent: .blue, symbol: "arrow.triangle.2.circlepath", pulses: true, autoExpands: false, autoCollapseAfter: nil)
+        case .failed: return NotchStyle(accent: .red, symbol: "xmark.octagon.fill", pulses: false, autoExpands: false, autoCollapseAfter: nil)
+        case .idle: return NotchStyle(accent: .neutral, symbol: "circle.dotted", pulses: false, autoExpands: false, autoCollapseAfter: nil)
+        }
     }
 }
 

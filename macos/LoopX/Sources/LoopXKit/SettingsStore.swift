@@ -55,6 +55,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: "runScheduler") }
     }
 
+    /// Whether task starts, completions and failures are posted to the macOS Notification Center.
+    public var notifyTasks: Bool {
+        get { defaults.object(forKey: "notifyTasks") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "notifyTasks") }
+    }
+
     /// The dashboard's accent and color mode as last seen in its web view (the dashboard keeps them in its
     /// own localStorage); native windows follow them.
     public var accent: Accent {

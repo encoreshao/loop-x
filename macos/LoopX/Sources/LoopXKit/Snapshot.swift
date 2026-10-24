@@ -61,8 +61,15 @@ public struct LoopStatus: Codable, Equatable, Sendable {
 public struct TopicStatus: Codable, Equatable, Sendable {
     public var state: String
     public var updatedAt: String?
-    enum CodingKeys: String, CodingKey { case state; case updatedAt = "updated_at" }
-    public init(state: String, updatedAt: String? = nil) { self.state = state; self.updatedAt = updatedAt }
+    public var currentStep: String?
+    enum CodingKeys: String, CodingKey {
+        case state
+        case updatedAt = "updated_at"
+        case currentStep = "current_step"
+    }
+    public init(state: String, updatedAt: String? = nil, currentStep: String? = nil) {
+        self.state = state; self.updatedAt = updatedAt; self.currentStep = currentStep
+    }
 }
 
 public struct Approval: Codable, Equatable, Sendable, Identifiable {

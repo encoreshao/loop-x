@@ -1040,5 +1040,8 @@
   "The checkout at {path} has no origin remote to fetch from": "{path} のチェックアウトには取得元の origin リモートがありません",
   "Worktree root must be an absolute path": "ワークツリーのルートは絶対パスで指定してください",
   "Worktree root must be outside the project checkout {path}": "ワークツリーのルートはプロジェクトのチェックアウト {path} の外に置いてください",
-  "Could not create the worktree root: {error}": "ワークツリーのルートを作成できませんでした: {error}"
+  "Could not create the worktree root: {error}": "ワークツリーのルートを作成できませんでした: {error}",
+  "Topic History": "トピック履歴",
+  "Every saved topic briefing, most recent first.": "保存されたトピックのブリーフィングを新しい順に表示します。",
+  "Briefings": "ブリーフィング"
 }

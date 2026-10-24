@@ -3,6 +3,7 @@
 //! behind the Topics view live in `settings/posts.rs` and `runs.rs`.
 
 use super::chat::topic_latest_data_html;
+use super::runs::{history_entry_html, topic_history_dir};
 use super::loops_common::{
     custom_select_plain, empty_state_html, esc_t, flash_html, relative_time, render_loop_page,
     run_now_action_html,
@@ -11,7 +12,7 @@ use crate::ui::badge::status_badge_markup;
 use crate::ui::hub::{builtin_loop_page, resolve_view};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::{consts, pyfmt};
-use loopx_core::{pydumps, status, topics};
+use loopx_core::{pydumps, run_history, status, topics};
 use serde_json::{Map, Value};
 
 pub fn register(r: &mut Registry) {
@@ -24,6 +25,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let view = ctx.query().first("view").map(str::to_string);
     let body = match resolve_view(&hub, view.as_deref()).key.as_str() {
         "topics" => topics_body(ctx, flash.as_deref(), flash_ok),
+        "history" => history_body(ctx),
         _ => live_body(ctx, flash.as_deref(), flash_ok),
     };
     UiResponse::html(render_loop_page(ctx, &hub, "topic-loop", view.as_deref(), &body, None))
@@ -123,6 +125,38 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     )
 }
 
+/// The History view: every saved briefing, newest first, with the same entry rows as Run History.
+fn history_body(ctx: &UiCtx) -> String {
+    let dir = topic_history_dir(ctx);
+    let entries: String = run_history::list_topic_history(None, &dir)
+        .iter()
+        .map(|name| {
+            let content = run_history::read_history_file(name, &dir).unwrap_or_default();
+            let safe = pyfmt::quote(name, "/");
+            history_entry_html(
+                ctx,
+                name,
+                &format!("/topic-monitor/history/{safe}"),
+                &format!("/topic-monitor/history/{safe}/delete"),
+                &run_history::extract_history_overview(&content, 240),
+                &run_history::topic_history_tags(name, &content),
+            )
+        })
+        .collect();
+    let entries = if entries.is_empty() {
+        format!("<p>{}</p>", esc_t(ctx, "(none yet)"))
+    } else {
+        entries
+    };
+    format!(
+        "\n<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{}</p>\n</div>\n\n<div class=\"grid\">\n<section class=\"card\">\n<div class=\"section-header\">{}<h2>{}</h2></div>\n{entries}\n</section>\n</div>\n",
+        esc_t(ctx, "Topic History"),
+        esc_t(ctx, "Every saved topic briefing, most recent first."),
+        consts::ds("_SECTION_ICON_HISTORY"),
+        esc_t(ctx, "Briefings"),
+    )
+}
+
 /// `_topic_action_html`: the enable/disable switch of one topic row.
 fn action_html(ctx: &UiCtx, topic: &Value, csrf: &str) -> String {
     let name = text(topic, "name");
@@ -202,4 +236,49 @@ fn topics_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         flash = flash_html(flash, flash_ok),
         icon = consts::ds("_SECTION_ICON_SETTINGS"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::state::UiState;
+    use crate::ui::UiRequest;
+
+    fn sandbox() -> (tempfile::TempDir, UiState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        (dir, state)
+    }
+
+    fn history_html(state: &UiState) -> String {
+        let req = UiRequest::get("/loops/topic-loop?view=history");
+        String::from_utf8(page(&UiCtx::new(state, &req)).body).unwrap()
+    }
+
+    #[test]
+    fn the_topic_monitor_has_a_history_tab() {
+        let (_dir, state) = sandbox();
+        let html = history_html(&state);
+        assert!(html.contains("href='/loops/topic-loop?view=history'"), "{html}");
+    }
+
+    #[test]
+    fn history_lists_saved_briefings_newest_first_with_delete() {
+        let (dir, state) = sandbox();
+        let hist = dir.path().join("outputs/topic-monitor/history");
+        std::fs::create_dir_all(&hist).unwrap();
+        std::fs::write(hist.join("2026-01-13-ai-news.md"), "# older\n\nfirst briefing").unwrap();
+        std::fs::write(hist.join("2026-01-14-ai-news.md"), "# newer\n\nsecond briefing").unwrap();
+        let html = history_html(&state);
+        let newer = html.find("/topic-monitor/history/2026-01-14-ai-news.md").expect("newer link");
+        let older = html.find("/topic-monitor/history/2026-01-13-ai-news.md").expect("older link");
+        assert!(newer < older);
+        assert!(html.contains("/topic-monitor/history/2026-01-14-ai-news.md/delete"));
+    }
+
+    #[test]
+    fn empty_history_says_none_yet() {
+        let (_dir, state) = sandbox();
+        assert!(history_html(&state).contains("(none yet)"));
+    }
 }

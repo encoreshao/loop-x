@@ -48,7 +48,7 @@ fn history_dir(ctx: &UiCtx) -> PathBuf {
     ctx.state.repo_root.join("outputs").join("history")
 }
 
-fn topic_history_dir(ctx: &UiCtx) -> PathBuf {
+pub(super) fn topic_history_dir(ctx: &UiCtx) -> PathBuf {
     ctx.state
         .repo_root
         .join("outputs")
@@ -269,7 +269,7 @@ fn loop_runs_body(ctx: &UiCtx) -> String {
 
 // ---- Run History ----------------------------------------------------------
 
-fn history_entry_html(
+pub(super) fn history_entry_html(
     ctx: &UiCtx,
     name: &str,
     detail_href: &str,

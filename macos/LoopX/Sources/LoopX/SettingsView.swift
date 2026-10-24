@@ -8,6 +8,7 @@ final class SettingsModel: ObservableObject {
     @Published var dashboardWindow: DashboardWindowMode { didSet { store.dashboardWindow = dashboardWindow } }
     @Published var hotkey: HotkeyPreset { didSet { store.hotkey = hotkey; onChange() } }
     @Published var runScheduler: Bool { didSet { store.runScheduler = runScheduler; onChange() } }
+    @Published var notifyTasks: Bool { didSet { store.notifyTasks = notifyTasks } }
     @Published var launchAtLogin: Bool
     @Published var loginNeedsApproval: Bool
     @Published var error: String?
@@ -37,7 +38,7 @@ final class SettingsModel: ObservableObject {
 
     init(store: SettingsStore, login: LaunchAtLogin) {
         self.store = store; self.login = login
-        displayMode = store.displayMode; hotkey = store.hotkey; dashboardWindow = store.dashboardWindow; runScheduler = store.runScheduler
+        displayMode = store.displayMode; hotkey = store.hotkey; dashboardWindow = store.dashboardWindow; runScheduler = store.runScheduler; notifyTasks = store.notifyTasks
         launchAtLogin = login.isEnabled; loginNeedsApproval = login.needsApproval
         accent = store.accent; colorMode = store.colorMode
     }
@@ -190,6 +191,10 @@ struct SettingsView: View {
             MDCard("Scheduled loops") {
                 Toggle("Run scheduled loops while LoopX is open", isOn: $settings.runScheduler)
                 MDNote("Checks every 15 minutes and starts any loop that is due. Due loops act on your real GitLab and Slack, so this is off until you turn it on. Each loop's own schedule is under Loops in the dashboard.")
+            }
+            MDCard("Notifications") {
+                Toggle("Notify when a task starts, completes or fails", isOn: $settings.notifyTasks)
+                MDNote("Posts to the macOS Notification Center, including when an approval is waiting for you.")
             }
             MDCard("Dashboard window") {
                 Picker("Opens", selection: $settings.dashboardWindow) {

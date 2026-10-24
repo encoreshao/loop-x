@@ -157,7 +157,11 @@ pub fn builtin_loop_page(name: &str) -> Option<Hub> {
             "/loops/topic-loop",
             "Topic Monitor",
             "_SECTION_ICON_TOPIC_MONITOR",
-            vec![v("live", "Live").refreshing(), v("topics", "Topics")],
+            vec![
+                v("live", "Live").refreshing(),
+                v("history", "History"),
+                v("topics", "Topics"),
+            ],
         ),
         "inbox-triage-loop" => hub(
             "loops",

@@ -15,6 +15,11 @@ public struct NotchStyle: Equatable, Sendable {
     public var autoExpands: Bool
     /// Seconds before an auto-expanded alert folds back; nil = stays until acted on.
     public var autoCollapseAfter: TimeInterval?
+
+    public init(accent: NotchAccent, symbol: String, pulses: Bool, autoExpands: Bool, autoCollapseAfter: TimeInterval?) {
+        self.accent = accent; self.symbol = symbol; self.pulses = pulses
+        self.autoExpands = autoExpands; self.autoCollapseAfter = autoCollapseAfter
+    }
 }
 
 public enum NotchAction: Equatable, Sendable {
@@ -34,6 +39,8 @@ public struct NotchState: Equatable, Sendable {
     public var approvals: [Approval]
     /// Identity of the alert shown (for dismiss), nil for non-alert states.
     public var alertKey: String?
+    /// Every loop and topic with its status and current message, running first.
+    public var tasks: [NotchTask] = []
 
     public static let alertWindow: TimeInterval = 120
 
@@ -44,6 +51,13 @@ public struct NotchState: Equatable, Sendable {
     /// pops for `alertWindow` seconds and never again once dismissed.
     public static func make(from s: Snapshot, now: Date, dismissed: Set<String> = [],
                             alertWindow: TimeInterval = NotchState.alertWindow) -> NotchState {
+        var state = headline(from: s, now: now, dismissed: dismissed, alertWindow: alertWindow)
+        state.tasks = TaskNotifications.tasks(in: s)
+        return state
+    }
+
+    private static func headline(from s: Snapshot, now: Date, dismissed: Set<String>,
+                                 alertWindow: TimeInterval) -> NotchState {
         let pending = s.approvals.pending.filter(\.isPending)
         if s.appState == .awaitingApproval || !pending.isEmpty {
             let first = pending.first
@@ -86,11 +100,18 @@ public struct NotchState: Equatable, Sendable {
                               actions: [.openDashboard], approvals: [], alertKey: nil)
         }
 
-        if s.appState == .running || s.runningLoop != nil {
-            let run = s.runningLoop
-            let sub = [run?.status.currentIssue, run?.status.currentStep].compactMap { $0 }.joined(separator: " · ")
-            return NotchState(kind: .running, title: run.map { "\($0.name) running" } ?? "Running",
-                              subtitle: sub.isEmpty ? nil : sub,
+        let running = TaskNotifications.tasks(in: s).filter { $0.state == .running }
+        if s.appState == .running || !running.isEmpty {
+            let title: String, sub: String?
+            if running.count > 1 {
+                title = "\(running.count) tasks running"
+                sub = running.map(\.name).joined(separator: ", ")
+            } else {
+                let one = running.first
+                title = one.map { "\($0.name) running" } ?? "Running"
+                sub = one?.detail
+            }
+            return NotchState(kind: .running, title: title, subtitle: sub,
                               style: NotchStyle(accent: .blue, symbol: "arrow.triangle.2.circlepath", pulses: true,
                                                 autoExpands: false, autoCollapseAfter: nil),
                               actions: [.openDashboard], approvals: [], alertKey: nil)
