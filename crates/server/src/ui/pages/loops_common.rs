@@ -68,12 +68,12 @@ pub fn run_now_action_html(
     let run_now = pyfmt::escape(&ctx.t("Run now"));
     if let Some(hint) = disabled_hint_html {
         return format!(
-            "\n<div class='run-now-action'>\n<button type='button' class='btn btn-primary' disabled>\n<span class='material-symbols-outlined' aria-hidden='true'>bolt</span> {run_now}\n</button>\n<p class='run-now-hint'>{hint}</p>\n</div>\n"
+            "\n<div class='run-now-action'>\n<button type='button' class='btn btn-primary' disabled>\n<svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {run_now}\n</button>\n<p class='run-now-hint'>{hint}</p>\n</div>\n"
         );
     }
     let confirm_attr = pyfmt::escape(confirm_text);
     format!(
-        "\n<div class='run-now-action'>\n<form method='post' action='{action}' class='daemon-action-form'>\n{csrf_input}\n<button type='submit' class='btn btn-primary' data-confirm=\"{confirm_attr}\">\n<span class='material-symbols-outlined' aria-hidden='true'>bolt</span> {run_now}\n</button>\n</form>\n</div>\n"
+        "\n<div class='run-now-action'>\n<form method='post' action='{action}' class='daemon-action-form'>\n{csrf_input}\n<button type='submit' class='btn btn-primary' data-confirm=\"{confirm_attr}\">\n<svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {run_now}\n</button>\n</form>\n</div>\n"
     )
 }
 
@@ -82,14 +82,14 @@ pub fn stop_action_html(ctx: &UiCtx, action: &str, confirm_text: &str, csrf_inpu
     let confirm_attr = pyfmt::escape(confirm_text);
     let stop = pyfmt::escape(&ctx.t("Stop"));
     format!(
-        "\n<div class='run-now-action'>\n<form method='post' action='{action}' class='daemon-action-form'>\n{csrf_input}\n<button type='submit' class='btn btn-warning' data-confirm=\"{confirm_attr}\">\n<span class='material-symbols-outlined' aria-hidden='true'>warning</span> {stop}\n</button>\n</form>\n</div>\n"
+        "\n<div class='run-now-action'>\n<form method='post' action='{action}' class='daemon-action-form'>\n{csrf_input}\n<button type='submit' class='btn btn-warning' data-confirm=\"{confirm_attr}\">\n<svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg> {stop}\n</button>\n</form>\n</div>\n"
     )
 }
 
 /// `_empty_state_html` (`message` and `action_label` are already escaped HTML).
 pub fn empty_state_html(message: &str, action_href: &str, action_label: &str) -> String {
     format!(
-        "\n<div class='empty-state'>\n<div class='empty-state-icon'><span class='material-symbols-outlined' aria-hidden='true'>folder_off</span></div>\n<p class='empty-state-message'>{message}</p>\n<a class='btn btn-primary empty-state-action' href='{action_href}'>\n<span class='material-symbols-outlined' aria-hidden='true'>settings</span> {action_label}\n</a>\n</div>\n"
+        "\n<div class='empty-state'>\n<div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-folder_off'/></svg></div>\n<p class='empty-state-message'>{message}</p>\n<a class='btn btn-primary empty-state-action' href='{action_href}'>\n<svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {action_label}\n</a>\n</div>\n"
     )
 }
 
@@ -200,7 +200,7 @@ pub fn custom_select(
         .map(|(_, l)| l.as_str())
         .unwrap_or("");
     format!(
-        "<div class='custom-select'><select name='{}' class='custom-select-native'>{option_tags}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{}</span><span class='material-symbols-outlined' aria-hidden='true'>expand_more</span></button><div class='custom-select-menu' role='listbox' hidden>{menu_items}</div></div>",
+        "<div class='custom-select'><select name='{}' class='custom-select-native'>{option_tags}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{}</span><svg class='icon' aria-hidden='true'><use href='#i-expand_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden>{menu_items}</div></div>",
         pyfmt::escape(name),
         pyfmt::escape(label)
     )

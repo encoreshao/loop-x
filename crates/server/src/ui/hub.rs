@@ -8,7 +8,7 @@
 use super::i18n;
 use super::routes::UiCtx;
 use super::shell::{render_shell, ShellOpts};
-use super::{consts, pyfmt};
+use super::{consts, icons, pyfmt};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HubView {
@@ -203,9 +203,7 @@ pub fn generic_loop_page(
         views.push(v("settings", "Settings"));
     }
     let icon = match nav_icon_glyph(name) {
-        Some(glyph) => {
-            format!("<span class='material-symbols-outlined' aria-hidden='true'>{glyph}</span>")
-        }
+        Some(glyph) => icons::icon(&glyph),
         None => consts::ds("_SECTION_ICON_LOOPS").to_string(),
     };
     let icon = match brand_icon_key(name) {

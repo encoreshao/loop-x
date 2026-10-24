@@ -722,7 +722,7 @@ fn gitlab_item(ctx: &UiCtx, item: &Value, prefix: &str, alias: Option<&str>, com
 fn error_notice(ctx: &UiCtx, message: &Option<String>) -> String {
     match message {
         Some(m) if !m.is_empty() => format!(
-            "<p class='inline-error'><span class='material-symbols-outlined' aria-hidden='true'>error</span> {}</p>",
+            "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> {}</p>",
             ctx.tf("Couldn't check: {message}", &[("message", &pyfmt::escape(m))])
         ),
         _ => String::new(),
@@ -890,7 +890,7 @@ fn input_text(name: &str, value: &str, placeholder: &str, extra: &str) -> String
 
 fn delete_form(ctx: &UiCtx, action: &str, confirm: &str, csrf: &str) -> String {
     format!(
-        "<form method='post' action='{action}' class='daemon-action-form'>{csrf}<button type='submit' class='btn btn-warning' data-confirm=\"{}\"><span class='material-symbols-outlined' aria-hidden='true'>delete</span> {}</button></form>",
+        "<form method='post' action='{action}' class='daemon-action-form'>{csrf}<button type='submit' class='btn btn-warning' data-confirm=\"{}\"><svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></form>",
         pyfmt::escape(confirm),
         esc_t(ctx, "Delete")
     )
@@ -954,7 +954,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         table(&[et("Instance"), et("Token"), et("Edit"), et("Delete")], &rows)
     };
     let add_instance_form = format!(
-        "\n<form method='post' action='/settings/gitlab/instances' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='url' placeholder='https://gitlab.example.com' required>\n<input type='password' name='token' placeholder='{}'>\n<button type='submit' class='btn btn-neutral'><span class='material-symbols-outlined' aria-hidden='true'>add</span> {}</button>\n</form>\n",
+        "\n<form method='post' action='/settings/gitlab/instances' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='url' placeholder='https://gitlab.example.com' required>\n<input type='password' name='token' placeholder='{}'>\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
         et("instance name"),
         et("required"),
         et("Add instance")
@@ -980,7 +980,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         table(&[et("Alias"), et("Edit"), et("Delete")], &rows)
     };
     let add_project_form = format!(
-        "\n<form method='post' action='/settings/gitlab/projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n{}\n{}\n<button type='submit' class='btn btn-neutral'><span class='material-symbols-outlined' aria-hidden='true'>add</span> {}</button>\n</form>\n",
+        "\n<form method='post' action='/settings/gitlab/projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n{}\n{}\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
         et("project alias"),
         custom_select_plain("instance", &instance_names, None, None),
         custom_select_plain("bundle", &bundle_names, None, Some(&t("(use instance default)"))),
@@ -1021,7 +1021,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         table(&[et("Project"), et("Delete")], &rows)
     };
     let add_tracked_project_form = format!(
-        "\n<form method='post' action='/settings/loop-projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n<input type='text' name='local_path' placeholder='/abs/path/to/checkout'>\n<input type='text' name='target_branch' placeholder='{}'>\n<input type='text' name='install_cmd' placeholder='{}'>\n<input type='text' name='lint_cmd' placeholder='{}'>\n<input type='text' name='test_cmd' placeholder='{}'>\n{}\n<button type='submit' class='btn btn-neutral'><span class='material-symbols-outlined' aria-hidden='true'>add</span> {}</button>\n</form>\n",
+        "\n<form method='post' action='/settings/loop-projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n<input type='text' name='local_path' placeholder='/abs/path/to/checkout'>\n<input type='text' name='target_branch' placeholder='{}'>\n<input type='text' name='install_cmd' placeholder='{}'>\n<input type='text' name='lint_cmd' placeholder='{}'>\n<input type='text' name='test_cmd' placeholder='{}'>\n{}\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
         et("project alias"),
         et("target branch"),
         et("install command"),
@@ -1074,7 +1074,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         )
     };
     let add_bundle_form = format!(
-        "\n<form method='post' action='/settings/access-bundles' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='name' placeholder='{}' required>\n{}\n<input type='password' name='token' placeholder='{}'>\n<input type='password' name='webhook_url' placeholder='{}'>\n<button type='submit' class='btn btn-neutral'><span class='material-symbols-outlined' aria-hidden='true'>add</span> {}</button>\n</form>\n",
+        "\n<form method='post' action='/settings/access-bundles' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='name' placeholder='{}' required>\n{}\n<input type='password' name='token' placeholder='{}'>\n<input type='password' name='webhook_url' placeholder='{}'>\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
         et("bundle name"),
         custom_select_plain("instance", &instance_names, None, None),
         et("GitLab access token"),

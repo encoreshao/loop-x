@@ -303,7 +303,7 @@ fn meetings_today_card(ctx: &UiCtx, name: &str) -> String {
             let icon = if join.is_empty() {
                 ""
             } else {
-                "<span class='material-symbols-outlined' aria-hidden='true'>videocam</span>"
+                "<svg class='icon' aria-hidden='true'><use href='#i-videocam'/></svg>"
             };
             title = format!("<a href='{}' target='_blank' rel='noopener'>{icon}{title}</a>", h(&href));
         }
@@ -1190,7 +1190,7 @@ fn catalog_parts(ctx: &UiCtx, loop_: &Value, csrf: &str, notify_accounts: &[Acco
     let met = missing.is_empty();
     let href = format!("/loops/{}", pyfmt::quote(&name, "/"));
     let settings = format!(
-        "<details class='loop-settings'><summary><span class='material-symbols-outlined' aria-hidden='true'>tune</span>{}</summary>\
+        "<details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-tune'/></svg>{}</summary>\
 <div class='loop-settings-body'>{}{}</div></details>",
         h(&ctx.t("Edit schedule")),
         schedule_form_html(ctx, loop_, csrf, "/loops"),
@@ -1213,7 +1213,7 @@ fn catalog_parts(ctx: &UiCtx, loop_: &Value, csrf: &str, notify_accounts: &[Acco
         },
         missing_html: if missing.is_empty() { String::new() } else { requirement_chips(ctx, &missing) },
         schedule_html: format!(
-            "<span class='loop-meta-item'><span class='material-symbols-outlined' aria-hidden='true'>schedule</span>{}</span>",
+            "<span class='loop-meta-item'><svg class='icon' aria-hidden='true'><use href='#i-schedule'/></svg>{}</span>",
             h(&schedule_summary(ctx, loop_))
         ),
         settings_html: settings,
@@ -1228,7 +1228,7 @@ fn catalog_row(ctx: &UiCtx, loop_: &Value, csrf: &str, notify: &[Account], accou
     let status = read_status(ctx.state, &p.name);
     let last_run = match status.get("updated_at").filter(|v| py_truthy(v)) {
         Some(u) => format!(
-            "<span class='loop-meta-item'><span class='material-symbols-outlined' aria-hidden='true'>history</span>{}</span>",
+            "<span class='loop-meta-item'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>{}</span>",
             h(&ctx.tf("Last run {when}", &[("when", &relative_time(ctx.state.now(), &py_str(u)))]))
         ),
         None => String::new(),

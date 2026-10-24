@@ -12,7 +12,7 @@ use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
 use crate::ui::state::UiState;
 use crate::ui::template::{Scope, Template};
-use crate::ui::{consts, pyfmt};
+use crate::ui::{consts, icons, pyfmt};
 use loopx_core::ledger::{self, RunQuery, RunRecord};
 use loopx_core::loops_config;
 use loopx_core::run_control::{self, Launcher, StopOutcome, TriggerOutcome};
@@ -210,7 +210,7 @@ fn loop_runs_overview_html(ctx: &UiCtx) -> String {
         .map(|(icon, label, value)| {
             let mut scope = Scope::new(ctx.lang);
             scope
-                .var("icon", *icon)
+                .var("icon", icons::icon_with(icon, "dash-stat-icon"))
                 .var("value", value.as_str())
                 .set("html.escape(label)", esc_t(ctx, label));
             render("runs_overview_tile", &scope)

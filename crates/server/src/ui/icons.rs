@@ -56,4 +56,47 @@ mod tests {
     fn stylesheet_defines_the_icon_class() {
         assert!(crate::ui::consts::ds("_STYLE").contains(".icon {"));
     }
+
+    /// Every glyph name written as a literal in a Rust source, template or
+    /// constants file must resolve, since a dangling `use` renders nothing.
+    #[test]
+    fn every_hard_coded_glyph_name_resolves() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if matches!(
+                    p.extension().and_then(|x| x.to_str()),
+                    Some("rs" | "tpl" | "txt" | "json")
+                ) && p.file_name().is_some_and(|n| n != "icons.rs")
+                {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        walk(&root.join("src"), &mut files);
+        walk(&root.join("assets"), &mut files);
+        let mut checked = 0;
+        for f in files {
+            let Ok(text) = std::fs::read_to_string(&f) else {
+                continue;
+            };
+            for marker in ["href='#i-", "icon(\"", "icon_with(\""] {
+                for part in text.split(marker).skip(1) {
+                    let end = part.find(['\'', '"']).unwrap_or(0);
+                    let name = &part[..end];
+                    if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    {
+                        continue;
+                    }
+                    assert!(is_known(name), "{} uses unknown icon {name}", f.display());
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50, "only {checked} literal icon names found");
+    }
 }

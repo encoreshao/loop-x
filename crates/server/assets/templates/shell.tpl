@@ -210,7 +210,7 @@
       var docDownload = docPanel.querySelector('[data-doc-download]');
       var docFailed = ⟦json.dumps(_t('Could not load the document.'))⟧;
       var docCopy = docPanel.querySelector('[data-doc-copy]');
-      var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon]');
+      var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
       var docCopiedText = ⟦json.dumps(_t('Copied'))⟧;
@@ -218,14 +218,14 @@
       var docCopyTimer = null;
       function resetCopy() {
         clearTimeout(docCopyTimer);
-        docCopyIcon.textContent = 'content_copy';
+        docCopyIcon.setAttribute('href', '#i-content_copy');
         docCopyLabel.textContent = docCopyText;
       }
       docCopy.addEventListener('click', function() {
         // Raw markdown, so pasting elsewhere keeps the document's own formatting.
         var text = docRaw || docBody.innerText;
         var done = function() {
-          docCopyIcon.textContent = 'check';
+          docCopyIcon.setAttribute('href', '#i-check');
           docCopyLabel.textContent = docCopiedText;
           clearTimeout(docCopyTimer);
           docCopyTimer = setTimeout(resetCopy, 1800);
@@ -406,12 +406,12 @@
     }
 
     function flashIcon(button, iconName) {
-      var icon = button.querySelector('.material-symbols-outlined');
+      var icon = button.querySelector('svg.icon use');
       if (!icon) return;
-      var original = icon.textContent;
-      icon.textContent = iconName;
+      var original = icon.getAttribute('href');
+      icon.setAttribute('href', '#i-' + iconName);
       button.classList.add('is-done');
-      setTimeout(function() { icon.textContent = original; button.classList.remove('is-done'); }, 1500);
+      setTimeout(function() { icon.setAttribute('href', original); button.classList.remove('is-done'); }, 1500);
     }
 
     // Editing a sent message re-asks: the edited text goes out through
@@ -774,7 +774,7 @@
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><span class='material-symbols-outlined' aria-hidden='true'>error</span> " + ⟦json.dumps(html.escape(_t("Couldn't load this section."), quote=False))⟧ + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + ⟦json.dumps(html.escape(_t("Couldn't load this section."), quote=False))⟧ + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -893,16 +893,17 @@
 </script>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">⟦icon_sprite⟧</svg>
 
 <div class="app-bg" aria-hidden="true"></div>
 
 <div class="field-error-bubble" id="field-error-bubble" hidden>
-<span class="material-symbols-outlined" aria-hidden="true">error</span>
+<svg class='icon' aria-hidden='true'><use href='#i-error'/></svg>
 <span class="field-error-bubble-text"></span>
 </div>
 
 <dialog class="confirm-dialog" id="confirm-dialog">
-<div class="confirm-dialog-icon"><span class="material-symbols-outlined" aria-hidden="true">error</span></div>
+<div class="confirm-dialog-icon"><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg></div>
 <p class="confirm-dialog-message"></p>
 <div class="confirm-dialog-actions">
 <button type="button" class="btn btn-neutral" data-confirm-cancel>⟦html.escape(_t('Cancel'))⟧</button>

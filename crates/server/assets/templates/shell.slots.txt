@@ -26,6 +26,7 @@ json.dumps(_t('Please fill out this field.'))
 json.dumps(html.escape(_t("Couldn't load this section."), quote=False))
 json.dumps(_t('Stop tracking #{iid}'))
 json.dumps(_t('Track #{iid} again'))
+icon_sprite
 html.escape(_t('Cancel'))
 html.escape(_t('Confirm'))
 _sidebar_html(active_page)

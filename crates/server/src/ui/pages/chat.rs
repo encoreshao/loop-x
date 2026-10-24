@@ -8,7 +8,7 @@
 //! (prompts, command, stream parsing, jobs) lives in `loopx_core::chat`.
 
 use crate::ui::badge::{self, default_badge};
-use crate::ui::hub;
+use crate::ui::{hub, icons};
 use crate::ui::i18n::{self, Lang};
 use crate::ui::markdown;
 use crate::ui::pages::loops_common::{
@@ -118,15 +118,15 @@ pub fn pending_card_html(lang: Lang, pending_id: &str, session: &str, record: &V
     );
     format!(
         "<div class='pending-card' data-pending-id=\"{}\" data-pending-session=\"{}\">\
-         <div class='pending-card-head'><span class='material-symbols-outlined' aria-hidden='true'>schedule</span>\
+         <div class='pending-card-head'><svg class='icon' aria-hidden='true'><use href='#i-schedule'/></svg>\
          <span>{}</span></div>\
          <div class='pending-card-tool'>{tool}</div>{summary_html}\
          <pre class='pending-card-args'>{args}</pre>\
          <div class='pending-card-actions'>\
          <button type='button' class='btn btn-primary' data-pending-approve>\
-         <span class='material-symbols-outlined' aria-hidden='true'>check</span>{}</button>\
+         <svg class='icon' aria-hidden='true'><use href='#i-check'/></svg>{}</button>\
          <button type='button' class='btn btn-neutral' data-pending-reject>\
-         <span class='material-symbols-outlined' aria-hidden='true'>close</span>{}</button>\
+         <svg class='icon' aria-hidden='true'><use href='#i-close'/></svg>{}</button>\
          </div>\
          <div class='pending-card-status' aria-live='polite'></div>\
          </div>",
@@ -176,9 +176,10 @@ pub fn tool_chips_html(
             "err" => "error",
             _ => "autorenew",
         };
+        let icon_svg = icons::icon_with(icon, "tool-chip-icon");
         chips.push_str(&format!(
             "<span class=\"tool-chip tool-chip-{kind}\">\
-             <span class=\"material-symbols-outlined tool-chip-icon\" aria-hidden=\"true\">{icon}</span>\
+             {icon_svg}\
              <span class=\"tool-chip-text\">{}{summary}</span></span>",
             pyfmt::escape(&tool_label(lang, &text_of(tool.get("name"))))
         ));
@@ -277,7 +278,7 @@ pub fn messages_fragment(state: &UiState, lang: Lang, session_id: Option<&str>) 
         let edit = if is_user {
             format!(
                 "<button type='button' class='message-action-btn' data-edit-message aria-label='{}' title='{}'>\
-                 <span class='material-symbols-outlined' aria-hidden='true'>edit</span></button>",
+                 <svg class='icon' aria-hidden='true'><use href='#i-edit'/></svg></button>",
                 esc_t(lang, "Edit message"),
                 esc_t(lang, "Edit")
             )
@@ -299,12 +300,12 @@ pub fn messages_fragment(state: &UiState, lang: Lang, session_id: Option<&str>) 
              </div>\
              <div class='message-actions'>\
              <button type='button' class='message-action-btn' data-copy-message aria-label='{}' title='{}'>\
-             <span class='material-symbols-outlined' aria-hidden='true'>content_copy</span></button>\
+             <svg class='icon' aria-hidden='true'><use href='#i-content_copy'/></svg></button>\
              {edit}\
              <form method='post' action='/activity/messages/{ts_quoted}/delete' class='message-delete-form'>\
              {csrf_input}\
              <button type='submit' class='message-action-btn' aria-label='{}' title='{}' data-confirm=\"{delete_confirm}\">\
-             <span class='material-symbols-outlined' aria-hidden='true'>delete</span></button>\
+             <svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg></button>\
              </form>\
              </div>\
              </div>\
@@ -391,7 +392,7 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
                  {csrf_input}{viewing_input}\
                  <button type='submit' class='message-action-btn' aria-label='{}'\
                  \u{20}title='{}' data-confirm=\"{confirm}\">\
-                 <span class='material-symbols-outlined' aria-hidden='true'>delete</span></button>\
+                 <svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg></button>\
                  </form>\
                  </div>",
                 pyfmt::escape(&href),
@@ -443,8 +444,9 @@ fn live_links_html(state: &UiState, lang: Lang) -> String {
         .map(|(name, label, icon)| {
             format!(
                 "<a class='btn btn-neutral chat-link-pill' href='/loops/{name}'>\
-                 <span class='material-symbols-outlined' aria-hidden='true'>{icon}</span>\
+                 {}\
                  {}</a>",
+                icons::icon(icon),
                 pyfmt::escape(&i18n::t(lang, "Live {loop}", &[("loop", &t(lang, label))]))
             )
         })
@@ -500,8 +502,9 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
         .map(|(icon, label, prompt)| {
             format!(
                 "<button type='button' class='btn btn-neutral chat-chip' data-chat-suggestion=\"{}\">\
-                 <span class='material-symbols-outlined' aria-hidden='true'>{icon}</span>{}</button>",
+                 {}{}</button>",
                 pyfmt::escape(prompt),
+                icons::icon(icon),
                 pyfmt::escape(&t(lang, label))
             )
         })

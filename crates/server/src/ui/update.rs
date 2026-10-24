@@ -8,7 +8,7 @@
 //! `bin/update_runner.py`, which [`start_detached`] launches.
 
 use super::i18n::{self, Lang};
-use super::{consts, pyfmt};
+use super::{consts, icons, pyfmt};
 use chrono::{DateTime, SecondsFormat, Utc};
 use loopx_core::loops_config::py_truthy;
 use loopx_core::{pydumps, pyjson};
@@ -137,7 +137,7 @@ pub fn render_chip(lang: Lang, status: &Value) -> String {
         return String::new();
     }
     format!(
-        "<a class='pill' href='/update'><span class='material-symbols-outlined' aria-hidden='true'>system_update</span>{}</a>",
+        "<a class='pill' href='/update'><svg class='icon' aria-hidden='true'><use href='#i-system_update'/></svg>{}</a>",
         esc_t(lang, "Update available")
     )
 }
@@ -235,10 +235,10 @@ fn steps_html(lang: Lang, progress: &Value) -> String {
                 .map(pydumps::py_str)
                 .unwrap_or_default();
             format!(
-                "<li data-step='{}' class='step-{}'><span class='material-symbols-outlined' aria-hidden='true'>{}</span> {}<pre>{}</pre></li>",
+                "<li data-step='{}' class='step-{}'>{} {}<pre>{}</pre></li>",
                 pyfmt::escape(&name),
                 pyfmt::escape(&status),
-                icon_for(&status),
+                icons::icon(&icon_for(&status)),
                 pyfmt::escape(&step_label(lang, &name)),
                 pyfmt::escape(&log)
             )

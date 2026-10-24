@@ -202,6 +202,24 @@ fn externalize_blobs(text: &str, expected: &Path) -> String {
     out
 }
 
+fn assert_icons_resolve(page: &str) {
+    assert!(
+        !page.contains("material-symbols-outlined"),
+        "old icon markup left in page"
+    );
+    let sprite = loopx_server::ui::icons::SPRITE;
+    let mut rest = page;
+    while let Some(i) = rest.find("href='#i-") {
+        let after = &rest[i + "href='#i-".len()..];
+        let name = &after[..after.find('\'').unwrap()];
+        assert!(
+            sprite.contains(&format!("id=\"i-{name}\"")),
+            "dangling icon #i-{name}"
+        );
+        rest = after;
+    }
+}
+
 fn blessing() -> bool {
     std::env::var("LOOPX_GOLDEN_BLESS").is_ok()
 }
@@ -347,6 +365,7 @@ fn rust_pages_match_the_python_dashboard() {
             if let Some(file) = rec["file"].as_str() {
                 if blessing() && !file.ends_with(".bin") {
                     let got = normalize(&resp.body_text());
+                    assert_icons_resolve(&got);
                     fs::write(
                         expected_dir.join(file),
                         externalize_blobs(&got, &expected_dir),
@@ -363,6 +382,7 @@ fn rust_pages_match_the_python_dashboard() {
                 } else {
                     let want = expand_blobs(&String::from_utf8(want_bytes).unwrap(), &expected_dir);
                     let got = normalize(&resp.body_text());
+                    assert_icons_resolve(&got);
                     if want != got {
                         problems.push(first_difference(&want, &got));
                     }
@@ -436,6 +456,7 @@ fn render_shell_matches_python_for_every_variant_and_language() {
                     lazy_refresh: flag("lazy_refresh"),
                 },
             ));
+            assert_icons_resolve(&got);
             let shell_file = expected_dir.join("shell").join(format!("{id}.{lang}.html"));
             if blessing() {
                 fs::write(&shell_file, externalize_blobs(&got, &expected_dir)).unwrap();

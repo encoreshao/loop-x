@@ -1,1 +1,1 @@
-<button type='button' role='menuitemradio' class='lang-switch-option' data-lang='⟦code⟧' aria-checked='⟦'true' if code == current_lang else 'false'⟧' lang='⟦i18n.html_lang(code)⟧'><span class='material-symbols-outlined' aria-hidden='true'>check</span>⟦html.escape(name)⟧</button>
+<button type='button' role='menuitemradio' class='lang-switch-option' data-lang='⟦code⟧' aria-checked='⟦'true' if code == current_lang else 'false'⟧' lang='⟦i18n.html_lang(code)⟧'><svg class='icon' aria-hidden='true'><use href='#i-check'/></svg>⟦html.escape(name)⟧</button>

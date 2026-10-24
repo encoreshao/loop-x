@@ -8,7 +8,7 @@
 use super::i18n::{self, Lang};
 use super::routes::UiCtx;
 use super::template::{Scope, Template};
-use super::{assets, badge, consts, csrf, nav, pyfmt, update};
+use super::{assets, badge, consts, csrf, icons, nav, pyfmt, update};
 use serde_json::{json, Value};
 
 /// The auto-refresh switches of `_render_shell(refresh=, refresh_note=, lazy_refresh=)`.
@@ -130,7 +130,7 @@ pub fn ai_panel_html(ctx: &UiCtx, active_page: &str) -> String {
                     ""
                 },
             )
-            .var("icon", p[0].as_str().unwrap_or(""))
+            .var("icon", icons::icon(p[0].as_str().unwrap_or("")))
             .var("label", p[1].as_str().unwrap_or(""));
         prompts_html.push_str(&render("ai_panel_prompt", &scope));
     }
@@ -258,6 +258,7 @@ pub fn render_shell(
         .var("refresh_schedule_script", refresh_schedule_script)
         .var("refresh_note_script", refresh_note_script)
         .var("ai_panel_script", ai_panel_script(lang))
+        .var("icon_sprite", icons::SPRITE)
         .set("_favicon_version()", assets::favicon_version())
         .set("_chat_tool_chips_js()", chat_tool_chips_js(lang))
         .set("_chat_pending_card_js()", chat_pending_card_js(lang))

@@ -233,10 +233,10 @@
     if (!copyBtn) return;
     var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
     var raw = textEl.getAttribute('data-raw') || textEl.innerText;
-    var icon = copyBtn.querySelector('.material-symbols-outlined');
+    var icon = copyBtn.querySelector('svg.icon use');
     navigator.clipboard.writeText(raw).then(function() {
-      icon.textContent = 'check';
-      setTimeout(function() { icon.textContent = 'content_copy'; }, 1500);
+      icon.setAttribute('href', '#i-check');
+      setTimeout(function() { icon.setAttribute('href', '#i-content_copy'); }, 1500);
     }, function() {});
   });
 

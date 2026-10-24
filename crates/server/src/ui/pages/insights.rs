@@ -7,6 +7,7 @@
 use crate::ui::badge::default_badge;
 use crate::ui::consts;
 use crate::ui::hub::{hub_by_key, render_hub_page};
+use crate::ui::icons as glyphs;
 use crate::ui::markdown::{self, GitlabPrefixes};
 use crate::ui::pyfmt::{self, escape, escape_text};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -134,9 +135,10 @@ fn stat_tile(icon: &str, label: &str, value: &str, tooltip: Option<&str>, detail
         .filter(|d| !d.is_empty())
         .map(|d| format!("<span class='dash-stat-detail'>{}</span>", escape(d)))
         .unwrap_or_default();
+    let icon_svg = glyphs::icon_with(icon, "dash-stat-icon");
     format!(
         "<div class='dash-stat-tile'{tooltip_attr}>\
-         <span class='material-symbols-outlined dash-stat-icon' aria-hidden='true'>{icon}</span>\
+         {icon_svg}\
          <span class='dash-stat-value'>{value}</span>\
          <span class='dash-stat-label'>{}</span>\
          {detail_html}</div>",
@@ -145,9 +147,10 @@ fn stat_tile(icon: &str, label: &str, value: &str, tooltip: Option<&str>, detail
 }
 
 fn na_stat_tile(ctx: &UiCtx, icon: &str, label: &str, reason: &str) -> String {
+    let icon_svg = glyphs::icon_with(icon, "dash-stat-icon");
     format!(
         "<div class='dash-stat-tile' title=\"{}\">\
-         <span class='material-symbols-outlined dash-stat-icon' aria-hidden='true'>{icon}</span>\
+         {icon_svg}\
          <span class='dash-stat-value'>{}</span>\
          <span class='dash-stat-label'>{}</span></div>",
         escape(reason),
@@ -723,9 +726,10 @@ fn budget_dimension_tile(ctx: &UiCtx, icon: &str, label: &str, dimension: &Value
     } else {
         format!("{} / {}", n_of(&used), n_of(&limit))
     };
+    let icon_svg = glyphs::icon_with(icon, "dash-stat-icon");
     format!(
         "<div class='dash-stat-tile'>\
-         <span class='material-symbols-outlined dash-stat-icon' aria-hidden='true'>{icon}</span>\
+         {icon_svg}\
          <span class='dash-stat-value'>{}</span>\
          <span class='dash-stat-label'>{}</span>\
          <span class='pill {}'>{}</span></div>",
@@ -899,7 +903,7 @@ fn issue_pill(prefixes: &GitlabPrefixes, alias: &str, iid: &Value) -> String {
     match prefixes.get(alias).filter(|b| !b.is_empty()) {
         Some(base) => format!(
             "<a class='pill pill-link' href='{base}/-/issues/{}' rel='noopener' target='_blank'>\
-             <span class='material-symbols-outlined' aria-hidden='true'>open_in_new</span>#{safe}</a>",
+             <svg class='icon' aria-hidden='true'><use href='#i-open_in_new'/></svg>#{safe}</a>",
             n_of(iid)
         ),
         None => format!("<span class='pill pill-grey'>#{safe}</span>"),
@@ -996,7 +1000,7 @@ fn memory_body(ctx: &UiCtx) -> String {
         let needs_review = e["flag"].as_str() == Some("needs_review");
         let badge = if needs_review {
             format!(
-                "<span class='pill pill-red' title='{}'><span class='material-symbols-outlined' aria-hidden='true'>warning</span>{}</span>",
+                "<span class='pill pill-red' title='{}'><svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>{}</span>",
                 escape(&ctx.t("Reuse of this lesson preceded repeated failures; check it is still correct.")),
                 escape(&ctx.t("Needs review"))
             )
@@ -1059,10 +1063,10 @@ fn memory_body(ctx: &UiCtx) -> String {
         .collect();
     let memory_html = if sections.is_empty() {
         format!(
-            "\n<div class='empty-state'>\n<div class='empty-state-icon'><span class='material-symbols-outlined' aria-hidden='true'>folder_off</span></div>\n\
+            "\n<div class='empty-state'>\n<div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-folder_off'/></svg></div>\n\
              <p class='empty-state-message'>{}</p>\n\
              <a class='btn btn-primary empty-state-action' href='/loops/gitlab-loop?view=projects'>\n\
-             <span class='material-symbols-outlined' aria-hidden='true'>settings</span> {}\n</a>\n</div>\n",
+             <svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}\n</a>\n</div>\n",
             escape_text(&ctx.t("No projects configured yet, so there is no memory recorded.")),
             escape_text(&ctx.t("Set up a project"))
         )
@@ -1113,9 +1117,10 @@ fn gate_tile(icon: &str, value: &str, label: &str, note: &str) -> String {
     } else {
         format!("<span class='subtitle'>{}</span>", escape(note))
     };
+    let icon_svg = glyphs::icon_with(icon, "dash-stat-icon");
     format!(
         "<div class='dash-stat-tile'>\
-         <span class='material-symbols-outlined dash-stat-icon' aria-hidden='true'>{icon}</span>\
+         {icon_svg}\
          <span class='dash-stat-value'>{}</span>\
          <span class='dash-stat-label'>{}</span>{note_html}</div>",
         escape(value),
@@ -1241,8 +1246,8 @@ fn eval_card(ctx: &UiCtx, title: &str, data: &Option<Value>, empty_hint: &str, e
                     .map(|a| a.iter().map(n_of).collect::<Vec<_>>().join("; "))
                     .unwrap_or_default();
                 format!(
-                    "<tr><td><span class='material-symbols-outlined' aria-hidden='true'>{}</span> {}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                    if ok { "check_circle" } else { "cancel" },
+                    "<tr><td>{} {}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    glyphs::icon(if ok { "check_circle" } else { "cancel" }),
                     escape(&ctx.t(if ok { "Passed" } else { "Failed" })),
                     escape(&r.get("name").map_or_else(String::new, n_of)),
                     escape(&cost_text),

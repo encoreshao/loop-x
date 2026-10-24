@@ -6,6 +6,7 @@
 use super::loops_common::{custom_select, flash_html, render_loop_page};
 use crate::ui::badge::py_title;
 use crate::ui::hub::{builtin_loop_page, resolve_view};
+use crate::ui::icons;
 use crate::ui::pyfmt;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use chrono::{DateTime, FixedOffset, Local};
@@ -166,7 +167,7 @@ fn live_body(ctx: &UiCtx, config: &Value) -> String {
     );
     if inboxes.is_empty() {
         return format!(
-            "{head}<div class='card'><div class='empty-state'><div class='empty-state-icon'><span class='material-symbols-outlined' aria-hidden='true'>email</span></div><p class='empty-state-message'>{}</p><a class='btn btn-primary empty-state-action' href='{setup}'><span class='material-symbols-outlined' aria-hidden='true'>settings</span> {}</a></div></div>",
+            "{head}<div class='card'><div class='empty-state'><div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-email'/></svg></div><p class='empty-state-message'>{}</p><a class='btn btn-primary empty-state-action' href='{setup}'><svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}</a></div></div>",
             e(&ctx.t("No inboxes yet. Connect Gmail or Outlook from Inbox Setup to start triaging - drafts are saved to your mailbox and never delivered automatically.")),
             e(&ctx.t("Set up an inbox")),
         );
@@ -479,7 +480,7 @@ fn inbox_card(ctx: &UiCtx, inbox: &Value, entry: &Value, bundles: &[String]) -> 
         &[("label", &s(inbox, "label"))],
     ));
     let footer = format!(
-        "<div class='inbox-card-footer'><button type='submit' form='{}' class='btn btn-primary'><span class='material-symbols-outlined' aria-hidden='true'>save</span> {}</button><button type='submit' form='{}' class='btn btn-warning' data-confirm=\"{confirm}\"><span class='material-symbols-outlined' aria-hidden='true'>delete</span> {}</button></div>",
+        "<div class='inbox-card-footer'><button type='submit' form='{}' class='btn btn-primary'><svg class='icon' aria-hidden='true'><use href='#i-save'/></svg> {}</button><button type='submit' form='{}' class='btn btn-warning' data-confirm=\"{confirm}\"><svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></div>",
         e(&edit_id),
         e(&ctx.t("Save")),
         e(&delete_id),
@@ -573,7 +574,7 @@ fn setup_body(ctx: &UiCtx, config: &Value, requested_tab: Option<&str>) -> Strin
 
     let inboxes_panel = if inboxes.is_empty() {
         format!(
-            "<div class='card'><div class='empty-state'><div class='empty-state-icon'><span class='material-symbols-outlined' aria-hidden='true'>email</span></div><p class='empty-state-message'>{}</p><a class='btn btn-primary empty-state-action' href='{BASE}?view=setup&tab=add'><span class='material-symbols-outlined' aria-hidden='true'>add</span> {}</a></div></div>",
+            "<div class='card'><div class='empty-state'><div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-email'/></svg></div><p class='empty-state-message'>{}</p><a class='btn btn-primary empty-state-action' href='{BASE}?view=setup&tab=add'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</a></div></div>",
             e(&ctx.t("No inboxes yet. First fill in the Gmail app or Outlook app tab, then add an inbox.")),
             e(&ctx.t("Add inbox")),
         )
@@ -584,7 +585,7 @@ fn setup_body(ctx: &UiCtx, config: &Value, requested_tab: Option<&str>) -> Strin
             .collect()
     };
     let add_footer = format!(
-        "<div class='inbox-card-footer'><button type='submit' class='btn btn-primary'><span class='material-symbols-outlined' aria-hidden='true'>add</span> {}</button></div>",
+        "<div class='inbox-card-footer'><button type='submit' class='btn btn-primary'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button></div>",
         e(&ctx.t("Add inbox"))
     );
     let add_panel = format!(
@@ -610,8 +611,9 @@ fn setup_body(ctx: &UiCtx, config: &Value, requested_tab: Option<&str>) -> Strin
         .iter()
         .map(|(key, label, icon)| {
             let on = *key == active;
+            let icon_svg = icons::icon(icon);
             format!(
-                "<button type='button' class='tab-button{}' data-tab-target='{key}' role='tab' aria-selected='{}'><span class='material-symbols-outlined' aria-hidden='true'>{icon}</span>{}</button>",
+                "<button type='button' class='tab-button{}' data-tab-target='{key}' role='tab' aria-selected='{}'>{icon_svg}{}</button>",
                 if on { " is-active" } else { "" },
                 if on { "true" } else { "false" },
                 e(&ctx.t(label))

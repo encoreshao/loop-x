@@ -10,7 +10,7 @@ use crate::ui::logos::{brand_color, brand_logo_svg};
 use crate::ui::pyfmt::{self, escape as h};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::state::UiState;
-use crate::ui::consts;
+use crate::ui::{consts, icons};
 use loopx_core::connectors::secrets::{open_connector_store, SecretStore};
 use loopx_core::connectors::{self, Account, Auth, HttpClient, TypeInfo, UreqClient};
 use loopx_core::connectors_config::{self as cc, Paths};
@@ -234,7 +234,7 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
             "<form method='post' action='/connectors/oauth/google/start' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='id' value=\"{safe_id}\">\
 <button type='submit' class='btn {}'>\
-<span class='material-symbols-outlined' aria-hidden='true'>login</span> {}</button></form>",
+<svg class='icon' aria-hidden='true'><use href='#i-login'/></svg> {}</button></form>",
             btn(connected),
             h(&if connected {
                 ctx.t("Reconnect")
@@ -249,7 +249,7 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
             "<form method='post' action='/inbox/inboxes/{quoted_id}/connect' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='back' value='connectors'>\
 <button type='submit' class='btn {}'>\
-<span class='material-symbols-outlined' aria-hidden='true'>login</span> {}</button></form>",
+<svg class='icon' aria-hidden='true'><use href='#i-login'/></svg> {}</button></form>",
             btn(connected),
             h(&if connected {
                 ctx.t("Reconnect")
@@ -264,7 +264,7 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
             "<form method='post' action='/connectors/linkedin/connect' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='id' value=\"{safe_id}\">\
 <button type='submit' class='btn {}'>\
-<span class='material-symbols-outlined' aria-hidden='true'>login</span> {}</button></form>",
+<svg class='icon' aria-hidden='true'><use href='#i-login'/></svg> {}</button></form>",
             btn(connected),
             h(&if connected {
                 ctx.t("Reconnect")
@@ -277,7 +277,7 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
                 "<form method='post' action='/connectors/linkedin/disconnect' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='id' value=\"{safe_id}\">\
 <button type='submit' class='btn btn-neutral'>\
-<span class='material-symbols-outlined' aria-hidden='true'>delete</span> {}</button></form>",
+<svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></form>",
                 h(&ctx.t("Disconnect"))
             ));
         }
@@ -285,20 +285,19 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
     let mut buttons = format!(
         "{connect_html}<form method='post' action='/connectors/test' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='id' value=\"{safe_id}\">\
-<button type='submit' class='btn btn-neutral'><span class='material-symbols-outlined' aria-hidden='true'>\
-{}</span> {}</button></form>",
-        if notify { "send" } else { "check_circle" },
+<button type='submit' class='btn btn-neutral'>{} {}</button></form>",
+        icons::icon(if notify { "send" } else { "check_circle" }),
         h(&test_label)
     );
     if managed_by == "native" {
         let confirm = h(&ctx.tf("Delete connector {id}?", &[("id", &account.id)]));
         buttons.push_str(&format!(
             "<a class='btn btn-neutral' href='/connectors?view=add&amp;type={}&amp;id={}'>\
-<span class='material-symbols-outlined' aria-hidden='true'>edit</span> {}</a>\
+<svg class='icon' aria-hidden='true'><use href='#i-edit'/></svg> {}</a>\
 <form method='post' action='/connectors/delete' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='id' value=\"{safe_id}\">\
 <button type='submit' class='btn btn-warning' data-confirm=\"{confirm}\">\
-<span class='material-symbols-outlined' aria-hidden='true'>delete</span> {}</button></form>",
+<svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></form>",
             pyfmt::quote(&account.kind, ""),
             h(&quoted_id),
             h(&ctx.t("Edit")),
@@ -345,9 +344,9 @@ fn accounts_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
             .collect();
         cards.push(format!(
             "<div class='card'><div class='section-header'>\
-<span class='material-symbols-outlined' aria-hidden='true'>{}</span>\
+{}\
 <h2>{}</h2></div>{rows}</div>",
-            h(icon),
+            icons::icon(icon),
             h(&label)
         ));
     }
@@ -526,7 +525,7 @@ fn type_picker_html(ctx: &UiCtx) -> String {
     let search_label = h(&ctx.t("Search connectors"));
     let search = format!(
         "<div class='connector-search-wrap'>\
-<span class='material-symbols-outlined' aria-hidden='true'>search</span>\
+<svg class='icon' aria-hidden='true'><use href='#i-search'/></svg>\
 <input type='search' class='connector-search' id='connector-search' \
 placeholder=\"{search_label}\" \
 aria-label=\"{search_label}\"></div>"
@@ -846,7 +845,7 @@ aria-controls='cf-secret' hidden>{}</button></span>",
             let title = ctx.t(cls.label);
             let bk = if cls.brand.is_empty() { type_name } else { cls.brand };
             let logo = if cls.brand.is_empty() {
-                format!("<span class='material-symbols-outlined' aria-hidden='true'>{}</span>", h(cls.icon))
+                icons::icon(cls.icon)
             } else {
                 brand_logo_svg(cls.brand, &title, "32", "brand-logo")
             };
@@ -860,7 +859,7 @@ aria-controls='cf-secret' hidden>{}</button></span>",
     let docs_html = if docs_url.starts_with("https://") {
         format!(
             "<a class='connector-docs-link' href='{}' target='_blank' rel='noopener noreferrer'>{}\
-<span class='material-symbols-outlined' aria-hidden='true'>open_in_new</span></a>",
+<svg class='icon' aria-hidden='true'><use href='#i-open_in_new'/></svg></a>",
             h(docs_url),
             h(&ctx.t("Where do I get this?"))
         )
@@ -894,23 +893,21 @@ aria-controls='cf-secret' hidden>{}</button></span>",
     let suggest = if editing { "" } else { " data-suggest-id='1'" };
     let save_and_test = format!(
         "<button type='submit' class='btn btn-neutral' name='then_test' value='1'>\
-<span class='material-symbols-outlined' aria-hidden='true'>check_circle</span> {}</button>",
+<svg class='icon' aria-hidden='true'><use href='#i-check_circle'/></svg> {}</button>",
         h(&ctx.t("Save and test"))
     );
     let actions = if oauth {
         format!(
             "<button type='submit' class='btn btn-primary' formaction='/connectors/oauth/google/start'>\
-<span class='material-symbols-outlined' aria-hidden='true'>login</span> {}</button>\
-<button type='submit' class='btn btn-neutral'><span class='material-symbols-outlined' \
-aria-hidden='true'>save</span> {}</button>{}",
+<svg class='icon' aria-hidden='true'><use href='#i-login'/></svg> {}</button>\
+<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-save'/></svg> {}</button>{}",
             h(&ctx.t("Connect with Google")),
             h(&ctx.t("Save")),
             if editing { save_and_test.as_str() } else { "" }
         )
     } else {
         format!(
-            "<button type='submit' class='btn btn-primary'><span class='material-symbols-outlined' \
-aria-hidden='true'>save</span> {}</button>{save_and_test}",
+            "<button type='submit' class='btn btn-primary'><svg class='icon' aria-hidden='true'><use href='#i-save'/></svg> {}</button>{save_and_test}",
             h(&ctx.t("Save"))
         )
     };

@@ -14,10 +14,10 @@
 </form>
 <div class='topic-row-actions'>
 <button type='submit' form='⟦edit_form_id⟧' class='btn btn-neutral'>
-<span class='material-symbols-outlined' aria-hidden='true'>save</span> ⟦html.escape(_t('Save'))⟧</button>
+<svg class='icon' aria-hidden='true'><use href='#i-save'/></svg> ⟦html.escape(_t('Save'))⟧</button>
 <form method='post' action='/topic-monitor/topics/⟦url_safe_name⟧/delete' id='⟦delete_form_id⟧'>⟦csrf_input⟧</form>
 <button type='submit' form='⟦delete_form_id⟧' class='btn btn-warning' data-confirm="⟦delete_confirm⟧">
-<span class='material-symbols-outlined' aria-hidden='true'>delete</span> ⟦html.escape(_t('Delete'))⟧</button>
+<svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> ⟦html.escape(_t('Delete'))⟧</button>
 </div>
 </div>
 </div>

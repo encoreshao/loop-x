@@ -12,7 +12,7 @@
 <textarea name='brief' rows='2' placeholder='⟦html.escape(_t('what counts as notable'))⟧' class='topic-row-brief' required></textarea>
 </form>
 <div class='topic-row-actions'>
-<button type='submit' form='topic-add-form' class='btn btn-neutral'><span class='material-symbols-outlined' aria-hidden='true'>add</span> ⟦html.escape(_t('Add topic'))⟧</button>
+<button type='submit' form='topic-add-form' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> ⟦html.escape(_t('Add topic'))⟧</button>
 </div>
 </div>
 </div>

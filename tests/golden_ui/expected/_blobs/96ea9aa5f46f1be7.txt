@@ -229,18 +229,18 @@ a {
   transition: color 150ms ease, background-color 150ms ease;
 }
 a:hover { color: var(--md-primary); text-decoration: underline; text-underline-offset: 2px; }
-/* A link carrying an icon (Material Symbol or inline SVG) lines the glyph
+/* A link carrying an icon (inline SVG) lines the glyph
    up with its text instead of sitting it on the baseline, sizes it to the
    text, and skips the underline, which would otherwise run under the
    icon too. :where() keeps this at zero specificity so any component's
    own rule (.btn, .pill, .sidebar-nav a, ...) still wins. */
-:where(a:has(> .material-symbols-outlined, > svg)) {
+:where(a:has(> svg)) {
   display: inline-flex;
   align-items: center;
   gap: 0.35em;
 }
-:where(a:has(> .material-symbols-outlined, > svg) > .material-symbols-outlined) { font-size: 1.2em; }
-:where(a:has(> .material-symbols-outlined, > svg)):hover { text-decoration: none; }
+:where(a:has(> svg) > .icon) { font-size: 1.2em; }
+:where(a:has(> svg)):hover { text-decoration: none; }
 
 /* One keyboard-focus treatment for every plain interactive element that
    doesn't already define its own (form inputs, the custom-select trigger,
@@ -319,7 +319,7 @@ button:focus-visible,
   transition: background-color 150ms ease, color 150ms ease;
 }
 .sidebar-toggle:hover { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
-.sidebar-toggle .material-symbols-outlined { transition: transform 150ms ease; font-size: 18px; }
+.sidebar-toggle .icon { transition: transform 150ms ease; font-size: 18px; }
 
 .sidebar-nav { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.5rem; overflow-y: auto; }
 .sidebar-nav a {
@@ -436,7 +436,7 @@ button:focus-visible,
   cursor: pointer;
   transition: background-color 150ms ease, color 150ms ease;
 }
-.lang-switch-trigger .material-symbols-outlined { font-size: 20px; }
+.lang-switch-trigger .icon { font-size: 20px; }
 .lang-switch-trigger:hover,
 .lang-switch.is-open .lang-switch-trigger { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
 .lang-switch-trigger:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
@@ -471,9 +471,9 @@ button:focus-visible,
   text-align: left;
   cursor: pointer;
 }
-.lang-switch-option .material-symbols-outlined { font-size: 16px; visibility: hidden; color: var(--md-primary); }
+.lang-switch-option .icon { font-size: 16px; visibility: hidden; color: var(--md-primary); }
 .lang-switch-option[aria-checked='true'] { color: var(--md-primary); font-weight: 500; }
-.lang-switch-option[aria-checked='true'] .material-symbols-outlined { visibility: visible; }
+.lang-switch-option[aria-checked='true'] .icon { visibility: visible; }
 .lang-switch-option:hover,
 .lang-switch-option:focus-visible { background: var(--md-surface-container-high); outline: none; }
 
@@ -506,17 +506,15 @@ button:focus-visible,
   text-decoration: none;
   transition: background-color 150ms ease;
 }
-.topbar-icon .material-symbols-outlined { font-size: 22px; }
+.topbar-icon .icon { font-size: 22px; }
 .topbar-icon:hover { background: var(--md-nav-active-surface); text-decoration: none; }
 .sidebar-nav a.nav-child { padding-left: 2.1rem; font-size: 0.8rem; }
 html.collapsed .sidebar-nav a.nav-child { padding-left: 0.9rem; }
-.ai-panel-trigger .material-symbols-outlined { font-size: 22px; }
+.ai-panel-trigger .icon { font-size: 22px; }
 .ai-panel-trigger:hover { background: var(--md-nav-active-surface); }
 html.ai-panel-open .ai-panel-trigger {
   background: color-mix(in srgb, var(--md-primary) 16%, var(--md-nav-surface));
-  font-variation-settings: 'FILL' 1;
 }
-html.ai-panel-open .ai-panel-trigger .material-symbols-outlined { font-variation-settings: 'FILL' 1; }
 
 /* The AI side panel: a second rounded card to the right of the main one,
    below the topbar, like Gmail's Gemini panel. Open/closed and width
@@ -577,7 +575,7 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
   flex-shrink: 0;
 }
 .ai-panel-title { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 1.05rem; font-weight: 500; }
-.ai-panel-title .material-symbols-outlined { color: var(--md-primary); font-size: 22px; }
+.ai-panel-title .icon { color: var(--md-primary); font-size: 22px; }
 .ai-panel-header-actions { display: flex; align-items: center; gap: 0.15rem; }
 .ai-panel.is-history [data-ai-history-toggle] { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
 /* Chat history view: replaces the thread and composer while open. It
@@ -606,7 +604,7 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
 }
 .ai-panel-icon-btn:hover { background: var(--md-surface-container-high); color: var(--md-on-surface); }
 .ai-panel-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.ai-panel-icon-btn .material-symbols-outlined { font-size: 20px; }
+.ai-panel-icon-btn .icon { font-size: 20px; }
 .ai-panel-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0.5rem 1rem 1rem 1.25rem; }
 .ai-panel-empty {
   min-height: 100%;
@@ -661,9 +659,8 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   animation: ai-thinking-spin 1.1s linear infinite;
 }
-.ai-thinking-avatar .material-symbols-outlined {
+.ai-thinking-avatar .icon {
   font-size: 18px;
-  font-variation-settings: 'FILL' 1;
   animation: ai-thinking-pulse 1.4s ease-in-out infinite;
 }
 .ai-thinking-body { flex: 1 1 auto; min-width: 0; max-width: 34rem; display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.4rem; }
@@ -756,7 +753,7 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
   transition: opacity 150ms ease;
 }
 .ai-panel-send:disabled { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); cursor: not-allowed; }
-.ai-panel-send .material-symbols-outlined { font-size: 20px; }
+.ai-panel-send .icon { font-size: 20px; }
 .ai-panel-disclaimer { margin: 0; text-align: center; font-size: 0.72rem; color: var(--md-on-surface-variant); }
 @media (max-width: 720px) {
   /* Too narrow for two cards side by side: the panel overlays the main
@@ -771,7 +768,7 @@ html.collapsed .sidebar { width: 64px; }
 html.collapsed .brand-name,
 html.collapsed .nav-label,
 html.collapsed .sidebar-group-label { display: none; }
-html.collapsed .sidebar-toggle .material-symbols-outlined { transform: rotate(180deg); }
+html.collapsed .sidebar-toggle .icon { transform: rotate(180deg); }
 html.collapsed .sidebar-nav a { justify-content: center; }
 html.collapsed .sidebar-top {
   /* Side-by-side, the brand icon and the toggle button (~20px + gap +
@@ -955,7 +952,7 @@ html.collapsed .sidebar-top {
 }
 .chat-announce:hover { text-decoration: none; }
 .chat-announce:hover .chat-announce-text { text-decoration: underline; text-underline-offset: 3px; }
-.chat-announce .material-symbols-outlined { font-size: 18px; color: var(--chat-accent); }
+.chat-announce .icon { font-size: 18px; color: var(--chat-accent); }
 .chat-announce .chat-announce-arrow { font-size: 16px; color: inherit; transition: transform 150ms ease; }
 .chat-announce:hover .chat-announce-arrow { transform: translateX(2px); }
 .chat-hero-title {
@@ -1061,7 +1058,7 @@ html .chat-page.is-empty .activity-composer {
 }
 .chat-send-btn:hover { transform: translateY(-1px); }
 .chat-send-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-.chat-send-btn .material-symbols-outlined { font-size: 22px; }
+.chat-send-btn .icon { font-size: 22px; }
 
 @media (max-width: 720px) {
   /* Restated here because the base .activity-composer rule above comes
@@ -1076,34 +1073,20 @@ html .chat-page.is-empty .activity-composer {
 .page-title .subtitle { margin: 0; font-size: 0.95rem; }
 
 .section-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.85rem; }
-.section-header .material-symbols-outlined,
+.section-header .icon,
 .section-header .slack-mark,
 .section-header .gitlab-mark { color: var(--md-primary); flex-shrink: 0; }
 /* Preferences page's Theme section only - larger than every other
    section-header icon on the dashboard, since this one doubles as a
    preview of the palette icon it represents. */
-.pref-theme-icon .material-symbols-outlined { font-size: 28px; }
+.pref-theme-icon .icon { font-size: 28px; }
 .section-subtitle { margin: 0 0 0.85rem; font-size: 0.85rem; color: var(--md-on-surface-variant); }
-.material-symbols-outlined {
-  font-family: 'Material Symbols Outlined';
-  font-weight: normal;
-  font-style: normal;
-  line-height: 1;
-  letter-spacing: normal;
-  text-transform: none;
-  display: inline-block;
-  white-space: nowrap;
-  word-wrap: normal;
-  direction: ltr;
-  vertical-align: middle;
-  user-select: none;
-}
 .icon { width: 1em; height: 1em; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75;
   stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.15em; display: inline-block; }
-.nav-icon .material-symbols-outlined,
-.section-header .material-symbols-outlined { font-size: 18px; }
-.pill .material-symbols-outlined { font-size: 14px; }
-.btn .material-symbols-outlined { font-size: 16px; }
+.nav-icon .icon,
+.section-header .icon { font-size: 18px; }
+.pill .icon { font-size: 14px; }
+.btn .icon { font-size: 16px; }
 .section-header h2 { margin: 0; }
 
 .grid { display: grid; grid-template-columns: 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
@@ -1235,7 +1218,7 @@ html .chat-page.is-empty .activity-composer {
 /* Inset ring: the tab strip scrolls (overflow-x), which would clip an outer one. */
 .tab-button:focus-visible, .hub-tab:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent); }
 .tab-button.is-active:focus-visible, .hub-tab.active:focus-visible { box-shadow: var(--shadow-1), inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 55%, transparent); }
-.tab-button .material-symbols-outlined { font-size: 16px; }
+.tab-button .icon { font-size: 16px; }
 /* Hub pages (render_hub_page): one sidebar entry, several tabbed views, each
    a plain link (?view=<key>) rather than a JS tab. Same tokens as .tab-list. */
 /* The GitLab Monitor tab's SVG mark - sized down from its 18px default
@@ -1359,12 +1342,12 @@ html.doc-panel-open .doc-panel { display: flex; }
 .message-body:has(.message-text:not(:empty)) .tool-status { display: none; }
 .pending-card { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem; padding: 0.75rem; border-radius: 12px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container); }
 .pending-card-head { display: flex; align-items: center; gap: 0.4rem; font-weight: 500; }
-.pending-card-head .material-symbols-outlined { font-size: 1.1rem; color: var(--md-primary); }
+.pending-card-head .icon { font-size: 1.1rem; color: var(--md-primary); }
 .pending-card-tool { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
 .pending-card-summary { font-size: 0.85rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
 .pending-card-args { margin: 0; max-height: 16rem; overflow: auto; padding: 0.5rem; border-radius: 8px; background: var(--md-surface-container-high); font-size: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pending-card-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.pending-card-actions .material-symbols-outlined { font-size: 1rem; }
+.pending-card-actions .icon { font-size: 1rem; }
 .pending-card-status { font-size: 0.85rem; color: var(--md-on-surface-variant); }
 .pending-card-status:empty { display: none; }
 .chat-toolbar { position: fixed; top: calc(var(--shell-top) + 0.75rem); right: calc(var(--shell-right) + 0.75rem); z-index: 85; display: flex; gap: 0.5rem; }
@@ -1475,7 +1458,7 @@ html.doc-panel-open .doc-panel { display: flex; }
 .message-action-btn:hover { background: var(--md-surface-container-high); color: var(--md-on-surface); }
 .message-delete-form .message-action-btn:hover { color: var(--md-error); }
 .message-action-btn.is-done { color: var(--md-primary); }
-.message-action-btn .material-symbols-outlined { font-size: 18px; }
+.message-action-btn .icon { font-size: 18px; }
 .message-row.is-editing .message-body { width: 85%; }
 .message-row.is-editing .message-bubble,
 .message-row.is-editing .message-actions { display: none; }
@@ -1618,7 +1601,7 @@ ul.plain li { font-size: 0.9rem; }
 .meeting-row + .meeting-row { margin-top: 0.35rem; }
 .meeting-time { font-variant-numeric: tabular-nums; font-weight: 500; }
 .meeting-title a { display: inline-flex; align-items: center; gap: 0.35rem; }
-.meeting-title .material-symbols-outlined { font-size: 18px; }
+.meeting-title .icon { font-size: 18px; }
 .meeting-when { font-size: 0.85rem; color: var(--md-on-surface-variant); }
 .meeting-pills { display: inline-flex; gap: 0.35rem; justify-self: end; }
 .draft-body, .content-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 0.5rem 0 0; }
@@ -1716,7 +1699,7 @@ ul.plain li { font-size: 0.9rem; }
   background: var(--md-surface-container-highest); color: var(--md-on-surface-variant);
 }
 .loop-icon svg { width: 22px; height: 22px; }
-.loop-icon .material-symbols-outlined { font-size: 22px; }
+.loop-icon .icon { font-size: 22px; }
 .loop-main { min-width: 0; }
 .loop-heading, .loop-tile-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .loop-tile-head { flex-wrap: nowrap; gap: 0.75rem; }
@@ -1727,7 +1710,7 @@ a.loop-title:hover, a.loop-title:focus-visible { color: var(--md-primary); text-
 .loop-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; margin-top: 0.6rem; font-size: 0.82rem; color: var(--md-on-surface-variant); }
 .loop-tile .loop-meta { margin-top: 0; }
 .loop-meta-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
-.loop-meta-item .material-symbols-outlined { font-size: 16px; }
+.loop-meta-item .icon { font-size: 16px; }
 .loop-actions { display: flex; align-items: center; gap: 0.75rem; }
 .loop-toggle { display: inline-flex; align-items: center; gap: 0.45rem; }
 .loop-toggle .switch[disabled] { opacity: 0.45; cursor: not-allowed; }
@@ -1740,7 +1723,7 @@ a.loop-title:hover, a.loop-title:focus-visible { color: var(--md-primary); text-
   padding: 0.22rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 500; line-height: 1.2;
   background: var(--md-warning-container); color: var(--md-on-warning-container); text-decoration: none; white-space: nowrap;
 }
-.chip .material-symbols-outlined { font-size: 14px; }
+.chip .icon { font-size: 14px; }
 a.chip:hover, a.chip:focus-visible { text-decoration: underline; }
 .loop-settings { margin-top: 0.6rem; }
 .loop-settings > summary {
@@ -1748,7 +1731,7 @@ a.chip:hover, a.chip:focus-visible { text-decoration: underline; }
   font-size: 0.82rem; font-weight: 500; color: var(--md-primary); border-radius: 8px; padding: 0.15rem 0.2rem;
 }
 .loop-settings > summary::-webkit-details-marker { display: none; }
-.loop-settings > summary .material-symbols-outlined { font-size: 16px; }
+.loop-settings > summary .icon { font-size: 16px; }
 .loop-settings[open] > summary { margin-bottom: 0.5rem; }
 .loop-settings-body { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.75rem; border-radius: 12px; background: var(--md-surface-container-low); }
 @media (max-width: 720px) {
@@ -1824,7 +1807,7 @@ table.skills tr.skill-row.is-expanded .skill-expand-icon { transform: rotate(180
    language switcher (all 40px tall), so the row reads as one set of
    controls rather than small badges next to big buttons. */
 .topbar .header-right .pill { height: 40px; padding: 0 1rem; font-size: 0.8rem; gap: 0.45rem; }
-.topbar .header-right .pill .material-symbols-outlined { font-size: 18px; }
+.topbar .header-right .pill .icon { font-size: 18px; }
 @media (max-width: 720px) { /* narrow topbar */
   /* A phone leaves the topbar ~330px: let its controls shrink and scroll
      sideways instead of being clipped off the right edge. */
@@ -1842,7 +1825,7 @@ table.skills tr.skill-row.is-expanded .skill-expand-icon { transform: rotate(180
    the topbar on every page, sized up since here it's the Latest Run
    card's headline value, not a small persistent indicator. */
 .pill-lg { font-size: 0.95rem; padding: 0.5rem 1rem; gap: 0.45rem; }
-.pill-lg .material-symbols-outlined { font-size: 18px; }
+.pill-lg .icon { font-size: 18px; }
 
 .badge-count {
   display: inline-flex;
@@ -1882,7 +1865,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .account-main .pill-row { margin-top: 0; gap: 0.3rem; }
 .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; flex: 0 1 auto; }
 .account-actions .btn[class] { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
-.account-actions .btn .material-symbols-outlined { font-size: 16px; }
+.account-actions .btn .icon { font-size: 16px; }
 /* Connector gallery cards. Tiles (.connector-tile), the search box and the
    form's brand header (.connector-hero) read the --cg-* tokens below, which
    derive from the theme accent (--md-nav-*), so picking another accent on
@@ -1982,7 +1965,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 }
 .connector-gallery-intro { margin: 0 0 0.75rem; }
 .connector-search-wrap { position: relative; display: flex; align-items: center; max-width: 26rem; margin: 0 0 1.5rem; }
-.connector-search-wrap .material-symbols-outlined { position: absolute; left: 0.9rem; font-size: 20px; color: var(--md-on-surface-variant); pointer-events: none; }
+.connector-search-wrap .icon { position: absolute; left: 0.9rem; font-size: 20px; color: var(--md-on-surface-variant); pointer-events: none; }
 .connector-search { width: 100%; height: 2.75rem; padding: 0 1rem 0 2.75rem; border: 1px solid var(--cg-border); border-radius: 999px; background: var(--cg-card); color: var(--md-on-surface); font: inherit; font-size: 0.92rem; box-sizing: border-box; transition: border-color 150ms ease, box-shadow 150ms ease; }
 .connector-search::placeholder { color: var(--md-on-surface-variant); }
 .connector-search:focus, .connector-search:focus-visible { outline: 2px solid transparent; border-color: var(--cg-accent); box-shadow: 0 0 0 3px var(--md-outline-variant); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cg-accent) 25%, transparent); }
@@ -2039,7 +2022,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 }
 .connector-tile-mark .brand-logo { padding: 0; background: none; border-radius: 0; }
 .connector-tile-mark .brand-lettermark { padding: 0; border-radius: 9px; background: var(--brand); font-size: 0.75rem; }
-.connector-tile-mark .material-symbols-outlined { font-size: 24px; color: var(--brand, #181717); }
+.connector-tile-mark .icon { font-size: 24px; color: var(--brand, #181717); }
 .connector-tile-name { min-width: 0; font-size: 1rem; font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
 .connector-tile-desc {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
@@ -2096,7 +2079,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .secret-toggle { flex: none; }
 .secret-toggle[hidden] { display: none; }
 .connector-docs-link { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; }
-.connector-docs-link .material-symbols-outlined { font-size: 1rem; }
+.connector-docs-link .icon { font-size: 1rem; }
 .connector-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
 .connector-cancel { background: transparent; color: var(--md-primary); }
 .connector-cancel:hover { background: var(--md-surface-container-high); }
@@ -2116,7 +2099,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   color: var(--md-on-surface-variant);
 }
 .empty-state-icon { color: var(--md-outline); }
-.empty-state-icon .material-symbols-outlined { font-size: 40px; }
+.empty-state-icon .icon { font-size: 40px; }
 .empty-state-message { margin: 0; font-size: 0.9rem; max-width: 32rem; }
 .empty-state-action { margin-top: 0.5rem; text-decoration: none; }
 
@@ -2192,7 +2175,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   max-width: 320px;
 }
-.field-error-bubble .material-symbols-outlined { font-size: 18px; flex-shrink: 0; }
+.field-error-bubble .icon { font-size: 18px; flex-shrink: 0; }
 .field-error-bubble[hidden] { display: none; }
 
 /* Replaces the browser's native, unstyled confirmation popup for every
@@ -2216,7 +2199,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 }
 .confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
 .confirm-dialog-icon { color: var(--md-error); margin-bottom: 0.75rem; }
-.confirm-dialog-icon .material-symbols-outlined { font-size: 36px; }
+.confirm-dialog-icon .icon { font-size: 36px; }
 .confirm-dialog-message { margin: 0 0 2rem; font-size: 1.1rem; line-height: 1.5; }
 .confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
 .confirm-dialog-actions button { padding: 0.55rem 1.25rem; font-size: 0.9rem; }
@@ -2229,7 +2212,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   font-size: 0.8rem;
   margin: 0.25rem 0 0.5rem;
 }
-.inline-error .material-symbols-outlined { font-size: 16px; flex-shrink: 0; }
+.inline-error .icon { font-size: 16px; flex-shrink: 0; }
 
 .daemon-action-form { margin: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 /* The "add a new instance/project" row sits directly under a table with no
@@ -2500,12 +2483,12 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .custom-select-trigger:hover { background: var(--md-surface-container-high); }
 .custom-select-trigger:focus-visible { border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); outline: none; }
 .custom-select.is-open .custom-select-trigger { border-color: var(--md-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 35%, transparent); }
-.custom-select-trigger .material-symbols-outlined {
+.custom-select-trigger .icon {
   font-size: 18px;
   color: var(--md-on-surface-variant);
   transition: transform 150ms ease;
 }
-.custom-select.is-open .custom-select-trigger .material-symbols-outlined { transform: rotate(180deg); }
+.custom-select.is-open .custom-select-trigger .icon { transform: rotate(180deg); }
 .custom-select-menu {
   /* position: fixed (not absolute) so this isn't clipped by .table-wrap's
      scroll boundary - top/left/width are computed from the trigger's
