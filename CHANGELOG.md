@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-24
+
 ### Added
 
 - `loopx chat-tool <action>`: the command the dashboard chat assistant runs (status, history, daemons, run-now, topic/project saves, enable/disable, `call <tool>`), ported from the Python dashboard so the chat no longer needs it.
@@ -307,7 +309,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/encoreshao/loop-x/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/encoreshao/loop-x/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/encoreshao/loop-x/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/encoreshao/loop-x/compare/v0.1.0...v0.2.0
