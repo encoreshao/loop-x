@@ -303,12 +303,16 @@ struct SettingsView: View {
             MDCard("LoopX") {
                 MDRow(label: "App version", value: settings.appVersion)
                 MDRow(label: "loopx version", value: settings.bundledLoopxVersion)
-                MDRow(label: "Author", value: "Encore Shao")
                 if let check = settings.onCheckForUpdates {
                     Button("Check for Updates…", action: check).buttonStyle(MDButtonStyle(filled: true))
                 } else {
                     MDNote("Updates: download the newest LoopX DMG from GitHub Releases, or run brew upgrade loopx.")
                 }
+            }
+            MDCard("Author") {
+                MDRow(label: "Name", value: "Encore Shao")
+                MDRow(label: "Email", value: "encore.shao@gmail.com")
+                Button("Send Email") { settings.open(URL(string: "mailto:encore.shao@gmail.com")!) }.buttonStyle(MDButtonStyle())
             }
             MDCard("Links") {
                 HStack {
@@ -316,8 +320,7 @@ struct SettingsView: View {
                         Button(l.title) { settings.open(l.url) }.buttonStyle(MDButtonStyle())
                     }
                 }
-                Button("encore.shao@gmail.com") { settings.open(URL(string: "mailto:encore.shao@gmail.com")!) }.buttonStyle(MDButtonStyle())
-                MDNote("Created by Encore Shao. MIT licensed.")
+                MDNote("MIT licensed.")
             }
         }
     }

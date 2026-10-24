@@ -1,1 +1,0 @@
-<a class='topbar-icon' href='/readme' title='⟦help_label⟧' aria-label='⟦help_label⟧'><svg class='icon' aria-hidden='true'><use href='#i-help'/></svg></a>
