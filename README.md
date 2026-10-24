@@ -11,8 +11,8 @@
 # Loop X Engineering
 
 ![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-x)
-![Release](https://img.shields.io/github/v/release/encoreshao/loop-x)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Releases](https://img.shields.io/badge/releases-download-brightgreen)](https://github.com/encoreshao/loop-x/releases/latest)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 **Get your time back from the daily grind of issues, email and status checks.**
