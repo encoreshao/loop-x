@@ -55,6 +55,17 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: "runScheduler") }
     }
 
+    /// The dashboard's accent and color mode as last seen in its web view (the dashboard keeps them in its
+    /// own localStorage); native windows follow them.
+    public var accent: Accent {
+        get { Accent(stored: defaults.string(forKey: "accent")) }
+        set { defaults.set(newValue.rawValue, forKey: "accent") }
+    }
+    public var colorMode: ColorMode {
+        get { ColorMode(stored: defaults.string(forKey: "colorMode")) }
+        set { defaults.set(newValue.rawValue, forKey: "colorMode") }
+    }
+
     /// Whether the one-time offer to install the `loopx` command has been shown.
     public var cliPromptShown: Bool {
         get { defaults.bool(forKey: "cliPromptShown") }

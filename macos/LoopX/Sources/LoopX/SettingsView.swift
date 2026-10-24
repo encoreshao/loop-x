@@ -18,6 +18,9 @@ final class SettingsModel: ObservableObject {
     private let login: LaunchAtLogin
     @Published var cliStatus: CLIInstaller.Status = .notInstalled
     @Published var tabIndex = 0
+    @Published var accent: Accent
+    @Published var colorMode: ColorMode
+    var onThemeChange: () -> Void = {}
     var cli: CLIInstaller?
     var onChange: () -> Void = {}
     var onOpenPage: (String) -> Void = { _ in }
@@ -36,6 +39,14 @@ final class SettingsModel: ObservableObject {
         self.store = store; self.login = login
         displayMode = store.displayMode; hotkey = store.hotkey; dashboardWindow = store.dashboardWindow; runScheduler = store.runScheduler
         launchAtLogin = login.isEnabled; loginNeedsApproval = login.needsApproval
+        accent = store.accent; colorMode = store.colorMode
+    }
+
+    /// Follow the dashboard's own Appearance choice (accent and light/dark/auto).
+    func applyTheme(accent raw: String?, colorMode rawMode: String?) {
+        accent = Accent(stored: raw); colorMode = ColorMode(stored: rawMode)
+        store.accent = accent; store.colorMode = colorMode
+        onThemeChange()
     }
 
     func refreshCLI() { cliStatus = cli?.status() ?? .notInstalled }
@@ -120,6 +131,7 @@ struct SettingsView: View {
             }
             .background(MD.surface)
         }
+        .environment(\.accent, settings.accent)
         .frame(width: 760, height: 520)
         .tint(MD.primary)
         .onAppear {
@@ -130,7 +142,7 @@ struct SettingsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Settings").font(.system(size: 12, weight: .medium)).foregroundStyle(MD.onSurfaceVariant)
+            Text("Settings").font(.system(size: 12, weight: .medium)).foregroundStyle(MD.navOn(settings.accent))
                 .padding(.horizontal, 12).padding(.bottom, 6)
             ForEach(Tab.allCases) { t in
                 Button { settings.tabIndex = Tab.allCases.firstIndex(of: t) ?? 0 } label: {
@@ -140,9 +152,9 @@ struct SettingsView: View {
                         Spacer(minLength: 0)
                     }
                     .font(.system(size: 13, weight: tab == t ? .medium : .regular))
-                    .foregroundStyle(tab == t ? MD.primary : MD.onSurfaceVariant)
+                    .foregroundStyle(tab == t ? MD.navActiveOn(settings.accent) : MD.navOn(settings.accent))
                     .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(tab == t ? MD.surfaceHighest : .clear, in: Capsule())
+                    .background(tab == t ? MD.navActive(settings.accent) : .clear, in: Capsule())
                     .contentShape(Capsule())
                 }.buttonStyle(.plain).focusEffectDisabled()
             }
@@ -151,7 +163,7 @@ struct SettingsView: View {
         .padding(.top, 20).padding(.horizontal, 12)
         .frame(width: 190)
         .frame(maxHeight: .infinity)
-        .background(MD.surfaceLow)
+        .background(MD.sidebar(settings.accent))
     }
 
     @ViewBuilder private var page: some View {
@@ -281,6 +293,7 @@ struct SettingsView: View {
             MDCard("LoopX") {
                 MDRow(label: "App version", value: settings.appVersion)
                 MDRow(label: "loopx version", value: settings.bundledLoopxVersion)
+                MDRow(label: "Author", value: "Encore Shao")
                 if let check = settings.onCheckForUpdates {
                     Button("Check for Updates…", action: check).buttonStyle(MDButtonStyle(filled: true))
                 } else {
@@ -293,7 +306,8 @@ struct SettingsView: View {
                         Button(l.title) { settings.open(l.url) }.buttonStyle(MDButtonStyle())
                     }
                 }
-                MDNote("MIT licensed.")
+                Button("encore.shao@gmail.com") { settings.open(URL(string: "mailto:encore.shao@gmail.com")!) }.buttonStyle(MDButtonStyle())
+                MDNote("Created by Encore Shao. MIT licensed.")
             }
         }
     }

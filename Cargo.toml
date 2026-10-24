@@ -6,6 +6,7 @@ members = ["crates/core", "crates/server", "crates/cli"]
 version = "0.6.0"
 edition = "2021"
 license = "MIT"
+authors = ["Encore Shao <encore.shao@gmail.com>"]
 rust-version = "1.85"
 
 [workspace.dependencies]

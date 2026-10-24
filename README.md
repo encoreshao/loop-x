@@ -88,4 +88,4 @@ To update later, re-run the installer with `--upgrade`. To remove it, run `bin/s
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Created by Encore Shao ([encore.shao@gmail.com](mailto:encore.shao@gmail.com)).

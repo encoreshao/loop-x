@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import LoopXKit
 
 /// The dashboard's Material 3 tokens (`--md-*` in `crates/server/assets/blobs/dashboard_server/_STYLE.txt`),
 /// as colors that follow the system light/dark appearance, so native windows look like the web pages.
@@ -28,43 +29,62 @@ enum MD {
     static let error = pair(0x772822, 0xE8B4B0)
 
     static let cardRadius: CGFloat = 12
+
+    /// The accent wash the dashboard puts on its sidebar and cards (`--md-nav-*`); `default` keeps the neutral surface.
+    private static func wash(_ v: UInt32?) -> Color? { v.map { Color(nsColor: hex($0)) } }
+    static func sidebar(_ a: Accent) -> Color { wash(a.navSurface) ?? surfaceLow }
+    static func navOn(_ a: Accent) -> Color { wash(a.navOnSurface) ?? onSurfaceVariant }
+    static func navActive(_ a: Accent) -> Color { wash(a.navActiveSurface) ?? surfaceHighest }
+    static func navActiveOn(_ a: Accent) -> Color { wash(a.navActiveOnSurface) ?? primary }
+    static func card(_ a: Accent) -> Color { wash(a.navSurface) ?? surfaceContainer }
+    /// Text on a card: the washes are light even in dark mode, so tinted cards use the dark nav text color.
+    static func cardText(_ a: Accent) -> Color { wash(a.navOnSurface) ?? onSurface }
+    static func cardTextVariant(_ a: Accent) -> Color { wash(a.navOnSurface)?.opacity(0.8) ?? onSurfaceVariant }
 }
 
 /// A dashboard `.card`: tinted surface, 12pt radius, a 500-weight title.
+private struct AccentKey: EnvironmentKey { static let defaultValue = Accent.default }
+extension EnvironmentValues {
+    var accent: Accent { get { self[AccentKey.self] } set { self[AccentKey.self] = newValue } }
+}
+
 struct MDCard<Content: View>: View {
+    @Environment(\.accent) private var accent
     let title: String?
     let content: Content
     init(_ title: String? = nil, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let title { Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(MD.onSurface) }
+            if let title { Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(MD.cardText(accent)) }
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20).padding(.vertical, 16)
-        .background(MD.surfaceContainer, in: RoundedRectangle(cornerRadius: MD.cardRadius))
+        .background(MD.card(accent), in: RoundedRectangle(cornerRadius: MD.cardRadius))
     }
 }
 
 /// A label/value line inside a card.
 struct MDRow: View {
+    @Environment(\.accent) private var accent
     let label: String
     let value: String
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).foregroundStyle(MD.onSurfaceVariant)
+            Text(label).foregroundStyle(MD.cardTextVariant(accent))
             Spacer(minLength: 16)
-            Text(value).foregroundStyle(MD.onSurface).multilineTextAlignment(.trailing).textSelection(.enabled)
+            Text(value).foregroundStyle(MD.cardText(accent)).multilineTextAlignment(.trailing).textSelection(.enabled)
         }.font(.system(size: 13))
     }
 }
 
 struct MDNote: View {
+    @Environment(\.accent) private var accent
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
-        Text(text).font(.system(size: 12)).foregroundStyle(MD.onSurfaceVariant).fixedSize(horizontal: false, vertical: true)
+        Text(text).font(.system(size: 12)).foregroundStyle(MD.cardTextVariant(accent)).fixedSize(horizontal: false, vertical: true)
     }
 }
 

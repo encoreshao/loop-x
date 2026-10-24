@@ -40,6 +40,21 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     }
 
     var currentURL: URL? { webView?.url }
+    /// Called with the accent and color mode the dashboard page has stored (nil when none is chosen).
+    var onTheme: (_ accent: String?, _ colorMode: String?) -> Void = { _, _ in }
+
+    /// The dashboard keeps its theme in the page's localStorage; read it so native windows can follow.
+    func readTheme() {
+        guard let wv = webView, wv.url?.host == "127.0.0.1" || wv.url?.host == "localhost" else { return }
+        let js = "JSON.stringify([localStorage.getItem('loop-dashboard-accent'), localStorage.getItem('loop-dashboard-color-mode')])"
+        wv.evaluateJavaScript(js) { [weak self] result, _ in
+            guard let s = result as? String, let data = s.data(using: .utf8),
+                  let a = try? JSONSerialization.jsonObject(with: data) as? [Any?], a.count == 2 else { return }
+            self?.onTheme(a[0] as? String, a[1] as? String)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { readTheme() }
     func reload() { webView?.reload() }
     func goBack() { webView?.goBack() }
     func goForward() { webView?.goForward() }

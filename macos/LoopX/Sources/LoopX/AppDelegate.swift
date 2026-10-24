@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.dashboard.backendChanged()
         }
         status.onOpenDashboard = { [weak self] in self?.dashboard.show() }
+        dashboard.onTheme = { [weak self] a, m in self?.settingsModel.applyTheme(accent: a, colorMode: m) }
+        settingsModel.onThemeChange = { [weak self] in self?.applySettingsAppearance() }
         settingsModel.onOpenPage = { [weak self] p in self?.dashboard.open(path: p) }
         if updater.isEnabled { settingsModel.onCheckForUpdates = { [weak self] in self?.updater.checkForUpdates() } }
         status.onOpenSettings = { [weak self] in self?.showSettings() }
@@ -217,7 +219,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if a.runModal() == .alertFirstButtonReturn { model.acceptTakeover() } else { model.declineTakeover() }
     }
 
+    /// Light/dark follows the dashboard's choice; "Auto" leaves the window on the system appearance.
+    private func applySettingsAppearance() {
+        switch settingsModel.colorMode {
+        case .auto: settingsWindow?.appearance = nil
+        case .light: settingsWindow?.appearance = NSAppearance(named: .aqua)
+        case .dark: settingsWindow?.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+
     func showSettings() {
+        dashboard.readTheme()
         if settingsWindow == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -226,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.isReleasedWhenClosed = false
             w.center()
             settingsWindow = w
+            applySettingsAppearance()
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
