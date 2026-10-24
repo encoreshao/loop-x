@@ -1,23 +1,36 @@
-<p align="right">
-
-**English** | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | [Français](README.fr.md)
-
+<p align="center">
+  <img src="assets/app-icon.svg" alt="Loop X logo" width="200" height="200">
 </p>
 
 <p align="center">
-  <img src="assets/app-icon.svg" alt="Loop X logo" width="256" height="256">
+  <b>English</b> | <a href="README.ja.md">日本語</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.fr.md">Français</a>
 </p>
 
-# Loop X Engineering
+<h1 align="center">Loop X Engineering</h1>
 
-![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Releases](https://img.shields.io/badge/releases-download-brightgreen)](https://github.com/encoreshao/loop-x/releases/latest)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
+<p align="center">
+  <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/encoreshao/loop-x/releases/latest"><img src="https://img.shields.io/badge/releases-download-brightgreen" alt="Releases"></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
+</p>
 
-**Get your time back from the daily grind of issues, email and status checks.**
+<p align="center"><strong>Get your time back from the daily grind of issues, email and status checks.</strong></p>
+
+---
 
 Loop X is a teammate that runs quietly on your Mac. Every weekday it works through the routine, so you only spend attention on what needs your judgment. A local dashboard shows what it did.
+
+## Goal and mission
+
+**Mission.** Give engineers their attention back. Routine triage, status checks and first drafts should not cost a person's best hours.
+
+**Goal.** Do the repetitive work end to end, safely and visibly, and hand the decision to a human at the point where judgment is needed:
+
+- **Finish what it can.** Fix an issue, draft a reply, write the brief, and stop at an open merge request, a draft or a comment.
+- **Ask when unsure.** Escalate unclear work with a question or a `loop:needs-human` label instead of guessing.
+- **Stay inspectable.** Every run leaves a history, a log and a dashboard entry, so you can see what happened and why.
+- **Stay yours.** It runs on your Mac, with your tools and your Keychain. Nothing is hosted for you.
 
 ## The problems it solves
 
@@ -74,6 +87,19 @@ loopx run gitlab-loop
 **5. Let it run.** In **Settings → Daemons**, load the scheduler. From then on it runs each loop on its own schedule.
 
 To update later, re-run the installer with `--upgrade`. To remove it, run `bin/scripts/uninstall-loopx.sh --keep-config`.
+
+## Best practices
+
+1. **Start small.** Keep only the GitLab issues and topic monitor loops on at first, and list one or two projects you know well.
+2. **Try one run before scheduling.** Run `loopx run gitlab-loop` by hand and read the result before loading the scheduler.
+3. **Give every project real checks.** Set `lint_cmd` and `test_cmd` for each project. A merge request only opens when they pass, so they are the loop's safety net.
+4. **Review every merge request.** Loop X stops at an open merge request. Read the diff as you would a teammate's.
+5. **Write clear issues.** Include the expected behaviour and how to reproduce it. A precise issue gets a fix, a vague one gets a question.
+6. **Use the gate verification mode** for projects that matter, so the loop re-runs your checks itself and escalates when they fail.
+7. **Keep secrets in the Keychain.** Add tokens through the dashboard, never in config files or issue text.
+8. **Run `loopx doctor`** after installing and after any upgrade.
+9. **Enable more loops one at a time**, and watch **Runs** on the dashboard before adding the next.
+10. **Evaluate prompt changes.** If you edit agent instructions, run `loopx loop eval --golden` before and after and compare.
 
 ## Learn more
 

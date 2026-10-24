@@ -1,34 +1,54 @@
-<p align="right">
-
-[English](README.md) | **日本語** | [简体中文](README.zh-CN.md) | [Français](README.fr.md)
-
+<p align="center">
+  <img src="assets/app-icon.svg" alt="Loop X logo" width="200" height="200">
 </p>
 
 <p align="center">
-  <img src="assets/app-icon.svg" alt="Loop X logo" width="256" height="256">
+  <a href="README.md">English</a> | <b>日本語</b> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.fr.md">Français</a>
 </p>
 
-# Loop X Engineering
+<h1 align="center">Loop X Engineering</h1>
 
-![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-x)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
-![Shell](https://img.shields.io/badge/shell-bash-4EAA25)
+<p align="center">
+  <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/encoreshao/loop-x/releases/latest"><img src="https://img.shields.io/badge/releases-download-brightgreen" alt="Releases"></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
+</p>
 
-Loop X Engineering の使命は、Issue のトリアージに奪われる時間をあなたに取り戻すことです。
-平日は毎日、無人で常駐するチームメイトとして GitLab のキューを処理し、
-あなたにアサインされた Issue が放置されないようにします。修正を出荷し、
-質問に回答し、本当にあなたの判断が必要なものだけをフラグ付けするので、
-あなたは本当に重要なことだけに集中できます。ローカルの Web ダッシュボードでは、
-動作の様子を見守り、これまでの作業をすべてレビューし、すべての設定を
-手動で行えます。JSON を編集する必要はありません。
+<p align="center"><strong>Issue、メール、ステータス確認の日々の雑務から、あなたの時間を取り戻します。</strong></p>
 
-無人で動かし続けても安全なように設計されています。自分のマージリクエストを
-マージすることはなく、自分に新しい Issue をアサインすることもなく、
-明示的に指定したプロジェクト以外には一切触れません。
+---
+
+Loop X は、Mac 上で静かに動き続けるチームメイトです。平日は毎日ルーチンワークをこなすので、あなたが注意を向けるのは判断が必要なことだけで済みます。ローカルのダッシュボードで、何をしたかを確認できます。
+
+## 目標と使命
+
+**使命。** エンジニアの集中力を取り戻すこと。定型のトリアージ、ステータス確認、最初の下書きに、人の最も大切な時間を使うべきではありません。
+
+**目標。** 繰り返しの作業を最初から最後まで、安全かつ見える形でこなし、判断が必要な場面で人に引き継ぐこと。
+
+- **できることは完了させる。** Issue の修正、返信の下書き、ブリーフの作成を行い、オープンなマージリクエスト、下書き、コメントで止まります。
+- **迷ったら尋ねる。** 不明確な作業は推測せず、質問または `loop:needs-human` ラベルでエスカレーションします。
+- **検証できる。** 実行のたびに履歴、ログ、ダッシュボードの記録が残るので、何が起きたか、なぜそうなったかを確認できます。
+- **あくまであなたのもの。** あなたの Mac、あなたのツール、あなたの Keychain で動きます。ホスティングされるものはありません。
+
+## ベストプラクティス
+
+1. **小さく始める。** 最初は GitLab Issue ループとトピック監視ループだけをオンにし、よく知っているプロジェクトを 1〜2 件登録します。
+2. **スケジュール前に 1 回実行する。** `loopx run gitlab-loop` を手動で実行し、結果を確認してからスケジューラーを読み込みます。
+3. **すべてのプロジェクトに実際のチェックを設定する。** `lint_cmd` と `test_cmd` を設定します。マージリクエストはこれらが通ったときだけ開かれるため、ループの安全網になります。
+4. **すべてのマージリクエストをレビューする。** Loop X はオープンなマージリクエストで止まります。チームメイトの変更と同じように差分を読んでください。
+5. **明確な Issue を書く。** 期待する動作と再現手順を含めます。明確な Issue には修正が、曖昧な Issue には質問が返ります。
+6. **重要なプロジェクトでは gate 検証モードを使う。** ループ自身がチェックを再実行し、失敗時にはエスカレーションします。
+7. **シークレットは Keychain に置く。** トークンはダッシュボードから追加し、設定ファイルや Issue 本文には書かないでください。
+8. **`loopx doctor` を実行する。** インストール後とアップグレード後に実行します。
+9. **ループは 1 つずつ有効にする。** 次を追加する前に、ダッシュボードの **Runs** を確認します。
+10. **プロンプトの変更は評価する。** エージェントの指示を編集したら、前後で `loopx loop eval --golden` を実行して比較します。
 
 ## 目次
 
+- [目標と使命](#目標と使命)
+- [ベストプラクティス](#ベストプラクティス)
 - [仕組み](#仕組み)
 - [ループ](#ループ)
 - [必要要件](#必要要件)

@@ -1,35 +1,54 @@
-<p align="right">
-
-[English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | **Français**
-
+<p align="center">
+  <img src="assets/app-icon.svg" alt="Loop X logo" width="200" height="200">
 </p>
 
 <p align="center">
-  <img src="assets/app-icon.svg" alt="Loop X logo" width="256" height="256">
+  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh-CN.md">简体中文</a> | <b>Français</b>
 </p>
 
-# Loop X Engineering
+<h1 align="center">Loop X Engineering</h1>
 
-![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-x)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
-![Shell](https://img.shields.io/badge/shell-bash-4EAA25)
+<p align="center">
+  <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/encoreshao/loop-x/releases/latest"><img src="https://img.shields.io/badge/releases-download-brightgreen" alt="Releases"></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
+</p>
 
-La mission de Loop X Engineering est de vous rendre le temps que dévore le
-tri des tickets : un coéquipier permanent et autonome qui traite votre file
-GitLab chaque jour ouvré, pour qu'aucun ticket qui vous est assigné ne reste
-en souffrance — en livrant des correctifs, en répondant aux questions ou en
-signalant ce qui requiert réellement votre jugement — et que votre attention
-n'aille qu'à ce qui compte vraiment. Un tableau de bord web local vous permet
-de le regarder travailler, de passer en revue tout ce qu'il a fait et de tout
-configurer à la main — sans éditer de JSON.
+<p align="center"><strong>Reprenez votre temps sur le quotidien des tickets, des e-mails et des points d'état.</strong></p>
 
-Il est conçu pour tourner sans surveillance en toute sécurité : il ne fusionne
-jamais ses propres merge requests, ne s'assigne jamais de nouveaux tickets et
-ne touche qu'aux projets que vous lui avez explicitement indiqués.
+---
+
+Loop X est un coéquipier qui travaille discrètement sur votre Mac. Chaque jour ouvré, il s'occupe de la routine, pour que vous ne consacriez votre attention qu'à ce qui demande votre jugement. Un tableau de bord local montre ce qu'il a fait.
+
+## Objectif et mission
+
+**Mission.** Rendre leur attention aux ingénieurs. Le tri de routine, les points d'état et les premiers jets ne doivent pas coûter à une personne ses meilleures heures.
+
+**Objectif.** Faire le travail répétitif de bout en bout, en sécurité et de façon visible, puis passer la main à un humain au moment où un jugement est nécessaire :
+
+- **Terminer ce qu'il peut.** Corriger un ticket, rédiger une réponse, écrire le brief, et s'arrêter à une merge request ouverte, un brouillon ou un commentaire.
+- **Demander en cas de doute.** Escalader le travail flou par une question ou le label `loop:needs-human` plutôt que de deviner.
+- **Rester vérifiable.** Chaque exécution laisse un historique, un journal et une entrée dans le tableau de bord : vous voyez ce qui s'est passé et pourquoi.
+- **Rester à vous.** Il tourne sur votre Mac, avec vos outils et votre trousseau. Rien n'est hébergé pour vous.
+
+## Bonnes pratiques
+
+1. **Commencer petit.** Gardez d'abord seulement les boucles « tickets GitLab » et « veille thématique », et listez un ou deux projets que vous connaissez bien.
+2. **Faire une exécution avant de planifier.** Lancez `loopx run gitlab-loop` à la main et lisez le résultat avant de charger le planificateur.
+3. **Donner de vraies vérifications à chaque projet.** Définissez `lint_cmd` et `test_cmd`. Une merge request ne s'ouvre que s'ils passent : ce sont le filet de sécurité de la boucle.
+4. **Relire chaque merge request.** Loop X s'arrête à une merge request ouverte. Lisez le diff comme celui d'un collègue.
+5. **Rédiger des tickets clairs.** Indiquez le comportement attendu et comment le reproduire. Un ticket précis reçoit un correctif, un ticket vague reçoit une question.
+6. **Utiliser le mode de vérification gate** pour les projets importants : la boucle relance elle-même vos vérifications et escalade en cas d'échec.
+7. **Garder les secrets dans le trousseau.** Ajoutez les jetons via le tableau de bord, jamais dans des fichiers de configuration ni dans le texte d'un ticket.
+8. **Lancer `loopx doctor`** après l'installation et après chaque mise à jour.
+9. **Activer les boucles une par une**, et surveiller **Runs** dans le tableau de bord avant d'ajouter la suivante.
+10. **Évaluer les changements de prompt.** Si vous modifiez les instructions de l'agent, lancez `loopx loop eval --golden` avant et après, et comparez.
 
 ## Table des matières
 
+- [Objectif et mission](#objectif-et-mission)
+- [Bonnes pratiques](#bonnes-pratiques)
 - [Comment ça marche](#comment-ça-marche)
 - [Boucles](#boucles)
 - [Prérequis](#prérequis)

@@ -1,31 +1,54 @@
-<p align="right">
-
-[English](README.md) | [日本語](README.ja.md) | **简体中文** | [Français](README.fr.md)
-
+<p align="center">
+  <img src="assets/app-icon.svg" alt="Loop X logo" width="200" height="200">
 </p>
 
 <p align="center">
-  <img src="assets/app-icon.svg" alt="Loop X logo" width="256" height="256">
+  <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <b>简体中文</b> | <a href="README.fr.md">Français</a>
 </p>
 
-# Loop X Engineering
+<h1 align="center">Loop X Engineering</h1>
 
-![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-x)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
-![Shell](https://img.shields.io/badge/shell-bash-4EAA25)
+<p align="center">
+  <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/encoreshao/loop-x/releases/latest"><img src="https://img.shields.io/badge/releases-download-brightgreen" alt="Releases"></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform">
+</p>
 
-Loop X Engineering 的使命是把被 issue 分诊占用的时间还给你：它是一位常驻、
-无需值守的队友，每个工作日处理你的 GitLab 队列，确保分配给你的事项不会无人问津——
-提交修复、回答问题，或标记出真正需要你判断的事项——让你的注意力只花在真正重要的地方。
-本地 Web 仪表盘让你可以观察它的工作、回顾它做过的一切，并通过界面手动完成所有配置，
-无需编辑 JSON。
+<p align="center"><strong>把你的时间从 issue、邮件和状态检查的日常琐事中夺回来。</strong></p>
 
-它的设计目标是可以放心地无人值守运行：它从不合并自己的 merge request，
-从不给自己分配新 issue，并且只会触碰你明确告诉过它的项目。
+---
+
+Loop X 是一位在你的 Mac 上安静运行的队友。每个工作日它都会处理日常事务,让你只把注意力花在需要你判断的事情上。本地仪表盘会展示它做了什么。
+
+## 目标与使命
+
+**使命。** 把注意力还给工程师。例行分诊、状态检查和初稿，不该占用一个人最好的时间。
+
+**目标。** 端到端地完成重复性工作，做到安全、可见，并在需要判断的地方把决定权交给人：
+
+- **能做完的就做完。** 修复 issue、起草回复、撰写简报，并停在一个打开的合并请求、草稿或评论上。
+- **不确定就提问。** 对不清楚的工作，用提问或 `loop:needs-human` 标签升级，而不是猜测。
+- **始终可检查。** 每次运行都会留下历史、日志和仪表盘记录，你可以看到发生了什么、为什么发生。
+- **始终属于你。** 它运行在你的 Mac 上，使用你的工具和你的钥匙串。没有任何东西托管在别处。
+
+## 最佳实践
+
+1. **从小处开始。** 起初只开启 GitLab issue 和主题监控两个循环，并只列出一两个你熟悉的项目。
+2. **调度前先试跑一次。** 手动运行 `loopx run gitlab-loop` 并查看结果，再加载调度器。
+3. **为每个项目配置真实的检查。** 设置 `lint_cmd` 和 `test_cmd`。只有它们通过，合并请求才会打开，因此它们是循环的安全网。
+4. **审阅每一个合并请求。** Loop X 只会停在打开的合并请求上。请像审阅队友的代码一样查看差异。
+5. **把 issue 写清楚。** 写明预期行为和复现方式。清晰的 issue 会得到修复，含糊的 issue 会得到提问。
+6. **重要项目使用 gate 验证模式。** 循环会自己重新运行你的检查，并在失败时升级。
+7. **密钥放进钥匙串。** 通过仪表盘添加令牌，不要写进配置文件或 issue 正文。
+8. **运行 `loopx doctor`。** 安装后和每次升级后都运行一次。
+9. **一次只启用一个循环。** 添加下一个之前，先在仪表盘的 **Runs** 中观察。
+10. **评估提示词的改动。** 修改智能体指令后，在修改前后各运行一次 `loopx loop eval --golden` 并对比。
 
 ## 目录
 
+- [目标与使命](#目标与使命)
+- [最佳实践](#最佳实践)
 - [工作原理](#工作原理)
 - [循环](#循环)
 - [环境要求](#环境要求)
