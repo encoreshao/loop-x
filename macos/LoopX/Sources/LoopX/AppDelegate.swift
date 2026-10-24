@@ -219,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         if settingsWindow == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
             w.title = "LoopX Settings"
             w.contentView = NSHostingView(rootView: SettingsView(settings: settingsModel, app: model))
