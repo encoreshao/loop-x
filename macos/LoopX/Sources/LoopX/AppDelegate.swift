@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         status.onOpenDashboard = { [weak self] in self?.dashboard.show() }
         status.onOpenSettings = { [weak self] in self?.showSettings() }
+        status.onOpenPage = { [weak self] p in self?.dashboard.open(path: p) }
         if updater.isEnabled { status.onCheckForUpdates = { [weak self] in self?.updater.checkForUpdates() } }
         status.onToggleHidden = { [weak self] in self?.notch.toggleHidden() }
         status.isHidden = { [weak self] in self?.notch.isHidden ?? false }
@@ -109,6 +110,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             item("Quit LoopX", #selector(NSApplication.terminate(_:)), "q"),
         ]))
+        for section in DashboardMenu.sections {
+            main.addItem(submenu(section.title, section.entries.map { e in
+                let i = item(e.title, #selector(openPageFromMenu(_:)), "", target: self)
+                i.representedObject = e.path
+                return i
+            }))
+        }
+        main.addItem(submenu("Developer", [
+            item("Reload Page", #selector(reloadPage), "r", target: self),
+            item("Back", #selector(pageBack), "[", target: self),
+            item("Forward", #selector(pageForward), "]", target: self),
+            .separator(),
+            item("Open in Browser", #selector(openInBrowser), "", target: self),
+            item("Copy Dashboard URL", #selector(copyDashboardURL), "", target: self),
+            item("Reveal ~/.loopx in Finder", #selector(revealHome), "", target: self),
+            .separator(),
+            item("Install Command Line Tool…", #selector(installCLIFromMenu), "", target: self),
+            .separator(),
+        ] + DashboardMenu.links.map { l in
+            let i = item(l.title, #selector(openLink(_:)), "", target: self)
+            i.representedObject = l.url
+            return i
+        }))
         main.addItem(submenu("Edit", [
             item("Undo", Selector(("undo:")), "z"),
             item("Redo", Selector(("redo:")), "z", [.command, .shift]),
@@ -127,6 +151,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettingsFromMenu() { showSettings() }
     @objc private func openDashboardFromMenu() { dashboard.show() }
+    @objc private func openPageFromMenu(_ s: NSMenuItem) { if let p = s.representedObject as? String { dashboard.open(path: p) } }
+    @objc private func openLink(_ s: NSMenuItem) { if let u = s.representedObject as? URL { NSWorkspace.shared.open(u) } }
+    @objc private func reloadPage() { dashboard.reload() }
+    @objc private func pageBack() { dashboard.goBack() }
+    @objc private func pageForward() { dashboard.goForward() }
+    private var dashboardURL: URL? { dashboard.currentURL ?? model.lock?.baseURL }
+    @objc private func openInBrowser() { if let u = dashboardURL { NSWorkspace.shared.open(u) } }
+    @objc private func copyDashboardURL() {
+        guard let u = dashboardURL else { return }
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(u.absoluteString, forType: .string)
+    }
+    @objc private func revealHome() {
+        let dir = ProcessInfo.processInfo.environment["LOOP_ENGINEERING_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".loopx")
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
+    }
+    @objc private func installCLIFromMenu() {
+        settingsModel.refreshCLI()
+        guard settingsModel.cli != nil else { return }
+        switch settingsModel.cliStatus {
+        case .notInstalled, .outdated: settingsModel.installCLI()
+        case .installed, .conflict: break
+        }
+        showSettings()
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 

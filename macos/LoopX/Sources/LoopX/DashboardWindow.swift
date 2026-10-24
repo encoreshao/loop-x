@@ -31,6 +31,19 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         present()
     }
 
+    /// Opens one dashboard page (`/runs?view=logs`) in the window, starting the backend first if needed.
+    func open(path: String) {
+        guard let base = baseURLProvider(), let url = DashboardMenu.url(for: path, base: base) else { show(); return }
+        ensureWindow()
+        webView?.load(URLRequest(url: url)); loadedBase = base
+        present()
+    }
+
+    var currentURL: URL? { webView?.url }
+    func reload() { webView?.reload() }
+    func goBack() { webView?.goBack() }
+    func goForward() { webView?.goForward() }
+
     private func showPlaceholder() {
         let s = statusProvider()
         webView?.loadHTMLString(Self.placeholder(s.text, failed: s.failed), baseURL: nil)
@@ -71,6 +84,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         wv.navigationDelegate = self
         wv.uiDelegate = self
         wv.allowsBackForwardNavigationGestures = true
+        wv.isInspectable = true   // Developer > Web Inspector; the page is the local backend's own
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         w.title = "LoopX"

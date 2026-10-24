@@ -8,6 +8,7 @@ final class StatusItemController: NSObject {
     private let menu = NSMenu()
     var onOpenDashboard: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    var onOpenPage: (String) -> Void = { _ in }
     var onCheckForUpdates: (() -> Void)?
     var onToggleHidden: () -> Void = {}
     var onModeChange: (DisplayMode) -> Void = { _ in }
@@ -50,6 +51,8 @@ final class StatusItemController: NSObject {
 
     @objc private func openDashboard() { onOpenDashboard() }
     @objc private func openSettings() { onOpenSettings() }
+    @objc private func openLink(_ s: NSMenuItem) { if let u = s.representedObject as? URL { NSWorkspace.shared.open(u) } }
+    @objc private func openPage(_ s: NSMenuItem) { if let p = s.representedObject as? String { onOpenPage(p) } }
     @objc private func checkForUpdates() { onCheckForUpdates?() }
     @objc private func toggleHidden() { onToggleHidden() }
     @objc private func setMode(_ s: NSMenuItem) { if let m = DisplayMode(rawValue: s.representedObject as? String ?? "") { onModeChange(m) } }
@@ -85,6 +88,22 @@ extension StatusItemController: NSMenuDelegate {
         }
         let modeItem = NSMenuItem(title: "Display Mode", action: nil, keyEquivalent: ""); modeItem.submenu = modes
         menu.addItem(modeItem)
+        for section in DashboardMenu.sections {
+            let sub = NSMenu()
+            for e in section.entries {
+                let i = NSMenuItem(title: e.title, action: #selector(openPage(_:)), keyEquivalent: "")
+                i.representedObject = e.path; i.target = self; sub.addItem(i)
+            }
+            let host = NSMenuItem(title: section.title, action: nil, keyEquivalent: ""); host.submenu = sub
+            menu.addItem(host)
+        }
+        let links = NSMenu()
+        for l in DashboardMenu.links {
+            let i = NSMenuItem(title: l.title, action: #selector(openLink(_:)), keyEquivalent: "")
+            i.representedObject = l.url; i.target = self; links.addItem(i)
+        }
+        let linksHost = NSMenuItem(title: "GitHub", action: nil, keyEquivalent: ""); linksHost.submenu = links
+        menu.addItem(linksHost)
         menu.addItem(.separator())
         add("Settings…", #selector(openSettings), ",")
         if onCheckForUpdates != nil { add("Check for Updates…", #selector(checkForUpdates), "") }
