@@ -47,6 +47,9 @@ public struct NotchLayout: Equatable, Sendable {
     public var wing: CGFloat = 36
     public var expandedWidth: CGFloat = 400
     public var expandedContentHeight: CGFloat = 200
+    /// Content height once the user pins the island open (task detail and the input bar).
+    public var pinnedContentHeight: CGFloat = 360
+    public var hudPinned = CGSize(width: 420, height: 400)
     public var hudCollapsed = CGSize(width: 230, height: 34)
     public var hudExpanded = CGSize(width: 380, height: 220)
     public var hudTopMargin: CGFloat = 8
@@ -74,22 +77,24 @@ public enum NotchGeometry {
 
     /// Panel frame hugging the notch: flush with the screen's top edge, centred on the notch.
     /// Collapsed = notch plus a wing on each side at menu-bar height; expanded drops down.
-    public static func notchFrame(screen: ScreenInfo, expanded: Bool, layout: NotchLayout = NotchLayout()) -> CGRect {
+    public static func notchFrame(screen: ScreenInfo, expanded: Bool, pinned: Bool = false,
+                                  layout: NotchLayout = NotchLayout()) -> CGRect {
         guard let notch = screen.notchRect else {
-            return hudFrame(screen: screen, expanded: expanded, layout: layout)
+            return hudFrame(screen: screen, expanded: expanded, pinned: pinned, layout: layout)
         }
         let collapsedWidth = notch.width + 2 * layout.wing
         let width = expanded ? max(layout.expandedWidth, collapsedWidth) : collapsedWidth
-        let height = expanded ? notch.height + layout.expandedContentHeight : notch.height
+        let content = pinned ? layout.pinnedContentHeight : layout.expandedContentHeight
+        let height = expanded ? notch.height + content : notch.height
         // Keep the panel inside the screen even on an unusually narrow one.
         let x = clamp(notch.midX - width / 2, lower: screen.frame.minX, upper: screen.frame.maxX - width)
         return CGRect(x: x, y: screen.frame.maxY - height, width: width, height: height)
     }
 
     /// Default HUD spot (no notch): centred under the menu bar.
-    public static func hudFrame(screen: ScreenInfo, expanded: Bool, layout: NotchLayout = NotchLayout(),
-                                origin: CGPoint? = nil) -> CGRect {
-        let size = expanded ? layout.hudExpanded : layout.hudCollapsed
+    public static func hudFrame(screen: ScreenInfo, expanded: Bool, pinned: Bool = false,
+                                layout: NotchLayout = NotchLayout(), origin: CGPoint? = nil) -> CGRect {
+        let size = expanded ? (pinned ? layout.hudPinned : layout.hudExpanded) : layout.hudCollapsed
         let area = screen.visibleFrame
         let anchor: CGPoint
         if let origin {
@@ -121,8 +126,9 @@ public enum NotchGeometry {
     }
 
     /// Frame for a remembered anchor at the given size, grown downward from its top edge.
-    public static func hudFrame(screen: ScreenInfo, expanded: Bool, anchor: CGPoint, layout: NotchLayout = NotchLayout()) -> CGRect {
-        let size = expanded ? layout.hudExpanded : layout.hudCollapsed
+    public static func hudFrame(screen: ScreenInfo, expanded: Bool, pinned: Bool = false, anchor: CGPoint,
+                                layout: NotchLayout = NotchLayout()) -> CGRect {
+        let size = expanded ? (pinned ? layout.hudPinned : layout.hudExpanded) : layout.hudCollapsed
         let a = screen.visibleFrame
         let top = a.maxY - anchor.y * a.height
         let origin = CGPoint(x: a.minX + anchor.x * a.width - size.width / 2, y: top - size.height)

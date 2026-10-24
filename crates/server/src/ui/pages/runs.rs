@@ -10,6 +10,7 @@ use crate::ui::hub::{hub_by_key, render_hub_page, Hub};
 use crate::ui::markdown::render_markdown;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
+use crate::ui::state::UiState;
 use crate::ui::template::{Scope, Template};
 use crate::ui::{consts, pyfmt};
 use loopx_core::ledger::{self, RunQuery, RunRecord};
@@ -563,6 +564,22 @@ const STARTED: &str = "Run started - check back here for progress";
 
 fn run_script_path(ctx: &UiCtx) -> PathBuf {
     ctx.state.repo_root.join("run-loop-now.sh")
+}
+
+/// Starts one of the three built-in loops; `None` for any other name.
+pub(crate) fn trigger_named(state: &UiState, name: &str) -> Option<TriggerOutcome> {
+    let fallback = state.repo_root.join("run-loop-now.sh");
+    let launcher = Launcher { cmd: &state.run_cmd, cwd: &state.repo_root, fallback_path: &fallback };
+    Some(match name {
+        "gitlab-loop" => run_control::trigger_manual_run(&state.status_path(), name, &launcher),
+        "topic-loop" => run_control::trigger_topic_monitor_run(
+            &state.repo_root.join("outputs").join("topic-monitor").join("status.json"),
+            name,
+            &launcher,
+        ),
+        "inbox-triage-loop" => run_control::trigger_inbox_triage_run(&state.status_path_for_loop(name), name, &launcher),
+        _ => return None,
+    })
 }
 
 fn run_now(ctx: &UiCtx) -> UiResponse {

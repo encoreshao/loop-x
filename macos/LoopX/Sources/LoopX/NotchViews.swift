@@ -24,6 +24,8 @@ final class NotchUI: ObservableObject {
     @Published var notchHeight: CGFloat = 0
     @Published var isHUD = false
     @Published var visible = true
+    /// The user clicked the island open: it stays until closed and takes keyboard input.
+    @Published var isPinned = false
 }
 
 /// Black pill that is flat at the top (it fuses with the screen edge/notch) and rounded below.
@@ -53,6 +55,7 @@ struct NotchShape: Shape {
 
 struct NotchRootView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var island: IslandModel
     @ObservedObject var ui: NotchUI
     static let spring = Animation.spring(response: 0.38, dampingFraction: 0.76)
 
@@ -65,8 +68,12 @@ struct NotchRootView: View {
                     NotchShape(bottomRadius: ui.isExpanded ? 24 : (ui.isHUD ? 17 : 10), topRadius: ui.isHUD ? (ui.isExpanded ? 24 : 17) : 0)
                         .stroke(model.notch.style.accent.color.opacity(ui.isExpanded ? 0.35 : 0.0), lineWidth: 1))
                 .shadow(color: .black.opacity(ui.isExpanded ? 0.45 : 0), radius: 14, y: 6)
-            if ui.isExpanded {
-                ExpandedContent(model: model, ui: ui)
+            if ui.isExpanded && ui.isPinned && model.notch.kind != .awaitingApproval {
+                IslandRoot(island: island, model: model, ui: ui)
+                    .padding(.top, ui.notchHeight)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+            } else if ui.isExpanded {
+                ExpandedContent(model: model, island: island, ui: ui)
                     .padding(.top, ui.notchHeight)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
             } else {
@@ -137,6 +144,7 @@ struct CollapsedContent: View {
 
 struct ExpandedContent: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var island: IslandModel
     @ObservedObject var ui: NotchUI
     var body: some View {
         let n = model.notch
@@ -160,6 +168,7 @@ struct ExpandedContent: View {
                 TaskList(tasks: n.tasks)
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
+                    pill("Tasks", "list.bullet") { island.pin() }
                     ForEach(Array(n.actions.enumerated()), id: \.offset) { _, action in
                         actionButton(action)
                     }

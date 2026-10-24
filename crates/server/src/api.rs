@@ -70,6 +70,7 @@ pub fn router(state: Shared) -> Router {
         .route("/static/loopx-notify.js", get(notify_script))
         .route("/api/approvals", get(list_approvals))
         .route("/api/approvals/:id", post(decide));
+    app = app.merge(crate::api_island::routes());
     match loopx_core::oauth::OauthContext::from_env() {
         Ok(ctx) => app = app.merge(crate::oauth_routes::routes(std::sync::Arc::new(ctx))),
         Err(e) => eprintln!("oauth routes disabled: {e}"),

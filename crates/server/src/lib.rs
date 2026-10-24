@@ -2,6 +2,7 @@
 //! Mac app talks to.
 
 pub mod api;
+pub mod api_island;
 pub mod chat_tool;
 pub mod lock;
 pub mod oauth_routes;

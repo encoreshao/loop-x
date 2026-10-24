@@ -20,13 +20,16 @@ final class NotchPanel: NSPanel {
         titleVisibility = .hidden
         isMovableByWindowBackground = false
     }
-    override var canBecomeKey: Bool { false }
+    /// Only while the island is pinned open: the input bar needs the keyboard, nothing else does.
+    var allowsKey = false
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }
 
 /// Hosting view that reports the pointer entering/leaving even while the app is inactive.
 final class HoverHostingView<Content: View>: NSHostingView<Content> {
     var onHover: ((Bool) -> Void)?
+    var onClick: (() -> Void)?
     private var area: NSTrackingArea?
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -36,6 +39,7 @@ final class HoverHostingView<Content: View>: NSHostingView<Content> {
     }
     override func mouseEntered(with event: NSEvent) { onHover?(true) }
     override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func mouseDown(with event: NSEvent) { onClick?(); super.mouseDown(with: event) }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -43,6 +47,7 @@ final class HoverHostingView<Content: View>: NSHostingView<Content> {
 @MainActor
 final class NotchController: NSObject {
     let model: AppModel
+    let island: IslandModel
     let ui = NotchUI()
     let panel = NotchPanel()
     private var host: HoverHostingView<NotchRootView>!
@@ -59,11 +64,21 @@ final class NotchController: NSObject {
     var screensProvider: () -> [ScreenInfo] = { ScreenInfo.current() }
     var pointerProvider: () -> CGPoint = { NSEvent.mouseLocation }
 
-    init(model: AppModel) {
+    private var outsideClick: Any?
+    private var escapeKey: Any?
+
+    init(model: AppModel, island: IslandModel) {
         self.model = model
+        self.island = island
         super.init()
-        host = HoverHostingView(rootView: NotchRootView(model: model, ui: ui))
+        host = HoverHostingView(rootView: NotchRootView(model: model, island: island, ui: ui))
         host.onHover = { [weak self] inside in self?.hover(inside) }
+        host.onClick = { [weak self] in
+            guard let self, self.ui.isExpanded, !self.island.nav.isPinned,
+                  self.model.notch.kind != .awaitingApproval else { return }
+            self.island.pin()
+        }
+        island.onNavChange = { [weak self] old, new in self?.navChanged(old, new) }
         panel.contentView = host
         host.sizingOptions = []   // the controller sets the frame; the view must not resize the panel
         model.onNotchChange = { [weak self] old, new in self?.notchChanged(old, new) }
@@ -103,11 +118,12 @@ final class NotchController: NSObject {
     }
 
     private func frame(for screen: ScreenInfo, expanded: Bool, hud: Bool) -> CGRect {
-        if !hud { return NotchGeometry.notchFrame(screen: screen, expanded: expanded, layout: layout) }
+        let pinned = ui.isPinned
+        if !hud { return NotchGeometry.notchFrame(screen: screen, expanded: expanded, pinned: pinned, layout: layout) }
         if let a = model.settings.hudAnchor {
-            return NotchGeometry.hudFrame(screen: screen, expanded: expanded, anchor: a, layout: layout)
+            return NotchGeometry.hudFrame(screen: screen, expanded: expanded, pinned: pinned, anchor: a, layout: layout)
         }
-        return NotchGeometry.hudFrame(screen: screen, expanded: expanded, layout: layout)
+        return NotchGeometry.hudFrame(screen: screen, expanded: expanded, pinned: pinned, layout: layout)
     }
 
     private func applyFrame(screen: ScreenInfo, hud: Bool, expanded: Bool) {
@@ -124,6 +140,7 @@ final class NotchController: NSObject {
     private func hover(_ inside: Bool) {
         collapseWork?.cancel()
         if inside { setExpanded(true) }
+        else if island.nav.isPinned { return }   // a pinned island stays until the user closes it
         else {
             // An approval must not fold away just because the pointer drifted off.
             guard model.notch.kind != .awaitingApproval else { return }
@@ -135,6 +152,7 @@ final class NotchController: NSObject {
 
     func setExpanded(_ expanded: Bool) {
         guard expanded != ui.isExpanded else { return }
+        if !expanded && island.nav.isPinned { return }   // alerts and hover never fold a pinned island
         shrinkWork?.cancel()
         guard let screen = screensProvider().first(where: { $0.id == currentScreenID }) else { ui.isExpanded = expanded; return }
         if expanded {
@@ -166,6 +184,46 @@ final class NotchController: NSObject {
             collapseWork = w
             DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: w)
         }
+    }
+
+    /// Pinning opens the island at its larger size and lets it take the keyboard; closing undoes both.
+    private func navChanged(_ old: IslandNav, _ new: IslandNav) {
+        guard old.isPinned != new.isPinned else { return }
+        ui.isPinned = new.isPinned
+        panel.allowsKey = new.isPinned
+        if new.isPinned {
+            setExpanded(true)
+            refresh()
+            panel.makeKey()
+            startMonitors()
+        } else {
+            stopMonitors()
+            panel.resignKey()
+            refresh()
+            setExpanded(false)
+        }
+    }
+
+    /// Esc, or a click anywhere else, closes the pinned island unless a draft or reply is in progress.
+    private func startMonitors() {
+        stopMonitors()
+        escapeKey = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard e.keyCode == 53, let self, !self.island.nav.blocksFold else { return e }
+            self.island.unpin(); return nil
+        }
+        outsideClick = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.island.nav.isPinned, !self.island.nav.blocksFold,
+                      !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+                self.island.unpin()
+            }
+        }
+    }
+
+    private func stopMonitors() {
+        if let m = escapeKey { NSEvent.removeMonitor(m) }
+        if let m = outsideClick { NSEvent.removeMonitor(m) }
+        escapeKey = nil; outsideClick = nil
     }
 
     @objc private func screensChanged() { refresh() }

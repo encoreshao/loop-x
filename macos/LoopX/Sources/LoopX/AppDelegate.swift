@@ -6,6 +6,7 @@ import LoopXKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model: AppModel
     let notifier = TaskNotifier()
+    let island: IslandModel
     let notch: NotchController
     let status: StatusItemController
     let dashboard = DashboardWindowController()
@@ -18,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         let settings = SettingsStore()
         model = AppModel(settings: settings)
-        notch = NotchController(model: model)
+        island = IslandModel(app: model)
+        notch = NotchController(model: model, island: island)
         status = StatusItemController(model: model)
         settingsModel = SettingsModel(store: settings, login: LaunchAtLogin(service: SMAppServiceAdapter(.mainApp)))
         scheduler = SchedulerRunner(binary: model.backendConfig.loopxBinary)

@@ -1031,6 +1031,11 @@ pub fn chat_approve(state: &UiState, lang: Lang, pending_id: &str, session: &str
     }
 }
 
+/// Discards a pending approval card; `false` when it expired or was already handled.
+pub fn chat_reject(state: &UiState, pending_id: &str, session: &str) -> bool {
+    chat_tools::pending::discard(&tools_env(state), pending_id, session)
+}
+
 fn post_approve(ctx: &UiCtx) -> UiResponse {
     let (id, session) = pending_form(ctx);
     UiResponse::json(200, &chat_approve(ctx.state, ctx.lang, &id, &session))
@@ -1038,7 +1043,7 @@ fn post_approve(ctx: &UiCtx) -> UiResponse {
 
 fn post_reject(ctx: &UiCtx) -> UiResponse {
     let (id, session) = pending_form(ctx);
-    let result = if chat_tools::pending::discard(&tools_env(ctx.state), &id, &session) {
+    let result = if chat_reject(ctx.state, &id, &session) {
         json!({"ok": true})
     } else {
         json!({"ok": false, "error": ctx.t("This action expired or was already handled.")})
@@ -1078,21 +1083,27 @@ fn page_context(page: Option<&str>) -> Option<(String, String)> {
     })
 }
 
-fn post_chat(ctx: &UiCtx) -> UiResponse {
-    let form = form_keep_blank(&ctx.req.body);
-    let text = field(&form, "text").unwrap_or("");
-    let store = store(ctx.state);
-    let Some(session_id) = store.send_chat_message(text, field(&form, "session")) else {
-        return UiResponse::json(400, &json!({"error": ctx.t("Message is required")}));
+/// Starts an assistant reply for `text`: stores the message, spawns the reply thread and returns
+/// `(reply_key, session_id)`. `Err` carries the user-facing message for a blank text.
+pub fn start_reply(
+    state: &UiState,
+    lang: Lang,
+    text: &str,
+    session: Option<&str>,
+    page: Option<&str>,
+) -> Result<(String, String), String> {
+    let store = store(state);
+    let Some(session_id) = store.send_chat_message(text, session) else {
+        return Err(t(lang, "Message is required"));
     };
     let all = store.chat_session_messages(&session_id);
     let upto = all.len().saturating_sub(1);
     let start = upto.saturating_sub(chat::CHAT_MESSAGE_HISTORY_LIMIT);
     let recent = &all[start..upto];
-    chat::append_unified_log(&ctx.state.repo_root, "chat-assistant", "question", Some(text.trim()));
-    let rt = chat_runtime(ctx.state);
+    chat::append_unified_log(&state.repo_root, "chat-assistant", "question", Some(text.trim()));
+    let rt = chat_runtime(state);
     let reply_key = rt.jobs.create();
-    let context = page_context(field(&form, "page").filter(|p| !p.is_empty()));
+    let context = page_context(page.filter(|p| !p.is_empty()));
     let prompt = chat::build_chat_prompt(
         text.trim(),
         recent,
@@ -1105,15 +1116,19 @@ fn post_chat(ctx: &UiCtx) -> UiResponse {
     if let Err(e) = spawned {
         jobs().finish(
             &reply_key,
-            Some(i18n::t(
-                ctx.lang,
-                "Could not start assistant thread: {error}",
-                &[("error", &e.to_string())],
-            )),
+            Some(i18n::t(lang, "Could not start assistant thread: {error}", &[("error", &e.to_string())])),
             None,
         );
     }
-    UiResponse::json(200, &json!({"reply_key": reply_key, "session": session_id}))
+    Ok((reply_key, session_id))
+}
+
+fn post_chat(ctx: &UiCtx) -> UiResponse {
+    let form = form_keep_blank(&ctx.req.body);
+    match start_reply(ctx.state, ctx.lang, field(&form, "text").unwrap_or(""), field(&form, "session"), field(&form, "page")) {
+        Ok((reply_key, session)) => UiResponse::json(200, &json!({"reply_key": reply_key, "session": session})),
+        Err(message) => UiResponse::json(400, &json!({"error": message})),
+    }
 }
 
 // ----- the SSE stream -----

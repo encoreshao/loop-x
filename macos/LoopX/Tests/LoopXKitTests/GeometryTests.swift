@@ -49,6 +49,16 @@ let plainScreen = ScreenInfo(
         #expect(e.minY < c.minY)
     }
 
+    @Test func pinnedFrameIsTallerThanExpandedAndStaysCentred() {
+        let e = NotchGeometry.notchFrame(screen: notchScreen, expanded: true, layout: layout)
+        let p = NotchGeometry.notchFrame(screen: notchScreen, expanded: true, pinned: true, layout: layout)
+        #expect(p.maxY == e.maxY); #expect(p.midX == e.midX)
+        #expect(p.height == 32 + layout.pinnedContentHeight)
+        #expect(p.height > e.height)
+        let h = NotchGeometry.hudFrame(screen: plainScreen, expanded: true, pinned: true, anchor: CGPoint(x: 0.5, y: 0.05), layout: layout)
+        #expect(h.size == layout.hudPinned)
+    }
+
     @Test func offsetScreensUseGlobalCoordinates() {
         // Notched built-in screen placed at x=-1512 (left of the main one).
         var s = notchScreen

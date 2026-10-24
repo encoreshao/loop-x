@@ -19,6 +19,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- The Mac app's island is now a small app: hover for a task list, click to pin it open, see a card per loop and topic, open one for its recent steps and result (Open MR, Dashboard, Run again), and use the new input bar to ask the dashboard assistant or start a loop (Allow/Deny first, like every write). Esc, ✕ or a click elsewhere closes it, never while you have a draft or a reply is streaming.
+- New token-authenticated API routes for the app: `POST /api/chat`, `POST /api/chat/approve`, `POST /api/chat/reject`, `POST /api/loops/:name/run`.
 - Topic Monitor has a **History** tab listing every saved briefing, newest first, with delete.
 - The Mac app's notch/HUD lists every loop and topic with its status and what it is doing (issue, step), running first; the collapsed HUD names the running task and the notch counts several running at once.
 - The Mac app posts macOS notifications when a loop or topic starts, completes or fails, and when an approval is waiting. Turn it off under Settings → General → Notifications.
