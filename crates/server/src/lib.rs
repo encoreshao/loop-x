@@ -95,10 +95,36 @@ pub async fn run_on(
     state: Arc<AppState>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
+    run_on_with_grace(listener, state, shutdown, SHUTDOWN_GRACE).await
+}
+
+/// How long open connections get to finish once shutdown starts. A dashboard tab keeps an
+/// `/api/events` stream open forever, so waiting for it would leave the process alive with its
+/// listener closed and the lock file still claiming the port.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+
+async fn run_on_with_grace(
+    listener: tokio::net::TcpListener,
+    state: Arc<AppState>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    grace: Duration,
+) -> Result<(), ServeError> {
     let _watcher = spawn_watcher(state.clone())?;
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    let (begun_tx, begun_rx) = tokio::sync::oneshot::channel::<()>();
+    let serving = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
+        shutdown.await;
+        let _ = begun_tx.send(());
+    });
+    tokio::select! {
+        served = serving => served?,
+        _ = async {
+            if begun_rx.await.is_ok() {
+                tokio::time::sleep(grace).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        } => {}
+    }
     Ok(())
 }
 
@@ -138,6 +164,44 @@ mod tests {
     #[test]
     fn crate_name_is_stable() {
         assert_eq!(super::crate_name(), "loopx-server");
+    }
+
+    #[tokio::test]
+    async fn shutdown_does_not_wait_for_an_open_event_stream() {
+        let d = tempfile::tempdir().unwrap();
+        let state = AppState::new(d.path().to_path_buf(), "t".into());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(run_on_with_grace(
+            listener,
+            state,
+            async move {
+                let _ = stop_rx.await;
+            },
+            Duration::from_millis(300),
+        ));
+        // A dashboard tab: an event stream that never ends on its own.
+        let (open_tx, open_rx) = std::sync::mpsc::channel::<()>();
+        let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            let resp = ureq::get(&format!("http://127.0.0.1:{port}/api/events"))
+                .call()
+                .unwrap();
+            let _ = open_tx.send(());
+            let _ = hold_rx.recv_timeout(Duration::from_secs(30));
+            drop(resp);
+        });
+        tokio::task::spawn_blocking(move || open_rx.recv_timeout(Duration::from_secs(5)).unwrap())
+            .await
+            .unwrap();
+        stop_tx.send(()).unwrap();
+        let done = tokio::time::timeout(Duration::from_secs(5), server).await;
+        let _ = hold_tx.send(());
+        assert!(
+            done.is_ok(),
+            "the server kept running with an event stream open"
+        );
     }
 
     #[tokio::test]
