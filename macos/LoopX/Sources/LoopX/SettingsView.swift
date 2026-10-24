@@ -155,8 +155,8 @@ struct SettingsView: View {
                     .font(.system(size: 13, weight: tab == t ? .medium : .regular))
                     .foregroundStyle(tab == t ? MD.navActiveOn(settings.accent) : MD.navOn(settings.accent))
                     .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(tab == t ? MD.navActive(settings.accent) : .clear, in: Capsule())
-                    .contentShape(Capsule())
+                    .background(tab == t ? MD.navActive(settings.accent) : .clear, in: RoundedRectangle(cornerRadius: MD.controlRadius, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: MD.controlRadius, style: .continuous))
                 }.buttonStyle(.plain).focusEffectDisabled()
             }
             Spacer()
@@ -164,7 +164,12 @@ struct SettingsView: View {
         .padding(.top, 20).padding(.horizontal, 12)
         .frame(width: 190)
         .frame(maxHeight: .infinity)
-        .background(MD.sidebar(settings.accent))
+        .background { sidebarBackground }
+    }
+
+    /// System material for the neutral accent (like the dashboard's translucent sidebar); tinted accents keep their wash.
+    @ViewBuilder private var sidebarBackground: some View {
+        if settings.accent == .default { Rectangle().fill(.regularMaterial) } else { MD.sidebar(settings.accent) }
     }
 
     @ViewBuilder private var page: some View {

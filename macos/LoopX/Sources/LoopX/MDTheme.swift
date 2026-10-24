@@ -14,21 +14,22 @@ enum MD {
         })
     }
 
-    static let primary = pair(0x0B57D0, 0x9CC0FC)
-    static let onPrimary = pair(0xFFFFFF, 0x032763)
-    static let primaryContainer = pair(0xD3E3FD, 0x043B95)
-    static let surface = pair(0xFBF8FA, 0x232529)
-    static let surfaceLow = pair(0xF5F1F4, 0x2A2D32)
-    static let surfaceContainer = pair(0xEFEBEE, 0x2F3237)
-    static let surfaceHighest = pair(0xE3DEE2, 0x454A52)
-    static let onSurface = pair(0x1C1B1E, 0xE3E5E8)
-    static let onSurfaceVariant = pair(0x47464A, 0xC7CBD1)
-    static let outlineVariant = pair(0xC7C5CA, 0x454B54)
-    static let success = pair(0x2A6F43, 0xB5E3C6)
-    static let warning = pair(0x774C22, 0xE8CCB0)
-    static let error = pair(0x772822, 0xE8B4B0)
+    static let primary = pair(MacPalette.primaryLight, MacPalette.primaryDark)
+    static let onPrimary = pair(MacPalette.onPrimaryLight, MacPalette.onPrimaryDark)
+    static let primaryContainer = pair(MacPalette.primaryContainerLight, MacPalette.primaryContainerDark)
+    static let surface = pair(MacPalette.surfaceLight, MacPalette.surfaceDark)
+    static let surfaceLow = pair(MacPalette.surfaceLowLight, MacPalette.surfaceLowDark)
+    static let surfaceContainer = pair(MacPalette.surfaceContainerLight, MacPalette.surfaceContainerDark)
+    static let surfaceHighest = pair(MacPalette.surfaceHighestLight, MacPalette.surfaceHighestDark)
+    static let onSurface = pair(MacPalette.onSurfaceLight, MacPalette.onSurfaceDark)
+    static let onSurfaceVariant = pair(MacPalette.onSurfaceVariantLight, MacPalette.onSurfaceVariantDark)
+    static let outlineVariant = pair(MacPalette.outlineVariantLight, MacPalette.outlineVariantDark)
+    static let success = pair(MacPalette.successLight, MacPalette.successDark)
+    static let warning = pair(MacPalette.warningLight, MacPalette.warningDark)
+    static let error = pair(MacPalette.errorLight, MacPalette.errorDark)
 
-    static let cardRadius: CGFloat = 12
+    static let cardRadius = CGFloat(MacPalette.cardRadius)
+    static let controlRadius = CGFloat(MacPalette.controlRadius)
 
     /// The accent wash the dashboard puts on its sidebar and cards (`--md-nav-*`); `default` keeps the neutral surface.
     private static func wash(_ v: UInt32?) -> Color? { v.map { Color(nsColor: hex($0)) } }
@@ -42,7 +43,7 @@ enum MD {
     static func cardTextVariant(_ a: Accent) -> Color { wash(a.navOnSurface)?.opacity(0.8) ?? onSurfaceVariant }
 }
 
-/// A dashboard `.card`: tinted surface, 12pt radius, a 500-weight title.
+/// A dashboard `.card`: tinted surface, 14pt continuous corners with a hairline border, a semibold title.
 private struct AccentKey: EnvironmentKey { static let defaultValue = Accent.default }
 extension EnvironmentValues {
     var accent: Accent { get { self[AccentKey.self] } set { self[AccentKey.self] = newValue } }
@@ -56,12 +57,13 @@ struct MDCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let title { Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(MD.cardText(accent)) }
+            if let title { Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(MD.cardText(accent)) }
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20).padding(.vertical, 16)
-        .background(MD.card(accent), in: RoundedRectangle(cornerRadius: MD.cardRadius))
+        .background(MD.card(accent), in: RoundedRectangle(cornerRadius: MD.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: MD.cardRadius, style: .continuous).stroke(MD.outlineVariant.opacity(0.5), lineWidth: 0.5))
     }
 }
 
@@ -88,15 +90,16 @@ struct MDNote: View {
     }
 }
 
-/// Pill buttons like the dashboard's: filled for the main action, tonal for the rest.
+/// Rounded-rect buttons like the dashboard's: filled for the main action, tonal for the rest.
 struct MDButtonStyle: ButtonStyle {
     var filled = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .padding(.horizontal, 16).padding(.vertical, 7)
-            .foregroundStyle(filled ? MD.onPrimary : MD.primary)
-            .background(filled ? MD.primary : MD.primaryContainer.opacity(0.55), in: Capsule())
-            .opacity(configuration.isPressed ? 0.8 : 1)
+            .foregroundStyle(filled ? MD.onPrimary : MD.onSurface)
+            .background(filled ? MD.primary : MD.surfaceHighest,
+                        in: RoundedRectangle(cornerRadius: MD.controlRadius, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }

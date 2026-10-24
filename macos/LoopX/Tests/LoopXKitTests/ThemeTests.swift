@@ -19,6 +19,17 @@ import Testing
         #expect(Accent.default.navSurface == nil)   // "Default" is the neutral surface, not a tint
     }
 
+    @Test func paletteMatchesTheDashboardTokens() {
+        #expect(MacPalette.primaryLight == 0x007AFF)
+        #expect(MacPalette.primaryDark == 0x0A84FF)
+        #expect(MacPalette.surfaceLight == 0xF5F5F7)
+        #expect(MacPalette.surfaceDark == 0x242426)
+        #expect(MacPalette.errorLight == 0x8C2A24)
+        #expect(MacPalette.errorDark == 0xFF8A84)
+        #expect(MacPalette.cardRadius == 14)
+        #expect(MacPalette.controlRadius == 8)
+    }
+
     @Test func colorModeFollowsTheSystemUnlessLightOrDarkIsStored() {
         #expect(ColorMode(stored: nil) == .auto)
         #expect(ColorMode(stored: "auto") == .auto)
