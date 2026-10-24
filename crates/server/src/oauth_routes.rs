@@ -157,9 +157,11 @@ async fn callback(
     }
     // A Gmail sign-in started from the Inbox Triage setup page: the refresh token goes to the
     // inbox's mail token store and the browser returns to the inbox list.
-    if provider == Provider::Google
-        && oauth::peek_pending(&ctx.dir, &state, now, true)
-            .is_some_and(|p| p.kind == crate::ui::pages::inbox_loop::INBOX_KIND)
+    if let Some(kind) = (provider == Provider::Google)
+        .then(|| oauth::peek_pending(&ctx.dir, &state, now, true))
+        .flatten()
+        .map(|p| p.kind)
+        .filter(|k| crate::ui::pages::inbox_loop::is_inbox_kind(k))
     {
         let lang = loopx_core_lang(&headers);
         let (code, error) = (q.get("code").cloned(), q.get("error").cloned());
@@ -181,7 +183,7 @@ async fn callback(
         return crate::ui::glue::into_response(crate::ui::UiResponse::flash_redirect(
             ok,
             &message,
-            "/loops/inbox-triage-loop?view=setup&tab=inboxes",
+            crate::ui::pages::inbox_loop::return_location(&kind),
         ));
     }
     let code = q.get("code").cloned();

@@ -143,8 +143,8 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     /// The page shown until a backend answers: the logo, name, what LoopX does, one status line (a
     /// spinner while starting, the reason and a Retry link when it failed) and the author. Follows the
-    /// system appearance. The entrance, float and glow are decorative, so they are gated on reduced motion;
-    /// the spinner is not, since its motion is the only sign that startup is still going.
+    /// system appearance. The entrance, float and glow are gated on reduced motion; the orbiting ring and the spinner are
+    /// not, since their motion is the sign that startup is still going.
     static func placeholder(_ text: String, failed: Bool, version: String = "") -> String {
         func escape(_ t: String) -> String {
             t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
@@ -162,11 +162,10 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         .logo{position:relative;width:240px;height:240px;margin:36px 0}
         .track,.ring{position:absolute;inset:-32px;border-radius:50%}
         .track{border:1.5px solid var(--glow)}
-        .ring{background:conic-gradient(from 0deg,transparent 0 50%,var(--accent) 82%,#e0457b);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px))}
+        .ring{animation:orbit 5s linear infinite;background:conic-gradient(from 0deg,transparent 0 50%,var(--accent) 82%,#e0457b);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px))}
         .logo::before{content:'';position:absolute;inset:-18%;border-radius:50%;background:radial-gradient(circle,var(--glow),transparent 68%)}
         .logo svg{position:relative;width:240px;height:240px;display:block}
         @media(prefers-reduced-motion:no-preference){
-        .ring{animation:orbit 5s linear infinite}
         .logo::before{animation:glow 3.2s ease-in-out infinite}
         .logo svg{animation:pop .9s cubic-bezier(.2,.9,.3,1.2) both,float 5s ease-in-out .9s infinite}
         h1{animation:rise .7s ease-out .25s both}

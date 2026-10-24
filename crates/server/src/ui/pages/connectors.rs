@@ -242,6 +242,21 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
                 ctx.t("Connect with Google")
             })
         );
+    } else if account.kind == "mailbox" && managed_by == "inboxes" && account.setting("provider") == "gmail" {
+        let connected = super::inbox_loop::gmail_connected(&account.id);
+        oauth_html = connected_pill(connected);
+        connect_html = format!(
+            "<form method='post' action='/inbox/inboxes/{quoted_id}/connect' class='daemon-action-form'>{csrf}\
+<input type='hidden' name='back' value='connectors'>\
+<button type='submit' class='btn {}'>\
+<span class='material-symbols-outlined' aria-hidden='true'>login</span> {}</button></form>",
+            btn(connected),
+            h(&if connected {
+                ctx.t("Reconnect")
+            } else {
+                ctx.t("Connect with Google")
+            })
+        );
     } else if is_linkedin(cls) && managed_by == "native" {
         let connected = linkedin_connected(ctx.state, &account.id);
         oauth_html = connected_pill(connected);

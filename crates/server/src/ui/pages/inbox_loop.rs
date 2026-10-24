@@ -725,9 +725,12 @@ fn inbox_action(ctx: &UiCtx) -> UiResponse {
 }
 
 /// `POST /inbox/inboxes/<name>/connect`: Gmail signs in through Google; Outlook is not built yet.
+/// A form with `back=connectors` (the Connectors page) returns there instead of to the inbox list.
 fn connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
+    let from_connectors = ctx.form().first("back") == Some("connectors");
+    let back = if from_connectors { CONNECTORS_PAGE } else { INBOXES_TAB };
     if s(inbox, "provider") == "gmail" {
-        return google_connect(ctx, name, inbox);
+        return google_connect(ctx, name, inbox, from_connectors);
     }
     UiResponse::flash_redirect(
         false,
@@ -735,15 +738,40 @@ fn connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
             "{label}: Outlook sign-in isn't available yet - connect a Gmail inbox for now",
             &[("label", &s(inbox, "label"))],
         ),
-        INBOXES_TAB,
+        back,
     )
 }
 
-/// Pending-state kind for a Gmail inbox sign-in.
-pub const INBOX_KIND: &str = "inbox";
+const CONNECTORS_PAGE: &str = "/connectors";
 
-/// `POST /inbox/inboxes/<name>/connect` for a Gmail inbox: send the browser to Google.
-fn google_connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
+/// Pending-state kinds for a Gmail inbox sign-in: from the inbox list, or from Connectors.
+pub const INBOX_KIND: &str = "inbox";
+pub const INBOX_FROM_CONNECTORS_KIND: &str = "inbox-connectors";
+
+pub fn is_inbox_kind(kind: &str) -> bool {
+    kind == INBOX_KIND || kind == INBOX_FROM_CONNECTORS_KIND
+}
+
+/// Where the browser lands after a Gmail sign-in that started with this pending kind.
+pub fn return_location(kind: &str) -> &'static str {
+    if kind == INBOX_FROM_CONNECTORS_KIND {
+        CONNECTORS_PAGE
+    } else {
+        INBOXES_TAB
+    }
+}
+
+/// Whether a Gmail refresh token is stored for this inbox.
+pub fn gmail_connected(name: &str) -> bool {
+    mail_auth::default_store()
+        .ok()
+        .and_then(|store| store.get(name).ok().flatten())
+        .is_some()
+}
+
+/// Send the browser to Google for a Gmail inbox.
+fn google_connect(ctx: &UiCtx, name: &str, inbox: &Value, from_connectors: bool) -> UiResponse {
+    let back = if from_connectors { CONNECTORS_PAGE } else { INBOXES_TAB };
     let Some((client_id, _)) = super::connectors::google_oauth_client(ctx.state) else {
         return UiResponse::flash_redirect(
             false,
@@ -755,7 +783,7 @@ fn google_connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
     let (verifier, challenge) = oauth::pkce();
     let pending = oauth::Pending {
         provider: oauth::Provider::Google,
-        kind: INBOX_KIND.to_string(),
+        kind: if from_connectors { INBOX_FROM_CONNECTORS_KIND } else { INBOX_KIND }.to_string(),
         account: name.to_string(),
         verifier,
         redirect_uri: redirect_uri.clone(),
@@ -763,7 +791,7 @@ fn google_connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
         created: oauth::now_secs(),
     };
     let Ok(state) = oauth::create_pending(&ctx.state.home_dir.join("oauth"), &pending) else {
-        return UiResponse::flash_redirect(false, &ctx.t("Could not start Google sign-in"), INBOXES_TAB);
+        return UiResponse::flash_redirect(false, &ctx.t("Could not start Google sign-in"), back);
     };
     let account = s(inbox, "account");
     let mut params = vec![
@@ -794,7 +822,7 @@ pub fn google_callback(
 ) -> (bool, String) {
     let t = |s: &str| crate::ui::i18n::t(lang, s, &[]);
     let now = oauth::now_secs();
-    let Some(pending) = oauth::consume_pending(&oauth_ctx.dir, query_state, now).filter(|p| p.kind == INBOX_KIND) else {
+    let Some(pending) = oauth::consume_pending(&oauth_ctx.dir, query_state, now).filter(|p| is_inbox_kind(&p.kind)) else {
         return (false, t("That sign-in link expired or was already used - click Connect again"));
     };
     if let Some(e) = error.filter(|e| !e.is_empty()) {
@@ -863,6 +891,20 @@ mod tests {
         assert!(location.contains("gmail.modify"), "{location}");
         assert!(location.contains("login_hint=me%40example.com"), "{location}");
         assert!(location.contains("127.0.0.1%3A8420%2Foauth%2Fgoogle%2Fcallback"), "{location}");
+    }
+
+    #[test]
+    fn connect_from_the_connectors_page_comes_back_to_it() {
+        let (dir, state) = sandbox();
+        let req = UiRequest::get("/").with_header("host", "127.0.0.1:8420").with_body("back=connectors");
+        let inbox = json!({"name": "work", "label": "Work", "provider": "gmail", "account": "me@example.com"});
+        let resp = connect(&UiCtx::new(&state, &req), "work", &inbox);
+        assert_eq!(resp.status, 303);
+        let pending = std::fs::read_dir(dir.path().join("oauth/pending")).unwrap().next().unwrap().unwrap();
+        let text = std::fs::read_to_string(pending.path()).unwrap();
+        assert!(text.contains(INBOX_FROM_CONNECTORS_KIND), "{text}");
+        assert_eq!(return_location(INBOX_FROM_CONNECTORS_KIND), "/connectors");
+        assert_eq!(return_location(INBOX_KIND), INBOXES_TAB);
     }
 
     #[test]

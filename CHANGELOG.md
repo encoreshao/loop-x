@@ -19,6 +19,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Connectors → Accounts: Gmail inboxes (the Mailbox accounts) show a Connected / Not connected marker and a **Connect with Google** / **Reconnect** button, like Google Calendar, and you return to Connectors after signing in.
 - The Mac app's start screen (shown while the backend starts) has a larger logo inside a slowly orbiting ring, with a soft glow and entrance animation, a one-line mission, the app version, and the author, Encore Shao, with a mail link.
 - The Mac app's Settings window follows the dashboard's Appearance choice: the sidebar and cards take the selected accent (Default, Indigo, Blue, Green, Red, Gray) and the window follows Light, Dark or Auto. The About tab shows the author.
 - The Mac app's Settings window now has tabs (General, Display, Accounts, Command Line, Backend, About) with more detail: startup and scheduler notes, the command line link and its target, backend address, version and pid, the data folder with Reveal in Finder and Open Logs, app and loopx versions, and project links.
