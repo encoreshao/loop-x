@@ -161,6 +161,67 @@ fn expand_blobs(text: &str, expected: &Path) -> String {
     out
 }
 
+/// Blob file stem: the first 16 hex chars of the SHA-256 of the body.
+fn blob_hash(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(s.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Inverse of `expand_blobs`: `<style>`/`<script>` bodies over 1 KiB move to `_blobs/<hash>.txt`.
+fn externalize_blobs(text: &str, expected: &Path) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let next = ["<style>", "<script>"]
+            .iter()
+            .filter_map(|t| rest.find(t).map(|i| (i, *t)))
+            .min_by_key(|(i, _)| *i);
+        let Some((i, tag)) = next else { break };
+        let start = i + tag.len();
+        let close = format!("</{}>", &tag[1..tag.len() - 1]);
+        let Some(len) = rest[start..].find(&close) else {
+            break;
+        };
+        let body = &rest[start..start + len];
+        out.push_str(&rest[..start]);
+        if body.len() > 1024 {
+            let h = blob_hash(body);
+            fs::create_dir_all(expected.join("_blobs")).unwrap();
+            fs::write(expected.join("_blobs").join(format!("{h}.txt")), body).unwrap();
+            out.push_str(&format!("<!--@blob:{h}-->"));
+        } else {
+            out.push_str(body);
+        }
+        rest = &rest[start + len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn blessing() -> bool {
+    std::env::var("LOOPX_GOLDEN_BLESS").is_ok()
+}
+
+/// Delete `_blobs` files no expected page references any more.
+fn prune_blobs(expected: &Path) {
+    let mut referenced = String::new();
+    each_file(expected, &mut |p| {
+        if !p.starts_with(expected.join("_blobs")) && p.extension().is_some_and(|e| e == "html") {
+            referenced.push_str(&fs::read_to_string(p).unwrap_or_default());
+        }
+    });
+    for e in fs::read_dir(expected.join("_blobs")).unwrap().flatten() {
+        let stem = e.path().file_stem().unwrap().to_string_lossy().to_string();
+        if !referenced.contains(&format!("<!--@blob:{stem}-->")) {
+            fs::remove_file(e.path()).unwrap();
+        }
+    }
+}
+
 /// A readable first difference, with a little context.
 fn first_difference(expected: &str, actual: &str) -> String {
     let (e, a): (Vec<&str>, Vec<&str>) = (expected.lines().collect(), actual.lines().collect());
@@ -284,6 +345,16 @@ fn rust_pages_match_the_python_dashboard() {
                 ));
             }
             if let Some(file) = rec["file"].as_str() {
+                if blessing() && !file.ends_with(".bin") {
+                    let got = normalize(&resp.body_text());
+                    fs::write(
+                        expected_dir.join(file),
+                        externalize_blobs(&got, &expected_dir),
+                    )
+                    .unwrap();
+                    t.ported += 1;
+                    continue;
+                }
                 let want_bytes = fs::read(expected_dir.join(file)).unwrap();
                 if file.ends_with(".bin") {
                     if resp.body != want_bytes {
@@ -325,6 +396,9 @@ fn rust_pages_match_the_python_dashboard() {
         "pending pages: {}",
         pending_ids.iter().cloned().collect::<Vec<_>>().join(", ")
     );
+    if blessing() {
+        prune_blobs(&expected_dir);
+    }
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n\n"));
 }
 
@@ -362,11 +436,13 @@ fn render_shell_matches_python_for_every_variant_and_language() {
                     lazy_refresh: flag("lazy_refresh"),
                 },
             ));
-            let want = expand_blobs(
-                &fs::read_to_string(expected_dir.join("shell").join(format!("{id}.{lang}.html")))
-                    .unwrap(),
-                &expected_dir,
-            );
+            let shell_file = expected_dir.join("shell").join(format!("{id}.{lang}.html"));
+            if blessing() {
+                fs::write(&shell_file, externalize_blobs(&got, &expected_dir)).unwrap();
+                count += 1;
+                continue;
+            }
+            let want = expand_blobs(&fs::read_to_string(&shell_file).unwrap(), &expected_dir);
             count += 1;
             if want != got {
                 failures.push(format!(
@@ -377,5 +453,40 @@ fn render_shell_matches_python_for_every_variant_and_language() {
         }
     }
     println!("shell variants compared: {count}");
+    if blessing() {
+        prune_blobs(&expected_dir);
+    }
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n\n"));
+}
+
+#[test]
+fn externalize_blobs_round_trips_through_expand_blobs() {
+    let dir = std::env::temp_dir().join(format!("golden-blob-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let big = "a{color:red}".repeat(200);
+    let page = format!("<html><style>{big}</style><script>var x=1;</script><p>hi</p></html>");
+    let stored = externalize_blobs(&page, &dir);
+    assert!(
+        stored.contains("<!--@blob:"),
+        "big body should be externalized"
+    );
+    assert!(
+        stored.contains("<script>var x=1;</script>"),
+        "small body stays inline"
+    );
+    assert_eq!(expand_blobs(&stored, &dir), page);
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn blob_names_are_the_sha256_prefix_of_their_content() {
+    let blobs = golden_dir().join("expected").join("_blobs");
+    let mut n = 0;
+    for e in fs::read_dir(&blobs).unwrap().flatten() {
+        let body = fs::read_to_string(e.path()).unwrap();
+        let stem = e.path().file_stem().unwrap().to_string_lossy().to_string();
+        assert_eq!(blob_hash(&body), stem, "{}", e.path().display());
+        n += 1;
+    }
+    assert!(n > 0, "no blobs found");
 }
