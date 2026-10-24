@@ -14,7 +14,7 @@ artifacts.
 | `loopx-darwin-arm64.tar.gz`, `loopx-darwin-x86_64.tar.gz`, `loopx-darwin-universal.tar.gz` (each holds one file, `loopx`) | `bin/scripts/install-loopx.sh` (native arch first, universal as fallback), the Homebrew formula (universal) |
 | `loopx-support.tar.gz` (`config/*.template`, `launchd/loopx/*.plist.template`) | `install-loopx.sh` (config skeleton, launchd plists), the formula (`pkgshare`) |
 | `LoopX-X.Y.Z.dmg`, `LoopX-X.Y.Z.app.zip` | people installing the Mac app; Sparkle downloads the DMG |
-| `appcast.xml` | Sparkle (`SUFeedURL` = `https://github.com/encoreshao/loop-engineering/releases/latest/download/appcast.xml`) |
+| `appcast.xml` | Sparkle (`SUFeedURL` = `https://github.com/encoreshao/loop-x/releases/latest/download/appcast.xml`) |
 | `SHA256SUMS` | `install-loopx.sh` verifies every download against it before installing |
 
 ## One-time setup (maintainer)
@@ -63,7 +63,7 @@ Then watch the "Release" workflow. When it is green:
 
 ```bash
 gh release view vX.Y.Z                                    # assets and notes
-curl -fsSL https://github.com/encoreshao/loop-engineering/releases/download/vX.Y.Z/SHA256SUMS
+curl -fsSL https://github.com/encoreshao/loop-x/releases/download/vX.Y.Z/SHA256SUMS
 brew update && brew install encoreshao/tap/loopx && loopx --version
 ```
 
@@ -79,8 +79,8 @@ Without CI, the same steps by hand: `bin/scripts/build_loopx_app.sh`, `codesign 
 ## Installing and upgrading from a release
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade
 bin/scripts/uninstall-loopx.sh --project-dir ~/.loopx   # --keep-config, --remove-app
 ```
 

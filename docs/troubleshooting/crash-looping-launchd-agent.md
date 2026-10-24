@@ -70,7 +70,7 @@ config, replaces the `loopx` binary, re-renders a plist that still points at
 the Python code (same port) and reloads the agents that are loaded:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade
 ```
 
 If nothing is installed yet, run it without `--upgrade` (see `README.md`'s

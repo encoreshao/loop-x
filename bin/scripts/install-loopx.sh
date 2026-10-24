@@ -3,12 +3,12 @@ set -euo pipefail
 
 # The online installer for the Rust `loopx` binary - no clone, no Python:
 #
-#   curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash
 #
 # Already installed and just want the latest release? Same command plus
 # --upgrade:
 #
-#   curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade
+#   curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade
 #
 # This is the loopx counterpart of install.sh (which clones the repo and runs
 # the Python code; it stays as the legacy installer). Instead of cloning, it:
@@ -55,7 +55,7 @@ else
 fi
 
 DIR="$HOME/.loopx"
-REPO_SLUG="encoreshao/loop-engineering"
+REPO_SLUG="encoreshao/loop-x"
 VERSION=""
 RELEASE_BASE="${LOOPX_RELEASE_BASE:-}"
 ARCH="${LOOPX_ARCH:-}"

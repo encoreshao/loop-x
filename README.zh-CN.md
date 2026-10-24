@@ -10,8 +10,8 @@
 
 # Loop X Engineering
 
-![CI](https://github.com/encoreshao/loop-engineering/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-engineering)
+![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
+![License](https://img.shields.io/github/license/encoreshao/loop-x)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25)
 
@@ -48,19 +48,19 @@ Loop X Engineering 的使命是把被 issue 分诊占用的时间还给你：它
 每次定时运行（`loopx run gitlab-loop`）：
 
 1. 列出配置中每个项目别名下、分配给你所配置用户名的所有未关闭 GitLab issue。
-2. **逐个处理，绝不并行**，遵循 [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-engineering/blob/main/instructions/loopx/gitlab-issue.md) 中的分步决策流程。
+2. **逐个处理，绝不并行**，遵循 [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md) 中的分步决策流程。
 3. 对每个 issue 只执行以下其中一项：
   - **修复**——在隔离的 git worktree 中、在 `loop/issue-<iid>` 分支上进行，只有在项目自身的 lint/test 命令通过后才会创建 merge request。
   - **回答**——当请求无需改代码时（提问、状态查询），发布一条 GitLab 评论。
   - **升级**——当请求含义不明确或验证失败时，发布一条 GitLab 评论请求澄清。
 4. 每个 issue 发送一条 Slack 消息，并在运行结束时发送一份汇总（每次运行都会发送，即使当天早上没有任何分配给你的 issue）。
-5. 更新 [`PROGRESS.md`](https://github.com/encoreshao/loop-engineering/blob/main/PROGRESS.md) 和 `outputs/daily-review.md`，让下一次运行——以及你——了解发生了什么。
+5. 更新 [`PROGRESS.md`](https://github.com/encoreshao/loop-x/blob/main/PROGRESS.md) 和 `outputs/daily-review.md`，让下一次运行——以及你——了解发生了什么。
 
 可复用的跨运行经验（修复模式、坑点）会通过 `loopx memory-store` 按 issue 记录为 markdown 任务记忆文件（在此格式出现之前记录的条目仍通过 `loopx memory` 读取），因此后续运行会比上一次更聪明。
 
-第二个独立的循环（`loopx run topic-loop`）不监控 GitLab，而是监控更广泛网络上的任意主题——参见 [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/topic-monitor-loop.md)。
+第二个独立的循环（`loopx run topic-loop`）不监控 GitLab，而是监控更广泛网络上的任意主题——参见 [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/topic-monitor-loop.md)。
 
-第三个循环（`loopx run inbox-triage-loop`）对 Gmail 和 Outlook 收件箱进行分诊：它将每封新的未读邮件归类到一个 `Loop/*` 标签，为紧急邮件起草（绝不发送）一封串联回复，并通过 Slack 汇总和仪表盘的 **Loops → Inbox Triage** 页面进行报告——参见 [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/inbox-triage-loop.md)。
+第三个循环（`loopx run inbox-triage-loop`）对 Gmail 和 Outlook 收件箱进行分诊：它将每封新的未读邮件归类到一个 `Loop/*` 标签，为紧急邮件起草（绝不发送）一封串联回复，并通过 Slack 汇总和仪表盘的 **Loops → Inbox Triage** 页面进行报告——参见 [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/inbox-triage-loop.md)。
 
 ## 循环
 
@@ -79,7 +79,7 @@ Loop X Engineering 的使命是把被 issue 分诊占用的时间还给你：它
 | Release Notes | 跟踪的项目有新标签时，根据上一个标签以来合并的 MR 编写发布说明（默认禁用） | `merge_requests` 连接器（GitLab） | 每小时 | 本地 Markdown 文件 + 通知 |
 | Stale Work Sweeper | 每周一列出停滞的 GitLab 议题和 MR 以及等待你审查的 MR；不调用模型（默认禁用） | `issues` 连接器（GitLab） | 每周一 09:00 | 仅通知 |
 
-后四个是 LoopKit 插件（`crates/core/src/loopkit.rs`、`crates/core/src/loop_plugins/`）：模型在密封环境中运行（无工具、无 MCP 服务器），每个条目相互隔离，单个失败不会中断整次运行，并通过该循环的 **Notify via** 连接器发送通知。详见 [`docs/architecture.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/architecture.md#loopkit)。
+后四个是 LoopKit 插件（`crates/core/src/loopkit.rs`、`crates/core/src/loop_plugins/`）：模型在密封环境中运行（无工具、无 MCP 服务器），每个条目相互隔离，单个失败不会中断整次运行，并通过该循环的 **Notify via** 连接器发送通知。详见 [`docs/architecture.md`](https://github.com/encoreshao/loop-x/blob/main/docs/architecture.md#loopkit)。
 
 ## 环境要求
 
@@ -97,16 +97,16 @@ Loop X Engineering 的使命是把被 issue 分诊占用的时间还给你：它
 **新：安装 `loopx` 二进制（无需克隆）。** 从最新的 GitHub Release 下载适合你 Mac 的预编译 `loopx`，校验 SHA-256，安装到 `~/.loopx/bin/loopx`，并用模板生成 `projects.json`/`topics.json`/`loops.json`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade   # later
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade   # later
 ```
 
 之后加 `--upgrade` 升级：保留你的配置，只替换程序，并重启已加载的 launchd 代理。全新安装时加 `--load-agents` 可同时启动仪表盘代理。也可用 Homebrew：`brew install encoreshao/tap/loopx`（再 `brew services start loopx`），或从 Release 的 DMG 安装已签名的 `LoopX.app`。首次启动检查（AI CLI、凭据、配置）：`loopx doctor`（应用用 `--json`）。卸载（两种模式）：`bin/scripts/uninstall-loopx.sh --project-dir ~/.loopx`（`--keep-config`、`--remove-app`）。发布流程见 [`docs/RELEASING.md`](docs/RELEASING.md)。
 
 **已经在使用 Claude Code？** 粘贴以下内容，而不必自己运行命令：
 
-> 请帮我设置 [https://github.com/encoreshao/loop-engineering](https://github.com/encoreshao/loop-engineering)：运行它的在线安装程序
-> （`curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash`），
+> 请帮我设置 [https://github.com/encoreshao/loop-x](https://github.com/encoreshao/loop-x)：运行它的在线安装程序
+> （`curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash`），
 > 然后帮我在 `~/.loopx/projects.json` 中填入我自己的 GitLab 项目，并在 `~/.gitlab/config.json` 中填入我的 GitLab 令牌。
 
 `gitlab-config` skill（见“环境要求”）可在仪表盘的 **Settings → Skills** 页面安装，该页面会运行 `bin/scripts/setup.sh`；你也可以手动运行这个脚本。
@@ -118,7 +118,7 @@ cargo build --release -p loopx                        # -> target/release/loopx�
 bin/scripts/build_loopx_app.sh target/release/loopx   # -> dist/LoopX.app，包裹该二进制的 Swift 应用（--install 会将其复制到 /Applications）
 ```
 
-`LoopX.app`（源码在 [`macos/LoopX`](https://github.com/encoreshao/loop-engineering/tree/main/macos/LoopX)）内嵌 `loopx` 二进制，并将其注册为后台代理（`com.hermes.loopx.backend`），使后端在应用退出后继续运行；如果已有 `loopx serve` 在运行（见 `loopx.lock`），应用会改为连接它。构建详情：[`docs/building.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/building.md)。
+`LoopX.app`（源码在 [`macos/LoopX`](https://github.com/encoreshao/loop-x/tree/main/macos/LoopX)）内嵌 `loopx` 二进制，并将其注册为后台代理（`com.hermes.loopx.backend`），使后端在应用退出后继续运行；如果已有 `loopx serve` 在运行（见 `loopx.lock`），应用会改为连接它。构建详情：[`docs/building.md`](https://github.com/encoreshao/loop-x/blob/main/docs/building.md)。
 
 **更新。** 应用通过 Sparkle 自行更新（仅限提供了 Sparkle feed URL 和公钥的构建）；二进制通过 `brew upgrade loopx` 或 `install-loopx.sh --upgrade` 更新。当此检出目录落后于 `origin` 时，仪表盘仍会显示“Update available”提示，但不再自行升级——请手动拉取并重新构建。
 
@@ -166,12 +166,12 @@ bin/scripts/uninstall-loopx.sh --keep-config   # 去掉 --keep-config 则全部�
 
 | 文件                                  | 内容                                                                                                                                                                                                                   | 管理方式                                                                                                                                                                   |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.loopx/projects.json`   | 要跟踪哪些项目、它们的本地检出路径、目标分支、install/lint/test 命令、你的 GitLab 用户名，以及 worktree 临时目录（`worktree_root`，默认为 `~/.loopx/worktrees`） | 仪表盘 **Loops → GitLab Issues → Projects** 页面的 “Tracked Projects” 区域，或手动复制 [`config/projects.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/projects.json.template)，或交给 `install-loopx.sh` 完成 |
+| `~/.loopx/projects.json`   | 要跟踪哪些项目、它们的本地检出路径、目标分支、install/lint/test 命令、你的 GitLab 用户名，以及 worktree 临时目录（`worktree_root`，默认为 `~/.loopx/worktrees`） | 仪表盘 **Loops → GitLab Issues → Projects** 页面的 “Tracked Projects” 区域，或手动复制 [`config/projects.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/projects.json.template)，或交给 `install-loopx.sh` 完成 |
 | ↳ 每个项目的 `instance`（可选）   | 为单个项目覆盖顶层的 `gitlab_instance`——当你的项目分布在多个 GitLab 实例上时设置。省略时回退到 `gitlab_instance`。                                               | 同一文件中的各项目条目——参见模板中的 `harbor` 示例                                                                                                            |
-| `~/.loopx/topics.json`     | 要监控哪些主题，以及每个主题中什么算值得关注（仅主题监控循环）                                                                                                                               | 手动复制 [`config/topics.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/topics.json.template)，或交给 `install-loopx.sh` 完成                                                                |
-| `~/.loopx/inboxes.json`    | 要分诊哪些邮箱（服务商、账号、分类、VIP/排除的发件人、Slack bundle）以及共享的默认分类集（仅 Inbox Triage 循环）                                                              | 仪表盘的 **Loops → Inbox Triage → Setup** 页面（`/inbox/setup`），或由 `install-loopx.sh` 从 [`config/inboxes.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/inboxes.json.template) 生成骨架               |
+| `~/.loopx/topics.json`     | 要监控哪些主题，以及每个主题中什么算值得关注（仅主题监控循环）                                                                                                                               | 手动复制 [`config/topics.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/topics.json.template)，或交给 `install-loopx.sh` 完成                                                                |
+| `~/.loopx/inboxes.json`    | 要分诊哪些邮箱（服务商、账号、分类、VIP/排除的发件人、Slack bundle）以及共享的默认分类集（仅 Inbox Triage 循环）                                                              | 仪表盘的 **Loops → Inbox Triage → Setup** 页面（`/inbox/setup`），或由 `install-loopx.sh` 从 [`config/inboxes.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/inboxes.json.template) 生成骨架               |
 | `~/.loopx/mail_oauth.json` | Gmail/Outlook OAuth 应用自身的 client ID（Google 还包括 client secret）——这是一次性的应用注册步骤，而不是按邮箱的凭据                                                                           | 仪表盘的 **Loops → Inbox Triage → Setup** 页面                                                                                                                                                     |
-| `~/.loopx/loops.json`      | 定时循环的注册表：每个条目的名称、计划（工作日/小时/分钟）、入口模块、超时以及各循环的参数——由 `loopx loops` 读取，由 `loopx scheduler` 轮询                 | 手动复制 [`config/loops.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/loops.json.template)，或交给 `install-loopx.sh` 完成                                                                  |
+| `~/.loopx/loops.json`      | 定时循环的注册表：每个条目的名称、计划（工作日/小时/分钟）、入口模块、超时以及各循环的参数——由 `loopx loops` 读取，由 `loopx scheduler` 轮询                 | 手动复制 [`config/loops.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/loops.json.template)，或交给 `install-loopx.sh` 完成                                                                  |
 | `~/.loopx/loop_scheduler_state.json` | 每个循环上次尝试运行的日期，确保调度器不会在同一天重复运行同一循环——不需要手动编辑                                                                                            | 由 `loopx scheduler` 自动写入；`install-loopx.sh` 会为每个已注册循环预填当天日期，因此启用调度器时不会立即触发一次运行 |
 | `~/.loopx/instructions.md` | 你自己的自由文本指令，循环在每次运行开始时读取                                                                                                                                             | 仪表盘 **Settings** 页面的 Instructions 标签页                                                                                                                               |
 | `~/.loopx/ai_cli.json`     | `loopx run` 为每个已注册循环调用哪个 AI CLI（Claude Code 或 Codex CLI）；默认为 `claude`                                                                                                        | 仪表盘 **Settings** 页面的 AI CLI 标签页，或交给 `install-loopx.sh` 完成                                                                                                                |
@@ -219,7 +219,7 @@ loopx run topic-loop    # the topic monitor loop
 **定时运行**有三种方式：
 
 - LoopX 应用内置的调度器：应用打开且 **Settings → Run scheduled loops while LoopX is open** 开启时，每 15 分钟运行一次 `loopx scheduler`；
-- launchd 代理：`install-loopx.sh` 会把 [`launchd/loopx/`](https://github.com/encoreshao/loop-engineering/tree/main/launchd/loopx) 下的模板一次性渲染到 `<安装目录>/launchd/`，你可以在仪表盘的 **Settings → Daemons** 页面逐个点击加载（该页面还会显示每个代理当前是否已加载及其 PID），或手动执行 `launchctl load -w`；
+- launchd 代理：`install-loopx.sh` 会把 [`launchd/loopx/`](https://github.com/encoreshao/loop-x/tree/main/launchd/loopx) 下的模板一次性渲染到 `<安装目录>/launchd/`，你可以在仪表盘的 **Settings → Daemons** 页面逐个点击加载（该页面还会显示每个代理当前是否已加载及其 PID），或手动执行 `launchctl load -w`；
 - 或者在你自己的调度器中运行 `loopx scheduler`。
 
 | 代理                                    | 运行内容                                                                                                                                         |
@@ -228,7 +228,7 @@ loopx run topic-loop    # the topic monitor loop
 | `com.hermes.loop-engineering-dashboard` | Web 仪表盘（`loopx serve`），常驻运行（`RunAtLoad` + `KeepAlive`）                                                                                |
 | `com.hermes.loopx.backend`              | 随 `LoopX.app` 打包的后端，由应用自行注册（不是本仓库中的模板）                                                                                  |
 
-运行哪些循环、按什么计划运行是配置而非代码——编辑 `~/.loopx/loops.json`（参见 [`config/loops.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/loops.json.template)）即可添加循环或更改其到期时间；添加循环需要在 `loops.json` 中新增条目，而不是新增 plist。**Settings → Daemons** 页面中按代理的计划编辑器只作用于 plist 自身的 `StartCalendarInterval`，而 `com.hermes.loop-engineering` 没有它（它以固定的 `StartInterval` 每 15 分钟轮询，实际哪个循环到期由 `loops.json` 决定）——循环自身的计划请在 **Loops** 页面中修改，或手动编辑 `loops.json`。
+运行哪些循环、按什么计划运行是配置而非代码——编辑 `~/.loopx/loops.json`（参见 [`config/loops.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/loops.json.template)）即可添加循环或更改其到期时间；添加循环需要在 `loops.json` 中新增条目，而不是新增 plist。**Settings → Daemons** 页面中按代理的计划编辑器只作用于 plist 自身的 `StartCalendarInterval`，而 `com.hermes.loop-engineering` 没有它（它以固定的 `StartInterval` 每 15 分钟轮询，实际哪个循环到期由 `loops.json` 决定）——循环自身的计划请在 **Loops** 页面中修改，或手动编辑 `loops.json`。
 
 
 ## 仪表盘
@@ -321,7 +321,7 @@ loopx run topic-loop    # the topic monitor loop
 
 ## 安全边界
 
-这些边界是固定的，不会随时间或多次成功而放宽（参见 [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/gitlab-issue-loop.md)）：
+这些边界是固定的，不会随时间或多次成功而放宽（参见 [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)）：
 
 - **从不合并 merge request。** 循环的工作止于“MR 已创建、验证通过”——合并始终是人工手动步骤。
 - 每次代码变更都在独立的 git worktree 中、在 `loop/issue-<iid>` 分支上进行，绝不直接在目标分支上修改。
@@ -330,7 +330,7 @@ loopx run topic-loop    # the topic monitor loop
 - issue 逐个按顺序处理，绝不并行。
 - 同一 issue 的验证失败在一次运行内绝不重试——而是通过 GitLab 评论升级处理。（启用 `verification.mode: gate` 后，循环会自行重新运行项目的检查，并允许带着失败输出作为反馈进行一次有限重试；测试/lint 失败的 MR 绝不会被创建，而是以 `loop:needs-human` 标签升级处理。）
 
-Inbox Triage 循环有其自己的固定安全边界（参见 [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/inbox-triage-loop.md)）：
+Inbox Triage 循环有其自己的固定安全边界（参见 [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/inbox-triage-loop.md)）：
 
 - **从不发送邮件。** 两个邮件服务商模块都不包含发送函数，且获取的 Outlook 令牌权限范围不含 `Mail.Send`——在令牌层面就无法发送，而不仅仅是代码层面。
 - **从不归档、删除、移动邮件或更改已读状态。** 对邮箱的写操作仅限于创建 `Loop/*` 标签/分类、应用这些标签，以及在邮箱自身的草稿箱中创建回复草稿。
@@ -357,18 +357,18 @@ Rust 单元测试与代码放在一起。`pytest` 套件只把构建好的 `loop
 
 | 文档                                                                    | 用途                                                                                          |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`docs/architecture.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/architecture.md)                         | V2 运行时架构：`LoopDefinition`/`LoopState`/`LoopRuntime`、验证/预算/策略、可观测性以及 CLI——这是全局地图，而非任一循环自身的规格说明 |
-| [`TASK.md`](https://github.com/encoreshao/loop-engineering/blob/main/TASK.md)                                                   | 本仓库运行的所有定时任务的索引，每项都指向 `docs/tasks/` 下各自的规格说明        |
-| [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/gitlab-issue-loop.md)   | GitLab issue 循环面向人的规格说明：目标、范围、安全边界                              |
-| [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/topic-monitor-loop.md) | 主题监控循环面向人的规格说明：目标、范围、安全边界                             |
-| [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-engineering/blob/main/instructions/loopx/gitlab-issue.md)                         | GitLab issue 循环每次运行时自身遵循的分步流程                               |
-| [`instructions/loopx/topic-monitor.md`](https://github.com/encoreshao/loop-engineering/blob/main/instructions/loopx/topic-monitor.md)       | 主题监控循环每次运行时自身遵循的分步流程                              |
-| [`PROGRESS.md`](https://github.com/encoreshao/loop-engineering/blob/main/PROGRESS.md)                                           | 循环每次运行都会读取和更新的实时状态——上次运行摘要、未解决的升级事项、已做出的决策 |
-| [`docs/troubleshooting/crash-looping-launchd-agent.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/troubleshooting/crash-looping-launchd-agent.md) | 诊断并修复陷入崩溃循环、日志被刷屏的 `com.hermes.loop-engineering*` launchd 代理 |
+| [`docs/architecture.md`](https://github.com/encoreshao/loop-x/blob/main/docs/architecture.md)                         | V2 运行时架构：`LoopDefinition`/`LoopState`/`LoopRuntime`、验证/预算/策略、可观测性以及 CLI——这是全局地图，而非任一循环自身的规格说明 |
+| [`TASK.md`](https://github.com/encoreshao/loop-x/blob/main/TASK.md)                                                   | 本仓库运行的所有定时任务的索引，每项都指向 `docs/tasks/` 下各自的规格说明        |
+| [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)   | GitLab issue 循环面向人的规格说明：目标、范围、安全边界                              |
+| [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/topic-monitor-loop.md) | 主题监控循环面向人的规格说明：目标、范围、安全边界                             |
+| [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md)                         | GitLab issue 循环每次运行时自身遵循的分步流程                               |
+| [`instructions/loopx/topic-monitor.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/topic-monitor.md)       | 主题监控循环每次运行时自身遵循的分步流程                              |
+| [`PROGRESS.md`](https://github.com/encoreshao/loop-x/blob/main/PROGRESS.md)                                           | 循环每次运行都会读取和更新的实时状态——上次运行摘要、未解决的升级事项、已做出的决策 |
+| [`docs/troubleshooting/crash-looping-launchd-agent.md`](https://github.com/encoreshao/loop-x/blob/main/docs/troubleshooting/crash-looping-launchd-agent.md) | 诊断并修复陷入崩溃循环、日志被刷屏的 `com.hermes.loop-engineering*` launchd 代理 |
 
 
 
 
 ## 许可证
 
-[MIT](https://github.com/encoreshao/loop-engineering/blob/main/LICENSE)——详见 [`LICENSE`](https://github.com/encoreshao/loop-engineering/blob/main/LICENSE) 文件。
+[MIT](https://github.com/encoreshao/loop-x/blob/main/LICENSE)——详见 [`LICENSE`](https://github.com/encoreshao/loop-x/blob/main/LICENSE) 文件。

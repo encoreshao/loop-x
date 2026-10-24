@@ -16,7 +16,7 @@ fi
 VERSION="${1#v}"
 SHA="$2"
 SUPPORT_SHA="$3"
-REPO="${4:-encoreshao/loop-engineering}"
+REPO="${4:-encoreshao/loop-x}"
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
   echo "render_formula.sh: '$VERSION' is not a version like 1.2.3" >&2

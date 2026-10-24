@@ -10,8 +10,8 @@
 
 # Loop X Engineering
 
-![CI](https://github.com/encoreshao/loop-engineering/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-engineering)
+![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
+![License](https://img.shields.io/github/license/encoreshao/loop-x)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 **Get your time back from the daily grind of issues, email and status checks.**
@@ -50,7 +50,7 @@ You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access tok
 **1. Install**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash
 ```
 
 Prefer an app? Download `LoopX-<version>.dmg` from the latest GitHub Release, or run `brew install encoreshao/tap/loopx`.

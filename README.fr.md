@@ -10,8 +10,8 @@
 
 # Loop X Engineering
 
-![CI](https://github.com/encoreshao/loop-engineering/actions/workflows/rust.yml/badge.svg)
-![License](https://img.shields.io/github/license/encoreshao/loop-engineering)
+![CI](https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg)
+![License](https://img.shields.io/github/license/encoreshao/loop-x)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25)
 
@@ -52,19 +52,19 @@ ne touche qu'aux projets que vous lui avez explicitement indiqués.
 Chaque exécution planifiée (`loopx run gitlab-loop`) :
 
 1. Liste tous les tickets GitLab ouverts assignés au nom d'utilisateur configuré, sur chaque alias de projet de votre configuration.
-2. Les traite **un par un, jamais en parallèle**, en suivant la procédure de décision pas à pas de [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-engineering/blob/main/instructions/loopx/gitlab-issue.md).
+2. Les traite **un par un, jamais en parallèle**, en suivant la procédure de décision pas à pas de [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md).
 3. Pour chaque ticket, fait exactement l'une des actions suivantes :
   - **Le corriger** — dans un git worktree isolé, sur une branche `loop/issue-<iid>`, en n'ouvrant une merge request qu'une fois les commandes de lint/test du projet passées.
   - **Y répondre** — publier un commentaire GitLab quand la demande ne nécessite aucune modification de code (une question, un point d'étape).
   - **L'escalader** — publier un commentaire GitLab demandant des précisions quand la demande est ambiguë ou quand la vérification échoue.
 4. Envoie un message Slack par ticket plus un récapitulatif de fin d'exécution (à chaque exécution, même les matins sans rien d'assigné).
-5. Met à jour [`PROGRESS.md`](https://github.com/encoreshao/loop-engineering/blob/main/PROGRESS.md) et `outputs/daily-review.md` pour que la prochaine exécution — et vous — sachiez ce qui s'est passé.
+5. Met à jour [`PROGRESS.md`](https://github.com/encoreshao/loop-x/blob/main/PROGRESS.md) et `outputs/daily-review.md` pour que la prochaine exécution — et vous — sachiez ce qui s'est passé.
 
 Les enseignements réutilisables d'une exécution à l'autre (schémas de correction, pièges) sont enregistrés par ticket sous forme de fichiers markdown de mémoire de tâche via `loopx memory-store` (les entrées antérieures à ce format restent lues via `loopx memory`), de sorte que chaque exécution démarre plus avisée que la précédente.
 
-Une deuxième boucle, indépendante (`loopx run topic-loop`), surveille des sujets arbitraires sur le web plutôt que GitLab — voir [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/topic-monitor-loop.md).
+Une deuxième boucle, indépendante (`loopx run topic-loop`), surveille des sujets arbitraires sur le web plutôt que GitLab — voir [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/topic-monitor-loop.md).
 
-Une troisième boucle (`loopx run inbox-triage-loop`) trie les boîtes de réception Gmail et Outlook : elle classe chaque nouveau message non lu sous un libellé `Loop/*`, rédige (sans jamais l'envoyer) un brouillon de réponse dans le fil pour tout ce qui est urgent, et rend compte via un récapitulatif Slack et la page **Loops → Inbox Triage** du tableau de bord — voir [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/inbox-triage-loop.md).
+Une troisième boucle (`loopx run inbox-triage-loop`) trie les boîtes de réception Gmail et Outlook : elle classe chaque nouveau message non lu sous un libellé `Loop/*`, rédige (sans jamais l'envoyer) un brouillon de réponse dans le fil pour tout ce qui est urgent, et rend compte via un récapitulatif Slack et la page **Loops → Inbox Triage** du tableau de bord — voir [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/inbox-triage-loop.md).
 
 ## Boucles
 
@@ -83,7 +83,7 @@ Sept boucles sont livrées dans `config/loops.json.template` ; chacune a sa page
 | Release Notes | Quand un projet suivi reçoit un nouveau tag, rédige les notes de version à partir des MR fusionnées depuis le tag précédent (désactivée par défaut) | Connecteur `merge_requests` (GitLab) | Toutes les heures | Fichier Markdown local + notification |
 | Stale Work Sweeper | Chaque lundi, liste vos tickets et MR GitLab en sommeil et les revues qui vous attendent ; aucun appel au modèle (désactivée par défaut) | Connecteur `issues` (GitLab) | Le lundi 09:00 | Notifications uniquement |
 
-Les quatre dernières sont des plugins LoopKit (`crates/core/src/loopkit.rs`, `crates/core/src/loop_plugins/`) : le modèle s'exécute en mode scellé (sans outils ni serveurs MCP), chaque élément est isolé pour qu'un échec n'arrête pas l'exécution, et les notifications passent par les connecteurs **Notify via** de la boucle. Voir [`docs/architecture.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/architecture.md#loopkit).
+Les quatre dernières sont des plugins LoopKit (`crates/core/src/loopkit.rs`, `crates/core/src/loop_plugins/`) : le modèle s'exécute en mode scellé (sans outils ni serveurs MCP), chaque élément est isolé pour qu'un échec n'arrête pas l'exécution, et les notifications passent par les connecteurs **Notify via** de la boucle. Voir [`docs/architecture.md`](https://github.com/encoreshao/loop-x/blob/main/docs/architecture.md#loopkit).
 
 ## Prérequis
 
@@ -101,16 +101,16 @@ Les quatre dernières sont des plugins LoopKit (`crates/core/src/loopkit.rs`, `c
 **Nouveau : installer le binaire `loopx` (sans clone).** Télécharge le `loopx` précompilé pour votre Mac depuis la dernière GitHub Release, vérifie son SHA-256, l'installe dans `~/.loopx/bin/loopx` et crée `projects.json`/`topics.json`/`loops.json` à partir des modèles :
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash
-curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade   # later
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash
+curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash -s -- --upgrade   # later
 ```
 
 Ajoutez `--upgrade` pour mettre à jour : votre configuration est conservée, seul le programme est remplacé, et les agents launchd déjà chargés sont redémarrés. Ajoutez `--load-agents` pour démarrer aussi l'agent du tableau de bord lors d'une première installation. Vous préférez Homebrew ? `brew install encoreshao/tap/loopx` (puis `brew services start loopx`), ou installez `LoopX.app` signée depuis le DMG de la release. Vérification au premier lancement (CLI d'IA, identifiants, configuration) : `loopx doctor` (`--json` pour l'app). Désinstaller (les deux modes) : `bin/scripts/uninstall-loopx.sh --project-dir ~/.loopx` (`--keep-config`, `--remove-app`). Procédure de release : [`docs/RELEASING.md`](docs/RELEASING.md).
 
 **Vous travaillez déjà dans Claude Code ?** Collez ceci au lieu d'exécuter les commandes vous-même :
 
-> Installe [https://github.com/encoreshao/loop-engineering](https://github.com/encoreshao/loop-engineering) pour moi : exécute son installateur en ligne
-> (`curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-engineering/main/bin/scripts/install-loopx.sh | bash`),
+> Installe [https://github.com/encoreshao/loop-x](https://github.com/encoreshao/loop-x) pour moi : exécute son installateur en ligne
+> (`curl -fsSL https://raw.githubusercontent.com/encoreshao/loop-x/main/bin/scripts/install-loopx.sh | bash`),
 > puis aide-moi à renseigner `~/.loopx/projects.json` avec mes propres projets GitLab, et `~/.gitlab/config.json` avec mon jeton GitLab.
 
 La skill `gitlab-config` (voir Prérequis) s'installe depuis la page **Settings → Skills** du tableau de bord, qui exécute `bin/scripts/setup.sh` ; vous pouvez aussi lancer ce script à la main.
@@ -122,7 +122,7 @@ cargo build --release -p loopx                        # -> target/release/loopx 
 bin/scripts/build_loopx_app.sh target/release/loopx   # -> dist/LoopX.app, l'application Swift autour de ce binaire (--install la copie dans /Applications)
 ```
 
-`LoopX.app` (sources dans [`macos/LoopX`](https://github.com/encoreshao/loop-engineering/tree/main/macos/LoopX)) embarque le binaire `loopx` et l'enregistre comme agent d'arrière-plan (`com.hermes.loopx.backend`) pour que le backend survive à l'application ; si un `loopx serve` tourne déjà (voir `loopx.lock`), l'application s'y connecte à la place. Détails de compilation : [`docs/building.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/building.md).
+`LoopX.app` (sources dans [`macos/LoopX`](https://github.com/encoreshao/loop-x/tree/main/macos/LoopX)) embarque le binaire `loopx` et l'enregistre comme agent d'arrière-plan (`com.hermes.loopx.backend`) pour que le backend survive à l'application ; si un `loopx serve` tourne déjà (voir `loopx.lock`), l'application s'y connecte à la place. Détails de compilation : [`docs/building.md`](https://github.com/encoreshao/loop-x/blob/main/docs/building.md).
 
 **Mises à jour.** L'application se met à jour via Sparkle (uniquement dans les builds auxquels on a donné une URL de flux Sparkle et une clé publique) ; le binaire se met à jour avec `brew upgrade loopx` ou `install-loopx.sh --upgrade`. Le tableau de bord affiche toujours un avis *Update available* quand ce checkout est en retard sur `origin`, mais il ne se met plus à jour tout seul — faites un pull et recompilez à la main.
 
@@ -170,12 +170,12 @@ Deux autres fichiers de configuration se trouvent entièrement hors de cette arb
 
 | Fichier                               | Contenu                                                                                                                                                                                                                 | Géré via                                                                                                                                                                      |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.loopx/projects.json`   | Les projets à suivre, leurs chemins de checkout locaux, la branche cible, les commandes d'installation/lint/test, votre nom d'utilisateur GitLab et le répertoire de travail des worktrees (`worktree_root`, par défaut `~/.loopx/worktrees`) | Section « Tracked Projects » de la page **Loops → GitLab Issues → Projects** du tableau de bord, ou copiez [`config/projects.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/projects.json.template) à la main, ou laissez `install-loopx.sh` s'en charger |
+| `~/.loopx/projects.json`   | Les projets à suivre, leurs chemins de checkout locaux, la branche cible, les commandes d'installation/lint/test, votre nom d'utilisateur GitLab et le répertoire de travail des worktrees (`worktree_root`, par défaut `~/.loopx/worktrees`) | Section « Tracked Projects » de la page **Loops → GitLab Issues → Projects** du tableau de bord, ou copiez [`config/projects.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/projects.json.template) à la main, ou laissez `install-loopx.sh` s'en charger |
 | ↳ `instance` par projet (facultatif)  | Remplace le `gitlab_instance` de premier niveau pour un projet — à définir quand vos projets s'étendent sur plusieurs instances GitLab. Retombe sur `gitlab_instance` s'il est omis.                                       | Même fichier, par entrée de projet — voir l'exemple `harbor` du modèle                                                                                                        |
-| `~/.loopx/topics.json`     | Les sujets à surveiller et ce qui est jugé notable pour chacun (boucle de surveillance de sujets uniquement)                                                                                                             | Copiez [`config/topics.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/topics.json.template) à la main, ou laissez `install-loopx.sh` s'en charger                                                                |
-| `~/.loopx/inboxes.json`    | Les boîtes mail à trier (fournisseur, compte, catégories, expéditeurs VIP/exclus, bundle Slack) et l'ensemble de catégories par défaut partagé (boucle Inbox Triage uniquement)                                          | Page **Loops → Inbox Triage → Setup** du tableau de bord (`/inbox/setup`), ou laissez `install-loopx.sh` le générer à partir de [`config/inboxes.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/inboxes.json.template)               |
+| `~/.loopx/topics.json`     | Les sujets à surveiller et ce qui est jugé notable pour chacun (boucle de surveillance de sujets uniquement)                                                                                                             | Copiez [`config/topics.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/topics.json.template) à la main, ou laissez `install-loopx.sh` s'en charger                                                                |
+| `~/.loopx/inboxes.json`    | Les boîtes mail à trier (fournisseur, compte, catégories, expéditeurs VIP/exclus, bundle Slack) et l'ensemble de catégories par défaut partagé (boucle Inbox Triage uniquement)                                          | Page **Loops → Inbox Triage → Setup** du tableau de bord (`/inbox/setup`), ou laissez `install-loopx.sh` le générer à partir de [`config/inboxes.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/inboxes.json.template)               |
 | `~/.loopx/mail_oauth.json` | Le client ID propre à l'application OAuth Gmail/Outlook (et, pour Google, le client secret) — une étape unique d'enregistrement d'application, pas un identifiant par boîte mail                                         | Page **Loops → Inbox Triage → Setup** du tableau de bord                                                                                                                                                     |
-| `~/.loopx/loops.json`      | Le registre des boucles planifiées : nom de chaque entrée, planning (jours ouvrés/heure/minute), module de point d'entrée, délai d'expiration et réglages par boucle — lu par `loopx loops`, sondé par `loopx scheduler` | Copiez [`config/loops.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/loops.json.template) à la main, ou laissez `install-loopx.sh` s'en charger                                                                  |
+| `~/.loopx/loops.json`      | Le registre des boucles planifiées : nom de chaque entrée, planning (jours ouvrés/heure/minute), module de point d'entrée, délai d'expiration et réglages par boucle — lu par `loopx loops`, sondé par `loopx scheduler` | Copiez [`config/loops.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/loops.json.template) à la main, ou laissez `install-loopx.sh` s'en charger                                                                  |
 | `~/.loopx/loop_scheduler_state.json` | La date de dernière tentative de chaque boucle, pour que l'ordonnanceur n'exécute jamais la même boucle deux fois dans la journée — à ne pas éditer à la main                                              | Écrit automatiquement par `loopx scheduler` ; initialisé avec la date du jour pour chaque boucle enregistrée par `install-loopx.sh`, afin qu'activer l'ordonnanceur ne déclenche pas une exécution immédiate |
 | `~/.loopx/instructions.md` | Vos propres instructions en texte libre, lues par la boucle au début de chaque exécution                                                                                                                                | Onglet Instructions de la page **Settings** du tableau de bord                                                                                                                               |
 | `~/.loopx/ai_cli.json`     | La CLI d'IA (Claude Code ou Codex CLI) que `loopx run` invoque pour chaque boucle enregistrée ; `claude` par défaut                                                                                                 | Onglet AI CLI de la page **Settings** du tableau de bord, ou laissez `install-loopx.sh` s'en charger                                                                                                                |
@@ -223,7 +223,7 @@ Les deux journalisent dans `outputs/history/`, et ajoutent aussi la sortie de ch
 **Selon un planning**, de trois façons :
 
 - le planificateur intégré à l'application LoopX : tant que l'application est ouverte et que **Settings → Run scheduled loops while LoopX is open** est activé, il exécute `loopx scheduler` toutes les 15 minutes ;
-- des agents launchd : `install-loopx.sh` génère une seule fois les modèles de [`launchd/loopx/`](https://github.com/encoreshao/loop-engineering/tree/main/launchd/loopx) dans `<répertoire d'installation>/launchd/`, et vous les chargez d'un clic chacun depuis la page **Settings → Daemons** du tableau de bord (qui indique aussi si chacun est actuellement chargé, avec son PID), ou à la main avec `launchctl load -w` ;
+- des agents launchd : `install-loopx.sh` génère une seule fois les modèles de [`launchd/loopx/`](https://github.com/encoreshao/loop-x/tree/main/launchd/loopx) dans `<répertoire d'installation>/launchd/`, et vous les chargez d'un clic chacun depuis la page **Settings → Daemons** du tableau de bord (qui indique aussi si chacun est actuellement chargé, avec son PID), ou à la main avec `launchctl load -w` ;
 - ou lancez `loopx scheduler` depuis votre propre planificateur.
 
 | Agent                                   | Exécute                                                                                                                                          |
@@ -232,7 +232,7 @@ Les deux journalisent dans `outputs/history/`, et ajoutent aussi la sortie de ch
 | `com.hermes.loop-engineering-dashboard` | Le tableau de bord web (`loopx serve`), toujours actif (`RunAtLoad` + `KeepAlive`)                                                               |
 | `com.hermes.loopx.backend`              | Le backend embarqué dans `LoopX.app`, enregistré par l'application elle-même (ce n'est pas un modèle de ce dépôt)                                |
 
-Quelles boucles tournent et selon quel planning relève de la configuration, pas du code — modifiez `~/.loopx/loops.json` (voir [`config/loops.json.template`](https://github.com/encoreshao/loop-engineering/blob/main/config/loops.json.template)) pour ajouter une boucle ou changer son échéance ; ajouter une boucle demande une nouvelle entrée dans `loops.json`, pas un nouveau plist. L'éditeur de planning par agent de la page **Settings → Daemons** ne s'applique qu'au `StartCalendarInterval` propre à un plist, que `com.hermes.loop-engineering` n'a pas (il sonde toutes les 15 minutes avec un `StartInterval` fixe et s'en remet à `loops.json` pour savoir quelle boucle est réellement due) — le planning d'une boucle se modifie dans les pages **Loops** ou à la main dans `loops.json`.
+Quelles boucles tournent et selon quel planning relève de la configuration, pas du code — modifiez `~/.loopx/loops.json` (voir [`config/loops.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/loops.json.template)) pour ajouter une boucle ou changer son échéance ; ajouter une boucle demande une nouvelle entrée dans `loops.json`, pas un nouveau plist. L'éditeur de planning par agent de la page **Settings → Daemons** ne s'applique qu'au `StartCalendarInterval` propre à un plist, que `com.hermes.loop-engineering` n'a pas (il sonde toutes les 15 minutes avec un `StartInterval` fixe et s'en remet à `loops.json` pour savoir quelle boucle est réellement due) — le planning d'une boucle se modifie dans les pages **Loops** ou à la main dans `loops.json`.
 
 
 ## Le tableau de bord
@@ -325,7 +325,7 @@ Dépliez pour la liste complète
 
 ## Garde-fous de sécurité
 
-Fixes, et ne se relâchent pas avec le temps ni avec les succès répétés (voir [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/gitlab-issue-loop.md)) :
+Fixes, et ne se relâchent pas avec le temps ni avec les succès répétés (voir [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)) :
 
 - **Ne fusionne jamais une merge request.** Le travail de la boucle s'arrête à « MR ouverte, vérification réussie » — la fusion reste toujours une étape humaine manuelle.
 - Chaque modification de code se fait dans son propre git worktree, sur une branche `loop/issue-<iid>`, jamais directement sur la branche cible.
@@ -334,7 +334,7 @@ Fixes, et ne se relâchent pas avec le temps ni avec les succès répétés (voi
 - Les tickets sont traités un par un, séquentiellement, jamais en parallèle.
 - Un échec de vérification sur un même ticket n'est jamais retenté au cours d'une exécution — il est escaladé via un commentaire GitLab. (Avec `verification.mode: gate`, la boucle relance elle-même les vérifications du projet et autorise une nouvelle tentative bornée avec la sortie en échec comme retour ; elle n'ouvre jamais une MR dont les tests/lint échouent et escalade avec le label `loop:needs-human`.)
 
-La boucle Inbox Triage a ses propres garde-fous fixes (voir [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/inbox-triage-loop.md)) :
+La boucle Inbox Triage a ses propres garde-fous fixes (voir [`docs/tasks/inbox-triage-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/inbox-triage-loop.md)) :
 
 - **N'envoie jamais de mail.** Aucun module de fournisseur mail ne contient de fonction d'envoi, et le jeton Outlook obtenu est limité sans `Mail.Send` — l'envoi est impossible au niveau du jeton, pas seulement du code.
 - **N'archive, ne supprime, ne déplace jamais et ne modifie jamais l'état lu/non lu.** Les seules écritures dans la boîte mail sont la création de libellés/catégories `Loop/*`, leur application et la création de brouillons de réponse laissés dans le dossier Brouillons de la boîte.
@@ -361,18 +361,18 @@ Les tests unitaires Rust vivent à côté du code. La suite `pytest` pilote uniq
 
 | Document                                                               | Utilité                                                                                                |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`docs/architecture.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/architecture.md)                         | L'architecture d'exécution V2 : `LoopDefinition`/`LoopState`/`LoopRuntime`, vérification/budget/politique, observabilité et la CLI — la carte d'ensemble, pas la spécification propre à l'une ou l'autre boucle |
-| [`TASK.md`](https://github.com/encoreshao/loop-engineering/blob/main/TASK.md)                                                   | Index de chaque tâche planifiée exécutée par ce dépôt, chacune pointant vers sa propre spécification sous `docs/tasks/` |
-| [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/gitlab-issue-loop.md)   | La spécification destinée aux humains de la boucle de tickets GitLab : objectif, périmètre, garde-fous de sécurité |
-| [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/tasks/topic-monitor-loop.md) | La spécification destinée aux humains de la boucle de surveillance de sujets : objectif, périmètre, garde-fous de sécurité |
-| [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-engineering/blob/main/instructions/loopx/gitlab-issue.md)                         | La procédure pas à pas que suit la boucle de tickets GitLab à chaque exécution                         |
-| [`instructions/loopx/topic-monitor.md`](https://github.com/encoreshao/loop-engineering/blob/main/instructions/loopx/topic-monitor.md)       | La procédure pas à pas que suit la boucle de surveillance de sujets à chaque exécution                 |
-| [`PROGRESS.md`](https://github.com/encoreshao/loop-engineering/blob/main/PROGRESS.md)                                           | L'état en direct que la boucle lit et met à jour à chaque exécution — résumé de la dernière exécution, escalades ouvertes, décisions prises |
-| [`docs/troubleshooting/crash-looping-launchd-agent.md`](https://github.com/encoreshao/loop-engineering/blob/main/docs/troubleshooting/crash-looping-launchd-agent.md) | Diagnostiquer et corriger un agent launchd `com.hermes.loop-engineering*` bloqué dans une boucle de plantages qui inonde son log |
+| [`docs/architecture.md`](https://github.com/encoreshao/loop-x/blob/main/docs/architecture.md)                         | L'architecture d'exécution V2 : `LoopDefinition`/`LoopState`/`LoopRuntime`, vérification/budget/politique, observabilité et la CLI — la carte d'ensemble, pas la spécification propre à l'une ou l'autre boucle |
+| [`TASK.md`](https://github.com/encoreshao/loop-x/blob/main/TASK.md)                                                   | Index de chaque tâche planifiée exécutée par ce dépôt, chacune pointant vers sa propre spécification sous `docs/tasks/` |
+| [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)   | La spécification destinée aux humains de la boucle de tickets GitLab : objectif, périmètre, garde-fous de sécurité |
+| [`docs/tasks/topic-monitor-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/topic-monitor-loop.md) | La spécification destinée aux humains de la boucle de surveillance de sujets : objectif, périmètre, garde-fous de sécurité |
+| [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md)                         | La procédure pas à pas que suit la boucle de tickets GitLab à chaque exécution                         |
+| [`instructions/loopx/topic-monitor.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/topic-monitor.md)       | La procédure pas à pas que suit la boucle de surveillance de sujets à chaque exécution                 |
+| [`PROGRESS.md`](https://github.com/encoreshao/loop-x/blob/main/PROGRESS.md)                                           | L'état en direct que la boucle lit et met à jour à chaque exécution — résumé de la dernière exécution, escalades ouvertes, décisions prises |
+| [`docs/troubleshooting/crash-looping-launchd-agent.md`](https://github.com/encoreshao/loop-x/blob/main/docs/troubleshooting/crash-looping-launchd-agent.md) | Diagnostiquer et corriger un agent launchd `com.hermes.loop-engineering*` bloqué dans une boucle de plantages qui inonde son log |
 
 
 
 
 ## Licence
 
-[MIT](https://github.com/encoreshao/loop-engineering/blob/main/LICENSE) — voir le fichier [`LICENSE`](https://github.com/encoreshao/loop-engineering/blob/main/LICENSE).
+[MIT](https://github.com/encoreshao/loop-x/blob/main/LICENSE) — voir le fichier [`LICENSE`](https://github.com/encoreshao/loop-x/blob/main/LICENSE).

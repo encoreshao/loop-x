@@ -307,8 +307,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-engineering/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/encoreshao/loop-engineering/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/encoreshao/loop-engineering/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/encoreshao/loop-engineering/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/encoreshao/loop-engineering/releases/tag/v0.1.0
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/encoreshao/loop-x/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/encoreshao/loop-x/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/encoreshao/loop-x/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/encoreshao/loop-x/releases/tag/v0.1.0
