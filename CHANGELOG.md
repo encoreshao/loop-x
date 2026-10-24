@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Inbox Triage → Connect on a Gmail inbox no longer answers "signing in is not available in the Mac app yet": it now sends you to Google to sign in and stores the refresh token for the inbox.
 - The dashboard chat showed "Something went wrong - try again." even though the assistant had answered: the live reply stream (`/activity/chat-stream`) was never served, so the page's connection got a 404. The reply is now streamed as it is written.
 
 ### Added

@@ -37,9 +37,9 @@ Inbox Triage → Setup** view (`/loops/inbox-triage-loop?view=setup`):
    works even when the dashboard is normally reached through nginx.
 2. Add an inbox (label, provider, account address, `urgent_brief`, VIP/
    excluded senders, optional Slack bundle).
-3. Click **Connect** — Gmail opens Google's consent screen in the browser;
-   Outlook shows a device code and `https://microsoft.com/devicelogin` and
-   polls in the background until you finish signing in there.
+3. Click **Connect** — Gmail opens Google's consent screen in the browser and
+   returns to the inbox list when you approve. Outlook sign-in is not available
+   yet. See [`docs/authentication.md`](../authentication.md).
 4. Click **Test connection** to confirm the stored token's mailbox address
    still matches what you configured.
 

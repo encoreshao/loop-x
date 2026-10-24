@@ -1209,7 +1209,7 @@ fn linkedin_disconnect(ctx: &UiCtx) -> UiResponse {
 
 // ---- Connect with Google ---------------------------------------------------------------
 
-fn urlencode(params: &[(&str, &str)]) -> String {
+pub(super) fn urlencode(params: &[(&str, &str)]) -> String {
     params
         .iter()
         .map(|(k, v)| format!("{}={}", pyfmt::quote(k, "").replace("%20", "+"), pyfmt::quote(v, "").replace("%20", "+")))
@@ -1217,7 +1217,7 @@ fn urlencode(params: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-fn authority_port(ctx: &UiCtx) -> String {
+pub(super) fn authority_port(ctx: &UiCtx) -> String {
     ctx.req
         .header("host")
         .and_then(|h| h.rsplit_once(':'))

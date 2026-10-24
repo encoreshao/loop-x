@@ -155,6 +155,35 @@ async fn callback(
             "/connectors",
         ));
     }
+    // A Gmail sign-in started from the Inbox Triage setup page: the refresh token goes to the
+    // inbox's mail token store and the browser returns to the inbox list.
+    if provider == Provider::Google
+        && oauth::peek_pending(&ctx.dir, &state, now, true)
+            .is_some_and(|p| p.kind == crate::ui::pages::inbox_loop::INBOX_KIND)
+    {
+        let lang = loopx_core_lang(&headers);
+        let (code, error) = (q.get("code").cloned(), q.get("error").cloned());
+        let c2 = ctx.clone();
+        let (ok, message) = tokio::task::spawn_blocking(move || {
+            crate::ui::pages::inbox_loop::google_callback(
+                &c2,
+                lang,
+                &state,
+                code.as_deref(),
+                error.as_deref(),
+            )
+        })
+        .await
+        .unwrap_or((
+            false,
+            "Internal error while finishing the sign-in".to_string(),
+        ));
+        return crate::ui::glue::into_response(crate::ui::UiResponse::flash_redirect(
+            ok,
+            &message,
+            "/loops/inbox-triage-loop?view=setup&tab=inboxes",
+        ));
+    }
     let code = q.get("code").cloned();
     let error = q.get("error").cloned();
     let c2 = ctx.clone();
@@ -484,6 +513,39 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(call(&app, foreign).await.0, 403);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_inbox_sign_in_returns_to_the_inbox_list_and_spends_the_state() {
+        let d = tempfile::tempdir().unwrap();
+        let (app, ctx) = setup(d.path());
+        let state = oauth::create_pending(
+            &ctx.dir,
+            &oauth::Pending {
+                provider: Provider::Google,
+                kind: "inbox".into(),
+                account: "work".into(),
+                verifier: "v".into(),
+                redirect_uri: "http://127.0.0.1:8420/oauth/google/callback".into(),
+                app_scheme: None,
+                created: oauth::now_secs(),
+            },
+        )
+        .unwrap();
+        let req = HttpRequest::get(format!(
+            "/oauth/google/callback?state={state}&error=access_denied"
+        ))
+        .header("host", "127.0.0.1:8420")
+        .body(Body::empty())
+        .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), 303);
+        let location = resp.headers()["location"].to_str().unwrap().to_string();
+        assert!(
+            location.starts_with("/loops/inbox-triage-loop?view=setup&tab=inboxes"),
+            "{location}"
+        );
+        assert!(oauth::peek_pending(&ctx.dir, &state, oauth::now_secs(), true).is_none());
     }
 
     #[tokio::test]

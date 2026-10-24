@@ -1,7 +1,7 @@
 //! The Inbox Triage loop's page `/loops/inbox-triage-loop` (views Live, Drafts and
 //! Setup) and the `/inbox/*` POSTs behind it (`/inbox/run-now` is in `runs.rs`).
-//! Signing a mailbox in (Connect) is not available here yet: it needs the Google
-//! redirect and Microsoft device-code flows, which still live in the Python dashboard.
+//! Connect signs a Gmail mailbox in through the Google redirect (`google_callback` finishes
+//! it); the Microsoft device-code flow is not available yet.
 
 use super::loops_common::{custom_select, flash_html, render_loop_page};
 use crate::ui::badge::py_title;
@@ -10,6 +10,7 @@ use crate::ui::pyfmt;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use chrono::{DateTime, FixedOffset, Local};
 use loopx_core::mail_auth::{self, RefreshTokenStore};
+use loopx_core::oauth;
 use loopx_core::{content_archive, inbox_config, inbox_seen, inbox_status, mail_provider, pydumps};
 use serde_json::{json, Value};
 
@@ -18,7 +19,6 @@ const INBOXES_TAB: &str = "/loops/inbox-triage-loop?view=setup&tab=inboxes";
 
 pub fn register(r: &mut Registry) {
     r.get("/loops/inbox-triage-loop", page);
-    r.get("/inbox/connect/status", |_| UiResponse::json(200, &json!({"state": "none"})));
     r.post("/inbox/oauth-client", oauth_client);
     r.post("/inbox/inboxes", save_inbox);
     r.post("/inbox/inboxes/:name/:verb", inbox_action);
@@ -474,21 +474,6 @@ fn inbox_card(ctx: &UiCtx, inbox: &Value, entry: &Value, bundles: &[String]) -> 
             )
         })
         .collect();
-    let device = if s(inbox, "provider") == "outlook" {
-        let prompt = ctx.tf(
-            "Go to {link} and enter {code}",
-            &[
-                ("link", "<a class='device-uri' target='_blank' rel='noopener'></a>"),
-                ("code", "<code class='device-code'></code>"),
-            ],
-        );
-        format!(
-            "<div class='device-flow' data-inbox='{}' hidden><p>{prompt}</p><p class='device-message section-subtitle'></p></div>",
-            e(&name)
-        )
-    } else {
-        String::new()
-    };
     let confirm = e(&ctx.tf(
         "Delete inbox {label}? This removes its settings, sign-in and saved state.",
         &[("label", &s(inbox, "label"))],
@@ -505,7 +490,7 @@ fn inbox_card(ctx: &UiCtx, inbox: &Value, entry: &Value, bundles: &[String]) -> 
         e(&s(inbox, "label")),
         state_chips(ctx, inbox, entry),
         inbox_form(ctx, Some(inbox), bundles, &edit_id, ""),
-        section(&ctx.t("Connection"), &format!("<div class='daemon-action-form'>{buttons}</div>{device}"), false),
+        section(&ctx.t("Connection"), &format!("<div class='daemon-action-form'>{buttons}</div>"), false),
     )
 }
 
@@ -564,11 +549,6 @@ fn client_form(ctx: &UiCtx, provider: &str, title: &str, oauth: &serde_json::Map
     )
 }
 
-fn js_str(text: &str) -> String {
-    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'").replace('<', "\\x3c"))
-}
-
-const DEVICE_FLOW_SCRIPT: &str = "\n<script>\ndocument.querySelectorAll('.device-flow').forEach(function (box) {\n  var inbox = box.getAttribute('data-inbox');\n  function poll() {\n    fetch('/inbox/connect/status?inbox=' + encodeURIComponent(inbox)).then(function (r) { return r.json(); }).then(function (s) {\n      if (s.state === 'none') { return; }\n      box.hidden = false;\n      box.querySelector('.device-uri').textContent = s.verification_uri || '';\n      box.querySelector('.device-uri').href = s.verification_uri || '#';\n      box.querySelector('.device-code').textContent = s.user_code || '';\n      box.querySelector('.device-message').textContent = s.message || '';\n      if (s.state === 'pending') { setTimeout(poll, 3000); }\n      if (s.state === 'connected' || s.state === 'failed') {\n        // The code is spent either way - drop the stale \"Go to ... enter code\" line.\n        box.querySelector('p').hidden = true;\n        box.querySelector('.device-message').textContent =\n          s.state === 'connected' ? 'Connected' : (s.message || 'Sign-in failed - click Connect again');\n      }\n    }).catch(function () {});\n  }\n  poll();\n});\n</script>";
 
 fn slack_bundles(ctx: &UiCtx) -> Vec<String> {
     std::fs::read_to_string(ctx.state.user_home.join(".gitlab").join("config.json"))
@@ -651,12 +631,9 @@ fn setup_body(ctx: &UiCtx, config: &Value, requested_tab: Option<&str>) -> Strin
         })
         .collect();
     format!(
-        "<div class='page-title'><h1>{}</h1><p class='subtitle'>{}</p></div><div data-tabs><div class='tab-list' role='tablist'>{tab_buttons}</div>{tab_panels}</div>{}",
+        "<div class='page-title'><h1>{}</h1><p class='subtitle'>{}</p></div><div data-tabs><div class='tab-list' role='tablist'>{tab_buttons}</div>{tab_panels}</div>",
         e(&ctx.t("Inbox Setup")),
         e(&ctx.t("Connect a Gmail or Outlook inbox for the loop to triage. Nothing is ever sent, archived, or deleted automatically.")),
-        DEVICE_FLOW_SCRIPT
-            .replace("'Connected'", &js_str(&ctx.t("Connected")))
-            .replace("'Sign-in failed - click Connect again'", &js_str(&ctx.t("Sign-in failed - click Connect again"))),
     )
 }
 
@@ -722,9 +699,10 @@ fn inbox_action(ctx: &UiCtx) -> UiResponse {
     };
     let label = s(&inbox, "label");
     match verb {
+        "connect" if s(&inbox, "provider") == "google" => google_connect(ctx, name, &inbox),
         "connect" => UiResponse::flash_redirect(
             false,
-            &ctx.tf("{label}: signing in is not available in the Mac app yet", &[("label", &label)]),
+            &ctx.tf("{label}: Outlook sign-in isn't available yet - connect a Gmail inbox for now", &[("label", &label)]),
             INBOXES_TAB,
         ),
         "test" => test_connection(ctx, &inbox),
@@ -748,6 +726,80 @@ fn inbox_action(ctx: &UiCtx) -> UiResponse {
             }
             UiResponse::flash_redirect(ok, &message, INBOXES_TAB)
         }
+    }
+}
+
+/// Pending-state kind for a Gmail inbox sign-in.
+pub const INBOX_KIND: &str = "inbox";
+
+/// `POST /inbox/inboxes/<name>/connect` for a Gmail inbox: send the browser to Google.
+fn google_connect(ctx: &UiCtx, name: &str, inbox: &Value) -> UiResponse {
+    let Some((client_id, _)) = super::connectors::google_oauth_client(ctx.state) else {
+        return UiResponse::flash_redirect(
+            false,
+            &ctx.t("Add a Google OAuth client on the Inbox Triage setup page first"),
+            "/loops/inbox-triage-loop?view=setup&tab=gmail",
+        );
+    };
+    let redirect_uri = format!("http://{}/oauth/google/callback", super::connectors::authority_port(ctx));
+    let (verifier, challenge) = oauth::pkce();
+    let pending = oauth::Pending {
+        provider: oauth::Provider::Google,
+        kind: INBOX_KIND.to_string(),
+        account: name.to_string(),
+        verifier,
+        redirect_uri: redirect_uri.clone(),
+        app_scheme: None,
+        created: oauth::now_secs(),
+    };
+    let Ok(state) = oauth::create_pending(&ctx.state.home_dir.join("oauth"), &pending) else {
+        return UiResponse::flash_redirect(false, &ctx.t("Could not start Google sign-in"), INBOXES_TAB);
+    };
+    let account = s(inbox, "account");
+    let mut params = vec![
+        ("client_id", client_id.as_str()),
+        ("redirect_uri", redirect_uri.as_str()),
+        ("response_type", "code"),
+        ("scope", oauth::GMAIL_SCOPE),
+        ("access_type", "offline"),
+        ("prompt", "consent"),
+        ("state", state.as_str()),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+    ];
+    if !account.is_empty() {
+        params.push(("login_hint", account.as_str()));
+    }
+    UiResponse::redirect(303, &format!("{}?{}", oauth::GOOGLE_AUTH_URL, super::connectors::urlencode(&params)))
+}
+
+/// Finish a Gmail inbox sign-in: swap the code for a refresh token and keep it under the
+/// inbox's name, where `mail_auth` looks it up. The message never carries the code or a token.
+pub fn google_callback(
+    oauth_ctx: &oauth::OauthContext,
+    lang: crate::ui::i18n::Lang,
+    query_state: &str,
+    code: Option<&str>,
+    error: Option<&str>,
+) -> (bool, String) {
+    let t = |s: &str| crate::ui::i18n::t(lang, s, &[]);
+    let now = oauth::now_secs();
+    let Some(pending) = oauth::consume_pending(&oauth_ctx.dir, query_state, now).filter(|p| p.kind == INBOX_KIND) else {
+        return (false, t("That sign-in link expired or was already used - click Connect again"));
+    };
+    if let Some(e) = error.filter(|e| !e.is_empty()) {
+        return (false, crate::ui::i18n::t(lang, "Google sign-in was cancelled ({error})", &[("error", e)]));
+    }
+    let tokens = match oauth::exchange_code(oauth_ctx, oauth::Provider::Google, code.unwrap_or(""), &pending, now) {
+        Ok(t) => t,
+        Err(e) => return (false, crate::ui::i18n::t(lang, "Google sign-in failed: {detail}", &[("detail", &e.to_string())])),
+    };
+    let Some(refresh) = tokens.refresh_token.as_deref() else {
+        return (false, t("Could not start Google sign-in"));
+    };
+    match mail_auth::default_store().and_then(|store| store.set(&pending.account, refresh)) {
+        Ok(()) => (true, crate::ui::i18n::t(lang, "Connected {label}", &[("label", &pending.account)])),
+        Err(err) => (false, err.to_string()),
     }
 }
 
