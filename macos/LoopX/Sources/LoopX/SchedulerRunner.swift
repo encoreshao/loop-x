@@ -7,13 +7,16 @@ import LoopXKit
 final class SchedulerRunner {
     private let binary: URL?
     private let environment: [String: String]
-    private lazy var poller = SchedulerPoller(poll: { [binary, environment] in
-        guard let binary else { return }
+    private lazy var poller = SchedulerPoller(poll: { [binary, environment, shouldPoll] in
+        guard let binary, shouldPoll() else { return }
         await Self.runOnce(binary, environment)
     })
+    private let shouldPoll: @Sendable () -> Bool
 
-    init(binary: URL?, environment: [String: String] = ProcessInfo.processInfo.environment) {
-        self.binary = binary; self.environment = environment
+    /// `shouldPoll` is asked before every poll, so a battery or Low Power Mode change takes effect on the next one.
+    init(binary: URL?, environment: [String: String] = ProcessInfo.processInfo.environment,
+         shouldPoll: @escaping @Sendable () -> Bool = { true }) {
+        self.binary = binary; self.environment = environment; self.shouldPoll = shouldPoll
     }
 
     func setEnabled(_ on: Bool) { on ? poller.start() : poller.stop() }

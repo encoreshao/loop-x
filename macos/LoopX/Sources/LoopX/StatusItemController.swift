@@ -3,7 +3,7 @@ import LoopXKit
 
 @MainActor
 final class StatusItemController: NSObject {
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let model: AppModel
     private let menu = NSMenu()
     var onOpenDashboard: () -> Void = {}
@@ -30,13 +30,23 @@ final class StatusItemController: NSObject {
         switch state.kind {
         case .idle, .running:
             img?.isTemplate = true; button.contentTintColor = nil
+            button.image = img
+            button.toolTip = "LoopX – \(state.title)"
         default:
             let cfg = NSImage.SymbolConfiguration(paletteColors: [Self.color(state.style.accent)])
             button.image = img?.withSymbolConfiguration(cfg); img?.isTemplate = false
-            button.toolTip = state.title; return
+            button.toolTip = state.title
         }
-        button.image = img
-        button.toolTip = "LoopX – \(state.title)"
+        // The number of approvals waiting sits beside the icon; the item is icon-sized when there are none.
+        if let badge = StatusBadge.text(for: state) {
+            button.title = " " + badge
+            button.imagePosition = .imageLeft
+            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+            button.toolTip = StatusBadge.tooltip(count: state.approvals.count)
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+        }
     }
 
     static func color(_ a: NotchAccent) -> NSColor {
@@ -68,6 +78,10 @@ extension StatusItemController: NSMenuDelegate {
         head.isEnabled = false; menu.addItem(head)
         let conn = NSMenuItem(title: model.connection.text, action: nil, keyEquivalent: ""); conn.isEnabled = false
         menu.addItem(conn)
+        for line in LastRuns.lines(in: model.snapshot, now: Date()) {
+            let i = NSMenuItem(title: line, action: nil, keyEquivalent: ""); i.isEnabled = false
+            menu.addItem(i)
+        }
         menu.addItem(.separator())
         for a in st.approvals.prefix(3) {
             let t = a.title ?? a.id

@@ -23,7 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notch = NotchController(model: model, island: island)
         status = StatusItemController(model: model)
         settingsModel = SettingsModel(store: settings, login: LaunchAtLogin(service: SMAppServiceAdapter(.mainApp)))
-        scheduler = SchedulerRunner(binary: model.backendConfig.loopxBinary)
+        scheduler = SchedulerRunner(binary: model.backendConfig.loopxBinary, shouldPoll: {
+            SchedulerPolicy.shouldPoll(power: .current(), enabled: settings.pauseSchedulerOnLowPower)
+        })
         super.init()
         settingsModel.cli = model.backendConfig.loopxBinary.map { CLIInstaller(binary: $0.path) }
         settingsModel.bundledLoopxVersion = model.backendConfig.discovery.bundledVersion

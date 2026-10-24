@@ -55,6 +55,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: "runScheduler") }
     }
 
+    /// Whether the scheduler skips its poll in Low Power Mode or on a nearly flat battery.
+    public var pauseSchedulerOnLowPower: Bool {
+        get { defaults.object(forKey: "pauseSchedulerOnLowPower") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "pauseSchedulerOnLowPower") }
+    }
+
     /// Whether task starts, completions and failures are posted to the macOS Notification Center.
     public var notifyTasks: Bool {
         get { defaults.object(forKey: "notifyTasks") as? Bool ?? true }

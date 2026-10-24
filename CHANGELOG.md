@@ -18,6 +18,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - The Mac app's menu bar menu has a Run submenu that starts the GitLab loop, Topic Monitor or Inbox Triage (after a confirmation).
 - The Mac app answers `loopx://` links, so Shortcuts ("Open URL"), Spotlight or a script can drive it: `loopx://run/gitlab-loop` (also `topic-loop`, `inbox-triage-loop`; always asks first) and `loopx://open/runs?view=logs` (any page in the app's menus; `loopx://open` for the dashboard).
 
+- The Mac app skips its scheduled-loop check in Low Power Mode or on battery below 20%, so a flat battery isn't spent on an agent run; the next check picks up whatever is still due. On by default, and only applies while "Run scheduled loops" is on (Settings → Scheduled loops).
+- The Mac app's menu bar icon shows how many approvals are waiting.
+- The Mac app's menu bar menu lists when each loop last ran or failed.
+
 ### Changed
 
 - The dashboard uses the macOS palette (system blue, grey surfaces, hairline separators) and the system SF font by default; Roboto stays selectable in Preferences.
