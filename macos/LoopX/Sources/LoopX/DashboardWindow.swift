@@ -159,16 +159,21 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:#98989d;--err:#ff6b5e;--bg:#1e1e1e;--accent:#7aa2ff;--glow:rgba(122,162,255,.28)}}
         html,body{height:100%;margin:0;background:var(--bg)}
         body{font:14px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center}
-        .logo{position:relative;width:240px;height:240px}
+        .logo{position:relative;width:240px;height:240px;margin:36px 0}
+        .track,.ring{position:absolute;inset:-32px;border-radius:50%}
+        .track{border:1.5px solid var(--glow)}
+        .ring{background:conic-gradient(from 0deg,transparent 0 50%,var(--accent) 82%,#e0457b);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px))}
         .logo::before{content:'';position:absolute;inset:-18%;border-radius:50%;background:radial-gradient(circle,var(--glow),transparent 68%)}
         .logo svg{position:relative;width:240px;height:240px;display:block}
         @media(prefers-reduced-motion:no-preference){
+        .ring{animation:orbit 5s linear infinite}
         .logo::before{animation:glow 3.2s ease-in-out infinite}
         .logo svg{animation:pop .9s cubic-bezier(.2,.9,.3,1.2) both,float 5s ease-in-out .9s infinite}
         h1{animation:rise .7s ease-out .25s both}
         .tag{animation:rise .7s ease-out .45s both}
         .row,.err,.retry{animation:rise .7s ease-out .65s both}
         footer{animation:rise .9s ease-out .9s both}}
+        @keyframes orbit{to{transform:rotate(360deg)}}
         @keyframes glow{50%{transform:scale(1.12);opacity:.65}}
         @keyframes pop{from{opacity:0;transform:scale(.6) rotate(-14deg)}}
         @keyframes float{50%{transform:translateY(-10px)}}
@@ -184,7 +189,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         footer .dot{margin:0 8px}
         footer a{color:var(--accent);text-decoration:none}
         </style></head><body>
-        <div class='logo'>\(LogoSVG.markup)</div><h1>LoopX</h1>
+        <div class='logo'><i class='track'></i><i class='ring'></i>\(LogoSVG.markup)</div><h1>LoopX</h1>
         <p class='tag'>Get your time back from the daily grind.</p>
         \(status)
         <footer>\(versionLine)<span>Created by <strong>Encore Shao</strong></span><span class='dot'>&middot;</span><a href='mailto:encore.shao@gmail.com'>encore.shao@gmail.com</a></footer>
