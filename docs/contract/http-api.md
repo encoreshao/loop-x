@@ -96,7 +96,6 @@ If the original request has a query, it is appended with `?` or `&` depending on
 | `/history/<name>` | none | HTML 200 rendered gitlab-loop history markdown from `outputs/history/`; 404 via `read_history_file` (traversal-safe) |
 | `/topic-monitor/history/<name>` | none | same, from the topic-monitor history dir |
 | `/inbox/history` and `/inbox/history/<name>` | none | HTML 200 inbox triage history page; 404 if none/unknown |
-| `/readme` | none | HTML 200 rendered README |
 | `/update` | none | HTML 200 self-update page (progress screen; the Mac app lands here after an upgrade relaunch) |
 | `/favicon.ico` | none | `200 image/x-icon` from `assets/favicon.ico`; 404 if missing |
 

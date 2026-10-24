@@ -925,7 +925,6 @@
 ⟦status_badge_html⟧
 ⟦refresh_html⟧
 ⟦lang_switch_html⟧
-⟦help_link_html⟧
 </div>
 </div>
 <div class="main-scroll" id="main-scroll">

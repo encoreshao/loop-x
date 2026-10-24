@@ -248,7 +248,6 @@ loopx run topic-loop    # the topic monitor loop
 | **Harness** (`/harness`) | 视图：Audit — 每个循环定义的评分及通过/未通过检查项 |
 | **Connectors** (`/connectors`) | 视图：Accounts — 按类型分组的所有连接器账号，带能力标签、显示上次结果的 Test 按钮（通知目标为 **Send test message**），外部账号还有指向其所属页面的「Managed on …」徽标；Add — 选择类型并填写表单。密钥填入密码框，保存后不会再次显示（编辑时留空即保留已存的值） |
 | **Settings** (`/settings`) | 视图：General — Notifications（管理 `~/.slack/config.json` 的默认 webhook）、AI CLI（选择 Claude Code 或 Codex CLI，并实时检查各自是否已安装）、Appearance（颜色模式、强调色主题、自动刷新间隔——保存在当前浏览器的 `localStorage` 中）以及 Instructions（你自己的自由文本指令，循环在每次运行开始时读取）——以标签页形式集中在同一页面 (**General** 视图拆分为 Notifications / AI CLI / Appearance / Instructions 标签页（`?tab=`）); Daemons — 每个 `launchd` 代理的加载状态、可编辑的计划及启用/禁用操作，外加 Registered Loops 分栏，列出统一调度器运行的每个循环（其自身计划和上次运行状态，读取自 `loops.json`）; Skills — 本循环依赖的每个外部 skill，以及它是否确实已安装 |
-| **README** (`/readme`) | 已移至顶栏的帮助图标（`/readme`）：本文件，在应用内渲染，并带有跳转到章节的快速导航 |
 
 所有旧 URL（`/activity`、`/gitlab`、`/topic-monitor`、`/inbox`、`/loop-runs`、`/history`、`/logs`、`/analytics`、`/cost`、`/budget`、`/memory`、`/audit`、`/settings/general`、`/daemons`、`/skills` 等）都会保留查询字符串并永久重定向（301）到新位置，因此书签依然有效。
 

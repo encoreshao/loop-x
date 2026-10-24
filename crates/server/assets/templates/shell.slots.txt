@@ -36,7 +36,6 @@ ai_cli_badge_html
 status_badge_html
 refresh_html
 lang_switch_html
-help_link_html
 update_banner_html
 body_html
 _ai_panel_html(active_page)

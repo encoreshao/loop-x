@@ -251,7 +251,6 @@ localhost 専用の Web UI（サーバーサイドレンダリング、JS フレ
 | **Harness** (`/harness`) | ビュー：Audit — 各ループ定義のスコアと合否チェック |
 | **Connectors** (`/connectors`) | ビュー：Accounts — 種類ごとにまとめた全コネクタアカウント。機能チップ、最後の結果を表示する Test ボタン（通知先は **Send test message**）、外部アカウントには所有ページへのリンク付き「Managed on …」バッジを表示します。Add — 種類を選んでフォームに入力します。シークレットはパスワード欄に入力し、保存後は二度と表示されません（編集時に空欄のままにすると保存済みの値が維持されます） |
 | **Settings** (`/settings`) | ビュー：General — Notifications（`~/.slack/config.json` のデフォルト webhook を管理）、AI CLI（Claude Code または Codex CLI を選択し、それぞれのインストール有無をライブで確認）、Appearance（カラーモード、アクセントテーマ、自動更新間隔 — このブラウザーの `localStorage` に保存）、Instructions（毎回の実行開始時にループが読み込む自由記述の独自指示）— 1 ページ内のタブとしてまとめています (**General** ビューは Notifications / AI CLI / Appearance / Instructions のタブ（`?tab=`）に分かれています); Daemons — すべての `launchd` エージェントのロード状態、編集可能なスケジュール、有効化/無効化に加え、統合スケジューラーが実行する全ループの Registered Loops 内訳（各ループのスケジュールと前回の実行状況。`loops.json` から読み込み）; Skills — このループが依存するすべての外部スキルと、それらが実際にインストールされているか |
-| **README** (`/readme`) | トップバーのヘルプアイコン（`/readme`）に移動：このファイルを、セクションへジャンプできるクイックナビ付きでアプリ内に表示 |
 
 従来のすべての URL（`/activity`、`/gitlab`、`/topic-monitor`、`/inbox`、`/loop-runs`、`/history`、`/logs`、`/analytics`、`/cost`、`/budget`、`/memory`、`/audit`、`/settings/general`、`/daemons`、`/skills` など）は、クエリ文字列を保ったまま新しい場所へ恒久リダイレクト（301）されるため、ブックマークはそのまま使えます。
 

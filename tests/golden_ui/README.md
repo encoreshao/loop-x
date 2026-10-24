@@ -15,9 +15,9 @@ the Rust pages in `crates/server/src/ui/`.
 
 ```
 python3 tests/golden_ui/capture.py                 # regenerate everything
-python3 tests/golden_ui/capture.py --only readme   # just these page ids
+python3 tests/golden_ui/capture.py --only update   # just these page ids
 cargo test -p loopx-server --test golden_ui -- --nocapture   # prints ported/pending per language
-LOOPX_GOLDEN_FILTER=readme,update LOOPX_GOLDEN_VERBOSE=1 cargo test -p loopx-server --test golden_ui -- --nocapture
+LOOPX_GOLDEN_FILTER=update,hub-overview LOOPX_GOLDEN_VERBOSE=1 cargo test -p loopx-server --test golden_ui -- --nocapture
 ```
 
 ## Normalization (the complete list)
@@ -59,7 +59,7 @@ patch in `launch_python.py` and the same in `build_fixture`), and document it he
 4. **List the URLs** in `pages.json` (`overlay`, `langs` optional). Then run `capture.py`,
    look at the generated `expected/` once, and run the cargo test. Iterate until your page
    moves from "pending" to "ported" in all four languages.
-5. Kill switches for debugging against Python: `LOOPX_LEGACY_PAGES=/readme,/update`
+5. Kill switches for debugging against Python: `LOOPX_LEGACY_PAGES=/update`
    proxies those routes to the legacy dashboard; `LOOPX_PORTED=none` (or a list) limits
    what Rust serves.
 

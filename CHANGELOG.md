@@ -19,6 +19,14 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Icons are a built-in outline set instead of a downloaded Material font, so the dashboard looks the same offline.
 - The Mac app's start screen has a water scene: soft ripples spread from the logo, two translucent waves drift along the bottom over a slow colour wash. The orbiting ring has a glowing blue-to-pink edge over a dashed track, and the Retry button has a gradient outline. With Reduce Motion on, the ripples and waves still run, smaller and slower.
 
+### Removed
+
+- The in-app README page (`/readme`) and the help icon in the dashboard header.
+
+### Added
+
+- The Mac app's Settings → About tab has an Author card with name and email.
+
 ## [0.7.0] - 2026-10-24
 
 ### Fixed

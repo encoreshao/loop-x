@@ -212,9 +212,6 @@ pub fn render_shell(
     let mut scope = Scope::new(lang);
     scope.var("ai_label", escaped_t(lang, "Ask Loop X"));
     let ai_trigger_html = render("shell_ai_trigger", &scope);
-    let mut scope = Scope::new(lang);
-    scope.var("help_label", escaped_t(lang, "Help"));
-    let help_link_html = render("shell_help_link", &scope);
 
     let refresh_schedule_script = if opts.refresh {
         let action = Template::named(if opts.lazy_refresh {
@@ -254,7 +251,6 @@ pub fn render_shell(
         .var("ai_cli_badge_html", ai_cli_badge_html)
         .var("refresh_html", refresh_html)
         .var("lang_switch_html", lang_switch_html(lang))
-        .var("help_link_html", help_link_html)
         .var("refresh_schedule_script", refresh_schedule_script)
         .var("refresh_note_script", refresh_note_script)
         .var("ai_panel_script", ai_panel_script(lang))
@@ -286,14 +282,14 @@ mod tests {
         let ctx = UiCtx::new(&state, &req);
         let html = render_shell(
             &ctx,
-            "README · Loop X Engineering",
-            "readme",
+            "Overview · Loop X Engineering",
+            "overview",
             "<b>badge</b>",
             "<p>body</p>",
             ShellOpts::default(),
         );
         assert!(html.starts_with("<!doctype html>\n<html lang=\"en\">"));
-        assert!(html.contains("<title>README · Loop X Engineering</title>"));
+        assert!(html.contains("<title>Overview · Loop X Engineering</title>"));
         assert!(html.contains("<p>body</p>"));
         assert!(html.contains("<b>badge</b>"));
         assert!(!html.contains('\u{27e6}'));

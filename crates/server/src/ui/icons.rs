@@ -38,7 +38,6 @@ pub const NAMES: &[&str] = &[
     "folder_off",
     "forum",
     "group",
-    "help",
     "history",
     "hub",
     "lightbulb",

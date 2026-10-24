@@ -1,7 +1,6 @@
 {
   "_comment": "Every GET page/fragment the golden harness captures from the Python dashboard. Add an entry per URL you port (and an overlay name if it needs different fixture data). `langs` defaults to all four.",
   "pages": [
-    {"id": "readme", "path": "/readme"},
     {"id": "update", "path": "/update"},
     {"id": "update-progress", "path": "/update/progress"},
     {"id": "update-behind", "path": "/update", "overlay": "update-behind"},
@@ -11,8 +10,8 @@
     {"id": "update-running-progress", "path": "/update/progress", "overlay": "update-running", "langs": ["en"]},
     {"id": "update-failed", "path": "/update", "overlay": "update-failed"},
     {"id": "update-done", "path": "/update", "overlay": "update-done"},
-    {"id": "banner-on-readme", "path": "/readme", "overlay": "update-behind"},
-    {"id": "banner-in-flight-on-readme", "path": "/readme", "overlay": "update-running"},
+    {"id": "banner-on-overview", "path": "/", "overlay": "update-behind"},
+    {"id": "banner-in-flight-on-overview", "path": "/", "overlay": "update-running"},
     {"id": "redirect-gitlab", "path": "/gitlab"},
     {"id": "redirect-logs-query", "path": "/logs?x=1"},
     {"id": "redirect-topic-settings", "path": "/topic-monitor/settings"},
