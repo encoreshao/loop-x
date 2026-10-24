@@ -2,7 +2,6 @@ i18n.html_lang(current_lang)
 html.escape(title)
 _favicon_version()
 _GOOGLE_FONTS_FAMILIES_PARAM
-_MATERIAL_SYMBOLS_ICON_NAMES
 _STYLE
 _TEXT_REVEAL_SCRIPT
 _chat_tool_chips_js()

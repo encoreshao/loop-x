@@ -4,6 +4,75 @@
 pub const SPRITE: &str = include_str!("../../assets/icons/sprite.svg");
 pub const FALLBACK: &str = "circle";
 
+/// Every glyph name the UI uses; each must have a symbol in the sprite.
+pub const NAMES: &[&str] = &[
+    "account_balance_wallet",
+    "add",
+    "add_comment",
+    "arrow_forward",
+    "arrow_upward",
+    "auto_awesome",
+    "autorenew",
+    "bolt",
+    "calendar_month",
+    "cancel",
+    "check",
+    "check_circle",
+    "chevron_left",
+    "circle",
+    "close",
+    "code",
+    "content_copy",
+    "delete",
+    "description",
+    "dns",
+    "download",
+    "edit",
+    "edit_note",
+    "email",
+    "error",
+    "expand_more",
+    "extension",
+    "fact_check",
+    "folder",
+    "folder_off",
+    "forum",
+    "group",
+    "help",
+    "history",
+    "hub",
+    "lightbulb",
+    "login",
+    "loop",
+    "mail",
+    "merge",
+    "monitoring",
+    "newspaper",
+    "open_in_new",
+    "palette",
+    "payments",
+    "rss_feed",
+    "save",
+    "schedule",
+    "search",
+    "send",
+    "settings",
+    "smart_toy",
+    "space_dashboard",
+    "speed",
+    "summarize",
+    "system_update",
+    "task_alt",
+    "terminal",
+    "topic",
+    "translate",
+    "tune",
+    "videocam",
+    "warning",
+    "webhook",
+    "widgets",
+];
+
 pub fn is_known(name: &str) -> bool {
     SPRITE.contains(&format!("id=\"i-{name}\""))
 }
@@ -28,8 +97,7 @@ mod tests {
 
     #[test]
     fn every_material_name_the_ui_used_has_a_symbol() {
-        let names = crate::ui::consts::ds("_MATERIAL_SYMBOLS_ICON_NAMES");
-        for n in names.split(',') {
+        for n in NAMES {
             assert!(is_known(n), "sprite lacks {n}");
         }
     }
@@ -98,5 +166,47 @@ mod tests {
             }
         }
         assert!(checked > 50, "only {checked} literal icon names found");
+    }
+
+    /// Icon names built on the JavaScript side (`setAttribute('href', '#i-x')`,
+    /// `icon('x')`, `flashIcon(btn, 'x')`) are invisible to the Rust-literal scan
+    /// above, so scan for those call shapes too.
+    #[test]
+    fn every_javascript_icon_literal_resolves() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if matches!(
+                    p.extension().and_then(|x| x.to_str()),
+                    Some("tpl" | "txt" | "json")
+                ) {
+                    out.push(p);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        walk(&root.join("assets"), &mut files);
+        let mut checked = 0;
+        for f in files {
+            let Ok(text) = std::fs::read_to_string(&f) else {
+                continue;
+            };
+            for marker in ["'#i-", "svgIcon('", "icon('", "flashIcon(copyBtn, '"] {
+                for part in text.split(marker).skip(1) {
+                    let end = part.find('\'').unwrap_or(0);
+                    let name = &part[..end];
+                    if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                    {
+                        continue;
+                    }
+                    assert!(is_known(name), "{} uses unknown icon {name}", f.display());
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked >= 10, "only {checked} JS icon names found");
     }
 }

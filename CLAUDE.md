@@ -99,8 +99,9 @@ subprocesses and temp dirs over mocks; inject fakes through the existing seams
 `tests/golden_ui/` holds the rendered HTML of every page in four languages
 (`expected/`) and the fixture each page renders against; `crates/server/tests/golden_ui.rs`
 compares the Rust pages byte for byte. The snapshots were first captured from the old
-Python dashboard and are now plain baselines: when a page changes on purpose, update
-the affected files under `expected/` in the same commit.
+Python dashboard and are now plain baselines: when a page changes on purpose, regenerate
+them with `LOOPX_GOLDEN_BLESS=1 cargo test -p loopx-server --test golden_ui --
+--test-threads=1` and commit the changed files under `expected/` in the same commit.
 
 ## Agent instruction/tool changes need a golden eval before/after
 
@@ -165,14 +166,15 @@ contain apostrophes (French), so anything placed inside an HTML attribute must b
 escaped. Never translate at import/static time — translate at render time, since the
 language is per request.
 
-## Adding a Material Symbols icon
+## Adding an icon
 
-Roboto and the Material Symbols Outlined icon font are loaded from Google Fonts at
-request time, not self-hosted. Adding a new icon means adding its glyph name to
-`_MATERIAL_SYMBOLS_ICON_NAMES` in `crates/server/assets/constants.json`, keeping the
-list alphabetically sorted: Google's `icon_names=` parameter subsets the served font to
-exactly that list, so a glyph name used in markup but missing from this list renders
-as tofu/missing glyph (and the golden snapshots change, so update them too).
+Icons are an inline SVG sprite (`crates/server/assets/icons/sprite.svg`, Lucide, ISC
+licence) rendered by `loopx_server::ui::icons::icon(name)`. Ids keep the old Material
+glyph names, so `icon("settings")` is `<use href='#i-settings'/>`. To add one, append a
+`<symbol id="i-NAME" viewBox="0 0 24 24">` to the sprite, add `NAME` to
+`icons::NAMES`, and update the golden snapshots (`LOOPX_GOLDEN_BLESS=1 cargo test -p
+loopx-server --test golden_ui -- --test-threads=1`). An unknown name renders the
+fallback circle, and the golden test fails on any dangling `#i-…` reference.
 
 ## A loading spinner's motion is functional, not decorative
 
