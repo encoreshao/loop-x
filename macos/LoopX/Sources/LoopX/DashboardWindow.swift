@@ -151,7 +151,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         let status = failed
             ? "<div class='msg err'>\(escape(text))</div><a class='retry' href='loopx-retry://now'>Try again</a>"
             : "<div class='row'><span class='spin'></span><span class='msg'>\(escape(text))</span></div>"
-        let chips = ["GitLab issues", "Inbox triage", "Topic monitor", "Meeting prep", "Daily digest", "LinkedIn"]
+        let chips = ["Fix your GitLab issues", "Triage your inbox", "Brief you on topics", "Prep your meetings", "Start days informed"]
             .map { "<span class='chip'>\($0)</span>" }.joined()
         let versionLine = version.isEmpty ? "" : "<span>v\(escape(version))</span><span class='dot'>&middot;</span>"
         return """
@@ -179,7 +179,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         footer a{color:var(--accent);text-decoration:none}
         </style></head><body>
         <div class='logo'>\(LogoSVG.markup)</div><h1>LoopX</h1>
-        <p class='tag'>Scheduled agent loops that triage issues, mail and meetings, so you don't have to.</p>
+        <p class='tag'>Get your time back from the daily grind of issues, email and status checks.</p>
         <div class='chips'>\(chips)</div>\(status)
         <footer>\(versionLine)<span>Created by <strong>Encore Shao</strong></span><span class='dot'>&middot;</span><a href='mailto:encore.shao@gmail.com'>encore.shao@gmail.com</a></footer>
         </body></html>
