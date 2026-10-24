@@ -213,7 +213,14 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      location.reload();
+      var indicator = document.getElementById('gitlab-refresh-indicator');
+      if (indicator) { indicator.style.display = ''; }
+      Promise.all(Array.prototype.map.call(
+        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
+      )).then(function() {
+        if (indicator) { indicator.style.display = 'none'; }
+        __loopScheduleRefresh();
+      });
     }, refreshSeconds * 1000);
   })();
 })();
@@ -260,20 +267,31 @@ if (!window.__loopPendingCardClicks) {
       root.classList.toggle('is-open', !wasOpen);
       var menu = root.querySelector('.custom-select-menu');
       if (menu) {
+        menu.hidden = wasOpen;
         if (!wasOpen) {
+          // Like a macOS pop-up button: the menu opens over the trigger with
+          // the selected option sitting on it, clamped to the viewport.
           var rect = trigger.getBoundingClientRect();
-          menu.style.top = (rect.bottom + 4) + 'px';
+          var sel = menu.querySelector('.is-selected');
+          menu.style.minWidth = rect.width + 'px';
           menu.style.left = rect.left + 'px';
-          menu.style.width = rect.width + 'px';
+          menu.style.top = rect.top + 'px';
+          var top = rect.top;
+          if (sel) {
+            menu.scrollTop = sel.offsetTop - (menu.clientHeight - sel.offsetHeight) / 2;
+            var delta = sel.getBoundingClientRect().top - menu.getBoundingClientRect().top;
+            top = rect.top - delta + (rect.height - sel.offsetHeight) / 2;
+          }
+          var maxTop = window.innerHeight - menu.offsetHeight - 8;
+          menu.style.top = Math.max(8, Math.min(top, maxTop)) + 'px';
           // Move focus into the listbox itself (selected option, or the
           // first one) - without this, a keyboard user who opens the menu
           // via Enter/Space has no way to reach the options at all, since
           // the real <select> behind them is display:none and the options
           // themselves aren't in the tab order until the menu is open.
-          var toFocus = menu.querySelector('.is-selected') || menu.querySelector('.custom-select-option');
-          if (toFocus) toFocus.focus();
+          var toFocus = sel || menu.querySelector('.custom-select-option');
+          if (toFocus) toFocus.focus({ preventScroll: true });
         }
-        menu.hidden = wasOpen;
       }
       trigger.setAttribute('aria-expanded', String(!wasOpen));
       return;

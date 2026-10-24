@@ -217,6 +217,7 @@ struct SettingsView: View {
                     Text("Full screen").tag(DashboardWindowMode.fullScreen)
                     Text("Standard window").tag(DashboardWindowMode.standard)
                 }
+                .pickerStyle(.menu)
                 MDNote("Applies the first time the window opens after LoopX starts; after that your own sizing is kept.")
             }
         }
@@ -230,6 +231,7 @@ struct SettingsView: View {
                     Text("Floating HUD").tag(DisplayMode.hud)
                     Text("Menu bar only").tag(DisplayMode.off)
                 }
+                .pickerStyle(.menu)
                 MDNote("Notch pins to the camera housing and falls back to a draggable HUD on screens without one. The menu bar icon is always there.")
             }
             MDCard("Hotkey") {
@@ -237,6 +239,7 @@ struct SettingsView: View {
                     ForEach(HotkeyPreset.presets) { Text($0.label).tag($0) }
                     Text("None").tag(HotkeyPreset.none)
                 }
+                .pickerStyle(.menu)
                 MDNote("A global shortcut that hides or shows the notch or HUD from any app.")
             }
         }

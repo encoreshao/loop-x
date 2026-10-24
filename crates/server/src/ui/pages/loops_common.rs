@@ -200,7 +200,7 @@ pub fn custom_select(
         .map(|(_, l)| l.as_str())
         .unwrap_or("");
     format!(
-        "<div class='custom-select'><select name='{}' class='custom-select-native'>{option_tags}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{}</span><svg class='icon' aria-hidden='true'><use href='#i-expand_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden>{menu_items}</div></div>",
+        "<div class='custom-select'><select name='{}' class='custom-select-native'>{option_tags}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{}</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden>{menu_items}</div></div>",
         pyfmt::escape(name),
         pyfmt::escape(label)
     )

@@ -24,6 +24,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Dropdowns use the macOS pop-up menu style: a translucent menu opening over the field, a checkmark on the selected item and an accent-filled hover; the Mac app's Settings pickers are explicit pop-up menus.
 - The dashboard uses the macOS palette (system blue, grey surfaces, hairline separators) and the system SF font by default; Roboto stays selectable in Preferences.
 - Buttons, tabs (now a segmented control), sidebar (translucent), inputs, switches and focus rings follow macOS conventions.
 - The Mac app's settings window uses the same macOS palette as the dashboard, with continuous corners and a system-material sidebar.
