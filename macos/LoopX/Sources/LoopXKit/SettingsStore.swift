@@ -55,6 +55,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: "runScheduler") }
     }
 
+    /// Whether the one-time offer to install the `loopx` command has been shown.
+    public var cliPromptShown: Bool {
+        get { defaults.bool(forKey: "cliPromptShown") }
+        set { defaults.set(newValue, forKey: "cliPromptShown") }
+    }
+
     /// HUD top-centre anchor as fractions of the screen's visible frame (see `NotchGeometry.hudAnchor`).
     public var hudAnchor: CGPoint? {
         get {

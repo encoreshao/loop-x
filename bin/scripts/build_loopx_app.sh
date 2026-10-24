@@ -117,7 +117,6 @@ $ICON_KEY
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LoopXBundledVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 $SPARKLE_KEYS

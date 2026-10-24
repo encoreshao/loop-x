@@ -38,8 +38,8 @@ open dist/LoopX.app
   `SPARKLE_PUBLIC_ED_KEY` (base64 Ed25519 public key) are set at build time;
   setting only one is an error. See [RELEASING.md](RELEASING.md).
 - The app is ad-hoc signed, so the first launch may need right-click > Open.
-- The app has no Dock icon or window (`LSUIElement`): look for its icon in the menu bar,
-  plus the notch or HUD once the backend is up.
+- The app is a regular app: a Dock icon, its own menu bar, and the dashboard window on launch. The
+  menu bar icon and the notch or HUD stay as shortcuts once the backend is up.
 - If launchd refuses to run the ad-hoc signed bundled agent (a crash report with
   `Launch Constraint Violation` in `~/Library/Logs/DiagnosticReports`), the app falls back
   to spawning the bundled `loopx serve` itself after a few seconds; that backend stops with

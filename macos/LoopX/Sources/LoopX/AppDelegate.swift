@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel = SettingsModel(store: settings, login: LaunchAtLogin(service: SMAppServiceAdapter(.mainApp)))
         scheduler = SchedulerRunner(binary: model.backendConfig.loopxBinary)
         super.init()
+        settingsModel.cli = model.backendConfig.loopxBinary.map { CLIInstaller(binary: $0.path) }
         wire()
     }
 
@@ -61,12 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)   // Dock icon and the app's own menu bar; the status item stays as a shortcut
         NSApp.mainMenu = makeMainMenu()
         notch.refresh()
         hotkey.register(settingsModel.hotkey)
         scheduler.setEnabled(settingsModel.runScheduler)
         model.start()
+        if !settingsModel.launchAtLogin { dashboard.show() }
+        offerCLIInstall()
         // The takeover prompt is modal-ish: ask once, as soon as discovery finds an older backend.
         Task { @MainActor in
             for await _ in model.$takeoverOffer.values {
@@ -98,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let main = NSMenu()
         main.addItem(submenu("LoopX", [
+            item("Open Dashboard", #selector(openDashboardFromMenu), "d", target: self),
             item("Settings…", #selector(openSettingsFromMenu), ",", target: self),
             .separator(),
             item("Hide LoopX", #selector(NSApplication.hide(_:)), "h"),
@@ -122,8 +126,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettingsFromMenu() { showSettings() }
+    @objc private func openDashboardFromMenu() { dashboard.show() }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Clicking the Dock icon with no window open brings the dashboard back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { dashboard.show() }
+        return true
+    }
+
+    /// One-time offer to put `loopx` on the PATH, so nobody has to link it by hand.
+    private func offerCLIInstall() {
+        let store = SettingsStore()
+        settingsModel.refreshCLI()
+        guard settingsModel.cli != nil, !store.cliPromptShown, settingsModel.cliStatus == .notInstalled else { return }
+        store.cliPromptShown = true
+        let a = NSAlert()
+        a.messageText = "Install the loopx command?"
+        a.informativeText = "This lets you run loopx from Terminal (for example loopx doctor). macOS will ask for your administrator password. You can also do it later from Settings."
+        a.addButton(withTitle: "Install")
+        a.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertFirstButtonReturn { settingsModel.installCLI() }
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkey.unregister(); model.stop()   // the backend keeps running: it is its own LaunchAgent

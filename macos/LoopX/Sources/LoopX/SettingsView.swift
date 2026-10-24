@@ -16,12 +16,30 @@ final class SettingsModel: ObservableObject {
     private let oauth = OAuthSession()
     private let store: SettingsStore
     private let login: LaunchAtLogin
+    @Published var cliStatus: CLIInstaller.Status = .notInstalled
+    var cli: CLIInstaller?
     var onChange: () -> Void = {}
 
     init(store: SettingsStore, login: LaunchAtLogin) {
         self.store = store; self.login = login
         displayMode = store.displayMode; hotkey = store.hotkey; dashboardWindow = store.dashboardWindow; runScheduler = store.runScheduler
         launchAtLogin = login.isEnabled; loginNeedsApproval = login.needsApproval
+    }
+
+    func refreshCLI() { cliStatus = cli?.status() ?? .notInstalled }
+
+    /// Links the bundled `loopx` into /usr/local/bin; macOS asks for the administrator password.
+    func installCLI() {
+        guard let cli else { return }
+        cliStatus = cli.install(run: { Self.runAsAdministrator($0) })
+        if cliStatus != .installed { error = "Could not install the loopx command." } else { error = nil }
+    }
+
+    static func runAsAdministrator(_ command: String) -> Bool {
+        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        var err: NSDictionary?
+        NSAppleScript(source: "do shell script \"\(escaped)\" with administrator privileges")?.executeAndReturnError(&err)
+        return err == nil
     }
 
     func signIn(_ provider: OAuthProvider, lock: LockFile?) {
@@ -90,6 +108,18 @@ struct SettingsView: View {
                     Text("None").tag(HotkeyPreset.none)
                 }
             }
+            Section("Command line") {
+                LabeledContent("loopx command") {
+                    switch settings.cliStatus {
+                    case .installed: Text("Installed at \(CLIInstaller.defaultLinkPath)").font(.caption).foregroundStyle(.secondary)
+                    case .conflict(let p): Text("Another loopx is already at \(p)").font(.caption).foregroundStyle(.secondary)
+                    case .notInstalled, .outdated:
+                        Button(settings.cliStatus == .outdated ? "Update Command Line Tool" : "Install Command Line Tool") { settings.installCLI() }
+                    }
+                }
+                Text("Lets you run loopx from Terminal. Needs your administrator password once.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Accounts") {
                 ForEach(OAuthProvider.allCases, id: \.self) { p in
                     LabeledContent(p.title) {
@@ -115,9 +145,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 640)
+        .frame(width: 440, height: 720)
         .onAppear {
             settings.refreshAccounts(lock: app.lock)
+            settings.refreshCLI()
         }
     }
 }

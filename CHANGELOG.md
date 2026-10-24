@@ -11,6 +11,14 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- The Mac app can install the `loopx` command itself: a one-time prompt on first launch and an **Install Command Line Tool** button under Settings → Command line link the bundled binary into `/usr/local/bin` (it asks for the administrator password once, and never replaces a `loopx` it does not own).
+
+### Changed
+
+- The Mac app is now a regular app with a Dock icon, its own menu bar (LoopX, Edit, Window) and the dashboard window on launch, instead of a menu-bar-only app. The menu bar icon stays as a shortcut.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
