@@ -143,7 +143,8 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     /// The page shown until a backend answers: the logo, name, what LoopX does, one status line (a
     /// spinner while starting, the reason and a Retry link when it failed) and the author. Follows the
-    /// system appearance. Only the logo's glow is decorative motion, so it is gated on reduced motion.
+    /// system appearance. The entrance, float and glow are decorative, so they are gated on reduced motion;
+    /// the spinner is not, since its motion is the only sign that startup is still going.
     static func placeholder(_ text: String, failed: Bool, version: String = "") -> String {
         func escape(_ t: String) -> String {
             t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
@@ -151,24 +152,29 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         let status = failed
             ? "<div class='msg err'>\(escape(text))</div><a class='retry' href='loopx-retry://now'>Try again</a>"
             : "<div class='row'><span class='spin'></span><span class='msg'>\(escape(text))</span></div>"
-        let chips = ["Fix your GitLab issues", "Triage your inbox", "Brief you on topics", "Prep your meetings", "Start days informed"]
-            .map { "<span class='chip'>\($0)</span>" }.joined()
         let versionLine = version.isEmpty ? "" : "<span>v\(escape(version))</span><span class='dot'>&middot;</span>"
         return """
         <html><head><meta name='color-scheme' content='light dark'><style>
-        :root{--fg:#1d1d1f;--sub:#6e6e73;--err:#c0392b;--bg:#fff;--accent:#4f6df5;--chip:#f2f3f7;--glow:rgba(79,109,245,.22)}
-        @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:#98989d;--err:#ff6b5e;--bg:#1e1e1e;--accent:#7aa2ff;--chip:#2b2c31;--glow:rgba(122,162,255,.28)}}
+        :root{--fg:#1d1d1f;--sub:#6e6e73;--err:#c0392b;--bg:#fff;--accent:#4f6df5;--glow:rgba(79,109,245,.22)}
+        @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:#98989d;--err:#ff6b5e;--bg:#1e1e1e;--accent:#7aa2ff;--glow:rgba(122,162,255,.28)}}
         html,body{height:100%;margin:0;background:var(--bg)}
         body{font:14px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center}
         .logo{position:relative;width:240px;height:240px}
         .logo::before{content:'';position:absolute;inset:-18%;border-radius:50%;background:radial-gradient(circle,var(--glow),transparent 68%)}
         .logo svg{position:relative;width:240px;height:240px;display:block}
-        @media(prefers-reduced-motion:no-preference){.logo::before{animation:glow 3.2s ease-in-out infinite}}
+        @media(prefers-reduced-motion:no-preference){
+        .logo::before{animation:glow 3.2s ease-in-out infinite}
+        .logo svg{animation:pop .9s cubic-bezier(.2,.9,.3,1.2) both,float 5s ease-in-out .9s infinite}
+        h1{animation:rise .7s ease-out .25s both}
+        .tag{animation:rise .7s ease-out .45s both}
+        .row,.err,.retry{animation:rise .7s ease-out .65s both}
+        footer{animation:rise .9s ease-out .9s both}}
         @keyframes glow{50%{transform:scale(1.12);opacity:.65}}
+        @keyframes pop{from{opacity:0;transform:scale(.6) rotate(-14deg)}}
+        @keyframes float{50%{transform:translateY(-10px)}}
+        @keyframes rise{from{opacity:0;transform:translateY(12px)}}
         h1{margin:0;font-size:44px;font-weight:700;color:var(--fg);letter-spacing:.3px}
         .tag{margin:-6px 0 0;font-size:16px;color:var(--sub);max-width:460px;line-height:1.45}
-        .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:520px}
-        .chip{padding:5px 12px;border-radius:999px;background:var(--chip);color:var(--fg);font-size:12.5px;font-weight:550}
         .row{display:flex;align-items:center;gap:10px;margin-top:6px}
         .spin{width:14px;height:14px;border:2px solid var(--sub);border-top-color:var(--accent);border-radius:50%;animation:s 0.9s linear infinite}
         @keyframes s{to{transform:rotate(360deg)}}
@@ -179,8 +185,8 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         footer a{color:var(--accent);text-decoration:none}
         </style></head><body>
         <div class='logo'>\(LogoSVG.markup)</div><h1>LoopX</h1>
-        <p class='tag'>Get your time back from the daily grind of issues, email and status checks.</p>
-        <div class='chips'>\(chips)</div>\(status)
+        <p class='tag'>Get your time back from the daily grind.</p>
+        \(status)
         <footer>\(versionLine)<span>Created by <strong>Encore Shao</strong></span><span class='dot'>&middot;</span><a href='mailto:encore.shao@gmail.com'>encore.shao@gmail.com</a></footer>
         </body></html>
         """
