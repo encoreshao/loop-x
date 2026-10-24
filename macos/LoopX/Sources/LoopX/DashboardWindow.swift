@@ -16,6 +16,8 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     var statusProvider: () -> (text: String, failed: Bool) = { ("Starting the backend…", false) }
     /// Asked to bring a backend up when the window opens without one.
     var onNeedsBackend: () -> Void = {}
+    /// Shown in the placeholder's footer.
+    var appVersion = ""
 
     func show() {
         ensureWindow()
@@ -61,7 +63,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     private func showPlaceholder() {
         let s = statusProvider()
-        webView?.loadHTMLString(Self.placeholder(s.text, failed: s.failed), baseURL: nil)
+        webView?.loadHTMLString(Self.placeholder(s.text, failed: s.failed, version: appVersion), baseURL: nil)
     }
 
     /// The backend's state changed while the placeholder is up (starting -> failed): redraw it.
@@ -126,6 +128,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
             onNeedsBackend(); showPlaceholder()
             return
         }
+        if url?.scheme == "mailto", let url { NSWorkspace.shared.open(url); decisionHandler(.cancel); return }
         let local = url?.host == "127.0.0.1" || url?.host == "localhost" || url?.scheme == "about"
         if local { decisionHandler(.allow); return }
         if let url, ["http", "https"].contains(url.scheme?.lowercased()) { NSWorkspace.shared.open(url) }
@@ -138,28 +141,47 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         return nil
     }
 
-    /// The page shown until a backend answers: logo, name and one status line (a spinner while
-    /// starting, the reason and a Retry link when it failed). Follows the system appearance.
-    static func placeholder(_ text: String, failed: Bool) -> String {
-        let safe = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+    /// The page shown until a backend answers: the logo, name, what LoopX does, one status line (a
+    /// spinner while starting, the reason and a Retry link when it failed) and the author. Follows the
+    /// system appearance. Only the logo's glow is decorative motion, so it is gated on reduced motion.
+    static func placeholder(_ text: String, failed: Bool, version: String = "") -> String {
+        func escape(_ t: String) -> String {
+            t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+        }
         let status = failed
-            ? "<div class='msg err'>\(safe)</div><a class='retry' href='loopx-retry://now'>Try again</a>"
-            : "<div class='row'><span class='spin'></span><span class='msg'>\(safe)</span></div>"
+            ? "<div class='msg err'>\(escape(text))</div><a class='retry' href='loopx-retry://now'>Try again</a>"
+            : "<div class='row'><span class='spin'></span><span class='msg'>\(escape(text))</span></div>"
+        let chips = ["GitLab issues", "Inbox triage", "Topic monitor", "Meeting prep", "Daily digest", "LinkedIn"]
+            .map { "<span class='chip'>\($0)</span>" }.joined()
+        let versionLine = version.isEmpty ? "" : "<span>v\(escape(version))</span><span class='dot'>&middot;</span>"
         return """
         <html><head><meta name='color-scheme' content='light dark'><style>
-        :root{--fg:#1d1d1f;--sub:#6e6e73;--err:#c0392b;--bg:#fff;--accent:#4f6df5}
-        @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:#98989d;--err:#ff6b5e;--bg:#1e1e1e;--accent:#7aa2ff}}
+        :root{--fg:#1d1d1f;--sub:#6e6e73;--err:#c0392b;--bg:#fff;--accent:#4f6df5;--chip:#f2f3f7;--glow:rgba(79,109,245,.22)}
+        @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:#98989d;--err:#ff6b5e;--bg:#1e1e1e;--accent:#7aa2ff;--chip:#2b2c31;--glow:rgba(122,162,255,.28)}}
         html,body{height:100%;margin:0;background:var(--bg)}
-        body{font:14px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
-        .logo svg{width:96px;height:96px;display:block}
-        h1{margin:0;font-size:26px;font-weight:650;color:var(--fg);letter-spacing:.2px}
-        .row{display:flex;align-items:center;gap:10px}
+        body{font:14px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center}
+        .logo{position:relative;width:240px;height:240px}
+        .logo::before{content:'';position:absolute;inset:-18%;border-radius:50%;background:radial-gradient(circle,var(--glow),transparent 68%)}
+        .logo svg{position:relative;width:240px;height:240px;display:block}
+        @media(prefers-reduced-motion:no-preference){.logo::before{animation:glow 3.2s ease-in-out infinite}}
+        @keyframes glow{50%{transform:scale(1.12);opacity:.65}}
+        h1{margin:0;font-size:44px;font-weight:700;color:var(--fg);letter-spacing:.3px}
+        .tag{margin:-6px 0 0;font-size:16px;color:var(--sub);max-width:460px;line-height:1.45}
+        .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:520px}
+        .chip{padding:5px 12px;border-radius:999px;background:var(--chip);color:var(--fg);font-size:12.5px;font-weight:550}
+        .row{display:flex;align-items:center;gap:10px;margin-top:6px}
         .spin{width:14px;height:14px;border:2px solid var(--sub);border-top-color:var(--accent);border-radius:50%;animation:s 0.9s linear infinite}
         @keyframes s{to{transform:rotate(360deg)}}
-        .err{color:var(--err);max-width:420px;text-align:center;line-height:1.4}
+        .err{color:var(--err);max-width:420px;line-height:1.4}
         .retry{color:var(--accent);text-decoration:none;font-weight:600;padding:6px 14px;border:1px solid var(--accent);border-radius:8px}
+        footer{position:fixed;bottom:22px;left:0;right:0;font-size:12.5px;line-height:1.7}
+        footer .dot{margin:0 8px}
+        footer a{color:var(--accent);text-decoration:none}
         </style></head><body>
-        <div class='logo'>\(LogoSVG.markup)</div><h1>LoopX</h1>\(status)
+        <div class='logo'>\(LogoSVG.markup)</div><h1>LoopX</h1>
+        <p class='tag'>Scheduled agent loops that triage issues, mail and meetings, so you don't have to.</p>
+        <div class='chips'>\(chips)</div>\(status)
+        <footer>\(versionLine)<span>Created by <strong>Encore Shao</strong></span><span class='dot'>&middot;</span><a href='mailto:encore.shao@gmail.com'>encore.shao@gmail.com</a></footer>
         </body></html>
         """
     }

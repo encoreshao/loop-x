@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             default: return ("Starting the backend…", false)
             }
         }
+        dashboard.appVersion = settingsModel.appVersion
         dashboard.onNeedsBackend = { [weak self] in
             guard let self, self.model.lock == nil else { return }
             Task { await self.model.ensureBackend() }
