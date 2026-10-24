@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- The Mac app's start screen has a water scene: soft ripples spread from the logo, two translucent waves drift along the bottom over a slow colour wash. The orbiting ring has a glowing blue-to-pink edge over a dashed track, and the Retry button has a gradient outline. With Reduce Motion on, the ripples and waves still run, smaller and slower.
+
 ## [0.7.0] - 2026-10-24
 
 ### Fixed
