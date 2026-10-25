@@ -1,6 +1,6 @@
 //! `loopx doctor`: first-launch checks for a fresh machine.
 //!
-//! Detects the AI CLIs (`claude`, `codex`) on `PATH`, the `gitlab-config` skill,
+//! Detects the AI CLIs (`claude`, `codex`, `gemini`, `kimi`, `cursor`) on `PATH`, the `gitlab-config` skill,
 //! the GitLab/Slack credential files, the three loop config files, and whether a
 //! `loopx serve` backend is alive. Pure data in, pure data out: the caller picks
 //! the environment ([`Env`]) so tests can point it at scratch dirs and a fake
@@ -85,8 +85,10 @@ fn cli_version(exe: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn cli_report(name: &str, env: &Env) -> Value {
-    match find_on_path(name, &env.path) {
+fn cli_report(cli: &str, env: &Env) -> Value {
+    let found = ai_cli_config::resolve_binary(cli, &|n| find_on_path(n, &env.path).is_some())
+        .and_then(|n| find_on_path(&n, &env.path));
+    match found {
         Some(p) => json!({
             "found": true,
             "path": p.display().to_string(),
@@ -147,10 +149,17 @@ fn flag(v: &Value, pointer: &str) -> bool {
 /// Run every check. `ready` is true when the loops could actually run: the
 /// selected AI CLI is installed. Everything else only produces `next_steps`.
 pub fn check(env: &Env) -> Value {
-    let claude = cli_report("claude", env);
-    let codex = cli_report("codex", env);
+    let mut ai_clis = serde_json::Map::new();
+    for cli in ai_cli_config::VALID_CLIS {
+        ai_clis.insert(cli.to_string(), cli_report(cli, env));
+    }
+    let ai_clis = Value::Object(ai_clis);
     let selected = ai_cli_config::get_selected_cli(&env.loop_home.join("ai_cli.json"));
-    let selected_found = flag(if selected == "codex" { &codex } else { &claude }, "/found");
+    let installed: Vec<&str> = ai_cli_config::VALID_CLIS
+        .into_iter()
+        .filter(|c| flag(&ai_clis, &format!("/{c}/found")))
+        .collect();
+    let selected_found = installed.contains(&selected.as_str());
 
     let skill_dir = env
         .home
@@ -170,18 +179,15 @@ pub fn check(env: &Env) -> Value {
     let backend = backend_report(&env.loop_home.join("loopx.lock"));
 
     let mut steps: Vec<String> = Vec::new();
-    if !flag(&claude, "/found") && !flag(&codex, "/found") {
-        steps.push(
-            "Install an AI CLI: Claude Code (https://claude.com/claude-code) or the Codex CLI, then make sure it is on your PATH.".into(),
-        );
-    } else if !selected_found {
-        let other = if selected == "codex" {
-            "claude"
-        } else {
-            "codex"
-        };
+    if installed.is_empty() {
         steps.push(format!(
-            "The selected AI CLI ({selected}) is not installed; install it, or switch with `loopx ai-cli set {other}`."
+            "Install an AI CLI ({}) and make sure it is on your PATH.",
+            ai_cli_config::VALID_CLIS.join(", ")
+        ));
+    } else if !selected_found {
+        steps.push(format!(
+            "The selected AI CLI ({selected}) is not installed; install it, or switch with `loopx ai-cli set <cli>` to an installed one ({}).",
+            installed.join(", ")
         ));
     }
     if !flag(&gitlab, "/exists") {
@@ -226,7 +232,7 @@ pub fn check(env: &Env) -> Value {
         "home": env.home.display().to_string(),
         "loop_home": env.loop_home.display().to_string(),
         "ready": selected_found,
-        "ai_clis": { "claude": claude, "codex": codex },
+        "ai_clis": ai_clis,
         "selected_cli": selected,
         "selected_cli_found": selected_found,
         "gitlab_skill": skill,
@@ -267,7 +273,7 @@ pub fn render(report: &Value) -> String {
         report["version"].as_str().unwrap_or_default()
     );
     let selected = report["selected_cli"].as_str().unwrap_or("claude");
-    for name in ["claude", "codex"] {
+    for name in ai_cli_config::VALID_CLIS {
         let c = &report["ai_clis"][name];
         let found = flag(c, "/found");
         let detail = if found {
@@ -384,8 +390,38 @@ mod tests {
         let r = check(&f.env);
         assert_eq!(r["ai_clis"]["claude"]["version"], "2.1.0 (Claude Code)");
         assert_eq!(r["ai_clis"]["codex"]["version"], "codex-cli 0.9.1");
+        assert_eq!(r["ai_clis"].as_object().unwrap().len(), 5);
         assert_eq!(r["selected_cli"], "claude");
         assert_eq!(r["ready"], true);
+    }
+
+    #[test]
+    fn reports_all_five_clis_including_cursor_under_either_binary_name() {
+        let f = fx();
+        script(&f.bin, "gemini", "echo 'gemini 1.0'");
+        script(&f.bin, "kimi", "echo 'kimi 2.0'");
+        script(&f.bin, "agent", "echo 'agent 3.0'");
+        let r = check(&f.env);
+        for cli in ai_cli_config::VALID_CLIS {
+            assert!(r["ai_clis"].get(cli).is_some(), "{cli}");
+        }
+        assert_eq!(r["ai_clis"]["gemini"]["version"], "gemini 1.0");
+        assert_eq!(r["ai_clis"]["kimi"]["version"], "kimi 2.0");
+        assert_eq!(r["ai_clis"]["cursor"]["version"], "agent 3.0");
+        assert_eq!(r["ai_clis"]["claude"]["found"], false);
+        let text = render(&r);
+        assert!(text.contains("cursor") && text.contains("kimi"));
+    }
+
+    #[test]
+    fn ready_when_only_the_selected_cli_is_installed() {
+        let f = fx();
+        script(&f.bin, "kimi", "echo 1");
+        std::fs::create_dir_all(&f.env.loop_home).unwrap();
+        std::fs::write(f.env.loop_home.join("ai_cli.json"), r#"{"cli":"kimi"}"#).unwrap();
+        let r = check(&f.env);
+        assert_eq!(r["ready"], true);
+        assert_eq!(r["ai_clis"]["codex"]["found"], false);
     }
 
     #[test]
@@ -408,9 +444,8 @@ mod tests {
         let r = check(&f.env);
         assert_eq!(r["selected_cli"], "codex");
         assert_eq!(r["ready"], false);
-        assert!(r["next_steps"]
-            .to_string()
-            .contains("loopx ai-cli set claude"));
+        let steps = r["next_steps"].to_string();
+        assert!(steps.contains("loopx ai-cli set <cli>") && steps.contains("(claude)"));
     }
 
     #[test]

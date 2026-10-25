@@ -1,4 +1,4 @@
-//! Which AI CLI (claude or codex) the loops use, from
+//! Which AI CLI (claude, codex, gemini, kimi or cursor) the loops use, from
 //! `<LOOP_ENGINEERING_HOME>/ai_cli.json`. Mirrors `bin/ai_cli_config.py`: a
 //! missing, corrupt or unrecognised file always falls back to `claude`.
 
@@ -7,7 +7,28 @@ use crate::pyjson;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-pub const VALID_CLIS: [&str; 2] = ["claude", "codex"];
+pub const VALID_CLIS: [&str; 5] = ["claude", "codex", "gemini", "kimi", "cursor"];
+
+/// Executable names a CLI may be installed under, in lookup order. Cursor's
+/// agent ships as `agent` and, on older installs, `cursor-agent`.
+pub fn binary_candidates(cli: &str) -> &'static [&'static str] {
+    match cli {
+        "claude" => &["claude"],
+        "codex" => &["codex"],
+        "gemini" => &["gemini"],
+        "kimi" => &["kimi"],
+        "cursor" => &["agent", "cursor-agent"],
+        _ => &[],
+    }
+}
+
+/// The first of [`binary_candidates`] that `path_lookup` reports as present.
+pub fn resolve_binary(cli: &str, path_lookup: &dyn Fn(&str) -> bool) -> Option<String> {
+    binary_candidates(cli)
+        .iter()
+        .find(|name| path_lookup(name))
+        .map(|name| name.to_string())
+}
 
 pub fn default_config_path() -> PathBuf {
     home_dir().join("ai_cli.json")
@@ -74,6 +95,32 @@ mod tests {
         assert_eq!(
             get_selected_cli(&write(d.path(), r#"{"cli": "codex"}"#)),
             "codex"
+        );
+    }
+
+    #[test]
+    fn reads_the_newer_clis() {
+        let d = tempfile::tempdir().unwrap();
+        for cli in ["gemini", "kimi", "cursor"] {
+            let text = format!(r#"{{"cli": "{cli}"}}"#);
+            assert_eq!(get_selected_cli(&write(d.path(), &text)), cli);
+        }
+    }
+
+    #[test]
+    fn cursor_resolves_to_whichever_binary_exists() {
+        assert_eq!(
+            resolve_binary("cursor", &|n| n == "agent").as_deref(),
+            Some("agent")
+        );
+        assert_eq!(
+            resolve_binary("cursor", &|n| n == "cursor-agent").as_deref(),
+            Some("cursor-agent")
+        );
+        assert_eq!(resolve_binary("cursor", &|_| false), None);
+        assert_eq!(
+            resolve_binary("gemini", &|n| n == "gemini").as_deref(),
+            Some("gemini")
         );
     }
 

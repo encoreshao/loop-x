@@ -9,7 +9,8 @@ use std::process::ExitCode;
 
 const LOOPS_USAGE: &str =
     "Usage: loopx loops <names|entry-point|timeout-seconds|log-suffix|emit-run-events|bash-env> [name]";
-const AI_CLI_USAGE: &str = "Usage: loopx ai-cli get\n       loopx ai-cli set <claude|codex>";
+const AI_CLI_USAGE: &str =
+    "Usage: loopx ai-cli get\n       loopx ai-cli set <claude|codex|gemini|kimi|cursor>";
 
 fn fail(msg: &str) -> ExitCode {
     eprintln!("{msg}");
@@ -109,7 +110,7 @@ pub fn ai_cli(args: &[String]) -> ExitCode {
         }
         Some("set") => {
             let Some(cli) = args.get(1) else {
-                return fail("Usage: loopx ai-cli set <claude|codex>");
+                return fail("Usage: loopx ai-cli set <claude|codex|gemini|kimi|cursor>");
             };
             match ai_cli_config::set_selected_cli(cli, &path) {
                 Ok(msg) => {

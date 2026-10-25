@@ -14,7 +14,7 @@ use crate::ai_cli_config;
 use crate::proc::ProcOutput;
 use std::path::{Path, PathBuf};
 
-pub const VALID_PROVIDERS: [&str; 2] = ai_cli_config::VALID_CLIS;
+pub const VALID_PROVIDERS: [&str; 5] = ai_cli_config::VALID_CLIS;
 
 /// `"success"`, `"failed"` or `"timeout"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
