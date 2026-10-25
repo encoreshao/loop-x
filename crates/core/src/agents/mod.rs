@@ -8,6 +8,9 @@
 
 pub mod claude;
 pub mod codex;
+pub mod cursor;
+pub mod gemini;
+pub mod kimi;
 pub mod sealed;
 
 use crate::ai_cli_config;
@@ -141,6 +144,57 @@ pub fn failure_result(out: &ProcOutput, timeout_seconds: f64, duration_ms: i64) 
     }
 }
 
+/// Run `program args` in `opts.cwd` and fold the outcome into an
+/// [`AgentResult`]. `extract` turns stdout into the reply text; `None` on exit 0
+/// is reported as "unreadable output from <cli>". These CLIs emit no cost.
+pub(crate) fn run_text_cli(
+    cli: &str,
+    program: &str,
+    args: Vec<String>,
+    opts: &RunOptions,
+    extract: &dyn Fn(&str) -> Option<String>,
+) -> AgentResult {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).current_dir(&opts.cwd);
+    let start = std::time::Instant::now();
+    let ms = |s: std::time::Instant| i64::try_from(s.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let out = match crate::proc::run(
+        &mut cmd,
+        None,
+        Some(std::time::Duration::from_secs_f64(opts.timeout_seconds)),
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            return AgentResult::failed(format!("cannot run {program}: {e}"), None, ms(start))
+        }
+    };
+    if out.timed_out || out.code != Some(0) {
+        return failure_result(&out, opts.timeout_seconds, ms(start));
+    }
+    match extract(&out.stdout) {
+        Some(text) => AgentResult {
+            status: AgentStatus::Success,
+            output: text,
+            exit_code: Some(0),
+            duration_ms: ms(start),
+            input_tokens: None,
+            output_tokens: None,
+            estimated_cost_usd: None,
+        },
+        None => AgentResult::failed(
+            format!("unreadable output from {cli}\n{}", out.stdout),
+            Some(0),
+            ms(start),
+        ),
+    }
+}
+
+/// The string field `key` of the JSON object in `stdout`.
+pub(crate) fn json_string_field(stdout: &str, key: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    v.get(key)?.as_str().map(String::from)
+}
+
 /// The adapter for `provider`; `None` / `"default"` resolve through
 /// `ai_cli.json` (`config_path`, or the per-machine default).
 pub fn get_agent(
@@ -157,6 +211,9 @@ pub fn get_agent(
     match provider.as_str() {
         "claude" => Ok(Box::new(claude::ClaudeAgent::default())),
         "codex" => Ok(Box::new(codex::CodexAgent::default())),
+        "gemini" => Ok(Box::new(gemini::GeminiAgent::default())),
+        "kimi" => Ok(Box::new(kimi::KimiAgent::default())),
+        "cursor" => Ok(Box::new(cursor::CursorAgent::default())),
         other => Err(format!(
             "Unknown agent provider: {}",
             crate::loops_config::py_repr_str(other)
