@@ -756,6 +756,8 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
 }
 .ai-panel-send:disabled { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); cursor: not-allowed; }
 .ai-panel-send .icon { font-size: 20px; }
+/* The AI CLI notice in the panel footer: the footer's gap spaces it. */
+.ai-panel-footer .flash { margin: 0; padding: 0.5rem 0.75rem; font-size: 0.8rem; }
 .ai-panel-disclaimer { margin: 0; text-align: center; font-size: 0.72rem; color: var(--md-on-surface-variant); }
 @media (max-width: 720px) {
   /* Too narrow for two cards side by side: the panel overlays the main
@@ -2169,6 +2171,16 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   border-color: var(--md-error-container);
   color: var(--md-on-error-container);
 }
+/* An AI CLI running without a tool allowlist, or one that degrades (Settings,
+   Chat, Inbox Triage, GitLab loop): the box can hold several paragraphs. */
+.flash-warning {
+  background: var(--md-warning-container);
+  border-color: var(--md-warning-container);
+  color: var(--md-on-warning-container);
+}
+.flash-warning p { margin: 0; }
+.flash-warning p + p { margin-top: 0.4rem; }
+.flash-warning a { color: inherit; text-decoration: underline; }
 
 /* A single inbox's last-run error (Inbox Triage page) - inline, next to
    that inbox's own card, rather than a full-width .flash banner which

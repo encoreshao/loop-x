@@ -52,6 +52,6 @@ The Harness -> Gates view (`/harness?view=gates`) shows the observe-mode agreeme
 
 ### Limitations
 
-- Gate enforcement on Codex is prompt-only: `codex exec` has no per-command allowlist, so "do not push / do not open the MR" is an instruction, not a harness-enforced denial as it is on Claude.
+- Gate enforcement on Codex (and Gemini, Kimi, Cursor, which are experimental) is prompt-only: `codex exec` has no per-command allowlist, so "do not push / do not open the MR" is an instruction, not a harness-enforced denial as it is on Claude.
 - A `project_config_error` escalation cannot comment or label (see above).
 - `loopx gitlab*` stays on the agent's allowlist in gate mode (it needs it to read issues, notes and MRs). Its MR-creating calls are not blocked, but they cannot produce a usable MR in gate mode: the agent cannot push, so the `loop/issue-<iid>` branch does not exist on the remote.

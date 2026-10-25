@@ -17,7 +17,7 @@ use crate::connectors::{ApiOpts, Connector, ConnectorSource, Field};
 use crate::loopkit::{self, LoopContext, LoopPlugin, Outcome, PluginError, Status, WorkItem};
 use crate::loops_config::{py_str, py_truthy};
 use crate::seen_store::{parse_iso, py_isoformat};
-use crate::{ai_cli_config, config, memory_store, pyjson};
+use crate::{config, memory_store, pyjson};
 use chrono::{DateTime, Duration, FixedOffset, Local, NaiveTime, SecondsFormat, TimeZone, Utc};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -38,7 +38,6 @@ pub const MAX_ENTRIES: usize = 5;
 pub const MAX_ATTENDEES: usize = 8;
 /// Briefs kept for the Live page, newest first.
 pub const MAX_BRIEFS: usize = 100;
-pub const NO_CLAUDE: &str = "mail skipped: reading mail requires the Claude CLI";
 const MAX_MEMORY: usize = 400;
 
 pub const SETTINGS_FIELDS: [Field; 4] = [
@@ -76,13 +75,10 @@ const OUTPUT_KEYS: [&str; 5] = [
 pub type MailFn = Arc<dyn Fn(&[String], i64, usize) -> Result<Vec<Value>, String> + Send + Sync>;
 /// `memory_fn(project path, issue iid)`: the recorded task memory, `""` if none.
 pub type MemoryFn = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
-/// `cli_fn()`: the selected AI CLI (`claude` / `codex`).
-pub type CliFn = Arc<dyn Fn() -> String + Send + Sync>;
 
 pub struct CalendarPrep {
     connectors: Arc<dyn ConnectorSource>,
     mail_fn: Option<MailFn>,
-    cli_fn: Option<CliFn>,
     memory_fn: Option<MemoryFn>,
     series_path: Option<PathBuf>,
     today_path: Option<PathBuf>,
@@ -94,7 +90,6 @@ impl CalendarPrep {
         Self {
             connectors,
             mail_fn: None,
-            cli_fn: None,
             memory_fn: None,
             series_path: None,
             today_path: None,
@@ -103,10 +98,6 @@ impl CalendarPrep {
     }
     pub fn with_mail_fn(mut self, f: MailFn) -> Self {
         self.mail_fn = Some(f);
-        self
-    }
-    pub fn with_cli_fn(mut self, f: CliFn) -> Self {
-        self.cli_fn = Some(f);
         self
     }
     pub fn with_memory_fn(mut self, f: MemoryFn) -> Self {
@@ -144,13 +135,6 @@ impl CalendarPrep {
     }
     fn briefs_file(&self, ctx: &LoopContext) -> PathBuf {
         self.state_file(&self.briefs_path, ctx, "briefs.json")
-    }
-
-    fn cli(&self) -> String {
-        match &self.cli_fn {
-            Some(f) => f(),
-            None => ai_cli_config::selected_cli(),
-        }
     }
 
     /// Keep the brief by meeting key so the Live page can show each meeting's
@@ -407,9 +391,6 @@ impl CalendarPrep {
     ) -> (Vec<Value>, Option<String>) {
         if days <= 0 || addresses.is_empty() {
             return (Vec::new(), None);
-        }
-        if self.cli() != "claude" {
-            return (Vec::new(), Some(NO_CLAUDE.into()));
         }
         let result = match &self.mail_fn {
             Some(f) => f(addresses, days, MAIL_LIMIT),
@@ -1395,7 +1376,6 @@ mod tests {
         gitlab_fail: bool,
         mail_rows: Vec<Value>,
         mail_error: Option<&'static str>,
-        cli: &'static str,
     }
 
     impl Default for Opts {
@@ -1405,7 +1385,6 @@ mod tests {
                 gitlab_fail: false,
                 mail_rows: vec![],
                 mail_error: None,
-                cli: "claude",
             }
         }
     }
@@ -1435,7 +1414,6 @@ mod tests {
         };
         let mail_calls: Arc<Mutex<Vec<(Vec<String>, i64, usize)>>> = Default::default();
         let (mc, rows, err) = (mail_calls.clone(), o.mail_rows.clone(), o.mail_error);
-        let cli = o.cli.to_string();
         let plugin = CalendarPrep::new(Arc::new(source))
             .with_mail_fn(Arc::new(move |a, d, l| {
                 mc.lock().unwrap().push((a.to_vec(), d, l));
@@ -1444,7 +1422,6 @@ mod tests {
                     None => Ok(rows.clone()),
                 }
             }))
-            .with_cli_fn(Arc::new(move || cli.clone()))
             .with_series_path(dir.path().join("series.json"))
             .with_today_path(dir.path().join("today.json"))
             .with_briefs_path(dir.path().join("briefs.json"));
@@ -1621,8 +1598,7 @@ mod tests {
         }))
         .with_today_path(h.dir.path().join("today.json"))
         .with_series_path(h2.dir.path().join("series.json"))
-        .with_briefs_path(h2.dir.path().join("briefs.json"))
-        .with_cli_fn(Arc::new(|| "claude".into()));
+        .with_briefs_path(h2.dir.path().join("briefs.json"));
         p2.discover(&ctx()).unwrap();
         let ids: Vec<_> = today(&h)["meetings"]
             .as_array()
@@ -1772,15 +1748,15 @@ mod tests {
     }
 
     #[test]
-    fn mail_is_skipped_without_claude_or_when_turned_off() {
+    fn mail_is_read_regardless_of_cli_and_skipped_only_when_turned_off() {
         let h = harness(Opts {
-            cli: "codex",
+            mail_rows: vec![json!({"subject": "Plan for issue #3"})],
             ..Opts::default()
         });
         let item = discover(&h, json!({})).remove(0);
-        assert!(h.mail_calls.lock().unwrap().is_empty());
-        assert_eq!(item.payload["mail"], json!([]));
-        assert_eq!(item.payload["mail_error"], NO_CLAUDE);
+        assert_eq!(h.mail_calls.lock().unwrap().len(), 1);
+        assert_eq!(item.payload["mail"][0]["subject"], "Plan for issue #3");
+        assert!(item.payload.get("mail_error").is_none());
         let h = harness(Opts::default());
         let item = discover(&h, json!({"mail_days": "0"})).remove(0);
         assert!(h.mail_calls.lock().unwrap().is_empty());
@@ -1881,8 +1857,7 @@ mod tests {
         )]));
         let p2 = CalendarPrep::new(h2.plugin.connectors.clone())
             .with_series_path(h.dir.path().join("series.json"))
-            .with_today_path(h2.dir.path().join("today.json"))
-            .with_cli_fn(Arc::new(|| "codex".into()));
+            .with_today_path(h2.dir.path().join("today.json"));
         let nxt = p2.discover(&ctx()).unwrap().remove(0);
         assert_eq!(
             nxt.payload["last_time"]["follow_ups"],
@@ -2103,7 +2078,6 @@ mod tests {
             "ev1", 30, "accepted", &desc, "", "x", None,
         )]));
         let plugin = CalendarPrep::new(h.plugin.connectors.clone())
-            .with_cli_fn(Arc::new(|| "codex".into()))
             .with_today_path(h.dir.path().join("t.json"))
             .with_series_path(h.dir.path().join("s.json"))
             .with_memory_fn(Arc::new(|path, iid| {

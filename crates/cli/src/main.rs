@@ -76,7 +76,7 @@ enum Command {
     },
     /// Which AI CLI the loops use
     AiCli {
-        /// `get` or `set <claude|codex>`
+        /// `get` or `set <claude|codex|gemini|kimi|cursor>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },

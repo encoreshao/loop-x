@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:ce8ce80d6e728a33--></style>
+<style><!--@blob:0599b4a2675d2a09--></style>
 <script><!--@blob:57dc9733945dc0e5--></script>
 </head>
 <body>
@@ -172,7 +172,7 @@
 <div class='ai-panel-thread' id='ai-panel-thread' aria-live='polite'></div>
 </div>
 <div class='ai-panel-footer'>
-<div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="このページには何が表示されていて、まず何を見るべきですか？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>このページを説明</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="最新の GitLab 実行レビューを要約してください。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>最新の実行</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="最近の実行で失敗したものはありますか？何が問題だったか要約してください。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg>最近のエラー</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="ループは今何をしていますか？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-monitoring'/></svg>ループの状態</button></div>
+<div class='flash flash-warning'><p>Codex はモデルにシェルを与え、メール本文を含むプロンプトを ~/.codex/sessions に記録します。チャットでは、そのサンドボックスが loopx の設定を直接変更する操作（ループの有効化・無効化、プロジェクトの保存）もブロックします。これらは設定ページで行うか、CLI を切り替えてください。</p><p>Codex CLI は返信を一度にまとめて返します。書いている途中の文字は表示されません。</p><p><a href='/settings?tab=ai-cli'>設定で AI CLI を切り替える</a></p></div><div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="このページには何が表示されていて、まず何を見るべきですか？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>このページを説明</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="最新の GitLab 実行レビューを要約してください。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>最新の実行</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="最近の実行で失敗したものはありますか？何が問題だったか要約してください。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg>最近のエラー</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="ループは今何をしていますか？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-monitoring'/></svg>ループの状態</button></div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <textarea name='text' rows='1' placeholder='このページについて質問、または GitLab Issue のリンクを貼り付け' aria-label='アシスタントにメッセージを送信'></textarea>

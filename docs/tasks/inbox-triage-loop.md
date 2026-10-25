@@ -108,7 +108,8 @@ Each run produces, per connected and enabled inbox:
 - `outputs/inbox-triage/state/<inbox>.json` — the high-water mark and the
   rolling 14-day set of already-triaged message IDs.
 - `outputs/inbox-triage/status.json` — per inbox: `idle` / `running` /
-  `failed` / `needs_reauth`, last run time, last counts per category. An
+  `failed` / `needs_reauth`, last run time, last counts per category, and
+  `ai_cli_warning` when the selected CLI is less restricted. An
   inbox is never left at `running`: any failure (or a `timeout` SIGTERM)
   mid-inbox writes `failed`, and the dashboard's **Run now** only refuses
   while the loop-level status reports a live run pid.
@@ -155,17 +156,16 @@ any inbox still sends the digest, saying so.
   own `CLAUDE.md`/auto-memory into the session. The user's own *global*
   `~/.claude/CLAUDE.md` still loads into the `claude -p` call, the same way
   it would for any other `claude` invocation on the machine.
-- **Inbox Triage requires the Claude CLI.** `codex exec` always gives the
-  model a shell (even `--sandbox read-only` can read files and run
-  commands) and always records the prompt — the email bodies — under
-  `~/.codex/sessions/`, with no switch to turn either off. So when Codex is
-  the selected AI CLI (dashboard **Settings** → AI CLI), every inbox fails
-  up front with "Inbox Triage requires the Claude CLI (codex gives the
-  model a shell) - switch AI CLI to Claude in Settings" — before any mail
-  is fetched, labelled, or recorded, and without invoking any AI. The other
-  loops keep honouring the Codex choice.
+- **Inbox Triage runs on the selected AI CLI.** Claude is invoked with no
+  tools. Codex, Gemini, Kimi and Cursor cannot be locked down the same way
+  (`codex exec` always gives the model a shell and records the prompt - the
+  email bodies - under `~/.codex/sessions/`), so with one of them selected
+  the loop still runs but each inbox's status carries an `ai_cli_warning`
+  that the Inbox Triage page, Settings and the unified log show. Errors
+  recorded for an inbox contain only loopx's own text (exit code, timeout,
+  could not start), never the CLI's output, so email text cannot leak.
 - **Message bodies never persist.** Body text exists only in this process's
-  memory and in the prompt sent to that `claude -p` call (one per inbox,
+  memory and in the prompt sent to that AI CLI call (one per inbox,
   plus at most one retry after an unusable reply), which keeps no session
   transcript. It is never written to `outputs/`, the unified log, status,
   or the Slack digest — only sender, subject, category, the AI's short

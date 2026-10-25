@@ -59,7 +59,7 @@ metrics/cost/learning.
 - **Cost** — `total_cost_usd` is the sum of what agent calls reported,
   including a failed call's spend (e.g. a `--max-budget-usd` stop, carried as
   `exc.cost_usd`). It is `None` (unknown), never `0`, when no call reported a
-  cost: every Codex run (topic-monitor runs before 2026-10-07 also have no
+  cost: every run on a CLI that reports none (all but Claude; topic-monitor runs before 2026-10-07 also have no
   cost figure; that loop now runs the CLI with JSON output). Health's cost efficiency
   leaves `None`-cost runs out of the numerator and the denominator and counts
   only `gitlab-issue-loop` runs; the `summarize_*`/Budget rollups add `None`
@@ -125,7 +125,7 @@ subdirectories — see §9. Bare file names in the table below are in
 | `loop_audit.rs` | `loop audit` — scores a `LoopDefinition`'s readiness (PASS/WARN/FAIL per check + weighted score) |
 | `loop_eval.rs` | Evaluation dataset harness — drives a real `LoopRuntime` with a scripted agent/verifiers |
 | `loop_cmd.rs` | The `loop` CLI: `init`/`validate`/`run`/`status`/`inspect`/`audit`/`cost`/`doctor`/`replay`/`eval` |
-| `crates/core/src/agents/mod.rs`, `crates/core/src/agents/claude.rs`, `crates/core/src/agents/codex.rs` | `Agent` trait + `AgentResult` + provider adapters |
+| `crates/core/src/agents/mod.rs`, `crates/core/src/agents/claude.rs`, `crates/core/src/agents/codex.rs`, `gemini.rs`, `kimi.rs`, `cursor.rs` | `Agent` trait + `AgentResult` + provider adapters |
 | `events.rs` | Append-only JSONL event log (read through the ledger, §2) |
 | `metrics.rs`, `cost.rs`, `health.rs`, `learning.rs` | Pure report builders over the event log (read through the ledger, §2) |
 | `gitlab_runner.rs` | Wires the real GitLab issue loop through `LoopRuntime`, one issue at a time |
@@ -209,7 +209,7 @@ result = runtime.start(definition, run_id, loop_id=None)  # -> LoopResult
 ```
 
 `agent_fn` and `verifiers` are injected, not imported — `loop_runtime.rs`
-itself has no GitLab/Claude/Codex/Slack dependency. Each iteration:
+itself has no GitLab/AI-CLI/Slack dependency. Each iteration:
 executes the agent, runs every configured verifier, checks budget
 (`BudgetController` in `budget.rs`), checks progress
 (`ProgressDetector` in `loop_progress.rs`), checks policy
@@ -229,9 +229,8 @@ failure never crashes the runtime — same `|| true` philosophy as
 - **Metrics** (`metrics.rs`) — issue/verification/classification/failure-
   taxonomy/quality-and-autonomy metrics computed from the event log.
 - **Cost** (`cost.rs`) — Claude-only usage/cost extraction (`claude -p
-  --output-format json`'s `total_cost_usd`); Codex cost is still
-  unverified and reported as `None` (its success-path usage schema has not
-  been confirmed against a real sample). Failed budget stops are booked at
+  --output-format json`'s `total_cost_usd`); Codex, Gemini, Kimi and Cursor
+  cost is reported as `None` (unknown). Failed budget stops are booked at
   the per-call cap (`--max-budget-usd`, from `stop_conditions.max_cost_usd`);
   other unknown costs stay `None`.
 - **Health** (`health.rs`) — a 7-component Loop Health score (weights:
@@ -429,10 +428,10 @@ definition's `prompt.md`, and `call_model` defaults to the sealed call.
 5. Write a history markdown file and `last-run.json`, call `digest`, notify,
    and send a second notification if any item failed.
 
-**Sealed model calls.** `crates/core/src/agents/sealed.rs` is the one hardened Claude call
-every plugin uses on untrusted content: no tools, no MCP servers, prompt on
-stdin, no session persistence, hooks disabled. It is Claude-only; codex is
-refused because it always gives the model a shell and records the prompt.
+**Sealed model calls.** `crates/core/src/agents/sealed.rs` is the one hardened model call
+every plugin uses on untrusted content, run on the selected AI CLI: on Claude, no tools, no MCP
+servers, prompt on stdin, no session persistence, hooks disabled. CLIs that cannot be locked
+down that far (Codex, Gemini, Kimi, Cursor) still run, with a warning (`ai_cli_safety.rs`).
 
 **`chat_*` helpers.** `chat_text`, `chat_url` and `chat_link` sanitize
 untrusted text before it goes into any chat message (control characters

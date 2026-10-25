@@ -11,6 +11,17 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Gemini CLI, Kimi CLI and Cursor CLI can be selected as the AI CLI (Settings -> AI CLI, or `loopx ai-cli set gemini|kimi|cursor`) and are used everywhere: loops, calendar prep, Inbox Triage and the dashboard chat. They are marked experimental (their flags come from documentation and are untested against the real binaries), and the picker says when a CLI is not found on PATH. `loopx doctor` detects all five.
+
+### Changed
+
+- Inbox Triage and the dashboard chat no longer refuse Codex. CLIs that cannot be locked down (Codex, Gemini, Kimi, Cursor) run with a visible warning on Settings, Chat, Inbox Triage, topic and loop pages, the unified log and run events. Codex's warning explains it gives the model a shell and records prompts, including email text, under `~/.codex/sessions`; in chat its sandbox also blocks actions that change loopx settings.
+- Calendar prep and the other sealed model calls run on whichever AI CLI is selected instead of Claude only.
+- Cost shows as unknown for CLIs that report none (everything except Claude). Gemini and Codex chat replies arrive in one piece, and chat titles are best effort on non-Claude CLIs.
+- Inbox Triage errors show only loopx's own text (exit code, timeout, could not start), never the CLI's output, so CLI output is never stored in Inbox errors.
+
 ## [0.8.1] - 2026-10-25
 
 ### Changed

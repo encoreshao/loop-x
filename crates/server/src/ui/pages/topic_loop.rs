@@ -11,7 +11,7 @@ use super::loops_common::{
 use crate::ui::badge::status_badge_markup;
 use crate::ui::hub::{builtin_loop_page, resolve_view};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
-use crate::ui::{consts, pyfmt};
+use crate::ui::{ai_cli, consts, pyfmt};
 use loopx_core::{pydumps, run_history, status, topics};
 use serde_json::{Map, Value};
 
@@ -46,11 +46,17 @@ fn text(topic: &Value, key: &str) -> String {
 /// `_topic_monitor_body`.
 fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     let topics: Vec<Value> = configured_topics(ctx).into_iter().filter(is_enabled).collect();
-    let topic_status = status::read_topic_status(
+    let status_doc = status::read_topic_status(
         &ctx.state.repo_root.join("outputs").join("topic-monitor").join("status.json"),
     );
     let empty = Map::new();
-    let topic_status = topic_status.get("topics").and_then(Value::as_object).unwrap_or(&empty);
+    let topic_status = status_doc.get("topics").and_then(Value::as_object).unwrap_or(&empty);
+    // The last run's CLI ran without a tool allowlist (`record_run_warning`).
+    let warning_html = status_doc
+        .get("ai_cli_warning")
+        .and_then(Value::as_str)
+        .map(|w| ai_cli::warning_notice(ctx.lang, w))
+        .unwrap_or_default();
     let any_running = topic_status
         .values()
         .any(|e| e.get("state").and_then(Value::as_str) == Some("running"));
@@ -97,8 +103,18 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
                         pyfmt::escape(&ctx.tf("last run {when}", &[("when", &last_run)]))
                     )
                 };
+                // The agent call's own failure (`mark_topic_failed`), never a
+                // topic that reported `failed` by itself.
+                let error_html = match entry.get("error").and_then(Value::as_str).filter(|e| !e.is_empty()) {
+                    Some(e) => format!(
+                        "<div class='flash flash-danger'>{} {}</div>",
+                        pyfmt::escape(e),
+                        ai_cli::settings_link(ctx.lang)
+                    ),
+                    None => String::new(),
+                };
                 format!(
-                    "<div class='project-block'><h3>{} {badge}{last_run_html}</h3></div>",
+                    "<div class='project-block'><h3>{} {badge}{last_run_html}</h3>{error_html}</div>",
                     pyfmt::escape(&label)
                 )
             })
@@ -117,7 +133,7 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         &[("link", &history_link)],
     );
     format!(
-        "\n<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{subtitle}</p>\n</div>\n\n{}\n\n<div class=\"grid\">\n<section class=\"card\">\n<div class=\"section-header\">{icon}<h2>{}</h2></div>\n{topics_html}\n{run_now_form}\n</section>\n</div>\n{latest_section}\n",
+        "\n<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{subtitle}</p>\n</div>\n\n{}\n\n<div class=\"grid\">\n<section class=\"card\">\n<div class=\"section-header\">{icon}<h2>{}</h2></div>\n{warning_html}{topics_html}\n{run_now_form}\n</section>\n</div>\n{latest_section}\n",
         esc_t(ctx, "Topic Monitor"),
         flash_html(flash, flash_ok),
         esc_t(ctx, "Topics"),
@@ -279,5 +295,42 @@ mod tests {
     fn empty_history_says_none_yet() {
         let (_dir, state) = sandbox();
         assert!(history_html(&state).contains("(none yet)"));
+    }
+
+    fn live_with(status: Value) -> String {
+        let (dir, state) = sandbox();
+        std::fs::write(dir.path().join("topics.json"), r#"[{"name": "news", "label": "News"}]"#).unwrap();
+        let out = dir.path().join("outputs/topic-monitor");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("status.json"), status.to_string()).unwrap();
+        let req = UiRequest::get("/loops/topic-loop");
+        live_body(&UiCtx::new(&state, &req), None, false)
+    }
+
+    #[test]
+    fn a_failed_cli_call_shows_its_message_and_the_way_to_switch() {
+        let html = live_with(serde_json::json!({"topics": {"news": {"state": "failed", "error": "exited 3: quota <gone>"}}}));
+        assert!(html.contains("exited 3: quota &lt;gone&gt;"), "{html}");
+        assert!(html.contains("href='/settings?tab=ai-cli'"), "{html}");
+    }
+
+    #[test]
+    fn an_unrestricted_run_shows_its_warning() {
+        let warning = loopx_core::ai_cli_safety::warning("gemini", loopx_core::ai_cli_safety::CallSite::TopicMonitor).unwrap();
+        let html = live_with(serde_json::json!({"ai_cli_warning": warning, "topics": {"news": {"state": "idle"}}}));
+        assert!(html.contains("<div class='flash flash-warning'>"), "{html}");
+        assert!(html.contains(&pyfmt::escape(warning)), "{html}");
+    }
+
+    #[test]
+    fn a_clean_or_self_reported_failure_shows_neither() {
+        for status in [
+            serde_json::json!({"topics": {"news": {"state": "idle"}}}),
+            serde_json::json!({"topics": {"news": {"state": "failed"}}}),
+        ] {
+            let html = live_with(status);
+            assert!(!html.contains("tab=ai-cli"), "{html}");
+            assert!(!html.contains("flash-warning"), "{html}");
+        }
     }
 }

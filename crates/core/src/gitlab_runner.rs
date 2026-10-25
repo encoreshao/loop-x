@@ -7,6 +7,7 @@
 //! ([`CliInvoker`]): the dashboard's on-demand single issue, one issue inside the
 //! scheduled batch, and the batch's single end-of-run wrap-up.
 
+use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
 use crate::config::{default_config_path, Config};
 use crate::events::EventFields;
 use crate::gitlab::{self, quote, Client};
@@ -17,8 +18,9 @@ use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::{build_verifiers, IssueContext};
 use crate::runner_util::{
-    append_unified_log, emit_best_effort, failed_call_cost, head, notify_slack_best_effort,
-    parse_envelope, tail, unified_log_path, STDERR_EXCERPT_CHARS,
+    append_unified_log, could_not_start, emit_best_effort, failed_call_cost, head,
+    notify_slack_best_effort, parse_envelope, resolved_program, tail, unified_log_path,
+    STDERR_EXCERPT_CHARS,
 };
 use crate::{
     ai_cli_config, approvals, cost, events, issue_tracking_config, learning, mr, proc, prompt,
@@ -154,6 +156,15 @@ pub fn cli_command(
     offline: bool,
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
+    if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
+        // No tool allowlist exists for these; cursor's workspace is the repo root.
+        let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
+        opts.add_dirs = vec![PathBuf::from(repo_root), PathBuf::from(worktree_root)];
+        let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
+        return std::iter::once(resolved_program(ai_cli))
+            .chain(args)
+            .collect();
+    }
     if ai_cli == "codex" {
         // `codex exec` has no --add-dir/--ask-for-approval; the two roots become
         // a writable_roots override, and network access is needed for git push
@@ -395,7 +406,28 @@ fn invoke_cli_with_prompt(
         max_budget_usd,
         offline,
     );
+    run_cli(
+        ctx,
+        &ai_cli,
+        &argv,
+        timeout_seconds,
+        issue,
+        env,
+        max_budget_usd,
+    )
+}
 
+/// Spawn `argv` (the selected CLI's command) and turn its outcome into the
+/// agent's result.
+fn run_cli(
+    ctx: &RunCtx,
+    ai_cli: &str,
+    argv: &[String],
+    timeout_seconds: f64,
+    issue: Option<(&str, &str)>,
+    env: &[(String, String)],
+    max_budget_usd: Option<f64>,
+) -> Result<AgentOutput, AgentError> {
     let report_failure = |reason: &str, detail: &str, event_reason: Option<&str>| {
         let label = issue
             .map(|(a, i)| format!(" for {a} #{i}"))
@@ -441,7 +473,7 @@ fn invoke_cli_with_prompt(
     let out = match proc::run(&mut command, None, Some(timeout)) {
         Ok(out) => out,
         Err(e) => {
-            let detail = format!("could not start {}: {e}", argv[0]);
+            let detail = could_not_start(ai_cli, &argv[0], &e);
             report_failure("failed to start", &detail, None);
             return Err(AgentError {
                 message: detail,
@@ -508,6 +540,17 @@ fn invoke_cli_with_prompt(
             .and_then(|u| u.get("cost_usd"))
             .and_then(Value::as_f64);
         (text, cost_usd, usage)
+    } else if let Some(reply) = extract_new_cli_reply(ai_cli, &out.stdout) {
+        match reply {
+            Ok(text) => (text, None, None),
+            Err(message) => {
+                report_failure("unusable output on exit 0", &message, None);
+                return Err(AgentError {
+                    message,
+                    cost_usd: None,
+                });
+            }
+        }
     } else {
         (out.stdout.clone(), None, None)
     };
@@ -1736,6 +1779,94 @@ mod tests {
         assert_eq!(&c[..4], ["codex", "exec", "--sandbox", "workspace-write"]);
         assert!(c.contains(&r#"sandbox_workspace_write.writable_roots=["/r","/wt"]"#.to_string()));
         assert_eq!(c.last().unwrap(), "P");
+    }
+
+    #[test]
+    fn new_clis_get_their_binary_prompt_and_write_flag() {
+        for (cli, flag) in [
+            ("gemini", "--yolo"),
+            ("kimi", "--yolo"),
+            ("cursor", "--force"),
+        ] {
+            let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false);
+            assert!(
+                ai_cli_config::binary_candidates(cli).contains(&c[0].as_str()),
+                "{cli}: {}",
+                c[0]
+            );
+            assert!(c.contains(&"P".to_string()), "{cli}");
+            assert!(c.contains(&flag.to_string()), "{cli}");
+        }
+        let g = cli_command("gemini", "P", "/r", "/wt", "x", false, None, false);
+        assert!(g
+            .windows(2)
+            .any(|w| w[0] == "--include-directories" && w[1] == "/r,/wt"));
+        let c = cli_command("cursor", "P", "/r", "/wt", "x", false, None, false);
+        assert!(c.windows(2).any(|w| w[0] == "--workspace" && w[1] == "/r"));
+    }
+
+    fn script_cli(dir: &Path, body: &str) -> String {
+        crate::agents::testutil::script(dir, "fake-cli", body)
+            .display()
+            .to_string()
+    }
+
+    #[test]
+    fn missing_binary_names_the_cli_and_the_settings_hint() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = RunCtx::new(d.path().to_path_buf());
+        let argv = vec!["/nonexistent/gemini-bin".to_string(), "P".to_string()];
+        let e = run_cli(&ctx, "gemini", &argv, 5.0, None, &[], None).unwrap_err();
+        assert!(
+            e.message
+                .contains("could not start /nonexistent/gemini-bin"),
+            "{}",
+            e.message
+        );
+        assert!(e.message.contains("gemini"), "{}", e.message);
+        assert!(
+            e.message.ends_with("Switch CLI in Settings -> AI CLI."),
+            "{}",
+            e.message
+        );
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(log.contains("could not start"), "{log}");
+    }
+
+    #[test]
+    fn new_cli_output_is_extracted_or_fails_visibly() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = RunCtx::new(d.path().to_path_buf());
+        let ok = vec![script_cli(d.path(), r#"echo '{"response":"fixed it"}'"#)];
+        let out = run_cli(&ctx, "gemini", &ok, 30.0, None, &[], None).unwrap();
+        assert_eq!((out.cost_usd, out.usage), (None, None));
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(log.contains("fixed it"), "{log}");
+        for (cli, body, want) in [
+            ("gemini", "echo plain", "unreadable output from gemini"),
+            (
+                "gemini",
+                r#"echo '{"error":{"message":"quota exceeded"}}'"#,
+                "quota exceeded",
+            ),
+            (
+                "cursor",
+                r#"echo '{"is_error":true,"result":"auth failed"}'"#,
+                "auth failed",
+            ),
+            ("kimi", "printf '  '", "empty output from kimi"),
+        ] {
+            let argv = vec![script_cli(d.path(), body)];
+            let e = run_cli(&ctx, cli, &argv, 30.0, None, &[], None).unwrap_err();
+            assert!(e.message.contains(want), "{cli}: {}", e.message);
+        }
+    }
+
+    #[test]
+    fn unreadable_output_message_names_the_cli_and_keeps_stdout() {
+        let m = crate::runner_util::unreadable_output("gemini", "garbage");
+        assert!(m.starts_with("unreadable output from gemini"), "{m}");
+        assert!(m.contains("garbage"));
     }
 
     #[test]

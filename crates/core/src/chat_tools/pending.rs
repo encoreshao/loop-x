@@ -133,6 +133,35 @@ pub fn claim(env: &Env, id: &str, session: &str, now: Option<f64>) -> Option<Pen
     valid(&record, session, now).then(|| Pending::from_value(&record.unwrap_or(Value::Null)))
 }
 
+/// Ids of the live (unclaimed) records `session` created at or after `since`,
+/// oldest first: the chat attaches them to a reply when the CLI's output did
+/// not show the tool calls. Only the pending directory is read, so this
+/// needs no [`Env`].
+pub fn created_since(repo_root: &Path, session: &str, since: f64) -> Vec<String> {
+    let dir = repo_root.join("outputs").join("chat-pending");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(f64, String)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let id = name.strip_suffix(".json")?.to_string();
+            if !valid_id(&id) {
+                return None;
+            }
+            let record = load(&e.path())?;
+            if session.is_empty() || record.get("session")?.as_str()? != session {
+                return None;
+            }
+            let created = record.get("created")?.as_f64()?;
+            (created >= since).then_some((created, id))
+        })
+        .collect();
+    found.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    found.into_iter().map(|(_, id)| id).collect()
+}
+
 /// Removes the record when it belongs to this session.
 pub fn discard(env: &Env, id: &str, session: &str) -> bool {
     if read(env, id, session, None).is_none() {
@@ -151,6 +180,23 @@ mod tests {
 
     fn env(tmp: &Path) -> Env {
         Env::new(tmp.join("repo"), tmp.join("home"))
+    }
+
+    #[test]
+    fn created_since_lists_only_this_sessions_new_unclaimed_records() {
+        let d = tempfile::tempdir().unwrap();
+        let e = env(d.path());
+        let old = create(&e, "t", &json!({}), "s1", "", Some(100.0)).unwrap();
+        let a = create(&e, "t", &json!({}), "s1", "", Some(205.0)).unwrap();
+        let b = create(&e, "t", &json!({}), "s1", "", Some(200.0)).unwrap();
+        create(&e, "t", &json!({}), "s2", "", Some(300.0)).unwrap();
+        let claimed = create(&e, "t", &json!({}), "s1", "", Some(250.0)).unwrap();
+        claim(&e, &claimed, "s1", Some(251.0)).unwrap();
+        assert_eq!(created_since(&e.repo_root, "s1", 150.0), [b, a]);
+        assert!(!created_since(&e.repo_root, "s1", 0.0).contains(&claimed));
+        assert!(created_since(&e.repo_root, "s1", 0.0).contains(&old));
+        assert!(created_since(&e.repo_root, "", 0.0).is_empty());
+        assert!(created_since(&d.path().join("none"), "s1", 0.0).is_empty());
     }
 
     #[test]

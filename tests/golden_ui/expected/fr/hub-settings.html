@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:ce8ce80d6e728a33--></style>
+<style><!--@blob:0599b4a2675d2a09--></style>
 <script><!--@blob:638bbdef2bf12a63--></script>
 </head>
 <body>
@@ -229,15 +229,27 @@
 <script><!--@blob:9ab9a767a22a688a--></script>
 </section>
 </div><div data-tab-panel='ai-cli' hidden>
-<section class="card">
+<section class="card" data-ai-cli-panel>
 <div class="section-header"><svg class='icon' aria-hidden='true'><use href='#i-smart_toy'/></svg><h2>CLI sélectionnée</h2></div>
-<p class="section-subtitle">Choisissez l&#x27;outil AI CLI utilisé à la fois par la boucle d&#x27;issues GitLab et par la boucle de veille de sujets.</p>
+<p class="section-subtitle">Choisissez l&#x27;AI CLI utilisé par toutes les boucles, le tri de la boîte et le chat du tableau de bord.</p>
 <p><strong>Actuellement :</strong> Codex CLI (introuvable dans le PATH)</p>
+<div class='flash flash-warning' data-ai-cli-warning='codex'><p>Codex CLI s&#x27;exécute sans liste d&#x27;outils autorisés dans : Boucle d&#x27;issues GitLab, Veille de sujets, Préparation du calendrier, Tri de la boîte, Chat du tableau de bord, Plugins LoopKit et extraction LinkedIn.</p><p>Codex donne un shell au modèle et enregistre les prompts, y compris le texte des e-mails, dans ~/.codex/sessions. Dans le chat, son bac à sable bloque aussi les actions qui modifient directement les réglages de loopx (activer ou désactiver des boucles, enregistrer des projets) : utilisez les pages Paramètres ou changez de CLI pour cela.</p></div><div class='flash flash-warning' data-ai-cli-warning='gemini' hidden><p>Gemini CLI s&#x27;exécute sans liste d&#x27;outils autorisés dans : Boucle d&#x27;issues GitLab, Veille de sujets, Préparation du calendrier, Tri de la boîte, Chat du tableau de bord, Plugins LoopKit et extraction LinkedIn.</p><p>Gemini CLI ne peut pas être limité ici à un ensemble fixe d&#x27;outils : le modèle s&#x27;exécute donc avec un accès complet à ses outils.</p></div><div class='flash flash-warning' data-ai-cli-warning='kimi' hidden><p>Kimi CLI s&#x27;exécute sans liste d&#x27;outils autorisés dans : Boucle d&#x27;issues GitLab, Veille de sujets, Préparation du calendrier, Tri de la boîte, Chat du tableau de bord, Plugins LoopKit et extraction LinkedIn.</p><p>Kimi CLI ne peut pas être limité ici à un ensemble fixe d&#x27;outils : le modèle s&#x27;exécute donc avec un accès complet à ses outils.</p></div><div class='flash flash-warning' data-ai-cli-warning='cursor' hidden><p>Cursor CLI s&#x27;exécute sans liste d&#x27;outils autorisés dans : Boucle d&#x27;issues GitLab, Veille de sujets, Préparation du calendrier, Tri de la boîte, Chat du tableau de bord, Plugins LoopKit et extraction LinkedIn.</p><p>Cursor Agent ne peut pas être limité ici à un ensemble fixe d&#x27;outils : le modèle s&#x27;exécute donc avec un accès complet à ses outils.</p></div>
 <form method='post' action='/ai-cli' class='daemon-action-form single-field'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
-<div class='custom-select'><select name='cli' class='custom-select-native'><option value='claude'>Claude Code (installé)</option><option value='codex' selected>Codex CLI (introuvable dans le PATH)</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Codex CLI (introuvable dans le PATH)</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option' role='option' tabindex='-1' data-value='claude'>Claude Code (installé)</div><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='codex'>Codex CLI (introuvable dans le PATH)</div></div></div>
+<div class='custom-select'><select name='cli' class='custom-select-native'><option value='claude'>Claude Code (installé)</option><option value='codex' selected>Codex CLI (introuvable dans le PATH)</option><option value='gemini'>Gemini CLI (expérimental) (introuvable dans le PATH)</option><option value='kimi'>Kimi CLI (expérimental) (introuvable dans le PATH)</option><option value='cursor'>Cursor CLI (expérimental) (introuvable dans le PATH)</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Codex CLI (introuvable dans le PATH)</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option' role='option' tabindex='-1' data-value='claude'>Claude Code (installé)</div><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='codex'>Codex CLI (introuvable dans le PATH)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='gemini'>Gemini CLI (expérimental) (introuvable dans le PATH)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='kimi'>Kimi CLI (expérimental) (introuvable dans le PATH)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='cursor'>Cursor CLI (expérimental) (introuvable dans le PATH)</div></div></div>
 <button type='submit' class='btn btn-neutral'>Enregistrer</button>
 </form>
+<script>
+(function() {
+  var select = document.querySelector('[data-ai-cli-panel] select[name="cli"]');
+  if (!select) return;
+  select.addEventListener('change', function() {
+    document.querySelectorAll('[data-ai-cli-warning]').forEach(function(box) {
+      box.hidden = box.getAttribute('data-ai-cli-warning') !== select.value;
+    });
+  });
+})();
+</script>
 </section>
 </div><div data-tab-panel='instructions' hidden>
 <section class="card">
@@ -278,7 +290,7 @@
 <div class='ai-panel-thread' id='ai-panel-thread' aria-live='polite'></div>
 </div>
 <div class='ai-panel-footer'>
-<div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Que montre cette page, et que dois-je regarder en premier ?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>Expliquer cette page</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Quels démons sont activés en ce moment ?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-dns'/></svg>Démons</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Configure un nouveau projet GitLab pour la boucle : " data-ai-send='0'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg>Ajouter un projet GitLab</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="En quoi peux-tu m&#x27;aider sur ce tableau de bord ?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg>Que peux-tu faire ?</button></div>
+<div class='flash flash-warning'><p>Codex donne un shell au modèle et enregistre les prompts, y compris le texte des e-mails, dans ~/.codex/sessions. Dans le chat, son bac à sable bloque aussi les actions qui modifient directement les réglages de loopx (activer ou désactiver des boucles, enregistrer des projets) : utilisez les pages Paramètres ou changez de CLI pour cela.</p><p>Codex CLI répond d&#x27;un seul bloc : pas d&#x27;affichage en direct pendant la rédaction.</p><p><a href='/settings?tab=ai-cli'>Changer d&#x27;AI CLI dans les Paramètres</a></p></div><div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Que montre cette page, et que dois-je regarder en premier ?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>Expliquer cette page</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Quels démons sont activés en ce moment ?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-dns'/></svg>Démons</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Configure un nouveau projet GitLab pour la boucle : " data-ai-send='0'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg>Ajouter un projet GitLab</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="En quoi peux-tu m&#x27;aider sur ce tableau de bord ?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg>Que peux-tu faire ?</button></div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <textarea name='text' rows='1' placeholder='Posez une question sur cette page ou collez un lien d&#x27;issue GitLab' aria-label='Envoyer un message à l&#x27;assistant'></textarea>

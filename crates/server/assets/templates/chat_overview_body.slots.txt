@@ -11,6 +11,7 @@ html.escape(_t('Chats'))
 html.escape(_t('Close history'))
 history_html
 flash_html
+ai_cli_notes_html
 html.escape(announce_text)
 hero_title_html
 messages_html

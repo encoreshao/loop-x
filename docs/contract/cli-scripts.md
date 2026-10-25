@@ -263,12 +263,12 @@ All are hand-rolled `sys.argv` except where noted. "Env" lists env vars the file
 
 | Script | Purpose / invocation | Notes (output, exit, env, files) | Tests |
 |---|---|---|---|
-| `ai_cli_config.py` | `get` / `set <claude\|codex>`: which AI CLI the loop shells out to | usage exit 1; env `LOOP_ENGINEERING_HOME`; file `ai_cli.json` | `test_ai_cli_config.py` |
+| `ai_cli_config.py` | `get` / `set <claude\|codex\|gemini\|kimi\|cursor>`: which AI CLI the loop shells out to | usage exit 1; env `LOOP_ENGINEERING_HOME`; file `ai_cli.json` | `test_ai_cli_config.py` |
 | `loops_config.py` | see 1.10 | env `LOOP_ENGINEERING_HOME`; file `loops.json` | `test_loops_config.py` |
 | `memory_store.py` | `add <alias> <issue_iid> <lesson> [tags_csv] [category]`, `get`, `list`: alias-keyed learnings under `LOOP_ENGINEERING_HOME` | exit 1 on bad usage; env `LOOP_ENGINEERING_HOME` | `test_memory_store.py` |
 | `events.py` | `emit --type T --run-id R [--data JSON ...]`, `list (--date D \| --run-id R) [...]`: per-checkout event ledger | usage/unknown command exit 1; env `LOOP_EVENTS_DIR` (else `<repo>/outputs/events/`) | `test_events.py` |
 | `cost.py` | `extract-result-text --cli-output-file F`, `usage-json --cli-output-file F`, `report [--days N] [--events-dir PATH]` | usage exit 1; `usage-json` prints one JSON object or skips with stderr note | `test_cost.py` |
-| `loop_cli.py` | `validate`, `audit`, `run <loop.yaml> [--cwd] [--results-dir] ...`, `inspect <run_id>`, `replay <run_id>`, `doctor`, `eval [--golden\|--chat] [--budget-usd N] [--case NAME]`, `ledger backfill [--results-dir] [--events-dir]` | the Rust migration's primary subcommand tree; env `LOOP_EVALS_DIR`, `LOOP_EVENTS_DIR`; exits per subcommand | `test_loop_cli.py`, `test_loop_eval.py`, `test_loop_runtime*.py` |
+| `loop_cli.py` | `validate`, `audit`, `run <loop.yaml> [--cwd] [--results-dir] ...`, `inspect <run_id>`, `replay <run_id>`, `doctor` (detects claude, codex, gemini, kimi and cursor; for Cursor it looks for both `agent` and `cursor-agent`), `eval [--golden\|--chat] [--budget-usd N] [--case NAME]`, `ledger backfill [--results-dir] [--events-dir]` | the Rust migration's primary subcommand tree; env `LOOP_EVALS_DIR`, `LOOP_EVENTS_DIR`; exits per subcommand | `test_loop_cli.py`, `test_loop_eval.py`, `test_loop_runtime*.py` |
 | `loop_audit.py` | `loop_audit.py <loop.yaml>` | usage exit 1 | `test_loop_audit.py` |
 | `loop_scheduler.py` | no args: one poll of due loops (launchd every 900 s) and spawn `run-loop-now.sh` | env `LOOP_NOW_SH`, `LOOP_DIR`, `LOOP_ENGINEERING_HOME`; state file under `LOOP_ENGINEERING_HOME` | `test_loop_scheduler.py` |
 | `gitlab_loop_runner.py` | `<run_id> [alias issue_iid]`: the GitLab loop entry point | usage exit 1; env `LOOP_RUN_ID`, `LOOP_HANDOFF_PATH`; writes handoffs/results under `outputs/` | `test_gitlab_loop_runner.py`, `test_gitlab_issue_loop_definition.py` |

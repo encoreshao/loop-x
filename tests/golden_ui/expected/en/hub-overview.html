@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:ce8ce80d6e728a33--></style>
+<style><!--@blob:0599b4a2675d2a09--></style>
 <script><!--@blob:4b90f144cdf194e6--></script>
 </head>
 <body>
@@ -142,6 +142,7 @@
 <div id='chat-history-list'><p class='chat-history-empty'>No chats yet</p></div>
 </aside>
 
+<div class='flash flash-warning'><p>Codex gives the model a shell and records prompts, including email text, under ~/.codex/sessions. In chat, its sandbox also blocks actions that change loopx settings directly (enabling or disabling loops, saving projects): use the Settings pages or switch CLI for those.</p><p>Codex CLI replies in one piece: there is no live typing while it writes.</p><p><a href='/settings?tab=ai-cli'>Switch AI CLI in Settings</a></p></div>
 <div class='chat-hero'>
 <a class='chat-announce' href='/?view=activity'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg><span class='chat-announce-text'>GitLab loop: Idle · updated 30m ago</span><svg class='icon chat-announce-arrow' aria-hidden='true'><use href='#i-arrow_forward'/></svg></a>
 <h1 class='chat-hero-title'>Into the <span class='chat-hero-accent'>Loop</span></h1>
@@ -195,7 +196,7 @@
 <div class='ai-panel-thread' id='ai-panel-thread' aria-live='polite'></div>
 </div>
 <div class='ai-panel-footer'>
-<div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="What is the loop doing right now?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-monitoring'/></svg>Loop status</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Summarize the latest GitLab run review." data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>Latest run</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Run this GitLab issue now: " data-ai-send='0'><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg>Run an issue</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Summarize my latest inbox triage - anything urgent?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-email'/></svg>Inbox triage</button></div>
+<div class='flash flash-warning'><p>Codex gives the model a shell and records prompts, including email text, under ~/.codex/sessions. In chat, its sandbox also blocks actions that change loopx settings directly (enabling or disabling loops, saving projects): use the Settings pages or switch CLI for those.</p><p>Codex CLI replies in one piece: there is no live typing while it writes.</p><p><a href='/settings?tab=ai-cli'>Switch AI CLI in Settings</a></p></div><div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="What is the loop doing right now?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-monitoring'/></svg>Loop status</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Summarize the latest GitLab run review." data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>Latest run</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Run this GitLab issue now: " data-ai-send='0'><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg>Run an issue</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="Summarize my latest inbox triage - anything urgent?" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-email'/></svg>Inbox triage</button></div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <textarea name='text' rows='1' placeholder='Ask about this page, or paste a GitLab issue link' aria-label='Message the assistant'></textarea>

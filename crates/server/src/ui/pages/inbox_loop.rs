@@ -246,11 +246,26 @@ fn status_card(ctx: &UiCtx, inbox: &Value, entry: &Value, csrf: &str) -> String 
         format!("<ul class='inbox-urgent-list'>{items}</ul>")
     };
     let error_html = match entry.get("error").filter(|v| loopx_core::loops_config::py_truthy(v)) {
-        Some(err) => format!("<div class='flash flash-danger'>{}</div>", e(&pydumps::py_str(err))),
+        Some(err) => {
+            let text = pydumps::py_str(err);
+            // The AI CLI itself failed: core names the exit code, timeout or
+            // spawn error, but never the CLI's own output (it can echo email text).
+            let hint = if text.starts_with(loopx_core::inbox_runner::AI_CALL_FAILED) {
+                format!(" {}", crate::ui::ai_cli::settings_link(ctx.lang))
+            } else {
+                String::new()
+            };
+            format!("<div class='flash flash-danger'>{}{hint}</div>", e(&text))
+        }
+        None => String::new(),
+    };
+    // The last run's AI CLI had no tool allowlist (`Outcome.ai_cli_warning`).
+    let warning_html = match entry.get("ai_cli_warning").and_then(Value::as_str).filter(|w| !w.is_empty()) {
+        Some(w) => crate::ui::ai_cli::warning_notice(ctx.lang, w),
         None => String::new(),
     };
     format!(
-        "<div class='card'><div class='inbox-card-head'><div><div class='section-header'><h2>{}</h2>{}</div><p class='section-subtitle'>{meta}</p></div><div class='daemon-action-form'>{pause}</div></div>{error_html}<div class='inbox-section'><h3>{}</h3>{counts_html}</div><div class='inbox-section'><h3>{} <span class='inbox-count'>{}</span></h3>{urgent_html}</div></div>",
+        "<div class='card'><div class='inbox-card-head'><div><div class='section-header'><h2>{}</h2>{}</div><p class='section-subtitle'>{meta}</p></div><div class='daemon-action-form'>{pause}</div></div>{error_html}{warning_html}<div class='inbox-section'><h3>{}</h3>{counts_html}</div><div class='inbox-section'><h3>{} <span class='inbox-count'>{}</span></h3>{urgent_html}</div></div>",
         e(&s(inbox, "label")),
         chip(ctx, inbox, entry),
         e(&ctx.t("Categories")),
@@ -907,6 +922,39 @@ mod tests {
         assert!(text.contains(INBOX_FROM_CONNECTORS_KIND), "{text}");
         assert_eq!(return_location(INBOX_FROM_CONNECTORS_KIND), "/connectors");
         assert_eq!(return_location(INBOX_KIND), INBOXES_TAB);
+    }
+
+    #[test]
+    fn a_run_on_an_unrestricted_cli_shows_its_stored_warning() {
+        let (_dir, state) = sandbox();
+        let inbox = json!({"name": "work", "label": "Work", "provider": "gmail", "account": "me@example.com"});
+        let english = loopx_core::ai_cli_safety::warning("codex", loopx_core::ai_cli_safety::CallSite::InboxTriage).unwrap();
+        let entry = json!({"state": "idle", "ai_cli_warning": english});
+        let req = UiRequest::get("/");
+        let en = status_card(&UiCtx::new(&state, &req), &inbox, &entry, "");
+        assert!(en.contains("<div class='flash flash-warning'>"), "{en}");
+        assert!(en.contains(&e(english)), "{en}");
+        assert!(en.contains("href='/settings?tab=ai-cli'"), "{en}");
+        let req = UiRequest::get("/").with_header("cookie", "loop_lang=ja");
+        let ja = status_card(&UiCtx::new(&state, &req), &inbox, &entry, "");
+        assert!(ja.contains("~/.codex/sessions"), "{ja}");
+        assert!(!ja.contains("Codex gives the model a shell"), "{ja}");
+        let clean = status_card(&UiCtx::new(&state, &req), &inbox, &json!({"state": "idle", "ai_cli_warning": null}), "");
+        assert!(!clean.contains("flash-warning"), "{clean}");
+    }
+
+    #[test]
+    fn a_failed_ai_call_points_at_the_ai_cli_setting() {
+        let (_dir, state) = sandbox();
+        let inbox = json!({"name": "work", "label": "Work", "provider": "gmail", "account": "me@example.com"});
+        let req = UiRequest::get("/");
+        let ctx = UiCtx::new(&state, &req);
+        let error = format!("{}: CalledProcessError: gemini exited 2", loopx_core::inbox_runner::AI_CALL_FAILED);
+        let failed = status_card(&ctx, &inbox, &json!({"state": "failed", "error": error}), "");
+        assert!(failed.contains("AI call failed: CalledProcessError: gemini exited 2"), "{failed}");
+        assert!(failed.contains("href='/settings?tab=ai-cli'"), "{failed}");
+        let other = status_card(&ctx, &inbox, &json!({"state": "failed", "error": "token expired"}), "");
+        assert!(!other.contains("tab=ai-cli"), "{other}");
     }
 
     #[test]

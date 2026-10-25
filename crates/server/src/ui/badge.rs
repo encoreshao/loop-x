@@ -1,6 +1,7 @@
 //! Status pills and the AI-CLI badge: `_status_badge`, `_progress_text`,
 //! `_state_label`, `_status_badge_markup` and the topbar's AI CLI pill.
 
+use super::ai_cli;
 use super::i18n::{self, Lang};
 use super::pyfmt;
 use super::template::{Scope, Template};
@@ -107,18 +108,10 @@ pub fn default_badge(ctx: &super::routes::UiCtx) -> String {
 /// The always-visible AI CLI pill (logo + display name) linking to its settings.
 pub fn ai_cli_badge(state: &UiState, lang: Lang) -> String {
     let selected = ai_cli_config::get_selected_cli(&state.ai_cli_config_path());
-    let name = consts::value("dashboard_server", "_AI_CLI_DISPLAY_NAMES")
-        .and_then(|v| v.get(&selected))
-        .and_then(Value::as_str)
-        .unwrap_or("Claude Code");
-    let logo = consts::value("dashboard_server", "_AI_CLI_LOGOS")
-        .and_then(|v| v.get(&selected))
-        .and_then(Value::as_str)
-        .unwrap_or("");
     let mut scope = Scope::new(lang);
     scope
-        .set("_AI_CLI_LOGOS[selected_cli]", logo)
-        .var("ai_cli_name", name);
+        .set("_AI_CLI_LOGOS[selected_cli]", ai_cli::logo(&selected))
+        .var("ai_cli_name", ai_cli::display_name(&selected));
     Template::named("shell_ai_cli_badge")
         .render(&scope)
         .expect("ai cli badge template")
@@ -128,6 +121,24 @@ pub fn ai_cli_badge(state: &UiState, lang: Lang) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_ai_cli_badge_names_and_draws_every_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        for (cli, name) in [
+            ("claude", "Claude Code"),
+            ("codex", "Codex CLI"),
+            ("gemini", "Gemini CLI"),
+            ("kimi", "Kimi CLI"),
+            ("cursor", "Cursor CLI"),
+        ] {
+            std::fs::write(state.ai_cli_config_path(), format!(r#"{{"cli": "{cli}"}}"#)).unwrap();
+            let html = ai_cli_badge(&state, Lang::En);
+            assert!(html.contains("<svg class='ai-cli-logo'"), "{cli}: {html}");
+            assert!(html.ends_with(&format!("{name}</a>")), "{cli}: {html}");
+        }
+    }
 
     #[test]
     fn title_matches_python() {

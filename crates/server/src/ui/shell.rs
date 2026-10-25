@@ -146,6 +146,10 @@ pub fn ai_panel_html(ctx: &UiCtx, active_page: &str) -> String {
         .var("close", escaped_t(lang, "Close assistant"))
         .var("context_html", context_html)
         .var("prompts_html", prompts_html)
+        .var(
+            "ai_cli_notes_html",
+            super::ai_cli::chat_notes_html(ctx.state, lang),
+        )
         .set(
             "html.escape(_CSRF_TOKEN)",
             pyfmt::escape(&ctx.state.csrf_token),
@@ -294,6 +298,31 @@ mod tests {
         assert!(html.contains("<b>badge</b>"));
         assert!(!html.contains('\u{27e6}'));
         assert!(html.contains("name='csrf_token' value=\"test-csrf-token\""));
+    }
+
+    fn panel_for(cli: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        std::fs::write(state.ai_cli_config_path(), format!(r#"{{"cli": "{cli}"}}"#)).unwrap();
+        let req = UiRequest::get("/settings");
+        ai_panel_html(&UiCtx::new(&state, &req), "settings")
+    }
+
+    #[test]
+    fn the_side_panel_carries_the_chat_warning_in_its_footer() {
+        let gemini = panel_for("gemini");
+        let footer = &gemini[gemini.find("<div class='ai-panel-footer'>").unwrap()..];
+        assert!(
+            footer.starts_with("<div class='ai-panel-footer'>\n<div class='flash flash-warning'>"),
+            "{footer}"
+        );
+        assert!(footer.contains("full tool access"), "{footer}");
+        assert!(
+            footer.contains("Gemini CLI replies in one piece"),
+            "{footer}"
+        );
+        assert!(footer.contains("href='/settings?tab=ai-cli'"), "{footer}");
+        assert!(!panel_for("claude").contains("flash-warning"));
     }
 
     #[test]

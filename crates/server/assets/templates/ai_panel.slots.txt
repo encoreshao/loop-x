@@ -8,6 +8,7 @@ html.escape(_t('Chats'))
 html.escape(_t('Hi, how can I help?'))
 context_html
 prompts_html
+ai_cli_notes_html
 html.escape(_CSRF_TOKEN)
 html.escape(_t('Ask about this page, or paste a GitLab issue link'))
 html.escape(_t('Message the assistant'))

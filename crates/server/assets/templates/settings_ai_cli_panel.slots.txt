@@ -1,8 +1,9 @@
 _SECTION_ICON_AI_CLI
 html.escape(_t('Selected CLI'))
-html.escape(_t('Choose which AI CLI tool the GitLab issue loop and the Topic Monitor loop both use.'))
+html.escape(_t('Choose which AI CLI every loop, Inbox Triage and the dashboard chat use.'))
 html.escape(_t('Currently:'))
 html.escape(cli_labels[current_cli])
+warnings_html
 csrf_input
 select_html
 html.escape(_t('Save'))

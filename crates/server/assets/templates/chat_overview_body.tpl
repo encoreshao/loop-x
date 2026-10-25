@@ -25,6 +25,7 @@
 <div id='chat-history-list'>⟦history_html⟧</div>
 </aside>
 ⟦flash_html⟧
+⟦ai_cli_notes_html⟧
 <div class='chat-hero'>
 <a class='chat-announce' href='/?view=activity'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg><span class='chat-announce-text'>⟦html.escape(announce_text)⟧</span><svg class='icon chat-announce-arrow' aria-hidden='true'><use href='#i-arrow_forward'/></svg></a>
 <h1 class='chat-hero-title'>⟦hero_title_html⟧</h1>

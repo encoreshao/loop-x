@@ -8,13 +8,16 @@
 
 pub mod claude;
 pub mod codex;
+pub mod cursor;
+pub mod gemini;
+pub mod kimi;
 pub mod sealed;
 
 use crate::ai_cli_config;
 use crate::proc::ProcOutput;
 use std::path::{Path, PathBuf};
 
-pub const VALID_PROVIDERS: [&str; 2] = ai_cli_config::VALID_CLIS;
+pub const VALID_PROVIDERS: [&str; 5] = ai_cli_config::VALID_CLIS;
 
 /// `"success"`, `"failed"` or `"timeout"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +144,95 @@ pub fn failure_result(out: &ProcOutput, timeout_seconds: f64, duration_ms: i64) 
     }
 }
 
+/// Run `program args` in `opts.cwd` and fold the outcome into an
+/// [`AgentResult`]. `extract` turns stdout into the reply text; `Err` on exit 0
+/// is a failure carrying that message. These CLIs emit no cost.
+pub(crate) fn run_text_cli(
+    program: &str,
+    args: Vec<String>,
+    opts: &RunOptions,
+    extract: &dyn Fn(&str) -> Result<String, String>,
+) -> AgentResult {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).current_dir(&opts.cwd);
+    let start = std::time::Instant::now();
+    let ms = |s: std::time::Instant| i64::try_from(s.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let out = match crate::proc::run(
+        &mut cmd,
+        None,
+        Some(std::time::Duration::from_secs_f64(opts.timeout_seconds)),
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            return AgentResult::failed(format!("cannot run {program}: {e}"), None, ms(start))
+        }
+    };
+    if out.timed_out || out.code != Some(0) {
+        return failure_result(&out, opts.timeout_seconds, ms(start));
+    }
+    match extract(&out.stdout) {
+        Ok(text) => AgentResult {
+            status: AgentStatus::Success,
+            output: text,
+            exit_code: Some(0),
+            duration_ms: ms(start),
+            input_tokens: None,
+            output_tokens: None,
+            estimated_cost_usd: None,
+        },
+        Err(message) => AgentResult::failed(message, Some(0), ms(start)),
+    }
+}
+
+/// A reply that must hold some text: whitespace-only is a failure.
+pub(crate) fn non_empty_reply(cli: &str, text: String) -> Result<String, String> {
+    if text.trim().is_empty() {
+        Err(format!("empty output from {cli}"))
+    } else {
+        Ok(text)
+    }
+}
+
+/// The message of a JSON `error` value: its `message`, else the string itself,
+/// else the value as JSON.
+pub(crate) fn error_message(error: &serde_json::Value) -> String {
+    error
+        .get("message")
+        .and_then(|m| m.as_str())
+        .or_else(|| error.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| error.to_string())
+}
+
+/// What a gemini / kimi / cursor run printed, as the reply or the failure
+/// message; `None` for `claude` and `codex`, whose output the runners already
+/// handle.
+pub fn extract_new_cli_reply(cli: &str, stdout: &str) -> Option<Result<String, String>> {
+    match cli {
+        "gemini" => Some(gemini::gemini_reply(stdout)),
+        "kimi" => Some(kimi::kimi_reply(stdout)),
+        "cursor" => Some(cursor::cursor_reply(stdout)),
+        _ => None,
+    }
+}
+
+/// The argv (after the program name) of the gemini / kimi / cursor CLIs;
+/// `None` for the others.
+pub fn new_cli_args(cli: &str, prompt: &str, opts: &RunOptions) -> Option<Vec<String>> {
+    match cli {
+        "gemini" => Some(gemini::gemini_args(prompt, opts)),
+        "kimi" => Some(kimi::kimi_args(prompt, opts)),
+        "cursor" => Some(cursor::cursor_args(prompt, opts)),
+        _ => None,
+    }
+}
+
+/// The string field `key` of the JSON object in `stdout`.
+pub(crate) fn json_string_field(stdout: &str, key: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    v.get(key)?.as_str().map(String::from)
+}
+
 /// The adapter for `provider`; `None` / `"default"` resolve through
 /// `ai_cli.json` (`config_path`, or the per-machine default).
 pub fn get_agent(
@@ -157,6 +249,9 @@ pub fn get_agent(
     match provider.as_str() {
         "claude" => Ok(Box::new(claude::ClaudeAgent::default())),
         "codex" => Ok(Box::new(codex::CodexAgent::default())),
+        "gemini" => Ok(Box::new(gemini::GeminiAgent::default())),
+        "kimi" => Ok(Box::new(kimi::KimiAgent::default())),
+        "cursor" => Ok(Box::new(cursor::CursorAgent::default())),
         other => Err(format!(
             "Unknown agent provider: {}",
             crate::loops_config::py_repr_str(other)
