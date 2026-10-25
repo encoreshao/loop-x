@@ -1110,5 +1110,8 @@
   "Why": "理由",
   "Action failed": "操作に失敗しました",
   "Close": "閉じる",
-  "Loop details": "ループの詳細"
+  "Loop details": "ループの詳細",
+  "Reload the page and try again": "ページを再読み込みして、もう一度お試しください",
+  "The 3D view stopped (graphics were reset). Reload the page.": "3Dビューが停止しました(グラフィックスがリセットされました)。ページを再読み込みしてください。",
+  "The office view could not load. Use the List view instead.": "オフィスビューを読み込めませんでした。代わりにリスト表示をご利用ください。"
 }

@@ -74,7 +74,7 @@ fn run_now_url(name: &str) -> String {
     }
 }
 
-/// The `/office/state` document: one entry per visible registered loop.
+/// The `/office/state` document: one entry per registered loop.
 pub fn build_office_state(ctx: &UiCtx) -> Value {
     let state = ctx.state;
     let now = state.now();

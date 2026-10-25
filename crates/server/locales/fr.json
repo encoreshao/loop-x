@@ -1110,5 +1110,8 @@
   "Why": "Pourquoi",
   "Action failed": "Échec de l'action",
   "Close": "Fermer",
-  "Loop details": "Détails de la boucle"
+  "Loop details": "Détails de la boucle",
+  "Reload the page and try again": "Rechargez la page et réessayez",
+  "The 3D view stopped (graphics were reset). Reload the page.": "La vue 3D s'est arrêtée (les graphismes ont été réinitialisés). Rechargez la page.",
+  "The office view could not load. Use the List view instead.": "La vue Bureau n'a pas pu se charger. Utilisez plutôt la vue Liste."
 }

@@ -1110,5 +1110,8 @@
   "Why": "原因",
   "Action failed": "操作失败",
   "Close": "关闭",
-  "Loop details": "循环详情"
+  "Loop details": "循环详情",
+  "Reload the page and try again": "请刷新页面后重试",
+  "The 3D view stopped (graphics were reset). Reload the page.": "3D 视图已停止(图形已被重置)。请刷新页面。",
+  "The office view could not load. Use the List view instead.": "无法加载办公室视图。请改用列表视图。"
 }

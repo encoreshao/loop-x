@@ -78,17 +78,28 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     busy = true;
     el.setAttribute("aria-busy", "true");
     q(".office-panel-error").hidden = true;
-    let failed = false;
+    // The routes answer with a 303 to `...?flash=<message>&ok=0|1`; the fetch follows it
+    // and only the final URL is read (the page behind it is never parsed).
+    let failed = null;
     try {
       const r = await fetch(url, {
         method: "POST",
         body: new URLSearchParams({ csrf_token: csrfToken }),
-        redirect: "manual",
         credentials: "same-origin",
       });
-      failed = !(r.ok || r.type === "opaqueredirect");
+      if (r.status === 403) failed = t("reload") || t("action_failed");
+      else if (!r.ok) failed = t("action_failed");
+      else {
+        let params = null;
+        try {
+          params = new URL(r.url).searchParams;
+        } catch {
+          /* a response without a URL carries no flash */
+        }
+        if (params && params.get("ok") === "0") failed = params.get("flash") || t("action_failed");
+      }
     } catch {
-      failed = true;
+      failed = t("action_failed");
     }
     try {
       if (hooks.refresh) await hooks.refresh();
@@ -98,7 +109,9 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     busy = false;
     if (el) {
       el.removeAttribute("aria-busy");
-      q(".office-panel-error").hidden = !failed;
+      const err = q(".office-panel-error");
+      if (failed) err.textContent = failed;
+      err.hidden = !failed;
     }
   }
 

@@ -133,8 +133,15 @@ fn client_strings(ctx: &UiCtx) -> Value {
         "why": ctx.t("Why"),
         "action_failed": ctx.t("Action failed"),
         "close": ctx.t("Close"),
+        "reload": ctx.t("Reload the page and try again"),
+        "context_lost": ctx.t("The 3D view stopped (graphics were reset). Reload the page."),
+        "load_failed": ctx.t("The office view could not load. Use the List view instead."),
     })
 }
+
+/// Runs when the entry module (or something it imports) fails to load: shows the List
+/// with the translated note, as `office.js` itself does when WebGL is missing.
+const LOAD_FAILED_JS: &str = "var r=document.getElementById('office'),l=document.getElementById('office-list'),p=document.createElement('p');p.className='office-note';p.setAttribute('role','status');try{p.textContent=JSON.parse(document.getElementById('office-i18n').textContent).load_failed||''}catch(e){}if(r)r.hidden=true;if(l){l.prepend(p);l.hidden=false}";
 
 /// The Office view: the import map, the entry module, the panel template and the
 /// translated strings the client script reads.
@@ -176,7 +183,7 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 </style>\
 <noscript><style>#office{{display:none}}#office-list[hidden]{{display:block}}</style></noscript>\
 <section id='office' aria-label=\"{label}\">\
-<script type='importmap'>{{\"imports\":{{\"three\":\"/office/assets/three.module.min.js\",\"three/addons/controls/OrbitControls.js\":\"/office/assets/OrbitControls.js\"}}}}</script>\
+<script type='importmap'>{{\"imports\":{{\"three\":\"/office/assets/three.module.min.js?v={version}\",\"three/addons/controls/OrbitControls.js\":\"/office/assets/OrbitControls.js?v={version}\"}}}}</script>\
 <template id='office-panel'><aside class='office-panel' role='dialog' aria-label=\"{panel_label}\">\
 <button type='button' class='office-panel-close' aria-label=\"{close}\">{close}</button>\
 <h2 class='office-panel-name'></h2><p class='office-panel-state'></p>\
@@ -191,7 +198,7 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 <p class='office-panel-error' role='alert' hidden>{action_failed}</p></aside></template>\
 <script type='application/json' id='office-i18n'>{i18n}</script>\
 <input type='hidden' id='office-csrf' value=\"{token}\">\
-<script type='module' src='/office/assets/office.js?v={version}'></script>\
+<script type='module' src='/office/assets/office.js?v={version}' onerror=\"{load_failed_js}\"></script>\
 </section>",
         label = h(&ctx.t("3D office: each loop is a person at a desk")),
         panel_label = h(&ctx.t("Loop details")),
@@ -203,6 +210,7 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
         run_now = h(&ctx.t("Run now")),
         open_loop = h(&ctx.t("Open loop page")),
         action_failed = h(&ctx.t("Action failed")),
+        load_failed_js = h(LOAD_FAILED_JS),
         i18n = script_json(&client_strings(ctx)),
         token = h(&token),
         version = version,
@@ -486,6 +494,9 @@ mod tests {
         assert!(body.contains(&format!("/office/assets/office.js?v={v}")), "{body}");
         let entry_only = loopx_core::sha256::hex(&loopx_core::sha256::sha256(assets::get("office/office.js").unwrap()))[..8].to_string();
         assert_ne!(v, entry_only, "world.js etc. must bust the cache too");
+        assert!(body.contains(&format!("/office/assets/three.module.min.js?v={v}")), "{body}");
+        assert!(body.contains(&format!("/office/assets/OrbitControls.js?v={v}")), "{body}");
+        assert!(body.contains("onerror=") && body.contains("office-list"), "module load failure falls back to the List");
     }
 
     #[test]

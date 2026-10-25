@@ -240,6 +240,27 @@ with Chrome() as c:
     except TimeoutError:
         fails.append("enable: quiet-loop did not return to idle")
 
+    # 6b. A refused action shows the server's own flash text and moves nobody.
+    c.wait_for("window.__office.debug().every(a => !a.walking)", timeout=120, interval=0.5)
+    positions = js(c, "window.__office.debug()")
+    base = js(c, "fetch('/office/state').then(r => r.json()).then(d => d.loops)")
+    ghost = {"name": "ghost-loop", "title": "Ghost", "enabled": True, "state": "idle", "reason": "", "last_run": None,
+             "next_run": "", "history": [], "run_now_url": "", "pending_approvals": 0,
+             "toggle_url": "/daemons/loops/ghost-loop/disable"}
+    js(c, f"window.__office.setLoops({json.dumps(base + [ghost])})")
+    js(c, "window.__office.select('ghost-loop')")
+    wait_open(c, "ghost-loop")
+    js(c, f"{PANEL}.querySelector('[data-act=toggle]').click()")
+    try:
+        c.wait_for(f"(() => {{ const e = {PANEL}.querySelector('.office-panel-error'); return !e.hidden && e.textContent.includes('ghost-loop'); }})()", timeout=10, interval=0.2)
+    except TimeoutError:
+        fails.append(f"refused toggle: panel error is {js(c, PANEL + '.querySelector(\'.office-panel-error\').textContent')!r}, expected the server's flash text")
+    now = {a["name"]: (a["x"], a["z"]) for a in js(c, "window.__office.debug()")}
+    for a in positions:
+        if now.get(a["name"]) != (a["x"], a["z"]):
+            fails.append(f"refused toggle: {a['name']} moved")
+    js(c, "window.__office.select(null)")
+
     # 7. Run now: record the POST, never send it.
     js(c, """(() => { window.__posts = []; const real = window.fetch.bind(window);
       window.fetch = (u, o) => { if (o && o.method === 'POST') { window.__posts.push([String(u), String(o.body)]);
