@@ -86,10 +86,11 @@ fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
 
 /// Which AI CLI call site a registry entry point runs.
 fn call_site(entry_point: &str) -> CallSite {
-    if matches!(entry_point, "bin.topic_monitor_runner" | "topic-loop") {
-        CallSite::TopicMonitor
-    } else {
-        CallSite::GitlabLoop
+    match entry_point {
+        "bin.topic_monitor_runner" | "topic-loop" => CallSite::TopicMonitor,
+        "bin.inbox_triage_runner" | "inbox-triage-loop" => CallSite::InboxTriage,
+        other if crate::loop_plugins::module_for_entry(other).is_some() => CallSite::Plugin,
+        _ => CallSite::GitlabLoop,
     }
 }
 
@@ -367,6 +368,16 @@ mod tests {
         }
         for ep in ["bin.gitlab_loop_runner", "gitlab-loop"] {
             assert_eq!(call_site(ep), CallSite::GitlabLoop, "{ep}");
+        }
+        for ep in ["bin.inbox_triage_runner", "inbox-triage-loop"] {
+            assert_eq!(call_site(ep), CallSite::InboxTriage, "{ep}");
+        }
+        for ep in [
+            "bin.loop_plugins.rss_watch",
+            "meeting-prep-loop",
+            "rss-watch-loop",
+        ] {
+            assert_eq!(call_site(ep), CallSite::Plugin, "{ep}");
         }
     }
 

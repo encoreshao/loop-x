@@ -96,17 +96,30 @@ pub fn build_prompt(kind: &str, dump: &Value) -> Option<String> {
 }
 
 /// The sealed, tool-less model call (`agents::sealed`); returns the reply text.
+/// An unrestricted AI CLI is allowed but logged to the unified log.
 pub fn default_call(prompt: &str) -> Result<String, String> {
+    let unified = crate::runner_util::unified_log_path(&crate::runner_util::repo_root());
+    let mut log = |m: &str| {
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        crate::runner_util::append_unified_log(&format!("[{stamp}] linkedin-extract: {m}"), &unified);
+    };
+    call_with(prompt, &crate::agents::sealed::SealedHooks::default(), &mut log)
+}
+
+fn call_with(
+    prompt: &str,
+    hooks: &crate::agents::sealed::SealedHooks<'_>,
+    log: &mut dyn FnMut(&str),
+) -> Result<String, String> {
     use crate::agents::sealed;
-    sealed::sealed_call(
-        prompt,
-        CALL_TIMEOUT_S,
-        &mut |_| {},
-        Some(CALL_BUDGET_USD),
-        &sealed::SealedHooks::default(),
-    )
-    .map(|r| r.text)
-    .map_err(|e| e.0)
+    let cli = match hooks.cli_fn {
+        Some(f) => f(),
+        None => crate::ai_cli_config::selected_cli(),
+    };
+    sealed::warn_if_unrestricted(&cli, crate::ai_cli_safety::CallSite::Plugin, log);
+    sealed::sealed_call(prompt, CALL_TIMEOUT_S, &mut |_| {}, Some(CALL_BUDGET_USD), hooks)
+        .map(|r| r.text)
+        .map_err(|e| e.0)
 }
 
 fn profile(url: &str) -> String {
@@ -221,6 +234,36 @@ mod tests {
         match obj {
             Value::String(t) => t,
             o => o.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_sealed_call_warns_for_an_unrestricted_cli_and_not_for_claude() {
+        use crate::agents::sealed::SealedHooks;
+        use crate::proc::ProcOutput;
+        let runner = |_: &[String], _: &str, _: f64, _: &std::path::Path| {
+            Ok(ProcOutput {
+                code: Some(0),
+                stdout: r#"{"response":"hi","result":"hi"}"#.into(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        };
+        for (cli, warns) in [("gemini", true), ("claude", false)] {
+            let cli_fn = move || cli.to_string();
+            let mut logs: Vec<String> = vec![];
+            let hooks = SealedHooks {
+                runner: Some(&runner),
+                cli_fn: Some(&cli_fn),
+                command_fn: None,
+            };
+            let r = call_with("p", &hooks, &mut |m| logs.push(m.into()));
+            assert_eq!(r.unwrap(), "hi", "{cli}");
+            assert_eq!(
+                logs.iter().any(|l| l.contains("WARNING")),
+                warns,
+                "{cli}: {logs:?}"
+            );
         }
     }
 

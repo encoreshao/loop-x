@@ -273,9 +273,28 @@ pub fn default_call_model(prompt: &str, ctx: &LoopContext) -> Result<ModelAnswer
     if let Some(model) = &ctx.model {
         return model(prompt, timeout, cap);
     }
+    call_model_with(prompt, ctx, &SealedHooks::default())
+}
+
+/// The sealed call with injectable hooks; an unrestricted AI CLI is allowed but
+/// logged (once per model call) through the run log.
+fn call_model_with(
+    prompt: &str,
+    ctx: &LoopContext,
+    hooks: &SealedHooks<'_>,
+) -> Result<ModelAnswer, ModelError> {
+    let timeout = ctx.definition.stop_conditions.max_runtime_minutes * 60.0;
+    let cap = ctx
+        .call_budget_usd
+        .or(Some(ctx.definition.stop_conditions.max_cost_usd));
     let log = ctx.log.clone();
     let mut sink = move |m: &str| log(m);
-    sealed::sealed_call(prompt, timeout, &mut sink, cap, &SealedHooks::default())
+    let cli = match hooks.cli_fn {
+        Some(f) => f(),
+        None => crate::ai_cli_config::selected_cli(),
+    };
+    sealed::warn_if_unrestricted(&cli, crate::ai_cli_safety::CallSite::Plugin, &mut sink);
+    sealed::sealed_call(prompt, timeout, &mut sink, cap, hooks)
         .map(|r| ModelAnswer {
             text: r.text,
             cost_usd: r.cost_usd,
@@ -1642,6 +1661,48 @@ retry: {enabled: true, max_attempts: 2}
             .path()
             .join("outputs/loops/demo-loop/content.json")
             .exists());
+    }
+
+    #[test]
+    fn the_sealed_model_call_warns_for_an_unrestricted_cli_and_not_for_claude() {
+        let w = world();
+        let def = LoopDefinition::from_yaml(&w.dir.path().join("loops/demo/loop.yaml")).unwrap();
+        let logs: Arc<Mutex<Vec<String>>> = Arc::default();
+        let l = logs.clone();
+        let ctx = LoopContext {
+            loop_name: "demo-loop".into(),
+            run_id: "r".into(),
+            now: Utc::now(),
+            definition: Arc::new(def),
+            settings: json!({}),
+            history_dir: w.dir.path().join("h"),
+            log: Arc::new(move |m| l.lock().unwrap().push(m.to_string())),
+            repo_root: w.dir.path().to_path_buf(),
+            force: false,
+            call_budget_usd: None,
+            model: None,
+            state_dir: None,
+        };
+        let runner = |_: &[String], _: &str, _: f64, _: &std::path::Path| {
+            Ok(crate::proc::ProcOutput {
+                code: Some(0),
+                stdout: r#"{"response":"hi","result":"hi"}"#.into(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        };
+        for (cli, warns) in [("gemini", true), ("claude", false)] {
+            logs.lock().unwrap().clear();
+            let cli_fn = move || cli.to_string();
+            let hooks = SealedHooks {
+                runner: Some(&runner),
+                cli_fn: Some(&cli_fn),
+                command_fn: None,
+            };
+            call_model_with("p", &ctx, &hooks).unwrap();
+            let got = logs.lock().unwrap().iter().any(|l| l.contains("WARNING"));
+            assert_eq!(got, warns, "{cli}");
+        }
     }
 
     #[test]

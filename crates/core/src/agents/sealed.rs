@@ -7,6 +7,7 @@
 
 use super::{cursor, gemini, kimi};
 use crate::ai_cli_config;
+use crate::ai_cli_safety::{self, CallSite};
 use crate::cost;
 use crate::proc::{self, ProcOutput};
 use serde_json::Value;
@@ -127,6 +128,15 @@ fn claude_command(max_budget_usd: Option<f64>) -> Vec<String> {
     .to_vec();
     cmd.extend(cost::budget_args(max_budget_usd));
     cmd
+}
+
+/// Log the `ai_cli_safety` warning for `cli` at `site` (if any) as a
+/// `WARNING: ...` line. The sealed call no longer refuses unrestricted CLIs, so
+/// every caller that feeds untrusted text to it uses this.
+pub fn warn_if_unrestricted(cli: &str, site: CallSite, log: &mut dyn FnMut(&str)) {
+    if let Some(w) = ai_cli_safety::warning(cli, site) {
+        log(&format!("WARNING: {w}"));
+    }
 }
 
 type Runner<'a> = &'a dyn Fn(&[String], &str, f64, &Path) -> std::io::Result<ProcOutput>;
@@ -504,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn other_clis_run_headless_most_restricted_with_no_prompt_in_argv() {
+    fn other_clis_use_their_headless_flag_and_no_unsafe_approval_flags() {
         for (cli, flag) in [
             ("gemini", "-p"),
             ("kimi", "--print"),
@@ -614,5 +624,52 @@ mod tests {
                 .0,
             "quota"
         );
+    }
+
+    #[test]
+    fn the_argv_sealed_call_runs_never_holds_the_prompt_except_for_cursor() {
+        for cli in ["gemini", "kimi", "codex"] {
+            let seen = std::cell::RefCell::new((vec![], String::new()));
+            let runner = |argv: &[String], input: &str, _: f64, _: &Path| {
+                *seen.borrow_mut() = (argv.to_vec(), input.to_string());
+                ok_out(r#"{"response":"x"}"#)
+            };
+            let cli_fn = move || cli.to_string();
+            let _ = sealed_call(
+                "SECRET-BODY",
+                5.0,
+                &mut |_| {},
+                None,
+                &SealedHooks {
+                    runner: Some(&runner),
+                    cli_fn: Some(&cli_fn),
+                    command_fn: None,
+                },
+            );
+            let (argv, input) = seen.into_inner();
+            assert!(
+                argv.iter().all(|a| !a.contains("SECRET-BODY")),
+                "{cli}: {argv:?}"
+            );
+            assert_eq!(input, "SECRET-BODY", "{cli}");
+        }
+    }
+
+    #[test]
+    fn warn_if_unrestricted_logs_for_other_clis_only() {
+        for (cli, want) in [
+            ("claude", false),
+            ("codex", true),
+            ("gemini", true),
+            ("kimi", true),
+            ("cursor", true),
+        ] {
+            let mut logs: Vec<String> = vec![];
+            warn_if_unrestricted(cli, CallSite::Plugin, &mut |m| logs.push(m.into()));
+            assert_eq!(logs.len(), usize::from(want), "{cli}");
+            if want {
+                assert!(logs[0].starts_with("WARNING: "), "{logs:?}");
+            }
+        }
     }
 }

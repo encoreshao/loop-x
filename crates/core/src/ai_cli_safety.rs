@@ -11,6 +11,8 @@ pub enum CallSite {
     CalendarPrep,
     InboxTriage,
     Chat,
+    /// LoopKit plugins (calendar prep, RSS watch, ...) and LinkedIn extraction.
+    Plugin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,12 +60,13 @@ pub fn experimental(cli: &str) -> bool {
 mod tests {
     use super::*;
 
-    const SITES: [CallSite; 5] = [
+    const SITES: [CallSite; 6] = [
         CallSite::GitlabLoop,
         CallSite::TopicMonitor,
         CallSite::CalendarPrep,
         CallSite::InboxTriage,
         CallSite::Chat,
+        CallSite::Plugin,
     ];
 
     #[test]
