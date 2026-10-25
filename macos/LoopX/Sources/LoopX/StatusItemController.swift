@@ -87,16 +87,19 @@ extension StatusItemController: NSMenuDelegate {
             let t = a.title ?? a.id
             let allow = NSMenuItem(title: "Allow: \(t)", action: #selector(approve(_:)), keyEquivalent: "")
             allow.representedObject = a.id; allow.target = self; menu.addItem(allow)
+            if a.id == st.approvals.first?.id { allow.setShortcut(.init("y")) }
             let deny = NSMenuItem(title: "Deny: \(t)", action: #selector(deny(_:)), keyEquivalent: "")
             deny.representedObject = a.id; deny.target = self; menu.addItem(deny)
+            if a.id == st.approvals.first?.id { deny.setShortcut(.init("n")) }
         }
         if !st.approvals.isEmpty { menu.addItem(.separator()) }
         add("Open Dashboard", #selector(openDashboard), "d")
         let starts = IslandStarts.available(tasks: st.tasks)
         if !starts.isEmpty {
             let run = NSMenu()
-            for s in starts {
+            for (n, s) in starts.prefix(9).enumerated() {
                 let i = NSMenuItem(title: s.title, action: #selector(runLoop(_:)), keyEquivalent: "")
+                i.setShortcut(.init("\(n + 1)", [.control, .option]))
                 i.representedObject = s.loop; i.target = self
                 i.image = NSImage(systemSymbolName: s.symbol, accessibilityDescription: nil)
                 run.addItem(i)
@@ -105,10 +108,12 @@ extension StatusItemController: NSMenuDelegate {
             menu.addItem(host)
         }
         let hide = add(isHidden() ? "Show Notch" : "Hide Notch", #selector(toggleHidden), "")
+        hide.setShortcut(.init("h", [.command, .shift]))
         hide.isEnabled = model.settings.displayMode != .off
         let modes = NSMenu()
-        for (m, t) in [(DisplayMode.notch, "Notch"), (.hud, "Floating HUD"), (.off, "Menu Bar Only")] {
+        for (n, (m, t)) in [(DisplayMode.notch, "Notch"), (.hud, "Floating HUD"), (.off, "Menu Bar Only")].enumerated() {
             let i = NSMenuItem(title: t, action: #selector(setMode(_:)), keyEquivalent: "")
+            i.setShortcut(.init("\(n + 1)", [.control]))
             i.representedObject = m.rawValue; i.target = self
             i.state = model.settings.displayMode == m ? .on : .off
             modes.addItem(i)
@@ -119,6 +124,7 @@ extension StatusItemController: NSMenuDelegate {
             let sub = NSMenu()
             for e in section.entries {
                 let i = NSMenuItem(title: e.title, action: #selector(openPage(_:)), keyEquivalent: "")
+                i.setShortcut(e.shortcut)
                 i.representedObject = e.path; i.target = self; sub.addItem(i)
             }
             let host = NSMenuItem(title: section.title, action: nil, keyEquivalent: ""); host.submenu = sub
@@ -127,13 +133,14 @@ extension StatusItemController: NSMenuDelegate {
         let links = NSMenu()
         for l in DashboardMenu.links {
             let i = NSMenuItem(title: l.title, action: #selector(openLink(_:)), keyEquivalent: "")
+            i.setShortcut(l.shortcut)
             i.representedObject = l.url; i.target = self; links.addItem(i)
         }
         let linksHost = NSMenuItem(title: "GitHub", action: nil, keyEquivalent: ""); linksHost.submenu = links
         menu.addItem(linksHost)
         menu.addItem(.separator())
         add("Settings…", #selector(openSettings), ",")
-        if onCheckForUpdates != nil { add("Check for Updates…", #selector(checkForUpdates), "") }
+        if onCheckForUpdates != nil { add("Check for Updates…", #selector(checkForUpdates), "u") }
         add("Quit LoopX", #selector(quit), "q")
     }
 

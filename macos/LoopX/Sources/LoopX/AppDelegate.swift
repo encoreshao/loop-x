@@ -129,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for section in DashboardMenu.sections {
             main.addItem(submenu(section.title, section.entries.map { e in
                 let i = item(e.title, #selector(openPageFromMenu(_:)), "", target: self)
+                i.setShortcut(e.shortcut)
                 i.representedObject = e.path
                 return i
             }))
@@ -138,14 +139,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Back", #selector(pageBack), "[", target: self),
             item("Forward", #selector(pageForward), "]", target: self),
             .separator(),
-            item("Open in Browser", #selector(openInBrowser), "", target: self),
-            item("Copy Dashboard URL", #selector(copyDashboardURL), "", target: self),
-            item("Reveal ~/.loopx in Finder", #selector(revealHome), "", target: self),
+            item("Open in Browser", #selector(openInBrowser), "", target: self).shortcut(DashboardMenu.developer["Open in Browser"]),
+            item("Copy Dashboard URL", #selector(copyDashboardURL), "", target: self).shortcut(DashboardMenu.developer["Copy Dashboard URL"]),
+            item("Reveal ~/.loopx in Finder", #selector(revealHome), "", target: self).shortcut(DashboardMenu.developer["Reveal ~/.loopx in Finder"]),
             .separator(),
-            item("Install Command Line Tool…", #selector(installCLIFromMenu), "", target: self),
+            item("Install Command Line Tool…", #selector(installCLIFromMenu), "", target: self).shortcut(DashboardMenu.developer["Install Command Line Tool…"]),
             .separator(),
         ] + DashboardMenu.links.map { l in
             let i = item(l.title, #selector(openLink(_:)), "", target: self)
+            i.setShortcut(l.shortcut)
             i.representedObject = l.url
             return i
         }))
@@ -319,4 +321,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension NotchController {
     func host_layoutForSelfTest() { panel.contentView?.layoutSubtreeIfNeeded() }
+}
+
+extension NSMenuItem {
+    func setShortcut(_ s: DashboardMenu.Shortcut) {
+        keyEquivalent = s.key
+        var m: NSEvent.ModifierFlags = []
+        if s.modifiers.contains(.command) { m.insert(.command) }
+        if s.modifiers.contains(.shift) { m.insert(.shift) }
+        if s.modifiers.contains(.option) { m.insert(.option) }
+        if s.modifiers.contains(.control) { m.insert(.control) }
+        keyEquivalentModifierMask = m
+    }
+    @discardableResult func shortcut(_ s: DashboardMenu.Shortcut?) -> NSMenuItem {
+        if let s { setShortcut(s) }
+        return self
+    }
 }

@@ -19,10 +19,13 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - The Mac app answers `loopx://` links, so Shortcuts ("Open URL"), Spotlight or a script can drive it: `loopx://run/gitlab-loop` (also `topic-loop`, `inbox-triage-loop`; always asks first) and `loopx://open/runs?view=logs` (any page in the app's menus; `loopx://open` for the dashboard).
 
 - The Mac app skips its scheduled-loop check in Low Power Mode or on battery below 20%, so a flat battery isn't spent on an agent run; the next check picks up whatever is still due. On by default, and only applies while "Run scheduled loops" is on (Settings → Scheduled loops).
+- Every action in the Mac app's menus has a keyboard shortcut (pages ⌘1–4, ⌥⌘1–8, ⌃⌘1–4; Developer and GitHub items; Run, Display Mode and approvals in the menu bar menu).
 - The Mac app's menu bar icon shows how many approvals are waiting.
 - The Mac app's menu bar menu lists when each loop last ran or failed.
 
 ### Changed
+
+- Chat tool-call bars have more padding, a coloured status edge (running, done, failed) and a little space above the first one.
 
 - Dropdowns use the macOS pop-up menu style: a translucent menu opening over the field, a checkmark on the selected item and an accent-filled hover; the Mac app's Settings pickers are explicit pop-up menus.
 - The dashboard uses the macOS palette (system blue, grey surfaces, hairline separators) and the system SF font by default; Roboto stays selectable in Preferences.

@@ -38,4 +38,14 @@ import Testing
         #expect(DashboardMenu.url(for: "/runs?view=logs", base: base)?.absoluteString == "http://127.0.0.1:8420/runs?view=logs")
         #expect(DashboardMenu.url(for: "/", base: base)?.absoluteString == "http://127.0.0.1:8420/")
     }
+
+    @Test func everyMenuActionHasAUniqueShortcut() {
+        var all: [DashboardMenu.Shortcut] = [DashboardMenu.home.shortcut]
+        all += self.all.map(\.shortcut) + DashboardMenu.links.map(\.shortcut) + Array(DashboardMenu.developer.values)
+        // Fixed app shortcuts (⌘D Open Dashboard, ⌘, ⌘H ⌘⌥H ⌘Q ⌘R ⌘[ ⌘] ⌘Z ⌘X ⌘C ⌘V ⌘A ⌘M ⌘W).
+        let taken = ["d", ",", "h", "q", "r", "[", "]", "z", "x", "c", "v", "a", "m", "w"].map { DashboardMenu.Shortcut($0) }
+        #expect(Set(all).count == all.count)
+        #expect(Set(all).isDisjoint(with: taken))
+        #expect(all.allSatisfy { !$0.key.isEmpty })
+    }
 }
