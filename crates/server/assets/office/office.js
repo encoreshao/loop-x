@@ -7,7 +7,9 @@
 // clicking empty space or pressing Escape releases it. `window.__office` exposes
 // `debug()` (where everyone is), `setLoops(loops)` (draw these states instead),
 // `overflow`, `syncs`, and the test hooks `select(name|null)`, `selected()`,
-// `hover()`, `panelOpen()`, `screenOf(name)` and `focus()`.
+// `hover()`, `panelOpen()`, `screenOf(name)`, `focus()` and `dispose()`. The state
+// stays live (live.js); `#stale=<ms>` and `#poll=<ms>` in the hash shorten its timers
+// for tests.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -60,7 +62,11 @@ function hashHooks() {
   const parts = location.hash.replace(/^#/, "").split("&");
   const camera = ["left", "right", "in"].find((c) => parts.includes(c)) || null;
   const h = parts.map((p) => p.match(/^h=([\d.]+)$/)).find(Boolean);
-  return { camera, hour: h ? Number(h[1]) : null };
+  const num = (key) => {
+    const m = parts.map((p) => p.match(new RegExp("^" + key + "=(\\d+)$"))).find(Boolean);
+    return m ? Number(m[1]) : null;
+  };
+  return { camera, hour: h ? Number(h[1]) : null, staleMs: num("stale"), pollMs: num("poll") };
 }
 
 function timeControl(onPick, initial) {
@@ -102,11 +108,12 @@ async function main() {
     return;
   }
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const [{ buildWorld, buildLights }, { createDayNight }, { createAgents }, { createPanel }] = await Promise.all([
+  const [{ buildWorld, buildLights }, { createDayNight }, { createAgents }, { createPanel }, { startLive }] = await Promise.all([
     import("./world.js" + V),
     import("./daynight.js" + V),
     import("./agents.js" + V),
     import("./panel.js" + V),
+    import("./live.js" + V),
   ]);
 
   let renderer;
@@ -157,6 +164,13 @@ async function main() {
   more.className = "office-more";
   more.hidden = true;
   root.append(more);
+  // Shown while the server cannot be reached: what is drawn is the last state we got.
+  const staleNote = document.createElement("p");
+  staleNote.className = "office-stale";
+  staleNote.setAttribute("role", "status");
+  staleNote.textContent = strings.stale || "";
+  staleNote.hidden = true;
+  root.append(staleNote);
   const office = (window.__office = Object.assign(window.__office || {}, { overflow: 0, syncs: 0 }));
   let latest = [], selected = null, hovered = null, focusAnim = null;
   const csrf = () => (document.getElementById("office-csrf") || {}).value || "";
@@ -176,15 +190,33 @@ async function main() {
     office.overflow = n;
     office.syncs += 1;
   }
-  async function refresh() {
+  async function fetchState() {
     const r = await fetch("/office/state", { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    const doc = await r.json();
-    if (!disposed) show(doc.loops);
+    return (await r.json()).loops;
   }
+  // Unchanged states are not redrawn: no panel flicker, nothing moves.
+  let lastJson = null;
+  function onState(loops) {
+    if (disposed) return;
+    const json = JSON.stringify(loops);
+    if (json === lastJson) return;
+    lastJson = json;
+    show(loops);
+  }
+  /// After a panel action: refetch now, even if the state looks unchanged.
+  const refresh = () => live.refresh();
+  const live = startLive({
+    fetchState,
+    onState,
+    onStale: () => (staleNote.hidden = false),
+    onFresh: () => (staleNote.hidden = true),
+    pollMs: hooks.pollMs || 30000,
+    staleMs: hooks.staleMs || 60000,
+  });
+  // A test override sticks until the server's own state next changes.
   office.setLoops = show;
   office.debug = () => agents.debug();
-  refresh().catch((err) => console.warn("office state:", err));
 
   // ---------- selection, hover and the camera ----------
   const FOCUS_MS = 600, FOCUS_DIST = 11, CHEST = 1.5;
@@ -376,6 +408,8 @@ async function main() {
     disposed = true;
     sync();
     clearInterval(timer);
+    live.stop();
+    panel.close();
     seen.disconnect();
     resizer.disconnect();
     document.removeEventListener("visibilitychange", sync);
@@ -388,6 +422,7 @@ async function main() {
     dispose();
     showList();
   });
+  office.dispose = dispose;
   addEventListener("pagehide", dispose);
   // Back/forward cache: the scene was disposed on pagehide, so rebuild it.
   addEventListener("pageshow", (e) => {

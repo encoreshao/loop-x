@@ -171,6 +171,8 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-panel-error{{margin:.8rem 0 0;color:#ff8a80}}\
 .office-panel[aria-busy='true']{{cursor:progress}}\
 .office-more{{position:absolute;left:12px;bottom:12px;margin:0;padding:.2rem .7rem;border-radius:999px;background:rgba(20,22,28,.72);color:#e6e8ee;font-size:.8rem}}\
+.office-stale{{position:absolute;left:50%;top:12px;transform:translateX(-50%);margin:0;padding:.25rem .8rem;border-radius:999px;background:rgba(120,70,0,.88);color:#fff;font-size:.8rem}}\
+.office-stale[hidden]{{display:none}}\
 </style>\
 <noscript><style>#office{{display:none}}#office-list[hidden]{{display:block}}</style></noscript>\
 <section id='office' aria-label=\"{label}\">\

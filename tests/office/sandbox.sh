@@ -4,8 +4,10 @@
 # plus a pending approval on gitlab-loop.
 #
 # Usage: tests/office/sandbox.sh [port]     (default port 18420)
-# Prints "OFFICE_URL=http://127.0.0.1:<port>"; Ctrl-C stops the server and removes the
-# temp dirs. For screenshots, in another shell:
+# Prints "OFFICE_URL=http://127.0.0.1:<port>", plus SANDBOX_HOME (the config dir, with
+# loops.json) and SANDBOX_ROOT (outputs/status/ holds the status files) so a check can
+# edit them. Ctrl-C stops the server and removes the temp dirs. SIGUSR1 stops just the
+# server and SIGUSR2 starts it again on the same port (the staleness check uses both). For screenshots, in another shell:
 #   OFFICE_URL=http://127.0.0.1:18420 tests/office/shot.sh 14 /tmp/day.png
 set -euo pipefail
 
@@ -33,7 +35,8 @@ cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
   rm -rf "$SANDBOX"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
 # off-loop: disabled; busy-loop: running (this script's own pid is alive);
 # broken-loop: failed; quiet-loop: idle; gitlab-loop: idle + one pending approval -> waiting.
@@ -60,13 +63,26 @@ cat > "$LOOPX_ROOT/outputs/approvals/apr_sandbox0001.json" <<JSON
 JSON
 
 cd "$REPO"
-"$BIN" serve --port "$PORT" &
-SERVER_PID=$!
+start_server() {
+  [ -z "$SERVER_PID" ] || return 0
+  "$BIN" serve --port "$PORT" &
+  SERVER_PID=$!
+}
+stop_server() {
+  [ -z "$SERVER_PID" ] || { kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; }
+  SERVER_PID=""
+}
+trap stop_server USR1
+trap start_server USR2
+start_server
 UP=""
 for _ in $(seq 1 60); do
   curl -s -o /dev/null "http://127.0.0.1:$PORT/loops" && UP=1 && break
   sleep 0.5
 done
 [ -n "$UP" ] || { echo "server did not come up on port $PORT" >&2; exit 1; }
+echo "SANDBOX_HOME=$LOOP_ENGINEERING_HOME"
+echo "SANDBOX_ROOT=$LOOPX_ROOT"
 echo "OFFICE_URL=http://127.0.0.1:$PORT"
-wait "$SERVER_PID"
+# Short sleeps (not one long wait) so USR1/USR2 are handled promptly.
+while :; do sleep 0.2; done
