@@ -86,7 +86,7 @@ fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
 
 /// Which AI CLI call site a registry entry point runs.
 fn call_site(entry_point: &str) -> CallSite {
-    if entry_point == "bin.topic_monitor_runner" {
+    if matches!(entry_point, "bin.topic_monitor_runner" | "topic-loop") {
         CallSite::TopicMonitor
     } else {
         CallSite::GitlabLoop
@@ -359,6 +359,16 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;
+
+    #[test]
+    fn call_site_treats_the_topic_loop_alias_as_the_topic_monitor() {
+        for ep in ["bin.topic_monitor_runner", "topic-loop"] {
+            assert_eq!(call_site(ep), CallSite::TopicMonitor, "{ep}");
+        }
+        for ep in ["bin.gitlab_loop_runner", "gitlab-loop"] {
+            assert_eq!(call_site(ep), CallSite::GitlabLoop, "{ep}");
+        }
+    }
 
     // The run mutates process-wide env (LOOP_RUN_ID, LOOP_ENGINEERING_HOME).
     static ENV_LOCK: Mutex<()> = Mutex::new(());

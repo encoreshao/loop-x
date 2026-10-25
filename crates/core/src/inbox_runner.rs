@@ -4,13 +4,15 @@
 //! JSON decisions. One [`LoopRuntime`] iteration per inbox, failures contained per
 //! inbox, exit 0 even when an inbox fails.
 //!
-//! Claude-only: `claude -p --tools ""` gives the model no tools at all, but
-//! `codex exec` always gives it a shell and records the prompt (the email
-//! bodies) under `~/.codex/sessions/`. So when the selected AI CLI is codex,
-//! every inbox fails up front with [`CODEX_REFUSAL`], before any mail is fetched,
-//! labelled or recorded, and no AI is invoked.
+//! Runs on any selected AI CLI. Claude gets no tools at all; the others get the
+//! most restrictive headless call they offer ([`sealed::sealed_command_for`]) but
+//! are still `Unrestricted` in [`ai_cli_safety`] (codex also records the prompt,
+//! with the email bodies, under `~/.codex/sessions/`). Each outcome therefore
+//! carries [`ai_cli_safety::warning`] for the Inbox Triage page instead of the
+//! run being refused.
 
 use crate::agents::sealed::{self, SealedHooks};
+use crate::ai_cli_safety::{self, CallSite};
 use crate::inbox_config::{self, categories_for, string_list};
 use crate::inbox_seen;
 use crate::inbox_status;
@@ -39,9 +41,6 @@ const INSTRUCTION_FILES: [&str; 2] = [
     "instructions/loopx/inbox-triage.md",
     "instructions/inbox-triage.md",
 ];
-pub const CODEX_REFUSAL: &str =
-    "Inbox Triage requires the Claude CLI (codex gives the model a shell) - \
-switch AI CLI to Claude in Settings";
 const REAUTH_FALLBACK: &str = "Sign-in expired - reconnect this inbox";
 const DRAFT_CAP: usize = 300;
 
@@ -193,10 +192,11 @@ pub fn invoke_triage_agent(
     max_budget_usd: Option<f64>,
     unified_log: &Path,
 ) -> Result<AiOut, AiFail> {
+    let cli = ai_cli_config::selected_cli();
     let mut log = |msg: &str| {
         let stamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         append_unified_log(
-            &format!("[{stamp}] inbox-triage: claude triage call {msg}"),
+            &format!("[{stamp}] inbox-triage: {cli} triage call {msg}"),
             unified_log,
         );
     };
@@ -211,15 +211,9 @@ pub fn invoke_triage_agent(
             text: out.text,
             cost_usd: out.cost_usd,
         }),
-        Err(e) if e.0 == "claude call timed out" => Err(AiFail::Timeout),
-        Err(e) if e.0.starts_with("claude exited") => Err(AiFail::Exited),
-        Err(e) => {
-            if ai_cli_config::selected_cli() != "claude" {
-                Err(AiFail::Triage(CODEX_REFUSAL.into()))
-            } else {
-                Err(AiFail::Triage(e.0))
-            }
-        }
+        Err(e) if e.0 == format!("{cli} call timed out") => Err(AiFail::Timeout),
+        Err(e) if e.0.starts_with(&format!("{cli} exited")) => Err(AiFail::Exited),
+        Err(e) => Err(AiFail::Triage(e.0)),
     }
 }
 
@@ -268,6 +262,9 @@ pub struct Outcome {
     pub error: Option<String>,
     pub cost_usd: Option<f64>,
     pub slack_bundle: Option<String>,
+    /// `ai_cli_safety::warning` for the AI CLI that triaged this inbox; `None`
+    /// when it is fully restricted (Claude). Shown on the Inbox Triage page.
+    pub ai_cli_warning: Option<String>,
 }
 
 impl Outcome {
@@ -296,6 +293,7 @@ impl Outcome {
                 .get("slack_bundle")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            ai_cli_warning: None,
         }
     }
 
@@ -428,11 +426,19 @@ pub fn triage_inbox(
     now: DateTime<Utc>,
     env: &TriageEnv<'_>,
 ) -> Outcome {
+    let mut outcome = triage_inbox_inner(inbox, config, now, env);
+    outcome.ai_cli_warning =
+        ai_cli_safety::warning(&(env.deps.cli_fn)(), CallSite::InboxTriage).map(str::to_owned);
+    outcome
+}
+
+fn triage_inbox_inner(
+    inbox: &Value,
+    config: &Value,
+    now: DateTime<Utc>,
+    env: &TriageEnv<'_>,
+) -> Outcome {
     let deps = env.deps;
-    // Before any token/provider call, so under codex no mail is ever read.
-    if (deps.cli_fn)() != "claude" {
-        return Outcome::failed(inbox, CODEX_REFUSAL);
-    }
     let instructions = match &deps.instructions {
         Some(i) => i.clone(),
         None => match compose_instructions(env.repo_root, env.home) {
@@ -1022,6 +1028,7 @@ pub fn run_all_inboxes(
             ("urgent", outcome.urgent_value()),
             ("error", json!(outcome.error)),
             ("overflow", json!(outcome.overflow)),
+            ("ai_cli_warning", json!(outcome.ai_cli_warning)),
         ];
         if let Err(e) = inbox_status::write(
             &name,

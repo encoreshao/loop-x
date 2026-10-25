@@ -58,6 +58,7 @@ pub fn gemini_reply(stdout: &str) -> Result<String, String> {
     if let Some(error) = serde_json::from_str::<serde_json::Value>(stdout.trim())
         .ok()
         .and_then(|v| v.get("error").cloned())
+        .filter(|e| !e.is_null())
     {
         return Err(error_message(&error));
     }
@@ -162,6 +163,25 @@ mod tests {
             r.output.contains("empty output from gemini"),
             "{}",
             r.output
+        );
+    }
+
+    #[test]
+    fn a_null_error_field_is_a_success() {
+        let d = tempfile::tempdir().unwrap();
+        let a = GeminiAgent {
+            program: script(d.path(), "g7", r#"echo '{"response":"fine","error":null}'"#)
+                .display()
+                .to_string(),
+        };
+        let r = a.run("p", &RunOptions::new(d.path(), 30.0));
+        assert_eq!(
+            (r.status, r.output.as_str()),
+            (AgentStatus::Success, "fine")
+        );
+        assert_eq!(
+            gemini_reply(r#"{"response":"x","error":null}"#),
+            Ok("x".into())
         );
     }
 

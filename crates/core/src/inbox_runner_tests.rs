@@ -346,17 +346,30 @@ fn happy_path_labels_drafts_and_records_seen() {
 }
 
 #[test]
-fn codex_fails_every_inbox_before_any_mail_is_read() {
+fn codex_inboxes_are_processed_and_carry_the_safety_warning() {
+    let d = tempdir().unwrap();
+    let (fake, log) = Fake::new(vec![m(1, 1)]);
+    let mut deps = deps_for(fake, replies(vec![decision("m1", "fyi", None)]));
+    deps.cli_fn = Arc::new(|| "codex".into());
+    let o = run(&deps, d.path());
+    assert_eq!(o.status, "ok", "{:?}", o.error);
+    assert!(log.lock().unwrap().fetch_args.is_some(), "mail was fetched");
+    assert_eq!(
+        o.ai_cli_warning.as_deref(),
+        ai_cli_safety::warning("codex", CallSite::InboxTriage)
+    );
+    assert!(o.ai_cli_warning.unwrap().contains("~/.codex/sessions"));
+}
+
+#[test]
+fn claude_inboxes_carry_no_warning() {
     let d = tempdir().unwrap();
     let (fake, _) = Fake::new(vec![m(1, 1)]);
-    let mut deps = deps_for(fake, replies(vec![]));
-    deps.cli_fn = Arc::new(|| "codex".into());
-    deps.token_fn = Arc::new(|_| panic!("token must not be fetched"));
-    let o = run(&deps, d.path());
-    assert_eq!(
-        (o.status.as_str(), o.error.as_deref()),
-        ("failed", Some(CODEX_REFUSAL))
+    let o = run(
+        &deps_for(fake, replies(vec![decision("m1", "fyi", None)])),
+        d.path(),
     );
+    assert_eq!(o.ai_cli_warning, None);
 }
 
 #[test]
@@ -1022,6 +1035,19 @@ fn states(ctx: &InboxCtx) -> HashMap<String, String> {
         .iter()
         .map(|(k, v)| (k.clone(), v["state"].as_str().unwrap().to_string()))
         .collect()
+}
+
+#[test]
+fn the_safety_warning_is_written_to_the_inbox_status() {
+    let w = world(json!([inbox()]));
+    let deps = stub_triage(|inbox| {
+        let mut o = named(inbox, "ok");
+        o.ai_cli_warning = Some("careful".into());
+        o
+    });
+    run_all_inboxes(&w.ctx, "run_1", now(), &deps).unwrap();
+    let status = inbox_status::read(&w.ctx.status_path);
+    assert_eq!(status["inboxes"]["w"]["ai_cli_warning"], "careful");
 }
 
 #[test]
