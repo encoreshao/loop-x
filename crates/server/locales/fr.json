@@ -1084,5 +1084,8 @@
   "Templates": "Modèles",
   "Templates and decks": "Modèles et présentations",
   "That deck was not created here": "Cette présentation n'a pas été créée ici",
-  "Tick the presentations the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "Cochez les présentations que le chat peut copier. Placez des {{placeholders}} dans le texte d'un modèle et le chat les remplira."
+  "Tick the presentations the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "Cochez les présentations que le chat peut copier. Placez des {{placeholders}} dans le texte d'un modèle et le chat les remplira.",
+  "The last run failed": "La dernière exécution a échoué",
+  "Working on a run right now": "Exécution en cours",
+  "Idle until the next run": "Inactif jusqu'à la prochaine exécution"
 }

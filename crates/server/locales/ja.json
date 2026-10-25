@@ -1084,5 +1084,8 @@
   "Templates": "テンプレート",
   "Templates and decks": "テンプレートとスライド",
   "That deck was not created here": "そのスライドはここで作成されたものではありません",
-  "Tick the presentations the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "チャットがコピーしてよいプレゼンテーションにチェックを入れてください。テンプレートの文中に {{placeholders}} を入れると、チャットが内容を埋めます。"
+  "Tick the presentations the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "チャットがコピーしてよいプレゼンテーションにチェックを入れてください。テンプレートの文中に {{placeholders}} を入れると、チャットが内容を埋めます。",
+  "The last run failed": "最後の実行は失敗しました",
+  "Working on a run right now": "今まさに実行中です",
+  "Idle until the next run": "次の実行まで待機中です"
 }

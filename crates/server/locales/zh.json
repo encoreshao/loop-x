@@ -1084,5 +1084,8 @@
   "Templates": "模板",
   "Templates and decks": "模板与演示文稿",
   "That deck was not created here": "该演示文稿不是在此创建的",
-  "Tick the presentations the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "勾选聊天可以复制的演示文稿。在模板文字中放入 {{placeholders}}，聊天会自动填写。"
+  "Tick the presentations the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "勾选聊天可以复制的演示文稿。在模板文字中放入 {{placeholders}}，聊天会自动填写。",
+  "The last run failed": "上次运行失败",
+  "Working on a run right now": "正在运行中",
+  "Idle until the next run": "空闲，等待下次运行"
 }
