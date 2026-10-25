@@ -15,6 +15,23 @@ pub fn text(path: &str) -> Option<&'static str> {
     get(path).and_then(|b| std::str::from_utf8(b).ok())
 }
 
+/// The first 8 hex digits of the SHA-256 over every asset under `prefix` (names and
+/// bytes): one cache-buster for a set of files that import each other.
+pub fn version_of(prefix: &str) -> String {
+    let mut all = Vec::new();
+    let mut files: Vec<_> = EMBEDDED
+        .iter()
+        .filter(|(p, _)| p.starts_with(prefix))
+        .collect();
+    files.sort_by_key(|(p, _)| *p);
+    for (path, bytes) in files {
+        all.extend_from_slice(path.as_bytes());
+        all.push(0);
+        all.extend_from_slice(bytes);
+    }
+    loopx_core::sha256::hex(&loopx_core::sha256::sha256(&all))[..8].to_string()
+}
+
 pub fn favicon() -> &'static [u8] {
     get("favicon.ico").unwrap_or(&[])
 }

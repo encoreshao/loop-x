@@ -139,15 +139,19 @@ fn client_strings(ctx: &UiCtx) -> Value {
 /// The Office view: the import map, the entry module, the panel template and the
 /// translated strings the client script reads.
 pub fn office_view_html(ctx: &UiCtx) -> String {
-    let version = assets::get("office/office.js")
-        .map(|b| loopx_core::sha256::hex(&loopx_core::sha256::sha256(b))[..8].to_string())
-        .unwrap_or_else(|| "0".to_string());
+    // office.js passes its own ?v= on to the modules it imports.
+    let version = assets::version_of("office/");
     let token = ctx.state.csrf_token.clone();
     format!(
         "<style>\
-#office{{position:relative;min-height:70vh;border-radius:12px;overflow:hidden}}\
+#office{{position:relative;height:calc(100vh - 220px);min-height:480px;border-radius:12px;overflow:hidden;background:#20232a}}\
 #office canvas{{display:block;width:100%;height:100%}}\
+.office-tod{{position:absolute;right:12px;bottom:12px;display:flex;gap:2px;padding:2px;border-radius:999px;background:rgba(20,22,28,.72)}}\
+.office-tod button{{font:inherit;font-size:.8rem;padding:.2rem .7rem;border:0;border-radius:999px;background:none;color:#e6e8ee;cursor:pointer}}\
+.office-tod button[aria-pressed='true']{{background:rgba(255,255,255,.18);color:#fff}}\
+.office-note{{margin:0 0 1rem}}\
 </style>\
+<noscript><style>#office{{display:none}}#office-list[hidden]{{display:block}}</style></noscript>\
 <section id='office' aria-label=\"{label}\">\
 <script type='importmap'>{{\"imports\":{{\"three\":\"/office/assets/three.module.min.js\",\"three/addons/controls/OrbitControls.js\":\"/office/assets/OrbitControls.js\"}}}}</script>\
 <template id='office-panel'><aside class='office-panel' role='dialog' aria-label=\"{panel_label}\">\
@@ -444,8 +448,20 @@ mod tests {
         assert!(body.contains("<template id='office-panel'>"));
         assert!(body.contains("id='office-i18n'"));
         assert!(body.contains("id='office-csrf'"));
-        assert!(!body.contains("class='card loop-section'"));
+        let list = body.find("<div id='office-list' hidden>").expect("hidden List wrapper");
+        assert!(body[list..].contains("class='card loop-section'"), "the List is the text alternative");
+        assert!(body.contains("<noscript>"));
         assert!(resp.headers.iter().any(|(k, v)| k == "Set-Cookie" && v.starts_with("loop_view=office;") && v.contains("Max-Age=31536000") && v.contains("SameSite=Lax")));
+    }
+
+    #[test]
+    fn office_script_version_covers_every_office_module() {
+        let f = fx(four());
+        let body = loops_page(&f, "/loops?view=office", None, None).body_text();
+        let v = assets::version_of("office/");
+        assert!(body.contains(&format!("/office/assets/office.js?v={v}")), "{body}");
+        let entry_only = loopx_core::sha256::hex(&loopx_core::sha256::sha256(assets::get("office/office.js").unwrap()))[..8].to_string();
+        assert_ne!(v, entry_only, "world.js etc. must bust the cache too");
     }
 
     #[test]

@@ -1325,11 +1325,8 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
         super::office::view_toggle_html(ctx, office),
         flash_html(flash, ok)
     );
-    if office {
-        return format!("{head}{}", super::office::office_view_html(ctx));
-    }
-    format!(
-        "{head}{}{}",
+    let list = format!(
+        "{}{}",
         section(
             "Active loops",
             "Loops that are on or have run. Turn them off, change when they run, or open one for details.",
@@ -1346,7 +1343,13 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             "loop-gallery",
             " data-section='available'"
         )
-    )
+    );
+    if office {
+        // The List stays in the page, hidden: it is the Office's text alternative and
+        // what the client shows when WebGL is missing (or JavaScript is off).
+        return format!("{head}{}<div id='office-list' hidden>{list}</div>", super::office::office_view_html(ctx));
+    }
+    format!("{head}{list}")
 }
 
 fn catalog_page(ctx: &UiCtx) -> UiResponse {
