@@ -86,7 +86,7 @@ pub fn build_office_state(ctx: &UiCtx) -> Value {
     .len();
     let mut entries = Vec::new();
     for l in loops::list_loops(state).unwrap_or_default() {
-        if !l.is_object() || !loops::is_visible(state, &l) {
+        if !l.is_object() {
             continue;
         }
         let name = l.get("name").map_or_else(|| "?".to_string(), py_str);

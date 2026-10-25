@@ -1173,7 +1173,7 @@ fn requirement_chips(ctx: &UiCtx, missing: &[String]) -> String {
         .join(" ")
 }
 
-pub(crate) fn is_visible(state: &UiState, loop_: &Value) -> bool {
+fn is_visible(state: &UiState, loop_: &Value) -> bool {
     if loop_.get("enabled").is_none_or(py_truthy) {
         return true;
     }

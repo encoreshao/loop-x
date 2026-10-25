@@ -153,6 +153,33 @@ mod tests {
     }
 
     #[test]
+    fn available_loop_with_no_status_file_is_listed_as_disabled() {
+        let f = fx(json!([{"name": "idle-one", "enabled": false}]));
+        let doc = f.get(None);
+        assert_eq!(doc["loops"].as_array().unwrap().len(), 1);
+        assert_eq!(by(&doc, "idle-one")["state"], "disabled");
+        assert!(by(&doc, "idle-one")["last_run"].is_null());
+    }
+
+    #[test]
+    fn urls_for_hostile_names_are_percent_encoded() {
+        let name = "a/b\"c<d é";
+        let f = fx(json!([{"name": name, "enabled": true}]));
+        let doc = f.get(None);
+        let l = by(&doc, name);
+        for key in ["run_now_url", "toggle_url"] {
+            let u = l[key].as_str().unwrap();
+            let tail = u.rsplit_once('/').unwrap().0;
+            let seg = tail.rsplit_once('/').unwrap().1;
+            assert!(!seg.contains(['"', '<', '/', ' ']) && seg.is_ascii(), "{u}");
+            assert!(seg.contains("%2F") && seg.contains("%22") && seg.contains("%3C"), "{u}");
+        }
+        let toggle = l["toggle_url"].as_str().unwrap();
+        let routed = Registry::with_pages().pattern_for(&"POST".parse().unwrap(), toggle);
+        assert_eq!(routed, Some("/daemons/loops/:name/disable"));
+    }
+
+    #[test]
     fn empty_registry_gives_empty_list() {
         let f = fx(json!([]));
         let doc = f.get(None);
