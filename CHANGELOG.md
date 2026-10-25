@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-25
+
 ### Added
 
 - Landing page: opening the dashboard asks whether to work in the Office or the Dashboard and remembers the choice (`?mode=choose` brings the chooser back). The Office (`/office`) fills the whole window with just the 3D scene and the assistant chat docked on the right; clicking a loop starts a chat message about it, and what the assistant does (tool calls, approvals, run now) shows in the chat while the scene updates in place. The chat header switches to the Dashboard and a topbar icon switches back.
@@ -414,7 +416,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/encoreshao/loop-x/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/encoreshao/loop-x/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/encoreshao/loop-x/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/encoreshao/loop-x/compare/v0.6.0...v0.7.0
