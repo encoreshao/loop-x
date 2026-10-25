@@ -1,7 +1,9 @@
 // Entry module for the Office view: checks WebGL (falling back to the List view
 // with a note), mounts the renderer in #office, builds the world, runs day/night
-// and the render loop. Test hooks in the URL hash: `h=<hour>` overrides the clock,
-// `left`/`right`/`in` pick a camera (e.g. `#left&h=23`).
+// and the render loop, and seats one person per loop from `/office/state`. Test
+// hooks in the URL hash: `h=<hour>` overrides the clock, `left`/`right`/`in` pick a
+// camera (e.g. `#left&h=23`). `window.__office` exposes `debug()` (where everyone
+// is), `setLoops(loops)` (draw these states instead), `overflow` and `syncs`.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -96,9 +98,10 @@ async function main() {
     return;
   }
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const [{ buildWorld, buildLights }, { createDayNight }] = await Promise.all([
+  const [{ buildWorld, buildLights }, { createDayNight }, { createAgents }] = await Promise.all([
     import("./world.js" + V),
     import("./daynight.js" + V),
+    import("./agents.js" + V),
   ]);
 
   let renderer;
@@ -143,6 +146,29 @@ async function main() {
   const lights = buildLights(scene, THREE);
   const { handles } = buildWorld(scene, THREE, { strings, reducedMotion });
   const dayNight = createDayNight(THREE, scene, handles, lights);
+  const agents = createAgents({ THREE, scene, handles, strings, reducedMotion });
+  // "and N more" for loops beyond the ones drawn; the List view has them all.
+  const more = document.createElement("p");
+  more.className = "office-more";
+  more.hidden = true;
+  root.append(more);
+  const office = (window.__office = Object.assign(window.__office || {}, { overflow: 0, syncs: 0 }));
+  function show(loops) {
+    agents.sync(loops);
+    const n = agents.overflow;
+    more.textContent = n ? (strings.and_more || "").replace("{n}", String(n)) : "";
+    more.hidden = !n;
+    office.overflow = n;
+    office.syncs += 1;
+  }
+  office.setLoops = show;
+  office.debug = () => agents.debug();
+  fetch("/office/state", { credentials: "same-origin", headers: { Accept: "application/json" } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+    .then((doc) => {
+      if (!disposed) show(doc.loops);
+    })
+    .catch((err) => console.warn("office state:", err));
   let override = hooks.hour;
   const apply = () => dayNight.apply(dayNight.currentHour(override));
   apply();
@@ -167,6 +193,7 @@ async function main() {
   function loop() {
     frame = requestAnimationFrame(loop);
     const dt = Math.min(clock.getDelta(), 0.1);
+    agents.tick(dt, clock.elapsedTime);
     handles.tick(dt, clock.elapsedTime);
     controls.update();
     renderer.render(scene, camera);

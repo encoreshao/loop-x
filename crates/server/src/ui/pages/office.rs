@@ -150,6 +150,7 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-tod button{{font:inherit;font-size:.8rem;padding:.2rem .7rem;border:0;border-radius:999px;background:none;color:#e6e8ee;cursor:pointer}}\
 .office-tod button[aria-pressed='true']{{background:rgba(255,255,255,.18);color:#fff}}\
 .office-note{{margin:0 0 1rem}}\
+.office-more{{position:absolute;left:12px;bottom:12px;margin:0;padding:.2rem .7rem;border-radius:999px;background:rgba(20,22,28,.72);color:#e6e8ee;font-size:.8rem}}\
 </style>\
 <noscript><style>#office{{display:none}}#office-list[hidden]{{display:block}}</style></noscript>\
 <section id='office' aria-label=\"{label}\">\
