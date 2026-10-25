@@ -1023,18 +1023,20 @@ fn schedule_form_html(ctx: &UiCtx, loop_: &Value, csrf: &str, return_to: &str) -
     let safe_name = h(&loop_.get("name").map_or_else(|| "?".to_string(), py_str));
     format!(
         "<form method='post' action='/daemons/loops/{safe_name}/schedule' class='daemon-action-form schedule-form'>\
-{csrf}<span class='setting-label'>{}</span>{}<span class='time-control'{}><input type='time' name='time' value='{time_value}'></span>\
+{csrf}{}<span class='setting-label'>{}</span><div class='setting-controls'><span class='time-control'{}><input type='time' name='time' value='{time_value}'></span>\
 {freq_select}<span class='weekday-checks weekly-controls'{}>{checkboxes}</span>\
 <span class='monthly-controls'{}>on day {day_select}</span>\
 <span class='hourly-controls'{}>{} {interval_select}</span>\
-<button type='submit' class='btn btn-neutral'>Save schedule</button></form>",
-        h(&ctx.t("Schedule")),
+<button type='submit' class='btn btn-neutral setting-save' aria-label='{save}' title='{save}'>{}</button></div></form>",
         return_to_input(return_to),
+        h(&ctx.t("Schedule")),
         style(frequency != "Hourly"),
         style(frequency == "Weekly"),
         style(frequency == "Monthly"),
         style(frequency == "Hourly"),
-        h(&ctx.t("every"))
+        h(&ctx.t("every")),
+        crate::ui::icons::icon("check"),
+        save = h(&ctx.t("Save schedule"))
     )
 }
 
@@ -1112,10 +1114,11 @@ fn notify_form_html(ctx: &UiCtx, loop_: &Value, csrf: &str, notify_accounts: &[A
     let value = if value.is_empty() { none.clone() } else { value };
     format!(
         "<form method='post' action='/loops/{safe_name}/notify' class='daemon-action-form'>{csrf}\
-<span class='setting-label'>{}</span><div class='custom-select custom-multi-select' data-empty='{none}'><select multiple name='notify' class='custom-select-native'>{native}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{value}</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' aria-multiselectable='true' hidden>{menu}</div></div> \
-<button type='submit' class='btn btn-neutral'>{}</button></form>",
+<span class='setting-label'>{}</span><div class='setting-controls'><div class='custom-select custom-multi-select' data-empty='{none}'><select multiple name='notify' class='custom-select-native'>{native}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{value}</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' aria-multiselectable='true' hidden>{menu}</div></div> \
+<button type='submit' class='btn btn-neutral setting-save' aria-label='{save}' title='{save}'>{}</button></div></form>",
         h(&ctx.t("Notify via")),
-        h(&ctx.t("Save"))
+        crate::ui::icons::icon("check"),
+        save = h(&ctx.t("Save"))
     )
 }
 

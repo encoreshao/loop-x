@@ -25,6 +25,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- The Mac app's start screen has a bigger, livelier tide: three taller gradient waves with crest lines drift at different speeds, and loop-shaped bubbles rise from the water (hidden under Reduce Motion).
+
+- The Loops page's schedule and notify settings are a caption over one row of equally tall controls, with a compact check button to save, so they fit even in a narrow card.
+
 - The Loops page's "Notify via" picker is now a macOS-style pop-up menu with a checkmark on each chosen account, instead of the browser's native multi-select list.
 
 - Chat tool-call bars have more padding, a coloured status edge (running, done, failed) and a little space above the first one.
