@@ -193,7 +193,10 @@ async function main() {
   async function fetchState() {
     const r = await fetch("/office/state", { credentials: "same-origin", headers: { Accept: "application/json" } });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    return (await r.json()).loops;
+    const loops = (await r.json()).loops;
+    // A 200 that is not a state feed counts as a failure: keep what is drawn.
+    if (!Array.isArray(loops)) throw new Error("bad state feed");
+    return loops;
   }
   // Unchanged states are not redrawn: no panel flicker, nothing moves.
   let lastJson = null;
@@ -214,6 +217,8 @@ async function main() {
     pollMs: hooks.pollMs || 30000,
     staleMs: hooks.staleMs || 60000,
   });
+  // The first state must not wait for the stream or the poll.
+  live.refresh();
   // A test override sticks until the server's own state next changes.
   office.setLoops = show;
   office.debug = () => agents.debug();

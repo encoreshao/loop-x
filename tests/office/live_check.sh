@@ -169,6 +169,38 @@ with Chrome() as c:
     except TimeoutError:
         fails.append("(c) the stale note never cleared after the server came back")
 
+# (e) The first state does not depend on SSE or the poll.
+with Chrome() as c:
+    c.call("Page.addScriptToEvaluateOnNewDocument", {"source": "window.EventSource = undefined"}, session=c.session)
+    c.goto("about:blank")
+    c.goto(f"{url}/loops?view=office#h=13&poll=60000")
+    c.wait_for("window.__office && window.__office.ready", timeout=60)
+    try:
+        c.wait_for("window.__office.syncs >= 1 && window.__office.debug().length > 0", timeout=3, interval=0.2)
+    except TimeoutError:
+        fails.append("(e) no people within 3s with SSE unavailable and the poll off")
+
+# (f) A 200 that is not a state feed keeps the office and counts as stale.
+with Chrome() as c:
+    c.call("Page.addScriptToEvaluateOnNewDocument", {"source":
+        "const f = window.fetch; window.fetch = (u, o) => window.__bad && String(u).includes('/office/state')"
+        " ? Promise.resolve(new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}})) : f(u, o)"},
+        session=c.session)
+    load(c, "h=13&stale=2000&poll=500")
+    n = len(debug(c))
+    c.evaluate("window.__bad = true")
+    try:
+        c.wait_for(STALE, timeout=15, interval=0.25)
+    except TimeoutError:
+        fails.append("(f) a malformed feed never raised the stale note")
+    if len(debug(c)) != n or n == 0:
+        fails.append(f"(f) people changed from {n} to {len(debug(c))} on a malformed feed")
+    c.evaluate("window.__bad = false")
+    try:
+        c.wait_for(f"!({STALE})", timeout=15, interval=0.25)
+    except TimeoutError:
+        fails.append("(f) the stale note did not clear when the feed recovered")
+
 if fails:
     print("FAIL")
     for f in fails:
