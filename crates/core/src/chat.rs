@@ -35,6 +35,10 @@ const SWITCH_HINT: &str = "Switch CLI in Settings -> AI CLI.";
 /// chat's cwd). It holds only `.cursor/cli.json`, the permission list that
 /// allows the chat-tool command and denies file reads and writes.
 pub const CURSOR_CHAT_WORKSPACE: &str = "outputs/chat-cursor";
+/// Codex's working root for the chat, relative to the repo root: an empty
+/// scratch dir, so `workspace-write` makes nothing but it and the repo's
+/// `outputs/` writable (the repo root may be the loopx home itself).
+pub const CODEX_CHAT_WORKSPACE: &str = "outputs/chat-codex";
 /// The machine-readable streaming format of Cursor Agent and Kimi CLI.
 const STREAM_JSON: &str = "stream-json";
 /// Gemini CLI's list of tools that may run without a confirmation; in headless
@@ -50,6 +54,16 @@ pub fn chat_cli_name(cli: &str) -> &'static str {
         "cursor" => "Cursor CLI",
         _ => "Claude Code",
     }
+}
+
+/// `cli` when it is one of `ai_cli_config::VALID_CLIS`, else `"claude"` (what
+/// [`ChatCommand::build_command`] runs for an unknown name).
+pub fn chat_cli(cli: &str) -> &'static str {
+    crate::ai_cli_config::VALID_CLIS
+        .iter()
+        .find(|c| **c == cli)
+        .copied()
+        .unwrap_or("claude")
 }
 
 /// Whether a CLI's reply arrives as it is written or all at once.
@@ -99,8 +113,10 @@ pub struct ChatCommand {
     pub wrapper: Vec<String>,
     /// The AI CLI that answers (`ai_cli_config::VALID_CLIS`).
     pub cli: String,
-    /// Directories besides the repo root that Codex's sandbox may write (the
-    /// loopx home, where the chat tools save settings).
+    /// Directories besides its scratch workspace that Codex's sandbox may
+    /// write; [`run_chat_job`] sets it to the repo's `outputs/` (pending
+    /// approvals, chat docs). Never the loopx home: write tools run in the
+    /// server after approval, so the model has no reason to touch its config.
     pub writable_roots: Vec<String>,
 }
 
@@ -131,8 +147,8 @@ impl ChatCommand {
         Self {
             chat_tool,
             wrapper,
-            cli: crate::ai_cli_config::selected_cli(),
-            writable_roots: vec![crate::config::home_dir().display().to_string()],
+            cli: chat_cli(&crate::ai_cli_config::selected_cli()).to_string(),
+            writable_roots: Vec::new(),
         }
     }
 
@@ -289,12 +305,14 @@ impl ChatCommand {
                 CURSOR_CHAT_WORKSPACE,
                 prompt,
             ]),
-            // The sandbox lets the chat tools write only the repo root (outputs/,
-            // pending approvals) and the loopx home; `--ephemeral` keeps the
+            // The sandbox lets the model write only its scratch workspace and
+            // `writable_roots` (the repo's outputs/); `--ephemeral` keeps the
             // session, and any tool output in it, off disk.
             _ => {
                 let mut args = strs(&[
                     "exec",
+                    "--cd",
+                    CODEX_CHAT_WORKSPACE,
                     "--sandbox",
                     "workspace-write",
                     "--skip-git-repo-check",
@@ -382,10 +400,25 @@ fn prepare_cursor_workspace(repo_root: &Path, chat_tool: &str) -> std::io::Resul
     let dir = repo_root.join(CURSOR_CHAT_WORKSPACE).join(".cursor");
     std::fs::create_dir_all(&dir)?;
     let perms = json!({"permissions": {"allow": allow, "deny": ["Read(**)", "Write(**)"]}});
+    // Written aside and renamed, so a concurrent turn never reads half a file.
+    let tmp = dir.join(format!("cli.json.{}.tmp", uuid::Uuid::new_v4().simple()));
     std::fs::write(
-        dir.join("cli.json"),
+        &tmp,
         serde_json::to_string_pretty(&perms).unwrap_or_default(),
-    )
+    )?;
+    std::fs::rename(&tmp, dir.join("cli.json")).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// The command for one turn: Codex gets the repo's `outputs/` as its only
+/// writable root besides its workspace.
+fn turn_command(rt: &ChatRuntime) -> ChatCommand {
+    let mut command = rt.command.clone();
+    if chat_cli(&command.cli) == "codex" {
+        command.writable_roots = vec![rt.repo_root.join("outputs").display().to_string()];
+    }
+    command
 }
 
 /// `build_chat_prompt`. `page_context` is `(label, path)` of the nav item the AI
@@ -1177,7 +1210,9 @@ fn verified_pending_event(rt: &ChatRuntime, event: &Value, session_id: &str) -> 
 /// becomes an error naming the CLI; nothing falls back to another CLI.
 pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id: &str) {
     let root = &rt.repo_root;
-    let cli = rt.command.cli.as_str();
+    let turn_start = unix_now();
+    let command = turn_command(rt);
+    let cli = chat_cli(&command.cli);
     let name = chat_cli_name(cli);
     let record = ChatJobRecord::for_cli(cli);
     let mode = record.chat_mode;
@@ -1205,14 +1240,17 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
         );
         rt.jobs.finish(reply_key, Some(msg), None);
     };
-    if cli == "cursor" {
-        if let Err(e) = prepare_cursor_workspace(root, &rt.command.chat_tool) {
-            return fail(format!(
-                "Could not prepare the {name} workspace: {e}. {SWITCH_HINT}"
-            ));
-        }
+    let workspace = match cli {
+        "cursor" => prepare_cursor_workspace(root, &command.chat_tool),
+        "codex" => std::fs::create_dir_all(root.join(CODEX_CHAT_WORKSPACE)),
+        _ => Ok(()),
+    };
+    if let Err(e) = workspace {
+        return fail(format!(
+            "Could not prepare the {name} workspace: {e}. {SWITCH_HINT}"
+        ));
     }
-    let argv = rt.command.build_command(prompt, &(rt.tools_description)());
+    let argv = command.build_command(prompt, &(rt.tools_description)());
     let (program, rest) = argv.split_first().expect("non-empty argv");
     let spawned = Command::new(program)
         .args(rest)
@@ -1303,16 +1341,35 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
         let reply = match mode {
             ChatMode::SingleReply if code == Some(0) => single_reply(cli, &unparsed),
             ChatMode::SingleReply => Err(cli_failure(cli, code, &stderr, "")),
-            ChatMode::Streaming => match final_text.or(last_message).filter(|t| !t.is_empty()) {
-                Some(text) if !final_is_error => Ok(text),
-                Some(text) => Err(text),
-                None => Err(cli_failure(cli, code, &stderr, &unparsed)),
-            },
+            ChatMode::Streaming => {
+                // A message with no final event is a reply only from a clean
+                // exit; after a timeout or a failure it is a partial answer.
+                let text = match final_text {
+                    Some(t) => Some(t),
+                    None if code == Some(0) => last_message,
+                    None => None,
+                };
+                match text.filter(|t| !t.is_empty()) {
+                    Some(text) if !final_is_error => Ok(text),
+                    Some(text) if cli == "claude" => Err(text),
+                    Some(text) => Err(format!(
+                        "{name}: {}. {SWITCH_HINT}",
+                        text.trim_end().trim_end_matches('.')
+                    )),
+                    None => Err(cli_failure(cli, code, &stderr, &unparsed)),
+                }
+            }
         };
         match reply {
             Ok(text) => {
                 if mode == ChatMode::SingleReply {
                     rt.jobs.append(reply_key, &text);
+                }
+                if cli != "claude" {
+                    for ev in turn_pending_events(rt, session_id, turn_start, &tool_events) {
+                        rt.jobs.event(reply_key, ev.clone());
+                        tool_events.push(ev);
+                    }
                 }
                 let tools = merge_tool_events(&tool_events);
                 rt.store.append_message(
@@ -1345,6 +1402,47 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
         ),
     }
     rt.jobs.finish(reply_key, finish_error, finish_text);
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// Tool events for the pending actions this turn stored that its stream did
+/// not show: a single-reply CLI shows no tool calls at all, and a streaming
+/// one's tool-call shape may be missed. Without them the reply has no Approve
+/// card. Each becomes a start, an ok result and the verified pending record.
+fn turn_pending_events(
+    rt: &ChatRuntime,
+    session_id: &str,
+    turn_start: f64,
+    seen: &[Value],
+) -> Vec<Value> {
+    let shown: Vec<&str> = seen
+        .iter()
+        .filter(|e| e.get("kind").and_then(Value::as_str) == Some("pending"))
+        .filter_map(|e| e.get("pending_id").and_then(Value::as_str))
+        .collect();
+    // Whole seconds of slack: a record's `created` may be truncated.
+    let since = turn_start.floor() - 1.0;
+    let mut out = Vec::new();
+    for pending_id in crate::chat_tools::pending::created_since(&rt.repo_root, session_id, since) {
+        if shown.contains(&pending_id.as_str()) {
+            continue;
+        }
+        let id = format!("pending-{pending_id}");
+        let probe = json!({"id": id, "pending_id": pending_id});
+        let Some(pending) = verified_pending_event(rt, &probe, session_id) else {
+            continue;
+        };
+        let summary = tool_args_summary(&pending["args"].to_string());
+        out.push(json!({"kind": "start", "id": id, "name": pending["tool"], "summary": summary}));
+        out.push(json!({"kind": "result", "id": id, "ok": true}));
+        out.push(pending);
+    }
+    out
 }
 
 /// The reply in a [`ChatMode::SingleReply`] CLI's stdout (it exited 0).
@@ -1758,7 +1856,7 @@ mod tests {
         let cmd = |cli: &str| {
             let mut c = ChatCommand::new("loopx chat-tool");
             c.cli = cli.into();
-            c.writable_roots = vec!["/home/x/.loopx".into()];
+            c.writable_roots = vec!["/r/outputs".into()];
             inner_argv(&c.build_command("hi", "T"))
         };
         let g = cmd("gemini");
@@ -1794,10 +1892,12 @@ mod tests {
         );
         let x = cmd("codex");
         assert_eq!(
-            &x[..12],
+            &x[..14],
             [
                 "codex",
                 "exec",
+                "--cd",
+                CODEX_CHAT_WORKSPACE,
                 "--sandbox",
                 "workspace-write",
                 "--skip-git-repo-check",
@@ -1807,7 +1907,7 @@ mod tests {
                 "-c",
                 "sandbox_workspace_write.network_access=true",
                 "-c",
-                r#"sandbox_workspace_write.writable_roots=["/home/x/.loopx"]"#
+                r#"sandbox_workspace_write.writable_roots=["/r/outputs"]"#
             ]
         );
     }
@@ -2130,6 +2230,213 @@ echo '{"role":"assistant","content":"All green."}'"#,
         let rt = runtime_for(d.path(), &bin, "kimi");
         let e = done_error(&run_turn(&rt).1);
         assert!(e.contains("unreadable output from kimi"), "{e}");
+    }
+
+    #[test]
+    fn codex_may_write_only_the_outputs_dir_never_the_loopx_home() {
+        let d = tempfile::tempdir().unwrap();
+        let mut rt = runtime(d.path(), d.path());
+        rt.command.cli = "codex".into();
+        rt.command.writable_roots = vec!["/somewhere/else".into()];
+        let c = turn_command(&rt);
+        let outputs = d.path().join("outputs").display().to_string();
+        assert_eq!(c.writable_roots, [outputs.as_str()]);
+        let words = inner_argv(&c.build_command("hi", "T"));
+        assert!(!words.iter().any(|w| w.contains(".loopx")), "{words:?}");
+        assert!(words.contains(&format!(
+            "sandbox_workspace_write.writable_roots={}",
+            json!([outputs])
+        )));
+        let i = words.iter().position(|w| w == "--cd").unwrap();
+        assert_eq!(words[i + 1], CODEX_CHAT_WORKSPACE);
+        // Other CLIs keep the command as configured.
+        rt.command.cli = "gemini".into();
+        assert_eq!(turn_command(&rt).writable_roots, ["/somewhere/else"]);
+    }
+
+    #[test]
+    fn a_codex_turn_runs_in_its_scratch_workspace() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(d.path(), "codex", "echo ok");
+        let rt = runtime_for(d.path(), &bin, "codex");
+        run_turn(&rt);
+        assert!(d.path().join(CODEX_CHAT_WORKSPACE).is_dir());
+    }
+
+    #[test]
+    fn an_unknown_cli_is_a_claude_chat_in_record_and_command() {
+        assert_eq!(chat_cli("gpt5"), "claude");
+        assert_eq!(chat_cli("kimi"), "kimi");
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_claude(
+            d.path(),
+            r#"echo '{"type":"result","result":"ok","is_error":false}'"#,
+        );
+        let mut rt = runtime(d.path(), &bin);
+        rt.command.cli = "gpt5".into();
+        let (key, items) = run_turn(&rt);
+        assert_eq!(
+            rt.jobs.record(&key).unwrap(),
+            ChatJobRecord::for_cli("claude")
+        );
+        assert_eq!(
+            items.last().unwrap(),
+            &StreamItem::Done {
+                error: None,
+                final_text: Some("ok".into())
+            }
+        );
+    }
+
+    #[test]
+    fn a_streaming_cli_that_times_out_or_fails_after_a_message_is_an_error() {
+        // (timeout fake, kimi's exit, expected error)
+        for (timeout, exit, want) in [
+            (
+                "shift\n\"$@\"\nexit 124",
+                "",
+                "Kimi CLI timed out after 90 s",
+            ),
+            (
+                "shift\nexec \"$@\"",
+                "exit 1",
+                "Kimi CLI exited with code 1",
+            ),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let kimi = format!("echo '{{\"role\":\"assistant\",\"content\":\"partial\"}}'\n{exit}");
+            let bin = fake_bin(d.path(), &[("kimi", kimi.as_str()), ("timeout", timeout)]);
+            let rt = runtime_for(d.path(), &bin, "kimi");
+            let (_, items) = run_turn(&rt);
+            assert_eq!(items[0], StreamItem::Chunk("partial".into()));
+            let e = done_error(&items);
+            assert!(e.contains(want), "{e}");
+            assert_eq!(rt.store.read_messages().len(), 1, "{want}");
+        }
+    }
+
+    #[test]
+    fn a_cursor_error_result_names_the_cli_and_the_switch_hint() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(
+            d.path(),
+            "agent",
+            r#"echo '{"type":"result","is_error":true,"result":"auth failed"}'"#,
+        );
+        let rt = runtime_for(d.path(), &bin, "cursor");
+        let e = done_error(&run_turn(&rt).1);
+        assert_eq!(
+            e,
+            "Cursor CLI: auth failed. Switch CLI in Settings -> AI CLI."
+        );
+    }
+
+    #[test]
+    fn the_cursor_permission_file_is_replaced_whole() {
+        let d = tempfile::tempdir().unwrap();
+        prepare_cursor_workspace(d.path(), "/opt/bin/loopx chat-tool").unwrap();
+        prepare_cursor_workspace(d.path(), "loopx chat-tool").unwrap();
+        let dir = d.path().join(CURSOR_CHAT_WORKSPACE).join(".cursor");
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["cli.json"]);
+        let perms: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("cli.json")).unwrap()).unwrap();
+        assert_eq!(perms["permissions"]["allow"], json!(["Shell(loopx)"]));
+    }
+
+    /// A fake CLI that, like a write chat-tool call, stores a pending action
+    /// for the turn's session, then replies.
+    fn pending_writing_script(reply: &str) -> String {
+        format!(
+            r#"mkdir -p outputs/chat-pending
+printf '{{"tool": "gitlab.comment", "args": {{"body": "hi"}}, "session": "%s", "summary": "g/p#1", "created": %s}}' "$LOOP_CHAT_SESSION" "$(date +%s)" > outputs/chat-pending/{NEW_ID}.json
+{reply}"#
+        )
+    }
+
+    const NEW_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OLD_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const OTHER_ID: &str = "cccccccccccccccccccccccccccccccc";
+
+    fn with_real_pending_lookup(mut rt: ChatRuntime) -> ChatRuntime {
+        let env = crate::chat_tools::Env::new(&rt.repo_root, rt.repo_root.join("home"));
+        rt.pending_lookup = Arc::new(move |id, session| {
+            crate::chat_tools::pending::lookup(&env, id, session, None).map(|p| p.to_value())
+        });
+        rt
+    }
+
+    fn seed_pending(root: &Path, id: &str, session: &str, created: f64) {
+        let dir = root.join("outputs/chat-pending");
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = json!({"tool": "gitlab.comment", "args": {}, "session": session,
+                         "summary": "old", "created": created});
+        std::fs::write(dir.join(format!("{id}.json")), rec.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_single_reply_turn_attaches_the_pending_actions_it_created() {
+        let d = tempfile::tempdir().unwrap();
+        let script = pending_writing_script(r#"echo '{"response":"Waiting for your approval."}'"#);
+        let bin = fake_cli(d.path(), "gemini", &script);
+        let rt = with_real_pending_lookup(runtime_for(d.path(), &bin, "gemini"));
+        let sid = rt.store.send_chat_message("hi", None).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        seed_pending(d.path(), OLD_ID, &sid, now - 300.0);
+        seed_pending(d.path(), OTHER_ID, "another-session", now);
+        let key = rt.jobs.create();
+        run_chat_job(&rt, &key, "hi", &sid);
+        let items = rt
+            .jobs
+            .stream(&key)
+            .unwrap()
+            .next_batch(Duration::from_millis(10))
+            .unwrap();
+        assert!(
+            items.iter().any(|i| matches!(i, StreamItem::Tool(e)
+                if e["kind"] == "pending" && e["pending_id"] == NEW_ID)),
+            "{items:?}"
+        );
+        let msgs = rt.store.read_messages();
+        let tools = msgs.last().unwrap()["tools"].as_array().unwrap().clone();
+        assert_eq!(tools.len(), 1, "{tools:?}");
+        assert_eq!(tools[0]["name"], "gitlab.comment");
+        assert_eq!(tools[0]["ok"], true);
+        assert_eq!(
+            tools[0]["pending"],
+            json!({"pending_id": NEW_ID, "tool": "gitlab.comment", "summary": "g/p#1",
+                   "args": {"body": "hi"}})
+        );
+    }
+
+    #[test]
+    fn a_streamed_pending_action_is_not_attached_twice() {
+        let d = tempfile::tempdir().unwrap();
+        let done = json!({"type": "tool_call", "subtype": "completed", "call_id": "c1",
+            "tool_call": {"shellToolCall": {"result": {"success": {"stdout":
+                format!("{{\"status\": \"pending_approval\", \"id\": \"{NEW_ID}\"}}")}}}}})
+        .to_string();
+        let started = json!({"type": "tool_call", "subtype": "started", "call_id": "c1",
+            "tool_call": {"shellToolCall": {"args": {"command":
+                "loopx chat-tool call gitlab.comment '{}'"}}}})
+        .to_string();
+        let reply = format!(
+            "echo '{started}'\necho '{done}'\necho '{}'",
+            r#"{"type":"result","is_error":false,"result":"Approve it."}"#
+        );
+        let bin = fake_cli(d.path(), "agent", &pending_writing_script(&reply));
+        let rt = with_real_pending_lookup(runtime_for(d.path(), &bin, "cursor"));
+        run_turn(&rt);
+        let msgs = rt.store.read_messages();
+        let tools = msgs.last().unwrap()["tools"].as_array().unwrap().clone();
+        assert_eq!(tools.len(), 1, "{tools:?}");
+        assert_eq!(tools[0]["pending"]["pending_id"], NEW_ID);
     }
 
     #[test]
