@@ -38,6 +38,16 @@ pub struct SealedResult {
     pub duration_ms: i64,
 }
 
+/// The failure text a caller may persist or show: loopx's own text for every
+/// kind except `Reply`, whose message can quote CLI output (and so the prompt);
+/// that becomes a fixed line naming the CLI.
+pub fn storable_message(cli: &str, e: &SealedCallFailed) -> String {
+    match e.1 {
+        SealedFailKind::Reply => format!("{cli} returned an unusable reply"),
+        _ => e.0.clone(),
+    }
+}
+
 /// No tools and no MCP servers (without `--strict-mcp-config` the user's own
 /// claude.ai connectors, possibly including one able to deliver mail, would
 /// load). The prompt goes on stdin so content never appears in argv / `ps`.
@@ -105,14 +115,14 @@ pub fn sealed_command_for(cli: &str, max_budget_usd: Option<f64>) -> Vec<String>
             cmd
         }
         // `-` makes `codex exec` read the prompt from stdin; the scratch dir is
-        // not a repo; `--ephemeral` keeps the session (and the prompt) off disk.
+        // not a repo. Codex records the prompt under ~/.codex/sessions (the
+        // safety warning says so); this Codex has no flag to stop that.
         "codex" => strs(&[
             "codex",
             "exec",
             "--sandbox",
             "read-only",
             "--skip-git-repo-check",
-            "--ephemeral",
             "-c",
             "approval_policy=never",
             "-",
@@ -559,8 +569,25 @@ mod tests {
         assert_eq!(c[c.iter().position(|a| a == "--mode").unwrap() + 1], "ask");
         let x = sealed_command_for("codex", None);
         assert!(x.contains(&"read-only".to_string()));
-        assert!(x.contains(&"--ephemeral".to_string()));
+        assert!(!x.contains(&"--ephemeral".to_string()));
         assert_eq!(x.last().unwrap(), "-");
+    }
+
+    #[test]
+    fn no_codex_argv_uses_the_flag_codex_does_not_have() {
+        use crate::agents::{codex, RunOptions};
+        let opts = RunOptions::new(std::path::Path::new("/x"), 5.0);
+        let mut all = vec![
+            sealed_command_for("codex", None),
+            codex::codex_args("p", &opts),
+        ];
+        let mut c = crate::chat::ChatCommand::new("loopx chat-tool");
+        c.cli = "codex".into();
+        all.push(c.build_command("q", "T"));
+        all.push(c.build_title_command("u", "r"));
+        for argv in all {
+            assert!(!argv.iter().any(|a| a.contains("--ephemeral")), "{argv:?}");
+        }
     }
 
     #[test]

@@ -1282,13 +1282,6 @@ fn the_registered_loop_definition_has_the_per_inbox_bounds() {
     assert_eq!(def.name, "inbox-triage-loop");
 }
 
-#[test]
-fn the_ai_failure_classes_map_from_the_sealed_call() {
-    // A command that does not exist cannot start: reported as a TriageFailed.
-    let d = tempdir().unwrap();
-    let _ = invoke_triage_agent("p", 1.0, None, &d.path().join("log"));
-}
-
 // ------------------------------------------------- a failed CLI, privately
 
 type FakeRun = std::io::Result<crate::proc::ProcOutput>;

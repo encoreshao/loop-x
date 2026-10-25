@@ -310,8 +310,7 @@ impl ChatCommand {
                 prompt,
             ]),
             // The sandbox lets the model write only its scratch workspace and
-            // `writable_roots` (the repo's outputs/); `--ephemeral` keeps the
-            // session, and any tool output in it, off disk.
+            // `writable_roots` (the repo's outputs/).
             _ => {
                 let mut args = strs(&[
                     "exec",
@@ -320,7 +319,6 @@ impl ChatCommand {
                     "--sandbox",
                     "workspace-write",
                     "--skip-git-repo-check",
-                    "--ephemeral",
                     "-c",
                     "approval_policy=never",
                     "-c",
@@ -372,7 +370,6 @@ impl ChatCommand {
                 "--sandbox",
                 "read-only",
                 "--skip-git-repo-check",
-                "--ephemeral",
                 "-c",
                 "approval_policy=never",
                 prompt,
@@ -1371,12 +1368,15 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
             }
         }
         let code = child.wait().ok().and_then(|s| s.code());
-        let stderr = stderr_rx
-            .recv_timeout(Duration::from_secs(2))
-            .unwrap_or_default();
+        // Only a failure shows stderr, so only a failure waits for it.
+        let stderr = || {
+            stderr_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap_or_default()
+        };
         let reply = match mode {
             ChatMode::SingleReply if code == Some(0) => single_reply(cli, &unparsed),
-            ChatMode::SingleReply => Err(cli_failure(cli, code, &stderr, "")),
+            ChatMode::SingleReply => Err(cli_failure(cli, code, &stderr(), "")),
             ChatMode::Streaming => {
                 // A message with no final event is a reply only from a clean
                 // exit; after a timeout or a failure it is a partial answer.
@@ -1392,7 +1392,7 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
                         "{name}: {}. {SWITCH_HINT}",
                         text.trim_end().trim_end_matches('.')
                     )),
-                    None => Err(cli_failure(cli, code, &stderr, &unparsed)),
+                    None => Err(cli_failure(cli, code, &stderr(), &unparsed)),
                 }
             }
         };
@@ -1928,7 +1928,7 @@ mod tests {
         );
         let x = cmd("codex");
         assert_eq!(
-            &x[..14],
+            &x[..13],
             [
                 "codex",
                 "exec",
@@ -1937,7 +1937,6 @@ mod tests {
                 "--sandbox",
                 "workspace-write",
                 "--skip-git-repo-check",
-                "--ephemeral",
                 "-c",
                 "approval_policy=never",
                 "-c",
@@ -2125,6 +2124,28 @@ mod tests {
         let bin = fake_cli(d.path(), "codex", "echo 'all done'");
         let rt = runtime_for(d.path(), &bin, "codex");
         let (_, items) = run_turn(&rt);
+        assert_eq!(
+            items.last().unwrap(),
+            &StreamItem::Done {
+                error: None,
+                final_text: Some("all done".into())
+            }
+        );
+    }
+
+    #[test]
+    fn a_successful_turn_does_not_wait_for_a_stderr_a_child_keeps_open() {
+        let d = tempfile::tempdir().unwrap();
+        // The backgrounded sleep inherits stderr and holds it for 4 s.
+        let bin = fake_cli(d.path(), "codex", "echo 'all done'\nsleep 4 >/dev/null &");
+        let rt = runtime_for(d.path(), &bin, "codex");
+        let started = std::time::Instant::now();
+        let (_, items) = run_turn(&rt);
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
+        );
         assert_eq!(
             items.last().unwrap(),
             &StreamItem::Done {

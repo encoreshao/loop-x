@@ -299,7 +299,7 @@ fn call_model_with(
             text: r.text,
             cost_usd: r.cost_usd,
         })
-        .map_err(|e| ModelError::new("SealedCallFailed", e.0))
+        .map_err(|e| ModelError::new("SealedCallFailed", sealed::storable_message(&cli, &e)))
 }
 
 // ---- text helpers ---------------------------------------------------------------
@@ -1702,6 +1702,51 @@ retry: {enabled: true, max_attempts: 2}
             call_model_with("p", &ctx, &hooks).unwrap();
             let got = logs.lock().unwrap().iter().any(|l| l.contains("WARNING"));
             assert_eq!(got, warns, "{cli}");
+        }
+    }
+
+    #[test]
+    fn a_failed_sealed_call_never_carries_cli_output() {
+        let w = world();
+        let def = LoopDefinition::from_yaml(&w.dir.path().join("loops/demo/loop.yaml")).unwrap();
+        let ctx = LoopContext {
+            loop_name: "demo-loop".into(),
+            run_id: "r".into(),
+            now: Utc::now(),
+            definition: Arc::new(def),
+            settings: json!({}),
+            history_dir: w.dir.path().join("h"),
+            log: Arc::new(|_| {}),
+            repo_root: w.dir.path().to_path_buf(),
+            force: false,
+            call_budget_usd: None,
+            model: None,
+            state_dir: None,
+        };
+        for (cli, stdout) in [
+            ("gemini", "SECRET not json"),
+            ("cursor", "SECRET not json"),
+            ("gemini", r#"{"error":{"message":"SECRET"}}"#),
+            ("cursor", r#"{"is_error":true,"result":"SECRET"}"#),
+        ] {
+            let runner = move |_: &[String], _: &str, _: f64, _: &std::path::Path| {
+                Ok(crate::proc::ProcOutput {
+                    code: Some(0),
+                    stdout: stdout.into(),
+                    stderr: String::new(),
+                    timed_out: false,
+                })
+            };
+            let cli_fn = move || cli.to_string();
+            let hooks = SealedHooks {
+                runner: Some(&runner),
+                cli_fn: Some(&cli_fn),
+                command_fn: None,
+            };
+            let e = call_model_with("p", &ctx, &hooks).unwrap_err();
+            let text = format!("{e:?}");
+            assert!(!text.contains("SECRET"), "{cli}: {text}");
+            assert!(text.contains(cli), "{cli}: {text}");
         }
     }
 

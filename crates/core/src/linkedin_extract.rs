@@ -119,7 +119,7 @@ fn call_with(
     sealed::warn_if_unrestricted(&cli, crate::ai_cli_safety::CallSite::Plugin, log);
     sealed::sealed_call(prompt, CALL_TIMEOUT_S, &mut |_| {}, Some(CALL_BUDGET_USD), hooks)
         .map(|r| r.text)
-        .map_err(|e| e.0)
+        .map_err(|e| crate::agents::sealed::storable_message(&cli, &e))
 }
 
 fn profile(url: &str) -> String {
@@ -264,6 +264,35 @@ mod tests {
                 warns,
                 "{cli}: {logs:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_failed_sealed_call_never_carries_cli_output() {
+        use crate::agents::sealed::SealedHooks;
+        for (cli, stdout) in [
+            ("gemini", "SECRET not json"),
+            ("cursor", "SECRET not json"),
+            ("gemini", r#"{"error":{"message":"SECRET"}}"#),
+            ("cursor", r#"{"is_error":true,"result":"SECRET"}"#),
+        ] {
+            let runner = move |_: &[String], _: &str, _: f64, _: &std::path::Path| {
+                Ok(crate::proc::ProcOutput {
+                    code: Some(0),
+                    stdout: stdout.into(),
+                    stderr: String::new(),
+                    timed_out: false,
+                })
+            };
+            let cli_fn = move || cli.to_string();
+            let hooks = SealedHooks {
+                runner: Some(&runner),
+                cli_fn: Some(&cli_fn),
+                command_fn: None,
+            };
+            let e = call_with("p", &hooks, &mut |_| {}).unwrap_err();
+            assert!(!e.contains("SECRET"), "{cli}: {e}");
+            assert!(e.contains(cli), "{cli}: {e}");
         }
     }
 
