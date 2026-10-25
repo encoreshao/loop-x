@@ -228,7 +228,7 @@ Top level: JSON **array** (a non-array raises `ValueError`
   `config/ai_cli.json.template` (`{"cli": "claude"}`).
 - **Readers:** `bin/ai_cli_config.py` (`get_selected_cli`; CLI
   `ai_cli_config.py get`), `bin/gitlab_loop_runner.py`, run scripts.
-- **Writers:** `ai_cli_config.set_selected_cli` (CLI `set <claude|codex>`),
+- **Writers:** `ai_cli_config.set_selected_cli` (CLI `set <claude|codex|gemini|kimi|cursor>`),
   strategy 3 (plain write, **not** atomic, parent dirs created).
 
 ### Schema
@@ -237,7 +237,7 @@ Top level object; the only key consumed is:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `cli` | string, one of `"claude"`, `"codex"` | optional on read | Anything else, missing key, missing file, invalid JSON or a non-object file all resolve to `"claude"` (fail-safe: claude's guardrails are harness-enforced). |
+| `cli` | string, one of `"claude"`, `"codex"`, `"gemini"`, `"kimi"`, `"cursor"` | optional on read | Anything else, missing key, missing file, invalid JSON or a non-object file all resolve to `"claude"` (fail-safe: claude's guardrails are harness-enforced). |
 
 ### Semantics and quirks
 
@@ -299,8 +299,11 @@ current_step as parsed by the CLI: pid, exit code, issue, step).
 (`write-topic-status <topic> <state> [--current-step T]`). It is
 read-modify-written whole, so concurrent writers race; the missing/corrupt
 default is `{"topics": {}}`. Out of scope for the main contract but must be
-handled by the same code path. `outputs/inbox-triage/status.json` and
-`outputs/update/status.json` are different, unrelated documents.
+handled by the same code path. Each topic entry may also carry `ai_cli_warning` (string, set when the
+selected CLI is less restricted) and `error` (string, bounded, loopx-generated
+failure text); the document also has a top-level `ai_cli_warning`.
+`outputs/inbox-triage/status.json` has an `ai_cli_warning` per inbox and
+`outputs/update/status.json` is a different, unrelated document.
 
 ### Example
 

@@ -59,7 +59,7 @@ The full list is in [Safety boundaries](docs/reference.md#safety-boundaries).
 
 ## Get started
 
-You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access token, and the `claude` or `codex` CLI. A Slack webhook is optional, for notifications.
+You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access token, and one AI CLI: Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), Kimi (`kimi`) or Cursor (`agent`/`cursor-agent`). Claude is the default; the others are chosen in Settings -> AI CLI. A Slack webhook is optional, for notifications.
 
 **1. Install**
 
