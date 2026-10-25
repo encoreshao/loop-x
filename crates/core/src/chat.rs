@@ -1,6 +1,7 @@
-//! The dashboard chat engine: the assistant's prompts and `claude -p` command,
-//! the stream-json line parsers, the in-memory reply jobs behind the SSE stream,
-//! and the background runner that persists a reply. Mirrors the chat half of
+//! The dashboard chat engine: the assistant's prompts and the selected AI CLI's
+//! command (`claude -p` by default), the stream-json line parsers, the in-memory
+//! reply jobs behind the SSE stream, and the background runner that persists a
+//! reply. Mirrors the chat half of
 //! `bin/web/dashboard_server.py` (`build_chat_command`, `_run_chat_job`,
 //! `_chat_job_*`, `parse_chat_stream_line`, `chat_tool_events_in_stream_line`).
 //!
@@ -24,11 +25,58 @@ pub const CHAT_MESSAGE_HISTORY_LIMIT: usize = 10;
 pub const CHAT_SUBPROCESS_TIMEOUT_SECONDS: u32 = 90;
 pub const CHAT_TITLE_TIMEOUT_SECONDS: u32 = 60;
 pub const STREAM_IDLE_TIMEOUT_SECONDS: u64 = 15;
-/// `_AI_CLI_DISPLAY_NAMES["claude"]`.
-pub const AI_CLI_NAME: &str = "Claude Code";
 
 const SYSTEM_PROMPT: &str = include_str!("chat_prompts/system.txt");
 const TOOLS_PROMPT: &str = include_str!("chat_prompts/tools.txt");
+
+/// Where every chat error tells the user to go.
+const SWITCH_HINT: &str = "Switch CLI in Settings -> AI CLI.";
+/// Cursor Agent's workspace for the chat, relative to the repo root (the
+/// chat's cwd). It holds only `.cursor/cli.json`, the permission list that
+/// allows the chat-tool command and denies file reads and writes.
+pub const CURSOR_CHAT_WORKSPACE: &str = "outputs/chat-cursor";
+/// The machine-readable streaming format of Cursor Agent and Kimi CLI.
+const STREAM_JSON: &str = "stream-json";
+/// Gemini CLI's list of tools that may run without a confirmation; in headless
+/// mode with the default approval mode every other confirmable tool is denied.
+const GEMINI_ALLOWED_TOOLS_FLAG: &str = "--allowed-tools";
+
+/// `_AI_CLI_DISPLAY_NAMES` in `crates/server/assets/constants.json`.
+pub fn chat_cli_name(cli: &str) -> &'static str {
+    match cli {
+        "codex" => "Codex CLI",
+        "gemini" => "Gemini CLI",
+        "kimi" => "Kimi CLI",
+        "cursor" => "Cursor CLI",
+        _ => "Claude Code",
+    }
+}
+
+/// Whether a CLI's reply arrives as it is written or all at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatMode {
+    Streaming,
+    /// One complete reply per turn: the CLI has no stream we can parse.
+    SingleReply,
+}
+
+impl ChatMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChatMode::Streaming => "streaming",
+            ChatMode::SingleReply => "single_reply",
+        }
+    }
+}
+
+/// Claude, Cursor and Kimi stream JSON lines; Gemini's JSON is one object and
+/// `codex exec` prints its last message at the end.
+pub fn chat_mode(cli: &str) -> ChatMode {
+    match cli {
+        "gemini" | "codex" => ChatMode::SingleReply,
+        _ => ChatMode::Streaming,
+    }
+}
 
 /// `shlex.quote`.
 pub fn shell_quote(s: &str) -> String {
@@ -49,11 +97,17 @@ pub struct ChatCommand {
     pub chat_tool: String,
     /// The shell wrapper around `timeout N claude ...` (default `zsh -i -l -c`).
     pub wrapper: Vec<String>,
+    /// The AI CLI that answers (`ai_cli_config::VALID_CLIS`).
+    pub cli: String,
+    /// Directories besides the repo root that Codex's sandbox may write (the
+    /// loopx home, where the chat tools save settings).
+    pub writable_roots: Vec<String>,
 }
 
 impl ChatCommand {
     /// `LOOPX_CHAT_TOOL_COMMAND`, else `<this binary> chat-tool` when this
-    /// process is `loopx`, else plain `loopx chat-tool`.
+    /// process is `loopx`, else plain `loopx chat-tool`. The CLI is the one
+    /// selected in Settings -> AI CLI.
     pub fn from_env() -> Self {
         let chat_tool = std::env::var("LOOPX_CHAT_TOOL_COMMAND")
             .ok()
@@ -74,13 +128,21 @@ impl ChatCommand {
             .filter(|v| !v.trim().is_empty())
             .and_then(|v| shlex::split(&v))
             .unwrap_or_else(|| ["zsh", "-i", "-l", "-c"].map(String::from).to_vec());
-        Self { chat_tool, wrapper }
+        Self {
+            chat_tool,
+            wrapper,
+            cli: crate::ai_cli_config::selected_cli(),
+            writable_roots: vec![crate::config::home_dir().display().to_string()],
+        }
     }
 
+    /// A Claude chat.
     pub fn new(chat_tool: &str) -> Self {
         Self {
             chat_tool: chat_tool.to_string(),
             wrapper: ["zsh", "-i", "-l", "-c"].map(String::from).to_vec(),
+            cli: "claude".to_string(),
+            writable_roots: Vec::new(),
         }
     }
 
@@ -97,8 +159,15 @@ impl ChatCommand {
         self.assistant_system_prompt() + &tools
     }
 
-    /// `build_chat_command`.
+    /// `build_chat_command` for the selected CLI. Only Claude can be held to
+    /// the one chat-tool command (`--allowedTools`); the others get the
+    /// strongest fence their headless mode offers and the system prompt ahead
+    /// of the user's prompt, since none takes an appended system prompt.
     pub fn build_command(&self, prompt: &str, tools_description: &str) -> Vec<String> {
+        if !self.is_claude() {
+            let prompt = format!("{}\n\n{prompt}", self.system_prompt(tools_description));
+            return self.wrap(CHAT_SUBPROCESS_TIMEOUT_SECONDS, &self.chat_args(&prompt));
+        }
         let allowed = format!("Bash({} *)", self.chat_tool);
         let disallowed = "Read Write Edit Grep Glob \
             Bash(git*) Bash(rm*) Bash(curl*) Bash(sh*) Bash(bash*) Bash(zsh*) \
@@ -142,6 +211,9 @@ impl ChatCommand {
             clip(user_text),
             clip(reply_text)
         );
+        if !self.is_claude() {
+            return self.wrap(CHAT_TITLE_TIMEOUT_SECONDS, &self.title_args(&prompt));
+        }
         let claude: Vec<String> = [
             "claude",
             "-p",
@@ -160,6 +232,160 @@ impl ChatCommand {
         ));
         argv
     }
+
+    fn is_claude(&self) -> bool {
+        !matches!(self.cli.as_str(), "codex" | "gemini" | "kimi" | "cursor")
+    }
+
+    /// `<wrapper> 'timeout N <program> <args>'`. Cursor's program is looked up
+    /// by the login shell, since it ships as `agent` or `cursor-agent`.
+    fn wrap(&self, timeout: u32, args: &[String]) -> Vec<String> {
+        let program = match self.cli.as_str() {
+            "cursor" => {
+                let lookups: Vec<String> = crate::ai_cli_config::binary_candidates("cursor")
+                    .iter()
+                    .map(|n| format!("command -v {n}"))
+                    .collect();
+                format!("\"$({} || echo agent)\"", lookups.join(" || "))
+            }
+            cli => shell_quote(cli),
+        };
+        let mut argv = self.wrapper.clone();
+        argv.push(format!("timeout {timeout} {program} {}", shell_join(args)));
+        argv
+    }
+
+    /// The chat turn's argv after the program, for a CLI other than Claude.
+    fn chat_args(&self, prompt: &str) -> Vec<String> {
+        use crate::agents::{cursor, gemini, kimi, sealed};
+        let strs = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        match self.cli.as_str() {
+            "gemini" => {
+                let allowed = format!("run_shell_command({})", self.chat_tool);
+                strs(&[
+                    gemini::GEMINI_OUTPUT_FORMAT_FLAG,
+                    gemini::GEMINI_OUTPUT_FORMAT,
+                    sealed::GEMINI_APPROVAL_MODE_FLAG,
+                    sealed::GEMINI_APPROVAL_MODE_DEFAULT,
+                    GEMINI_ALLOWED_TOOLS_FLAG,
+                    &allowed,
+                    gemini::GEMINI_PROMPT_FLAG,
+                    prompt,
+                ])
+            }
+            "kimi" => strs(&[
+                sealed::KIMI_PRINT_FLAG,
+                kimi::KIMI_OUTPUT_FORMAT_FLAG,
+                STREAM_JSON,
+                kimi::KIMI_PROMPT_FLAG,
+                prompt,
+            ]),
+            // No `--force`: only what the workspace's permission list allows runs.
+            "cursor" => strs(&[
+                cursor::CURSOR_PRINT_FLAG,
+                cursor::CURSOR_OUTPUT_FORMAT_FLAG,
+                STREAM_JSON,
+                cursor::CURSOR_WORKSPACE_FLAG,
+                CURSOR_CHAT_WORKSPACE,
+                prompt,
+            ]),
+            // The sandbox lets the chat tools write only the repo root (outputs/,
+            // pending approvals) and the loopx home; `--ephemeral` keeps the
+            // session, and any tool output in it, off disk.
+            _ => {
+                let mut args = strs(&[
+                    "exec",
+                    "--sandbox",
+                    "workspace-write",
+                    "--skip-git-repo-check",
+                    "--ephemeral",
+                    "-c",
+                    "approval_policy=never",
+                    "-c",
+                    "sandbox_workspace_write.network_access=true",
+                ]);
+                if !self.writable_roots.is_empty() {
+                    args.push("-c".into());
+                    args.push(format!(
+                        "sandbox_workspace_write.writable_roots={}",
+                        json!(self.writable_roots)
+                    ));
+                }
+                args.push(prompt.to_string());
+                args
+            }
+        }
+    }
+
+    /// The title call's argv after the program: each CLI's read-only one-shot.
+    fn title_args(&self, prompt: &str) -> Vec<String> {
+        use crate::agents::{cursor, gemini, kimi, sealed};
+        let strs = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        match self.cli.as_str() {
+            "gemini" => strs(&[
+                gemini::GEMINI_OUTPUT_FORMAT_FLAG,
+                gemini::GEMINI_OUTPUT_FORMAT,
+                sealed::GEMINI_APPROVAL_MODE_FLAG,
+                sealed::GEMINI_APPROVAL_MODE_DEFAULT,
+                gemini::GEMINI_PROMPT_FLAG,
+                prompt,
+            ]),
+            "kimi" => strs(&[
+                sealed::KIMI_PRINT_FLAG,
+                kimi::KIMI_OUTPUT_FORMAT_FLAG,
+                kimi::KIMI_OUTPUT_FORMAT,
+                kimi::KIMI_PROMPT_FLAG,
+                prompt,
+            ]),
+            "cursor" => strs(&[
+                cursor::CURSOR_PRINT_FLAG,
+                sealed::CURSOR_MODE_FLAG,
+                sealed::CURSOR_MODE_ASK,
+                cursor::CURSOR_OUTPUT_FORMAT_FLAG,
+                cursor::CURSOR_OUTPUT_FORMAT,
+                prompt,
+            ]),
+            _ => strs(&[
+                "exec",
+                "--sandbox",
+                "read-only",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "-c",
+                "approval_policy=never",
+                prompt,
+            ]),
+        }
+    }
+
+    /// The title text in a title call's stdout (`None` when unreadable).
+    fn title_text(&self, stdout: &str) -> Option<String> {
+        match self.cli.as_str() {
+            "gemini" => crate::agents::gemini::gemini_text(stdout),
+            "cursor" => crate::agents::cursor::cursor_text(stdout),
+            _ => Some(stdout.to_string()),
+        }
+    }
+}
+
+/// Cursor Agent's chat workspace under `repo_root` with a permission list
+/// that lets the shell run only the chat-tool command (by its program name,
+/// which is how Cursor matches `Shell(...)`) and denies reading or writing files.
+fn prepare_cursor_workspace(repo_root: &Path, chat_tool: &str) -> std::io::Result<()> {
+    let program = chat_tool.split_whitespace().next().unwrap_or("loopx");
+    let mut allow = vec![format!("Shell({program})")];
+    if let Some(base) = Path::new(program).file_name().map(|n| n.to_string_lossy()) {
+        if base != program {
+            allow.push(format!("Shell({base})"));
+        }
+    }
+    let dir = repo_root.join(CURSOR_CHAT_WORKSPACE).join(".cursor");
+    std::fs::create_dir_all(&dir)?;
+    let perms = json!({"permissions": {"allow": allow, "deny": ["Read(**)", "Write(**)"]}});
+    std::fs::write(
+        dir.join("cli.json"),
+        serde_json::to_string_pretty(&perms).unwrap_or_default(),
+    )
 }
 
 /// `build_chat_prompt`. `page_context` is `(label, path)` of the nav item the AI
@@ -225,7 +451,59 @@ pub fn clean_ai_chat_title(raw: &str) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamLine {
     Delta(String),
-    Result { text: String, is_error: bool },
+    /// A whole assistant message (Cursor, Kimi): shown as it arrives, and the
+    /// last one is the reply when no `Result` follows.
+    Message(String),
+    Result {
+        text: String,
+        is_error: bool,
+    },
+}
+
+/// [`parse_chat_stream_line`] for the stream of `cli`.
+///
+/// Cursor Agent's `stream-json` is Claude-like: `assistant` events carry a
+/// message's text blocks and a final `result` event the reply. Kimi CLI's is
+/// one chat message per line (`{"role": "assistant", "content": ...}`) with no
+/// final event. Both shapes come from the CLIs' docs, not a real binary.
+pub fn parse_stream_line_for(cli: &str, line: &str) -> Option<StreamLine> {
+    match cli {
+        "cursor" => {
+            let event: Value = serde_json::from_str(line.trim()).ok()?;
+            match event.get("type").and_then(Value::as_str) {
+                Some("assistant") => message_text(event.pointer("/message/content")?)
+                    .filter(|t| !t.is_empty())
+                    .map(StreamLine::Message),
+                Some("result") => parse_chat_stream_line(line),
+                _ => None,
+            }
+        }
+        "kimi" => {
+            let event: Value = serde_json::from_str(line.trim()).ok()?;
+            if event.get("role").and_then(Value::as_str) != Some("assistant") {
+                return None;
+            }
+            message_text(event.get("content")?)
+                .filter(|t| !t.is_empty())
+                .map(StreamLine::Message)
+        }
+        _ => parse_chat_stream_line(line),
+    }
+}
+
+/// A message `content`: a string, or the joined `text` of its `text` parts.
+fn message_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(s) => Some(s.clone()),
+        Value::Array(parts) => Some(
+            parts
+                .iter()
+                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|p| p.get("text").and_then(Value::as_str))
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 pub fn parse_chat_stream_line(line: &str) -> Option<StreamLine> {
@@ -405,40 +683,152 @@ pub fn chat_tool_events_in_stream_line(line: &str) -> Vec<Value> {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let id = block.get("id").and_then(Value::as_str).unwrap_or("");
-            if let Some(call) = call_re().captures(command) {
-                out.push(json!({"kind": "start", "id": id, "name": &call[1],
-                                "summary": tool_args_summary(&call[2])}));
-            } else {
-                for c in command_re().captures_iter(command) {
-                    out.push(json!({"kind": "start", "id": id, "name": &c[1], "summary": ""}));
-                }
-            }
+            out.extend(tool_start_events(id, command));
         } else if ty == "user" && kind == Some("tool_result") {
             let text = tool_result_text(block);
-            let data = serde_json::from_str::<Value>(&text).ok();
-            let is_err_obj = data
-                .as_ref()
-                .is_some_and(|d| d.as_object().is_some_and(|o| o.contains_key("error")));
-            let ok = !truthy(block.get("is_error")) && !is_err_obj;
             let tid = block
                 .get("tool_use_id")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            out.push(json!({"kind": "result", "id": tid, "ok": ok}));
-            if let Some(d) = data.as_ref().filter(|d| d.is_object()) {
-                if d.get("status").and_then(Value::as_str) == Some("pending_approval") {
-                    out.push(json!({
-                        "kind": "pending", "id": tid,
-                        "pending_id": d.get("id").cloned().unwrap_or(json!("")),
-                        "tool": d.get("tool").cloned().unwrap_or(json!("")),
-                        "summary": d.get("summary").cloned().unwrap_or(json!("")),
-                        "args": d.get("args").cloned().unwrap_or(json!({})),
-                    }));
-                }
-            }
+            out.extend(tool_result_events(
+                tid,
+                &text,
+                truthy(block.get("is_error")),
+            ));
         }
     }
     out
+}
+
+/// The `start` events for one shell command the assistant ran.
+fn tool_start_events(id: &str, command: &str) -> Vec<Value> {
+    if let Some(call) = call_re().captures(command) {
+        return vec![json!({"kind": "start", "id": id, "name": &call[1],
+                           "summary": tool_args_summary(&call[2])})];
+    }
+    command_re()
+        .captures_iter(command)
+        .map(|c| json!({"kind": "start", "id": id, "name": &c[1], "summary": ""}))
+        .collect()
+}
+
+/// The `result` (and `pending`) events for one command's output.
+fn tool_result_events(id: &str, text: &str, is_error: bool) -> Vec<Value> {
+    let data = serde_json::from_str::<Value>(text).ok();
+    let is_err_obj = data
+        .as_ref()
+        .is_some_and(|d| d.as_object().is_some_and(|o| o.contains_key("error")));
+    let mut out = vec![json!({"kind": "result", "id": id, "ok": !is_error && !is_err_obj})];
+    if let Some(d) = data.as_ref().filter(|d| d.is_object()) {
+        if d.get("status").and_then(Value::as_str) == Some("pending_approval") {
+            out.push(json!({
+                "kind": "pending", "id": id,
+                "pending_id": d.get("id").cloned().unwrap_or(json!("")),
+                "tool": d.get("tool").cloned().unwrap_or(json!("")),
+                "summary": d.get("summary").cloned().unwrap_or(json!("")),
+                "args": d.get("args").cloned().unwrap_or(json!({})),
+            }));
+        }
+    }
+    out
+}
+
+/// The shell commands a Cursor or Kimi stream line starts, as `(id, command)`.
+///
+/// Cursor: `{"type": "tool_call", "subtype": "started", "call_id",
+/// "tool_call": {"<kind>ToolCall": {"args": {"command"}}}}`. Kimi: an assistant
+/// message's `tool_calls[].function.arguments`, a JSON string with `command`.
+fn started_commands(cli: &str, event: &Value) -> Vec<(String, String)> {
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).unwrap_or("").to_string();
+    match cli {
+        "cursor" if event.get("type").and_then(Value::as_str) == Some("tool_call") => {
+            if event.get("subtype").and_then(Value::as_str) != Some("started") {
+                return Vec::new();
+            }
+            cursor_tool(event)
+                .and_then(|t| t.pointer("/args/command"))
+                .and_then(Value::as_str)
+                .map(|c| vec![(text(event.get("call_id")), c.to_string())])
+                .unwrap_or_default()
+        }
+        "kimi" if event.get("role").and_then(Value::as_str) == Some("assistant") => event
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|call| {
+                let args = call.pointer("/function/arguments")?.as_str()?;
+                let args: Value = serde_json::from_str(args).ok()?;
+                Some((
+                    text(call.get("id")),
+                    args.get("command")?.as_str()?.to_string(),
+                ))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The one `<kind>ToolCall` object inside a Cursor `tool_call` event.
+fn cursor_tool(event: &Value) -> Option<&Value> {
+    event.get("tool_call")?.as_object()?.values().next()
+}
+
+/// [`chat_tool_events_in_stream_line`] for the stream of `cli`.
+pub fn chat_tool_events_for(cli: &str, line: &str) -> Vec<Value> {
+    if !matches!(cli, "cursor" | "kimi") {
+        return chat_tool_events_in_stream_line(line);
+    }
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Value> = started_commands(cli, &event)
+        .iter()
+        .flat_map(|(id, command)| tool_start_events(id, command))
+        .collect();
+    if cli == "cursor"
+        && event.get("type").and_then(Value::as_str) == Some("tool_call")
+        && event.get("subtype").and_then(Value::as_str) == Some("completed")
+    {
+        let id = event.get("call_id").and_then(Value::as_str).unwrap_or("");
+        let result = cursor_tool(&event).and_then(|t| t.get("result"));
+        let (stdout, ok) = match result.and_then(|r| r.get("success")) {
+            Some(s) => (s.get("stdout").and_then(Value::as_str).unwrap_or(""), true),
+            None => ("", false),
+        };
+        out.extend(tool_result_events(id, stdout, !ok));
+    }
+    if cli == "kimi" && event.get("role").and_then(Value::as_str) == Some("tool") {
+        let id = event
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let text = match event.get("content") {
+            Some(c) => message_text(c).unwrap_or_default(),
+            None => String::new(),
+        };
+        out.extend(tool_result_events(id, &text, false));
+    }
+    out
+}
+
+/// [`chat_tool_actions_in_stream_line`] for the stream of `cli`.
+pub fn chat_tool_actions_for(cli: &str, line: &str) -> Vec<String> {
+    if !matches!(cli, "cursor" | "kimi") {
+        return chat_tool_actions_in_stream_line(line);
+    }
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        return Vec::new();
+    };
+    started_commands(cli, &event)
+        .iter()
+        .flat_map(|(_, command)| {
+            command_re()
+                .captures_iter(command)
+                .map(|c| c[1].to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// `merge_tool_events`: `[{"name","summary","ok"[,"pending"]}]` in call order.
@@ -517,6 +907,31 @@ struct JobState {
     error: Option<String>,
     final_text: Option<String>,
     changed: bool,
+    record: Option<ChatJobRecord>,
+}
+
+/// How a reply job runs, for the chat page: the CLI, whether it streams, and
+/// the `ai_cli_safety` warning when the CLI cannot be held to the chat tools.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatJobRecord {
+    pub cli: String,
+    pub chat_mode: ChatMode,
+    pub warning: Option<String>,
+}
+
+impl ChatJobRecord {
+    pub fn for_cli(cli: &str) -> Self {
+        Self {
+            cli: cli.to_string(),
+            chat_mode: chat_mode(cli),
+            warning: crate::ai_cli_safety::warning(cli, crate::ai_cli_safety::CallSite::Chat)
+                .map(String::from),
+        }
+    }
+
+    pub fn to_value(&self) -> Value {
+        json!({"cli": self.cli, "chat_mode": self.chat_mode.as_str(), "warning": self.warning})
+    }
 }
 
 struct Job {
@@ -580,6 +995,19 @@ impl ChatJobs {
             }
             job.cond.notify_all();
         }
+    }
+
+    pub fn set_record(&self, key: &str, record: ChatJobRecord) {
+        if let Some(job) = self.get(key) {
+            if let Ok(mut s) = job.state.lock() {
+                s.record = Some(record);
+            }
+        }
+    }
+
+    /// The job's [`ChatJobRecord`], once its runner has started.
+    pub fn record(&self, key: &str) -> Option<ChatJobRecord> {
+        self.get(key)?.state.lock().ok()?.record.clone()
     }
 
     pub fn mark_changed(&self, key: &str) {
@@ -743,16 +1171,47 @@ fn verified_pending_event(rt: &ChatRuntime, event: &Value, session_id: &str) -> 
     }))
 }
 
-/// `_run_chat_job`: runs `claude -p`, streams deltas into the job, persists a
-/// successful reply, and always finishes the job exactly once.
+/// `_run_chat_job`: runs the selected CLI, streams its deltas into the job (or,
+/// for a [`ChatMode::SingleReply`] CLI, takes its one reply), persists a
+/// successful reply, and always finishes the job exactly once. Every failure
+/// becomes an error naming the CLI; nothing falls back to another CLI.
 pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id: &str) {
     let root = &rt.repo_root;
+    let cli = rt.command.cli.as_str();
+    let name = chat_cli_name(cli);
+    let record = ChatJobRecord::for_cli(cli);
+    let mode = record.chat_mode;
     append_unified_log(
         root,
         "chat-assistant",
-        &format!("turn started ({AI_CLI_NAME})"),
+        &format!("turn started ({name})"),
         None,
     );
+    if let Some(w) = &record.warning {
+        append_unified_log(
+            root,
+            "chat-assistant",
+            &format!("warning ({name})"),
+            Some(w),
+        );
+    }
+    rt.jobs.set_record(reply_key, record);
+    let fail = |msg: String| {
+        append_unified_log(
+            root,
+            "chat-assistant",
+            &format!("error ({name})"),
+            Some(&msg),
+        );
+        rt.jobs.finish(reply_key, Some(msg), None);
+    };
+    if cli == "cursor" {
+        if let Err(e) = prepare_cursor_workspace(root, &rt.command.chat_tool) {
+            return fail(format!(
+                "Could not prepare the {name} workspace: {e}. {SWITCH_HINT}"
+            ));
+        }
+    }
     let argv = rt.command.build_command(prompt, &(rt.tools_description)());
     let (program, rest) = argv.split_first().expect("non-empty argv");
     let spawned = Command::new(program)
@@ -760,30 +1219,33 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .envs(rt.env.iter().map(|(k, v)| (k, v)))
         .env("LOOP_CHAT_SESSION", session_id)
         .spawn();
     let mut child = match spawned {
         Ok(c) => c,
-        Err(e) => {
-            let msg = format!("Could not start assistant: {e}");
-            append_unified_log(
-                root,
-                "chat-assistant",
-                &format!("error ({AI_CLI_NAME})"),
-                Some(&msg),
-            );
-            rt.jobs.finish(reply_key, Some(msg), None);
-            return;
-        }
+        Err(e) => return fail(crate::runner_util::could_not_start(cli, program, &e)),
     };
+    // Read stderr on the side (only failures show it); a process the CLI left
+    // running may hold the pipe open, so the turn never waits long for it.
+    let stderr = child.stderr.take();
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut e) = stderr {
+            let _ = std::io::Read::read_to_string(&mut e, &mut text);
+        }
+        let _ = stderr_tx.send(text);
+    });
     let mut finish_error: Option<String> = None;
     let mut finish_text: Option<String> = None;
     let outcome: Result<(), String> = (|| {
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let mut final_text: Option<String> = None;
         let mut final_is_error = false;
+        let mut last_message: Option<String> = None;
+        let mut unparsed = String::new();
         let mut tool_events: Vec<Value> = Vec::new();
         let mut reader = BufReader::new(stdout);
         let mut raw = Vec::new();
@@ -796,7 +1258,11 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
                 break;
             }
             let line = String::from_utf8_lossy(&raw).into_owned();
-            for ev in chat_tool_events_in_stream_line(&line) {
+            if mode == ChatMode::SingleReply {
+                unparsed.push_str(&line);
+                continue;
+            }
+            for ev in chat_tool_events_for(cli, &line) {
                 let ev = if ev.get("kind").and_then(Value::as_str) == Some("pending") {
                     match verified_pending_event(rt, &ev, session_id) {
                         Some(v) => v,
@@ -808,24 +1274,46 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
                 rt.jobs.event(reply_key, ev.clone());
                 tool_events.push(ev);
             }
-            if chat_tool_actions_in_stream_line(&line)
+            if chat_tool_actions_for(cli, &line)
                 .iter()
                 .any(|a| MUTATING_ACTIONS.contains(&a.as_str()))
             {
                 rt.jobs.mark_changed(reply_key);
             }
-            match parse_chat_stream_line(&line) {
+            match parse_stream_line_for(cli, &line) {
                 Some(StreamLine::Delta(t)) => rt.jobs.append(reply_key, &t),
+                Some(StreamLine::Message(t)) => {
+                    rt.jobs.append(reply_key, &t);
+                    last_message = Some(t);
+                }
                 Some(StreamLine::Result { text, is_error }) => {
                     final_text = Some(text);
                     final_is_error = is_error;
                 }
+                None if serde_json::from_str::<Value>(line.trim()).is_err() => {
+                    unparsed.push_str(&line);
+                }
                 None => {}
             }
         }
-        let _ = child.wait();
-        match final_text.filter(|t| !t.is_empty()) {
-            Some(text) if !final_is_error => {
+        let code = child.wait().ok().and_then(|s| s.code());
+        let stderr = stderr_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_default();
+        let reply = match mode {
+            ChatMode::SingleReply if code == Some(0) => single_reply(cli, &unparsed),
+            ChatMode::SingleReply => Err(cli_failure(cli, code, &stderr, "")),
+            ChatMode::Streaming => match final_text.or(last_message).filter(|t| !t.is_empty()) {
+                Some(text) if !final_is_error => Ok(text),
+                Some(text) => Err(text),
+                None => Err(cli_failure(cli, code, &stderr, &unparsed)),
+            },
+        };
+        match reply {
+            Ok(text) => {
+                if mode == ChatMode::SingleReply {
+                    rt.jobs.append(reply_key, &text);
+                }
                 let tools = merge_tool_events(&tool_events);
                 rt.store.append_message(
                     "loop",
@@ -836,31 +1324,72 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
                 finish_text = Some(text.clone());
                 maybe_title_chat_session(rt, session_id, &text);
             }
-            Some(text) => finish_error = Some(text),
-            None => finish_error = Some("The assistant didn't return a reply.".to_string()),
+            Err(e) => finish_error = Some(e),
         }
         Ok(())
     })();
     if let Err(e) = outcome {
         let _ = child.kill();
         let _ = child.wait();
-        finish_error = Some(format!("Error while reading assistant output: {e}"));
+        finish_error = Some(format!(
+            "Error while reading {name} output: {e}. {SWITCH_HINT}"
+        ));
     }
     match &finish_error {
-        Some(e) => append_unified_log(
-            root,
-            "chat-assistant",
-            &format!("error ({AI_CLI_NAME})"),
-            Some(e),
-        ),
+        Some(e) => append_unified_log(root, "chat-assistant", &format!("error ({name})"), Some(e)),
         None => append_unified_log(
             root,
             "chat-assistant",
-            &format!("reply ({AI_CLI_NAME})"),
+            &format!("reply ({name})"),
             finish_text.as_deref(),
         ),
     }
     rt.jobs.finish(reply_key, finish_error, finish_text);
+}
+
+/// The reply in a [`ChatMode::SingleReply`] CLI's stdout (it exited 0).
+fn single_reply(cli: &str, stdout: &str) -> Result<String, String> {
+    let reply = match cli {
+        "gemini" => crate::agents::gemini::gemini_reply(stdout),
+        _ => crate::agents::non_empty_reply(cli, stdout.trim().to_string()),
+    };
+    reply.map_err(|e| {
+        format!(
+            "{}: {}. {SWITCH_HINT}",
+            chat_cli_name(cli),
+            e.trim_end().trim_end_matches('.')
+        )
+    })
+}
+
+/// Why a CLI gave no reply: the exit code `timeout` or the shell uses for a
+/// timeout (124) or a missing command (127), any other failing exit with the
+/// end of its stderr, or output that held no reply.
+fn cli_failure(cli: &str, code: Option<i32>, stderr: &str, unparsed: &str) -> String {
+    use crate::runner_util::{could_not_start, tail, unreadable_output};
+    let name = chat_cli_name(cli);
+    match code {
+        Some(124) => {
+            format!("{name} timed out after {CHAT_SUBPROCESS_TIMEOUT_SECONDS} s. {SWITCH_HINT}")
+        }
+        Some(127) => {
+            let program = crate::ai_cli_config::binary_candidates(cli)
+                .first()
+                .copied()
+                .unwrap_or(cli);
+            could_not_start(cli, program, &"command not found")
+        }
+        Some(0) if !unparsed.trim().is_empty() => format!(
+            "{}\n{SWITCH_HINT}",
+            unreadable_output(cli, tail(unparsed, 500).trim_end())
+        ),
+        Some(0) => format!("{name} didn't return a reply. {SWITCH_HINT}"),
+        Some(n) => match tail(stderr, 500).trim() {
+            "" => format!("{name} exited with code {n}. {SWITCH_HINT}"),
+            err => format!("{name} exited with code {n}: {err}. {SWITCH_HINT}"),
+        },
+        None => format!("{name} was stopped by a signal. {SWITCH_HINT}"),
+    }
 }
 
 /// `_maybe_title_chat_session`: after a session's first reply, ask for an AI
@@ -899,7 +1428,8 @@ fn maybe_title_chat_session(rt: &ChatRuntime, session_id: &str, reply_text: &str
     std::thread::spawn(move || generate_chat_title(&rt, &sid, &first_user, &reply));
 }
 
-/// `generate_chat_title`: any failure keeps the heuristic title.
+/// `generate_chat_title`: best effort on the selected CLI; any failure keeps
+/// the heuristic title and never touches the reply.
 pub fn generate_chat_title(rt: &ChatRuntime, session_id: &str, user_text: &str, reply_text: &str) {
     let argv = rt.command.build_title_command(user_text, reply_text);
     let (program, rest) = argv.split_first().expect("non-empty argv");
@@ -916,7 +1446,10 @@ pub fn generate_chat_title(rt: &ChatRuntime, session_id: &str, user_text: &str, 
     if !out.status.success() {
         return;
     }
-    let title = clean_ai_chat_title(&String::from_utf8_lossy(&out.stdout));
+    let Some(text) = rt.command.title_text(&String::from_utf8_lossy(&out.stdout)) else {
+        return;
+    };
+    let title = clean_ai_chat_title(&text);
     if !title.is_empty() {
         rt.store.set_chat_session_title(session_id, &title, "ai");
     }
@@ -1097,15 +1630,572 @@ mod tests {
 
     /// A fake `claude` (and `timeout`, which macOS lacks) in a scratch bin dir.
     fn fake_claude(dir: &Path, script: &str) -> PathBuf {
+        fake_cli(dir, "claude", script)
+    }
+
+    /// A fake CLI binary named `program` (and `timeout`) in a scratch bin dir.
+    fn fake_cli(dir: &Path, program: &str, script: &str) -> PathBuf {
+        fake_bin(dir, &[(program, script), ("timeout", "shift\nexec \"$@\"")])
+    }
+
+    fn fake_bin(dir: &Path, scripts: &[(&str, &str)]) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let bin = dir.join("fakebin");
         std::fs::create_dir_all(&bin).unwrap();
-        for (name, body) in [("claude", script), ("timeout", "shift\nexec \"$@\"")] {
+        for (name, body) in scripts {
             let p = bin.join(name);
             std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         bin
+    }
+
+    /// [`runtime`] with `cli` selected and a `PATH` of only the fake bin dir
+    /// plus the system dirs, so no real AI CLI is ever found.
+    fn runtime_for(dir: &Path, bin: &Path, cli: &str) -> ChatRuntime {
+        let mut rt = runtime(dir, bin);
+        rt.command.cli = cli.to_string();
+        rt.env = vec![("PATH".into(), format!("{}:/usr/bin:/bin", bin.display()))];
+        rt
+    }
+
+    fn run_turn(rt: &ChatRuntime) -> (String, Vec<StreamItem>) {
+        let sid = rt.store.send_chat_message("hi", None).unwrap();
+        let key = rt.jobs.create();
+        run_chat_job(rt, &key, "hi", &sid);
+        let mut s = rt.jobs.stream(&key).unwrap();
+        (key, s.next_batch(Duration::from_millis(10)).unwrap())
+    }
+
+    fn done_error(items: &[StreamItem]) -> String {
+        match items.last().unwrap() {
+            StreamItem::Done {
+                error: Some(e),
+                final_text: None,
+            } => e.clone(),
+            other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    fn unified_log(dir: &Path) -> String {
+        std::fs::read_to_string(dir.join("logs/loop-engineering.log")).unwrap()
+    }
+
+    /// The CLI's argv inside `timeout 90 ...` of the wrapped command.
+    fn inner_argv(argv: &[String]) -> Vec<String> {
+        let words = shlex::split(argv.last().unwrap()).unwrap();
+        assert_eq!(&words[..2], ["timeout", "90"]);
+        words[2..].to_vec()
+    }
+
+    #[test]
+    fn chat_cli_names_follow_the_dashboard_constants() {
+        assert_eq!(chat_cli_name("claude"), "Claude Code");
+        assert_eq!(chat_cli_name("codex"), "Codex CLI");
+        assert_eq!(chat_cli_name("gemini"), "Gemini CLI");
+        assert_eq!(chat_cli_name("kimi"), "Kimi CLI");
+        assert_eq!(chat_cli_name("cursor"), "Cursor CLI");
+        let constants: Value =
+            serde_json::from_str(include_str!("../../server/assets/constants.json")).unwrap();
+        let names = constants["dashboard_server"]["_AI_CLI_DISPLAY_NAMES"]
+            .as_object()
+            .unwrap();
+        assert!(names.contains_key("claude") && names.contains_key("codex"));
+        for (cli, name) in names {
+            assert_eq!(chat_cli_name(cli), name.as_str().unwrap(), "{cli}");
+        }
+    }
+
+    #[test]
+    fn chat_modes_stream_only_where_the_cli_streams() {
+        for (cli, mode) in [
+            ("claude", ChatMode::Streaming),
+            ("cursor", ChatMode::Streaming),
+            ("kimi", ChatMode::Streaming),
+            ("gemini", ChatMode::SingleReply),
+            ("codex", ChatMode::SingleReply),
+        ] {
+            assert_eq!(chat_mode(cli), mode, "{cli}");
+        }
+        assert_eq!(ChatMode::Streaming.as_str(), "streaming");
+        assert_eq!(ChatMode::SingleReply.as_str(), "single_reply");
+    }
+
+    #[test]
+    fn new_is_a_claude_chat() {
+        assert_eq!(ChatCommand::new("loopx chat-tool").cli, "claude");
+    }
+
+    #[test]
+    fn every_cli_gets_the_system_prompt_and_no_approval_bypass() {
+        use crate::ai_cli_safety::{restriction, CallSite, Restriction};
+        for cli in ["codex", "gemini", "kimi", "cursor"] {
+            let mut c = ChatCommand::new("loopx chat-tool");
+            c.cli = cli.into();
+            let argv = c.build_command("it's me", "T");
+            assert_eq!(&argv[..4], ["zsh", "-i", "-l", "-c"], "{cli}");
+            let words = inner_argv(&argv);
+            let prompt = words.last().unwrap();
+            assert!(prompt.starts_with(&c.system_prompt("T")), "{cli}: {prompt}");
+            assert!(prompt.ends_with("it's me"), "{cli}");
+            for unsafe_flag in [
+                "--yolo",
+                "--force",
+                "--dangerously-skip-permissions",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "danger-full-access",
+            ] {
+                assert!(!words.iter().any(|w| w == unsafe_flag), "{cli}");
+            }
+            assert!(!words.iter().any(|w| w == "--allowedTools"), "{cli}");
+            // None of them can be held to the one command the way claude is.
+            assert_eq!(restriction(cli, CallSite::Chat), Restriction::Unrestricted);
+        }
+    }
+
+    #[test]
+    fn each_cli_arm_uses_its_strongest_headless_restriction() {
+        let cmd = |cli: &str| {
+            let mut c = ChatCommand::new("loopx chat-tool");
+            c.cli = cli.into();
+            c.writable_roots = vec!["/home/x/.loopx".into()];
+            inner_argv(&c.build_command("hi", "T"))
+        };
+        let g = cmd("gemini");
+        assert_eq!(
+            &g[..7],
+            [
+                "gemini",
+                "--output-format",
+                "json",
+                "--approval-mode",
+                "default",
+                "--allowed-tools",
+                "run_shell_command(loopx chat-tool)"
+            ]
+        );
+        assert_eq!(g[7], "-p");
+        let k = cmd("kimi");
+        assert_eq!(
+            &k[..5],
+            ["kimi", "--print", "--output-format", "stream-json", "-p"]
+        );
+        let c = cmd("cursor");
+        assert!(c[0].contains("command -v agent"), "{}", c[0]);
+        assert_eq!(
+            &c[1..6],
+            [
+                "--print",
+                "--output-format",
+                "stream-json",
+                "--workspace",
+                CURSOR_CHAT_WORKSPACE
+            ]
+        );
+        let x = cmd("codex");
+        assert_eq!(
+            &x[..12],
+            [
+                "codex",
+                "exec",
+                "--sandbox",
+                "workspace-write",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "-c",
+                "approval_policy=never",
+                "-c",
+                "sandbox_workspace_write.network_access=true",
+                "-c",
+                r#"sandbox_workspace_write.writable_roots=["/home/x/.loopx"]"#
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_arm_is_unchanged_for_an_explicit_claude() {
+        let mut c = ChatCommand::new("loopx chat-tool");
+        let default = c.build_command("q", "T");
+        c.cli = "claude".into();
+        c.writable_roots = vec!["/x".into()];
+        assert_eq!(c.build_command("q", "T"), default);
+        assert_eq!(
+            c.build_title_command("u", "r"),
+            ChatCommand::new("loopx chat-tool").build_title_command("u", "r")
+        );
+    }
+
+    #[test]
+    fn title_commands_are_tool_less_one_shots_for_every_cli() {
+        for cli in ["codex", "gemini", "kimi", "cursor"] {
+            let mut c = ChatCommand::new("loopx chat-tool");
+            c.cli = cli.into();
+            let argv = c.build_title_command("user asks", "assistant says");
+            let words = shlex::split(argv.last().unwrap()).unwrap();
+            assert_eq!(&words[..2], ["timeout", "60"], "{cli}");
+            let prompt = words.last().unwrap();
+            assert!(prompt.starts_with("Write a short title"), "{cli}");
+            assert!(prompt.contains("User: user asks"), "{cli}");
+            assert!(!words.iter().any(|w| w == "--yolo" || w == "--force"));
+            assert!(!prompt.contains("chat-tool"), "{cli}");
+        }
+    }
+
+    #[test]
+    fn cursor_stream_lines_become_deltas_and_a_result() {
+        let a = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hel"}]},"session_id":"s"}"#;
+        assert_eq!(
+            parse_stream_line_for("cursor", a),
+            Some(StreamLine::Message("Hel".into()))
+        );
+        assert_eq!(
+            parse_stream_line_for(
+                "cursor",
+                r#"{"type":"result","subtype":"success","is_error":false,"result":"Hello"}"#
+            ),
+            Some(StreamLine::Result {
+                text: "Hello".into(),
+                is_error: false
+            })
+        );
+        assert_eq!(
+            parse_stream_line_for("cursor", r#"{"type":"system","subtype":"init"}"#),
+            None
+        );
+        // Claude's own parser ignores a whole assistant message.
+        assert_eq!(parse_stream_line_for("claude", a), None);
+    }
+
+    #[test]
+    fn kimi_stream_lines_become_messages() {
+        assert_eq!(
+            parse_stream_line_for("kimi", r#"{"role":"assistant","content":"Hi"}"#),
+            Some(StreamLine::Message("Hi".into()))
+        );
+        assert_eq!(
+            parse_stream_line_for(
+                "kimi",
+                r#"{"role":"assistant","content":[{"type":"think","think":"x"},{"type":"text","text":"Yo"}]}"#
+            ),
+            Some(StreamLine::Message("Yo".into()))
+        );
+        assert_eq!(
+            parse_stream_line_for("kimi", r#"{"role":"tool","content":"{}"}"#),
+            None
+        );
+        assert_eq!(parse_stream_line_for("kimi", "plain"), None);
+    }
+
+    #[test]
+    fn cursor_and_kimi_tool_calls_become_tool_events() {
+        let started = json!({"type": "tool_call", "subtype": "started", "call_id": "c1",
+            "tool_call": {"shellToolCall": {"args": {"command":
+                "loopx chat-tool call gitlab.comment '{\"project\": \"g/p\", \"iid\": 3}'"}}}})
+        .to_string();
+        assert_eq!(
+            chat_tool_events_for("cursor", &started),
+            [json!({"kind":"start","id":"c1","name":"gitlab.comment","summary":"p#3"})]
+        );
+        assert_eq!(chat_tool_actions_for("cursor", &started), ["call"]);
+        let done = json!({"type": "tool_call", "subtype": "completed", "call_id": "c1",
+            "tool_call": {"shellToolCall": {"result": {"success": {"stdout":
+                "{\"status\": \"pending_approval\", \"id\": \"p1\", \"tool\": \"gitlab.comment\"}",
+                "exitCode": 0}}}}})
+        .to_string();
+        let ev = chat_tool_events_for("cursor", &done);
+        assert_eq!(ev[0], json!({"kind":"result","id":"c1","ok":true}));
+        assert_eq!(ev[1]["pending_id"], "p1");
+
+        let call = json!({"role": "assistant", "content": "",
+            "tool_calls": [{"type": "function", "id": "k1", "function": {"name": "Shell",
+                "arguments": "{\"command\": \"loopx chat-tool run-now gitlab\"}"}}]})
+        .to_string();
+        assert_eq!(
+            chat_tool_events_for("kimi", &call),
+            [json!({"kind":"start","id":"k1","name":"run-now","summary":""})]
+        );
+        assert_eq!(chat_tool_actions_for("kimi", &call), ["run-now"]);
+        let result = json!({"role": "tool", "tool_call_id": "k1",
+            "content": [{"type": "text", "text": "{\"error\": \"no\"}"}]})
+        .to_string();
+        assert_eq!(
+            chat_tool_events_for("kimi", &result),
+            [json!({"kind":"result","id":"k1","ok":false})]
+        );
+        // Claude's events are untouched by the per-CLI entry point.
+        assert!(chat_tool_events_for("claude", &call).is_empty());
+    }
+
+    #[test]
+    fn a_claude_job_records_streaming_and_no_warning() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_claude(
+            d.path(),
+            r#"echo '{"type":"result","result":"ok","is_error":false}'"#,
+        );
+        let rt = runtime(d.path(), &bin);
+        let (key, _) = run_turn(&rt);
+        let record = rt.jobs.record(&key).unwrap();
+        assert_eq!(
+            record,
+            ChatJobRecord {
+                cli: "claude".into(),
+                chat_mode: ChatMode::Streaming,
+                warning: None
+            }
+        );
+        assert_eq!(
+            record.to_value(),
+            json!({"cli": "claude", "chat_mode": "streaming", "warning": null})
+        );
+        let log = unified_log(d.path());
+        assert!(log.contains("turn started (Claude Code)"), "{log}");
+        assert!(log.contains("reply (Claude Code)"), "{log}");
+    }
+
+    #[test]
+    fn gemini_gives_one_complete_reply_and_records_the_degraded_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(d.path(), "gemini", r#"echo '{"response":"hi","stats":{}}'"#);
+        let rt = runtime_for(d.path(), &bin, "gemini");
+        let (key, items) = run_turn(&rt);
+        assert_eq!(
+            items,
+            vec![
+                StreamItem::Chunk("hi".into()),
+                StreamItem::Done {
+                    error: None,
+                    final_text: Some("hi".into())
+                }
+            ]
+        );
+        assert_eq!(rt.store.read_messages().last().unwrap()["text"], "hi");
+        let record = rt.jobs.record(&key).unwrap();
+        assert_eq!(record.chat_mode, ChatMode::SingleReply);
+        assert_eq!(
+            record.warning.as_deref(),
+            crate::ai_cli_safety::warning("gemini", crate::ai_cli_safety::CallSite::Chat)
+        );
+        let log = unified_log(d.path());
+        assert!(log.contains("turn started (Gemini CLI)"), "{log}");
+        assert!(log.contains("warning (Gemini CLI)"), "{log}");
+        assert!(log.contains("reply (Gemini CLI)"), "{log}");
+        assert!(!log.contains("Claude Code"), "{log}");
+    }
+
+    #[test]
+    fn codex_gives_its_stdout_as_one_reply() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(d.path(), "codex", "echo 'all done'");
+        let rt = runtime_for(d.path(), &bin, "codex");
+        let (_, items) = run_turn(&rt);
+        assert_eq!(
+            items.last().unwrap(),
+            &StreamItem::Done {
+                error: None,
+                final_text: Some("all done".into())
+            }
+        );
+    }
+
+    #[test]
+    fn cursor_streams_deltas_then_the_final_text() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(
+            d.path(),
+            "agent",
+            r#"echo '{"type":"system","subtype":"init"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Hel"}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"lo"}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"Hello"}'"#,
+        );
+        let rt = runtime_for(d.path(), &bin, "cursor");
+        let (key, items) = run_turn(&rt);
+        assert_eq!(
+            items,
+            vec![
+                StreamItem::Chunk("Hel".into()),
+                StreamItem::Chunk("lo".into()),
+                StreamItem::Done {
+                    error: None,
+                    final_text: Some("Hello".into())
+                }
+            ]
+        );
+        assert_eq!(rt.jobs.record(&key).unwrap().chat_mode, ChatMode::Streaming);
+        let perms: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                d.path()
+                    .join(CURSOR_CHAT_WORKSPACE)
+                    .join(".cursor/cli.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(perms["permissions"]["allow"], json!(["Shell(loopx)"]));
+    }
+
+    #[test]
+    fn kimi_streams_messages_and_keeps_the_last_as_the_reply() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(
+            d.path(),
+            "kimi",
+            r#"echo '{"role":"assistant","content":"Checking. ","tool_calls":[{"type":"function","id":"k1","function":{"name":"Shell","arguments":"{\"command\": \"loopx chat-tool status\"}"}}]}'
+echo '{"role":"tool","tool_call_id":"k1","content":"{}"}'
+echo '{"role":"assistant","content":"All green."}'"#,
+        );
+        let rt = runtime_for(d.path(), &bin, "kimi");
+        let (_, items) = run_turn(&rt);
+        assert_eq!(items[0], StreamItem::Chunk("Checking. ".into()));
+        assert_eq!(items[1], StreamItem::Chunk("All green.".into()));
+        assert!(items.contains(&StreamItem::Tool(
+            json!({"kind":"start","id":"k1","name":"status","summary":""})
+        )));
+        assert_eq!(
+            items.last().unwrap(),
+            &StreamItem::Done {
+                error: None,
+                final_text: Some("All green.".into())
+            }
+        );
+        let msgs = rt.store.read_messages();
+        assert_eq!(msgs.last().unwrap()["text"], "All green.");
+        assert_eq!(msgs.last().unwrap()["tools"][0]["name"], "status");
+    }
+
+    #[test]
+    fn a_failing_cli_is_a_visible_error_naming_it() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(d.path(), "gemini", "echo 'auth expired' >&2; exit 3");
+        let rt = runtime_for(d.path(), &bin, "gemini");
+        let (_, items) = run_turn(&rt);
+        let e = done_error(&items);
+        assert!(e.contains("Gemini CLI exited with code 3"), "{e}");
+        assert!(e.contains("auth expired"), "{e}");
+        assert!(e.ends_with("Switch CLI in Settings -> AI CLI."), "{e}");
+        let log = unified_log(d.path());
+        assert!(log.contains("error (Gemini CLI)"), "{log}");
+        assert!(!log.contains("Claude Code"), "{log}");
+        assert_eq!(rt.store.read_messages().len(), 1);
+    }
+
+    #[test]
+    fn a_missing_cli_says_it_could_not_start_and_how_to_switch() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_bin(d.path(), &[("timeout", "shift\nexec \"$@\"")]);
+        let rt = runtime_for(d.path(), &bin, "kimi");
+        let (_, items) = run_turn(&rt);
+        let e = done_error(&items);
+        assert!(e.contains("could not start kimi (kimi CLI)"), "{e}");
+        assert!(e.ends_with("Switch CLI in Settings -> AI CLI."), "{e}");
+    }
+
+    #[test]
+    fn a_timed_out_cli_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_bin(
+            d.path(),
+            &[("cursor-agent", "exit 0"), ("timeout", "exit 124")],
+        );
+        let rt = runtime_for(d.path(), &bin, "cursor");
+        let (_, items) = run_turn(&rt);
+        let e = done_error(&items);
+        assert!(e.contains("Cursor CLI timed out after 90 s"), "{e}");
+        assert!(e.ends_with("Switch CLI in Settings -> AI CLI."), "{e}");
+    }
+
+    #[test]
+    fn unreadable_or_error_output_is_a_visible_error() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(d.path(), "gemini", "echo plain words");
+        let rt = runtime_for(d.path(), &bin, "gemini");
+        let e = done_error(&run_turn(&rt).1);
+        assert!(e.contains("unreadable output from gemini"), "{e}");
+        assert!(e.contains("plain words"), "{e}");
+        assert!(e.ends_with("Switch CLI in Settings -> AI CLI."), "{e}");
+
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(
+            d.path(),
+            "gemini",
+            r#"echo '{"error":{"message":"quota exceeded"}}'"#,
+        );
+        let rt = runtime_for(d.path(), &bin, "gemini");
+        let e = done_error(&run_turn(&rt).1);
+        assert!(e.contains("Gemini CLI: quota exceeded"), "{e}");
+
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(d.path(), "kimi", "echo not json");
+        let rt = runtime_for(d.path(), &bin, "kimi");
+        let e = done_error(&run_turn(&rt).1);
+        assert!(e.contains("unreadable output from kimi"), "{e}");
+    }
+
+    #[test]
+    fn a_title_failure_leaves_the_reply_and_heuristic_title_intact() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = fake_cli(
+            d.path(),
+            "gemini",
+            r#"case "$*" in *"Write a short title"*) echo nope >&2; exit 1;; esac
+echo '{"response":"the reply"}'"#,
+        );
+        let rt = runtime_for(d.path(), &bin, "gemini");
+        let sid = rt.store.send_chat_message("hi there", None).unwrap();
+        let before = rt.store.read_chat_sessions();
+        let key = rt.jobs.create();
+        run_chat_job(&rt, &key, "hi there", &sid);
+        generate_chat_title(&rt, &sid, "hi there", "the reply");
+        let mut s = rt.jobs.stream(&key).unwrap();
+        assert_eq!(
+            s.next_batch(Duration::from_millis(10)).unwrap().last(),
+            Some(&StreamItem::Done {
+                error: None,
+                final_text: Some("the reply".into())
+            })
+        );
+        assert_eq!(
+            rt.store.read_messages().last().unwrap()["text"],
+            "the reply"
+        );
+        let after = rt.store.read_chat_sessions();
+        let title = |s: &crate::messages::ChatSessions| {
+            s.sessions
+                .iter()
+                .find(|r| r["id"].as_str() == Some(sid.as_str()))
+                .map(|r| (r["title"].clone(), r["title_source"].clone()))
+        };
+        assert_eq!(title(&after), title(&before));
+        assert_eq!(title(&after).unwrap().1, "auto");
+    }
+
+    #[test]
+    fn a_title_from_each_cli_output_shape_is_stored() {
+        for (cli, program, out) in [
+            ("gemini", "gemini", r#"echo '{"response":"Gemini title"}'"#),
+            ("cursor", "agent", r#"echo '{"result":"Cursor title"}'"#),
+            ("kimi", "kimi", "echo 'Kimi title'"),
+            ("codex", "codex", "echo 'Codex title'"),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let bin = fake_cli(d.path(), program, out);
+            let rt = runtime_for(d.path(), &bin, cli);
+            let sid = rt.store.send_chat_message("hi", None).unwrap();
+            generate_chat_title(&rt, &sid, "hi", "reply");
+            let sessions = rt.store.read_chat_sessions();
+            let rec = sessions
+                .sessions
+                .iter()
+                .find(|r| r["id"].as_str() == Some(sid.as_str()))
+                .unwrap();
+            assert_eq!(rec["title_source"], "ai", "{cli}");
+            assert!(
+                rec["title"].as_str().unwrap().ends_with("title"),
+                "{cli}: {}",
+                rec["title"]
+            );
+        }
     }
 
     #[test]

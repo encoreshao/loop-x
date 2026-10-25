@@ -38,15 +38,15 @@ pub fn sealed_command(max_budget_usd: Option<f64>) -> Vec<String> {
 
 /// Kimi's non-interactive mode switch (its adapter passes the prompt with `-p`;
 /// here the prompt arrives on stdin instead).
-const KIMI_PRINT_FLAG: &str = "--print";
+pub(crate) const KIMI_PRINT_FLAG: &str = "--print";
 /// Gemini's approval mode that never auto-approves a tool (no `--yolo`).
-const GEMINI_APPROVAL_MODE_FLAG: &str = "--approval-mode";
-const GEMINI_APPROVAL_MODE_DEFAULT: &str = "default";
+pub(crate) const GEMINI_APPROVAL_MODE_FLAG: &str = "--approval-mode";
+pub(crate) const GEMINI_APPROVAL_MODE_DEFAULT: &str = "default";
 /// Fixed text appended to Gemini's stdin prompt, which `-p` requires.
 const GEMINI_STDIN_INSTRUCTION: &str = "Follow the instructions above.";
 /// Cursor's read-only Q&A mode.
-const CURSOR_MODE_FLAG: &str = "--mode";
-const CURSOR_MODE_ASK: &str = "ask";
+pub(crate) const CURSOR_MODE_FLAG: &str = "--mode";
+pub(crate) const CURSOR_MODE_ASK: &str = "ask";
 
 /// Whether the prompt has to ride in argv (visible in `ps`) because the CLI has
 /// no way to read it from stdin. Only Cursor Agent: `agent --print` takes the
