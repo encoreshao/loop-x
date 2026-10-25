@@ -109,6 +109,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         w.title = "LoopX"
+        w.contentMinSize = NSSize(width: 700, height: 600)
         w.titleVisibility = .hidden
         w.titlebarAppearsTransparent = true
         w.collectionBehavior.insert(.fullScreenPrimary)

@@ -11,6 +11,11 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Switching from the Office to the Dashboard closes the chat panel instead of carrying it over.
+- Mac app: the dashboard window can no longer be resized below 700 × 600.
+
 ## [0.9.0] - 2026-10-25
 
 ### Added

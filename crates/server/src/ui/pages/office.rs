@@ -192,13 +192,13 @@ fn office_page(ctx: &UiCtx) -> UiResponse {
     let view = office_view_html(ctx).replacen("</section>", &format!("{toggle}</section>"), 1);
     // What shows when the scene cannot (no WebGL, a failed load): the way to the Dashboard.
     let fallback = format!(
-        "<div id='office-list' hidden><a class='office-fallback-link' href='/?mode=dashboard'>{}</a></div>",
+        "<div id='office-list' hidden><a class='office-fallback-link' href='/?mode=dashboard' onclick=\"try{{localStorage.removeItem('loop-ai-panel-open')}}catch(e){{}}\">{}</a></div>",
         h(&ctx.t("Switch to Dashboard"))
     );
     let body = format!("{OFFICE_MODE_CSS}{OFFICE_CHAT_OPEN_JS}{view}{fallback}");
     let mut html = render_shell(ctx, "Office · Loop X Engineering", "office", "", &body, ShellOpts::default());
     let switch = format!(
-        "<a class='ai-panel-icon-btn' href='/?mode=dashboard' aria-label=\"{0}\" title=\"{0}\">{1}</a>",
+        "<a class='ai-panel-icon-btn' href='/?mode=dashboard' onclick=\"try{{localStorage.removeItem('loop-ai-panel-open')}}catch(e){{}}\" aria-label=\"{0}\" title=\"{0}\">{1}</a>",
         h(&ctx.t("Switch to Dashboard")),
         crate::ui::icons::icon("space_dashboard")
     );
