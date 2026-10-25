@@ -23,7 +23,7 @@ use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use loopx_core::chat::{self, ChatCommand, ChatJobs, ChatRuntime};
 use loopx_core::chat_tools::{self, Env as ToolsEnv};
 use loopx_core::messages::MessageStore;
-use loopx_core::{pydumps, run_history, status as core_status, topics};
+use loopx_core::{ai_cli_config, pydumps, run_history, status as core_status, topics};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -1055,10 +1055,13 @@ fn post_reject(ctx: &UiCtx) -> UiResponse {
 pub fn chat_runtime(state: &UiState) -> ChatRuntime {
     let env = tools_env(state);
     let now_fixed = state.fixed_now;
+    let mut command = ChatCommand::from_env();
+    command.cli =
+        chat::chat_cli(&ai_cli_config::get_selected_cli(&state.ai_cli_config_path())).to_string();
     ChatRuntime {
         repo_root: state.repo_root.clone(),
         store: store(state),
-        command: ChatCommand::from_env(),
+        command,
         jobs: jobs().clone(),
         tools_description: Arc::new(chat_tools::describe_all),
         pending_lookup: Arc::new(move |id, session| {
@@ -1202,6 +1205,20 @@ mod tests {
             req = req.with_header("cookie", &format!("loop_lang={lang}"));
         }
         overview_body(&UiCtx::new(&state, &req), None, false, None)
+    }
+
+    #[test]
+    fn the_chat_runtime_uses_the_cli_in_the_states_own_config() {
+        for (text, want) in [
+            (r#"{"cli": "gemini"}"#, "gemini"),
+            (r#"{"cli": "nonsense"}"#, "claude"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let state =
+                UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+            std::fs::write(state.ai_cli_config_path(), text).unwrap();
+            assert_eq!(chat_runtime(&state).command.cli, want, "{text}");
+        }
     }
 
     #[test]

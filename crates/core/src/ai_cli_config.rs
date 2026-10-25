@@ -10,14 +10,15 @@ use std::path::{Path, PathBuf};
 pub const VALID_CLIS: [&str; 5] = ["claude", "codex", "gemini", "kimi", "cursor"];
 
 /// Executable names a CLI may be installed under, in lookup order. Cursor's
-/// agent ships as `agent` and, on older installs, `cursor-agent`.
+/// agent ships as `cursor-agent` and, on newer installs, also as `agent`; the
+/// specific name goes first so an unrelated `agent` earlier on PATH is not run.
 pub fn binary_candidates(cli: &str) -> &'static [&'static str] {
     match cli {
         "claude" => &["claude"],
         "codex" => &["codex"],
         "gemini" => &["gemini"],
         "kimi" => &["kimi"],
-        "cursor" => &["agent", "cursor-agent"],
+        "cursor" => &["cursor-agent", "agent"],
         _ => &[],
     }
 }
@@ -105,6 +106,15 @@ mod tests {
             let text = format!(r#"{{"cli": "{cli}"}}"#);
             assert_eq!(get_selected_cli(&write(d.path(), &text)), cli);
         }
+    }
+
+    #[test]
+    fn cursor_prefers_the_specific_binary_name() {
+        assert_eq!(binary_candidates("cursor"), ["cursor-agent", "agent"]);
+        assert_eq!(
+            resolve_binary("cursor", &|_| true).as_deref(),
+            Some("cursor-agent")
+        );
     }
 
     #[test]
