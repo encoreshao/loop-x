@@ -1102,7 +1102,6 @@
   "Time of day": "时段",
   "Dusk": "黄昏",
   "Night": "夜晚",
-  "The office view needs WebGL, which this browser has turned off. Use the List view instead.": "办公室视图需要 WebGL，但此浏览器已将其关闭。请改用列表视图。",
   "and {n} more": "另有 {n} 个",
   "3D office: each loop is a person at a desk": "3D 办公室：每个循环是坐在工位上的一个人",
   "Next run": "下次运行",
@@ -1113,5 +1112,15 @@
   "Loop details": "循环详情",
   "Reload the page and try again": "请刷新页面后重试",
   "The 3D view stopped (graphics were reset). Reload the page.": "3D 视图已停止(图形已被重置)。请刷新页面。",
-  "The office view could not load. Use the List view instead.": "无法加载办公室视图。请改用列表视图。"
+  "Choose how you want to work": "选择你的工作方式",
+  "You can switch at any time.": "你可以随时切换。",
+  "Your loops as people in a 3D office, with a chat beside it to talk to them.": "在 3D 办公室中以人物呈现你的循环，并可在旁边的聊天中与它们交流。",
+  "The classic view: pages for loops, runs, insights and settings.": "经典视图：循环、运行、洞察和设置页面。",
+  "About the loop {name}: ": "关于循环 {name}：",
+  "Open chat": "打开聊天",
+  "Switch to Dashboard": "切换到仪表板",
+  "Switch to Office": "切换到办公室",
+  "The office view needs WebGL, which this browser has turned off. Use the Dashboard instead.": "办公室视图需要 WebGL，但此浏览器已将其关闭。请改用仪表板。",
+  "The office view could not load. Use the Dashboard instead.": "无法加载办公室视图。请改用仪表板。",
+  "Pick a view to start with.": "选择一个视图开始。"
 }

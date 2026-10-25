@@ -158,7 +158,7 @@ pub fn ai_panel_html(ctx: &UiCtx, active_page: &str) -> String {
     render("ai_panel", &scope)
 }
 
-fn lang_switch_html(lang: Lang) -> String {
+pub fn lang_switch_html(lang: Lang) -> String {
     let mut options = String::new();
     for code in Lang::ALL {
         let mut scope = Scope::new(lang);
@@ -216,7 +216,12 @@ pub fn render_shell(
 
     let mut scope = Scope::new(lang);
     scope.var("ai_label", escaped_t(lang, "Ask Loop X"));
-    let ai_trigger_html = render("shell_ai_trigger", &scope);
+    let office_label = escaped_t(lang, "Switch to Office");
+    let ai_trigger_html = format!(
+        "<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
+        icons::icon("apartment"),
+        render("shell_ai_trigger", &scope)
+    );
 
     let refresh_schedule_script = if opts.refresh {
         let action = Template::named(if opts.lazy_refresh {

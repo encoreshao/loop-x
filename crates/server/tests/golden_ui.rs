@@ -335,7 +335,8 @@ fn rust_pages_match_the_python_dashboard() {
                 pending_ids.insert(id.to_string());
                 continue;
             }
-            let req = UiRequest::get(path).with_header("cookie", &format!("loop_lang={lang}"));
+            let req = UiRequest::get(path)
+                .with_header("cookie", &format!("loop_lang={lang}; loop_mode=dashboard"));
             let resp = fixture
                 .state
                 .registry

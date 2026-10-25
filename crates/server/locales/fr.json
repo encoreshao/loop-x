@@ -1102,7 +1102,6 @@
   "Time of day": "Moment de la journée",
   "Dusk": "Crépuscule",
   "Night": "Nuit",
-  "The office view needs WebGL, which this browser has turned off. Use the List view instead.": "La vue bureau nécessite WebGL, désactivé dans ce navigateur. Utilisez plutôt la vue Liste.",
   "and {n} more": "et {n} de plus",
   "3D office: each loop is a person at a desk": "Bureau 3D : chaque boucle est une personne à son poste",
   "Next run": "Prochaine exécution",
@@ -1113,5 +1112,15 @@
   "Loop details": "Détails de la boucle",
   "Reload the page and try again": "Rechargez la page et réessayez",
   "The 3D view stopped (graphics were reset). Reload the page.": "La vue 3D s'est arrêtée (les graphismes ont été réinitialisés). Rechargez la page.",
-  "The office view could not load. Use the List view instead.": "La vue Bureau n'a pas pu se charger. Utilisez plutôt la vue Liste."
+  "Choose how you want to work": "Choisissez votre façon de travailler",
+  "You can switch at any time.": "Vous pouvez changer à tout moment.",
+  "Your loops as people in a 3D office, with a chat beside it to talk to them.": "Vos boucles en personnes dans un bureau 3D, avec un chat à côté pour leur parler.",
+  "The classic view: pages for loops, runs, insights and settings.": "La vue classique : pages des boucles, exécutions, analyses et réglages.",
+  "About the loop {name}: ": "À propos de la boucle {name} : ",
+  "Open chat": "Ouvrir le chat",
+  "Switch to Dashboard": "Passer au tableau de bord",
+  "Switch to Office": "Passer au bureau",
+  "The office view needs WebGL, which this browser has turned off. Use the Dashboard instead.": "La vue bureau nécessite WebGL, désactivé dans ce navigateur. Utilisez plutôt le tableau de bord.",
+  "The office view could not load. Use the Dashboard instead.": "La vue Bureau n'a pas pu se charger. Utilisez plutôt le tableau de bord.",
+  "Pick a view to start with.": "Choisissez une vue pour commencer."
 }

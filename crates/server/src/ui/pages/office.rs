@@ -4,9 +4,11 @@ use crate::ui::assets;
 use crate::ui::office;
 use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
+use crate::ui::shell::{render_shell, ShellOpts};
 use serde_json::{json, Value};
 
 pub fn register(r: &mut Registry) {
+    r.get("/office", office_page);
     r.get("/office/state", state_json);
     r.get("/office/assets/*rest", asset);
 }
@@ -35,8 +37,6 @@ fn asset(ctx: &UiCtx) -> UiResponse {
     }
 }
 
-const VIEW_COOKIE: &str = "loop_view";
-
 fn cookie_value(ctx: &UiCtx, name: &str) -> Option<String> {
     ctx.req.header("cookie")?.split(';').find_map(|part| {
         let (n, v) = part.trim().split_once('=')?;
@@ -44,53 +44,172 @@ fn cookie_value(ctx: &UiCtx, name: &str) -> Option<String> {
     })
 }
 
-/// The view named by `?view=`, if it is one of the two we know.
-fn query_view(ctx: &UiCtx) -> Option<&'static str> {
-    match ctx.query().first("view") {
-        Some("office") => Some("office"),
-        Some("list") => Some("list"),
+// ---- landing: Office or Dashboard ----------------------------------------------------------
+
+const MODE_COOKIE: &str = "loop_mode";
+
+/// Where `GET /` should go.
+pub enum Landing {
+    Dashboard,
+    Office,
+    Choose,
+}
+
+fn mode_of(v: &str) -> Option<Landing> {
+    match v {
+        "office" => Some(Landing::Office),
+        "dashboard" => Some(Landing::Dashboard),
+        "choose" => Some(Landing::Choose),
         _ => None,
     }
 }
 
-/// Office when `?view=office`, else when the `loop_view=office` cookie is set;
-/// `?view=list` always wins over the cookie.
-pub fn wants_office(ctx: &UiCtx) -> bool {
-    match query_view(ctx) {
-        Some(v) => v == "office",
-        None => cookie_value(ctx, VIEW_COOKIE).as_deref() == Some("office"),
+/// `?mode=` wins over the remembered `loop_mode` cookie; with neither, the chooser. Only a
+/// bare `/` is a landing: `/?session=...` and the like (flash redirects) stay on the Dashboard.
+pub fn landing(ctx: &UiCtx) -> Landing {
+    if let Some(l) = ctx.query().first("mode").and_then(mode_of) {
+        return l;
+    }
+    if !ctx.req.query.is_empty() {
+        return Landing::Dashboard;
+    }
+    match cookie_value(ctx, MODE_COOKIE).as_deref().and_then(mode_of) {
+        Some(Landing::Choose) | None => Landing::Choose,
+        Some(l) => l,
     }
 }
 
-/// The `Set-Cookie` header remembering an explicit `?view=` choice for a year.
-pub fn view_cookie_header(ctx: &UiCtx) -> Option<(String, String)> {
-    query_view(ctx).map(|v| {
-        (
-            "Set-Cookie".to_string(),
-            format!("{VIEW_COOKIE}={v}; Path=/; Max-Age=31536000; SameSite=Lax"),
-        )
-    })
+fn mode_cookie(mode: &str) -> (String, String) {
+    ("Set-Cookie".to_string(), format!("{MODE_COOKIE}={mode}; Path=/; Max-Age=31536000; SameSite=Lax"))
 }
 
-/// The List | Office switch in the Loops header.
-pub fn view_toggle_html(ctx: &UiCtx, office: bool) -> String {
-    let link = |view: &str, label: String, active: bool| {
+/// The `Set-Cookie` header remembering an explicit `?mode=dashboard` choice.
+pub fn dashboard_cookie_header(ctx: &UiCtx) -> Option<(String, String)> {
+    (ctx.query().first("mode") == Some("dashboard")).then(|| mode_cookie("dashboard"))
+}
+
+/// Marks `<html>` with a class the stylesheet keys the page's chrome off.
+fn with_html_class(html: String, class: &str) -> String {
+    html.replacen("<html ", &format!("<html class=\"{class}\" "), 1)
+}
+
+const CHOOSER_CSS: &str = "<style>\
+html.chooser-mode .sidebar,html.chooser-mode .topbar,html.chooser-mode .ai-panel,html.chooser-mode .app-bg,html.chooser-mode .update-banner{display:none!important}\
+html.chooser-mode .content-area,html.chooser-mode .main-scroll,html.chooser-mode .wrap{margin:0;padding:0;max-width:none;border-radius:0;overflow:visible}\
+.chooser{position:fixed;top:0;left:0;right:0;bottom:0;z-index:100;display:flex;overflow:auto;box-sizing:border-box;padding:2rem 1.25rem;color:var(--md-on-surface);\
+background:radial-gradient(900px 520px at 50% 18%,color-mix(in srgb,var(--md-primary) 14%,transparent),transparent 70%),var(--md-surface-dim)}\
+.chooser-inner{margin:auto;width:min(760px,100%);display:flex;flex-direction:column;align-items:center;gap:2.25rem;text-align:center}\
+.chooser-lang{position:fixed;top:1rem;right:1.25rem;z-index:101}\
+.chooser-lang button,.chooser-lang .icon{color:var(--md-on-surface-variant)}\
+.chooser-mark{display:grid;place-items:center;width:64px;height:64px;margin:0 auto;border-radius:18px;background:linear-gradient(145deg,var(--md-primary),color-mix(in srgb,var(--md-primary) 55%,#7d5cff));color:var(--md-on-primary);box-shadow:0 10px 30px color-mix(in srgb,var(--md-primary) 38%,transparent)}\
+.chooser-mark .icon{width:32px;height:32px}\
+.chooser h1{margin:1.1rem 0 0;font-size:clamp(1.75rem,4vw,2.4rem);font-weight:650;letter-spacing:-.02em;line-height:1.15}\
+.chooser-sub{margin:.55rem 0 0;font-size:1.05rem;color:var(--md-on-surface-variant)}\
+.chooser-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.25rem;width:100%}\
+.chooser-card{display:flex;flex-direction:column;align-items:flex-start;gap:.5rem;box-sizing:border-box;padding:1.75rem;text-align:left;color:inherit;text-decoration:none;border-radius:28px;\
+border:1px solid color-mix(in srgb,var(--md-outline-variant) 70%,transparent);\
+background:color-mix(in srgb,var(--md-surface) 82%,transparent);-webkit-backdrop-filter:saturate(180%) blur(24px);backdrop-filter:saturate(180%) blur(24px);\
+box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.10)}\
+.chooser-card:hover{border-color:color-mix(in srgb,var(--md-primary) 55%,transparent);box-shadow:0 2px 4px rgba(0,0,0,.08),0 18px 44px rgba(0,0,0,.16);text-decoration:none}\
+.chooser-card:focus-visible{outline:3px solid color-mix(in srgb,var(--md-primary) 70%,transparent);outline-offset:3px;text-decoration:none}\
+.chooser-card:active{transform:scale(.99)}\
+.chooser-tile{display:grid;place-items:center;width:52px;height:52px;margin-bottom:.6rem;border-radius:15px;background:var(--md-primary-container);color:var(--md-on-primary-container)}\
+.chooser-tile .icon{width:28px;height:28px}\
+.chooser-card strong{font-size:1.3rem;font-weight:600;letter-spacing:-.01em}\
+.chooser-card span.chooser-text{font-size:.98rem;line-height:1.45;color:var(--md-on-surface-variant)}\
+.chooser-open{display:inline-flex;align-items:center;gap:.3rem;margin-top:auto;padding-top:1rem;font-weight:500;color:var(--md-primary)}\
+.chooser-open .icon{width:18px;height:18px}\
+.chooser-hint{margin:0;font-size:.9rem;color:var(--md-on-surface-variant)}\
+@media(prefers-reduced-motion:no-preference){.chooser-card{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}.chooser-card:hover{transform:translateY(-3px)}}\
+@media(max-width:640px){.chooser-grid{grid-template-columns:1fr}.chooser-card{padding:1.4rem}}\
+</style>";
+
+/// The landing page: a centred pair of cards, one per mode.
+pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
+    let open = ctx.t("Open");
+    let card = |href: &str, icon: &str, title: String, text: String| {
         format!(
-            "<a href='/loops?view={view}'{}>{}</a>",
-            if active { " aria-current='page'" } else { "" },
-            h(&label)
+            "<a class='chooser-card' href='{href}'><span class='chooser-tile'>{}</span><strong>{}</strong>\
+<span class='chooser-text'>{}</span><span class='chooser-open'>{}{}</span></a>",
+            crate::ui::icons::icon(icon),
+            h(&title),
+            h(&text),
+            h(&open),
+            crate::ui::icons::icon("arrow_forward")
         )
     };
-    format!(
-        "<style>\
-.view-toggle{{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--outline,#d0d0d0);border-radius:999px}}\
-.view-toggle a{{padding:.3rem .9rem;border-radius:999px;text-decoration:none;font-size:.9rem;color:inherit}}\
-.view-toggle a[aria-current='page']{{background:var(--primary,#1a73e8);color:#fff}}\
-</style><nav class='view-toggle' aria-label=\"{}\">{}{}</nav>",
-        h(&ctx.t("Loops view")),
-        link("list", ctx.t("List"), !office),
-        link("office", ctx.t("Office"), office)
-    )
+    let body = format!(
+        "{CHOOSER_CSS}<div class='chooser'><div class='chooser-lang'>{}</div><div class='chooser-inner'>\
+<div><div class='chooser-mark'>{}</div><h1>{}</h1><p class='chooser-sub'>{}</p></div>\
+<div class='chooser-grid'>{}{}</div><p class='chooser-hint'>{}</p></div></div>",
+        crate::ui::shell::lang_switch_html(ctx.lang),
+        crate::ui::icons::icon("auto_awesome"),
+        h(&ctx.t("Choose how you want to work")),
+        h(&ctx.t("Pick a view to start with.")),
+        card(
+            "/office",
+            "apartment",
+            ctx.t("Office"),
+            ctx.t("Your loops as people in a 3D office, with a chat beside it to talk to them.")
+        ),
+        card(
+            "/?mode=dashboard",
+            "space_dashboard",
+            ctx.t("Dashboard"),
+            ctx.t("The classic view: pages for loops, runs, insights and settings.")
+        ),
+        h(&ctx.t("You can switch at any time.")),
+    );
+    let html = render_shell(ctx, "Loop X · Loop X Engineering", "overview", "", &body, ShellOpts::default());
+    UiResponse::html(with_html_class(html, "chooser-mode"))
+}
+
+const OFFICE_MODE_CSS: &str = "<style>\
+html.office-mode .sidebar,html.office-mode .topbar,html.office-mode .app-bg,html.office-mode .update-banner{display:none!important}\
+html.office-mode .content-area,html.office-mode .main-scroll,html.office-mode .wrap{margin:0;padding:0;max-width:none;border-radius:0;overflow:hidden}\
+html.office-mode .ai-panel{top:0;right:0;bottom:0;border-radius:0;box-shadow:-1px 0 0 var(--md-outline-variant,#d0d0d0)}\
+html.office-mode #office{position:fixed;top:0;left:0;bottom:0;right:0;height:auto;min-height:0;border-radius:0}\
+html.office-mode.ai-panel-open #office{right:var(--ai-panel-width)}\
+.office-chat-toggle{position:absolute;top:12px;right:12px;display:none;font:inherit;padding:.4rem .9rem;border:0;border-radius:999px;background:rgba(20,22,28,.78);color:#e6e8ee;cursor:pointer}\
+html.office-mode:not(.ai-panel-open) .office-chat-toggle{display:block}\
+html.office-mode:not(.ai-panel-open) .office-panel{top:56px}\
+#office-list:not([hidden]){position:fixed;top:0;left:0;bottom:0;right:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:1.5rem;text-align:center}\
+html.office-mode.ai-panel-open #office-list:not([hidden]){right:var(--ai-panel-width)}\
+.office-fallback-link{padding:.6rem 1.2rem;border-radius:999px;background:var(--md-primary);color:var(--md-on-primary);text-decoration:none}\
+@media(max-width:760px){html.office-mode.ai-panel-open #office,html.office-mode.ai-panel-open #office-list:not([hidden]){right:0}}\
+</style>";
+
+/// Opens the chat on first visit; a width the person chose or a closed chat stays as it is.
+const OFFICE_CHAT_OPEN_JS: &str = "<script>try{if(localStorage.getItem('loop-ai-panel-open')===null)document.documentElement.classList.add('ai-panel-open')}catch(e){document.documentElement.classList.add('ai-panel-open')}window.__loopNoReloadOnChange=true;</script>";
+
+/// `GET /office`: the 3D office filling the window, with the assistant docked on the right
+/// and no menu: switching modes lives in the chat header.
+fn office_page(ctx: &UiCtx) -> UiResponse {
+    let toggle = format!(
+        "<button type='button' class='office-chat-toggle' data-office-chat-toggle aria-label=\"{0}\">{0}</button>",
+        h(&ctx.t("Open chat"))
+    );
+    let view = office_view_html(ctx).replacen("</section>", &format!("{toggle}</section>"), 1);
+    // What shows when the scene cannot (no WebGL, a failed load): the way to the Dashboard.
+    let fallback = format!(
+        "<div id='office-list' hidden><a class='office-fallback-link' href='/?mode=dashboard'>{}</a></div>",
+        h(&ctx.t("Switch to Dashboard"))
+    );
+    let body = format!("{OFFICE_MODE_CSS}{OFFICE_CHAT_OPEN_JS}{view}{fallback}");
+    let mut html = render_shell(ctx, "Office · Loop X Engineering", "office", "", &body, ShellOpts::default());
+    let switch = format!(
+        "<a class='ai-panel-icon-btn' href='/?mode=dashboard' aria-label=\"{0}\" title=\"{0}\">{1}</a>",
+        h(&ctx.t("Switch to Dashboard")),
+        crate::ui::icons::icon("space_dashboard")
+    );
+    html = html.replacen(
+        "<div class='ai-panel-header-actions'>",
+        &format!("<div class='ai-panel-header-actions'>{switch}"),
+        1,
+    );
+    let mut resp = UiResponse::html(with_html_class(html, "office-mode"));
+    resp.headers.push(mode_cookie("office"));
+    resp
 }
 
 /// JSON that is safe inside a `<script>` element.
@@ -123,7 +242,7 @@ fn client_strings(ctx: &UiCtx) -> Value {
         "day": ctx.t("Day"),
         "dusk": ctx.t("Dusk"),
         "night": ctx.t("Night"),
-        "no_webgl": ctx.t("The office view needs WebGL, which this browser has turned off. Use the List view instead."),
+        "no_webgl": ctx.t("The office view needs WebGL, which this browser has turned off. Use the Dashboard instead."),
         "and_more": ctx.t("and {n} more"),
         "canvas_label": ctx.t("3D office: each loop is a person at a desk"),
         "last_run": ctx.t("Last run"),
@@ -134,7 +253,8 @@ fn client_strings(ctx: &UiCtx) -> Value {
         "close": ctx.t("Close"),
         "reload": ctx.t("Reload the page and try again"),
         "context_lost": ctx.t("The 3D view stopped (graphics were reset). Reload the page."),
-        "load_failed": ctx.t("The office view could not load. Use the List view instead."),
+        "load_failed": ctx.t("The office view could not load. Use the Dashboard instead."),
+        "chat_about": ctx.t("About the loop {name}: "),
     })
 }
 
@@ -444,7 +564,43 @@ mod tests {
         }
     }
 
-    fn loops_page(f: &Fx, path: &str, cookie: Option<&str>, lang: Option<&str>) -> UiResponse {
+    #[test]
+    fn loops_page_has_no_office_switch() {
+        let f = fx(four());
+        let body = page(&f, "/loops", None, None).body_text();
+        assert!(!body.contains("view-toggle") && !body.contains("view=office") && !body.contains("id='office'"));
+        assert!(body.contains("class='card loop-section'"));
+    }
+
+    #[test]
+    fn office_script_version_covers_every_office_module() {
+        let f = fx(four());
+        let body = page(&f, "/office", None, None).body_text();
+        let v = assets::version_of("office/");
+        assert!(body.contains(&format!("/office/assets/office.js?v={v}")), "{body}");
+        let entry_only = loopx_core::sha256::hex(&loopx_core::sha256::sha256(assets::get("office/office.js").unwrap()))[..8].to_string();
+        assert_ne!(v, entry_only, "world.js etc. must bust the cache too");
+        assert!(body.contains(&format!("/office/assets/three.module.min.js?v={v}")), "{body}");
+        assert!(body.contains(&format!("/office/assets/OrbitControls.js?v={v}")), "{body}");
+        assert!(body.contains("onerror=") && body.contains("office-list"), "module load failure falls back to the Dashboard link");
+        assert!(body.contains("<div id='office-list' hidden>") && body.contains("href='/?mode=dashboard'"));
+    }
+
+    #[test]
+    fn office_i18n_json_is_translated_per_language() {
+        let f = fx(four());
+        let body = page(&f, "/office", None, Some("fr")).body_text();
+        let start = body.find("id='office-i18n'>").unwrap() + "id='office-i18n'>".len();
+        let end = start + body[start..].find("</script>").unwrap();
+        let raw = body[start..end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&");
+        let doc: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["run_now"], "Exécuter maintenant");
+        assert_eq!(doc["and_more"], "et {n} de plus");
+        let en = page(&f, "/office", None, None).body_text();
+        assert!(en.contains("\"run_now\":\"Run now\""));
+    }
+
+    fn page(f: &Fx, path: &str, cookie: Option<&str>, lang: Option<&str>) -> UiResponse {
         let mut req = UiRequest::new("GET".parse().unwrap(), path);
         if let Some(c) = cookie {
             req = req.with_header("cookie", c);
@@ -452,85 +608,73 @@ mod tests {
         if let Some(l) = lang {
             req = req.with_header("accept-language", l);
         }
-        let resp = Registry::with_pages().dispatch(&f.state, &req).expect("route");
+        Registry::with_pages().dispatch(&f.state, &req).expect("route")
+    }
+
+    fn sets_mode_cookie(resp: &UiResponse, mode: &str) -> bool {
+        resp.headers.iter().any(|(k, v)| {
+            k == "Set-Cookie" && v.starts_with(&format!("loop_mode={mode};")) && v.contains("Max-Age=31536000") && v.contains("SameSite=Lax")
+        })
+    }
+
+    #[test]
+    fn landing_without_a_remembered_mode_is_the_chooser() {
+        let f = fx(four());
+        let resp = page(&f, "/", None, None);
         assert_eq!(resp.status, 200);
-        resp
-    }
-
-    #[test]
-    fn loops_page_defaults_to_list_and_has_the_toggle() {
-        let f = fx(four());
-        let body = loops_page(&f, "/loops", None, None).body_text();
-        assert!(body.contains("href='/loops?view=list'"), "{body}");
-        assert!(body.contains("href='/loops?view=office'"));
-        assert!(body.contains("aria-current='page'"));
-        assert!(body.contains("class='card loop-section'"));
-    }
-
-    #[test]
-    fn view_office_query_renders_the_office_container_and_import_map() {
-        let f = fx(four());
-        let resp = loops_page(&f, "/loops?view=office", None, None);
         let body = resp.body_text();
-        assert!(body.contains("<section id='office'"), "{body}");
-        assert!(body.contains("<script type='importmap'>"));
-        assert!(body.contains("/office/assets/three.module.min.js"));
-        assert!(body.contains("/office/assets/office.js?v="));
-        assert!(body.contains("<template id='office-panel'>"));
-        assert!(body.contains("id='office-i18n'"));
-        assert!(body.contains("id='office-csrf'"));
-        let list = body.find("<div id='office-list' hidden>").expect("hidden List wrapper");
-        assert!(body[list..].contains("class='card loop-section'"), "the List is the text alternative");
-        assert!(body.contains("<noscript>"));
-        assert!(resp.headers.iter().any(|(k, v)| k == "Set-Cookie" && v.starts_with("loop_view=office;") && v.contains("Max-Age=31536000") && v.contains("SameSite=Lax")));
+        assert!(body.contains("<html class=\"chooser-mode\""), "{body}");
+        assert!(body.contains("href='/office'"));
+        assert!(body.contains("href='/?mode=dashboard'"));
+        assert!(!body.contains("id='office'"));
     }
 
     #[test]
-    fn office_script_version_covers_every_office_module() {
+    fn landing_follows_the_remembered_mode() {
         let f = fx(four());
-        let body = loops_page(&f, "/loops?view=office", None, None).body_text();
-        let v = assets::version_of("office/");
-        assert!(body.contains(&format!("/office/assets/office.js?v={v}")), "{body}");
-        let entry_only = loopx_core::sha256::hex(&loopx_core::sha256::sha256(assets::get("office/office.js").unwrap()))[..8].to_string();
-        assert_ne!(v, entry_only, "world.js etc. must bust the cache too");
-        assert!(body.contains(&format!("/office/assets/three.module.min.js?v={v}")), "{body}");
-        assert!(body.contains(&format!("/office/assets/OrbitControls.js?v={v}")), "{body}");
-        assert!(body.contains("onerror=") && body.contains("office-list"), "module load failure falls back to the List");
+        let to_office = page(&f, "/", Some("loop_mode=office"), None);
+        assert_eq!(to_office.status, 302);
+        assert_eq!(to_office.header("location"), Some("/office"));
+        let dash = page(&f, "/", Some("loop_mode=dashboard"), None);
+        assert_eq!(dash.status, 200);
+        assert!(!dash.body_text().contains("chooser-mode"));
+        assert!(dash.body_text().contains("class=\"sidebar\""));
     }
 
     #[test]
-    fn cookie_loop_view_office_selects_office() {
+    fn mode_query_picks_remembers_or_reopens_the_chooser() {
         let f = fx(four());
-        let body = loops_page(&f, "/loops", Some("loop_view=office"), None).body_text();
+        let dash = page(&f, "/?mode=dashboard", Some("loop_mode=office"), None);
+        assert_eq!(dash.status, 200);
+        assert!(sets_mode_cookie(&dash, "dashboard"));
+        assert!(!dash.body_text().contains("chooser-mode"));
+        let choose = page(&f, "/?mode=choose", Some("loop_mode=office"), None);
+        assert_eq!(choose.status, 200);
+        assert!(choose.body_text().contains("chooser-mode"));
+    }
+
+    #[test]
+    fn office_page_is_the_scene_and_the_chat_with_nothing_else() {
+        let f = fx(four());
+        let resp = page(&f, "/office", None, None);
+        assert_eq!(resp.status, 200);
+        let body = resp.body_text();
+        assert!(body.contains("<html class=\"office-mode\""), "{body}");
         assert!(body.contains("<section id='office'"));
+        assert!(body.contains("<template id='office-panel'>"));
+        assert!(body.contains("id='ai-panel'"), "the chat sits beside the scene");
+        assert!(body.contains("href='/?mode=dashboard'"), "the switch lives in the chat header");
+        assert!(body.contains("data-office-chat-toggle"));
+        assert!(body.contains("\"chat_about\":\"About the loop {name}: \""));
+        assert!(sets_mode_cookie(&resp, "office"));
     }
 
     #[test]
-    fn view_list_query_beats_the_cookie() {
+    fn office_page_chat_text_is_translated() {
         let f = fx(four());
-        let resp = loops_page(&f, "/loops?view=list", Some("loop_view=office"), None);
-        assert!(!resp.body_text().contains("<section id='office'"));
-        assert!(resp.headers.iter().any(|(k, v)| k == "Set-Cookie" && v.starts_with("loop_view=list;")));
-    }
-
-    #[test]
-    fn office_container_absent_in_list_view() {
-        let f = fx(four());
-        let body = loops_page(&f, "/loops", None, None).body_text();
-        assert!(!body.contains("id='office'") && !body.contains("importmap") && !body.contains("office-i18n"));
-    }
-
-    #[test]
-    fn office_i18n_json_is_translated_per_language() {
-        let f = fx(four());
-        let body = loops_page(&f, "/loops?view=office", None, Some("fr")).body_text();
-        let start = body.find("id='office-i18n'>").unwrap() + "id='office-i18n'>".len();
-        let end = start + body[start..].find("</script>").unwrap();
-        let raw = body[start..end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&");
-        let doc: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(doc["run_now"], "Exécuter maintenant");
-        assert_eq!(doc["and_more"], "et {n} de plus");
-        let en = loops_page(&f, "/loops?view=office", None, None).body_text();
-        assert!(en.contains("\"run_now\":\"Run now\""));
+        let body = page(&f, "/office", None, Some("fr")).body_text();
+        assert!(!body.contains("\"chat_about\":\"About the loop"), "{body}");
+        let choose = page(&f, "/?mode=choose", None, Some("fr")).body_text();
+        assert!(!choose.contains(">Choose how you want to work<"));
     }
 }

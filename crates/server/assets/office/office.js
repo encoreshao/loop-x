@@ -37,8 +37,8 @@ function webglAvailable() {
   }
 }
 
-/// Hides the office and shows the server-rendered List with a one-line note. The
-/// `loop_view` cookie is left alone, so a browser with WebGL still gets the office.
+/// Hides the office and shows the server-rendered Dashboard link with a one-line note. The
+/// `loop_mode` cookie is left alone, so a browser with WebGL still gets the office.
 function showList(key = "no_webgl") {
   if (root) root.hidden = true;
   const list = document.getElementById("office-list");
@@ -51,10 +51,6 @@ function showList(key = "no_webgl") {
     list.prepend(note);
   }
   list.hidden = false;
-  for (const a of document.querySelectorAll(".view-toggle a")) {
-    if (a.getAttribute("href").endsWith("view=list")) a.setAttribute("aria-current", "page");
-    else a.removeAttribute("aria-current");
-  }
 }
 
 /// `{camera, hour}` from the URL hash, e.g. `#left&h=23`.
@@ -352,7 +348,21 @@ async function main() {
     panel.open(loop);
     highlight();
     startFocus(loop.name);
+    seedChat(loop);
   }
+  /// Starts the chat's message about the picked loop, unless the person already typed.
+  function seedChat(loop) {
+    const box = document.querySelector("#ai-panel-form textarea[name='text']");
+    if (!box || !strings.chat_about) return;
+    const last = box.dataset.seeded;
+    if (box.value && box.value !== last) return;
+    box.value = strings.chat_about.replace("{name}", loop.title ? String(loop.title) : String(loop.name));
+    box.dataset.seeded = box.value;
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  // The chat changed something (a loop ran, was switched, an approval went through).
+  document.addEventListener("loopx:changed", refresh);
+  document.querySelector("[data-office-chat-toggle]")?.addEventListener("click", () => document.getElementById("ai-panel-trigger")?.click());
   /// Drops the selection: closes the panel, stops following and returns focus to the canvas container.
   function release() {
     const had = selected !== null;

@@ -1102,7 +1102,6 @@
   "Time of day": "時間帯",
   "Dusk": "夕方",
   "Night": "夜",
-  "The office view needs WebGL, which this browser has turned off. Use the List view instead.": "オフィスビューにはWebGLが必要ですが、このブラウザでは無効になっています。代わりにリストビューをご利用ください。",
   "and {n} more": "ほか {n} 件",
   "3D office: each loop is a person at a desk": "3Dオフィス: 各ループが机に向かう一人の人として表示されます",
   "Next run": "次回の実行",
@@ -1113,5 +1112,15 @@
   "Loop details": "ループの詳細",
   "Reload the page and try again": "ページを再読み込みして、もう一度お試しください",
   "The 3D view stopped (graphics were reset). Reload the page.": "3Dビューが停止しました(グラフィックスがリセットされました)。ページを再読み込みしてください。",
-  "The office view could not load. Use the List view instead.": "オフィスビューを読み込めませんでした。代わりにリスト表示をご利用ください。"
+  "Choose how you want to work": "作業スタイルを選んでください",
+  "You can switch at any time.": "いつでも切り替えられます。",
+  "Your loops as people in a 3D office, with a chat beside it to talk to them.": "ループを3Dオフィスの人として表示し、横のチャットで話しかけられます。",
+  "The classic view: pages for loops, runs, insights and settings.": "従来のビュー：ループ、実行、インサイト、設定のページ。",
+  "About the loop {name}: ": "ループ {name} について：",
+  "Open chat": "チャットを開く",
+  "Switch to Dashboard": "ダッシュボードに切り替え",
+  "Switch to Office": "オフィスに切り替え",
+  "The office view needs WebGL, which this browser has turned off. Use the Dashboard instead.": "オフィスビューにはWebGLが必要ですが、このブラウザでは無効になっています。代わりにダッシュボードをご利用ください。",
+  "The office view could not load. Use the Dashboard instead.": "オフィスビューを読み込めませんでした。代わりにダッシュボードをご利用ください。",
+  "Pick a view to start with.": "まず表示するビューを選んでください。"
 }

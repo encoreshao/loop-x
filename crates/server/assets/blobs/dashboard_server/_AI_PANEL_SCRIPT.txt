@@ -317,7 +317,10 @@
           source.close();
           reveal.finish(function() {
             setBusy(false);
-            if (changed) { location.replace(location.href); return; }
+            if (changed && window.__loopNoReloadOnChange) {
+              // The Office view redraws itself: tell it, and keep the scene running.
+              document.dispatchEvent(new CustomEvent('loopx:changed'));
+            } else if (changed) { location.replace(location.href); return; }
             loadThread(true);
           });
         });

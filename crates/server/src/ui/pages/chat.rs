@@ -845,6 +845,11 @@ fn activity_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
 // ----- routes: pages and fragments -----
 
 fn dashboard(ctx: &UiCtx) -> UiResponse {
+    match super::office::landing(ctx) {
+        super::office::Landing::Office => return UiResponse::redirect(302, "/office"),
+        super::office::Landing::Choose => return super::office::chooser_response(ctx),
+        super::office::Landing::Dashboard => {}
+    }
     let q = ctx.query();
     let (flash, ok) = ctx.flash();
     let hub = hub::hub_by_key("overview").expect("overview hub");
@@ -854,13 +859,15 @@ fn dashboard(ctx: &UiCtx) -> UiResponse {
     } else {
         overview_body(ctx, flash.as_deref(), ok, q.first("session"))
     };
-    UiResponse::html(hub::render_hub_page(
+    let mut resp = UiResponse::html(hub::render_hub_page(
         ctx,
         &hub,
         Some(&view),
         &body,
         &default_badge(ctx),
-    ))
+    ));
+    resp.headers.extend(super::office::dashboard_cookie_header(ctx));
+    resp
 }
 
 fn messages_fragment_route(ctx: &UiCtx) -> UiResponse {

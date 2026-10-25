@@ -8,6 +8,7 @@ pub const FALLBACK: &str = "circle";
 pub const NAMES: &[&str] = &[
     "account_balance_wallet",
     "add",
+    "apartment",
     "add_comment",
     "arrow_back",
     "arrow_forward",

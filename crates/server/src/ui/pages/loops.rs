@@ -1318,11 +1318,9 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             h(&ctx.t(hint))
         )
     };
-    let office = super::office::wants_office(ctx);
     let head = format!(
-        "<div class='page-title'><h1>{}</h1>{}</div>{}",
+        "<div class='page-title'><h1>{}</h1></div>{}",
         h(&ctx.t("Loops")),
-        super::office::view_toggle_html(ctx, office),
         flash_html(flash, ok)
     );
     let list = format!(
@@ -1344,27 +1342,20 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             " data-section='available'"
         )
     );
-    if office {
-        // The List stays in the page, hidden: it is the Office's text alternative and
-        // what the client shows when WebGL is missing (or JavaScript is off).
-        return format!("{head}{}<div id='office-list' hidden>{list}</div>", super::office::office_view_html(ctx));
-    }
     format!("{head}{list}")
 }
 
 fn catalog_page(ctx: &UiCtx) -> UiResponse {
     let (flash, ok) = ctx.flash();
     let body = catalog_body(ctx, flash.as_deref(), ok);
-    let mut resp = UiResponse::html(render_shell(
+    UiResponse::html(render_shell(
         ctx,
         "Loops · Loop X Engineering",
         "loops",
         &default_badge(ctx),
         &body,
         ShellOpts::default(),
-    ));
-    resp.headers.extend(super::office::view_cookie_header(ctx));
-    resp
+    ))
 }
 
 // ---- POSTs ---------------------------------------------------------------------------------------------
