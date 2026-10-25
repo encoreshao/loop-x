@@ -2,7 +2,9 @@
 
 use crate::ui::assets;
 use crate::ui::office;
+use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
+use serde_json::{json, Value};
 
 pub fn register(r: &mut Registry) {
     r.get("/office/state", state_json);
@@ -31,6 +33,152 @@ fn asset(ctx: &UiCtx) -> UiResponse {
         ],
         body: body.to_vec(),
     }
+}
+
+const VIEW_COOKIE: &str = "loop_view";
+
+fn cookie_value(ctx: &UiCtx, name: &str) -> Option<String> {
+    ctx.req.header("cookie")?.split(';').find_map(|part| {
+        let (n, v) = part.trim().split_once('=')?;
+        (n == name).then(|| v.to_string())
+    })
+}
+
+/// The view named by `?view=`, if it is one of the two we know.
+fn query_view(ctx: &UiCtx) -> Option<&'static str> {
+    match ctx.query().first("view") {
+        Some("office") => Some("office"),
+        Some("list") => Some("list"),
+        _ => None,
+    }
+}
+
+/// Office when `?view=office`, else when the `loop_view=office` cookie is set;
+/// `?view=list` always wins over the cookie.
+pub fn wants_office(ctx: &UiCtx) -> bool {
+    match query_view(ctx) {
+        Some(v) => v == "office",
+        None => cookie_value(ctx, VIEW_COOKIE).as_deref() == Some("office"),
+    }
+}
+
+/// The `Set-Cookie` header remembering an explicit `?view=` choice for a year.
+pub fn view_cookie_header(ctx: &UiCtx) -> Option<(String, String)> {
+    query_view(ctx).map(|v| {
+        (
+            "Set-Cookie".to_string(),
+            format!("{VIEW_COOKIE}={v}; Path=/; Max-Age=31536000; SameSite=Lax"),
+        )
+    })
+}
+
+/// The List | Office switch in the Loops header.
+pub fn view_toggle_html(ctx: &UiCtx, office: bool) -> String {
+    let link = |view: &str, label: String, active: bool| {
+        format!(
+            "<a href='/loops?view={view}'{}>{}</a>",
+            if active { " aria-current='page'" } else { "" },
+            h(&label)
+        )
+    };
+    format!(
+        "<style>\
+.view-toggle{{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--outline,#d0d0d0);border-radius:999px}}\
+.view-toggle a{{padding:.3rem .9rem;border-radius:999px;text-decoration:none;font-size:.9rem;color:inherit}}\
+.view-toggle a[aria-current='page']{{background:var(--primary,#1a73e8);color:#fff}}\
+</style><nav class='view-toggle' aria-label=\"{}\">{}{}</nav>",
+        h(&ctx.t("Loops view")),
+        link("list", ctx.t("List"), !office),
+        link("office", ctx.t("Office"), office)
+    )
+}
+
+/// JSON that is safe inside a `<script>` element.
+fn script_json(v: &Value) -> String {
+    serde_json::to_string(v)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
+fn client_strings(ctx: &UiCtx) -> Value {
+    json!({
+        "state_working": ctx.t("Working"),
+        "state_waiting": ctx.t("Waiting for you"),
+        "state_idle": ctx.t("Idle"),
+        "state_failed": ctx.t("Failed"),
+        "state_disabled": ctx.t("Disabled"),
+        "needs_you": ctx.t("Needs you"),
+        "disabled_standby": ctx.t("Disabled · standby"),
+        "run_now": ctx.t("Run now"),
+        "enable": ctx.t("Enable"),
+        "disable": ctx.t("Disable"),
+        "open_loop": ctx.t("Open loop page"),
+        "pending_approvals": ctx.t("Pending approvals"),
+        "stale": ctx.t("Showing last known state"),
+        "time_of_day": ctx.t("Time of day"),
+        "auto": ctx.t("Auto"),
+        "day": ctx.t("Day"),
+        "dusk": ctx.t("Dusk"),
+        "night": ctx.t("Night"),
+        "no_webgl": ctx.t("The office view needs WebGL, which this browser has turned off. Use the List view instead."),
+        "and_more": ctx.t("and {n} more"),
+        "canvas_label": ctx.t("3D office: each loop is a person at a desk"),
+        "last_run": ctx.t("Last run"),
+        "next_run": ctx.t("Next run"),
+        "run_history": ctx.t("Run history"),
+        "why": ctx.t("Why"),
+        "action_failed": ctx.t("Action failed"),
+        "close": ctx.t("Close"),
+    })
+}
+
+/// The Office view: the import map, the entry module, the panel template and the
+/// translated strings the client script reads.
+pub fn office_view_html(ctx: &UiCtx) -> String {
+    let version = assets::get("office/office.js")
+        .map(|b| loopx_core::sha256::hex(&loopx_core::sha256::sha256(b))[..8].to_string())
+        .unwrap_or_else(|| "0".to_string());
+    let token = ctx.state.csrf_token.clone();
+    format!(
+        "<style>\
+#office{{position:relative;min-height:70vh;border-radius:12px;overflow:hidden}}\
+#office canvas{{display:block;width:100%;height:100%}}\
+</style>\
+<section id='office' aria-label=\"{label}\">\
+<script type='importmap'>{{\"imports\":{{\"three\":\"/office/assets/three.module.min.js\",\"three/addons/controls/OrbitControls.js\":\"/office/assets/OrbitControls.js\"}}}}</script>\
+<template id='office-panel'><aside class='office-panel' role='dialog' aria-label=\"{panel_label}\">\
+<button type='button' class='office-panel-close' aria-label=\"{close}\">{close}</button>\
+<h2 class='office-panel-name'></h2><p class='office-panel-state'></p>\
+<dl><dt>{why}</dt><dd class='office-panel-why'></dd>\
+<dt>{last_run}</dt><dd class='office-panel-last'></dd>\
+<dt>{next_run}</dt><dd class='office-panel-next'></dd></dl>\
+<h3>{history}</h3><ul class='office-panel-history'></ul>\
+<div class='office-panel-actions'><button type='button' data-act='run'>{run_now}</button>\
+<button type='button' data-act='toggle'></button>\
+<a data-act='open'>{open_loop}</a></div>\
+<p class='office-panel-error' role='alert' hidden>{action_failed}</p></aside></template>\
+<script type='application/json' id='office-i18n'>{i18n}</script>\
+<input type='hidden' id='office-csrf' value=\"{token}\">\
+<script type='module' src='/office/assets/office.js?v={version}'></script>\
+</section>",
+        label = h(&ctx.t("3D office: each loop is a person at a desk")),
+        panel_label = h(&ctx.t("Loop details")),
+        close = h(&ctx.t("Close")),
+        why = h(&ctx.t("Why")),
+        last_run = h(&ctx.t("Last run")),
+        next_run = h(&ctx.t("Next run")),
+        history = h(&ctx.t("Run history")),
+        run_now = h(&ctx.t("Run now")),
+        open_loop = h(&ctx.t("Open loop page")),
+        action_failed = h(&ctx.t("Action failed")),
+        i18n = script_json(&client_strings(ctx)),
+        token = h(&token),
+        version = version,
+    )
 }
 
 fn state_json(ctx: &UiCtx) -> UiResponse {
@@ -259,5 +407,80 @@ mod tests {
         ] {
             assert_eq!(get_asset(p).status, 404, "{p}");
         }
+    }
+
+    fn loops_page(f: &Fx, path: &str, cookie: Option<&str>, lang: Option<&str>) -> UiResponse {
+        let mut req = UiRequest::new("GET".parse().unwrap(), path);
+        if let Some(c) = cookie {
+            req = req.with_header("cookie", c);
+        }
+        if let Some(l) = lang {
+            req = req.with_header("accept-language", l);
+        }
+        let resp = Registry::with_pages().dispatch(&f.state, &req).expect("route");
+        assert_eq!(resp.status, 200);
+        resp
+    }
+
+    #[test]
+    fn loops_page_defaults_to_list_and_has_the_toggle() {
+        let f = fx(four());
+        let body = loops_page(&f, "/loops", None, None).body_text();
+        assert!(body.contains("href='/loops?view=list'"), "{body}");
+        assert!(body.contains("href='/loops?view=office'"));
+        assert!(body.contains("aria-current='page'"));
+        assert!(body.contains("class='card loop-section'"));
+    }
+
+    #[test]
+    fn view_office_query_renders_the_office_container_and_import_map() {
+        let f = fx(four());
+        let resp = loops_page(&f, "/loops?view=office", None, None);
+        let body = resp.body_text();
+        assert!(body.contains("<section id='office'"), "{body}");
+        assert!(body.contains("<script type='importmap'>"));
+        assert!(body.contains("/office/assets/three.module.min.js"));
+        assert!(body.contains("/office/assets/office.js?v="));
+        assert!(body.contains("<template id='office-panel'>"));
+        assert!(body.contains("id='office-i18n'"));
+        assert!(body.contains("id='office-csrf'"));
+        assert!(!body.contains("class='card loop-section'"));
+        assert!(resp.headers.iter().any(|(k, v)| k == "Set-Cookie" && v.starts_with("loop_view=office;") && v.contains("Max-Age=31536000") && v.contains("SameSite=Lax")));
+    }
+
+    #[test]
+    fn cookie_loop_view_office_selects_office() {
+        let f = fx(four());
+        let body = loops_page(&f, "/loops", Some("loop_view=office"), None).body_text();
+        assert!(body.contains("<section id='office'"));
+    }
+
+    #[test]
+    fn view_list_query_beats_the_cookie() {
+        let f = fx(four());
+        let resp = loops_page(&f, "/loops?view=list", Some("loop_view=office"), None);
+        assert!(!resp.body_text().contains("<section id='office'"));
+        assert!(resp.headers.iter().any(|(k, v)| k == "Set-Cookie" && v.starts_with("loop_view=list;")));
+    }
+
+    #[test]
+    fn office_container_absent_in_list_view() {
+        let f = fx(four());
+        let body = loops_page(&f, "/loops", None, None).body_text();
+        assert!(!body.contains("id='office'") && !body.contains("importmap") && !body.contains("office-i18n"));
+    }
+
+    #[test]
+    fn office_i18n_json_is_translated_per_language() {
+        let f = fx(four());
+        let body = loops_page(&f, "/loops?view=office", None, Some("fr")).body_text();
+        let start = body.find("id='office-i18n'>").unwrap() + "id='office-i18n'>".len();
+        let end = start + body[start..].find("</script>").unwrap();
+        let raw = body[start..end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&");
+        let doc: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(doc["run_now"], "Exécuter maintenant");
+        assert_eq!(doc["and_more"], "et {n} de plus");
+        let en = loops_page(&f, "/loops?view=office", None, None).body_text();
+        assert!(en.contains("\"run_now\":\"Run now\""));
     }
 }

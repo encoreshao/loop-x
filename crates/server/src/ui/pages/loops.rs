@@ -1318,10 +1318,18 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             h(&ctx.t(hint))
         )
     };
-    format!(
-        "<div class='page-title'><h1>{}</h1></div>{}{}{}",
+    let office = super::office::wants_office(ctx);
+    let head = format!(
+        "<div class='page-title'><h1>{}</h1>{}</div>{}",
         h(&ctx.t("Loops")),
-        flash_html(flash, ok),
+        super::office::view_toggle_html(ctx, office),
+        flash_html(flash, ok)
+    );
+    if office {
+        return format!("{head}{}", super::office::office_view_html(ctx));
+    }
+    format!(
+        "{head}{}{}",
         section(
             "Active loops",
             "Loops that are on or have run. Turn them off, change when they run, or open one for details.",
@@ -1344,14 +1352,16 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
 fn catalog_page(ctx: &UiCtx) -> UiResponse {
     let (flash, ok) = ctx.flash();
     let body = catalog_body(ctx, flash.as_deref(), ok);
-    UiResponse::html(render_shell(
+    let mut resp = UiResponse::html(render_shell(
         ctx,
         "Loops · Loop X Engineering",
         "loops",
         &default_badge(ctx),
         &body,
         ShellOpts::default(),
-    ))
+    ));
+    resp.headers.extend(super::office::view_cookie_header(ctx));
+    resp
 }
 
 // ---- POSTs ---------------------------------------------------------------------------------------------
