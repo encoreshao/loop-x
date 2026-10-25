@@ -1077,24 +1077,43 @@ fn notify_form_html(ctx: &UiCtx, loop_: &Value, csrf: &str, notify_accounts: &[A
             h(&ctx.t("Clear"))
         );
     }
-    let options: String = notify_accounts
+    let none = h(&ctx.t("None"));
+    let native: String = notify_accounts
         .iter()
         .map(|a| {
             format!(
-                "<option value='{}'{}>{} ({})</option>",
+                "<option value='{}'{}>{}</option>",
                 h(&a.id),
                 if selected_list.contains(&a.id) { " selected" } else { "" },
+                h(&a.label)
+            )
+        })
+        .collect();
+    let menu: String = notify_accounts
+        .iter()
+        .map(|a| {
+            format!(
+                "<div class='custom-select-option{}' role='option' tabindex='-1' data-value='{}' data-label='{}'>{} <span class='custom-select-hint'>{}</span></div>",
+                if selected_list.contains(&a.id) { " is-selected" } else { "" },
+                h(&a.id),
+                h(&a.label),
                 h(&a.label),
                 h(&a.id)
             )
         })
         .collect();
+    let value = notify_accounts
+        .iter()
+        .filter(|a| selected_list.contains(&a.id))
+        .map(|a| h(&a.label))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let value = if value.is_empty() { none.clone() } else { value };
     format!(
         "<form method='post' action='/loops/{safe_name}/notify' class='daemon-action-form'>{csrf}\
-<label class='notify-via'>{} <select multiple name='notify' size='{}'>{options}</select></label> \
+<div class='notify-via'>{} <div class='custom-select custom-multi-select' data-empty='{none}'><select multiple name='notify' class='custom-select-native'>{native}</select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>{value}</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' aria-multiselectable='true' hidden>{menu}</div></div></div> \
 <button type='submit' class='btn btn-neutral'>{}</button></form>",
         h(&ctx.t("Notify via")),
-        notify_accounts.len().clamp(2, 5),
         h(&ctx.t("Save"))
     )
 }

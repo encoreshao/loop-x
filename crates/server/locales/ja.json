@@ -736,6 +736,7 @@
   "Pipelines": "パイプライン",
   "Feeds": "フィード",
   "Mail": "メール",
+  "None": "なし",
   "Notify via": "通知先",
   "Cannot enable {name}: missing connector for {capabilities}": "{name} を有効にできません: {capabilities} のコネクタがありません",
   "Unknown loop {name}": "不明なループ {name}",

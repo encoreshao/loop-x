@@ -736,6 +736,7 @@
   "Pipelines": "Pipelines",
   "Feeds": "Flux",
   "Mail": "Courrier",
+  "None": "Aucun",
   "Notify via": "Notifier via",
   "Cannot enable {name}: missing connector for {capabilities}": "Impossible d'activer {name} : connecteur manquant pour {capabilities}",
   "Unknown loop {name}": "Boucle inconnue {name}",

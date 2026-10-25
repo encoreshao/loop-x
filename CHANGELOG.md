@@ -25,6 +25,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- The Loops page's "Notify via" picker is now a macOS-style pop-up menu with a checkmark on each chosen account, instead of the browser's native multi-select list.
+
 - Chat tool-call bars have more padding, a coloured status edge (running, done, failed) and a little space above the first one.
 
 - Dropdowns use the macOS pop-up menu style: a translucent menu opening over the field, a checkmark on the selected item and an accent-filled hover; the Mac app's Settings pickers are explicit pop-up menus.

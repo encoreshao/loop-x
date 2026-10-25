@@ -736,6 +736,7 @@
   "Pipelines": "流水线",
   "Feeds": "订阅源",
   "Mail": "邮件",
+  "None": "无",
   "Notify via": "通知方式",
   "Cannot enable {name}: missing connector for {capabilities}": "无法启用 {name}：缺少 {capabilities} 的连接器",
   "Unknown loop {name}": "未知循环 {name}",

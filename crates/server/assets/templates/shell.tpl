@@ -88,7 +88,25 @@
     });
     root.querySelector('.custom-select-value').textContent = label;
   };
+  // "Notify via": a pull-down that toggles each item's checkmark and stays
+  // open, like a macOS menu with several checkable items.
+  function toggleOption(root, option) {
+    var native = root.querySelector('.custom-select-native');
+    var on = !option.classList.contains('is-selected');
+    option.classList.toggle('is-selected', on);
+    var labels = [];
+    root.querySelectorAll('.custom-select-option').forEach(function(o) {
+      var selected = o.classList.contains('is-selected');
+      if (selected) labels.push(o.getAttribute('data-label'));
+      Array.prototype.forEach.call(native.options, function(opt) {
+        if (opt.value === o.getAttribute('data-value')) opt.selected = selected;
+      });
+    });
+    root.querySelector('.custom-select-value').textContent = labels.length ? labels.join(', ') : root.getAttribute('data-empty');
+    native.dispatchEvent(new Event('change', { bubbles: true }));
+  }
   function selectOption(root, option) {
+    if (root.classList.contains('custom-multi-select')) { toggleOption(root, option); return; }
     var native = root.querySelector('.custom-select-native');
     var valueEl = root.querySelector('.custom-select-value');
     root.querySelectorAll('.custom-select-option').forEach(function(o) { o.classList.remove('is-selected'); });
@@ -117,11 +135,12 @@
           // Like a macOS pop-up button: the menu opens over the trigger with
           // the selected option sitting on it, clamped to the viewport.
           var rect = trigger.getBoundingClientRect();
-          var sel = menu.querySelector('.is-selected');
+          var multi = root.classList.contains('custom-multi-select');
+          var sel = multi ? null : menu.querySelector('.is-selected');
           menu.style.minWidth = rect.width + 'px';
           menu.style.left = rect.left + 'px';
           menu.style.top = rect.top + 'px';
-          var top = rect.top;
+          var top = multi ? rect.bottom + 4 : rect.top;
           if (sel) {
             menu.scrollTop = sel.offsetTop - (menu.clientHeight - sel.offsetHeight) / 2;
             var delta = sel.getBoundingClientRect().top - menu.getBoundingClientRect().top;
@@ -134,7 +153,7 @@
           // via Enter/Space has no way to reach the options at all, since
           // the real <select> behind them is display:none and the options
           // themselves aren't in the tab order until the menu is open.
-          var toFocus = sel || menu.querySelector('.custom-select-option');
+          var toFocus = sel || menu.querySelector('.is-selected') || menu.querySelector('.custom-select-option');
           if (toFocus) toFocus.focus({ preventScroll: true });
         }
       }
@@ -143,8 +162,9 @@
     }
     var option = ev.target.closest('.custom-select-option');
     if (option) {
-      selectOption(option.closest('.custom-select'), option);
-      closeAll(null);
+      var optRoot = option.closest('.custom-select');
+      selectOption(optRoot, option);
+      if (!optRoot.classList.contains('custom-multi-select')) closeAll(null);
       return;
     }
     if (!ev.target.closest('.custom-select')) closeAll(null);
@@ -175,8 +195,10 @@
       } else if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         selectOption(root, option);
-        closeAll(null);
-        if (trigger) trigger.focus();
+        if (!root.classList.contains('custom-multi-select')) {
+          closeAll(null);
+          if (trigger) trigger.focus();
+        }
       } else if (ev.key === 'Escape') {
         ev.preventDefault();
         closeAll(null);
