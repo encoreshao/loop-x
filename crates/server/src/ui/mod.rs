@@ -29,6 +29,7 @@ pub mod icons;
 pub mod logos;
 pub mod markdown;
 pub mod nav;
+pub mod office;
 pub mod pages;
 pub mod pyfmt;
 pub mod routes;

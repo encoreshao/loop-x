@@ -53,7 +53,7 @@ fn pid_alive(_pid: u64) -> bool {
 }
 
 /// A `running` status whose pid is gone is a run that died without cleaning up.
-fn effective_state(doc: &Value) -> String {
+pub(crate) fn effective_state(doc: &Value) -> String {
     let state = doc["state"].as_str().unwrap_or("unknown").to_string();
     if state == "running" {
         if let Some(pid) = doc.get("pid").and_then(Value::as_u64) {

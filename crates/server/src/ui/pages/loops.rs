@@ -30,7 +30,7 @@ pub fn register(r: &mut Registry) {
     r.post("/loops/:name/notify", notify);
 }
 
-const BUILTIN: [&str; 3] = ["gitlab-loop", "topic-loop", "inbox-triage-loop"];
+pub(crate) const BUILTIN: [&str; 3] = ["gitlab-loop", "topic-loop", "inbox-triage-loop"];
 
 fn is_builtin(name: &str) -> bool {
     BUILTIN.contains(&name)
@@ -38,7 +38,7 @@ fn is_builtin(name: &str) -> bool {
 
 // ---- registry access -------------------------------------------------------------------
 
-fn list_loops(state: &UiState) -> Option<Vec<Value>> {
+pub(crate) fn list_loops(state: &UiState) -> Option<Vec<Value>> {
     loops_config::list_loops(&state.loops_config_path(), Some(&state.loops_template_path())).ok()
 }
 
@@ -579,7 +579,7 @@ pub fn valid_history_name(s: &str) -> bool {
         && s.ends_with(".md")
 }
 
-fn history_files(state: &UiState, name: &str) -> Vec<String> {
+pub(crate) fn history_files(state: &UiState, name: &str) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(output_dir(state, name).join("history")) else {
         return Vec::new();
     };
@@ -877,7 +877,7 @@ fn to_int(v: Option<&Value>) -> Option<i64> {
     }
 }
 
-fn schedule_summary(ctx: &UiCtx, loop_: &Value) -> String {
+pub(crate) fn schedule_summary(ctx: &UiCtx, loop_: &Value) -> String {
     let Some(schedule) = loop_.get("schedule").and_then(Value::as_object).filter(|s| !s.is_empty()) else {
         return ctx.t("No schedule");
     };
@@ -1318,10 +1318,15 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             h(&ctx.t(hint))
         )
     };
-    format!(
-        "<div class='page-title'><h1>{}</h1></div>{}{}{}",
+    let office = super::office::wants_office(ctx);
+    let head = format!(
+        "<div class='page-title'><h1>{}</h1>{}</div>{}",
         h(&ctx.t("Loops")),
-        flash_html(flash, ok),
+        super::office::view_toggle_html(ctx, office),
+        flash_html(flash, ok)
+    );
+    let list = format!(
+        "{}{}",
         section(
             "Active loops",
             "Loops that are on or have run. Turn them off, change when they run, or open one for details.",
@@ -1338,20 +1343,28 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             "loop-gallery",
             " data-section='available'"
         )
-    )
+    );
+    if office {
+        // The List stays in the page, hidden: it is the Office's text alternative and
+        // what the client shows when WebGL is missing (or JavaScript is off).
+        return format!("{head}{}<div id='office-list' hidden>{list}</div>", super::office::office_view_html(ctx));
+    }
+    format!("{head}{list}")
 }
 
 fn catalog_page(ctx: &UiCtx) -> UiResponse {
     let (flash, ok) = ctx.flash();
     let body = catalog_body(ctx, flash.as_deref(), ok);
-    UiResponse::html(render_shell(
+    let mut resp = UiResponse::html(render_shell(
         ctx,
         "Loops · Loop X Engineering",
         "loops",
         &default_badge(ctx),
         &body,
         ShellOpts::default(),
-    ))
+    ));
+    resp.headers.extend(super::office::view_cookie_header(ctx));
+    resp
 }
 
 // ---- POSTs ---------------------------------------------------------------------------------------------
