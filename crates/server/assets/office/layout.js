@@ -65,9 +65,12 @@ export function buildLayout(count) {
       seats.push({ x, z: row.zc + row.side * 1.5, zc: row.zc, za: row.za, side: row.side, gap: spacing / 2, screenMat: null, occ: null });
     }
   }
-  const extra = (list, base) => list.slice(0, Math.max(0, drawn - base));
+  // Extra spots come in steps of four, so one more loop rarely changes the layout (and
+  // so rebuilds it and moves everyone): only the seat tier and these tiers do.
+  const tier = (base) => Math.ceil(Math.max(0, drawn - base) / 4);
+  const extra = (list, base) => list.slice(0, tier(base) * 4);
   return {
-    key: `${perSide}:${drawn}`,
+    key: `${perSide}:${tier(LOUNGE.length)}:${tier(WAIT.length)}:${tier(OFF.length)}`,
     tables,
     seats,
     lounge: copy([...LOUNGE, ...extra(LOUNGE_EXTRA, LOUNGE.length)]),

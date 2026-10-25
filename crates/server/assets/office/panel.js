@@ -21,14 +21,20 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
   function when(iso) {
     if (!iso) return "—";
     const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+    if (Number.isNaN(d.getTime())) return String(iso);
+    // The dashboard's language (<html lang>), not the browser's.
+    try {
+      return d.toLocaleString(document.documentElement.lang || undefined);
+    } catch {
+      return d.toLocaleString();
+    }
   }
 
   function render(loop) {
     current = loop;
     const name = String(loop.name);
     const state = String(loop.state);
-    q(".office-panel-name").textContent = name;
+    q(".office-panel-name").textContent = loop.title ? String(loop.title) : name;
     const chip = q(".office-panel-state");
     chip.textContent = t("state_" + state) || state;
     chip.dataset.state = state;
@@ -102,7 +108,7 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     el = null;
     current = null;
     busy = false;
-    document.removeEventListener("keydown", onKey, true);
+    root.removeEventListener("keydown", onKey, true);
     if (fromInside && hooks.onClose) hooks.onClose();
   }
 
@@ -127,7 +133,8 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
           if (e.target.closest("[data-act=run][aria-disabled=true]")) e.preventDefault();
         });
         root.append(el);
-        document.addEventListener("keydown", onKey, true);
+        // Scoped to the office: focus is inside it whenever the panel was opened.
+        root.addEventListener("keydown", onKey, true);
         q(".office-panel-close").focus();
       }
       render(loop);

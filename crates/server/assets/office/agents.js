@@ -45,6 +45,7 @@ export function createAgents(ctx) {
   const R = rng(5);
   const agents = new Map();
   let order = [];
+  const scratch = new THREE.Vector3();
   let layout = null, furniture = null, labelScale = 1, overflow = 0;
 
   // ---------- sprites ----------
@@ -145,7 +146,7 @@ export function createAgents(ctx) {
     };
   }
   function dispose(a) {
-    free(held(a));
+    free(held(a), a);
     scene.remove(a.group);
     scene.remove(a.beam);
     a.beam.geometry.dispose();
@@ -160,15 +161,16 @@ export function createAgents(ctx) {
   function setState(a, s) {
     a.state = s;
     drawLabel(a);
-    if (s !== "idle") setGlyph(a, GLYPHS[s]);
+    // An idle person's bubble is drawn by the lounge pose; drop the previous state's glyph.
+    setGlyph(a, s === "idle" ? null : GLYPHS[s]);
     a.mug.visible = s === "idle";
     a.shirtMat.color.setHex(s === "disabled" ? DISABLED_SHIRT : appearanceFor(a.name).shirt);
   }
 
   // ---------- places ----------
   const held = (a) => (a.path.length ? a.dest : a.loc);
-  function free(place) {
-    if (place && place.spot) place.spot.occ = null;
+  function free(place, a) {
+    if (place && place.spot && place.spot.occ === a) place.spot.occ = null;
   }
   /// A free spot: any in the lounge, the first free one (bench and mat fill up from
   /// the front) elsewhere.
@@ -241,12 +243,13 @@ export function createAgents(ctx) {
   }
   /// Puts `a` straight at its place, no walking (first sight, new layout, reduced motion).
   function place(a) {
-    free(held(a));
+    free(held(a), a);
     a.path = [];
     a.loc = null;
-    const dest = target(a, null);
-    if (!dest) return;
-    if (dest.spot) dest.spot.occ = a;
+    let dest = target(a, null);
+    // Every spot taken (only possible with a full room): share a lounge spot rather than vanish.
+    if (!dest) dest = { kind: "lounge", spot: layout.lounge[(a.idx || 0) % layout.lounge.length] };
+    else if (dest.spot) dest.spot.occ = a;
     const p = dest.kind === "desk" ? dest.desk : dest.spot;
     a.group.position.set(p.x, 0, p.z);
     settle(a, dest);
@@ -254,12 +257,36 @@ export function createAgents(ctx) {
     a.yaw = a.yawT = yawTo(a, a.faceT);
     a.group.rotation.y = a.yaw;
   }
+  /// After a new layout: someone standing still on a spot that exists at the same place
+  /// in it stays put (rebound to the new spot); everyone else is placed afresh.
+  function carryOver(a) {
+    const old = a.loc;
+    a.dest = null;
+    if (old && !a.path.length) {
+      const same = (p) => Math.abs(p.x - old[old.kind === "desk" ? "desk" : "spot"].x) < 1e-6 && Math.abs(p.z - old[old.kind === "desk" ? "desk" : "spot"].z) < 1e-6;
+      if (old.kind === "desk") {
+        if (same(a.desk)) {
+          a.loc = { kind: "desk", desk: a.desk };
+          return;
+        }
+      } else {
+        const spot = layout[old.kind].find((s) => !s.occ && same(s));
+        if (spot) {
+          spot.occ = a;
+          a.loc = { kind: old.kind, spot };
+          return;
+        }
+      }
+    }
+    a.loc = null;
+    a.path = [];
+  }
   function plan(a) {
     const dest = target(a, a.loc.kind === "lounge" ? a.loc.spot : null);
     if (!dest) return false;
     if (dest.kind === "desk" && a.loc.kind === "desk" && a.loc.desk === dest.desk) return false;
     const bothLounge = dest.kind === "lounge" && a.loc.kind === "lounge";
-    free(a.loc);
+    free(a.loc, a);
     if (dest.spot) dest.spot.occ = a;
     a.path = [...leavePts(a.loc, bothLounge), ...enterPts(dest, bothLounge)];
     a.dest = dest;
@@ -275,7 +302,8 @@ export function createAgents(ctx) {
       // Idle people wander between lounge spots now and then.
       if (!still && a.state === "idle" && a.loc.kind === "lounge") {
         a.wander -= dt;
-        if (a.wander < 0) plan(a);
+        // No free spot to wander to: wait a while before looking again.
+        if (a.wander < 0 && !plan(a)) a.wander = 8 + R() * 12;
       }
       // A pending change of place (also a change that arrived mid-walk).
       if (!a.path.length && needsMove(a)) {
@@ -380,12 +408,12 @@ export function createAgents(ctx) {
     }
     // A faint data beam from the AI centre while working at the table.
     const on = onDesk && a.state === "working";
-    const ln = a.beam, i = order.indexOf(a);
+    const ln = a.beam, i = a.idx;
     const want = on ? (still ? 0.45 : 0.45 + Math.sin(t * 5 + i) * 0.15) : 0;
     ln.material.opacity = still ? want : lerp(ln.material.opacity, want, Math.min(1, dt * 6));
     ln.visible = ln.material.opacity > 0.01;
     if (ln.visible) {
-      const to = new THREE.Vector3();
+      const to = scratch;
       a.head.getWorldPosition(to);
       to.y += 0.5;
       const from = handles.aiTop, pos = ln.geometry.attributes.position;
@@ -414,6 +442,7 @@ export function createAgents(ctx) {
       });
       const next = buildLayout(list.length);
       overflow = next.overflow;
+      let rebuilt = false, labelScaled = false;
       if (!layout || next.key !== layout.key) {
         if (furniture) {
           scene.remove(furniture);
@@ -422,11 +451,8 @@ export function createAgents(ctx) {
         layout = next;
         furniture = furnish(scene, THREE, layout);
         labelScale = Math.min(1, (layout.seats[0].gap * 2) / 2.2);
-        for (const a of agents.values()) {
-          a.loc = a.dest = null;
-          a.path = [];
-          scaleLabel(a);
-        }
+        rebuilt = true;
+        labelScaled = true;
       }
       const drawn = list.slice(0, MAX_DRAWN);
       const keep = new Set(drawn.map((l) => l.name));
@@ -443,20 +469,27 @@ export function createAgents(ctx) {
           agents.set(l.name, a);
         }
         a.desk = layout.seats[i];
+        a.idx = i;
         a.info = l;
         const s = Object.hasOwn(COLORS, l.state) ? l.state : "idle";
         if (s !== a.state) setState(a, s);
         return a;
       });
-      // New people (and everyone after a new layout) appear at their place.
+      if (rebuilt) for (const a of order) carryOver(a);
+      if (labelScaled) for (const a of agents.values()) scaleLabel(a);
+      // New people (and anyone whose spot is gone from a rebuilt layout) appear at their place.
       for (const a of order) if (!a.loc) place(a);
     },
     tick(dt, t) {
       if (!layout) return;
       for (const s of layout.seats) s.lit = false;
-      for (const a of order) update(a, dt, t);
+      let working = 0;
+      for (const a of order) {
+        update(a, dt, t);
+        if (a.state === "working") working++;
+      }
       for (const s of layout.seats) if (!s.lit) s.screenMat.emissive.setHex(0x000000);
-      handles.aiRate = 1 + order.filter((a) => a.state === "working").length * 0.5;
+      handles.aiRate = 1 + working * 0.5;
     },
     /// The agent whose person contains `object3D` (e.g. a raycast hit), or null.
     agentAt(object3D) {

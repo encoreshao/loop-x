@@ -117,13 +117,14 @@ with Chrome() as c:
         fails.append("no csrf token in the page")
 
     # 1. Selecting each fixture loop shows its panel.
+    titles = js(c, "fetch('/office/state').then(r => r.json()).then(d => Object.fromEntries(d.loops.map(l => [l.name, l.title])))")
     for name, (state, run_dis, toggle) in FIXTURE.items():
         js(c, f"window.__office.select({json.dumps(name)})")
         if not wait_open(c, name):
             continue
         p = read_panel(c)
-        if p["name"] != name:
-            fails.append(f"{name}: panel name {p['name']!r}")
+        if p["name"] != (titles.get(name) or name):
+            fails.append(f"{name}: panel heading {p['name']!r}, expected the translated title {titles.get(name)!r}")
         if p["chip"].strip() != i18n["state_" + state]:
             fails.append(f"{name}: chip {p['chip']!r}, expected {i18n['state_' + state]!r}")
         if p["runDisabled"] != run_dis:

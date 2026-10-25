@@ -18,6 +18,16 @@ pub fn text(path: &str) -> Option<&'static str> {
 /// The first 8 hex digits of the SHA-256 over every asset under `prefix` (names and
 /// bytes): one cache-buster for a set of files that import each other.
 pub fn version_of(prefix: &str) -> String {
+    // The Office page asks on every render and its set (three.js included) is large;
+    // embedded assets never change, so hash that prefix once.
+    if prefix == "office/" {
+        static OFFICE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        return OFFICE.get_or_init(|| hash_prefix(prefix)).clone();
+    }
+    hash_prefix(prefix)
+}
+
+fn hash_prefix(prefix: &str) -> String {
     let mut all = Vec::new();
     let mut files: Vec<_> = EMBEDDED
         .iter()
