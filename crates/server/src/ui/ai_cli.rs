@@ -2,8 +2,10 @@
 //! core's safety warnings (`loopx_core::ai_cli_safety`) in the reader's language.
 
 use super::i18n::{t, Lang};
+use super::state::UiState;
 use super::{consts, icons, pyfmt};
 use loopx_core::ai_cli_safety::CallSite;
+use loopx_core::{ai_cli_config, chat};
 use serde_json::Value;
 
 /// Every place loopx calls an AI CLI, in the order the Settings warning names them.
@@ -85,33 +87,81 @@ pub fn warning_notice(lang: Lang, english: &str) -> String {
     ])
 }
 
+/// What the selected CLI means for chat (the Chat page and the side panel):
+/// core's warning when it runs without a tool allowlist, and a note when its
+/// reply arrives in one piece. Empty for a restricted, streaming CLI.
+pub fn chat_notes_html(state: &UiState, lang: Lang) -> String {
+    let cli = chat::chat_cli(&ai_cli_config::get_selected_cli(
+        &state.ai_cli_config_path(),
+    ));
+    let record = chat::ChatJobRecord::for_cli(cli);
+    let mut paragraphs: Vec<String> = Vec::new();
+    if let Some(w) = &record.warning {
+        paragraphs.push(pyfmt::escape(&warning_text(lang, w)));
+    }
+    if record.chat_mode == chat::ChatMode::SingleReply {
+        paragraphs.push(pyfmt::escape(&t(
+            lang,
+            "{cli} replies in one piece: there is no live typing while it writes.",
+            &[("cli", &display_name(cli))],
+        )));
+    }
+    if paragraphs.is_empty() {
+        return String::new();
+    }
+    paragraphs.push(settings_link(lang));
+    warning_box(&paragraphs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use loopx_core::ai_cli_config::VALID_CLIS;
     use loopx_core::ai_cli_safety::warning;
 
+    /// The English patterns of `warning_text`'s arms, read from this file, each
+    /// checked to translate its own pattern.
+    fn mapped_warnings() -> std::collections::BTreeSet<String> {
+        let src = include_str!("ai_cli.rs");
+        let body = &src[src.find("pub fn warning_text(").unwrap()..];
+        let body = &body[..body.find("other => other.to_string()").unwrap()];
+        body.lines()
+            .filter_map(|l| l.trim().strip_prefix('"'))
+            .map(|l| {
+                let (pattern, rest) = l.split_once("\" => t(lang, \"").expect("arm shape");
+                assert_eq!(
+                    rest,
+                    format!("{pattern}\", &[]),"),
+                    "arm translates another text"
+                );
+                pattern.to_string()
+            })
+            .collect()
+    }
+
     #[test]
-    fn every_core_warning_is_translated_in_every_language() {
-        let mut seen = 0;
+    fn every_core_warning_is_mapped_and_translated_in_every_language() {
+        let mut seen = std::collections::BTreeSet::new();
         for cli in VALID_CLIS.iter().chain(["unknown-cli"].iter()) {
             for site in SITES {
-                let Some(english) = warning(cli, site) else {
-                    continue;
-                };
-                seen += 1;
-                assert_eq!(warning_text(Lang::En, english), english);
-                for lang in [Lang::Ja, Lang::Zh, Lang::Fr] {
-                    let shown = warning_text(lang, english);
-                    assert!(
-                        !shown.is_empty() && shown != english,
-                        "{cli}/{site:?}: no {} translation for {english:?}",
-                        lang.code()
-                    );
+                if let Some(english) = warning(cli, site) {
+                    seen.insert(english.to_string());
                 }
             }
         }
-        assert!(seen >= 24, "only {seen} warnings checked");
+        // A core text change, a new core text or a dead arm all fail here.
+        assert_eq!(seen, mapped_warnings());
+        for english in &seen {
+            assert_eq!(&warning_text(Lang::En, english), english);
+            for lang in [Lang::Ja, Lang::Zh, Lang::Fr] {
+                let shown = warning_text(lang, english);
+                assert!(
+                    !shown.is_empty() && &shown != english,
+                    "no {} translation for {english:?}",
+                    lang.code()
+                );
+            }
+        }
     }
 
     #[test]

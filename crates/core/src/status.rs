@@ -88,6 +88,21 @@ pub fn write_topic_status(
     Ok(doc)
 }
 
+/// Set (or, for `None`, remove) the topic run's top-level `ai_cli_warning`,
+/// leaving every topic entry untouched.
+pub fn write_topic_run_warning(path: &Path, warning: Option<&str>) -> std::io::Result<Value> {
+    let mut doc = read_topic_status(path);
+    let obj = doc
+        .as_object_mut()
+        .expect("read_topic_status guarantees an object");
+    match warning {
+        Some(w) => obj.insert("ai_cli_warning".into(), json!(w)),
+        None => obj.remove("ai_cli_warning"),
+    };
+    write_doc(path, &doc)?;
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

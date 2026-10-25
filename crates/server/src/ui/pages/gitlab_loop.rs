@@ -310,9 +310,10 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                 } else {
                     reason
                 };
-                if data.get("cli").is_some_and(py_truthy) {
-                    row.cli_message = Some(str_or_empty(data.get("stderr_excerpt")));
-                }
+                row.cli_message = data
+                    .get("cli")
+                    .is_some_and(py_truthy)
+                    .then(|| str_or_empty(data.get("stderr_excerpt")));
             }
             _ => continue,
         }
@@ -1679,5 +1680,18 @@ mod tests {
         assert!(html.contains("worktree failed"), "{html}");
         assert!(!html.contains("tab=ai-cli"), "{html}");
         assert!(!html.contains("flash-warning"), "{html}");
+    }
+
+    #[test]
+    fn a_later_failure_without_a_cli_replaces_the_cli_message() {
+        let sb = Sandbox::new();
+        let dir = Some(sb.state.events_dir.as_path());
+        let fields = |data: Value| events::EventFields { project: Some("app".into()), issue_iid: Some(7), data: Some(data), ..Default::default() };
+        events::emit("issue.agent_failed", "run_1", fields(json!({"reason": "nonzero_exit", "cli": "gemini", "stderr_excerpt": "quota gone"})), dir).unwrap();
+        events::emit("issue.failed", "run_1", fields(json!({"error": "push rejected"})), dir).unwrap();
+        let html = live_body(&sb.ctx(), None, false);
+        assert!(html.contains("push rejected"), "{html}");
+        assert!(!html.contains("quota gone"), "{html}");
+        assert!(!html.contains("tab=ai-cli"), "{html}");
     }
 }

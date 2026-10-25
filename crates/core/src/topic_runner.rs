@@ -11,6 +11,7 @@
 //!   code - [`alert_on_incomplete_results`] announces it in Slack instead.
 
 use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
+use crate::ai_cli_safety::{self, CallSite};
 use crate::loop_definition::LoopDefinition;
 use crate::loop_result::{AgentCost, LoopResult};
 use crate::loop_runtime::{AgentFailure, AgentFn, AgentSuccess, LoopRuntime};
@@ -19,7 +20,7 @@ use crate::loop_state::LoopState;
 use crate::loop_verifiers::build_verifiers;
 use crate::runner_util::{
     append_unified_log, could_not_start, notify_slack_best_effort, parse_envelope,
-    resolved_program, unified_log_path,
+    resolved_program, tail, unified_log_path,
 };
 use crate::{ai_cli_config, cost, proc, prompt, status, topics};
 use serde_json::Value;
@@ -28,6 +29,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const DEFINITION_RELATIVE_PATH: &str = "loops/topic-monitor/loop.yaml";
+
+/// How much of a failed CLI's output a topic's error keeps.
+const CLI_MESSAGE_CHARS: usize = 300;
 
 /// `loopx` subcommands the topic agent may run (its only helpers).
 const AGENT_BASH: [&str; 4] = ["topic config", "topic seen", "notify", "status"];
@@ -281,8 +285,15 @@ fn run_topic_cli(
             &format!("{ai_cli} invocation for topic '{name}' FAILED ({reason}):\n{detail}"),
             &ctx.unified_log,
         );
+        // The CLI's own words, for the dashboard; a topic prompt holds no
+        // private text, so stdout is fine when stderr is empty.
+        let excerpt = tail(detail.trim(), CLI_MESSAGE_CHARS);
         return Err(TopicError {
-            message: reason,
+            message: if excerpt.is_empty() {
+                reason
+            } else {
+                format!("{reason}: {excerpt}")
+            },
             cost_usd: None,
         });
     }
@@ -313,10 +324,25 @@ fn run_topic_cli(
     Ok(TopicOutput { cost_usd })
 }
 
+/// Note on the topic status document whether this run's CLI runs without a
+/// tool allowlist (the dashboard shows it); a restricted CLI clears it.
+/// Best-effort.
+pub fn record_run_warning(status_path: &Path, cli: &str) {
+    let warning = ai_cli_safety::warning(cli, CallSite::TopicMonitor);
+    if let Err(e) = status::write_topic_run_warning(status_path, warning) {
+        eprintln!("loopx: recording the AI CLI warning failed: {e}");
+    }
+}
+
 /// Write this topic's terminal `failed` state ourselves: the agent normally does
 /// it, but a timeout-killed session never gets there. Best-effort.
-pub fn mark_topic_failed(name: &str, status_path: &Path) -> bool {
-    match status::write_topic_status(status_path, name, "failed", &[]) {
+/// `error` is the agent call's failure, when that is why the topic failed.
+pub fn mark_topic_failed(name: &str, status_path: &Path, error: Option<&str>) -> bool {
+    let extra: Vec<(&str, Value)> = error
+        .map(|e| ("error", Value::from(e)))
+        .into_iter()
+        .collect();
+    match status::write_topic_status(status_path, name, "failed", &extra) {
         Ok(_) => true,
         Err(e) => {
             eprintln!("loopx: writing failed status for topic '{name}' failed: {e}");
@@ -336,8 +362,10 @@ pub fn run_one_topic(
     let timeout_seconds = definition.stop_conditions.max_runtime_minutes * 60.0;
     let max_budget = definition.stop_conditions.max_cost_usd;
     let costs: Arc<Mutex<Vec<Option<f64>>>> = Arc::default();
+    // `LoopRuntime` drops the failure message, so keep the last one here.
+    let last_error: Arc<Mutex<Option<String>>> = Arc::default();
     let agent_fn: AgentFn = {
-        let (name, costs) = (name.to_string(), costs.clone());
+        let (name, costs, last_error) = (name.to_string(), costs.clone(), last_error.clone());
         Box::new(
             move |_context| match invoker(&name, timeout_seconds, Some(max_budget)) {
                 Ok(out) => {
@@ -346,10 +374,13 @@ pub fn run_one_topic(
                         cost_usd: out.cost_usd,
                     })
                 }
-                Err(e) => Err(AgentFailure {
-                    message: e.message,
-                    cost_usd: e.cost_usd,
-                }),
+                Err(e) => {
+                    *last_error.lock().unwrap() = Some(e.message.clone());
+                    Err(AgentFailure {
+                        message: e.message,
+                        cost_usd: e.cost_usd,
+                    })
+                }
             },
         )
     };
@@ -372,7 +403,8 @@ pub fn run_one_topic(
     // own `idle` (or its own `failed`) from inside its session, which is the
     // more accurate self-report.
     if result.final_state != LoopState::Completed {
-        mark_topic_failed(name, &ctx.status_path);
+        let error = last_error.lock().unwrap().clone();
+        mark_topic_failed(name, &ctx.status_path, error.as_deref());
     }
     if let Err(e) = write_result(
         &result,
@@ -458,6 +490,7 @@ pub fn main(ctx: &TopicCtx, argv: &[String], invoker: TopicInvoker) -> i32 {
         eprintln!("Usage: loopx run topic-loop: <run_id>");
         return 2;
     }
+    record_run_warning(&ctx.status_path, &ai_cli_config::selected_cli());
     match run_all_topics(ctx, &argv[0], invoker, None) {
         Ok(results) => {
             alert_on_incomplete_results(&results);
@@ -593,10 +626,87 @@ mod tests {
         let p = d.path().join("status.json");
         status::write_topic_status(&p, "a", "running", &[]).unwrap();
         status::write_topic_status(&p, "b", "running", &[]).unwrap();
-        assert!(mark_topic_failed("a", &p));
+        assert!(mark_topic_failed("a", &p, None));
         let doc = status::read_topic_status(&p);
         assert_eq!(doc["topics"]["a"]["state"], "failed");
         assert_eq!(doc["topics"]["b"]["state"], "running");
+    }
+
+    #[test]
+    fn a_failed_cli_exit_carries_the_cli_message() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = TopicCtx::new(d.path().to_path_buf());
+        let fake = crate::agents::testutil::script(
+            d.path(),
+            "fake-gemini",
+            "echo 'quota exceeded' >&2; exit 3",
+        );
+        let argv = vec![fake.display().to_string()];
+        let e = run_topic_cli(&ctx, "gemini", "t", &argv, 30.0).unwrap_err();
+        assert!(e.message.starts_with("exited 3"), "{}", e.message);
+        assert!(e.message.contains("quota exceeded"), "{}", e.message);
+    }
+
+    fn topic_ctx(d: &Path) -> TopicCtx {
+        let mut ctx = TopicCtx::new(d.to_path_buf());
+        ctx.status_path = d.join("status.json");
+        ctx.events_dir = Some(d.join("events"));
+        ctx.results_dir = Some(d.join("results"));
+        ctx
+    }
+
+    fn definition() -> LoopDefinition {
+        LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .join(DEFINITION_RELATIVE_PATH),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_topic_records_the_cli_message_in_its_status() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = topic_ctx(d.path());
+        let failing: TopicInvoker = Arc::new(|_, _, _| {
+            Err(TopicError {
+                message: "exited 3: quota exceeded".into(),
+                cost_usd: None,
+            })
+        });
+        run_one_topic(&ctx, "run_1", "news", &definition(), failing).unwrap();
+        let doc = status::read_topic_status(&ctx.status_path);
+        assert_eq!(doc["topics"]["news"]["state"], "failed");
+        assert_eq!(doc["topics"]["news"]["error"], "exited 3: quota exceeded");
+    }
+
+    #[test]
+    fn a_completed_topic_records_no_error() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = topic_ctx(d.path());
+        let ok: TopicInvoker = Arc::new(|_, _, _| Ok(TopicOutput::default()));
+        run_one_topic(&ctx, "run_1", "news", &definition(), ok).unwrap();
+        let doc = status::read_topic_status(&ctx.status_path);
+        assert!(doc["topics"].get("news").is_none(), "{doc}");
+    }
+
+    #[test]
+    fn the_run_warning_follows_the_selected_cli_and_survives_topic_updates() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("status.json");
+        record_run_warning(&p, "gemini");
+        status::write_topic_status(&p, "news", "idle", &[]).unwrap();
+        let doc = status::read_topic_status(&p);
+        assert_eq!(
+            doc["ai_cli_warning"],
+            crate::ai_cli_safety::warning("gemini", crate::ai_cli_safety::CallSite::TopicMonitor)
+                .unwrap()
+        );
+        assert_eq!(doc["topics"]["news"]["state"], "idle");
+        record_run_warning(&p, "claude");
+        let doc = status::read_topic_status(&p);
+        assert!(doc.get("ai_cli_warning").is_none(), "{doc}");
+        assert_eq!(doc["topics"]["news"]["state"], "idle");
     }
 
     #[test]

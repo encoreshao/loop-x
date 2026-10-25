@@ -20,7 +20,7 @@
 <div class='ai-panel-thread' id='ai-panel-thread' aria-live='polite'></div>
 </div>
 <div class='ai-panel-footer'>
-<div class='ai-panel-prompts'>⟦prompts_html⟧</div>
+⟦ai_cli_notes_html⟧<div class='ai-panel-prompts'>⟦prompts_html⟧</div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="⟦html.escape(_CSRF_TOKEN)⟧">
 <textarea name='text' rows='1' placeholder='⟦html.escape(_t('Ask about this page, or paste a GitLab issue link'))⟧' aria-label='⟦html.escape(_t('Message the assistant'))⟧'></textarea>

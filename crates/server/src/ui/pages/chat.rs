@@ -453,29 +453,6 @@ fn live_links_html(state: &UiState, lang: Lang) -> String {
         .collect()
 }
 
-/// What the selected CLI means for chat: core's warning when it runs without a
-/// tool allowlist, and a note when its reply arrives in one piece.
-fn ai_cli_notes_html(state: &UiState, lang: Lang) -> String {
-    let cli = chat::chat_cli(&loopx_core::ai_cli_config::get_selected_cli(&state.ai_cli_config_path()));
-    let record = chat::ChatJobRecord::for_cli(cli);
-    let mut paragraphs: Vec<String> = Vec::new();
-    if let Some(w) = &record.warning {
-        paragraphs.push(pyfmt::escape(&ai_cli::warning_text(lang, w)));
-    }
-    if record.chat_mode == chat::ChatMode::SingleReply {
-        paragraphs.push(pyfmt::escape(&i18n::t(
-            lang,
-            "{cli} replies in one piece: there is no live typing while it writes.",
-            &[("cli", &ai_cli::display_name(cli))],
-        )));
-    }
-    if paragraphs.is_empty() {
-        return String::new();
-    }
-    paragraphs.push(ai_cli::settings_link(lang));
-    ai_cli::warning_box(&paragraphs)
-}
-
 /// `_overview_body`.
 fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Option<&str>) -> String {
     let state = ctx.state;
@@ -544,7 +521,7 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
         .var("csrf_input", csrf)
         .var("history_html", history_html)
         .var("flash_html", flash_html(flash, flash_ok))
-        .var("ai_cli_notes_html", ai_cli_notes_html(state, lang))
+        .var("ai_cli_notes_html", ai_cli::chat_notes_html(state, lang))
         .var("announce_text", announce)
         .var("hero_title_html", hero_title)
         .var("messages_html", messages_html)

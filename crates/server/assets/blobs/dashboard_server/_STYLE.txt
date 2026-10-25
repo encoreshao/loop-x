@@ -756,6 +756,8 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
 }
 .ai-panel-send:disabled { background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); cursor: not-allowed; }
 .ai-panel-send .icon { font-size: 20px; }
+/* The AI CLI notice in the panel footer: the footer's gap spaces it. */
+.ai-panel-footer .flash { margin: 0; padding: 0.5rem 0.75rem; font-size: 0.8rem; }
 .ai-panel-disclaimer { margin: 0; text-align: center; font-size: 0.72rem; color: var(--md-on-surface-variant); }
 @media (max-width: 720px) {
   /* Too narrow for two cards side by side: the panel overlays the main

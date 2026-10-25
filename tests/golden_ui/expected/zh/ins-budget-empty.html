@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:dcf345b95b935a10--></style>
+<style><!--@blob:0599b4a2675d2a09--></style>
 <script><!--@blob:cef28daddfe17552--></script>
 </head>
 <body>
@@ -150,7 +150,7 @@
 <div class='ai-panel-thread' id='ai-panel-thread' aria-live='polite'></div>
 </div>
 <div class='ai-panel-footer'>
-<div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="这个页面显示了什么？我应该先看哪里？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>解释此页面</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="循环最近表现如何？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-speed'/></svg>表现</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="循环到目前为止学到了什么？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-lightbulb'/></svg>经验总结</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="总结最近一次 GitLab 运行回顾。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>最近一次运行</button></div>
+<div class='flash flash-warning'><p>Codex 会为模型提供 shell，并将提示（包括邮件正文）记录在 ~/.codex/sessions 下。在聊天中，它的沙箱还会阻止直接更改 loopx 设置的操作（启用或停用循环、保存项目）：请改用设置页面，或切换 CLI。</p><p>Codex CLI 会一次性返回完整回复：撰写过程中不会实时显示文字。</p><p><a href='/settings?tab=ai-cli'>在设置中切换 AI CLI</a></p></div><div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="这个页面显示了什么？我应该先看哪里？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>解释此页面</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="循环最近表现如何？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-speed'/></svg>表现</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="循环到目前为止学到了什么？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-lightbulb'/></svg>经验总结</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="总结最近一次 GitLab 运行回顾。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>最近一次运行</button></div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <textarea name='text' rows='1' placeholder='询问此页面，或粘贴 GitLab Issue 链接' aria-label='给助手发消息'></textarea>
