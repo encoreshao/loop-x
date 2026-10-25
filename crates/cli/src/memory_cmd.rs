@@ -1,5 +1,5 @@
 //! `loopx memory`: durable cross-run lessons per GitLab project, stored in the
-//! project's cache entry under `_memory.fix_learnings` (replaces bin/project_memory.py).
+//! project's cache entry under `_memory.fix_learnings`.
 
 use loopx_core::gitlab_cache;
 use loopx_core::pyjson;

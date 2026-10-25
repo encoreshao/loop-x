@@ -1,5 +1,5 @@
-//! `loopx events` (replaces bin/events.py) and `loopx ledger` (the
-//! `loop_cli.py ledger backfill` subcommand).
+//! `loopx events` (append to / read the event ledger) and `loopx ledger`
+//! (ledger maintenance, e.g. `backfill`).
 
 use loopx_core::events::{self, EventFields};
 use loopx_core::ledger;

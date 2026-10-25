@@ -1,4 +1,4 @@
-//! `loopx notify`: post to the loop's Slack incoming webhook (replaces bin/slack_notify.py).
+//! `loopx notify`: post to the loop's Slack incoming webhook.
 
 use loopx_core::slack;
 use serde_json::Value;

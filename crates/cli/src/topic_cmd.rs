@@ -1,5 +1,4 @@
-//! `loopx topic`: topic registry and dedup state (replaces bin/topic_config.py
-//! and bin/topic_seen.py).
+//! `loopx topic`: topic registry and dedup state.
 
 use chrono::Utc;
 use loopx_core::{pyjson, topic_seen, topics};

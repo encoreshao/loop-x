@@ -1,5 +1,5 @@
-//! `loopx worktree new` and `loopx mr open` (replace bin/scripts/new_worktree.sh
-//! and bin/scripts/open_merge_request.sh).
+//! `loopx worktree new` (per-issue git worktrees) and `loopx mr open` (push a
+//! loop branch and open a merge request).
 
 use loopx_core::{mr, worktree};
 use std::process::{Command, ExitCode};

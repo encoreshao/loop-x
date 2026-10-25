@@ -36,12 +36,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Loop definitions: init, validate, audit, run, status, inspect, replay, cost, doctor, eval (replaces bin/loop_cli.py)
+    /// Loop definitions: init, validate, audit, run, status, inspect, replay, cost, doctor, eval
     Loop {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Performance report from the event log (replaces bin/metrics.py)
+    /// Performance report from the event log
     Metrics {
         /// `[--days N] [--project NAME] [--events-dir DIR]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -62,92 +62,92 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Run a LoopKit plugin (replaces bin/loop_plugins/*.py's CLI)
+    /// Run a LoopKit plugin
     Loopkit {
         /// `<plugin> <run_id> [--force]` or `list`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// The loops registry for run-loop-now.sh (replaces bin/loops_config.py's CLI)
+    /// The loops registry: look up registered loops and their settings
     Loops {
         /// `names` or `<entry-point|timeout-seconds|log-suffix|emit-run-events|bash-env> <name>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Which AI CLI the loops use (replaces bin/ai_cli_config.py's CLI)
+    /// Which AI CLI the loops use
     AiCli {
         /// `get` or `set <claude|codex>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Keyword risk score for issue text (replaces bin/risk.py)
+    /// Keyword risk score for issue text
     Risk {
         /// `score --title T --description D`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// AI cost extraction and report (replaces bin/cost.py)
+    /// AI cost extraction and report
     Cost {
         /// `extract-result-text|usage-json --cli-output-file F` or `report [--days N] [--events-dir P]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Lesson reuse report (replaces bin/learning.py)
+    /// Lesson reuse report
     Learning {
         /// `[--days N] [--project P] [--events-dir P]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// File-based per-issue task memory (replaces bin/memory_store.py)
+    /// File-based per-issue task memory
     MemoryStore {
         /// `add <alias> <iid> <lesson> [tags] [category]`, `get <alias> <iid>` or `list <alias>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Route a loop notification to its connectors (replaces bin/notify.py)
+    /// Route a loop notification to its connectors
     NotifyLoop {
         /// `<loop_name> <text>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Append to / read the event ledger (replaces bin/events.py)
+    /// Append to / read the event ledger
     Events {
         /// `emit --type T --run-id R [--data JSON ...]` or `list (--date D | --run-id R) [...]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Event ledger maintenance (replaces `loop_cli.py ledger`)
+    /// Event ledger maintenance
     Ledger {
         /// `backfill [--results-dir DIR] [--events-dir DIR]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Read the per-machine project config (replaces bin/loop_config.py)
+    /// Read the per-machine project config
     Config {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Post a message to the Slack webhook (replaces bin/slack_notify.py)
+    /// Post a message to the Slack webhook
     #[command(disable_help_flag = true)]
     Notify {
         /// `[--bundle=<name>] [--blocks=<json>] <message text>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// GitLab REST helpers (replaces the gitlab-config skill's gitlab_api.py / gitlab_cache.py)
+    /// GitLab REST helpers
     #[command(disable_help_flag = true)]
     Gitlab {
         /// `[--instance=<name>] <command> [args...]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Write run status files (replaces dashboard_server.py write-status / write-topic-status)
+    /// Write run status files
     Status {
         /// `write <state> [--loop NAME] ...` or `topic <name> <state> [--current-step TEXT]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Run one registered loop now (replaces run-loop-now.sh)
+    /// Run one registered loop now
     Run {
         /// `<loop_name> [extra_args...]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -165,7 +165,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Start every loop that is due (what launchd runs; replaces loop_scheduler.py)
+    /// Start every loop that is due (what launchd runs)
     Scheduler,
     /// Internal: the supervised process behind `loopx run`
     #[command(name = "_entry", hide = true)]
@@ -179,7 +179,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Per-project lessons learned (replaces bin/project_memory.py)
+    /// Per-project lessons learned
     Memory {
         /// `get <instance> <project_id>` or `add <instance> <project_id> <lesson> [issue_iid] [tags]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -211,7 +211,7 @@ enum Command {
         #[command(subcommand)]
         command: MrCommand,
     },
-    /// Inbox Triage loop (replaces bin/inbox_triage_runner.py)
+    /// Inbox Triage loop
     Inbox {
         /// `run <run_id>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -231,7 +231,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum WorktreeCommand {
-    /// Create or sync the worktree for an issue; prints its path (replaces new_worktree.sh)
+    /// Create or sync the worktree for an issue; prints its path
     New {
         /// `<repo_path> <default_branch> <issue_iid> <worktree_root>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -241,7 +241,7 @@ enum WorktreeCommand {
 
 #[derive(Subcommand)]
 enum MrCommand {
-    /// Push a loop/issue-* branch and open a merge request (replaces open_merge_request.sh)
+    /// Push a loop/issue-* branch and open a merge request
     Open {
         /// `<repo_path> <branch> <target_branch> <title>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -253,13 +253,13 @@ enum MrCommand {
 enum TopicCommand {
     /// Run the topic monitor loop now
     Run,
-    /// Read topics.json (replaces bin/topic_config.py)
+    /// Read topics.json
     Config {
         /// `names` or `topic <name>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Items already reported per topic (replaces bin/topic_seen.py)
+    /// Items already reported per topic
     Seen {
         /// `get <topic>` or `add <topic> <url> <title>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -269,13 +269,13 @@ enum TopicCommand {
 
 #[derive(Subcommand)]
 enum IssuesCommand {
-    /// List open issues assigned to a user (replaces bin/list_assigned_issues.py)
+    /// List open issues assigned to a user
     List {
         /// `[username] [project_alias...]`; defaults come from projects.json
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// New issue notes since the loop last looked (replaces bin/track_new_comments.py)
+    /// New issue notes since the loop last looked
     Comments {
         /// `<instance> <project_id> <issue_iid> [exclude_author]` or `mark-seen <instance> <project_id> <issue_iid>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
