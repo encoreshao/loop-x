@@ -198,6 +198,37 @@ with Chrome() as c:
     c.pump(4)
     c.screenshot(f"{out}/inside-13h.png")
 
+# 8. A started run sends its person to the desk, even one too short to be seen as
+# "working", and a finished one relaxes at the coffee machine or on a sofa.
+SEATED_JS = ("((n) => { const a = window.__office.debug().find(a => a.name === n);"
+             " return !!a && !a.walking && a.seated && a.x < -2; })")
+with Chrome() as c:
+    load(c)
+    settle(c, "run start fixture", timeout=20)
+    # 8a. Run now clicked while the loop still reads idle: walk to the desk at once.
+    c.evaluate("window.__office.runRequested('quiet-loop')")
+    try:
+        c.wait_for("window.__office.debug().some(a => a.name === 'quiet-loop' && a.walking)", timeout=5, interval=0.1)
+        c.wait_for(SEATED_JS + "('quiet-loop')", timeout=60, interval=0.5)
+    except TimeoutError:
+        fails.append(f"run requested: quiet-loop did not walk to its desk: {[a for a in debug(c) if a['name'] == 'quiet-loop']}")
+    # 8b. The run flips to working and back to idle before the person arrives (chat run):
+    # still walks to the desk, works a moment, then goes to coffee or a sofa.
+    load(c)
+    settle(c, "short run fixture", timeout=20)
+    base = {l["name"]: l for l in c.evaluate("fetch('/office/state').then(r => r.json()).then(d => d.loops)")}
+    set_loops(c, list({**base, "quiet-loop": loop("quiet-loop", "working")}.values()))
+    c.pump(0.3)
+    set_loops(c, list({**base, "quiet-loop": loop("quiet-loop", "idle")}.values()))
+    try:
+        c.wait_for(SEATED_JS + "('quiet-loop')", timeout=60, interval=0.5)
+        c.wait_for("(() => { const a = window.__office.debug().find(a => a.name === 'quiet-loop');"
+                   " return !a.walking && (a.at === 'coffee' || a.at === 'sofa'); })()", timeout=90, interval=0.5)
+    except TimeoutError:
+        fails.append(f"short run: quiet-loop did not sit at its desk and then relax: {[a for a in debug(c) if a['name'] == 'quiet-loop']}")
+    if c.errors:
+        fails.append("run start console errors: " + " | ".join(c.errors[:3]))
+
 # 7. Reduced motion: a state change teleports, nobody ever walks.
 with Chrome(reduced_motion=True) as c:
     load(c)
@@ -220,6 +251,6 @@ if fails:
     for f in fails:
         print("  - " + f)
     sys.exit(1)
-print("PASS: fixture zones, walking transitions, double change, 40 -> 24 + 16 more, empty room, hostile name, reduced motion")
+print("PASS: fixture zones, walking transitions, run start and relax, double change, 40 -> 24 + 16 more, empty room, hostile name, reduced motion")
 PY
 echo "screenshots in $OUT"

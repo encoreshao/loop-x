@@ -101,6 +101,7 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     } catch {
       failed = t("action_failed");
     }
+    if (kind === "run" && !failed && hooks.onRun) hooks.onRun(current ? current.name : null);
     try {
       if (hooks.refresh) await hooks.refresh();
     } catch {

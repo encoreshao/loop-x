@@ -20,6 +20,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Office view: starting a run (Run now, or from the chat) sends that person straight to their desk, even for a run too short to be seen as working, and when it ends they go to the coffee machine or a sofa; the big "Needs you" sign is now a small hand icon.
 - Inbox Triage and the dashboard chat no longer refuse Codex. CLIs that cannot be locked down (Codex, Gemini, Kimi, Cursor) run with a visible warning on Settings, Chat, Inbox Triage, topic and loop pages, the unified log and run events. Codex's warning explains it gives the model a shell and records prompts, including email text, under `~/.codex/sessions`; in chat its sandbox also blocks actions that change loopx settings.
 - Calendar prep and the other sealed model calls run on whichever AI CLI is selected instead of Claude only.
 - Cost shows as unknown for CLIs that report none (everything except Claude). Gemini and Codex chat replies arrive in one piece, and chat titles are best effort on non-Claude CLIs.

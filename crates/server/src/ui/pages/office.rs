@@ -111,7 +111,6 @@ fn client_strings(ctx: &UiCtx) -> Value {
         "state_idle": ctx.t("Idle"),
         "state_failed": ctx.t("Failed"),
         "state_disabled": ctx.t("Disabled"),
-        "needs_you": ctx.t("Needs you"),
         "disabled_standby": ctx.t("Disabled · standby"),
         "run_now": ctx.t("Run now"),
         "enable": ctx.t("Enable"),

@@ -196,6 +196,7 @@ async function main() {
   root.tabIndex = -1;
   const panel = createPanel(root, strings, csrf(), {
     refresh: () => refresh(),
+    onRun: (name) => name && agents.runRequested(name),
     onClose: () => release(),
   });
   function show(loops) {
@@ -245,6 +246,7 @@ async function main() {
   live.refresh();
   // A test override sticks until the server's own state next changes.
   office.setLoops = show;
+  office.runRequested = (name) => agents.runRequested(name);
   office.debug = () => agents.debug();
 
   // ---------- selection, hover and the camera ----------

@@ -16,6 +16,10 @@ const COLORS = { working: 0x3ddc84, waiting: 0xffb020, idle: 0x7d8590, failed: 0
 const GLYPHS = { working: "⌨️", waiting: "✋", failed: "⚠️", disabled: "💤" };
 const DISABLED_SHIRT = 0x7b808a;
 const WALK_SPEED = 2.6;
+/// A requested run (Run now) is shown as work this long while the loop's own state catches up.
+const PENDING_RUN_S = 25;
+/// A person who walked to the desk for a run stays at least this long, however short the run was.
+const MIN_DESK_S = 3.5;
 /// The front aisle between table B and the "Needs you" mat, and where it meets the
 /// walk along the standby bench.
 const FRONT_Z = 8, BENCH_WALK_X = -12.8, WAIT_Z = 9.9;
@@ -46,7 +50,7 @@ export function createAgents(ctx) {
   const agents = new Map();
   let order = [];
   const scratch = new THREE.Vector3();
-  let layout = null, furniture = null, labelScale = 1, overflow = 0;
+  let layout = null, furniture = null, labelScale = 1, overflow = 0, clock = 0;
 
   // ---------- sprites ----------
   function sprite(w, h, cw, ch) {
@@ -143,6 +147,9 @@ export function createAgents(ctx) {
       name, state: null, info: null, ...p, label, bubble, beam,
       desk: null, loc: null, dest: null, path: [], sit: 0, sitY: 0, sitOn: false,
       yaw: 0, yawT: 0, t0: phaseOf(name), wander: 8 + R() * 10, glyph: null, faceT: null,
+      // `minWork`: a run started, so go to the desk (and stay a moment) whatever the state says.
+      // `pendingUntil`: a requested run the state feed has not shown yet. `dwell`: time left at the desk.
+      minWork: false, pendingUntil: 0, dwell: null,
     };
   }
   function dispose(a) {
@@ -159,7 +166,16 @@ export function createAgents(ctx) {
     });
   }
   function setState(a, s) {
+    const was = a.state;
     a.state = s;
+    if (s === "working") {
+      a.pendingUntil = 0;
+      a.dwell = null;
+      if (was !== "working" && !still) a.minWork = true;
+    } else if (s === "waiting" || s === "disabled") {
+      a.minWork = false;
+      a.pendingUntil = 0;
+    }
     drawLabel(a);
     // An idle person's bubble is drawn by the lounge pose; drop the previous state's glyph.
     setGlyph(a, s === "idle" ? null : GLYPHS[s]);
@@ -178,7 +194,12 @@ export function createAgents(ctx) {
     const open = list.filter((s) => !s.occ);
     return open.length ? open[anywhere ? Math.floor(R() * open.length) : 0] : null;
   }
-  const wantOf = (a) => (a.state === "disabled" ? "off" : a.state === "waiting" ? "wait" : a.state === "idle" ? "lounge" : "desk");
+  const wantOf = (a) => {
+    if (a.state === "disabled") return "off";
+    if (a.state === "waiting") return "wait";
+    if (a.minWork || a.pendingUntil > clock) return "desk";
+    return a.state === "idle" ? "lounge" : "desk";
+  };
   /// Where `a` should go now; waiting and disabled people fall back to the lounge
   /// when their zone is full.
   function target(a, notSpot) {
@@ -189,7 +210,10 @@ export function createAgents(ctx) {
       if (spot) return { kind, spot };
       kind = "lounge";
     }
-    const spot = pick(layout.lounge.filter((s) => s !== notSpot), true);
+    // Someone coming off a run goes for coffee or a sofa, not the chat corner.
+    const open = layout.lounge.filter((s) => s !== notSpot);
+    const rest = a.loc && a.loc.kind === "desk" ? open.filter((s) => s.kind !== "chat") : [];
+    const spot = pick(rest.length ? rest : open, true);
     return spot ? { kind: "lounge", spot } : null;
   }
   function needsMove(a) {
@@ -304,6 +328,14 @@ export function createAgents(ctx) {
         a.wander -= dt;
         // No free spot to wander to: wait a while before looking again.
         if (a.wander < 0 && !plan(a)) a.wander = 8 + R() * 12;
+      }
+      // A person at the desk for a run that is already over stays a moment before leaving.
+      if (a.minWork && a.loc.kind === "desk" && a.loc.desk === a.desk && a.pendingUntil <= clock && a.state !== "working") {
+        a.dwell = (a.dwell === null ? MIN_DESK_S : a.dwell) - dt;
+        if (a.dwell <= 0) {
+          a.minWork = false;
+          a.dwell = null;
+        }
       }
       // A pending change of place (also a change that arrived mid-walk).
       if (!a.path.length && needsMove(a)) {
@@ -490,6 +522,7 @@ export function createAgents(ctx) {
     },
     tick(dt, t) {
       if (!layout) return;
+      clock += dt;
       for (const s of layout.seats) s.lit = false;
       let working = 0;
       for (const a of order) {
@@ -528,6 +561,15 @@ export function createAgents(ctx) {
       const a = agents.get(name);
       return a ? [a.group.position.x, a.group.position.y, a.group.position.z] : null;
     },
+    /// A run was just started for `name` (Run now, a chat command): send that person to
+    /// the desk now instead of waiting for the state feed to show the run.
+    runRequested(name) {
+      const a = agents.get(name);
+      if (!a || a.state === "disabled" || a.state === "waiting" || still) return;
+      a.pendingUntil = clock + PENDING_RUN_S;
+      a.minWork = true;
+      a.dwell = null;
+    },
     /// Test hook: where everyone is.
     debug() {
       return order.map((a) => ({
@@ -537,6 +579,7 @@ export function createAgents(ctx) {
         z: Math.round(a.group.position.z * 100) / 100,
         seated: a.sit > 0.5,
         walking: a.path.length > 0,
+        at: a.loc ? (a.loc.spot ? a.loc.spot.kind : a.loc.kind) : null,
       }));
     },
     get overflow() {

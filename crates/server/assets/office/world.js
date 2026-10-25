@@ -305,11 +305,12 @@ export function buildWorld(scene, THREE, opts = {}) {
     sprite(tex, 3.0, 0.8, -13.2, 3.4, 4.6); // clear of the wall, which would clip it
   }
 
-  // ---------- the "Needs you" mat and sign ----------
+  // ---------- the "Needs you" mat and its icon ----------
   box(WAIT_MAT.w, 0.02, WAIT_MAT.d, M(0xffb020, { emissive: 0x553500 }), WAIT_MAT.x, 0.03, WAIT_MAT.z).castShadow = false;
-  if (strings.needs_you) {
-    const tex = art.signTexture(THREE, strings.needs_you + " ↓", { width: 640, height: 160, background: "rgba(138,90,0,.95)", color: "#fff", size: 72 });
-    sprite(tex, 4.4, 1.1, WAIT_MAT.x, 5.4, 10.6);
+  // Just a small hand icon above the mat, no wording.
+  {
+    const tex = art.signTexture(THREE, "✋", { width: 128, height: 128, background: "rgba(138,90,0,.95)", color: "#fff", size: 80 });
+    sprite(tex, 0.9, 0.9, WAIT_MAT.x, 3.2, 10.6);
   }
 
   // ---------- AI centre: three racks of blinking LEDs, no label ----------
