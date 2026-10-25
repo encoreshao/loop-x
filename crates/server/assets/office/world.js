@@ -51,6 +51,22 @@ export function rng(seed) {
 
 /// The scene's lights: sky/ground fill, the sun (casts shadows), a warm lounge
 /// lamp and four ceiling lights over the work and waiting areas that come on at night.
+/// Stops recomputing the matrices of everything under `root` (the root too, unless it is a
+/// scene) except the subtrees in `movers`: for objects that never move after being built.
+export function freezeStatic(root, movers = []) {
+  const skip = new Set(movers);
+  root.updateMatrixWorld(true);
+  const walk = (o) => {
+    for (const c of o.children) {
+      if (skip.has(c)) continue;
+      if (!c.isLight) c.matrixAutoUpdate = false;
+      walk(c);
+    }
+  };
+  if (!root.isScene) root.matrixAutoUpdate = false;
+  walk(root);
+}
+
 export function buildLights(scene, THREE) {
   const hemi = new THREE.HemisphereLight(0xdfe8ff, 0x6b5a45, 0.8);
   scene.add(hemi);

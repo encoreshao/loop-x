@@ -32,7 +32,10 @@ mkdir -p "$LOOP_ENGINEERING_HOME" "$HOME" "$LOOP_UPDATE_DIR" "$LOOP_EVENTS_DIR" 
 
 SERVER_PID=""
 cleanup() {
-  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
   rm -rf "$SANDBOX"
 }
 trap cleanup EXIT
@@ -74,9 +77,15 @@ stop_server() {
 }
 trap stop_server USR1
 trap start_server USR2
+# Something else already answering on the port would make the probe below lie.
+if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/"; then
+  echo "port $PORT is already served by something else" >&2
+  exit 1
+fi
 start_server
 UP=""
 for _ in $(seq 1 60); do
+  kill -0 "$SERVER_PID" 2>/dev/null || { echo "server exited while starting on port $PORT" >&2; exit 1; }
   curl -s -o /dev/null "http://127.0.0.1:$PORT/loops" && UP=1 && break
   sleep 0.5
 done
@@ -85,4 +94,10 @@ echo "SANDBOX_HOME=$LOOP_ENGINEERING_HOME"
 echo "SANDBOX_ROOT=$LOOPX_ROOT"
 echo "OFFICE_URL=http://127.0.0.1:$PORT"
 # Short sleeps (not one long wait) so USR1/USR2 are handled promptly.
-while :; do sleep 0.2; done
+while :; do
+  if [ -n "$SERVER_PID" ] && ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "server exited" >&2
+    exit 1
+  fi
+  sleep 0.2
+done

@@ -201,6 +201,60 @@ with Chrome() as c:
     except TimeoutError:
         fails.append("(f) the stale note did not clear when the feed recovered")
 
+# (g) Frames stop while the office is not visible and resume afterwards.
+with Chrome() as c:
+    load(c, "h=13")
+    f0 = c.evaluate("window.__office.frames")
+    c.pump(1)
+    if c.evaluate("window.__office.frames") <= f0:
+        fails.append("(g) no frames drawn while the office is visible")
+    c.evaluate("document.getElementById('office').style.display = 'none'")
+    c.pump(0.7)
+    f1 = c.evaluate("window.__office.frames")
+    c.pump(1)
+    f2 = c.evaluate("window.__office.frames")
+    if f2 != f1:
+        fails.append(f"(g) frames kept advancing while hidden ({f1} -> {f2})")
+    c.evaluate("document.getElementById('office').style.display = ''")
+    c.pump(1)
+    if c.evaluate("window.__office.frames") <= f2:
+        fails.append("(g) frames did not resume when the office was shown again")
+
+# (h) Reduced motion draws on demand: idle means no frames, a selection draws some.
+with Chrome(reduced_motion=True) as c:
+    load(c, "h=13")
+    c.pump(2)
+    f1 = c.evaluate("window.__office.frames")
+    c.pump(1)
+    f2 = c.evaluate("window.__office.frames")
+    if f2 != f1:
+        fails.append(f"(h) frames kept advancing at rest under reduced motion ({f1} -> {f2})")
+    c.evaluate("window.__office.select('busy-loop')")
+    c.pump(0.5)
+    if c.evaluate("window.__office.frames") <= f2:
+        fails.append("(h) selecting a person drew no frame under reduced motion")
+
+# (i) If a module fails to load the List is shown with a note.
+with Chrome() as c:
+    c.call("Network.enable", session=c.session)
+    c.call("Network.setBlockedURLs", {"urls": ["*three.module.min.js*"]}, session=c.session)
+    c.goto("about:blank")
+    c.goto(f"{url}/loops?view=office#h=13")
+    try:
+        c.wait_for("document.getElementById('office').hidden && !document.getElementById('office-list').hidden"
+                   " && !!document.querySelector('#office-list .office-note')", timeout=20, interval=0.3)
+    except TimeoutError:
+        fails.append("(i) a failed module load did not fall back to the List with a note")
+
+# (j) Hash hooks are clamped: poll=10 still means at most a few fetches a second.
+with Chrome() as c:
+    load(c, "h=13&poll=10")
+    n0 = c.evaluate("performance.getEntriesByType('resource').filter(r => r.name.includes('/office/state')).length")
+    c.pump(2)
+    n1 = c.evaluate("performance.getEntriesByType('resource').filter(r => r.name.includes('/office/state')).length")
+    if n1 - n0 > 12:
+        fails.append(f"(j) poll=10 fetched {n1 - n0} times in 2s; the floor is not applied")
+
 if fails:
     print("FAIL")
     for f in fails:

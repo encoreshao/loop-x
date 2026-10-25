@@ -6,7 +6,7 @@
 // to the AI centre rack; disabled people wear grey.
 
 const V = new URL(import.meta.url).search;
-const [{ HUB, COR, rng }, { buildLayout, furnish, MAX_DRAWN }, { appearanceFor, buildPerson }] = await Promise.all([
+const [{ HUB, COR, rng, freezeStatic }, { buildLayout, furnish, MAX_DRAWN }, { appearanceFor, buildPerson }] = await Promise.all([
   import("./world.js" + V),
   import("./layout.js" + V),
   import("./people.js" + V),
@@ -78,7 +78,7 @@ export function createAgents(ctx) {
     x.fillStyle = "#fff";
     x.textAlign = "center";
     const max = c.width - 40;
-    let px = 54, name = a.name;
+    let px = 54, name = a.title || a.name;
     const font = (n, w) => w + " " + n + "px -apple-system,system-ui,sans-serif";
     x.font = font(px, 600);
     while (px > 30 && x.measureText(name).width > max) x.font = font((px -= 2), 600);
@@ -450,11 +450,15 @@ export function createAgents(ctx) {
         }
         layout = next;
         furniture = furnish(scene, THREE, layout);
+        freezeStatic(furniture);
         labelScale = Math.min(1, (layout.seats[0].gap * 2) / 2.2);
         rebuilt = true;
         labelScaled = true;
       }
-      const drawn = list.slice(0, MAX_DRAWN);
+      // With more loops than people drawn, disabled ones (idle on the bench) are the ones left out.
+      const drawn = list.length > MAX_DRAWN
+        ? [...list.filter((l) => l.state !== "disabled"), ...list.filter((l) => l.state === "disabled")].slice(0, MAX_DRAWN)
+        : list;
       const keep = new Set(drawn.map((l) => l.name));
       for (const [name, a] of agents) {
         if (!keep.has(name)) {
@@ -471,8 +475,12 @@ export function createAgents(ctx) {
         a.desk = layout.seats[i];
         a.idx = i;
         a.info = l;
+        const title = typeof l.title === "string" && l.title ? l.title : l.name;
+        const retitled = title !== a.title;
+        a.title = title;
         const s = Object.hasOwn(COLORS, l.state) ? l.state : "idle";
         if (s !== a.state) setState(a, s);
+        else if (retitled) drawLabel(a);
         return a;
       });
       if (rebuilt) for (const a of order) carryOver(a);
@@ -490,6 +498,10 @@ export function createAgents(ctx) {
       }
       for (const s of layout.seats) if (!s.lit) s.screenMat.emissive.setHex(0x000000);
       handles.aiRate = 1 + working * 0.5;
+    },
+    /// The group holding the current layout's tables and chairs (hit-testing hides people behind it).
+    furnitureGroup() {
+      return furniture;
     },
     /// The agent whose person contains `object3D` (e.g. a raycast hit), or null.
     agentAt(object3D) {

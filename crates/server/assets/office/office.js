@@ -39,7 +39,7 @@ function webglAvailable() {
 
 /// Hides the office and shows the server-rendered List with a one-line note. The
 /// `loop_view` cookie is left alone, so a browser with WebGL still gets the office.
-function showList() {
+function showList(key = "no_webgl") {
   if (root) root.hidden = true;
   const list = document.getElementById("office-list");
   if (!list) return;
@@ -47,7 +47,7 @@ function showList() {
     const note = document.createElement("p");
     note.className = "office-note";
     note.setAttribute("role", "status");
-    note.textContent = strings.no_webgl || "";
+    note.textContent = strings[key] || "";
     list.prepend(note);
   }
   list.hidden = false;
@@ -66,7 +66,9 @@ function hashHooks() {
     const m = parts.map((p) => p.match(new RegExp("^" + key + "=(\\d+)$"))).find(Boolean);
     return m ? Number(m[1]) : null;
   };
-  return { camera, hour: h ? Number(h[1]) : null, staleMs: num("stale"), pollMs: num("poll") };
+  // Floors keep a stray hash from hammering the server.
+  const floor = (v, min) => (v === null ? null : Math.max(min, v));
+  return { camera, hour: h ? Number(h[1]) : null, staleMs: floor(num("stale"), 1000), pollMs: floor(num("poll"), 250) };
 }
 
 function timeControl(onPick, initial) {
@@ -90,6 +92,14 @@ function timeControl(onPick, initial) {
   return group;
 }
 
+/// An AbortSignal that fires after `ms` (older browsers lack `AbortSignal.timeout`).
+function timeoutSignal(ms) {
+  if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) return AbortSignal.timeout(ms);
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
 function disposeScene(scene) {
   scene.traverse((o) => {
     if (o.geometry) o.geometry.dispose();
@@ -108,7 +118,7 @@ async function main() {
     return;
   }
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const [{ buildWorld, buildLights }, { createDayNight }, { createAgents }, { createPanel }, { startLive }] = await Promise.all([
+  const [{ buildWorld, buildLights, freezeStatic }, { createDayNight }, { createAgents }, { createPanel }, { startLive }] = await Promise.all([
     import("./world.js" + V),
     import("./daynight.js" + V),
     import("./agents.js" + V),
@@ -157,6 +167,13 @@ async function main() {
 
   const lights = buildLights(scene, THREE);
   const { handles } = buildWorld(scene, THREE, { strings, reducedMotion });
+  // Only the clouds, cars, birds, walkers, sun and moon move; the rest keeps its matrices.
+  const movers = [
+    ...handles.clouds, ...handles.cars.map((c) => c.g), ...handles.birds.map((b) => b.g), ...handles.walkers.map((w) => w.g),
+    handles.sun.mesh, handles.sun.halo, handles.moon.mesh, handles.moon.halo,
+  ];
+  freezeStatic(scene, movers);
+  const worldObjects = new Set(scene.children);
   const dayNight = createDayNight(THREE, scene, handles, lights);
   const agents = createAgents({ THREE, scene, handles, strings, reducedMotion });
   // "and N more" for loops beyond the ones drawn; the List view has them all.
@@ -172,6 +189,8 @@ async function main() {
   staleNote.hidden = true;
   root.append(staleNote);
   const office = (window.__office = Object.assign(window.__office || {}, { overflow: 0, syncs: 0 }));
+  let frame = 0, onScreen = true, disposed = false, lastFrame = 0, boostUntil = 0, wanted = 2;
+  const clock = new THREE.Clock();
   let latest = [], selected = null, hovered = null, focusAnim = null;
   const csrf = () => (document.getElementById("office-csrf") || {}).value || "";
   root.tabIndex = -1;
@@ -189,9 +208,14 @@ async function main() {
     more.hidden = !n;
     office.overflow = n;
     office.syncs += 1;
+    requestRender();
   }
   async function fetchState() {
-    const r = await fetch("/office/state", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const r = await fetch("/office/state", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+      signal: timeoutSignal(10000),
+    });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const loops = (await r.json()).loops;
     // A 200 that is not a state feed counts as a failure: keep what is drawn.
@@ -239,7 +263,7 @@ async function main() {
     const mine = ray.intersectObjects(agents.pickables(), true).find((h) => !h.object.isLine && isShown(h.object));
     if (!mine) return null;
     const a = agents.agentAt(mine.object);
-    for (const h of ray.intersectObjects(scene.children, true)) {
+    for (const h of ray.intersectObjects(occluders(), true)) {
       if (h.distance >= mine.distance - 0.05) break;
       const o = h.object;
       if (o.isLine || o.isPoints || o.isSprite || !isShown(o) || agents.agentAt(o)) continue;
@@ -251,6 +275,28 @@ async function main() {
   }
   function highlight() {
     agents.setHighlight([hovered, selected].filter(Boolean));
+    requestRender();
+  }
+  // What can hide a person from the pointer: the room's static objects and furniture,
+  // not the sky, the ground or the city outside.
+  const ROOM_BOX = new THREE.Box3(new THREE.Vector3(-16, -1, -12), new THREE.Vector3(16, 12, 14));
+  let indoor = null, indoorList = [], indoorFurniture = null;
+  function occluders() {
+    if (!indoor) {
+      const box = new THREE.Box3(), size = new THREE.Vector3();
+      indoor = [...worldObjects].filter((o) => {
+        if (o.isLight || o.isSprite || o.isPoints || o.isLine) return false;
+        box.setFromObject(o);
+        box.getSize(size);
+        return box.intersectsBox(ROOM_BOX) && Math.max(size.x, size.y, size.z) < 60;
+      });
+    }
+    const f = agents.furnitureGroup();
+    if (f !== indoorFurniture) {
+      indoorFurniture = f;
+      indoorList = f ? [...indoor, f] : indoor;
+    }
+    return indoorList;
   }
   const chestOf = (name) => {
     const p = agents.positionOf(name);
@@ -361,7 +407,10 @@ async function main() {
     return p ? { target: controls.target.toArray(), person: p.toArray() } : null;
   };
   let override = hooks.hour;
-  const apply = () => dayNight.apply(dayNight.currentHour(override));
+  const apply = () => {
+    dayNight.apply(dayNight.currentHour(override));
+    requestRender();
+  };
   apply();
   const timer = setInterval(apply, 30000);
   root.append(timeControl((hour) => {
@@ -374,29 +423,57 @@ async function main() {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    requestRender();
   };
   const resizer = new ResizeObserver(resize);
   resizer.observe(root);
 
-  // Render only while the document and the office are both visible.
-  const clock = new THREE.Clock();
-  let frame = 0, onScreen = true, disposed = false;
-  function loop() {
-    frame = requestAnimationFrame(loop);
+  // Render only while the document and the office are both visible, at most 30 times a
+  // second (uncapped while the camera is being moved), and only on demand under reduced
+  // motion. `office.frames` counts the frames drawn.
+  const FRAME_MS = 28;
+  office.frames = 0;
+  controls.addEventListener("change", () => {
+    boostUntil = performance.now() + 250;
+    requestRender();
+  });
+  if (reducedMotion) controls.enableDamping = false;
+  function canRun() {
+    return !disposed && onScreen && !document.hidden;
+  }
+  function schedule() {
+    if (!frame && canRun()) frame = requestAnimationFrame(loop);
+  }
+  /// Under reduced motion nothing animates on its own: draw two frames (one to apply the
+  /// change, one to settle) whenever something changes. Otherwise the loop is running anyway.
+  function requestRender() {
+    wanted = 2;
+    schedule();
+  }
+  function loop(now) {
+    frame = 0;
+    if (!canRun()) return;
+    if (!reducedMotion) {
+      schedule();
+      if (now - lastFrame < FRAME_MS && now > boostUntil) return;
+    } else if (--wanted > 0) {
+      schedule();
+    }
+    lastFrame = now;
     const dt = Math.min(clock.getDelta(), 0.1);
     agents.tick(dt, clock.elapsedTime);
     handles.tick(dt, clock.elapsedTime);
     stepFocus(clock.elapsedTime);
     controls.update();
     renderer.render(scene, camera);
-    if (!window.__office || !window.__office.ready) window.__office = Object.assign(window.__office || {}, { ready: true });
+    office.frames += 1;
+    if (!office.ready) office.ready = true;
   }
   function sync() {
-    const run = !disposed && onScreen && !document.hidden;
-    if (run && !frame) {
-      clock.getDelta();
-      loop();
-    } else if (!run && frame) {
+    if (canRun()) {
+      if (!frame) clock.getDelta();
+      requestRender();
+    } else if (frame) {
       cancelAnimationFrame(frame);
       frame = 0;
     }
@@ -425,7 +502,7 @@ async function main() {
   canvas.addEventListener("webglcontextlost", (e) => {
     e.preventDefault();
     dispose();
-    showList();
+    showList("context_lost");
   });
   office.dispose = dispose;
   addEventListener("pagehide", dispose);
@@ -438,5 +515,5 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  showList();
+  showList("load_failed");
 });

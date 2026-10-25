@@ -159,6 +159,17 @@ with Chrome() as c:
     c.pump(2)
     c.screenshot(f"{out}/forty-13h.png")
 
+    # 4b. More loops than people: disabled ones are left out, so the 5 failed at the end show.
+    many = [loop(f"dis-{i:02d}", "disabled") for i in range(30)] + [loop(f"bad-{i}", "failed") for i in range(5)] + \
+           [loop(f"idle-{i}", "idle") for i in range(5)]
+    set_loops(c, many)
+    drawn = {a["name"] for a in debug(c)}
+    missing = [f"bad-{i}" for i in range(5) if f"bad-{i}" not in drawn] + [f"idle-{i}" for i in range(5) if f"idle-{i}" not in drawn]
+    if missing or len(drawn) != 24:
+        fails.append(f"overflow: active loops hidden or wrong count ({len(drawn)} drawn, missing {missing})")
+    if c.evaluate("window.__office.overflow") != 16:
+        fails.append("overflow: wrong overflow count with 40 loops")
+
     # 5. Zero loops: an empty room, the note hidden.
     set_loops(c, [])
     c.pump(1)
