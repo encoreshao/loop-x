@@ -19,7 +19,7 @@ use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::build_verifiers;
 use crate::runner_util::{
-    append_unified_log, could_not_start, notify_slack_best_effort, parse_envelope,
+    append_unified_log, could_not_start, head, notify_slack_best_effort, parse_envelope,
     resolved_program, tail, unified_log_path,
 };
 use crate::{ai_cli_config, cost, proc, prompt, status, topics};
@@ -375,7 +375,8 @@ pub fn run_one_topic(
                     })
                 }
                 Err(e) => {
-                    *last_error.lock().unwrap() = Some(e.message.clone());
+                    // Bounded: an unreadable reply carries the CLI's whole stdout.
+                    *last_error.lock().unwrap() = Some(head(&e.message, CLI_MESSAGE_CHARS));
                     Err(AgentFailure {
                         message: e.message,
                         cost_usd: e.cost_usd,
@@ -678,6 +679,30 @@ mod tests {
         let doc = status::read_topic_status(&ctx.status_path);
         assert_eq!(doc["topics"]["news"]["state"], "failed");
         assert_eq!(doc["topics"]["news"]["error"], "exited 3: quota exceeded");
+    }
+
+    #[test]
+    fn a_huge_failure_message_is_stored_bounded() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = topic_ctx(d.path());
+        let failing: TopicInvoker = Arc::new(|_, _, _| {
+            Err(TopicError {
+                message: format!("unreadable output from gemini\n{}", "x".repeat(5000)),
+                cost_usd: None,
+            })
+        });
+        run_one_topic(&ctx, "run_1", "news", &definition(), failing).unwrap();
+        let doc = status::read_topic_status(&ctx.status_path);
+        let error = doc["topics"]["news"]["error"].as_str().unwrap();
+        assert!(
+            error.starts_with("unreadable output from gemini"),
+            "{error}"
+        );
+        assert!(
+            error.chars().count() <= CLI_MESSAGE_CHARS + 1,
+            "{}",
+            error.len()
+        );
     }
 
     #[test]

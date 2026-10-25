@@ -11,7 +11,7 @@
 //! carries [`ai_cli_safety::warning`] for the Inbox Triage page instead of the
 //! run being refused.
 
-use crate::agents::sealed::{self, SealedHooks};
+use crate::agents::sealed::{self, SealedCallFailed, SealedFailKind, SealedHooks};
 use crate::ai_cli_safety::{self, CallSite};
 use crate::inbox_config::{self, categories_for, string_list};
 use crate::inbox_seen;
@@ -97,24 +97,40 @@ pub struct AiOut {
     pub cost_usd: Option<f64>,
 }
 
+/// How every inbox error from a failed AI call starts (the dashboard keys on it).
+pub const AI_CALL_FAILED: &str = "AI call failed";
+
 /// Why an AI call failed; the Python exception class names are what the
-/// status/Slack text shows.
+/// status/Slack text shows. The `Timeout`, `Exited` and `NotStarted` payloads
+/// are text loopx generated itself (never the CLI's output, which can echo
+/// email text) and are shown after the class name.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AiFail {
     /// `subprocess.TimeoutExpired`
-    Timeout,
+    Timeout(String),
     /// `subprocess.CalledProcessError`
-    Exited,
-    /// `TriageFailed`
+    Exited(String),
+    /// `FileNotFoundError`: the CLI could not be started.
+    NotStarted(String),
+    /// `TriageFailed`; its message can quote the CLI's output, so it is never shown.
     Triage(String),
 }
 
 impl AiFail {
     pub fn class_name(&self) -> &'static str {
         match self {
-            AiFail::Timeout => "TimeoutExpired",
-            AiFail::Exited => "CalledProcessError",
+            AiFail::Timeout(_) => "TimeoutExpired",
+            AiFail::Exited(_) => "CalledProcessError",
+            AiFail::NotStarted(_) => "FileNotFoundError",
             AiFail::Triage(_) => "TriageFailed",
+        }
+    }
+
+    /// The loopx-generated detail that may be shown and persisted.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            AiFail::Timeout(d) | AiFail::Exited(d) | AiFail::NotStarted(d) => Some(d),
+            AiFail::Triage(_) => None,
         }
     }
 }
@@ -200,20 +216,36 @@ pub fn invoke_triage_agent(
             unified_log,
         );
     };
-    match sealed::sealed_call(
+    invoke_sealed(
         prompt,
         timeout_seconds,
-        &mut log,
         max_budget_usd,
+        &mut log,
         &SealedHooks::default(),
-    ) {
+    )
+}
+
+/// [`invoke_triage_agent`] with the sealed call's seams (tests).
+pub fn invoke_sealed(
+    prompt: &str,
+    timeout_seconds: f64,
+    max_budget_usd: Option<f64>,
+    log: &mut dyn FnMut(&str),
+    hooks: &SealedHooks<'_>,
+) -> Result<AiOut, AiFail> {
+    match sealed::sealed_call(prompt, timeout_seconds, log, max_budget_usd, hooks) {
         Ok(out) => Ok(AiOut {
             text: out.text,
             cost_usd: out.cost_usd,
         }),
-        Err(e) if e.0 == format!("{cli} call timed out") => Err(AiFail::Timeout),
-        Err(e) if e.0.starts_with(&format!("{cli} exited")) => Err(AiFail::Exited),
-        Err(e) => Err(AiFail::Triage(e.0)),
+        // Only the kinds whose text loopx wrote itself keep it (see SealedFailKind).
+        Err(SealedCallFailed(_, SealedFailKind::TimedOut)) => Err(AiFail::Timeout(format!(
+            "timed out after {}s",
+            crate::agents::fmt_seconds(timeout_seconds)
+        ))),
+        Err(SealedCallFailed(m, SealedFailKind::Exited)) => Err(AiFail::Exited(m)),
+        Err(SealedCallFailed(m, SealedFailKind::NotStarted)) => Err(AiFail::NotStarted(m)),
+        Err(SealedCallFailed(m, SealedFailKind::Reply)) => Err(AiFail::Triage(m)),
     }
 }
 
@@ -340,7 +372,10 @@ pub fn classify(
         let out = match invoke(prompt, cap) {
             Ok(o) => o,
             Err(f) => {
-                last_error = format!("AI call failed: {}", f.class_name());
+                last_error = match f.detail() {
+                    Some(d) => format!("{AI_CALL_FAILED}: {}: {d}", f.class_name()),
+                    None => format!("{AI_CALL_FAILED}: {}", f.class_name()),
+                };
                 spent += cap.unwrap_or(0.0);
                 continue;
             }

@@ -15,9 +15,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+/// Why a sealed call failed. Every kind but [`SealedFailKind::Reply`] carries
+/// only text loopx wrote itself (an exit code, a timeout, a spawn error), never
+/// the CLI's stdout or stderr, so callers may persist it; a `Reply` message can
+/// quote the CLI's output, which can quote the prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealedFailKind {
+    NotStarted,
+    TimedOut,
+    Exited,
+    Reply,
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("{0}")]
-pub struct SealedCallFailed(pub String);
+pub struct SealedCallFailed(pub String, pub SealedFailKind);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SealedResult {
@@ -192,7 +204,8 @@ pub fn sealed_call(
     max_budget_usd: Option<f64>,
     hooks: &SealedHooks<'_>,
 ) -> Result<SealedResult, SealedCallFailed> {
-    let fail = |m: &str| Err(SealedCallFailed(m.into()));
+    let fail = |m: &str| Err(SealedCallFailed(m.into(), SealedFailKind::Reply));
+    let fail_as = |m: String, kind| Err(SealedCallFailed(m, kind));
     let cli = match hooks.cli_fn {
         Some(f) => f(),
         None => ai_cli_config::selected_cli(),
@@ -209,8 +222,12 @@ pub fn sealed_call(
         prompt
     };
     let started = Instant::now();
-    let scratch =
-        Scratch::new().map_err(|e| SealedCallFailed(format!("cannot create scratch dir: {e}")))?;
+    let scratch = Scratch::new().map_err(|e| {
+        SealedCallFailed(
+            format!("cannot create scratch dir: {e}"),
+            SealedFailKind::NotStarted,
+        )
+    })?;
     let out = match hooks.runner {
         Some(r) => r(&argv, stdin_prompt, timeout_seconds, &scratch.0),
         None => real_runner(&argv, stdin_prompt, timeout_seconds, &scratch.0),
@@ -218,9 +235,12 @@ pub fn sealed_call(
     drop(scratch);
     let out = match out {
         Ok(o) => o,
-        Err(_) => {
+        Err(e) => {
             log(&format!("FAILED (could not start {cli})"));
-            return fail(&format!("{cli} could not be started"));
+            return fail_as(
+                crate::runner_util::could_not_start(&cli, &argv[0], &e),
+                SealedFailKind::NotStarted,
+            );
         }
     };
     if out.timed_out {
@@ -228,12 +248,12 @@ pub fn sealed_call(
             "FAILED (timed out after {}s)",
             super::fmt_seconds(timeout_seconds)
         ));
-        return fail(&format!("{cli} call timed out"));
+        return fail_as(format!("{cli} call timed out"), SealedFailKind::TimedOut);
     }
     if out.code != Some(0) {
         let code = out.code.unwrap_or(-1);
         log(&format!("FAILED (exited {code})"));
-        return fail(&format!("{cli} exited {code}"));
+        return fail_as(format!("{cli} exited {code}"), SealedFailKind::Exited);
     }
     let elapsed = started.elapsed();
     if cli != "claude" {
@@ -606,6 +626,55 @@ mod tests {
         let (argv, input) = seen.into_inner();
         assert_eq!(argv.last().unwrap(), "SECRET-BODY");
         assert_eq!(input, "");
+    }
+
+    #[test]
+    fn each_failure_says_whether_its_text_is_loopx_own() {
+        let kind = |cli: &'static str, out: std::io::Result<ProcOutput>| {
+            let out = std::cell::RefCell::new(Some(out));
+            let runner = |_: &[String], _: &str, _: f64, _: &Path| out.borrow_mut().take().unwrap();
+            let cli_fn = move || cli.to_string();
+            sealed_call(
+                "p",
+                5.0,
+                &mut |_| {},
+                None,
+                &SealedHooks {
+                    runner: Some(&runner),
+                    cli_fn: Some(&cli_fn),
+                    command_fn: None,
+                },
+            )
+            .unwrap_err()
+        };
+        let run = |code: Option<i32>, stdout: &str, timed_out: bool| {
+            Ok(ProcOutput {
+                code,
+                stdout: stdout.into(),
+                stderr: "SECRET".into(),
+                timed_out,
+            })
+        };
+        let e = kind("gemini", run(Some(3), "SECRET", false));
+        assert_eq!(
+            (e.0.as_str(), e.1),
+            ("gemini exited 3", SealedFailKind::Exited)
+        );
+        let e = kind("claude", run(None, "", true));
+        assert_eq!(e.1, SealedFailKind::TimedOut);
+        let e = kind(
+            "gemini",
+            run(Some(0), r#"{"error":{"message":"quota"}}"#, false),
+        );
+        assert_eq!(e.1, SealedFailKind::Reply);
+        let e = kind(
+            "kimi",
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "gone")),
+        );
+        assert_eq!(e.1, SealedFailKind::NotStarted);
+        assert!(e.0.starts_with("could not start "), "{}", e.0);
+        assert!(e.0.contains("(kimi CLI): gone"), "{}", e.0);
+        assert!(!e.0.contains("SECRET"));
     }
 
     #[test]

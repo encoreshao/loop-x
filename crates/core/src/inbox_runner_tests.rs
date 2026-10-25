@@ -254,7 +254,7 @@ fn classify_retries_on_a_failed_call_and_names_the_class() {
         let mut n = c.lock().unwrap();
         *n += 1;
         if *n == 1 {
-            Err(AiFail::Timeout)
+            Err(AiFail::Timeout("timed out after 5s".into()))
         } else {
             Ok(AiOut {
                 text: GOOD.into(),
@@ -264,10 +264,10 @@ fn classify_retries_on_a_failed_call_and_names_the_class() {
     });
     let (_, cost) = classify("p", &[m(1, 0)], &cats(), &invoke, Some(2.0)).unwrap();
     assert_eq!((*calls.lock().unwrap(), cost), (2, None));
-    let always: Invoker = Arc::new(|_, _| Err(AiFail::Exited));
+    let always: Invoker = Arc::new(|_, _| Err(AiFail::Exited("gemini exited 2".into())));
     assert_eq!(
         classify("p", &[m(1, 0)], &cats(), &always, Some(2.0)).unwrap_err(),
-        "AI call failed: CalledProcessError"
+        "AI call failed: CalledProcessError: gemini exited 2"
     );
     let triage: Invoker = Arc::new(|_, _| Err(AiFail::Triage("x".into())));
     assert_eq!(
@@ -295,7 +295,7 @@ fn classify_caps_each_attempt_at_the_remaining_budget() {
     let c = caps.clone();
     let unknown: Invoker = Arc::new(move |_, cap| {
         c.lock().unwrap().push(cap);
-        Err(AiFail::Timeout)
+        Err(AiFail::Timeout("timed out after 5s".into()))
     });
     let _ = classify("p", &[m(1, 0)], &cats(), &unknown, Some(2.0));
     assert_eq!(*caps.lock().unwrap(), vec![Some(2.0), Some(0.05)]);
@@ -1287,4 +1287,117 @@ fn the_ai_failure_classes_map_from_the_sealed_call() {
     // A command that does not exist cannot start: reported as a TriageFailed.
     let d = tempdir().unwrap();
     let _ = invoke_triage_agent("p", 1.0, None, &d.path().join("log"));
+}
+
+// ------------------------------------------------- a failed CLI, privately
+
+type FakeRun = std::io::Result<crate::proc::ProcOutput>;
+
+fn sealed_fail(cli: &'static str, out: impl Fn() -> FakeRun) -> AiFail {
+    let runner = |_: &[String], _: &str, _: f64, _: &Path| out();
+    let cli_fn = move || cli.to_string();
+    invoke_sealed(
+        "PRIVATE BODY",
+        5.0,
+        None,
+        &mut |_| {},
+        &SealedHooks {
+            runner: Some(&runner),
+            cli_fn: Some(&cli_fn),
+            command_fn: None,
+        },
+    )
+    .unwrap_err()
+}
+
+fn exited(code: i32, stdout: &str, stderr: &str) -> FakeRun {
+    Ok(crate::proc::ProcOutput {
+        code: Some(code),
+        stdout: stdout.into(),
+        stderr: stderr.into(),
+        timed_out: false,
+    })
+}
+
+#[test]
+fn a_failed_call_names_what_loopx_saw_and_nothing_the_cli_printed() {
+    assert_eq!(
+        sealed_fail("gemini", || exited(2, "SECRET", "SECRET")),
+        AiFail::Exited("gemini exited 2".into())
+    );
+    let slow = || {
+        Ok(crate::proc::ProcOutput {
+            code: None,
+            stdout: "SECRET".into(),
+            stderr: "SECRET".into(),
+            timed_out: true,
+        })
+    };
+    assert_eq!(
+        sealed_fail("claude", slow),
+        AiFail::Timeout("timed out after 5s".into())
+    );
+    let missing = sealed_fail("kimi", || {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No such file",
+        ))
+    });
+    let AiFail::NotStarted(detail) = &missing else {
+        panic!("{missing:?}")
+    };
+    assert!(detail.starts_with("could not start "), "{detail}");
+    assert!(detail.contains("(kimi CLI)"), "{detail}");
+    assert!(
+        detail.ends_with("Switch CLI in Settings -> AI CLI."),
+        "{detail}"
+    );
+    // A reply that merely looks like loopx's own text stays private.
+    let spoof = sealed_fail("gemini", || {
+        exited(0, r#"{"error":{"message":"gemini exited 2 SECRET"}}"#, "")
+    });
+    assert_eq!(spoof.detail(), None, "{spoof:?}");
+}
+
+#[test]
+fn a_failed_cli_call_persists_its_exit_code_but_never_its_output() {
+    let w = world(json!([inbox()]));
+    std::fs::write(
+        &w.ctx.slack_config,
+        json!({"webhook_url": "http://h"}).to_string(),
+    )
+    .unwrap();
+    let posts: Posts = Arc::default();
+    let (fake, _) = Fake::new(vec![m(1, 0)]);
+    let invoke: Invoker = Arc::new(|_, _| {
+        Err(sealed_fail("gemini", || {
+            exited(2, "SECRET-OUT", "SECRET-ERR")
+        }))
+    });
+    let mut deps = deps_for(fake, invoke);
+    deps.slack_post = recording_post(&posts);
+    run_all_inboxes(&w.ctx, "run_1", now(), &deps).unwrap();
+
+    let status = std::fs::read_to_string(&w.ctx.status_path).unwrap();
+    let mut history = String::new();
+    for f in std::fs::read_dir(&w.ctx.history_dir).unwrap() {
+        history.push_str(&std::fs::read_to_string(f.unwrap().path()).unwrap());
+    }
+    let slack: String = posts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(t, b)| format!("{t}{b:?}"))
+        .collect();
+    let want = format!("{AI_CALL_FAILED}: CalledProcessError: gemini exited 2");
+    for (name, text) in [
+        ("status", &status),
+        ("history", &history),
+        ("slack", &slack),
+    ] {
+        assert!(!text.contains("SECRET"), "{name}: {text}");
+        assert!(!text.contains("PRIVATE BODY"), "{name}: {text}");
+    }
+    assert!(status.contains(&want), "{status}");
+    assert!(history.contains("gemini exited 2"), "{history}");
 }

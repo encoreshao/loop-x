@@ -248,8 +248,9 @@ fn status_card(ctx: &UiCtx, inbox: &Value, entry: &Value, csrf: &str) -> String 
     let error_html = match entry.get("error").filter(|v| loopx_core::loops_config::py_truthy(v)) {
         Some(err) => {
             let text = pydumps::py_str(err);
-            // `triage_with_retry`'s failure when the AI CLI itself failed.
-            let hint = if text.starts_with("AI call failed") {
+            // The AI CLI itself failed: core names the exit code, timeout or
+            // spawn error, but never the CLI's own output (it can echo email text).
+            let hint = if text.starts_with(loopx_core::inbox_runner::AI_CALL_FAILED) {
                 format!(" {}", crate::ui::ai_cli::settings_link(ctx.lang))
             } else {
                 String::new()
@@ -948,8 +949,9 @@ mod tests {
         let inbox = json!({"name": "work", "label": "Work", "provider": "gmail", "account": "me@example.com"});
         let req = UiRequest::get("/");
         let ctx = UiCtx::new(&state, &req);
-        let failed = status_card(&ctx, &inbox, &json!({"state": "failed", "error": "AI call failed: Timeout"}), "");
-        assert!(failed.contains("AI call failed: Timeout"), "{failed}");
+        let error = format!("{}: CalledProcessError: gemini exited 2", loopx_core::inbox_runner::AI_CALL_FAILED);
+        let failed = status_card(&ctx, &inbox, &json!({"state": "failed", "error": error}), "");
+        assert!(failed.contains("AI call failed: CalledProcessError: gemini exited 2"), "{failed}");
         assert!(failed.contains("href='/settings?tab=ai-cli'"), "{failed}");
         let other = status_card(&ctx, &inbox, &json!({"state": "failed", "error": "token expired"}), "");
         assert!(!other.contains("tab=ai-cli"), "{other}");
