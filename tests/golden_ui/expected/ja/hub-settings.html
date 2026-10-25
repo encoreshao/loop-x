@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:ce8ce80d6e728a33--></style>
+<style><!--@blob:dcf345b95b935a10--></style>
 <script><!--@blob:57dc9733945dc0e5--></script>
 </head>
 <body>
@@ -229,15 +229,27 @@
 <script><!--@blob:738516496d987d7a--></script>
 </section>
 </div><div data-tab-panel='ai-cli' hidden>
-<section class="card">
+<section class="card" data-ai-cli-panel>
 <div class="section-header"><svg class='icon' aria-hidden='true'><use href='#i-smart_toy'/></svg><h2>選択中の CLI</h2></div>
-<p class="section-subtitle">GitLab Issue ループとトピックモニターループの両方で使う AI CLI ツールを選択します。</p>
+<p class="section-subtitle">すべてのループ、受信トレイ整理、ダッシュボードのチャットで使う AI CLI を選択します。</p>
 <p><strong>現在:</strong> Codex CLI (PATH に見つかりません)</p>
+<div class='flash flash-warning' data-ai-cli-warning='codex'><p>Codex CLI は次の機能でツールの許可リストなしで実行されます: GitLab Issue ループ, トピックモニター, カレンダー準備, 受信トレイ整理, ダッシュボードのチャット, LoopKit プラグインと LinkedIn 抽出。</p><p>Codex はモデルにシェルを与え、メール本文を含むプロンプトを ~/.codex/sessions に記録します。チャットでは、そのサンドボックスが loopx の設定を直接変更する操作（ループの有効化・無効化、プロジェクトの保存）もブロックします。これらは設定ページで行うか、CLI を切り替えてください。</p></div><div class='flash flash-warning' data-ai-cli-warning='gemini' hidden><p>Gemini CLI は次の機能でツールの許可リストなしで実行されます: GitLab Issue ループ, トピックモニター, カレンダー準備, 受信トレイ整理, ダッシュボードのチャット, LoopKit プラグインと LinkedIn 抽出。</p><p>Gemini CLI は、ここでは使えるツールを固定の範囲に制限できないため、モデルはすべてのツールにアクセスできる状態で実行されます。</p></div><div class='flash flash-warning' data-ai-cli-warning='kimi' hidden><p>Kimi CLI は次の機能でツールの許可リストなしで実行されます: GitLab Issue ループ, トピックモニター, カレンダー準備, 受信トレイ整理, ダッシュボードのチャット, LoopKit プラグインと LinkedIn 抽出。</p><p>Kimi CLI は、ここでは使えるツールを固定の範囲に制限できないため、モデルはすべてのツールにアクセスできる状態で実行されます。</p></div><div class='flash flash-warning' data-ai-cli-warning='cursor' hidden><p>Cursor CLI は次の機能でツールの許可リストなしで実行されます: GitLab Issue ループ, トピックモニター, カレンダー準備, 受信トレイ整理, ダッシュボードのチャット, LoopKit プラグインと LinkedIn 抽出。</p><p>Cursor Agent は、ここでは使えるツールを固定の範囲に制限できないため、モデルはすべてのツールにアクセスできる状態で実行されます。</p></div>
 <form method='post' action='/ai-cli' class='daemon-action-form single-field'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
-<div class='custom-select'><select name='cli' class='custom-select-native'><option value='claude'>Claude Code (インストール済み)</option><option value='codex' selected>Codex CLI (PATH に見つかりません)</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Codex CLI (PATH に見つかりません)</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option' role='option' tabindex='-1' data-value='claude'>Claude Code (インストール済み)</div><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='codex'>Codex CLI (PATH に見つかりません)</div></div></div>
+<div class='custom-select'><select name='cli' class='custom-select-native'><option value='claude'>Claude Code (インストール済み)</option><option value='codex' selected>Codex CLI (PATH に見つかりません)</option><option value='gemini'>Gemini CLI (試験的) (PATH に見つかりません)</option><option value='kimi'>Kimi CLI (試験的) (PATH に見つかりません)</option><option value='cursor'>Cursor CLI (試験的) (PATH に見つかりません)</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Codex CLI (PATH に見つかりません)</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option' role='option' tabindex='-1' data-value='claude'>Claude Code (インストール済み)</div><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='codex'>Codex CLI (PATH に見つかりません)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='gemini'>Gemini CLI (試験的) (PATH に見つかりません)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='kimi'>Kimi CLI (試験的) (PATH に見つかりません)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='cursor'>Cursor CLI (試験的) (PATH に見つかりません)</div></div></div>
 <button type='submit' class='btn btn-neutral'>保存</button>
 </form>
+<script>
+(function() {
+  var select = document.querySelector('[data-ai-cli-panel] select[name="cli"]');
+  if (!select) return;
+  select.addEventListener('change', function() {
+    document.querySelectorAll('[data-ai-cli-warning]').forEach(function(box) {
+      box.hidden = box.getAttribute('data-ai-cli-warning') !== select.value;
+    });
+  });
+})();
+</script>
 </section>
 </div><div data-tab-panel='instructions' hidden>
 <section class="card">

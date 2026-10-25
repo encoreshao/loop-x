@@ -1,5 +1,6 @@
 //! General view: Appearance, Notifications, AI CLI and Instructions tabs.
 
+use crate::ui::ai_cli;
 use crate::ui::consts;
 use crate::ui::i18n;
 use crate::ui::pages::loops_common::{custom_select, flash_html, mask_secret};
@@ -7,6 +8,7 @@ use crate::ui::pyfmt;
 use crate::ui::routes::UiCtx;
 use crate::ui::template::{Scope, Template};
 use loopx_core::settings_store as store;
+use loopx_core::{ai_cli_config, ai_cli_safety};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,14 +19,6 @@ fn render(name: &str, scope: &Scope) -> String {
     Template::named(name)
         .render(scope)
         .unwrap_or_else(|e| panic!("{e}"))
-}
-
-fn display_name(cli: &str) -> String {
-    consts::value("dashboard_server", "_AI_CLI_DISPLAY_NAMES")
-        .and_then(|v| v.get(cli))
-        .and_then(Value::as_str)
-        .unwrap_or(cli)
-        .to_string()
 }
 
 const CLI_TTL_SECS: u64 = 3600;
@@ -153,21 +147,88 @@ and Save to make it your own (Delete is disabled until then).",
     render("settings_notifications_panel", &scope)
 }
 
-fn ai_cli_panel(ctx: &UiCtx, csrf: &str, current: &str) -> String {
-    let flags = cli_available(ctx, &loopx_core::ai_cli_config::VALID_CLIS);
-    let availability = |cli: &str| match flags.get(cli).copied().flatten() {
-        Some(true) => format!(" ({})", ctx.t("installed")),
-        Some(false) => format!(" ({})", ctx.t("not found on PATH")),
-        None => String::new(),
-    };
-    let labels: Vec<(String, String)> = loopx_core::ai_cli_config::VALID_CLIS
+/// Whether `cli` is installed under any of its binary names; `None` until probed.
+fn cli_found(flags: &HashMap<String, Option<bool>>, cli: &str) -> Option<bool> {
+    let seen: Vec<Option<bool>> = ai_cli_config::binary_candidates(cli)
         .iter()
-        .map(|cli| (cli.to_string(), format!("{}{}", display_name(cli), availability(cli))))
+        .map(|b| flags.get(*b).copied().flatten())
+        .collect();
+    if seen.contains(&Some(true)) {
+        Some(true)
+    } else if seen.contains(&None) {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// The inline warning for an unrestricted CLI, naming every feature it affects;
+/// only the selected CLI's is visible, the picker's script reveals the others.
+fn ai_cli_warning(ctx: &UiCtx, cli: &str, visible: bool) -> Option<String> {
+    let mut features: Vec<String> = Vec::new();
+    let mut texts: Vec<&str> = Vec::new();
+    for site in ai_cli::SITES {
+        if let Some(w) = ai_cli_safety::warning(cli, site) {
+            features.push(ai_cli::feature_label(ctx.lang, site));
+            if !texts.contains(&w) {
+                texts.push(w);
+            }
+        }
+    }
+    if features.is_empty() {
+        return None;
+    }
+    // Codex's chat text extends its general one: say it once.
+    let longer = texts.clone();
+    texts.retain(|w| !longer.iter().any(|o| o != w && o.contains(w)));
+    let affected = ctx.tf(
+        "{cli} runs without a tool allowlist in: {features}.",
+        &[("cli", &ai_cli::display_name(cli)), ("features", &features.join(", "))],
+    );
+    let paragraphs: String = std::iter::once(affected)
+        .chain(texts.iter().map(|w| ai_cli::warning_text(ctx.lang, w)))
+        .map(|p| format!("<p>{}</p>", pyfmt::escape(&p)))
+        .collect();
+    Some(format!(
+        "<div class='flash flash-warning' data-ai-cli-warning='{}'{}>{paragraphs}</div>",
+        pyfmt::escape(cli),
+        if visible { "" } else { " hidden" }
+    ))
+}
+
+fn ai_cli_panel(ctx: &UiCtx, csrf: &str, current: &str) -> String {
+    let binaries: Vec<&str> = ai_cli_config::VALID_CLIS
+        .iter()
+        .flat_map(|cli| ai_cli_config::binary_candidates(cli).iter().copied())
+        .collect();
+    let flags = cli_available(ctx, &binaries);
+    let label = |cli: &str| {
+        let mut text = ai_cli::display_name(cli);
+        if ai_cli_safety::experimental(cli) {
+            text.push_str(&format!(" ({})", ctx.t("experimental")));
+        }
+        match cli_found(&flags, cli) {
+            Some(true) => text.push_str(&format!(" ({})", ctx.t("installed"))),
+            Some(false) => text.push_str(&format!(" ({})", ctx.t("not found on PATH"))),
+            None => {}
+        }
+        text
+    };
+    let labels: Vec<(String, String)> = ai_cli_config::VALID_CLIS
+        .iter()
+        .map(|cli| (cli.to_string(), label(cli)))
+        .collect();
+    let warnings: String = ai_cli_config::VALID_CLIS
+        .iter()
+        .filter_map(|cli| ai_cli_warning(ctx, cli, *cli == current))
         .collect();
     let select = custom_select("cli", &labels, Some(current), None);
     let current_label = scope_label(&labels, current);
     let mut scope = Scope::new(ctx.lang);
-    scope.var("select_html", select).var("csrf_input", csrf);
+    scope
+        .var("select_html", select)
+        .var("csrf_input", csrf)
+        .var("warnings_html", warnings);
     scope.set("html.escape(cli_labels[current_cli])", pyfmt::escape(&current_label));
     render("settings_ai_cli_panel", &scope)
 }
@@ -267,7 +328,7 @@ fn instructions_panel(ctx: &UiCtx, csrf: &str, current_cli: &str) -> String {
 Saved to {path} - read at the start of every run, on top of everything already in {spec}. \
 For one loop only, add a file under {per_loop} (gitlab-issue.md, topic-monitor.md or inbox-triage.md).",
         &[
-            ("cli", &pyfmt::escape(&display_name(current_cli))),
+            ("cli", &pyfmt::escape(&ai_cli::display_name(current_cli))),
             ("path", "<code>~/.loopx/instructions.md</code>"),
             ("spec", "<code>instructions/</code>"),
             ("per_loop", "<code>~/.loopx/instructions/</code>"),
@@ -334,5 +395,96 @@ mod tests {
         assert!(fr.contains("font-family: system-ui, "), "{fr}");
         assert!(!fr.contains("'system-ui'"));
         assert!(font_buttons(Lang::En).contains(">System</button>"));
+    }
+
+    /// The AI CLI panel with `cli` selected and only `on_path` binaries installed.
+    fn ai_panel_for(cli: &str, on_path: &[&str]) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ai_cli.json"), format!(r#"{{"cli": "{cli}"}}"#)).unwrap();
+        let mut state = crate::ui::UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        state.cli_pinned = Some(on_path.iter().map(|s| s.to_string()).collect());
+        let req = crate::ui::UiRequest::get("/settings?tab=ai-cli");
+        let ctx = UiCtx::new(&state, &req);
+        let current = loopx_core::ai_cli_config::get_selected_cli(&state.ai_cli_config_path());
+        ai_cli_panel(&ctx, "", &current)
+    }
+
+    fn option_label<'a>(html: &'a str, cli: &str) -> &'a str {
+        let start = html.find(&format!("<option value='{cli}'")).unwrap_or_else(|| panic!("no {cli} option: {html}"));
+        let rest = &html[start..];
+        let open = rest.find('>').unwrap() + 1;
+        &rest[open..rest.find("</option>").unwrap()]
+    }
+
+    #[test]
+    fn the_picker_lists_all_five_and_tags_the_newer_ones_experimental() {
+        let html = ai_panel_for("claude", &["claude", "codex", "gemini", "kimi", "agent"]);
+        assert_eq!(html.matches("<option value=").count(), 5, "{html}");
+        for (cli, name, experimental) in [
+            ("claude", "Claude Code", false),
+            ("codex", "Codex CLI", false),
+            ("gemini", "Gemini CLI", true),
+            ("kimi", "Kimi CLI", true),
+            ("cursor", "Cursor CLI", true),
+        ] {
+            let label = option_label(&html, cli);
+            assert!(label.starts_with(name), "{label}");
+            assert_eq!(label.contains("experimental"), experimental, "{label}");
+            assert!(label.contains("installed"), "{label}");
+        }
+    }
+
+    #[test]
+    fn the_picker_says_which_clis_are_not_on_path() {
+        // Cursor counts as installed under either of its binary names.
+        let html = ai_panel_for("claude", &["claude", "cursor-agent"]);
+        for cli in ["codex", "gemini", "kimi"] {
+            assert!(option_label(&html, cli).ends_with("(not found on PATH)"), "{html}");
+        }
+        assert!(option_label(&html, "cursor").ends_with("(installed)"), "{html}");
+        assert!(option_label(&html, "claude").ends_with("(installed)"), "{html}");
+    }
+
+    #[test]
+    fn an_unrestricted_selection_shows_its_warning_naming_the_affected_features() {
+        let html = ai_panel_for("gemini", &["claude"]);
+        let start = html
+            .find("data-ai-cli-warning='gemini'>")
+            .unwrap_or_else(|| panic!("no visible gemini warning: {html}"));
+        let shown = &html[start..start + html[start..].find("</div>").unwrap()];
+        assert!(shown.contains("full tool access"), "{shown}");
+        for feature in ["GitLab issue loop", "Topic Monitor", "Inbox Triage", "Dashboard chat"] {
+            assert!(shown.contains(feature), "{feature}: {shown}");
+        }
+        // The other unrestricted CLIs' warnings are present but hidden, for the
+        // picker's script to reveal; claude has none.
+        for cli in ["codex", "kimi", "cursor"] {
+            assert!(html.contains(&format!("data-ai-cli-warning='{cli}' hidden>")), "{cli}: {html}");
+        }
+        assert!(!html.contains("data-ai-cli-warning='claude'"), "{html}");
+    }
+
+    #[test]
+    fn claude_shows_no_warning() {
+        let html = ai_panel_for("claude", &["claude"]);
+        for cli in loopx_core::ai_cli_config::VALID_CLIS {
+            assert!(!html.contains(&format!("data-ai-cli-warning='{cli}'>")), "{cli}: {html}");
+        }
+        assert!(html.contains("data-ai-cli-warning='codex' hidden>"), "{html}");
+    }
+
+    #[test]
+    fn the_codex_warning_is_translated_and_names_its_session_log() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ai_cli.json"), r#"{"cli": "codex"}"#).unwrap();
+        let state = crate::ui::UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let req = crate::ui::UiRequest::get("/settings").with_header("cookie", "loop_lang=fr");
+        let ctx = UiCtx::new(&state, &req);
+        let html = ai_cli_panel(&ctx, "", "codex");
+        assert!(html.contains("~/.codex/sessions"), "{html}");
+        assert!(!html.contains("Codex gives the model a shell"), "{html}");
+        let en = ai_panel_for("codex", &["claude"]);
+        assert_eq!(en.matches("Codex gives the model a shell").count(), 1, "{en}");
+        assert!(en.contains("saving projects"), "{en}");
     }
 }

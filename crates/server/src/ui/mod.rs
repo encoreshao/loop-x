@@ -8,13 +8,15 @@
 //!   (the extracted f-string templates and Python constants, see
 //!   `tools/extract_ui_assets.py`), [`assets`];
 //! * page chrome: [`shell`] (`render_shell`), [`nav`] (sidebar), [`hub`] (tabbed
-//!   hubs), [`badge`], [`logos`], [`markdown`], [`update`];
+//!   hubs), [`badge`], [`logos`], [`markdown`], [`update`], [`ai_cli`] (CLI names,
+//!   logos and translated safety warnings);
 //! * plumbing: [`routes`] (request/response types and the route registry),
 //!   [`state`] (paths, CSRF token, kill switches), [`glue`] (the axum bridge);
 //! * [`pages`]: one module per page group, each registering its own routes.
 //!
 //! See `tests/golden_ui/README.md` for how to port a page.
 
+pub mod ai_cli;
 pub mod assets;
 pub mod badge;
 pub mod consts;

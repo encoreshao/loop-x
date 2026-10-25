@@ -361,10 +361,7 @@ fn logs_body(ctx: &UiCtx) -> String {
         None => format!("<p>{}</p>", esc_t(ctx, "No log entries yet.")),
     };
     let selected = ai_cli_config::get_selected_cli(&ctx.state.ai_cli_config_path());
-    let cli_name = consts::value("dashboard_server", "_AI_CLI_DISPLAY_NAMES")
-        .and_then(|v| v.get(&selected))
-        .and_then(Value::as_str)
-        .unwrap_or("Claude Code");
+    let cli_name = crate::ui::ai_cli::display_name(&selected);
     let mut scope = Scope::new(ctx.lang);
     scope
         .var("log_html", log_html)

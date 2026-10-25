@@ -8,7 +8,7 @@
 //! (prompts, command, stream parsing, jobs) lives in `loopx_core::chat`.
 
 use crate::ui::badge::{self, default_badge};
-use crate::ui::{hub, icons};
+use crate::ui::{ai_cli, hub, icons};
 use crate::ui::i18n::{self, Lang};
 use crate::ui::markdown;
 use crate::ui::pages::loops_common::{
@@ -453,6 +453,29 @@ fn live_links_html(state: &UiState, lang: Lang) -> String {
         .collect()
 }
 
+/// What the selected CLI means for chat: core's warning when it runs without a
+/// tool allowlist, and a note when its reply arrives in one piece.
+fn ai_cli_notes_html(state: &UiState, lang: Lang) -> String {
+    let cli = chat::chat_cli(&loopx_core::ai_cli_config::get_selected_cli(&state.ai_cli_config_path()));
+    let record = chat::ChatJobRecord::for_cli(cli);
+    let mut paragraphs: Vec<String> = Vec::new();
+    if let Some(w) = &record.warning {
+        paragraphs.push(pyfmt::escape(&ai_cli::warning_text(lang, w)));
+    }
+    if record.chat_mode == chat::ChatMode::SingleReply {
+        paragraphs.push(pyfmt::escape(&i18n::t(
+            lang,
+            "{cli} replies in one piece: there is no live typing while it writes.",
+            &[("cli", &ai_cli::display_name(cli))],
+        )));
+    }
+    if paragraphs.is_empty() {
+        return String::new();
+    }
+    paragraphs.push(ai_cli::settings_link(lang));
+    ai_cli::warning_box(&paragraphs)
+}
+
 /// `_overview_body`.
 fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Option<&str>) -> String {
     let state = ctx.state;
@@ -521,6 +544,7 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
         .var("csrf_input", csrf)
         .var("history_html", history_html)
         .var("flash_html", flash_html(flash, flash_ok))
+        .var("ai_cli_notes_html", ai_cli_notes_html(state, lang))
         .var("announce_text", announce)
         .var("hero_title_html", hero_title)
         .var("messages_html", messages_html)
@@ -1186,3 +1210,47 @@ pub fn chat_stream_response(query: &str) -> axum::http::Response<axum::body::Bod
 /// Unused import guard for helpers other modules may want.
 #[allow(dead_code)]
 fn _paths(_: PathBuf) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+
+    fn overview_for(cli: &str, lang_cookie: Option<&str>) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        std::fs::write(state.ai_cli_config_path(), format!(r#"{{"cli": "{cli}"}}"#)).unwrap();
+        let mut req = UiRequest::get("/");
+        if let Some(lang) = lang_cookie {
+            req = req.with_header("cookie", &format!("loop_lang={lang}"));
+        }
+        overview_body(&UiCtx::new(&state, &req), None, false, None)
+    }
+
+    #[test]
+    fn an_unrestricted_cli_gets_a_warning_banner_and_claude_none() {
+        let codex = overview_for("codex", None);
+        let warning = loopx_core::ai_cli_safety::warning("codex", loopx_core::ai_cli_safety::CallSite::Chat).unwrap();
+        assert!(codex.contains("flash flash-warning"), "{codex}");
+        assert!(codex.contains(&pyfmt::escape(warning)), "{codex}");
+        assert!(codex.contains("href='/settings?tab=ai-cli'"), "{codex}");
+        let claude = overview_for("claude", None);
+        assert!(!claude.contains("flash-warning"), "{claude}");
+    }
+
+    #[test]
+    fn a_single_reply_cli_says_its_reply_arrives_in_one_piece() {
+        assert!(overview_for("gemini", None).contains("Gemini CLI replies in one piece"));
+        assert!(overview_for("codex", None).contains("Codex CLI replies in one piece"));
+        for streaming in ["claude", "kimi", "cursor"] {
+            assert!(!overview_for(streaming, None).contains("replies in one piece"), "{streaming}");
+        }
+    }
+
+    #[test]
+    fn the_chat_banner_is_translated() {
+        let fr = overview_for("kimi", Some("fr"));
+        assert!(fr.contains("flash-warning"), "{fr}");
+        assert!(!fr.contains("cannot be limited to a fixed set of tools"), "{fr}");
+    }
+}

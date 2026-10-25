@@ -13,7 +13,7 @@ use crate::ui::hub::{builtin_loop_page, resolve_view};
 use crate::ui::pyfmt::{self, Form};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::template::{Scope, Template};
-use crate::ui::{consts, gitlab as ui_gitlab};
+use crate::ui::{ai_cli, consts, gitlab as ui_gitlab};
 use chrono::{DateTime, Local, Utc};
 use loopx_core::loops_config::py_truthy;
 use loopx_core::worktree::{self, CheckoutProblem, RootProblem};
@@ -209,6 +209,8 @@ struct IssueRow {
     iid: Value,
     outcome: &'static str,
     detail: String,
+    /// What the AI CLI itself said when the call failed (`issue.agent_failed`).
+    cli_message: Option<String>,
     mr_url: String,
     timestamp: String,
     title: String,
@@ -218,6 +220,8 @@ struct IssueRow {
 struct Activity {
     updated_at: Option<String>,
     issues: Vec<IssueRow>,
+    /// The run-start warning for a CLI without a tool allowlist.
+    warning: Option<String>,
 }
 
 fn str_or_empty(v: Option<&Value>) -> String {
@@ -238,8 +242,15 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
     let mut keys: Vec<String> = Vec::new();
     let mut issues: Vec<IssueRow> = Vec::new();
     let mut updated: Option<String> = None;
+    let mut warnings: Vec<(Value, String)> = Vec::new();
     for event in &all {
         let etype = event.get("event_type").map(pydumps::py_str).unwrap_or_default();
+        if etype == "run.started" {
+            if let Some(w) = event.pointer("/data/warning").and_then(Value::as_str) {
+                warnings.push((event.get("run_id").cloned().unwrap_or(Value::Null), w.to_string()));
+            }
+            continue;
+        }
         let iid = event.get("issue_iid").cloned().unwrap_or(Value::Null);
         if !etype.starts_with("issue.") || iid.is_null() {
             continue;
@@ -261,6 +272,7 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                     iid,
                     outcome: "in_progress",
                     detail: String::new(),
+                    cli_message: None,
                     mr_url: String::new(),
                     timestamp: String::new(),
                     title: String::new(),
@@ -298,6 +310,9 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                 } else {
                     reason
                 };
+                if data.get("cli").is_some_and(py_truthy) {
+                    row.cli_message = Some(str_or_empty(data.get("stderr_excerpt")));
+                }
             }
             _ => continue,
         }
@@ -305,8 +320,9 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
         row.timestamp = ts.clone();
         updated = Some(ts);
     }
-    run_id?;
-    Some(Activity { updated_at: updated, issues })
+    let run_id = run_id?;
+    let warning = warnings.into_iter().find(|(r, _)| *r == run_id).map(|(_, w)| w);
+    Some(Activity { updated_at: updated, issues, warning })
 }
 
 fn outcome_pill(outcome: &str) -> (&'static str, &'static str) {
@@ -405,7 +421,12 @@ fn status_card(ctx: &UiCtx, status: &Value, activity: &Option<Activity>, csrf: &
         "<p class='status-link'><a href='/runs?view=history'>{}</a></p>",
         esc_t(ctx, "View run history")
     );
-    format!("<section class='card'>{head}{body}{link}</section>")
+    let warning = activity
+        .warning
+        .as_deref()
+        .map(|w| ai_cli::warning_notice(ctx.lang, w))
+        .unwrap_or_default();
+    format!("<section class='card'>{head}{warning}{body}{link}</section>")
 }
 
 fn is_http(url: &str) -> bool {
@@ -456,7 +477,7 @@ fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
         } else {
             String::new()
         };
-        let detail = if issue.detail.is_empty() {
+        let mut detail = if issue.detail.is_empty() {
             String::new()
         } else {
             format!(
@@ -464,6 +485,12 @@ fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
                 pyfmt::escape(&issue.detail.replace('_', " "))
             )
         };
+        if let Some(message) = issue.cli_message.as_deref().filter(|_| issue.outcome == "failed") {
+            if !message.is_empty() {
+                detail.push_str(&format!("<p class='result-summary'>{}</p>", pyfmt::escape(message)));
+            }
+            detail.push_str(&format!("<p class='result-summary'>{}</p>", ai_cli::settings_link(ctx.lang)));
+        }
         let ago = match super::loops_common::aware(&issue.timestamp) {
             Some(stamp) => format!(
                 "<span class='stat-sub'>{}</span>",
@@ -1608,5 +1635,49 @@ mod tests {
         assert!(save(&sb.path("wt2")).0);
         let on_root = sb.repo("wt2", true);
         assert!(sb.project(&on_root, "main").1.contains("must be outside the project checkout"));
+    }
+
+    #[test]
+    fn a_failed_cli_call_shows_the_cli_message_and_the_way_to_switch() {
+        let sb = Sandbox::new();
+        let dir = Some(sb.state.events_dir.as_path());
+        let warning = loopx_core::ai_cli_safety::warning("gemini", loopx_core::ai_cli_safety::CallSite::GitlabLoop).unwrap();
+        events::emit("run.started", "run_1", events::EventFields { data: Some(json!({"trigger": "manual", "warning": warning})), ..Default::default() }, dir).unwrap();
+        events::emit(
+            "issue.agent_failed",
+            "run_1",
+            events::EventFields {
+                project: Some("app".into()),
+                issue_iid: Some(7),
+                data: Some(json!({"reason": "nonzero_exit", "cli": "gemini", "stderr_excerpt": "Error: quota <exceeded>"})),
+                ..Default::default()
+            },
+            dir,
+        )
+        .unwrap();
+        let html = live_body(&sb.ctx(), None, false);
+        assert!(html.contains("nonzero exit"), "{html}");
+        assert!(html.contains("Error: quota &lt;exceeded&gt;"), "{html}");
+        assert!(html.contains("href='/settings?tab=ai-cli'"), "{html}");
+        assert!(html.contains("<div class='flash flash-warning'>"), "{html}");
+        assert!(html.contains("full tool access"), "{html}");
+    }
+
+    #[test]
+    fn a_failure_without_a_cli_gets_no_cli_hint() {
+        let sb = Sandbox::new();
+        let dir = Some(sb.state.events_dir.as_path());
+        events::emit("run.started", "run_1", events::EventFields { data: Some(json!({"trigger": "manual"})), ..Default::default() }, dir).unwrap();
+        events::emit(
+            "issue.failed",
+            "run_1",
+            events::EventFields { project: Some("app".into()), issue_iid: Some(7), data: Some(json!({"error": "worktree failed"})), ..Default::default() },
+            dir,
+        )
+        .unwrap();
+        let html = live_body(&sb.ctx(), None, false);
+        assert!(html.contains("worktree failed"), "{html}");
+        assert!(!html.contains("tab=ai-cli"), "{html}");
+        assert!(!html.contains("flash-warning"), "{html}");
     }
 }

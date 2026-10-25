@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:ce8ce80d6e728a33--></style>
+<style><!--@blob:dcf345b95b935a10--></style>
 <script><!--@blob:cef28daddfe17552--></script>
 </head>
 <body>
@@ -229,15 +229,27 @@
 <script><!--@blob:f6f5ddff12a89298--></script>
 </section>
 </div><div data-tab-panel='ai-cli' hidden>
-<section class="card">
+<section class="card" data-ai-cli-panel>
 <div class="section-header"><svg class='icon' aria-hidden='true'><use href='#i-smart_toy'/></svg><h2>已选 CLI</h2></div>
-<p class="section-subtitle">选择 GitLab Issue 循环和主题监控循环共同使用的 AI CLI 工具。</p>
+<p class="section-subtitle">选择所有循环、收件箱分拣和仪表板聊天使用的 AI CLI。</p>
 <p><strong>当前:</strong> Codex CLI (PATH 中未找到)</p>
+<div class='flash flash-warning' data-ai-cli-warning='codex'><p>Codex CLI 在以下功能中运行时没有工具允许列表：GitLab Issue 循环, 主题监控, 日程准备, 收件箱分拣, 仪表板聊天, LoopKit 插件和 LinkedIn 提取。</p><p>Codex 会为模型提供 shell，并将提示（包括邮件正文）记录在 ~/.codex/sessions 下。在聊天中，它的沙箱还会阻止直接更改 loopx 设置的操作（启用或停用循环、保存项目）：请改用设置页面，或切换 CLI。</p></div><div class='flash flash-warning' data-ai-cli-warning='gemini' hidden><p>Gemini CLI 在以下功能中运行时没有工具允许列表：GitLab Issue 循环, 主题监控, 日程准备, 收件箱分拣, 仪表板聊天, LoopKit 插件和 LinkedIn 提取。</p><p>Gemini CLI 在这里无法限制为固定的一组工具，因此模型将以完整的工具权限运行。</p></div><div class='flash flash-warning' data-ai-cli-warning='kimi' hidden><p>Kimi CLI 在以下功能中运行时没有工具允许列表：GitLab Issue 循环, 主题监控, 日程准备, 收件箱分拣, 仪表板聊天, LoopKit 插件和 LinkedIn 提取。</p><p>Kimi CLI 在这里无法限制为固定的一组工具，因此模型将以完整的工具权限运行。</p></div><div class='flash flash-warning' data-ai-cli-warning='cursor' hidden><p>Cursor CLI 在以下功能中运行时没有工具允许列表：GitLab Issue 循环, 主题监控, 日程准备, 收件箱分拣, 仪表板聊天, LoopKit 插件和 LinkedIn 提取。</p><p>Cursor Agent 在这里无法限制为固定的一组工具，因此模型将以完整的工具权限运行。</p></div>
 <form method='post' action='/ai-cli' class='daemon-action-form single-field'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
-<div class='custom-select'><select name='cli' class='custom-select-native'><option value='claude'>Claude Code (已安装)</option><option value='codex' selected>Codex CLI (PATH 中未找到)</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Codex CLI (PATH 中未找到)</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option' role='option' tabindex='-1' data-value='claude'>Claude Code (已安装)</div><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='codex'>Codex CLI (PATH 中未找到)</div></div></div>
+<div class='custom-select'><select name='cli' class='custom-select-native'><option value='claude'>Claude Code (已安装)</option><option value='codex' selected>Codex CLI (PATH 中未找到)</option><option value='gemini'>Gemini CLI (实验性) (PATH 中未找到)</option><option value='kimi'>Kimi CLI (实验性) (PATH 中未找到)</option><option value='cursor'>Cursor CLI (实验性) (PATH 中未找到)</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Codex CLI (PATH 中未找到)</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option' role='option' tabindex='-1' data-value='claude'>Claude Code (已安装)</div><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='codex'>Codex CLI (PATH 中未找到)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='gemini'>Gemini CLI (实验性) (PATH 中未找到)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='kimi'>Kimi CLI (实验性) (PATH 中未找到)</div><div class='custom-select-option' role='option' tabindex='-1' data-value='cursor'>Cursor CLI (实验性) (PATH 中未找到)</div></div></div>
 <button type='submit' class='btn btn-neutral'>保存</button>
 </form>
+<script>
+(function() {
+  var select = document.querySelector('[data-ai-cli-panel] select[name="cli"]');
+  if (!select) return;
+  select.addEventListener('change', function() {
+    document.querySelectorAll('[data-ai-cli-warning]').forEach(function(box) {
+      box.hidden = box.getAttribute('data-ai-cli-warning') !== select.value;
+    });
+  });
+})();
+</script>
 </section>
 </div><div data-tab-panel='instructions' hidden>
 <section class="card">
