@@ -13,7 +13,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- "Run now" on every loop starts the run immediately, without the confirmation popup.
 - The Mac app's window has a transparent title bar: the dashboard runs up under the traffic lights, and an empty part of the topbar or sidebar header drags the window (double-click zooms it).
+
+### Fixed
+
+- "Run now" on the GitLab loop page keeps you on that page instead of jumping to the dashboard.
 
 ## [0.8.0] - 2026-10-25
 

@@ -723,7 +723,6 @@ fn activity_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         run_now_action_html(
             ctx,
             "/run-now",
-            "",
             &csrf,
             Some(&t(
                 lang,
@@ -734,7 +733,6 @@ fn activity_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         run_now_action_html(
             ctx,
             "/run-now",
-            &t(lang, "Run the GitLab loop now? This starts a real automated run outside its normal schedule."),
             &csrf,
             None,
         )
@@ -800,7 +798,6 @@ fn activity_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         run_now_action_html(
             ctx,
             "/topic-monitor/run-now",
-            "",
             &csrf,
             Some(&t(
                 lang,
@@ -811,7 +808,6 @@ fn activity_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         run_now_action_html(
             ctx,
             "/topic-monitor/run-now",
-            &t(lang, "Run the topic monitor loop now? This starts a real automated run outside its normal schedule."),
             &csrf,
             None,
         )

@@ -453,8 +453,6 @@
   "Run now": "今すぐ実行",
   "Run started - check back here for progress": "実行を開始しました - 進捗はここで確認できます",
   "Run stopped": "実行を停止しました",
-  "Run the GitLab loop now? This starts a real automated run outside its normal schedule.": "今すぐ GitLab ループを実行しますか？通常のスケジュール外で実際の自動実行が開始されます。",
-  "Run the topic monitor loop now? This starts a real automated run outside its normal schedule.": "今すぐトピックモニターループを実行しますか？通常のスケジュール外で実際の自動実行が開始されます。",
   "Run the topic monitor now.": "トピックモニターを今すぐ実行してください。",
   "Run this GitLab issue now: ": "この GitLab Issue を今すぐ実行してください: ",
   "Run topic monitor": "トピックモニターを実行",

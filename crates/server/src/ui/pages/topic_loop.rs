@@ -61,7 +61,6 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         run_now_action_html(
             ctx,
             "/topic-monitor/run-now",
-            &ctx.t("Run the topic monitor loop now? This starts a real automated run outside its normal schedule."),
             &ctx.csrf_input(),
             None,
         )

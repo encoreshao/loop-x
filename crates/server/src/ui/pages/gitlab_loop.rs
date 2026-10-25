@@ -339,7 +339,6 @@ fn status_card(ctx: &UiCtx, status: &Value, activity: &Option<Activity>, csrf: &
         run_now_action_html(
             ctx,
             "/run-now",
-            "",
             csrf,
             Some(&ctx.t(
                 "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.",
@@ -349,7 +348,6 @@ fn status_card(ctx: &UiCtx, status: &Value, activity: &Option<Activity>, csrf: &
         run_now_action_html(
             ctx,
             "/run-now",
-            &ctx.t("Run the GitLab loop now? This starts a real automated run outside its normal schedule."),
             csrf,
             None,
         )

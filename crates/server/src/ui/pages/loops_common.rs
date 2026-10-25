@@ -61,7 +61,6 @@ pub fn render_loop_page(
 pub fn run_now_action_html(
     ctx: &UiCtx,
     action: &str,
-    confirm_text: &str,
     csrf_input: &str,
     disabled_hint_html: Option<&str>,
 ) -> String {
@@ -71,9 +70,8 @@ pub fn run_now_action_html(
             "\n<div class='run-now-action'>\n<button type='button' class='btn btn-primary' disabled>\n<svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {run_now}\n</button>\n<p class='run-now-hint'>{hint}</p>\n</div>\n"
         );
     }
-    let confirm_attr = pyfmt::escape(confirm_text);
     format!(
-        "\n<div class='run-now-action'>\n<form method='post' action='{action}' class='daemon-action-form'>\n{csrf_input}\n<button type='submit' class='btn btn-primary' data-confirm=\"{confirm_attr}\">\n<svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {run_now}\n</button>\n</form>\n</div>\n"
+        "\n<div class='run-now-action'>\n<form method='post' action='{action}' class='daemon-action-form'>\n{csrf_input}\n<button type='submit' class='btn btn-primary'>\n<svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {run_now}\n</button>\n</form>\n</div>\n"
     )
 }
 

@@ -453,8 +453,6 @@
   "Run now": "Exécuter maintenant",
   "Run started - check back here for progress": "Exécution lancée - revenez ici pour suivre la progression",
   "Run stopped": "Exécution arrêtée",
-  "Run the GitLab loop now? This starts a real automated run outside its normal schedule.": "Lancer la boucle GitLab maintenant ? Cela démarre une véritable exécution automatisée en dehors de sa planification habituelle.",
-  "Run the topic monitor loop now? This starts a real automated run outside its normal schedule.": "Lancer la boucle de veille des sujets maintenant ? Cela démarre une véritable exécution automatisée en dehors de sa planification habituelle.",
   "Run the topic monitor now.": "Lance le moniteur de sujets maintenant.",
   "Run this GitLab issue now: ": "Lance cette issue GitLab maintenant : ",
   "Run topic monitor": "Lancer le moniteur de sujets",

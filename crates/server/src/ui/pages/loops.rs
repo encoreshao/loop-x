@@ -139,7 +139,7 @@ fn status_card(ctx: &UiCtx, name: &str, status: &Value, last: Option<&Map<String
     let run_now = if running {
         String::new()
     } else {
-        run_now_action_html(ctx, &format!("/loops/{safe_name}/run-now"), "", &ctx.csrf_input(), None)
+        run_now_action_html(ctx, &format!("/loops/{safe_name}/run-now"), &ctx.csrf_input(), None)
     };
     let head = format!(
         "<div class='status-head'><div class='section-header'><h2>{}</h2>{}</div>{run_now}</div>",

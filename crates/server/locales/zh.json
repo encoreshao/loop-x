@@ -453,8 +453,6 @@
   "Run now": "立即运行",
   "Run started - check back here for progress": "已开始运行 - 请回到此处查看进度",
   "Run stopped": "已停止运行",
-  "Run the GitLab loop now? This starts a real automated run outside its normal schedule.": "立即运行 GitLab 循环？这将在正常计划之外启动一次真实的自动运行。",
-  "Run the topic monitor loop now? This starts a real automated run outside its normal schedule.": "立即运行主题监控循环？这将在正常计划之外启动一次真实的自动运行。",
   "Run the topic monitor now.": "立即运行主题监控。",
   "Run this GitLab issue now: ": "立即运行这个 GitLab Issue：",
   "Run topic monitor": "运行主题监控",

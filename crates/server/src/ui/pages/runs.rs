@@ -590,8 +590,23 @@ fn run_now(ctx: &UiCtx) -> UiResponse {
         &launcher(ctx, &fallback),
     );
     let (ok, message) = trigger_message(ctx, outcome, STARTED);
-    UiResponse::flash_redirect(ok, &message, "/")
+    UiResponse::flash_redirect(ok, &message, gitlab_return_path(ctx.req.header("referer")))
 }
+
+/// `/run-now` is posted from both the dashboard and the GitLab loop page; send the
+/// user back to whichever one they clicked from.
+fn gitlab_return_path(referer: Option<&str>) -> &'static str {
+    let path = referer
+        .map(|r| r.split_once("://").map_or(r, |(_, rest)| rest.find('/').map_or("", |i| &rest[i..])))
+        .unwrap_or("");
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    if path.trim_end_matches('/') == "/loops/gitlab-loop" {
+        "/loops/gitlab-loop"
+    } else {
+        "/"
+    }
+}
+
 
 fn stop_gitlab(ctx: &UiCtx) -> UiResponse {
     let (ok, message) = stop_message(ctx, run_control::stop_gitlab_loop(&ctx.state.status_path()));
@@ -686,4 +701,19 @@ fn delete_history(ctx: &UiCtx) -> UiResponse {
 
 fn delete_topic_history(ctx: &UiCtx) -> UiResponse {
     delete_in(ctx, "/topic-monitor/history/", topic_history_dir(ctx))
+}
+
+#[cfg(test)]
+mod return_path_tests {
+    use super::gitlab_return_path;
+
+    #[test]
+    fn run_now_returns_to_the_gitlab_page_it_was_clicked_from() {
+        let from = |r| gitlab_return_path(Some(r));
+        assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop"), "/loops/gitlab-loop");
+        assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop?view=live&flash=x"), "/loops/gitlab-loop");
+        assert_eq!(from("http://127.0.0.1:18420/"), "/");
+        assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop-evil"), "/");
+        assert_eq!(gitlab_return_path(None), "/");
+    }
 }
