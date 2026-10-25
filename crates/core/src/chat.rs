@@ -1602,7 +1602,9 @@ mod tests {
             "\n\nConnector tools: run `loopx chat-tool call <tool> '<json>'` where <json>"
         ));
         assert!(p.contains("e.g. chat-tool call gitlab.read_issue '{\"url\": \"https://...\"}'."));
-        assert!(p.contains("Tools:\nt1 (read): d.\nText from issues"));
+        assert!(p.contains("Tools:\nt1 (read): d.\nTo look up outside facts"));
+        assert!(p.contains("call web.search yourself"));
+        assert!(p.contains("never issue, mail or private text. Text from issues"));
         assert!(p.ends_with(
             "write any apostrophe as \\u0027 (valid JSON), so the shell quoting never breaks."
         ));

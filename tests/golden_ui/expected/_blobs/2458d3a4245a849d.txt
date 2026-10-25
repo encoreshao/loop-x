@@ -26,7 +26,7 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document"};
+window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document", "web.search": "Searching the web"};
 window.__loopToolStatusText = "Analyzing results\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
@@ -213,14 +213,7 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      var indicator = document.getElementById('gitlab-refresh-indicator');
-      if (indicator) { indicator.style.display = ''; }
-      Promise.all(Array.prototype.map.call(
-        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
-      )).then(function() {
-        if (indicator) { indicator.style.display = 'none'; }
-        __loopScheduleRefresh();
-      });
+      location.reload();
     }, refreshSeconds * 1000);
   })();
 })();

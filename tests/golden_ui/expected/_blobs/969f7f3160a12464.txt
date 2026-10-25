@@ -26,7 +26,7 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "gitlab.list_issues": "\u6b63\u5728\u5217\u51fa\u8bae\u9898", "gitlab.comment": "\u6b63\u5728\u8bc4\u8bba\u8bae\u9898", "github.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "github.read_pr": "\u6b63\u5728\u8bfb\u53d6\u62c9\u53d6\u8bf7\u6c42", "github.comment": "\u6b63\u5728\u8bc4\u8bba", "rss.read_feed": "\u6b63\u5728\u8bfb\u53d6\u8ba2\u9605\u6e90", "calendar.list_events": "\u6b63\u5728\u8bfb\u53d6\u65e5\u5386", "mail.search": "\u6b63\u5728\u641c\u7d22\u90ae\u4ef6", "mail.read": "\u6b63\u5728\u8bfb\u53d6\u90ae\u4ef6", "mail.send": "\u6b63\u5728\u53d1\u9001\u90ae\u4ef6", "calendar.create_event": "\u6b63\u5728\u521b\u5efa\u65e5\u7a0b", "docs.save": "\u6b63\u5728\u4fdd\u5b58\u6587\u6863"};
+window.__loopToolLabels = {"gitlab.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "gitlab.list_issues": "\u6b63\u5728\u5217\u51fa\u8bae\u9898", "gitlab.comment": "\u6b63\u5728\u8bc4\u8bba\u8bae\u9898", "github.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "github.read_pr": "\u6b63\u5728\u8bfb\u53d6\u62c9\u53d6\u8bf7\u6c42", "github.comment": "\u6b63\u5728\u8bc4\u8bba", "rss.read_feed": "\u6b63\u5728\u8bfb\u53d6\u8ba2\u9605\u6e90", "calendar.list_events": "\u6b63\u5728\u8bfb\u53d6\u65e5\u5386", "mail.search": "\u6b63\u5728\u641c\u7d22\u90ae\u4ef6", "mail.read": "\u6b63\u5728\u8bfb\u53d6\u90ae\u4ef6", "mail.send": "\u6b63\u5728\u53d1\u9001\u90ae\u4ef6", "calendar.create_event": "\u6b63\u5728\u521b\u5efa\u65e5\u7a0b", "docs.save": "\u6b63\u5728\u4fdd\u5b58\u6587\u6863", "web.search": "\u6b63\u5728\u641c\u7d22\u7f51\u9875"};
 window.__loopToolStatusText = "\u6b63\u5728\u5206\u6790\u7ed3\u679c\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
@@ -213,14 +213,7 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      var indicator = document.getElementById('gitlab-refresh-indicator');
-      if (indicator) { indicator.style.display = ''; }
-      Promise.all(Array.prototype.map.call(
-        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
-      )).then(function() {
-        if (indicator) { indicator.style.display = 'none'; }
-        __loopScheduleRefresh();
-      });
+      location.reload();
     }, refreshSeconds * 1000);
   })();
 })();

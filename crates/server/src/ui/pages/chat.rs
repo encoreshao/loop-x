@@ -95,6 +95,7 @@ pub fn tool_label(lang: Lang, name: &str) -> String {
         "mail.send" => "Sending email",
         "calendar.create_event" => "Creating event",
         "docs.save" => "Saving document",
+        "web.search" => "Searching the web",
         _ => return name.to_string(),
     };
     t(lang, label)

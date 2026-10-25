@@ -26,7 +26,7 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document"};
+window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document", "web.search": "Searching the web"};
 window.__loopToolStatusText = "Analyzing results\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {

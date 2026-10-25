@@ -50,6 +50,7 @@ fn chat_tool_chips_js(lang: Lang) -> String {
         ("mail.send", "Sending email"),
         ("calendar.create_event", "Creating event"),
         ("docs.save", "Saving document"),
+        ("web.search", "Searching the web"),
     ];
     for (name, label) in names {
         labels.insert(name.to_string(), json!(i18n::t(lang, label, &[])));
