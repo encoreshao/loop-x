@@ -2,8 +2,12 @@
 // with a note), mounts the renderer in #office, builds the world, runs day/night
 // and the render loop, and seats one person per loop from `/office/state`. Test
 // hooks in the URL hash: `h=<hour>` overrides the clock, `left`/`right`/`in` pick a
-// camera (e.g. `#left&h=23`). `window.__office` exposes `debug()` (where everyone
-// is), `setLoops(loops)` (draw these states instead), `overflow` and `syncs`.
+// camera (e.g. `#left&h=23`). Hovering a person highlights their name tag; clicking
+// one (or `select(name)`) opens the details panel and eases the camera to them,
+// clicking empty space or pressing Escape releases it. `window.__office` exposes
+// `debug()` (where everyone is), `setLoops(loops)` (draw these states instead),
+// `overflow`, `syncs`, and the test hooks `select(name|null)`, `selected()`,
+// `hover()`, `panelOpen()`, `screenOf(name)` and `focus()`.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
@@ -98,10 +102,11 @@ async function main() {
     return;
   }
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const [{ buildWorld, buildLights }, { createDayNight }, { createAgents }] = await Promise.all([
+  const [{ buildWorld, buildLights }, { createDayNight }, { createAgents }, { createPanel }] = await Promise.all([
     import("./world.js" + V),
     import("./daynight.js" + V),
     import("./agents.js" + V),
+    import("./panel.js" + V),
   ]);
 
   let renderer;
@@ -153,22 +158,171 @@ async function main() {
   more.hidden = true;
   root.append(more);
   const office = (window.__office = Object.assign(window.__office || {}, { overflow: 0, syncs: 0 }));
+  let latest = [], selected = null, hovered = null, focusAnim = null;
+  const csrf = () => (document.getElementById("office-csrf") || {}).value || "";
+  root.tabIndex = -1;
+  const panel = createPanel(root, strings, csrf(), {
+    refresh: () => refresh(),
+    onClose: () => release(),
+  });
   function show(loops) {
-    agents.sync(loops);
+    latest = Array.isArray(loops) ? loops : [];
+    agents.sync(latest);
+    panel.update(latest);
+    if (selected && !panel.isOpen) release();
     const n = agents.overflow;
     more.textContent = n ? (strings.and_more || "").replace("{n}", String(n)) : "";
     more.hidden = !n;
     office.overflow = n;
     office.syncs += 1;
   }
+  async function refresh() {
+    const r = await fetch("/office/state", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const doc = await r.json();
+    if (!disposed) show(doc.loops);
+  }
   office.setLoops = show;
   office.debug = () => agents.debug();
-  fetch("/office/state", { credentials: "same-origin", headers: { Accept: "application/json" } })
-    .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
-    .then((doc) => {
-      if (!disposed) show(doc.loops);
-    })
-    .catch((err) => console.warn("office state:", err));
+  refresh().catch((err) => console.warn("office state:", err));
+
+  // ---------- selection, hover and the camera ----------
+  const FOCUS_MS = 600, FOCUS_DIST = 11, CHEST = 1.5;
+  const ray = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const isShown = (o) => {
+    for (; o; o = o.parent) if (!o.visible) return false;
+    return true;
+  };
+  /// The person under the pointer, or null. Furniture in front hides people behind it.
+  function pick(ev) {
+    const r = canvas.getBoundingClientRect();
+    ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const mine = ray.intersectObjects(agents.pickables(), true).find((h) => !h.object.isLine && isShown(h.object));
+    if (!mine) return null;
+    const a = agents.agentAt(mine.object);
+    for (const h of ray.intersectObjects(scene.children, true)) {
+      if (h.distance >= mine.distance - 0.05) break;
+      const o = h.object;
+      if (o.isLine || o.isPoints || o.isSprite || !isShown(o) || agents.agentAt(o)) continue;
+      const m = Array.isArray(o.material) ? o.material[0] : o.material;
+      if (m && m.transparent && m.opacity < 0.6) continue;
+      return null;
+    }
+    return a ? a.name : null;
+  }
+  function highlight() {
+    agents.setHighlight([hovered, selected].filter(Boolean));
+  }
+  const chestOf = (name) => {
+    const p = agents.positionOf(name);
+    return p && new THREE.Vector3(p[0], p[1] + CHEST, p[2]);
+  };
+  function startFocus(name) {
+    const to = chestOf(name);
+    if (!to) return;
+    const dir = camera.position.clone().sub(controls.target);
+    dir.y = Math.max(dir.y, dir.length() * 0.35);
+    dir.setLength(FOCUS_DIST);
+    focusAnim = {
+      name, t0: clock.elapsedTime, fromT: controls.target.clone(), fromP: camera.position.clone(),
+      dir, last: to.clone(), done: false,
+    };
+    if (reducedMotion) stepFocus(1e9);
+  }
+  /// One frame of the ease; afterwards the camera just keeps pace with a walking person.
+  function stepFocus(now) {
+    const f = focusAnim;
+    if (!f) return;
+    const to = chestOf(f.name);
+    if (!to) {
+      focusAnim = null;
+      return;
+    }
+    if (f.done) {
+      const d = to.clone().sub(f.last);
+      controls.target.add(d);
+      camera.position.add(d);
+    } else {
+      const u = Math.min(1, ((now - f.t0) * 1000) / FOCUS_MS);
+      const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
+      controls.target.lerpVectors(f.fromT, to, e);
+      camera.position.lerpVectors(f.fromP, to.clone().add(f.dir), e);
+      f.done = u >= 1;
+    }
+    f.last.copy(to);
+  }
+  controls.addEventListener("start", () => {
+    // Grabbing the camera ends the ease; it still follows the person afterwards.
+    if (focusAnim && !focusAnim.done) focusAnim.done = true;
+  });
+  function select(name) {
+    const loop = name == null ? null : latest.find((l) => l && l.name === name);
+    if (!loop || !agents.positionOf(loop.name)) {
+      release();
+      return;
+    }
+    selected = loop.name;
+    panel.open(loop);
+    highlight();
+    startFocus(loop.name);
+  }
+  /// Drops the selection: closes the panel, stops following and returns focus to the canvas container.
+  function release() {
+    const had = selected !== null;
+    selected = null;
+    focusAnim = null;
+    panel.close();
+    highlight();
+    if (had) root.focus({ preventScroll: true });
+  }
+  let down = null, lastMove = 0;
+  canvas.addEventListener("pointerdown", (e) => {
+    down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    const d = down;
+    down = null;
+    if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) return;
+    const name = pick(e);
+    if (name) select(name);
+    else release();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (e.buttons) return;
+    const now = performance.now();
+    if (now - lastMove < 50) return;
+    lastMove = now;
+    const name = pick(e);
+    if (name !== hovered) {
+      hovered = name;
+      canvas.style.cursor = name ? "pointer" : "";
+      highlight();
+    }
+  });
+  canvas.addEventListener("pointerleave", () => {
+    if (hovered) {
+      hovered = null;
+      canvas.style.cursor = "";
+      highlight();
+    }
+  });
+  office.select = select;
+  office.selected = () => selected;
+  office.hover = () => hovered;
+  office.panelOpen = () => panel.isOpen;
+  office.screenOf = (name) => {
+    const p = agents.positionOf(name);
+    if (!p) return null;
+    const v = new THREE.Vector3(p[0], p[1] + 1.2, p[2]).project(camera);
+    const r = canvas.getBoundingClientRect();
+    return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+  };
+  office.focus = () => {
+    const p = selected && chestOf(selected);
+    return p ? { target: controls.target.toArray(), person: p.toArray() } : null;
+  };
   let override = hooks.hour;
   const apply = () => dayNight.apply(dayNight.currentHour(override));
   apply();
@@ -195,6 +349,7 @@ async function main() {
     const dt = Math.min(clock.getDelta(), 0.1);
     agents.tick(dt, clock.elapsedTime);
     handles.tick(dt, clock.elapsedTime);
+    stepFocus(clock.elapsedTime);
     controls.update();
     renderer.render(scene, camera);
     if (!window.__office || !window.__office.ready) window.__office = Object.assign(window.__office || {}, { ready: true });

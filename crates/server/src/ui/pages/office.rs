@@ -150,6 +150,26 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-tod button{{font:inherit;font-size:.8rem;padding:.2rem .7rem;border:0;border-radius:999px;background:none;color:#e6e8ee;cursor:pointer}}\
 .office-tod button[aria-pressed='true']{{background:rgba(255,255,255,.18);color:#fff}}\
 .office-note{{margin:0 0 1rem}}\
+.office-panel{{position:absolute;top:12px;right:12px;max-height:calc(100% - 68px);width:min(300px,calc(100% - 24px));box-sizing:border-box;overflow:auto;padding:1rem;border-radius:12px;background:rgba(20,22,28,.94);color:#e6e8ee;font-size:.9rem;box-shadow:0 8px 28px rgba(0,0,0,.4)}}\
+.office-panel-close{{position:absolute;top:.5rem;right:.5rem;font:inherit;font-size:.8rem;padding:.2rem .6rem;border:0;border-radius:999px;background:rgba(255,255,255,.12);color:inherit;cursor:pointer}}\
+.office-panel-name{{margin:0 3.5rem .4rem 0;font-size:1.1rem;word-break:break-word}}\
+.office-panel-state{{display:inline-block;margin:0 0 .8rem;padding:.15rem .7rem;border-radius:999px;background:rgba(255,255,255,.12);font-size:.8rem}}\
+.office-panel-state::before{{content:'';display:inline-block;width:.55rem;height:.55rem;margin-right:.4rem;border-radius:50%;background:#7d8590}}\
+.office-panel-state[data-state='working']::before{{background:#3ddc84}}\
+.office-panel-state[data-state='waiting']::before{{background:#ffb020}}\
+.office-panel-state[data-state='failed']::before{{background:#ff5252}}\
+.office-panel-state[data-state='disabled']::before{{background:#6b7280}}\
+.office-panel dl{{margin:0 0 .8rem}}.office-panel dt{{margin-top:.5rem;font-size:.75rem;color:#9aa1ad}}.office-panel dd{{margin:0;word-break:break-word}}\
+.office-panel h3{{margin:.8rem 0 .3rem;font-size:.8rem;color:#9aa1ad;font-weight:600}}\
+.office-panel ul{{margin:0;padding-left:1.1rem}}.office-panel a{{color:#8ab4f8}}\
+.office-panel-approvals{{margin:0 0 .8rem}}\
+.office-panel-actions{{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem;align-items:center}}\
+.office-panel-actions button{{font:inherit;padding:.4rem .9rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}\
+.office-panel-actions button[data-act='toggle']{{background:rgba(255,255,255,.14);color:inherit}}\
+.office-panel-actions button[aria-disabled='true']{{opacity:.45;cursor:not-allowed}}\
+.office-panel button:focus-visible,.office-panel a:focus-visible,#office:focus-visible{{outline:2px solid #8ab4f8;outline-offset:2px}}\
+.office-panel-error{{margin:.8rem 0 0;color:#ff8a80}}\
+.office-panel[aria-busy='true']{{cursor:progress}}\
 .office-more{{position:absolute;left:12px;bottom:12px;margin:0;padding:.2rem .7rem;border-radius:999px;background:rgba(20,22,28,.72);color:#e6e8ee;font-size:.8rem}}\
 </style>\
 <noscript><style>#office{{display:none}}#office-list[hidden]{{display:block}}</style></noscript>\
@@ -161,10 +181,11 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 <dl><dt>{why}</dt><dd class='office-panel-why'></dd>\
 <dt>{last_run}</dt><dd class='office-panel-last'></dd>\
 <dt>{next_run}</dt><dd class='office-panel-next'></dd></dl>\
-<h3>{history}</h3><ul class='office-panel-history'></ul>\
+<p class='office-panel-approvals' hidden><a data-act='approvals'></a></p>\
+<div class='office-panel-history-block'><h3>{history}</h3><ul class='office-panel-history'></ul></div>\
 <div class='office-panel-actions'><button type='button' data-act='run'>{run_now}</button>\
 <button type='button' data-act='toggle'></button>\
-<a data-act='open'>{open_loop}</a></div>\
+<a data-act='open' class='office-panel-link'>{open_loop}</a></div>\
 <p class='office-panel-error' role='alert' hidden>{action_failed}</p></aside></template>\
 <script type='application/json' id='office-i18n'>{i18n}</script>\
 <input type='hidden' id='office-csrf' value=\"{token}\">\

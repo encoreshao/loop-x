@@ -61,6 +61,12 @@ export function createAgents(ctx) {
     s.userData = { c, tex, w, h };
     return s;
   }
+  /// The name tag grows a little (and turns fully opaque) while hovered or selected.
+  function scaleLabel(a) {
+    const k = a.hi ? 1.18 : 1;
+    a.label.scale.set(2.8 * labelScale * k, 0.875 * labelScale * k, 1);
+    a.label.material.opacity = a.hi ? 1 : 0.92;
+  }
   function drawLabel(a) {
     const { c, tex } = a.label.userData, x = c.getContext("2d");
     x.clearRect(0, 0, c.width, c.height);
@@ -120,6 +126,7 @@ export function createAgents(ctx) {
     scene.add(p.group);
     const label = sprite(2.8 * labelScale, 0.875 * labelScale, 512, 160);
     label.position.set(0, 3.3, 0);
+    label.material.opacity = 0.92;
     p.group.add(label);
     const bubble = sprite(0.8, 0.8, 128, 128);
     bubble.position.set(0, 2.6, 0);
@@ -418,7 +425,7 @@ export function createAgents(ctx) {
         for (const a of agents.values()) {
           a.loc = a.dest = null;
           a.path = [];
-          a.label.scale.set(2.8 * labelScale, 0.875 * labelScale, 1);
+          scaleLabel(a);
         }
       }
       const drawn = list.slice(0, MAX_DRAWN);
@@ -455,6 +462,26 @@ export function createAgents(ctx) {
     agentAt(object3D) {
       for (let o = object3D; o; o = o.parent) if (o.userData && o.userData.agent) return agents.get(o.userData.agent) || null;
       return null;
+    },
+    /// Every drawn person's group, for raycasting.
+    pickables() {
+      return order.map((a) => a.group);
+    },
+    /// Highlights the name tags of exactly `names` (hover and selection).
+    setHighlight(names) {
+      const set = new Set(names);
+      for (const a of agents.values()) {
+        const hi = set.has(a.name);
+        if (hi !== !!a.hi) {
+          a.hi = hi;
+          scaleLabel(a);
+        }
+      }
+    },
+    /// Where `name` stands now as [x, y, z], or null.
+    positionOf(name) {
+      const a = agents.get(name);
+      return a ? [a.group.position.x, a.group.position.y, a.group.position.z] : null;
     },
     /// Test hook: where everyone is.
     debug() {
