@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-25
+
 ### Changed
 
 - "Run now" on every loop starts the run immediately, without the confirmation popup.
@@ -395,7 +397,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/encoreshao/loop-x/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/encoreshao/loop-x/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/encoreshao/loop-x/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/encoreshao/loop-x/compare/v0.5.0...v0.6.0
