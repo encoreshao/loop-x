@@ -33,6 +33,7 @@ public enum StartScreen {
             .joined()
         return """
         <html><head><meta name='color-scheme' content='light dark'><style>
+        .\(TitlebarChrome.dragStripClass){position:fixed;top:0;left:0;right:0;height:28px;z-index:10}
         :root{--fg:#1d1d1f;--sub:#6e6e73;--err:#c0392b;--bg:#fff;--accent:#4f6df5;--pink:#e0457b;--glow:rgba(79,109,245,.22);--wash1:rgba(79,109,245,.10);--wash2:rgba(224,69,123,.08)}
         @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:#98989d;--err:#ff6b5e;--bg:#1e1e1e;--accent:#7aa2ff;--pink:#ff6fa5;--glow:rgba(122,162,255,.28);--wash1:rgba(122,162,255,.14);--wash2:rgba(255,111,165,.10)}}
         html{background:var(--bg)}
@@ -96,7 +97,7 @@ public enum StartScreen {
         footer::before{content:'';display:block;width:140px;height:1px;margin:0 auto 10px;background:linear-gradient(90deg,transparent,var(--glow),transparent)}
         footer .dot{margin:0 8px}
         footer a{color:var(--accent);text-decoration:none}
-        </style></head><body>
+        </style></head><body><div class='\(TitlebarChrome.dragStripClass)'></div>
         <div class='water'><svg width='0' height='0' style='position:absolute'><defs><linearGradient id='tideA' x1='0' y1='0' x2='0' y2='1'><stop offset='0' style='stop-color:var(--accent)'/><stop offset='1' style='stop-color:var(--pink)'/></linearGradient><linearGradient id='tideB' x1='0' y1='0' x2='0' y2='1'><stop offset='0' style='stop-color:var(--pink)'/><stop offset='1' style='stop-color:var(--accent)'/></linearGradient></defs></svg>\(bubbles)\(svg("w1", wave(100, 62, 360)))\(svg("w2", wave(120, 44, 240)))\(svg("w3", wave(90, 36, 720)))</div>
         <div class='logo'><i class='ripple r1'></i><i class='ripple r2'></i><i class='ripple r3'></i><i class='ripple r4'></i><i class='track'></i><i class='ring'></i>\(logo)</div><h1>LoopX</h1>
         <p class='tag'>Get your time back from the daily grind.</p>

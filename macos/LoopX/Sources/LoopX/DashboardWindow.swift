@@ -5,7 +5,7 @@ import LoopXKit
 /// The dashboard: a plain WKWebView on the backend's own pages. Same server a browser tab would use,
 /// so having both open at once is fine.
 @MainActor
-final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDelegate {
+final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     private(set) var window: NSWindow?
     private(set) var webView: WKWebView?
     private var loadedBase: URL?
@@ -97,20 +97,36 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         guard window == nil else { return }
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
+        cfg.userContentController.addUserScript(WKUserScript(source: TitlebarChrome.script,
+                                                             injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        cfg.userContentController.add(self, name: TitlebarChrome.messageName)
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         wv.uiDelegate = self
         wv.allowsBackForwardNavigationGestures = true
         wv.isInspectable = true   // Developer > Web Inspector; the page is the local backend's own
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
-                         styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                         backing: .buffered, defer: false)
         w.title = "LoopX"
+        w.titleVisibility = .hidden
+        w.titlebarAppearsTransparent = true
         w.collectionBehavior.insert(.fullScreenPrimary)
         w.contentView = wv
         w.isReleasedWhenClosed = false
         w.setFrameAutosaveName("LoopXDashboard")
         w.center()
         window = w; webView = wv
+    }
+
+    /// The page's empty topbar/sidebar header stands in for the title bar: drag moves, double-click zooms.
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let w = window, let kind = message.body as? String else { return }
+        switch kind {
+        case "drag": if let e = NSApp.currentEvent { w.performDrag(with: e) }
+        case "zoom": w.performZoom(nil)
+        default: break
+        }
     }
 
     /// Reload after the backend moved to another port.

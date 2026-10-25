@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- The Mac app's window has a transparent title bar: the dashboard runs up under the traffic lights, and an empty part of the topbar or sidebar header drags the window (double-click zooms it).
+
 ## [0.8.0] - 2026-10-25
 
 ### Added
