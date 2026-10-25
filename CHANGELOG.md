@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Google Slides connector (Connectors -> Add -> Google Slides, sign in with Google). Refresh lists the presentations you own or that were shared with you; tick the ones to use as templates (the list is cached locally under `~/.loopx/slides/`). In chat, ask for a deck and the assistant reads an enabled template's `{{placeholders}}`, fills them from your instructions or a summary, and creates a copy only after you approve the card. The account's Templates and decks page reviews each created deck in the app (slide thumbnails and text, with any placeholders left unfilled) and links to open it in Google Slides. Slides needs the `presentations` and full `drive` scopes, because Google only lets an app copy a file shared by someone else with `drive`; the Google Calendar sign-in is unchanged.
 - Gemini CLI, Kimi CLI and Cursor CLI can be selected as the AI CLI (Settings -> AI CLI, or `loopx ai-cli set gemini|kimi|cursor`) and are used everywhere: loops, calendar prep, Inbox Triage and the dashboard chat. They are marked experimental (their flags come from documentation and are untested against the real binaries), and the picker says when a CLI is not found on PATH. `loopx doctor` detects all five.
 
 ### Changed

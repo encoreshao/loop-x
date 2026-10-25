@@ -76,6 +76,7 @@ pub mod seen_store;
 pub mod settings_store;
 pub mod sha256;
 pub mod slack;
+pub mod slides_store;
 pub mod status;
 pub mod topic_runner;
 pub mod topic_seen;

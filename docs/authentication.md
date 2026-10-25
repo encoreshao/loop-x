@@ -8,6 +8,7 @@ details are in [`contract/oauth.md`](contract/oauth.md).
 |---|---|---|
 | Gmail inbox (Inbox Triage) | **Loops → Inbox Triage → Setup → Inboxes → Connect** | A Google OAuth client (below) |
 | Google Calendar connector | **Connectors → Accounts → Connect with Google** | The same Google OAuth client |
+| Google Slides connector | **Connectors → Accounts → Connect with Google** | The same Google OAuth client (also enable the Google Slides and Google Drive APIs) |
 | Outlook inbox | Not available yet | - |
 
 ## One-time setup: a Google OAuth client

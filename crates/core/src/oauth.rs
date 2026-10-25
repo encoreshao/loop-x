@@ -30,6 +30,10 @@ pub const LINKEDIN_TOKEN_URL: &str = "https://www.linkedin.com/oauth/v2/accessTo
 pub const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
 pub const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly \
 https://www.googleapis.com/auth/calendar.events";
+/// Slides plus full Drive: copying a template someone else shared needs `drive`
+/// (`drive.file` and `drive.readonly` cannot copy a file this app did not create).
+pub const SLIDES_SCOPE: &str = "https://www.googleapis.com/auth/presentations \
+https://www.googleapis.com/auth/drive";
 pub const LINKEDIN_SCOPE: &str = "openid profile email";
 
 /// A pending sign-in state is single use and lives this long.
@@ -102,6 +106,26 @@ impl Provider {
             Self::Google => "LOOPX_OAUTH_GOOGLE",
             Self::Linkedin => "LOOPX_OAUTH_LINKEDIN",
         }
+    }
+}
+
+/// The Google scopes a connector type asks for at sign-in.
+pub fn connector_scope(type_name: &str) -> &'static str {
+    match type_name {
+        "google_slides" => SLIDES_SCOPE,
+        _ => CALENDAR_SCOPE,
+    }
+}
+
+/// The scopes without which a connector type is useless; checked against what
+/// Google reports as granted (the user can untick boxes on the consent screen).
+pub fn connector_required_scopes(type_name: &str) -> &'static [&'static str] {
+    match type_name {
+        "google_slides" => &[
+            "https://www.googleapis.com/auth/presentations",
+            "https://www.googleapis.com/auth/drive",
+        ],
+        _ => &["https://www.googleapis.com/auth/calendar.readonly"],
     }
 }
 
@@ -866,6 +890,23 @@ pub fn logout(ctx: &OauthContext, p: Provider, account: &str) -> Result<(), Oaut
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connector_scopes_follow_the_type() {
+        assert_eq!(
+            super::connector_scope("google_calendar"),
+            super::CALENDAR_SCOPE
+        );
+        assert_eq!(super::connector_scope("google_slides"), super::SLIDES_SCOPE);
+        for scope in super::connector_required_scopes("google_slides") {
+            assert!(super::SLIDES_SCOPE.split_whitespace().any(|s| s == *scope));
+        }
+        for scope in super::connector_required_scopes("google_calendar") {
+            assert!(super::CALENDAR_SCOPE
+                .split_whitespace()
+                .any(|s| s == *scope));
+        }
+    }
+
     use super::*;
     use crate::keychain::MemoryStore;
     use std::io::{BufRead, BufReader, Read, Write};

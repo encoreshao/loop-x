@@ -282,6 +282,14 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
             ));
         }
     }
+    if account.kind == "google_slides" && managed_by == "native" {
+        connect_html.push_str(&format!(
+            "<a class='btn btn-neutral' href='/connectors/slides?id={}'>{} {}</a>",
+            h(&quoted_id),
+            icons::icon("slideshow"),
+            h(&ctx.t("Templates and decks"))
+        ));
+    }
     let mut buttons = format!(
         "{connect_html}<form method='post' action='/connectors/test' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='id' value=\"{safe_id}\">\
@@ -1081,6 +1089,11 @@ pub fn run_test(ctx: &UiCtx, id: &str) -> (bool, String) {
 fn renamed_or_deleted(ctx: &UiCtx, old: &str, new: Option<&str>) {
     // The loops' notify lists live in `<home>/loops.json`.
     cc::account_renamed_or_deleted_in(old, new, &results_path(ctx.state), &ctx.state.loops_config_path());
+    let slides = ctx.state.home_dir.join("slides");
+    match new {
+        Some(new) => loopx_core::slides_store::rename(&slides, old, new),
+        None => loopx_core::slides_store::remove(&slides, old),
+    }
 }
 
 fn save(ctx: &UiCtx) -> UiResponse {
@@ -1354,7 +1367,7 @@ fn google_start_inner(ctx: &UiCtx) -> Start {
             ("client_id", &client_id),
             ("redirect_uri", &redirect_uri),
             ("response_type", "code"),
-            ("scope", oauth::CALENDAR_SCOPE),
+            ("scope", oauth::connector_scope(&type_name)),
             ("access_type", "offline"),
             ("prompt", "consent"),
             ("state", &state),
@@ -1433,13 +1446,17 @@ pub fn google_callback(
         Err(e) => return (false, e.to_string()),
     };
     if let Some(granted) = tokens.scope.as_deref().filter(|g| !g.is_empty()) {
-        if !granted
-            .split_whitespace()
-            .any(|s| s == "https://www.googleapis.com/auth/calendar.readonly")
-        {
+        let missing = oauth::connector_required_scopes(&account.kind)
+            .iter()
+            .any(|need| !granted.split_whitespace().any(|s| s == *need));
+        if missing {
             return (
                 false,
-                t("Google didn't grant calendar access - reconnect and keep the Calendar box ticked"),
+                if account.kind == "google_slides" {
+                    t("Google didn't grant Slides and Drive access - reconnect and keep every box ticked")
+                } else {
+                    t("Google didn't grant calendar access - reconnect and keep the Calendar box ticked")
+                },
             );
         }
     }

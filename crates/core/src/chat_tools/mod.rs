@@ -17,6 +17,7 @@ pub mod mail;
 pub mod pending;
 pub mod rss;
 pub mod settings;
+pub mod slides;
 
 use crate::connectors::http::UreqClient;
 use crate::connectors::secrets::open_connector_store;
@@ -413,6 +414,7 @@ pub fn tools() -> &'static [Tool] {
         all.extend(gitlab::tools());
         all.extend(mail::tools());
         all.extend(rss::tools());
+        all.extend(slides::tools());
         all
     })
 }
@@ -1108,7 +1110,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 17);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1130,7 +1132,8 @@ mod tests {
                 "calendar.create_event",
                 "github.comment",
                 "gitlab.comment",
-                "mail.send"
+                "mail.send",
+                "slides.create_deck"
             ]
         );
     }

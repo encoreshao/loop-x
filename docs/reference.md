@@ -125,7 +125,7 @@ Every older URL (`/activity`, `/gitlab`, `/topic-monitor`, `/inbox`, `/loop-runs
 
 ## Connectors
 
-A connector is an account the loops can talk to: a GitLab or GitHub instance, a Slack, Telegram or chat webhook, a Notion workspace, an RSS feed list, a Jira or Linear workspace, a mailbox, a Google Calendar. Manage them on the dashboard's **System → Connectors** page (`/connectors`). Each type declares *capabilities* (`issues`, `merge_requests`, `pipelines`, `notify`, `feed`, `mail`, `docs`, `calendar`), and a loop can require a capability instead of a specific product.
+A connector is an account the loops can talk to: a GitLab or GitHub instance, a Slack, Telegram or chat webhook, a Notion workspace, an RSS feed list, a Jira or Linear workspace, a mailbox, a Google Calendar, Google Slides. Manage them on the dashboard's **System → Connectors** page (`/connectors`). Each type declares *capabilities* (`issues`, `merge_requests`, `pipelines`, `notify`, `feed`, `mail`, `docs`, `calendar`, `slides`), and a loop can require a capability instead of a specific product.
 
 | Type | Capabilities | What you enter | Secret |
 | --- | --- | --- | --- |
@@ -140,6 +140,7 @@ A connector is an account the loops can talk to: a GitLab or GitHub instance, a 
 | Linear | `issues` | — | API key |
 | Mailbox | `mail` | external — managed on Inbox Triage setup | — |
 | Google Calendar | `calendar` (shown as Calendar) | calendar ID (default `primary`) | Google sign-in (`calendar.readonly` plus `calendar.events`, so the chat can create events after you approve); the refresh token goes in the Keychain |
+| Google Slides | `slides` (shown as Slides) | none | Google sign-in (`presentations` plus `drive`: copying a template someone else shared needs full Drive access); the refresh token goes in the Keychain |
 
 **Gallery and form.**
 
@@ -149,6 +150,7 @@ A connector is an account the loops can talk to: a GitLab or GitHub instance, a 
 - The add/edit form has an **Account** section (**Label** and **Connector id**; the id is suggested from the label until you edit it), a **Connection** section (the type's settings) and a **Credentials** section (the secret).
 - Sign-in guide for Gmail and Calendar: [`authentication.md`](authentication.md).
 - **Google Calendar** has no pasted secret: click **Connect with Google** (**Reconnect** once connected) to sign in. It reuses the Google OAuth client you already set up for Gmail on Inbox Triage's setup page (Gmail tab; if it is missing, the form links you there), so Google Cloud needs the same redirect URI, `http://127.0.0.1:<port>/oauth/google/callback`. The account row shows a **Connected** / **Not connected** marker, and **Test** reads the calendar. It requests `calendar.readonly` and `calendar.events`; a calendar connected before the second scope existed keeps working read-only until you click **Reconnect**.
+- **Google Slides** also signs in with **Connect with Google** and reuses the same OAuth client (enable the **Google Slides API** and **Google Drive API** in Google Cloud). **Templates and decks** on its row opens `/connectors/slides`: **Refresh from Drive** caches the presentations you own or that were shared with you (`~/.loopx/slides/<id>.json`, file ids, names and links only), and the ticked ones are the only templates the chat can copy. Put `{{placeholders}}` in a template's text; the chat tools `slides.list_templates`, `slides.template_info`, `slides.create_deck` (a write: it waits for your approval) and `slides.review_deck` fill them in. Created decks are listed on the same page, where **Review** shows each slide's thumbnail and text next to an **Open in Google Slides** link. A connector signed in before this existed does not need to change.
 - Required fields are marked `*`, the others say "(optional)", and fields have example placeholders. The secret field has a **Show**/**Hide** toggle.
 - Buttons: **Save**, **Save and test** (saves, then runs the probe) and **Cancel**. If a save fails, the form is shown again with your non-secret values kept.
 

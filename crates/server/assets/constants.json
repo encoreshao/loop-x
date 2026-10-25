@@ -809,11 +809,13 @@
    "dingtalk": "dingtalk 钉钉",
    "microsoftteams": "teams",
    "googlechat": "google chat",
+   "googleslides": "google slides presentation deck powerpoint",
    "telegram": "tg"
   },
   "_GOOGLE_TILE_ORDER": [
    "gmail",
    "googlecalendar",
+   "googleslides",
    "googlechat"
   ],
   "_MAILBOX_TILES": [
@@ -854,6 +856,7 @@
    "mail": "Mail",
    "docs": "Documents",
    "calendar": "Calendar",
+   "slides": "Slides",
    "social": "Social"
   },
   "_LOOP_NEED_ICON": "<svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>",

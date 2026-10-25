@@ -11,7 +11,9 @@
 
 pub mod github;
 pub mod gitlab;
+pub mod google_auth;
 pub mod google_calendar;
+pub mod google_slides;
 pub mod http;
 pub mod jira;
 pub mod linear;
@@ -37,6 +39,7 @@ pub const FEED: &str = "feed";
 pub const MAIL: &str = "mail";
 pub const DOCS: &str = "docs";
 pub const CALENDAR: &str = "calendar";
+pub const SLIDES: &str = "slides";
 pub const SOCIAL: &str = "social";
 
 /// `ConnectorError` and the other failures a connector call can end in.
@@ -265,11 +268,12 @@ fn is_email(value: &str) -> bool {
 }
 
 /// Every type, in registry order.
-pub fn all_types() -> [&'static TypeInfo; 12] {
+pub fn all_types() -> [&'static TypeInfo; 13] {
     [
         &github::INFO,
         &gitlab::INFO,
         &google_calendar::INFO,
+        &google_slides::INFO,
         &jira::INFO,
         &linear::INFO,
         &linkedin::INFO,
@@ -455,6 +459,28 @@ pub trait Connector: Send + Sync {
         unsupported("create_event")
     }
 
+    /// Slides: presentations usable as templates (`id`, `name`, `modified`,
+    /// `web_link`, `owned_by_me`, `owner`), newest first; `query` filters by name.
+    fn list_templates(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
+        unsupported("list_templates")
+    }
+
+    /// Slides: copy a template into a new deck named `title`; returns `{id, web_link}`.
+    fn copy_deck(&self, _template_id: &str, _title: &str) -> ConnResult<Value> {
+        unsupported("copy_deck")
+    }
+
+    /// Slides: replace each `{{key}}` with its value; returns `{replaced}`.
+    fn fill_deck(&self, _deck_id: &str, _replacements: &[(String, String)]) -> ConnResult<Value> {
+        unsupported("fill_deck")
+    }
+
+    /// Slides: `{id, title, web_link, placeholders, slides: [{index, id, text,
+    /// thumbnail_url}]}`; thumbnails only when asked for.
+    fn describe_deck(&self, _deck_id: &str, _thumbnails: bool) -> ConnResult<Value> {
+        unsupported("describe_deck")
+    }
+
     /// Mail: search the mailbox.
     fn search_messages(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
         unsupported("search_messages")
@@ -487,6 +513,9 @@ pub fn build(
         "github" => Box::new(github::GitHubConnector::new(account, secret, http)),
         "gitlab" => Box::new(gitlab::GitLabConnector::new(account, secret, http)),
         "google_calendar" => Box::new(google_calendar::GoogleCalendarConnector::new(
+            account, secret, http,
+        )),
+        "google_slides" => Box::new(google_slides::GoogleSlidesConnector::new(
             account, secret, http,
         )),
         "jira" => Box::new(jira::JiraConnector::new(account, secret, http)),
@@ -701,6 +730,7 @@ mod tests {
                 "github",
                 "gitlab",
                 "google_calendar",
+                "google_slides",
                 "jira",
                 "linear",
                 "linkedin",
