@@ -35,6 +35,9 @@ pub fn warning(cli: &str, site: CallSite) -> Option<&'static str> {
         return None;
     }
     Some(match cli {
+        "codex" if site == CallSite::Chat => {
+            "Codex gives the model a shell and records prompts, including email text, under ~/.codex/sessions. In chat, its sandbox also blocks actions that change loopx settings directly (enabling or disabling loops, saving projects): use the Settings pages or switch CLI for those."
+        }
         "codex" => {
             "Codex gives the model a shell and records prompts, including email text, under ~/.codex/sessions."
         }
@@ -96,6 +99,22 @@ mod tests {
         assert!(warning("codex", CallSite::InboxTriage)
             .unwrap()
             .contains("~/.codex/sessions"));
+    }
+
+    #[test]
+    fn codex_chat_warning_names_the_settings_actions_its_sandbox_blocks() {
+        let chat = warning("codex", CallSite::Chat).unwrap();
+        assert!(chat.contains("~/.codex/sessions"), "{chat}");
+        assert!(
+            chat.contains("enabling or disabling loops, saving projects"),
+            "{chat}"
+        );
+        assert!(
+            chat.contains("use the Settings pages or switch CLI"),
+            "{chat}"
+        );
+        let inbox = warning("codex", CallSite::InboxTriage).unwrap();
+        assert!(!inbox.contains("Settings pages"), "{inbox}");
     }
 
     #[test]

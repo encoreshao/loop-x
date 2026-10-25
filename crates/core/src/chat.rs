@@ -115,8 +115,12 @@ pub struct ChatCommand {
     pub cli: String,
     /// Directories besides its scratch workspace that Codex's sandbox may
     /// write; [`run_chat_job`] sets it to the repo's `outputs/` (pending
-    /// approvals, chat docs). Never the loopx home: write tools run in the
-    /// server after approval, so the model has no reason to touch its config.
+    /// approvals, chat docs). Deliberately never the loopx home: the model must
+    /// not be able to edit `chat_tools.json` (auto-approve), `projects.json` or
+    /// `ai_cli.json`. The `loopx chat-tool` it runs inherits the sandbox, so the
+    /// chat-tool actions that write the loopx home directly, without an
+    /// approval (topic/loop/inbox/issue enable and disable, project save), fail
+    /// under Codex; its chat warning tells the user to use Settings instead.
     pub writable_roots: Vec<String>,
 }
 
@@ -397,8 +401,8 @@ fn prepare_cursor_workspace(repo_root: &Path, chat_tool: &str) -> std::io::Resul
             allow.push(format!("Shell({base})"));
         }
     }
-    let dir = repo_root.join(CURSOR_CHAT_WORKSPACE).join(".cursor");
-    std::fs::create_dir_all(&dir)?;
+    real_workspace_dir(repo_root, CURSOR_CHAT_WORKSPACE)?;
+    let dir = real_workspace_dir(repo_root, &format!("{CURSOR_CHAT_WORKSPACE}/.cursor"))?;
     let perms = json!({"permissions": {"allow": allow, "deny": ["Read(**)", "Write(**)"]}});
     // Written aside and renamed, so a concurrent turn never reads half a file.
     let tmp = dir.join(format!("cli.json.{}.tmp", uuid::Uuid::new_v4().simple()));
@@ -409,6 +413,38 @@ fn prepare_cursor_workspace(repo_root: &Path, chat_tool: &str) -> std::io::Resul
     std::fs::rename(&tmp, dir.join("cli.json")).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
+}
+
+/// `root/rel` as a real directory inside `root/outputs`. The model can write
+/// `outputs/`, so a turn may have planted a symlink (say to the loopx home) or
+/// a file at a workspace path for the next turn to use: a symlink or file there
+/// is removed (never followed) and replaced by a real directory, and a path that
+/// still resolves outside `outputs/` is an error.
+fn real_workspace_dir(root: &Path, rel: &str) -> std::io::Result<PathBuf> {
+    let outside = || {
+        std::io::Error::other(format!(
+            "{rel} resolves outside {}",
+            root.join("outputs").display()
+        ))
+    };
+    if !rel.starts_with("outputs/") {
+        return Err(outside());
+    }
+    let path = root.join(rel);
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => {
+            std::fs::remove_file(&path)?;
+            std::fs::create_dir(&path)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir_all(&path)?,
+        Err(e) => return Err(e),
+    }
+    let outputs = std::fs::canonicalize(root.join("outputs"))?;
+    if !std::fs::canonicalize(&path)?.starts_with(&outputs) {
+        return Err(outside());
+    }
+    Ok(path)
 }
 
 /// The command for one turn: Codex gets the repo's `outputs/` as its only
@@ -1242,7 +1278,7 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
     };
     let workspace = match cli {
         "cursor" => prepare_cursor_workspace(root, &command.chat_tool),
-        "codex" => std::fs::create_dir_all(root.join(CODEX_CHAT_WORKSPACE)),
+        "codex" => real_workspace_dir(root, CODEX_CHAT_WORKSPACE).map(|_| ()),
         _ => Ok(()),
     };
     if let Err(e) = workspace {
@@ -2437,6 +2473,90 @@ printf '{{"tool": "gitlab.comment", "args": {{"body": "hi"}}, "session": "%s", "
         let tools = msgs.last().unwrap()["tools"].as_array().unwrap().clone();
         assert_eq!(tools.len(), 1, "{tools:?}");
         assert_eq!(tools[0]["pending"]["pending_id"], NEW_ID);
+    }
+
+    fn is_real_dir(p: &Path) -> bool {
+        std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir())
+    }
+
+    fn empty_dir(p: &Path) -> bool {
+        std::fs::read_dir(p).unwrap().next().is_none()
+    }
+
+    #[test]
+    fn a_symlinked_codex_workspace_is_replaced_by_a_real_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        let ws = d.path().join(CODEX_CHAT_WORKSPACE);
+        std::os::unix::fs::symlink(home.path(), &ws).unwrap();
+        // Codex writes into its workspace (the fake runs from the repo root).
+        let bin = fake_cli(
+            d.path(),
+            "codex",
+            &format!("echo x > {CODEX_CHAT_WORKSPACE}/written\necho done"),
+        );
+        let rt = runtime_for(d.path(), &bin, "codex");
+        let (_, items) = run_turn(&rt);
+        assert_eq!(
+            items.last().unwrap(),
+            &StreamItem::Done {
+                error: None,
+                final_text: Some("done".into())
+            }
+        );
+        assert!(is_real_dir(&ws));
+        assert!(ws.join("written").is_file());
+        assert!(empty_dir(home.path()));
+    }
+
+    #[test]
+    fn a_file_at_the_codex_workspace_is_replaced_by_a_real_dir() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        let ws = d.path().join(CODEX_CHAT_WORKSPACE);
+        std::fs::write(&ws, "planted").unwrap();
+        let bin = fake_cli(d.path(), "codex", "echo done");
+        let rt = runtime_for(d.path(), &bin, "codex");
+        run_turn(&rt);
+        assert!(is_real_dir(&ws));
+    }
+
+    #[test]
+    fn symlinked_cursor_workspace_and_cursor_dir_are_replaced() {
+        for planted in [
+            CURSOR_CHAT_WORKSPACE.to_string(),
+            format!("{CURSOR_CHAT_WORKSPACE}/.cursor"),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let home = tempfile::tempdir().unwrap();
+            let link = d.path().join(&planted);
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(home.path(), &link).unwrap();
+            prepare_cursor_workspace(d.path(), "loopx chat-tool").unwrap();
+            let dir = d.path().join(CURSOR_CHAT_WORKSPACE);
+            assert!(is_real_dir(&dir), "{planted}");
+            assert!(is_real_dir(&dir.join(".cursor")), "{planted}");
+            assert!(dir.join(".cursor/cli.json").is_file(), "{planted}");
+            assert!(empty_dir(home.path()), "{planted}");
+        }
+    }
+
+    #[test]
+    fn a_workspace_outside_outputs_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        assert!(real_workspace_dir(d.path(), CODEX_CHAT_WORKSPACE).is_ok());
+        let e = real_workspace_dir(d.path(), "logs/elsewhere").unwrap_err();
+        assert!(e.to_string().contains("outside"), "{e}");
+    }
+
+    #[test]
+    fn the_codex_chat_warning_says_settings_actions_are_unavailable() {
+        let rec = ChatJobRecord::for_cli("codex");
+        let w = rec.warning.unwrap();
+        assert!(w.contains("enabling or disabling loops"), "{w}");
+        assert!(w.contains("Settings"), "{w}");
     }
 
     #[test]
