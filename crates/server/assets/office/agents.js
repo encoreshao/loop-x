@@ -20,6 +20,11 @@ const WALK_SPEED = 2.6;
 const PENDING_RUN_S = 25;
 /// A person who walked to the desk for a run stays at least this long, however short the run was.
 const MIN_DESK_S = 3.5;
+/// After a run, at most this many people (the same few, by name) stay at their desks
+/// instead of walking to the lounge.
+const MAX_STAY = 2, STAY_SHARE = 0.3;
+/// How fast arms, legs and head ease into the next pose (per second).
+const POSE_EASE = 9;
 /// The front aisle between table B and the "Needs you" mat, and where it meets the
 /// walk along the standby bench.
 const FRONT_Z = 8, BENCH_WALK_X = -12.8, WAIT_Z = 9.9;
@@ -149,7 +154,8 @@ export function createAgents(ctx) {
       yaw: 0, yawT: 0, t0: phaseOf(name), wander: 8 + R() * 10, glyph: null, faceT: null,
       // `minWork`: a run started, so go to the desk (and stay a moment) whatever the state says.
       // `pendingUntil`: a requested run the state feed has not shown yet. `dwell`: time left at the desk.
-      minWork: false, pendingUntil: 0, dwell: null,
+      minWork: false, pendingUntil: 0, dwell: null, stay: false,
+      pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
     };
   }
   function dispose(a) {
@@ -168,6 +174,12 @@ export function createAgents(ctx) {
   function setState(a, s) {
     const was = a.state;
     a.state = s;
+    a.stay = false;
+    if (s === "idle" && (was === "working" || was === "failed") && a.loc && a.loc.kind === "desk" && !still) {
+      let staying = 0;
+      for (const o of agents.values()) if (o.stay) staying++;
+      if (staying < MAX_STAY && phaseOf(a.name) / 10 < STAY_SHARE) a.stay = true;
+    }
     if (s === "working") {
       a.pendingUntil = 0;
       a.dwell = null;
@@ -198,7 +210,7 @@ export function createAgents(ctx) {
     if (a.state === "disabled") return "off";
     if (a.state === "waiting") return "wait";
     if (a.minWork || a.pendingUntil > clock) return "desk";
-    return a.state === "idle" ? "lounge" : "desk";
+    return a.state === "idle" && !a.stay ? "lounge" : "desk";
   };
   /// Where `a` should go now; waiting and disabled people fall back to the lounge
   /// when their zone is full.
@@ -373,12 +385,13 @@ export function createAgents(ctx) {
     a.legR.hip.rotation.x = lerp(-sw, 1.5, sit);
     a.legL.knee.rotation.x = lerp(walking ? Math.max(0, -sw) * 0.8 : 0, -1.5, sit);
     a.legR.knee.rotation.x = lerp(walking ? Math.max(0, sw) * 0.8 : 0, -1.5, sit);
-    let lx = 0.15, rx = 0.15, lz = 0, rz = 0, hx = 0;
-    a.body.position.x = 0;
+    let lx = 0.15, rx = 0.15, lz = 0, rz = 0, hx = 0, bx = 0, swL = 0, swR = 0;
     const atDesk = a.loc.kind === "desk" && !a.path.length;
     if (walking) {
-      lx = -sw * 0.8;
-      rx = a.state === "idle" ? 1.1 : sw * 0.8;
+      // The swing itself is not eased; only the pose it swings around is.
+      swL = -sw * 0.8;
+      if (a.state === "idle") rx = 1.1;
+      else swR = sw * 0.8;
     } else if (a.state === "working" && atDesk) {
       lx = 1.1 + Math.sin(k * 13) * 0.1;
       rx = 1.1 + Math.cos(k * 11) * 0.1;
@@ -389,7 +402,7 @@ export function createAgents(ctx) {
       lz = -0.3;
       rz = 0.3;
       hx = 0.35;
-      a.body.position.x = still ? 0 : Math.sin(k * 30) * 0.015;
+      bx = still ? 0 : Math.sin(k * 30) * 0.015;
     } else if (a.state === "waiting" && a.loc.kind === "wait") {
       rz = 2.9 + Math.sin(k * 6) * 0.25;
       rx = 0;
@@ -416,11 +429,20 @@ export function createAgents(ctx) {
         setGlyph(a, sip ? "☕" : "😌");
       }
     }
-    a.lArm.rotation.x = lx;
-    a.rArm.rotation.x = rx;
-    a.lArm.rotation.z = lz;
-    a.rArm.rotation.z = rz;
-    a.head.rotation.x = hx;
+    // Ease into each pose so changing activity never snaps a limb.
+    const ps = a.pose, e = still ? 1 : Math.min(1, dt * POSE_EASE);
+    ps.lx = lerp(ps.lx, lx, e);
+    ps.rx = lerp(ps.rx, rx, e);
+    ps.lz = lerp(ps.lz, lz, e);
+    ps.rz = lerp(ps.rz, rz, e);
+    ps.hx = lerp(ps.hx, hx, e);
+    ps.bx = lerp(ps.bx, bx, e);
+    a.lArm.rotation.x = ps.lx + swL;
+    a.rArm.rotation.x = ps.rx + swR;
+    a.lArm.rotation.z = ps.lz;
+    a.rArm.rotation.z = ps.rz;
+    a.head.rotation.x = ps.hx;
+    a.body.position.x = ps.bx;
     a.bubble.position.y = 2.6 + Math.sin(k * 3) * 0.05;
     if (walking && a.state === "idle") setGlyph(a, "☕");
     if (a.state === "waiting" && walking) setGlyph(a, "✋");

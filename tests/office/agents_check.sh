@@ -49,7 +49,7 @@ def zone_ok(a):
     if s in ("working", "failed"):
         return a["seated"] and x < -2 and any(abs(z - r) < 0.15 for r in SEAT_ROWS)
     if s == "idle":
-        return x > 3
+        return x > 3 or (a["seated"] and x < -2 and any(abs(z - r) < 0.15 for r in SEAT_ROWS))
     if s == "waiting":
         return abs(z - 9.9) < 0.8 and -1.5 < x < 6
     if s == "disabled":
@@ -79,7 +79,7 @@ def settle(c, label, timeout=150):
 # The same zone rule in JS, for polling inside the page.
 ZONE_JS = ("((a) => { const rows = [-4.5, -1.5, 2.5, 5.5];"
            " if (a.state === 'working' || a.state === 'failed') return a.seated && a.x < -2 && rows.some(r => Math.abs(a.z - r) < 0.15);"
-           " if (a.state === 'idle') return a.x > 3;"
+           " if (a.state === 'idle') return a.x > 3 || (a.seated && a.x < -2 && rows.some(r => Math.abs(a.z - r) < 0.15));"
            " if (a.state === 'waiting') return Math.abs(a.z - 9.9) < 0.8 && a.x > -1.5 && a.x < 6;"
            " return a.x < -13; })(a)")
 
@@ -205,13 +205,21 @@ SEATED_JS = ("((n) => { const a = window.__office.debug().find(a => a.name === n
 with Chrome() as c:
     load(c)
     settle(c, "run start fixture", timeout=20)
-    # 8a. Run now clicked while the loop still reads idle: walk to the desk at once.
+    # 8a. Run now clicked while the loop still reads idle: walk to the desk at once,
+    # smoothly: no frame moves anyone further than a stride.
+    c.evaluate("""(() => { const last = {}; window.__maxStep = 0;
+      const f = () => { for (const a of window.__office.debug()) { const p = last[a.name];
+        if (p) window.__maxStep = Math.max(window.__maxStep, Math.hypot(a.x - p[0], a.z - p[1])); last[a.name] = [a.x, a.z]; }
+        requestAnimationFrame(f); }; requestAnimationFrame(f); })()""")
     c.evaluate("window.__office.runRequested('quiet-loop')")
     try:
         c.wait_for("window.__office.debug().some(a => a.name === 'quiet-loop' && a.walking)", timeout=5, interval=0.1)
         c.wait_for(SEATED_JS + "('quiet-loop')", timeout=60, interval=0.5)
     except TimeoutError:
         fails.append(f"run requested: quiet-loop did not walk to its desk: {[a for a in debug(c) if a['name'] == 'quiet-loop']}")
+    step = c.evaluate("window.__maxStep")
+    if step > 0.5:
+        fails.append(f"run requested: someone jumped {step:.2f} units in one frame")
     # 8b. The run flips to working and back to idle before the person arrives (chat run):
     # still walks to the desk, works a moment, then goes to coffee or a sofa.
     load(c)
@@ -251,6 +259,6 @@ if fails:
     for f in fails:
         print("  - " + f)
     sys.exit(1)
-print("PASS: fixture zones, walking transitions, run start and relax, double change, 40 -> 24 + 16 more, empty room, hostile name, reduced motion")
+print("PASS: fixture zones, walking transitions, run start and relax, smooth walking, double change, 40 -> 24 + 16 more, empty room, hostile name, reduced motion")
 PY
 echo "screenshots in $OUT"
