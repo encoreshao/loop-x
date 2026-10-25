@@ -10,6 +10,7 @@
 //! - `LoopRuntime` contains a per-topic failure, so it never reaches the exit
 //!   code - [`alert_on_incomplete_results`] announces it in Slack instead.
 
+use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
 use crate::loop_definition::LoopDefinition;
 use crate::loop_result::{AgentCost, LoopResult};
 use crate::loop_runtime::{AgentFailure, AgentFn, AgentSuccess, LoopRuntime};
@@ -17,7 +18,8 @@ use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::build_verifiers;
 use crate::runner_util::{
-    append_unified_log, notify_slack_best_effort, parse_envelope, unified_log_path,
+    append_unified_log, could_not_start, notify_slack_best_effort, parse_envelope,
+    resolved_program, unified_log_path,
 };
 use crate::{ai_cli_config, cost, proc, prompt, status, topics};
 use serde_json::Value;
@@ -81,6 +83,15 @@ pub fn cli_command(
     max_budget_usd: Option<f64>,
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
+    if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
+        // No tool allowlist exists for these. The run's cwd is the repo root, so
+        // cursor's workspace is ".".
+        let opts = RunOptions::new(Path::new("."), 0.0);
+        let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
+        return std::iter::once(resolved_program(ai_cli))
+            .chain(args)
+            .collect();
+    }
     if ai_cli == "codex" {
         return vec![
             s("codex"),
@@ -112,10 +123,18 @@ pub fn cli_command(
 }
 
 /// `(text, cost_usd)` from the CLI's stdout: Claude's JSON envelope gives the
-/// result text and `total_cost_usd`; anything else is returned as-is with an
-/// unknown cost.
+/// result text and `total_cost_usd`; Gemini's JSON gives its `response`; anything
+/// else is returned as-is with an unknown cost.
 pub fn parse_cli_output(stdout: &str) -> (String, Option<f64>) {
     match parse_envelope(stdout) {
+        Some(env) if env.get("result").is_none() && env.get("response").is_some() => {
+            let text = match env.get("response") {
+                Some(Value::String(s)) => s.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            };
+            (text, None)
+        }
         Some(env) if env.get("result").is_some() => {
             let text = match env.get("result") {
                 Some(Value::String(s)) => s.clone(),
@@ -126,6 +145,16 @@ pub fn parse_cli_output(stdout: &str) -> (String, Option<f64>) {
             (text, cost)
         }
         _ => (stdout.to_string(), None),
+    }
+}
+
+/// The reply and cost from the selected CLI's stdout. Gemini, Kimi and Cursor
+/// output with no reply (or an error on exit 0) is an `Err` message; Claude's
+/// and Codex's output goes through [`parse_cli_output`] untouched.
+pub fn read_reply(ai_cli: &str, stdout: &str) -> Result<(String, Option<f64>), String> {
+    match extract_new_cli_reply(ai_cli, stdout) {
+        Some(reply) => reply.map(|text| (text, None)),
+        None => Ok(parse_cli_output(stdout)),
     }
 }
 
@@ -195,6 +224,18 @@ pub fn invoke_topic_agent(
     let text = prompt::topic(&ctx.repo_root, Some(name));
     let ai_cli = ai_cli_config::selected_cli();
     let argv = cli_command(&ai_cli, &text, &ctx.exe, &home_string(), max_budget_usd);
+    run_topic_cli(ctx, &ai_cli, name, &argv, timeout_seconds)
+}
+
+/// Spawn `argv` (the selected CLI's command) for one topic and turn its outcome
+/// into the topic's result.
+fn run_topic_cli(
+    ctx: &TopicCtx,
+    ai_cli: &str,
+    name: &str,
+    argv: &[String],
+    timeout_seconds: f64,
+) -> Result<TopicOutput, TopicError> {
     let mut command = std::process::Command::new(&argv[0]);
     command.args(&argv[1..]).current_dir(&ctx.repo_root);
     if let Some(dir) = Path::new(&ctx.exe)
@@ -212,7 +253,7 @@ pub fn invoke_topic_agent(
     let out = match out {
         Ok(o) => o,
         Err(e) => {
-            let detail = format!("could not start {}: {e}", argv[0]);
+            let detail = could_not_start(ai_cli, &argv[0], &e);
             append_unified_log(
                 &format!(
                     "{ai_cli} invocation for topic '{name}' FAILED (failed to start):\n{detail}"
@@ -245,7 +286,21 @@ pub fn invoke_topic_agent(
             cost_usd: None,
         });
     }
-    let (result_text, cost_usd) = parse_cli_output(&out.stdout);
+    let (result_text, cost_usd) = match read_reply(ai_cli, &out.stdout) {
+        Ok(reply) => reply,
+        Err(message) => {
+            append_unified_log(
+                &format!(
+                    "{ai_cli} invocation for topic '{name}' FAILED (unusable output on exit 0):\n{message}"
+                ),
+                &ctx.unified_log,
+            );
+            return Err(TopicError {
+                message,
+                cost_usd: None,
+            });
+        }
+    };
     println!("{result_text}");
     append_unified_log(&result_text, &ctx.unified_log);
     // The CLI's stderr would otherwise vanish, since the run captures it.
@@ -468,6 +523,68 @@ mod tests {
         assert_eq!((t.as_str(), c), (r#"{"other": 1}"#, None));
         let (_, c) = parse_cli_output(r#"{"result": "x", "total_cost_usd": "n/a"}"#);
         assert_eq!(c, None);
+    }
+
+    #[test]
+    fn new_clis_get_their_binary_prompt_and_write_flag() {
+        for (cli, flag) in [
+            ("gemini", "--yolo"),
+            ("kimi", "--yolo"),
+            ("cursor", "--force"),
+        ] {
+            let c = cli_command(cli, "P", "x", "/h", None);
+            assert!(
+                ai_cli_config::binary_candidates(cli).contains(&c[0].as_str()),
+                "{cli}: {}",
+                c[0]
+            );
+            assert!(c.contains(&"P".to_string()), "{cli}");
+            assert!(c.contains(&flag.to_string()), "{cli}");
+        }
+    }
+
+    #[test]
+    fn gemini_and_cursor_json_yield_their_text_with_no_cost() {
+        let (t, c) = parse_cli_output(r#"{"response": "from gemini", "stats": {}}"#);
+        assert_eq!((t.as_str(), c), ("from gemini", None));
+        let (t, c) = parse_cli_output(r#"{"type": "result", "result": "from cursor"}"#);
+        assert_eq!((t.as_str(), c), ("from cursor", None));
+    }
+
+    #[test]
+    fn new_cli_garbage_or_error_output_is_a_failure() {
+        let e = read_reply("gemini", "garbage").unwrap_err();
+        assert!(e.contains("unreadable output from gemini"), "{e}");
+        assert_eq!(
+            read_reply("gemini", r#"{"response":"ok"}"#).unwrap().0,
+            "ok"
+        );
+        let e = read_reply("cursor", r#"{"is_error":true,"result":"auth failed"}"#).unwrap_err();
+        assert!(e.contains("auth failed"), "{e}");
+        assert!(read_reply("kimi", "  \n")
+            .unwrap_err()
+            .contains("empty output from kimi"));
+        // Claude and Codex keep taking whatever stdout is.
+        assert_eq!(read_reply("codex", "plain").unwrap().0, "plain");
+    }
+
+    #[test]
+    fn missing_binary_is_a_visible_start_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = TopicCtx::new(d.path().to_path_buf());
+        let argv = vec!["/nonexistent/kimi-bin".to_string(), "P".to_string()];
+        let e = run_topic_cli(&ctx, "kimi", "t", &argv, 5.0).unwrap_err();
+        assert!(
+            e.message.contains("could not start /nonexistent/kimi-bin"),
+            "{}",
+            e.message
+        );
+        assert!(e.message.contains("kimi"), "{}", e.message);
+        assert!(
+            e.message.ends_with("Switch CLI in Settings -> AI CLI."),
+            "{}",
+            e.message
+        );
     }
 
     #[test]

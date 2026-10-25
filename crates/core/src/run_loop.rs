@@ -4,6 +4,7 @@
 //! loop's entry point (`loopx _entry ...`) under its timeout in a login shell so
 //! the user's PATH and `claude` auth are available.
 
+use crate::ai_cli_safety::{self, CallSite};
 use crate::config::default_config_path as projects_config_path;
 use crate::events::EventFields;
 use crate::gitlab_runner::{self, RunCtx};
@@ -83,6 +84,15 @@ fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
     })
 }
 
+/// Which AI CLI call site a registry entry point runs.
+fn call_site(entry_point: &str) -> CallSite {
+    if entry_point == "bin.topic_monitor_runner" {
+        CallSite::TopicMonitor
+    } else {
+        CallSite::GitlabLoop
+    }
+}
+
 fn fresh_run_id() -> String {
     format!("run_{}", Utc::now().format("%Y%m%d_%H%M%S"))
 }
@@ -123,6 +133,16 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         &format!("[{}] ---- {loop_name} ---- run started ----", stamp()),
         &unified,
     );
+
+    // Gemini, Kimi, Cursor and Codex run without a tool allowlist: say so once,
+    // in the log and on the run-start event.
+    let warning = ai_cli_safety::warning(
+        &ai_cli_config::selected_cli(),
+        call_site(&entry.entry_point),
+    );
+    if let Some(w) = warning {
+        append_unified_log(&format!("[{}] WARNING: {w}", stamp()), &unified);
+    }
 
     let status_path = loop_scheduler::status_path_for_loop(loop_name, Some(&opts.root));
     let events_dir = None::<&Path>;
@@ -168,7 +188,10 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
             "run.started",
             Some(&run_id),
             EventFields {
-                data: Some(json!({"trigger": trigger})),
+                data: Some(match warning {
+                    Some(w) => json!({"trigger": trigger, "warning": w}),
+                    None => json!({"trigger": trigger}),
+                }),
                 ..Default::default()
             },
             events_dir,
@@ -427,6 +450,52 @@ mod tests {
             "two extras = dashboard"
         );
         assert!(!events.contains("run.failed"));
+    }
+
+    #[test]
+    fn unrestricted_cli_warns_in_the_log_and_run_started_event() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), true, 30);
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "gemini"}"#).unwrap();
+        let exe = fake_exe(d.path(), "true");
+        let code = with_env(d.path(), || {
+            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+        });
+        assert_eq!(code, 0);
+        let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        let warning =
+            crate::ai_cli_safety::warning("gemini", crate::ai_cli_safety::CallSite::GitlabLoop)
+                .unwrap();
+        assert_eq!(unified.matches(warning).count(), 1, "{unified}");
+        let events = read_events(d.path());
+        assert!(events.contains("\"warning\""), "{events}");
+        assert!(events.contains(warning), "{events}");
+    }
+
+    #[test]
+    fn restricted_cli_has_no_warning() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), true, 30);
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
+        let exe = fake_exe(d.path(), "true");
+        with_env(d.path(), || {
+            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+        });
+        let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(!unified.contains("full tool access"), "{unified}");
+        assert!(!read_events(d.path()).contains("\"warning\""));
+    }
+
+    fn read_events(dir: &Path) -> String {
+        std::fs::read_to_string(
+            std::fs::read_dir(dir.join("events"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path(),
+        )
+        .unwrap()
     }
 
     #[test]

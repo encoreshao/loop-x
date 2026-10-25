@@ -1,7 +1,10 @@
 //! `GeminiAgent`: `gemini --output-format json --yolo -p <prompt>`. The reply is
 //! the `response` field of Gemini's JSON; `estimated_cost_usd` is always `None`.
 
-use super::{json_string_field, run_text_cli, Agent, AgentResult, RunOptions};
+use super::{
+    error_message, json_string_field, non_empty_reply, run_text_cli, Agent, AgentResult, RunOptions,
+};
+use crate::runner_util::unreadable_output;
 
 pub const GEMINI_PROMPT_FLAG: &str = "-p";
 pub const GEMINI_OUTPUT_FORMAT_FLAG: &str = "--output-format";
@@ -49,14 +52,28 @@ pub fn gemini_text(stdout: &str) -> Option<String> {
     json_string_field(stdout, "response")
 }
 
+/// The reply, or the failure message: an `error` field (Gemini can exit 0 with
+/// one), unparseable output, or an empty reply.
+pub fn gemini_reply(stdout: &str) -> Result<String, String> {
+    if let Some(error) = serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .ok()
+        .and_then(|v| v.get("error").cloned())
+    {
+        return Err(error_message(&error));
+    }
+    match gemini_text(stdout) {
+        Some(text) => non_empty_reply("gemini", text),
+        None => Err(unreadable_output("gemini", stdout)),
+    }
+}
+
 impl Agent for GeminiAgent {
     fn run(&self, prompt: &str, opts: &RunOptions) -> AgentResult {
         run_text_cli(
-            "gemini",
             &self.program,
             gemini_args(prompt, opts),
             opts,
-            &gemini_text,
+            &gemini_reply,
         )
     }
 }
@@ -126,6 +143,26 @@ mod tests {
         let r = a.run("p", &RunOptions::new(d.path(), 5.0));
         assert_eq!(r.status, AgentStatus::Failed);
         assert!(r.output.contains("/nonexistent/gemini-bin"));
+    }
+
+    #[test]
+    fn error_field_and_empty_text_are_visible_failures() {
+        let d = tempfile::tempdir().unwrap();
+        let mk = |name: &str, body: &str| GeminiAgent {
+            program: script(d.path(), name, body).display().to_string(),
+        };
+        let r = mk("g5", r#"echo '{"error":{"message":"quota exceeded"}}'"#)
+            .run("p", &RunOptions::new(d.path(), 30.0));
+        assert_eq!((r.status, r.exit_code), (AgentStatus::Failed, Some(0)));
+        assert!(r.output.contains("quota exceeded"), "{}", r.output);
+        assert!(!r.output.contains("unreadable"), "{}", r.output);
+        let r = mk("g6", r#"echo '{"response":"   "}'"#).run("p", &RunOptions::new(d.path(), 30.0));
+        assert_eq!(r.status, AgentStatus::Failed);
+        assert!(
+            r.output.contains("empty output from gemini"),
+            "{}",
+            r.output
+        );
     }
 
     #[test]

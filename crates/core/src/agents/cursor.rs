@@ -2,9 +2,10 @@
 //! <prompt>`. The reply is the `result` field of Cursor's JSON;
 //! `estimated_cost_usd` is always `None`.
 
-use super::{json_string_field, run_text_cli, Agent, AgentResult, RunOptions};
+use super::{json_string_field, non_empty_reply, run_text_cli, Agent, AgentResult, RunOptions};
 use crate::ai_cli_config;
 use crate::doctor::find_on_path;
+use crate::runner_util::unreadable_output;
 
 pub const CURSOR_PRINT_FLAG: &str = "--print";
 pub const CURSOR_APPROVAL_FLAG: &str = "--force";
@@ -45,14 +46,33 @@ pub fn cursor_text(stdout: &str) -> Option<String> {
     json_string_field(stdout, "result")
 }
 
+/// The reply, or the failure message: `is_error: true` (with its `result`
+/// text), unparseable output, or an empty reply.
+pub fn cursor_reply(stdout: &str) -> Result<String, String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(stdout.trim()).ok();
+    if parsed
+        .as_ref()
+        .and_then(|v| v.get("is_error"))
+        .is_some_and(crate::loop_serialize::truthy)
+    {
+        return Err(match cursor_text(stdout).filter(|t| !t.trim().is_empty()) {
+            Some(text) => text,
+            None => "cursor reported an error".into(),
+        });
+    }
+    match cursor_text(stdout) {
+        Some(text) => non_empty_reply("cursor", text),
+        None => Err(unreadable_output("cursor", stdout)),
+    }
+}
+
 impl Agent for CursorAgent {
     fn run(&self, prompt: &str, opts: &RunOptions) -> AgentResult {
         run_text_cli(
-            "cursor",
             &self.program,
             cursor_args(prompt, opts),
             opts,
-            &cursor_text,
+            &cursor_reply,
         )
     }
 }
@@ -120,6 +140,26 @@ mod tests {
         let r = a.run("p", &RunOptions::new(d.path(), 5.0));
         assert_eq!(r.status, AgentStatus::Failed);
         assert!(r.output.contains("/nonexistent/agent-bin"));
+    }
+
+    #[test]
+    fn is_error_and_empty_text_are_visible_failures() {
+        let d = tempfile::tempdir().unwrap();
+        let mk = |name: &str, body: &str| CursorAgent {
+            program: script(d.path(), name, body).display().to_string(),
+        };
+        let r = mk("c5", r#"echo '{"is_error":true,"result":"auth failed"}'"#)
+            .run("p", &RunOptions::new(d.path(), 30.0));
+        assert_eq!((r.status, r.exit_code), (AgentStatus::Failed, Some(0)));
+        assert!(r.output.contains("auth failed"), "{}", r.output);
+        assert!(!r.output.contains("unreadable"), "{}", r.output);
+        let r = mk("c6", r#"echo '{"result":" "}'"#).run("p", &RunOptions::new(d.path(), 30.0));
+        assert_eq!(r.status, AgentStatus::Failed);
+        assert!(
+            r.output.contains("empty output from cursor"),
+            "{}",
+            r.output
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! `KimiAgent`: `kimi --output-format text --yolo -p <prompt>`. The reply is
 //! stdout as is; `estimated_cost_usd` is always `None`.
 
-use super::{run_text_cli, Agent, AgentResult, RunOptions};
+use super::{non_empty_reply, run_text_cli, Agent, AgentResult, RunOptions};
 
 pub const KIMI_PROMPT_FLAG: &str = "-p";
 pub const KIMI_OUTPUT_FORMAT_FLAG: &str = "--output-format";
@@ -33,11 +33,14 @@ pub fn kimi_args(prompt: &str, _opts: &RunOptions) -> Vec<String> {
     .to_vec()
 }
 
+/// Stdout as the reply; whitespace-only is a failure.
+pub fn kimi_reply(stdout: &str) -> Result<String, String> {
+    non_empty_reply("kimi", stdout.to_string())
+}
+
 impl Agent for KimiAgent {
     fn run(&self, prompt: &str, opts: &RunOptions) -> AgentResult {
-        run_text_cli("kimi", &self.program, kimi_args(prompt, opts), opts, &|s| {
-            Some(s.to_string())
-        })
+        run_text_cli(&self.program, kimi_args(prompt, opts), opts, &kimi_reply)
     }
 }
 
@@ -82,6 +85,19 @@ mod tests {
         let r = a.run("p", &RunOptions::new(d.path(), 5.0));
         assert_eq!(r.status, AgentStatus::Failed);
         assert!(r.output.contains("/nonexistent/kimi-bin"));
+    }
+
+    #[test]
+    fn empty_output_is_a_visible_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let a = KimiAgent {
+            program: script(d.path(), "k4", "printf '  \\n'")
+                .display()
+                .to_string(),
+        };
+        let r = a.run("p", &RunOptions::new(d.path(), 30.0));
+        assert_eq!((r.status, r.exit_code), (AgentStatus::Failed, Some(0)));
+        assert!(r.output.contains("empty output from kimi"), "{}", r.output);
     }
 
     #[test]

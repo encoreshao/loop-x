@@ -145,14 +145,13 @@ pub fn failure_result(out: &ProcOutput, timeout_seconds: f64, duration_ms: i64) 
 }
 
 /// Run `program args` in `opts.cwd` and fold the outcome into an
-/// [`AgentResult`]. `extract` turns stdout into the reply text; `None` on exit 0
-/// is reported as "unreadable output from <cli>". These CLIs emit no cost.
+/// [`AgentResult`]. `extract` turns stdout into the reply text; `Err` on exit 0
+/// is a failure carrying that message. These CLIs emit no cost.
 pub(crate) fn run_text_cli(
-    cli: &str,
     program: &str,
     args: Vec<String>,
     opts: &RunOptions,
-    extract: &dyn Fn(&str) -> Option<String>,
+    extract: &dyn Fn(&str) -> Result<String, String>,
 ) -> AgentResult {
     let mut cmd = std::process::Command::new(program);
     cmd.args(args).current_dir(&opts.cwd);
@@ -172,7 +171,7 @@ pub(crate) fn run_text_cli(
         return failure_result(&out, opts.timeout_seconds, ms(start));
     }
     match extract(&out.stdout) {
-        Some(text) => AgentResult {
+        Ok(text) => AgentResult {
             status: AgentStatus::Success,
             output: text,
             exit_code: Some(0),
@@ -181,11 +180,50 @@ pub(crate) fn run_text_cli(
             output_tokens: None,
             estimated_cost_usd: None,
         },
-        None => AgentResult::failed(
-            format!("unreadable output from {cli}\n{}", out.stdout),
-            Some(0),
-            ms(start),
-        ),
+        Err(message) => AgentResult::failed(message, Some(0), ms(start)),
+    }
+}
+
+/// A reply that must hold some text: whitespace-only is a failure.
+pub(crate) fn non_empty_reply(cli: &str, text: String) -> Result<String, String> {
+    if text.trim().is_empty() {
+        Err(format!("empty output from {cli}"))
+    } else {
+        Ok(text)
+    }
+}
+
+/// The message of a JSON `error` value: its `message`, else the string itself,
+/// else the value as JSON.
+pub(crate) fn error_message(error: &serde_json::Value) -> String {
+    error
+        .get("message")
+        .and_then(|m| m.as_str())
+        .or_else(|| error.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| error.to_string())
+}
+
+/// What a gemini / kimi / cursor run printed, as the reply or the failure
+/// message; `None` for `claude` and `codex`, whose output the runners already
+/// handle.
+pub fn extract_new_cli_reply(cli: &str, stdout: &str) -> Option<Result<String, String>> {
+    match cli {
+        "gemini" => Some(gemini::gemini_reply(stdout)),
+        "kimi" => Some(kimi::kimi_reply(stdout)),
+        "cursor" => Some(cursor::cursor_reply(stdout)),
+        _ => None,
+    }
+}
+
+/// The argv (after the program name) of the gemini / kimi / cursor CLIs;
+/// `None` for the others.
+pub fn new_cli_args(cli: &str, prompt: &str, opts: &RunOptions) -> Option<Vec<String>> {
+    match cli {
+        "gemini" => Some(gemini::gemini_args(prompt, opts)),
+        "kimi" => Some(kimi::kimi_args(prompt, opts)),
+        "cursor" => Some(cursor::cursor_args(prompt, opts)),
+        _ => None,
     }
 }
 

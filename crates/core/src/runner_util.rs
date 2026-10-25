@@ -40,6 +40,30 @@ pub fn append_unified_log(text: &str, unified_log_path: &Path) {
     }
 }
 
+/// The failure text for stdout a CLI exited 0 with that holds no reply.
+pub fn unreadable_output(cli: &str, stdout: &str) -> String {
+    format!("unreadable output from {cli}\n{stdout}")
+}
+
+/// The failure text for a CLI binary that could not be spawned; the hint tells
+/// the user where to change the CLI.
+pub fn could_not_start(cli: &str, program: &str, err: &dyn std::fmt::Display) -> String {
+    format!("could not start {program} ({cli} CLI): {err}. Switch CLI in Settings -> AI CLI.")
+}
+
+/// The binary to spawn for `cli`: whichever candidate is on `PATH`, else the
+/// first candidate, else the CLI id.
+pub fn resolved_program(cli: &str) -> String {
+    let path = std::env::var("PATH").unwrap_or_default();
+    crate::ai_cli_config::resolve_binary(cli, &|n| crate::doctor::find_on_path(n, &path).is_some())
+        .or_else(|| {
+            crate::ai_cli_config::binary_candidates(cli)
+                .first()
+                .map(|n| n.to_string())
+        })
+        .unwrap_or_else(|| cli.to_string())
+}
+
 /// The last `max_chars` characters of `s`.
 pub fn tail(s: &str, max_chars: usize) -> String {
     let count = s.chars().count();
