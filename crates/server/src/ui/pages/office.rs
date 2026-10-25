@@ -1,10 +1,36 @@
 //! `GET /office/state`: the JSON the office view polls, one entry per loop.
 
+use crate::ui::assets;
 use crate::ui::office;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 
 pub fn register(r: &mut Registry) {
     r.get("/office/state", state_json);
+    r.get("/office/assets/*rest", asset);
+}
+
+/// A vendored file under `assets/office/`, by exact embedded name only.
+fn asset(ctx: &UiCtx) -> UiResponse {
+    let rest = ctx.param("rest");
+    if rest.contains("..") || rest.contains('\\') || rest.contains('\0') || rest.starts_with('/') {
+        return UiResponse::not_found(ctx.lang);
+    }
+    let Some(body) = assets::get(&format!("office/{rest}")) else {
+        return UiResponse::not_found(ctx.lang);
+    };
+    let content_type = if rest.ends_with(".js") {
+        "text/javascript; charset=utf-8"
+    } else {
+        "text/plain; charset=utf-8"
+    };
+    UiResponse {
+        status: 200,
+        headers: vec![
+            ("Content-Type".to_string(), content_type.to_string()),
+            ("Cache-Control".to_string(), "public, max-age=31536000, immutable".to_string()),
+        ],
+        body: body.to_vec(),
+    }
 }
 
 fn state_json(ctx: &UiCtx) -> UiResponse {
@@ -192,5 +218,46 @@ mod tests {
         let f = fx(four());
         assert_eq!(by(&f.get(None), "never-loop")["reason"], "Idle until the next run");
         assert_ne!(by(&f.get(Some("fr")), "never-loop")["reason"], "Idle until the next run");
+    }
+
+    fn get_asset(path: &str) -> UiResponse {
+        let f = fx(json!([]));
+        let req = UiRequest::get(path);
+        Registry::with_pages().dispatch(&f.state, &req).expect("route")
+    }
+
+    #[test]
+    fn serves_vendored_three_with_js_type_and_cache_header() {
+        let resp = get_asset("/office/assets/three.module.min.js?v=1");
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.content_type(), Some("text/javascript; charset=utf-8"));
+        assert_eq!(resp.header("cache-control"), Some("public, max-age=31536000, immutable"));
+        assert!(resp.body.len() > 100_000);
+        let orbit = get_asset("/office/assets/OrbitControls.js");
+        assert_eq!(orbit.status, 200);
+        assert_eq!(orbit.content_type(), Some("text/javascript; charset=utf-8"));
+        let licence = get_asset("/office/assets/LICENSE-three.txt");
+        assert_eq!(licence.status, 200);
+        assert_eq!(licence.content_type(), Some("text/plain; charset=utf-8"));
+    }
+
+    #[test]
+    fn unknown_asset_is_404() {
+        assert_eq!(get_asset("/office/assets/nope.js").status, 404);
+        assert_eq!(get_asset("/office/assets/three.module.js").status, 404);
+    }
+
+    #[test]
+    fn path_traversal_is_404() {
+        for p in [
+            "/office/assets/..%2f..%2fCargo.toml",
+            "/office/assets/%2e%2e/x",
+            "/office/assets/a/../three.module.min.js",
+            "/office/assets/..%5cthree.module.min.js",
+            "/office/assets/%2fthree.module.min.js",
+            "/office/assets/three.module.min.js%00",
+        ] {
+            assert_eq!(get_asset(p).status, 404, "{p}");
+        }
     }
 }
