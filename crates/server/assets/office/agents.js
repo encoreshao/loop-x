@@ -16,6 +16,8 @@ const COLORS = { working: 0x3ddc84, waiting: 0xffb020, idle: 0x7d8590, failed: 0
 const GLYPHS = { working: "⌨️", waiting: "✋", failed: "⚠️", disabled: "💤" };
 const DISABLED_SHIRT = 0x7b808a;
 const WALK_SPEED = 2.6;
+/// A walk to the desk for a chat tool call is slow and unhurried.
+const SLOW_WALK = 0.5;
 /// A requested run (Run now) is shown as work this long while the loop's own state catches up.
 const PENDING_RUN_S = 25;
 /// A person who walked to the desk for a run stays at least this long, however short the run was.
@@ -154,7 +156,7 @@ export function createAgents(ctx) {
       yaw: 0, yawT: 0, t0: phaseOf(name), wander: 8 + R() * 10, glyph: null, faceT: null,
       // `minWork`: a run started, so go to the desk (and stay a moment) whatever the state says.
       // `pendingUntil`: a requested run the state feed has not shown yet. `dwell`: time left at the desk.
-      minWork: false, pendingUntil: 0, dwell: null, stay: false,
+      minWork: false, pendingUntil: 0, dwell: null, stay: false, slow: false,
       pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
     };
   }
@@ -360,12 +362,15 @@ export function createAgents(ctx) {
     const p = a.group.position;
     if (a.path.length && a.sit < 0.15) {
       const [tx, tz] = a.path[0];
-      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = WALK_SPEED * dt;
+      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = WALK_SPEED * (a.slow ? SLOW_WALK : 1) * dt;
       if (d <= step) {
         p.x = tx;
         p.z = tz;
         a.path.shift();
-        if (!a.path.length) settle(a, a.dest);
+        if (!a.path.length) {
+          a.slow = false;
+          settle(a, a.dest);
+        }
       } else {
         p.x += (dx / d) * step;
         p.z += (dz / d) * step;
@@ -380,7 +385,7 @@ export function createAgents(ctx) {
 
     const sit = a.sit;
     a.body.position.y = lerp(0, a.sitY, sit);
-    const sw = walking ? Math.sin(t * 9) * 0.6 : 0;
+    const sw = walking ? Math.sin(t * (a.slow ? 5 : 9)) * 0.6 : 0;
     a.legL.hip.rotation.x = lerp(sw, 1.5, sit);
     a.legR.hip.rotation.x = lerp(-sw, 1.5, sit);
     a.legL.knee.rotation.x = lerp(walking ? Math.max(0, -sw) * 0.8 : 0, -1.5, sit);
@@ -591,6 +596,15 @@ export function createAgents(ctx) {
       a.pendingUntil = clock + PENDING_RUN_S;
       a.minWork = true;
       a.dwell = null;
+    },
+    /// A chat tool call for `name` is running (reading mail, an issue...): like `runRequested`,
+    /// but the person strolls over instead of walking briskly.
+    toolRequested(name) {
+      const a = agents.get(name);
+      if (!a || a.state === "disabled" || a.state === "waiting" || still) return;
+      const away = !a.loc || a.loc.kind !== "desk" || a.path.length > 0;
+      this.runRequested(name);
+      if (away) a.slow = true;
     },
     /// Test hook: where everyone is.
     debug() {

@@ -21,6 +21,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Dashboard chat: a failed tool call in the progress list is shown in amber instead of red. In the Office, a chat tool call (mail or calendar, GitLab, feeds or web search) sends the matching person (Inbox Triage, GitLab, Topic Monitor) to their desk, walking slowly.
 - Office view: starting a run (Run now, or from the chat) sends that person straight to their desk, even for a run too short to be seen as working, and when it ends they go to the coffee machine or a sofa (one or two may stay at their desks); arms, legs and head now ease between poses instead of snapping; the big "Needs you" sign is now a small hand icon.
 - Inbox Triage and the dashboard chat no longer refuse Codex. CLIs that cannot be locked down (Codex, Gemini, Kimi, Cursor) run with a visible warning on Settings, Chat, Inbox Triage, topic and loop pages, the unified log and run events. Codex's warning explains it gives the model a shell and records prompts, including email text, under `~/.codex/sessions`; in chat its sandbox also blocks actions that change loopx settings.
 - Calendar prep and the other sealed model calls run on whichever AI CLI is selected instead of Claude only.

@@ -9,6 +9,7 @@ pub const NAMES: &[&str] = &[
     "account_balance_wallet",
     "add",
     "apartment",
+    "office",
     "add_comment",
     "arrow_back",
     "arrow_forward",

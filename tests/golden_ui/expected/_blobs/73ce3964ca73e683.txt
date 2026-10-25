@@ -1337,8 +1337,8 @@ html.doc-panel-open .doc-panel { display: flex; }
 .tool-chip-icon { flex: none; font-size: 1.15rem; }
 .tool-chip-ok { border-left-color: var(--md-primary); }
 .tool-chip-ok .tool-chip-icon { color: var(--md-primary); }
-.tool-chip-err { color: var(--md-error); border-left-color: var(--md-error); }
-.tool-chip-err .tool-chip-icon { color: var(--md-error); }
+.tool-chip-err { color: var(--md-on-surface-variant); border-left-color: var(--md-warning); }
+.tool-chip-err .tool-chip-icon { color: var(--md-warning); }
 .tool-chip-run { color: var(--md-on-surface); border-left-color: var(--md-outline); }
 .tool-chip-run .tool-chip-icon { animation: tool-chip-spin 1s linear infinite; }
 @keyframes tool-chip-spin { to { transform: rotate(360deg); } }

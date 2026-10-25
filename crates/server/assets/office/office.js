@@ -243,6 +243,14 @@ async function main() {
   // A test override sticks until the server's own state next changes.
   office.setLoops = show;
   office.runRequested = (name) => agents.runRequested(name);
+  // A chat tool call sends the matching employee to their desk, slowly.
+  const TOOL_LOOP = { gitlab: "gitlab-loop", mail: "inbox-triage-loop", calendar: "inbox-triage-loop", rss: "topic-loop", web: "topic-loop" };
+  const onTool = (ev) => {
+    const prefix = String((ev.detail && ev.detail.name) || "").split(".")[0];
+    if (TOOL_LOOP[prefix]) agents.toolRequested(TOOL_LOOP[prefix]);
+  };
+  document.addEventListener("loopx:tool", onTool);
+  office.toolRequested = (name) => agents.toolRequested(name);
   office.debug = () => agents.debug();
 
   // ---------- selection, hover and the camera ----------
@@ -507,6 +515,7 @@ async function main() {
     seen.disconnect();
     resizer.disconnect();
     document.removeEventListener("visibilitychange", sync);
+    document.removeEventListener("loopx:tool", onTool);
     controls.dispose();
     disposeScene(scene);
     renderer.dispose();
