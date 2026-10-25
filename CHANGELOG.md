@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
 ### Added
 
 - The Mac app keeps your Mac from idle sleep while a loop or topic is running, so long runs are not cut off. Turn it off in Settings → Power; the screen can still turn off and closing the lid still sleeps the Mac.
@@ -384,7 +386,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/encoreshao/loop-x/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/encoreshao/loop-x/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/encoreshao/loop-x/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/encoreshao/loop-x/compare/v0.4.0...v0.5.0
