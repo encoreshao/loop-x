@@ -4,7 +4,7 @@
 // the back wall at z = ROOM.Z0 and the windows looking north (towards -z).
 
 const V = new URL(import.meta.url).search;
-const [art, shops] = await Promise.all([import("./art.js" + V), import("./shops.js" + V)]);
+const [art, shops, town] = await Promise.all([import("./art.js" + V), import("./shops.js" + V), import("./town.js" + V)]);
 
 export const ROOM = { W: 30, Z0: -10.5, Z1: 12.5 };
 const D = ROOM.Z1 - ROOM.Z0, ZC = (ROOM.Z0 + ROOM.Z1) / 2;
@@ -428,7 +428,7 @@ export function buildWorld(scene, THREE, opts = {}) {
     om(new THREE.CylinderGeometry(0.05, 0.07, 3.4, 8), M(0x333333), x, 1.4, -13.3);
     om(new THREE.SphereGeometry(0.22, 10, 8), lampM, x, 3.2, -13.3);
   }
-  // The plaza in front of the office with the coffee shop and the bookstore.
+  // The coffee shop and the bookstore beside the office, and the street in front of all three.
   shops.buildShops(scene, THREE, { art, strings, M });
   // Skyline: day windows in the colour map, night windows in the emissive map.
   function windowsTexture(lit) {
@@ -496,7 +496,7 @@ export function buildWorld(scene, THREE, opts = {}) {
   }
   for (let i = 0; i < 8; i++) {
     const g = car([0xd1453b, 0x3b6fd1, 0xf2f2f2, 0xe0b020, 0x2f2f33, 0x3bb273][i % 6]), lane = i % 2;
-    g.position.set((R() - 0.5) * 200, -0.3, lane ? -38.4 : -41.8);
+    g.position.set((R() - 0.5) * 200, -0.3, lane ? shops.STREET.roadZ1 - 2 : shops.STREET.roadZ0 + 2);
     if (!lane) g.rotation.y = Math.PI;
     scene.add(g);
     cars.push({ g, v: (4 + R() * 5) * (lane ? 1 : -1) });
@@ -534,12 +534,20 @@ export function buildWorld(scene, THREE, opts = {}) {
   walker(0xd1604b, -10, 1);
   walker(0x4b79c4, 6, -1);
   walker(0x5bb58a, 18, 1);
+  // The street in front of the row: staff and customers in the shops, pedestrians on the sidewalk.
+  const streetFolk = town.buildTown(scene, THREE, { R, still });
+  // Lamp posts along the kerb.
+  for (const x of [-34, -17, 0, 17]) {
+    om(new THREE.CylinderGeometry(0.05, 0.07, 3.4, 8), M(0x333333), x, 1.4, shops.STREET.roadZ0 - 0.5);
+    om(new THREE.SphereGeometry(0.22, 10, 8), lampM, x, 3.2, shops.STREET.roadZ0 - 0.5);
+  }
 
   let env = { day: 1, tw: 0 };
   const C = THREE.Color, mix = (a, b, t) => new C(a).lerp(new C(b), t), lerp = (a, b, t) => a + (b - a) * t;
 
   const handles = {
     clouds, cars, birds, walkers,
+    folk: streetFolk.folk,
     lamps: { posts: lampM, shade: lampShade },
     carLights: carLightM,
     buildingMats,
@@ -579,6 +587,7 @@ export function buildWorld(scene, THREE, opts = {}) {
         if (c.g.position.x > 115) c.g.position.x = -115;
         if (c.g.position.x < -115) c.g.position.x = 115;
       }
+      streetFolk.tick(dt, t);
       for (const b of birds) {
         b.a += b.sp * dt;
         placeBird(b, t);

@@ -144,15 +144,22 @@ async function main() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x20232a);
   const camera = new THREE.PerspectiveCamera(42, w0 / h0, 0.1, 250);
-  camera.position.set(2, 29, 43);
+  camera.position.set(-9, 40, 60);
   const controls = new OrbitControls(camera, canvas);
-  controls.target.set(0, 1, 5.5);
+  controls.target.set(-9, 1, 6);
   controls.enableDamping = true;
   controls.maxPolarAngle = Math.PI / 2.05;
+  // Dragging the view slides it along the street (right-drag or two fingers turns it), within the town.
+  controls.screenSpacePanning = false;
+  controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+  controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
+  controls.minDistance = 5;
+  controls.maxDistance = 120;
+  const PAN_LIMIT = { x: 95, zMin: -30, zMax: 60 };
   const hooks = hashHooks();
   if (hooks.camera === "left") {
-    camera.position.set(-40, 9, 1);
-    controls.target.set(-15, 3.5, 1);
+    camera.position.set(-26, 12, 36);
+    controls.target.set(-26, 1.5, 8);
   } else if (hooks.camera === "right") {
     camera.position.set(40, 9, 1);
     controls.target.set(15, 3.5, 1);
@@ -167,6 +174,7 @@ async function main() {
   // Only the clouds, cars, birds, walkers, sun and moon move; the rest keeps its matrices.
   const movers = [
     ...handles.clouds, ...handles.cars.map((c) => c.g), ...handles.birds.map((b) => b.g), ...handles.walkers.map((w) => w.g),
+    ...handles.folk.map((f) => f.g),
     handles.sun.mesh, handles.sun.halo, handles.moon.mesh, handles.moon.halo,
   ];
   freezeStatic(scene, movers);
@@ -453,6 +461,16 @@ async function main() {
     requestRender();
   });
   if (reducedMotion) controls.enableDamping = false;
+  /// Keeps the view's centre inside the town (the camera moves with it).
+  function keepInTown() {
+    const t = controls.target;
+    const x = Math.max(-PAN_LIMIT.x, Math.min(PAN_LIMIT.x, t.x)), z = Math.max(PAN_LIMIT.zMin, Math.min(PAN_LIMIT.zMax, t.z));
+    if (x === t.x && z === t.z) return;
+    camera.position.x += x - t.x;
+    camera.position.z += z - t.z;
+    t.x = x;
+    t.z = z;
+  }
   function canRun() {
     return !disposed && onScreen && !document.hidden;
   }
@@ -480,6 +498,7 @@ async function main() {
     handles.tick(dt, clock.elapsedTime);
     stepFocus(clock.elapsedTime);
     controls.update();
+    keepInTown();
     renderer.render(scene, camera);
     office.frames += 1;
     if (!office.ready) office.ready = true;

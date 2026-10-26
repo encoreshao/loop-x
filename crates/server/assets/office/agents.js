@@ -4,7 +4,7 @@
 // their head. A question asked in the chat sends a randomly picked colleague to work until
 // the answer is done. People with nothing to do now and then turn to each other and talk
 // about something worth discussing (a speech bubble). During the workday (09:00-17:00 on the
-// scene's clock) an idle colleague now and then walks out to the plaza in front of the office,
+// scene's clock) an idle colleague now and then walks out along the street in front of the office,
 // to the coffee shop (mostly in the morning) or the bookstore (mostly in the evening), stays a
 // while and comes back; at most one is away at a time and anyone who gets work returns at once.
 // Name tags, glyph bubbles and speech are canvas sprites, so a loop name is always text, never
@@ -289,7 +289,7 @@ export function createAgents(ctx) {
   const inWorkday = () => hour >= WORK_START && hour < WORK_END;
   const between = ([lo, hi]) => lo + R() * (hi - lo);
   /// The points from `a`'s seat to a visitor's spot in the shop: slide out past the chair, round the
-  /// desk at RING to the open front, across the plaza to the door and in.
+  /// desk at RING to the open front, along the sidewalk to the door and in.
   function routeOut(a, place) {
     const shop = SHOPS[place], spot = shop.spots[a.idx % shop.spots.length];
     const at = (ang, r) => [DESK.x + Math.cos(ang) * r, DESK.z + Math.sin(ang) * r];
@@ -297,7 +297,7 @@ export function createAgents(ctx) {
     const slide = from + dir * 0.35, steps = Math.max(1, Math.ceil((Math.abs(d) - 0.35) / 0.4));
     const pts = [at(slide, DESK.seat), at(slide, RING)];
     for (let i = 1; i <= steps; i++) pts.push(at(slide + dir * (Math.abs(d) - 0.35) * (i / steps), RING));
-    pts.push([DESK.x, EXIT_Z], [shop.cx, PLAZA_Z], [shop.cx, DOOR_APPROACH_Z], [shop.cx, shop.door[1] + 0.3], [shop.cx, shop.door[1] + 1.4], [spot.x, spot.z]);
+    pts.push([DESK.x, EXIT_Z], [shop.cx, PLAZA_Z], [shop.cx, DOOR_APPROACH_Z], [shop.cx, shop.door[1] - 0.3], [shop.cx, shop.door[1] - 1.4], [spot.x, spot.z]);
     return { pts, spot };
   }
   function startTrip(a, place) {
