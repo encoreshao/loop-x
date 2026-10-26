@@ -24,6 +24,16 @@
   }
   var session = load(KEY_SESSION) || '';
 
+  // Ctrl+V switches between the Office and the Dashboard (not while typing, so paste still works).
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key.toLowerCase() !== 'v' || !ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.repeat) return;
+    var t = ev.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    ev.preventDefault();
+    if (root.classList.contains('office-mode')) { store(KEY_OPEN, null); location.href = '/?mode=dashboard'; }
+    else location.href = '/office';
+  });
+
   // Width: clamped so the main card always keeps a usable ~480px.
   function maxWidth() { return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 480)); }
   var width = parseInt(load(KEY_WIDTH), 10) || DEFAULT_WIDTH;
@@ -147,7 +157,7 @@
   // (meta row with "You" / the Loop X icon), so nothing jumps when the
   // thread is re-fetched once the reply is saved.
   var BRAND_ICON = "<svg class='message-brand-icon' viewBox='0 0 24 24' width='20' height='20' fill='none' stroke-width='2.6' stroke-linecap='round' aria-hidden='true'><path d='M8.97 4.16A8.4 8.4 0 0 1 15.03 4.16' stroke='#2F5BFF'/><path d='M19.84 8.97A8.4 8.4 0 0 1 19.84 15.03' stroke='#0FA37F'/><path d='M15.03 19.84A8.4 8.4 0 0 1 8.97 19.84' stroke='#E8336F'/><path d='M4.16 15.03A8.4 8.4 0 0 1 4.16 8.97' stroke='#FF8A00'/><path d='M6.06 6.06L17.94 17.94' stroke='currentColor'/><path d='M17.94 6.06L6.06 17.94' stroke='currentColor'/></svg>";
-  var YOU_LABEL = "\u3042\u306a\u305f";
+  var YOU_LABEL = "Vous";
   function appendBubble(fromUser, text) {
     var row = document.createElement('li');
     row.className = 'message-row ' + (fromUser ? 'message-row-user' : 'message-row-loop');
@@ -181,7 +191,7 @@
     var row = document.createElement('li');
     row.className = 'message-row message-row-loop ai-thinking-row';
     row.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-    row.querySelector('.ai-thinking-label').textContent = "\u8003\u3048\u4e2d\u2026";
+    row.querySelector('.ai-thinking-label').textContent = "R\u00e9flexion\u2026";
     messageList().appendChild(row);
     scrollToBottom();
     return row;
@@ -241,6 +251,8 @@
   });
 
   function setBusy(value) {
+    // The Office view picks a colleague to work on the question while it is answered.
+    if (value !== busy) document.dispatchEvent(new CustomEvent('loopx:chat', { detail: { busy: value } }));
     busy = value;
     window.__loopPanelChatStreaming = value;
     window.__loopChatStreaming = !!(value || window.__loopActivityChatStreaming);
@@ -282,7 +294,7 @@
     var reveal = window.__loopTextReveal(function(text) { showReply(text, true); });
     function fail(message) {
       reveal.stop();
-      showReply(message || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002", false);
+      showReply(message || "Une erreur s'est produite - r\u00e9essayez.", false);
       setBusy(false);
     }
 
@@ -326,9 +338,9 @@
         });
         source.addEventListener('error', function(ev) {
           source.close();
-          var message = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
+          var message = "Une erreur s'est produite - r\u00e9essayez.";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
-          fail(accumulated ? accumulated + ' ' + "\uff08\u8fd4\u4fe1\u304c\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f\uff09" : message);
+          fail(accumulated ? accumulated + ' ' + "(r\u00e9ponse interrompue)" : message);
         });
       })
       .catch(function() { fail(); });

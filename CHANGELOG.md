@@ -12,7 +12,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Changed
+- Office: you can send E1/E2/E3 to the coffee shop or the bookstore from their card (and call them back), or have two of them chat about any topic you type or pick; Ctrl+V switches between the Office and the Dashboard.
 
+- Office view: three colleagues (E1, E2 and E3) now sit around one round desk with a plant in its hollow centre, instead of one person per loop. Every loop belongs to one of them: they type while it runs, raise a hand when it waits for you and hold their head when it failed. Asking the chat a question puts a randomly picked colleague to work until the answer is done, and colleagues with nothing to do now and then talk to each other about a real loop or a general topic in a speech bubble. Clicking a colleague opens a card with their loops (Run now, Enable/Disable); during the workday (09:00-17:00 on the scene's clock) an idle colleague now and then walks out to a coffee shop (mostly mornings) or a bookstore (mostly evenings) on a new plaza in front of the office, stays a while and comes back, and anyone given work returns at once; the default camera is pulled back to show them; the "Needs you" mat and standby bench are gone, and clicking one no longer seeds the chat message.
 - Switching from the Office to the Dashboard closes the chat panel instead of carrying it over.
 - Mac app: the dashboard window can no longer be resized below 700 × 600.
 

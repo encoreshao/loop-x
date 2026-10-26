@@ -24,6 +24,16 @@
   }
   var session = load(KEY_SESSION) || '';
 
+  // Ctrl+V switches between the Office and the Dashboard (not while typing, so paste still works).
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key.toLowerCase() !== 'v' || !ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey || ev.repeat) return;
+    var t = ev.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    ev.preventDefault();
+    if (root.classList.contains('office-mode')) { store(KEY_OPEN, null); location.href = '/?mode=dashboard'; }
+    else location.href = '/office';
+  });
+
   // Width: clamped so the main card always keeps a usable ~480px.
   function maxWidth() { return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 480)); }
   var width = parseInt(load(KEY_WIDTH), 10) || DEFAULT_WIDTH;
@@ -241,6 +251,8 @@
   });
 
   function setBusy(value) {
+    // The Office view picks a colleague to work on the question while it is answered.
+    if (value !== busy) document.dispatchEvent(new CustomEvent('loopx:chat', { detail: { busy: value } }));
     busy = value;
     window.__loopPanelChatStreaming = value;
     window.__loopChatStreaming = !!(value || window.__loopActivityChatStreaming);

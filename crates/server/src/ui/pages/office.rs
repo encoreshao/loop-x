@@ -150,7 +150,7 @@ pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
             "/office",
             "apartment",
             ctx.t("Office"),
-            ctx.t("Your loops as people in a 3D office, with a chat beside it to talk to them.")
+            ctx.t("Three colleagues in a 3D office run your loops, with a chat beside it to talk to them.")
         ),
         card(
             "/?mode=dashboard",
@@ -224,18 +224,45 @@ fn script_json(v: &Value) -> String {
 }
 
 fn client_strings(ctx: &UiCtx) -> Value {
+    let mut all = base_strings(ctx);
+    all.as_object_mut().unwrap().extend(assign_strings(ctx).as_object().unwrap().clone());
+    all
+}
+
+/// The colleague card's send-out and conversation controls, and the lines of an assigned chat.
+fn assign_strings(ctx: &UiCtx) -> Value {
+    json!({
+        "send_out": ctx.t("Send out"),
+        "call_back": ctx.t("Call back to desk"),
+        "talk_about": ctx.t("Talk with a colleague"),
+        "any_topic": ctx.t("Any topic…"),
+        "chat_with": ctx.t("Chat with {name}"),
+        "unavailable": ctx.t("{name} is busy or away right now"),
+        "human_1": ctx.t("weekend plans"),
+        "human_2": ctx.t("favourite food"),
+        "human_3": ctx.t("a good movie"),
+        "human_4": ctx.t("travel"),
+        "human_5": ctx.t("music"),
+        "human_6": ctx.t("sports"),
+        "human_7": ctx.t("pets"),
+        "human_8": ctx.t("the weather"),
+        "talk_line_1": ctx.t("Hey, got any thoughts on {topic}?"),
+        "talk_line_2": ctx.t("Hmm, {topic}... I would love to hear more."),
+        "talk_line_3": ctx.t("Ha, that reminds me of something from last week."),
+        "talk_line_4": ctx.t("We should chat about {topic} over coffee sometime.")
+    })
+}
+
+fn base_strings(ctx: &UiCtx) -> Value {
     json!({
         "state_working": ctx.t("Working"),
         "state_waiting": ctx.t("Waiting for you"),
         "state_idle": ctx.t("Idle"),
         "state_failed": ctx.t("Failed"),
         "state_disabled": ctx.t("Disabled"),
-        "disabled_standby": ctx.t("Disabled · standby"),
         "run_now": ctx.t("Run now"),
         "enable": ctx.t("Enable"),
         "disable": ctx.t("Disable"),
-        "open_loop": ctx.t("Open loop page"),
-        "pending_approvals": ctx.t("Pending approvals"),
         "stale": ctx.t("Showing last known state"),
         "time_of_day": ctx.t("Time of day"),
         "auto": ctx.t("Auto"),
@@ -243,18 +270,28 @@ fn client_strings(ctx: &UiCtx) -> Value {
         "dusk": ctx.t("Dusk"),
         "night": ctx.t("Night"),
         "no_webgl": ctx.t("The office view needs WebGL, which this browser has turned off. Use the Dashboard instead."),
-        "and_more": ctx.t("and {n} more"),
-        "canvas_label": ctx.t("3D office: each loop is a person at a desk"),
-        "last_run": ctx.t("Last run"),
-        "next_run": ctx.t("Next run"),
-        "run_history": ctx.t("Run history"),
-        "why": ctx.t("Why"),
+        "canvas_label": ctx.t("3D office: three colleagues sit around a round desk"),
+        "loops": ctx.t("Loops"),
+        "no_loops": ctx.t("No loops yet"),
+        "answering": ctx.t("Answering your question"),
+        "coffee_shop": ctx.t("Coffee shop"),
+        "bookstore": ctx.t("Bookstore"),
+        "at_coffee": ctx.t("At the coffee shop"),
+        "at_books": ctx.t("At the bookstore"),
+        "topic_1": ctx.t("Should the daily review run earlier?"),
+        "topic_2": ctx.t("Which loop is costing us the most time?"),
+        "topic_3": ctx.t("Can we trust the inbox triage on its own yet?"),
+        "topic_4": ctx.t("What should we automate next?"),
+        "topic_5": ctx.t("Are any approvals piling up?"),
+        "topic_failed": ctx.t("Why did {loop} fail last time?"),
+        "topic_waiting": ctx.t("{loop} needs a decision. Who takes it?"),
+        "topic_ok": ctx.t("{loop} ran cleanly. Can it run more often?"),
+        "topic_disabled": ctx.t("Is {loop} still worth keeping switched off?"),
         "action_failed": ctx.t("Action failed"),
         "close": ctx.t("Close"),
         "reload": ctx.t("Reload the page and try again"),
         "context_lost": ctx.t("The 3D view stopped (graphics were reset). Reload the page."),
         "load_failed": ctx.t("The office view could not load. Use the Dashboard instead."),
-        "chat_about": ctx.t("About the loop {name}: "),
     })
 }
 
@@ -285,18 +322,19 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-panel-state[data-state='waiting']::before{{background:#ffb020}}\
 .office-panel-state[data-state='failed']::before{{background:#ff5252}}\
 .office-panel-state[data-state='disabled']::before{{background:#6b7280}}\
-.office-panel dl{{margin:0 0 .8rem}}.office-panel dt{{margin-top:.5rem;font-size:.75rem;color:#9aa1ad}}.office-panel dd{{margin:0;word-break:break-word}}\
+.office-panel-note{{margin:0 0 .8rem;color:#9aa1ad;font-size:.85rem}}\
+.office-panel .office-panel-loops{{list-style:none;padding:0}}.office-panel-loop{{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem .6rem;padding:.55rem 0;border-top:1px solid rgba(255,255,255,.1)}}.office-panel-loop .office-panel-state{{margin:0;font-size:.75rem}}.office-panel-loop .office-panel-actions{{flex-basis:100%;margin-top:.2rem}}\
+.office-panel-empty{{margin:.3rem 0 0;color:#9aa1ad}}\
 .office-panel h3{{margin:.8rem 0 .3rem;font-size:.8rem;color:#9aa1ad;font-weight:600}}\
 .office-panel ul{{margin:0;padding-left:1.1rem}}.office-panel a{{color:#8ab4f8}}\
-.office-panel-approvals{{margin:0 0 .8rem}}\
 .office-panel-actions{{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem;align-items:center}}\
-.office-panel-actions button{{font:inherit;padding:.4rem .9rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}\
+.office-panel-assign h3{{margin:.9rem 0 .3rem}}.office-panel-row{{display:flex;flex-wrap:wrap;gap:.5rem;margin:.3rem 0}}.office-panel-topic{{width:100%;box-sizing:border-box;font:inherit;font-size:.85rem;padding:.35rem .6rem;border-radius:.5rem;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:inherit}}.office-panel-assign-msg{{margin:.3rem 0 0;color:#e8b04a;font-size:.8rem}}.office-panel-assign button{{font:inherit;font-size:.8rem;padding:.3rem .8rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}.office-panel-assign button[aria-disabled='true']{{opacity:.45;cursor:not-allowed}}\
+.office-panel-actions button{{font:inherit;font-size:.8rem;padding:.3rem .8rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}\
 .office-panel-actions button[data-act='toggle']{{background:rgba(255,255,255,.14);color:inherit}}\
 .office-panel-actions button[aria-disabled='true']{{opacity:.45;cursor:not-allowed}}\
 .office-panel button:focus-visible,.office-panel a:focus-visible,#office:focus-visible{{outline:2px solid #8ab4f8;outline-offset:2px}}\
 .office-panel-error{{margin:.8rem 0 0;color:#ff8a80}}\
 .office-panel[aria-busy='true']{{cursor:progress}}\
-.office-more{{position:absolute;left:12px;bottom:12px;margin:0;padding:.2rem .7rem;border-radius:999px;background:rgba(20,22,28,.72);color:#e6e8ee;font-size:.8rem}}\
 .office-stale{{position:absolute;left:50%;top:12px;transform:translateX(-50%);margin:0;padding:.25rem .8rem;border-radius:999px;background:rgba(120,70,0,.88);color:#fff;font-size:.8rem}}\
 .office-stale[hidden]{{display:none}}\
 </style>\
@@ -306,28 +344,18 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 <template id='office-panel'><aside class='office-panel' role='dialog' aria-label=\"{panel_label}\">\
 <button type='button' class='office-panel-close' aria-label=\"{close}\">{close}</button>\
 <h2 class='office-panel-name'></h2><p class='office-panel-state'></p>\
-<dl><dt>{why}</dt><dd class='office-panel-why'></dd>\
-<dt>{last_run}</dt><dd class='office-panel-last'></dd>\
-<dt>{next_run}</dt><dd class='office-panel-next'></dd></dl>\
-<p class='office-panel-approvals' hidden><a data-act='approvals'></a></p>\
-<div class='office-panel-history-block'><h3>{history}</h3><ul class='office-panel-history'></ul></div>\
-<div class='office-panel-actions'><button type='button' data-act='run'>{run_now}</button>\
-<button type='button' data-act='toggle'></button>\
-<a data-act='open' class='office-panel-link'>{open_loop}</a></div>\
+<p class='office-panel-note' hidden></p>\
+<h3>{loops}</h3><ul class='office-panel-loops'></ul><p class='office-panel-empty' hidden>{no_loops}</p>\
 <p class='office-panel-error' role='alert' hidden>{action_failed}</p></aside></template>\
 <script type='application/json' id='office-i18n'>{i18n}</script>\
 <input type='hidden' id='office-csrf' value=\"{token}\">\
 <script type='module' src='/office/assets/office.js?v={version}' onerror=\"{load_failed_js}\"></script>\
 </section>",
-        label = h(&ctx.t("3D office: each loop is a person at a desk")),
-        panel_label = h(&ctx.t("Loop details")),
+        label = h(&ctx.t("3D office: three colleagues sit around a round desk")),
+        panel_label = h(&ctx.t("Colleague details")),
         close = h(&ctx.t("Close")),
-        why = h(&ctx.t("Why")),
-        last_run = h(&ctx.t("Last run")),
-        next_run = h(&ctx.t("Next run")),
-        history = h(&ctx.t("Run history")),
-        run_now = h(&ctx.t("Run now")),
-        open_loop = h(&ctx.t("Open loop page")),
+        loops = h(&ctx.t("Loops")),
+        no_loops = h(&ctx.t("No loops yet")),
         action_failed = h(&ctx.t("Action failed")),
         load_failed_js = h(LOAD_FAILED_JS),
         i18n = script_json(&client_strings(ctx)),
@@ -595,7 +623,7 @@ mod tests {
         let raw = body[start..end].replace("\\u003c", "<").replace("\\u003e", ">").replace("\\u0026", "&");
         let doc: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(doc["run_now"], "Exécuter maintenant");
-        assert_eq!(doc["and_more"], "et {n} de plus");
+        assert_eq!(doc["answering"], "Répond à votre question");
         let en = page(&f, "/office", None, None).body_text();
         assert!(en.contains("\"run_now\":\"Run now\""));
     }
@@ -665,7 +693,6 @@ mod tests {
         assert!(body.contains("id='ai-panel'"), "the chat sits beside the scene");
         assert!(body.contains("href='/?mode=dashboard'"), "the switch lives in the chat header");
         assert!(body.contains("data-office-chat-toggle"));
-        assert!(body.contains("\"chat_about\":\"About the loop {name}: \""));
         assert!(sets_mode_cookie(&resp, "office"));
     }
 
@@ -673,7 +700,7 @@ mod tests {
     fn office_page_chat_text_is_translated() {
         let f = fx(four());
         let body = page(&f, "/office", None, Some("fr")).body_text();
-        assert!(!body.contains("\"chat_about\":\"About the loop"), "{body}");
+        assert!(!body.contains("\"answering\":\"Answering your question\""), "{body}");
         let choose = page(&f, "/?mode=choose", None, Some("fr")).body_text();
         assert!(!choose.contains(">Choose how you want to work<"));
     }

@@ -47,7 +47,7 @@ fails = []
 
 def load(c, hash_):
     c.goto("about:blank")
-    c.goto(f"{url}/loops?view=office#{hash_}")
+    c.goto(f"{url}/office#{hash_}")
     c.wait_for("window.__office && window.__office.ready && window.__office.syncs >= 1 && !!window.__office.select", timeout=60)
 
 def debug(c):
@@ -68,35 +68,35 @@ def write_status(name, state):
 STALE = "(() => { const n = document.querySelector('#office .office-stale'); return !!(n && !n.hidden && n.textContent.trim()); })()"
 
 with Chrome() as c:
-    load(c, "h=13&poll=1000")
+    load(c, "h=20&poll=1000")
     c.evaluate("window.__marker = 12345")
     settled(c)
 
-    # (a) A status file changes: the person moves, the page is not reloaded, panel and camera stay.
-    c.evaluate("window.__office.select('busy-loop')")
+    # (a) A status file changes: the loop's row updates, the page is not reloaded, card and camera stay.
+    c.evaluate("window.__office.select('E2')")
     c.pump(1.5)
     cam0 = c.evaluate("window.__office.focus()")
     if not cam0 or not c.evaluate("window.__office.panelOpen()"):
-        fails.append("(a) panel did not open for busy-loop")
+        fails.append("(a) card did not open for E2")
     write_status("quiet-loop", "running")
+    ROW = "document.querySelector('.office-panel-loop[data-loop=\"quiet-loop\"] .office-panel-state')"
     try:
-        c.wait_for("window.__office.debug().some(a => a.name === 'quiet-loop' && a.state === 'working')", timeout=20, interval=0.25)
+        c.wait_for(f"!!{ROW} && {ROW}.dataset.state === 'working'", timeout=20, interval=0.25)
     except TimeoutError:
-        fails.append("(a) quiet-loop never became working after its status file changed")
-    settled(c)
+        fails.append("(a) quiet-loop never showed as working in E2's card after its status file changed")
     c.pump(1)
-    q = by_name(c).get("quiet-loop")
-    if not q or not (q["x"] < -2 and q["seated"]):
-        fails.append(f"(a) quiet-loop not seated at a table after the change: {q}")
+    k = by_name(c).get("E2")
+    if not k or not k["seated"] or k["state"] != "working":
+        fails.append(f"(a) E2 should be seated and working: {k}")
     if c.evaluate("window.__marker") != 12345:
         fails.append("(a) the page reloaded")
     cam1 = c.evaluate("window.__office.focus()")
-    if not c.evaluate("window.__office.panelOpen()") or c.evaluate("window.__office.selected()") != "busy-loop":
-        fails.append("(a) the open panel was reset by a live refresh")
+    if not c.evaluate("window.__office.panelOpen()") or c.evaluate("window.__office.selected()") != "E2":
+        fails.append("(a) the open card was reset by a live refresh")
     elif max(abs(a - b) for a, b in zip(cam0["target"], cam1["target"])) > 1e-3:
         fails.append(f"(a) the camera moved on a live refresh: {cam0['target']} -> {cam1['target']}")
 
-    # (b) One more loop: nobody else moves.
+    # (b) One more loop: it is dealt to a colleague and nobody moves.
     c.evaluate("window.__office.select(null)")
     before = by_name(c)
     with open(f"{home}/loops.json") as f:
@@ -105,7 +105,7 @@ with Chrome() as c:
     with open(f"{home}/loops.json", "w") as f:
         json.dump(loops, f)
     try:
-        c.wait_for("window.__office.debug().some(a => a.name === 'zz-new-loop')", timeout=20, interval=0.25)
+        c.wait_for("window.__office.debug().some(a => a.loops.includes('zz-new-loop'))", timeout=20, interval=0.25)
     except TimeoutError:
         fails.append("(b) the new loop never appeared")
     c.pump(1.5)
@@ -113,26 +113,22 @@ with Chrome() as c:
     for name, a in before.items():
         b = after.get(name)
         if not b or (a["x"], a["z"], a["state"]) != (b["x"], b["z"], b["state"]):
-            fails.append(f"(b) {name} moved when a loop was added: {a} -> {b}")
+            fails.append(f"(b) {name} moved or changed when an idle loop was added: {a} -> {b}")
     if c.evaluate("window.__marker") != 12345:
         fails.append("(b) the page reloaded")
     if c.errors:
         fails.append("(a/b) console errors: " + " | ".join(c.errors[:3]))
 
-    # (d) Title heading, language-formatted last run, dispose.
-    c.evaluate("document.documentElement.lang = 'fr'")
+    # (d) A loop's title is its row's text, then dispose.
     c.evaluate("window.__office.setLoops([{name:'t-loop',title:'Titre traduit',enabled:true,state:'idle',reason:'',"
                "last_run:'2026-03-25T14:07:00Z',next_run:'',history:[],run_now_url:'',toggle_url:'',pending_approvals:0}])")
-    c.evaluate("window.__office.select('t-loop')")
-    head = c.evaluate("document.querySelector('.office-panel-name').textContent")
-    if head != "Titre traduit":
-        fails.append(f"(d) panel heading is {head!r}, expected the title")
-    last = c.evaluate("document.querySelector('.office-panel-last').textContent")
-    if not last.startswith("25/03/2026"):
-        fails.append(f"(d) Last run not formatted for the page language: {last!r}")
+    c.evaluate("window.__office.select('E1')")
+    row = c.evaluate("document.querySelector('.office-panel-loop a').textContent")
+    if row != "Titre traduit":
+        fails.append(f"(d) the loop row shows {row!r}, expected the title")
     c.evaluate("window.__office.dispose()")
     if c.evaluate("!!document.querySelector('.office-panel')") or c.evaluate("window.__office.panelOpen()"):
-        fails.append("(d) the panel is still there after dispose()")
+        fails.append("(d) the card is still there after dispose()")
     c.evaluate("for (const t of [document.body, document.getElementById('office')]) t.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}))")
     n0 = c.evaluate("performance.getEntriesByType('resource').filter(r => r.name.includes('/office/state')).length")
     c.pump(2.5)
@@ -144,7 +140,7 @@ with Chrome() as c:
 
 # (c) The server goes away: the note appears after the stale timeout, clears on return.
 with Chrome() as c:
-    load(c, "h=13&stale=2000&poll=500")
+    load(c, "h=20&stale=2000&poll=500")
     if c.evaluate(STALE):
         fails.append("(c) the stale note shows while the server is up")
     os.kill(sandbox_pid, signal.SIGUSR1)
@@ -173,12 +169,12 @@ with Chrome() as c:
 with Chrome() as c:
     c.call("Page.addScriptToEvaluateOnNewDocument", {"source": "window.EventSource = undefined"}, session=c.session)
     c.goto("about:blank")
-    c.goto(f"{url}/loops?view=office#h=13&poll=60000")
+    c.goto(f"{url}/office#h=20&poll=60000")
     c.wait_for("window.__office && window.__office.ready", timeout=60)
     try:
-        c.wait_for("window.__office.syncs >= 1 && window.__office.debug().length > 0", timeout=3, interval=0.2)
+        c.wait_for("window.__office.syncs >= 1 && window.__office.debug().some(a => a.loops.length)", timeout=3, interval=0.2)
     except TimeoutError:
-        fails.append("(e) no people within 3s with SSE unavailable and the poll off")
+        fails.append("(e) no loops dealt within 3s with SSE unavailable and the poll off")
 
 # (f) A 200 that is not a state feed keeps the office and counts as stale.
 with Chrome() as c:
@@ -186,15 +182,16 @@ with Chrome() as c:
         "const f = window.fetch; window.fetch = (u, o) => window.__bad && String(u).includes('/office/state')"
         " ? Promise.resolve(new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}})) : f(u, o)"},
         session=c.session)
-    load(c, "h=13&stale=2000&poll=500")
-    n = len(debug(c))
+    load(c, "h=20&stale=2000&poll=500")
+    count = lambda: sum(len(a["loops"]) for a in debug(c))
+    n = count()
     c.evaluate("window.__bad = true")
     try:
         c.wait_for(STALE, timeout=15, interval=0.25)
     except TimeoutError:
         fails.append("(f) a malformed feed never raised the stale note")
-    if len(debug(c)) != n or n == 0:
-        fails.append(f"(f) people changed from {n} to {len(debug(c))} on a malformed feed")
+    if count() != n or n == 0:
+        fails.append(f"(f) loops changed from {n} to {count()} on a malformed feed")
     c.evaluate("window.__bad = false")
     try:
         c.wait_for(f"!({STALE})", timeout=15, interval=0.25)
@@ -203,7 +200,7 @@ with Chrome() as c:
 
 # (g) Frames stop while the office is not visible and resume afterwards.
 with Chrome() as c:
-    load(c, "h=13")
+    load(c, "h=20")
     f0 = c.evaluate("window.__office.frames")
     c.pump(1)
     if c.evaluate("window.__office.frames") <= f0:
@@ -222,14 +219,14 @@ with Chrome() as c:
 
 # (h) Reduced motion draws on demand: idle means no frames, a selection draws some.
 with Chrome(reduced_motion=True) as c:
-    load(c, "h=13")
+    load(c, "h=20")
     c.pump(2)
     f1 = c.evaluate("window.__office.frames")
     c.pump(1)
     f2 = c.evaluate("window.__office.frames")
     if f2 != f1:
         fails.append(f"(h) frames kept advancing at rest under reduced motion ({f1} -> {f2})")
-    c.evaluate("window.__office.select('busy-loop')")
+    c.evaluate("window.__office.select('E2')")
     c.pump(0.5)
     if c.evaluate("window.__office.frames") <= f2:
         fails.append("(h) selecting a person drew no frame under reduced motion")
@@ -239,7 +236,7 @@ with Chrome() as c:
     c.call("Network.enable", session=c.session)
     c.call("Network.setBlockedURLs", {"urls": ["*three.module.min.js*"]}, session=c.session)
     c.goto("about:blank")
-    c.goto(f"{url}/loops?view=office#h=13")
+    c.goto(f"{url}/office#h=20")
     try:
         c.wait_for("document.getElementById('office').hidden && !document.getElementById('office-list').hidden"
                    " && !!document.querySelector('#office-list .office-note')", timeout=20, interval=0.3)
@@ -248,7 +245,7 @@ with Chrome() as c:
 
 # (j) Hash hooks are clamped: poll=10 still means at most a few fetches a second.
 with Chrome() as c:
-    load(c, "h=13&poll=10")
+    load(c, "h=20&poll=10")
     n0 = c.evaluate("performance.getEntriesByType('resource').filter(r => r.name.includes('/office/state')).length")
     c.pump(2)
     n1 = c.evaluate("performance.getEntriesByType('resource').filter(r => r.name.includes('/office/state')).length")
@@ -260,6 +257,6 @@ if fails:
     for f in fails:
         print("  - " + f)
     sys.exit(1)
-print("PASS: live status change, no camera/panel reset, add a loop moves nobody, stale note and recovery, dispose, title and language")
+print("PASS: live status change, no camera/card reset, add a loop moves nobody, stale note and recovery, dispose, loop title")
 PY
 echo "screenshots in $OUT"

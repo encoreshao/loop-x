@@ -22,5 +22,5 @@ trap 'rm -rf "$PROFILE"' EXIT
 # shellcheck disable=SC2086
 "$CHROME" --headless=new --user-data-dir="$PROFILE" --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader \
   --window-size=1500,900 --timeout="${SHOT_TIMEOUT:-8000}" ${SHOT_FLAGS:-} --screenshot="$OUT" \
-  "$OFFICE_URL/loops?view=office#$HASH"
+  "$OFFICE_URL/office#$HASH"
 echo "wrote $OUT"

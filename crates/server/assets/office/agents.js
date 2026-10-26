@@ -1,35 +1,47 @@
-// One person per loop, placed and moved by the loop's office state. Ported from the
-// prototype's agents: `plan`/`leavePts`/`enterPts`/`arrive` route people along the
-// aisles and the central corridor, `updateAgent` walks, sits and poses them, and
-// each wears a name tag and a mug/glyph bubble (canvas sprites, so a loop name is
-// always text, never markup). Working people at their seat get a faint data beam
-// to the AI centre rack; disabled people wear grey.
+// The office's three colleagues, seated around the round desk. Every loop belongs to one
+// of them (sorted by name, dealt out in turn): while one of their loops runs they type at
+// their screen, while one waits for approval they raise a hand, while one failed they hold
+// their head. A question asked in the chat sends a randomly picked colleague to work until
+// the answer is done. People with nothing to do now and then turn to each other and talk
+// about something worth discussing (a speech bubble). During the workday (09:00-17:00 on the
+// scene's clock) an idle colleague now and then walks out to the plaza in front of the office,
+// to the coffee shop (mostly in the morning) or the bookstore (mostly in the evening), stays a
+// while and comes back; at most one is away at a time and anyone who gets work returns at once.
+// Name tags, glyph bubbles and speech are canvas sprites, so a loop name is always text, never
+// markup. Working people get a faint data beam to the AI centre rack.
 
 const V = new URL(import.meta.url).search;
-const [{ HUB, COR, rng, freezeStatic }, { buildLayout, furnish, MAX_DRAWN }, { appearanceFor, buildPerson }] = await Promise.all([
+const [{ rng, freezeStatic }, { buildLayout, furnish, SEATS, DESK }, { appearanceFor, buildPerson }, { SHOPS, PLAZA_Z, DOOR_APPROACH_Z }] = await Promise.all([
   import("./world.js" + V),
   import("./layout.js" + V),
   import("./people.js" + V),
+  import("./shops.js" + V),
 ]);
 
-const COLORS = { working: 0x3ddc84, waiting: 0xffb020, idle: 0x7d8590, failed: 0xff5252, disabled: 0x6b7280 };
-const GLYPHS = { working: "⌨️", waiting: "✋", failed: "⚠️", disabled: "💤" };
-const DISABLED_SHIRT = 0x7b808a;
-const WALK_SPEED = 2.6;
-/// A walk to the desk for a chat tool call is slow and unhurried.
-const SLOW_WALK = 0.5;
+/// The colleagues, in seat order. Names are fixed.
+export const NAMES = ["E1", "E2", "E3"];
+
+const COLORS = { working: 0x3ddc84, waiting: 0xffb020, idle: 0x7d8590, failed: 0xff5252 };
+const GLYPHS = { working: "⌨️", waiting: "✋", failed: "⚠️" };
+const TRIP_GLYPH = { coffee: "☕", books: "📖" };
 /// A requested run (Run now) is shown as work this long while the loop's own state catches up.
 const PENDING_RUN_S = 25;
-/// A person who walked to the desk for a run stays at least this long, however short the run was.
+/// A colleague who finished a chat answer keeps typing this long, so a quick one is still seen.
 const MIN_DESK_S = 3.5;
-/// After a run, at most this many people (the same few, by name) stay at their desks
-/// instead of walking to the lounge.
-const MAX_STAY = 2, STAY_SHARE = 0.3;
+/// A chat takes this long to start talking, how long one exchange lasts and how long each speaks.
+const FIRST_TALK_S = 4, TALK_S = 9, TURN_S = 3;
 /// How fast arms, legs and head ease into the next pose (per second).
 const POSE_EASE = 9;
-/// The front aisle between table B and the "Needs you" mat, and where it meets the
-/// walk along the standby bench.
-const FRONT_Z = 8, BENCH_WALK_X = -12.8, WAIT_Z = 9.9;
+/// Walking pace, the workday on the scene's clock, how long a visit lasts and the gap between trips.
+const WALK_SPEED = 2.6;
+const WORK_START = 9, WORK_END = 17;
+const STAY_S = [12, 20], TRIP_GAP_S = [25, 50], FIRST_TRIP_S = 12;
+/// Radius of the walk around the desk, clear of the chairs, and the exit point on the office's front edge.
+const RING = DESK.seat + 1.2, EXIT_Z = 13.2;
+/// Lines of an assigned conversation, in order; `{topic}` is what the user picked or typed.
+const TALK_LINES = ["talk_line_1", "talk_line_2", "talk_line_3", "talk_line_4"];
+const HUMAN_TOPICS = ["human_1", "human_2", "human_3", "human_4", "human_5", "human_6", "human_7", "human_8"];
+const GENERIC_TOPICS = ["topic_1", "topic_2", "topic_3", "topic_4", "topic_5"];
 
 const lerp = (a, b, t) => a + (b - a) * t;
 function angDiff(a, b) {
@@ -46,18 +58,19 @@ function phaseOf(name) {
 }
 
 /// `ctx`: {THREE, scene, handles (world handles: `aiTop`, `aiRate`), strings
-/// (`#office-i18n`), reducedMotion}. Under reduced motion nobody walks or wanders:
-/// a state change moves the person straight to their new place, and poses hold still.
+/// (`#office-i18n`), reducedMotion}. Under reduced motion nobody turns or talks, and
+/// poses hold still.
 export function createAgents(ctx) {
   const { THREE, scene, handles } = ctx;
   const strings = ctx.strings || {};
   const still = !!ctx.reducedMotion;
-  // Seeded, so the same states give the same spots on every load.
   const R = rng(5);
-  const agents = new Map();
-  let order = [];
   const scratch = new THREE.Vector3();
-  let layout = null, furniture = null, labelScale = 1, overflow = 0, clock = 0;
+  const layout = buildLayout();
+  const furniture = furnish(scene, THREE, layout);
+  freezeStatic(furniture);
+  const people = [];
+  let clock = 0, loops = [], chatter = null, talk = null, nextTalk = FIRST_TALK_S, hour = 13, nextTrip = FIRST_TRIP_S;
 
   // ---------- sprites ----------
   function sprite(w, h, cw, ch) {
@@ -76,7 +89,7 @@ export function createAgents(ctx) {
   /// The name tag grows a little (and turns fully opaque) while hovered or selected.
   function scaleLabel(a) {
     const k = a.hi ? 1.18 : 1;
-    a.label.scale.set(2.8 * labelScale * k, 0.875 * labelScale * k, 1);
+    a.label.scale.set(2.8 * k, 0.875 * k, 1);
     a.label.material.opacity = a.hi ? 1 : 0.92;
   }
   function drawLabel(a) {
@@ -88,18 +101,11 @@ export function createAgents(ctx) {
     x.fill();
     x.fillStyle = "#fff";
     x.textAlign = "center";
+    x.font = "600 54px -apple-system,system-ui,sans-serif";
+    x.fillText(a.title, c.width / 2, 70);
     const max = c.width - 40;
-    let px = 54, name = a.title || a.name;
-    const font = (n, w) => w + " " + n + "px -apple-system,system-ui,sans-serif";
-    x.font = font(px, 600);
-    while (px > 30 && x.measureText(name).width > max) x.font = font((px -= 2), 600);
-    if (x.measureText(name).width > max) {
-      while (name.length > 1 && x.measureText(name + "…").width > max) name = name.slice(0, -1);
-      name += "…";
-    }
-    x.fillText(name, c.width / 2, 70);
-    const text = strings["state_" + a.state] || "";
-    x.font = font(40, 500);
+    const text = (a.trip && a.state === "idle" ? strings["at_" + a.trip.place] : strings["state_" + a.state]) || "";
+    x.font = "500 40px -apple-system,system-ui,sans-serif";
     const tw = Math.min(x.measureText(text).width, max - 40);
     x.fillStyle = "#" + COLORS[a.state].toString(16).padStart(6, "0");
     x.beginPath();
@@ -130,19 +136,59 @@ export function createAgents(ctx) {
     }
     tex.needsUpdate = true;
   }
+  /// Wraps `text` into the speech bubble (or hides the bubble when it is empty).
+  function setSpeech(a, text) {
+    if (a.said === text) return;
+    a.said = text;
+    a.speech.visible = !!text;
+    const { c, tex } = a.speech.userData, x = c.getContext("2d");
+    x.clearRect(0, 0, c.width, c.height);
+    if (!text) return;
+    x.font = "500 38px -apple-system,system-ui,sans-serif";
+    const lines = [], max = c.width - 70;
+    let line = "";
+    for (const word of text.split(/(?<=\s)|(?<=[　-鿿，。？！])/u)) {
+      if (line && x.measureText(line + word).width > max) {
+        lines.push(line.trimEnd());
+        line = "";
+      }
+      line += word;
+    }
+    if (line) lines.push(line.trimEnd());
+    const shown = lines.slice(0, 3), h = 40 + shown.length * 48;
+    const top = c.height - 28 - h;
+    x.fillStyle = "rgba(255,255,255,.96)";
+    x.beginPath();
+    x.roundRect(8, top, c.width - 16, h, 30);
+    x.fill();
+    x.beginPath();
+    x.moveTo(c.width / 2 - 16, top + h - 2);
+    x.lineTo(c.width / 2, c.height - 6);
+    x.lineTo(c.width / 2 + 16, top + h - 2);
+    x.fill();
+    x.fillStyle = "#1b1d22";
+    x.textAlign = "center";
+    x.textBaseline = "middle";
+    shown.forEach((l, i) => x.fillText(l, c.width / 2, top + 20 + 24 + i * 48));
+    tex.needsUpdate = true;
+  }
 
   // ---------- people ----------
-  function create(name) {
+  function create(name, i) {
     const p = buildPerson(THREE, appearanceFor(name));
     p.group.userData.agent = name;
     scene.add(p.group);
-    const label = sprite(2.8 * labelScale, 0.875 * labelScale, 512, 160);
+    const label = sprite(2.8, 0.875, 512, 160);
     label.position.set(0, 3.3, 0);
     label.material.opacity = 0.92;
     p.group.add(label);
     const bubble = sprite(0.8, 0.8, 128, 128);
     bubble.position.set(0, 2.6, 0);
     p.group.add(bubble);
+    const speech = sprite(3.6, 1.7, 640, 300);
+    speech.position.set(0, 4.7, 0);
+    speech.visible = false;
+    p.group.add(speech);
     const beam = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
       new THREE.LineBasicMaterial({ color: 0x6aa8ff, transparent: true, opacity: 0 })
@@ -150,253 +196,221 @@ export function createAgents(ctx) {
     beam.frustumCulled = false;
     beam.visible = false;
     scene.add(beam);
-    return {
-      name, state: null, info: null, ...p, label, bubble, beam,
-      desk: null, loc: null, dest: null, path: [], sit: 0, sitY: 0, sitOn: false,
-      yaw: 0, yawT: 0, t0: phaseOf(name), wander: 8 + R() * 10, glyph: null, faceT: null,
-      // `minWork`: a run started, so go to the desk (and stay a moment) whatever the state says.
-      // `pendingUntil`: a requested run the state feed has not shown yet. `dwell`: time left at the desk.
-      minWork: false, pendingUntil: 0, dwell: null, stay: false, slow: false,
-      pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
+    const seat = layout.seats[i];
+    const a = {
+      name, title: name, idx: i, seat, state: null, loops: [], ...p, label, bubble, speech, beam,
+      said: null, glyph: null, chat: false, pendingUntil: 0, t0: phaseOf(name), sit: 1, wantSit: true, trip: null, path: [],
+      yaw: 0, yawT: 0, pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
     };
-  }
-  function dispose(a) {
-    free(held(a), a);
-    scene.remove(a.group);
-    scene.remove(a.beam);
-    a.beam.geometry.dispose();
-    a.beam.material.dispose();
-    // Person geometries are shared; materials and the sprite textures are not.
-    a.group.traverse((o) => {
-      if (!o.material) return;
-      if (o.material.map) o.material.map.dispose();
-      o.material.dispose();
-    });
+    // Seated at once, facing the plant.
+    p.group.position.set(seat.x, 0, seat.z);
+    a.faceYaw = Math.atan2(-(seat.face[0] - seat.x), -(seat.face[1] - seat.z));
+    a.yaw = a.yawT = a.faceYaw;
+    p.group.rotation.y = a.yaw;
+    return a;
   }
   function setState(a, s) {
-    const was = a.state;
     a.state = s;
-    a.stay = false;
-    if (s === "idle" && (was === "working" || was === "failed") && a.loc && a.loc.kind === "desk" && !still) {
-      let staying = 0;
-      for (const o of agents.values()) if (o.stay) staying++;
-      if (staying < MAX_STAY && phaseOf(a.name) / 10 < STAY_SHARE) a.stay = true;
-    }
-    if (s === "working") {
-      a.pendingUntil = 0;
-      a.dwell = null;
-      if (was !== "working" && !still) a.minWork = true;
-    } else if (s === "waiting" || s === "disabled") {
-      a.minWork = false;
-      a.pendingUntil = 0;
-    }
     drawLabel(a);
-    // An idle person's bubble is drawn by the lounge pose; drop the previous state's glyph.
-    setGlyph(a, s === "idle" ? null : GLYPHS[s]);
-    a.mug.visible = s === "idle";
-    a.shirtMat.color.setHex(s === "disabled" ? DISABLED_SHIRT : appearanceFor(a.name).shirt);
+    setGlyph(a, a.trip && s === "idle" ? TRIP_GLYPH[a.trip.place] : GLYPHS[s] || null);
+    a.mug.visible = s === "idle" && (!a.trip || a.trip.place === "coffee");
+  }
+  /// What `a` is doing now, from their loops, a chat answer in progress or a requested run.
+  function stateOf(a) {
+    if (a.chat || a.pendingUntil > clock || a.loops.some((l) => l.state === "working")) return "working";
+    if (a.loops.some((l) => l.state === "waiting")) return "waiting";
+    if (a.loops.some((l) => l.state === "failed")) return "failed";
+    return "idle";
+  }
+  const ownerOf = (loopName) => people.find((a) => a.loops.some((l) => l.name === loopName)) || null;
+  const view = (a) => ({
+    name: a.name, title: a.title, state: a.state, answering: a.chat, loops: a.loops,
+    free: a.state === "idle" && !a.chat, away: a.trip ? a.trip.place : null,
+    note: a.chat ? "answering" : a.trip ? "at_" + a.trip.place : null,
+  });
+
+  // ---------- talking ----------
+  const titleOf = (l) => (typeof l.title === "string" && l.title ? l.title : l.name);
+  /// Something for `a` to bring up: a real loop's state when there is one, else a general topic.
+  function topicFor() {
+    const pool = GENERIC_TOPICS.map((key) => ({ key }));
+    for (const l of loops) {
+      const key = l.state === "failed" ? "topic_failed" : l.state === "waiting" ? "topic_waiting" : l.state === "disabled" ? "topic_disabled" : "topic_ok";
+      // Real loops come up more often than the general topics.
+      for (let i = 0; i < 3; i++) pool.push({ key, loop: titleOf(l) });
+    }
+    const t = pool[Math.floor(R() * pool.length)];
+    return (strings[t.key] || "").replace("{loop}", t.loop || "");
+  }
+  function startTalk() {
+    const idle = people.filter((a) => a.state === "idle" && !a.trip);
+    if (idle.length < 2) return false;
+    const i = Math.floor(R() * idle.length);
+    const a = idle[i], b = idle[(i + 1 + Math.floor(R() * (idle.length - 1))) % idle.length];
+    talk = { a, b, t: 0, turn: 0, speaker: R() < 0.5 ? a : b };
+    say(talk.speaker, talk.speaker === a ? b : a);
+    return true;
+  }
+  function say(speaker, listener) {
+    let text;
+    if (talk && talk.topic) text = (strings[TALK_LINES[talk.line++]] || "").replaceAll("{topic}", talk.topic);
+    else text = topicFor();
+    if (!text) return;
+    setSpeech(speaker, text);
+    setSpeech(listener, null);
+  }
+  function endTalk() {
+    if (!talk) return;
+    setSpeech(talk.a, null);
+    setSpeech(talk.b, null);
+    talk = null;
+    nextTalk = 6 + R() * 8;
+  }
+  const talking = (a) => !!talk && (talk.a === a || talk.b === a);
+  function stepTalk(dt) {
+    if (still) return;
+    if (talk) {
+      // Whoever gets work ends the conversation.
+      if (talk.a.state !== "idle" || talk.b.state !== "idle") return endTalk();
+      talk.t += dt;
+      talk.turn += dt;
+      if (talk.t >= (talk.topic ? TURN_S * TALK_LINES.length : TALK_S)) return endTalk();
+      if (talk.turn >= TURN_S) {
+        talk.turn = 0;
+        talk.speaker = talk.speaker === talk.a ? talk.b : talk.a;
+        say(talk.speaker, talk.speaker === talk.a ? talk.b : talk.a);
+      }
+    } else if ((nextTalk -= dt) < 0 && !startTalk()) {
+      nextTalk = 3 + R() * 4;
+    }
   }
 
-  // ---------- places ----------
-  const held = (a) => (a.path.length ? a.dest : a.loc);
-  function free(place, a) {
-    if (place && place.spot && place.spot.occ === a) place.spot.occ = null;
+  // ---------- trips to the shops ----------
+  const inWorkday = () => hour >= WORK_START && hour < WORK_END;
+  const between = ([lo, hi]) => lo + R() * (hi - lo);
+  /// The points from `a`'s seat to a visitor's spot in the shop: slide out past the chair, round the
+  /// desk at RING to the open front, across the plaza to the door and in.
+  function routeOut(a, place) {
+    const shop = SHOPS[place], spot = shop.spots[a.idx % shop.spots.length];
+    const at = (ang, r) => [DESK.x + Math.cos(ang) * r, DESK.z + Math.sin(ang) * r];
+    const target = Math.PI / 2, from = a.seat.angle, d = angDiff(from, target), dir = d >= 0 ? 1 : -1;
+    const slide = from + dir * 0.35, steps = Math.max(1, Math.ceil((Math.abs(d) - 0.35) / 0.4));
+    const pts = [at(slide, DESK.seat), at(slide, RING)];
+    for (let i = 1; i <= steps; i++) pts.push(at(slide + dir * (Math.abs(d) - 0.35) * (i / steps), RING));
+    pts.push([DESK.x, EXIT_Z], [shop.cx, PLAZA_Z], [shop.cx, DOOR_APPROACH_Z], [shop.cx, shop.door[1] + 0.3], [shop.cx, shop.door[1] + 1.4], [spot.x, spot.z]);
+    return { pts, spot };
   }
-  /// A free spot: any in the lounge, the first free one (bench and mat fill up from
-  /// the front) elsewhere.
-  function pick(list, anywhere) {
-    const open = list.filter((s) => !s.occ);
-    return open.length ? open[anywhere ? Math.floor(R() * open.length) : 0] : null;
+  function startTrip(a, place) {
+    const { pts, spot } = routeOut(a, place);
+    a.trip = { place, phase: "out", spot, done: [], stay: 0 };
+    a.path = pts;
+    a.wantSit = false;
+    drawLabel(a);
+    setState(a, a.state);
   }
-  const wantOf = (a) => {
-    if (a.state === "disabled") return "off";
-    if (a.state === "waiting") return "wait";
-    if (a.minWork || a.pendingUntil > clock) return "desk";
-    return a.state === "idle" && !a.stay ? "lounge" : "desk";
-  };
-  /// Where `a` should go now; waiting and disabled people fall back to the lounge
-  /// when their zone is full.
-  function target(a, notSpot) {
-    let kind = wantOf(a);
-    if (kind === "desk") return { kind, desk: a.desk };
-    if (kind === "wait" || kind === "off") {
-      const spot = pick(kind === "wait" ? layout.wait : layout.off);
-      if (spot) return { kind, spot };
-      kind = "lounge";
-    }
-    // Someone coming off a run goes for coffee or a sofa, not the chat corner.
-    const open = layout.lounge.filter((s) => s !== notSpot);
-    const rest = a.loc && a.loc.kind === "desk" ? open.filter((s) => s.kind !== "chat") : [];
-    const spot = pick(rest.length ? rest : open, true);
-    return spot ? { kind: "lounge", spot } : null;
+  /// Heads home along the way it came (also from inside the shop).
+  function beginBack(a) {
+    const back = [...a.trip.done].reverse();
+    // Drop the spot it stands on, if that is the first point.
+    const p = a.group.position;
+    if (back.length && Math.hypot(back[0][0] - p.x, back[0][1] - p.z) < 0.2) back.shift();
+    a.path = [...back, [a.seat.x, a.seat.z]];
+    a.trip.phase = "back";
+    a.trip.done = [];
   }
-  function needsMove(a) {
-    const want = wantOf(a);
-    if (want === "desk") return a.loc.kind !== "desk" || a.loc.desk !== a.desk;
-    if (want === a.loc.kind) return false;
-    // Already in the lounge because the zone was full: stay until a spot frees up.
-    if (a.loc.kind === "lounge" && want === "wait" && !layout.wait.some((s) => !s.occ)) return false;
-    if (a.loc.kind === "lounge" && want === "off" && !layout.off.some((s) => !s.occ)) return false;
+  function endTrip(a) {
+    a.trip = null;
+    nextTrip = between(TRIP_GAP_S);
+    drawLabel(a);
+    setState(a, a.state);
+  }
+  /// Someone idle goes out (to `place`, else by the time of day): mostly coffee in the morning,
+  /// books in the evening, either at midday. Only one at a time, never someone busy or talking.
+  function pickTrip(place) {
+    if (people.some((a) => a.trip)) return false;
+    const free = people.filter((a) => a.state === "idle" && !talking(a) && !a.chat && a.pendingUntil <= clock);
+    if (!free.length) return false;
+    const a = free[Math.floor(R() * free.length)];
+    const coffeeShare = hour < 12 ? 0.75 : hour < 14 ? 0.5 : 0.25;
+    startTrip(a, place || (R() < coffeeShare ? "coffee" : "books"));
     return true;
   }
-  const benchRoute = (spot) => (spot.via.length ? spot.via : [[BENCH_WALK_X, FRONT_Z], [BENCH_WALK_X, spot.z]]);
-  // Route planning: seat <-> corridor <-> lounge / "Needs you" / standby.
-  function leavePts(loc, nextLounge) {
-    if (loc.kind === "desk") {
-      const d = loc.desk;
-      return [[d.x + d.gap, d.z], [d.x + d.gap, d.za], [0, d.za], COR];
-    }
-    if (loc.kind === "off") return [...[...benchRoute(loc.spot)].reverse(), [0, FRONT_Z], COR];
-    if (loc.kind === "lounge") {
-      const v = [...loc.spot.via].reverse();
-      return nextLounge ? [...v, HUB] : [...v, HUB, COR];
-    }
-    return [[loc.spot.x, WAIT_Z], [0, WAIT_Z], COR];
-  }
-  function enterPts(dest, fromLounge) {
-    if (dest.kind === "desk") {
-      const d = dest.desk;
-      return [[0, d.za], [d.x + d.gap, d.za], [d.x + d.gap, d.z], [d.x, d.z]];
-    }
-    const s = dest.spot;
-    if (dest.kind === "off") return [[0, FRONT_Z], ...benchRoute(s), [s.x, s.z]];
-    if (dest.kind === "lounge") return [...(fromLounge ? [] : [HUB]), ...s.via, [s.x, s.z]];
-    return [[0, WAIT_Z], [s.x, WAIT_Z], [s.x, s.z]];
-  }
-  const yawTo = (a, t) => Math.atan2(-(t[0] - a.group.position.x), -(t[1] - a.group.position.z));
-  /// Settles `a` at `loc`: what to face and whether to sit.
-  function settle(a, loc) {
-    a.loc = loc;
-    a.dest = null;
-    if (loc.kind === "desk") {
-      a.faceT = [loc.desk.x, loc.desk.zc];
-      a.sitY = -0.37;
-      a.sitOn = true;
-    } else {
-      a.faceT = loc.spot.face;
-      a.sitY = loc.spot.sitY || 0;
-      a.sitOn = !!loc.spot.sitY;
-    }
-    a.wander = 8 + R() * 12;
-  }
-  /// Puts `a` straight at its place, no walking (first sight, new layout, reduced motion).
-  function place(a) {
-    free(held(a), a);
-    a.path = [];
-    a.loc = null;
-    let dest = target(a, null);
-    // Every spot taken (only possible with a full room): share a lounge spot rather than vanish.
-    if (!dest) dest = { kind: "lounge", spot: layout.lounge[(a.idx || 0) % layout.lounge.length] };
-    else if (dest.spot) dest.spot.occ = a;
-    const p = dest.kind === "desk" ? dest.desk : dest.spot;
-    a.group.position.set(p.x, 0, p.z);
-    settle(a, dest);
-    a.sit = a.sitOn ? 1 : 0;
-    a.yaw = a.yawT = yawTo(a, a.faceT);
-    a.group.rotation.y = a.yaw;
-  }
-  /// After a new layout: someone standing still on a spot that exists at the same place
-  /// in it stays put (rebound to the new spot); everyone else is placed afresh.
-  function carryOver(a) {
-    const old = a.loc;
-    a.dest = null;
-    if (old && !a.path.length) {
-      const same = (p) => Math.abs(p.x - old[old.kind === "desk" ? "desk" : "spot"].x) < 1e-6 && Math.abs(p.z - old[old.kind === "desk" ? "desk" : "spot"].z) < 1e-6;
-      if (old.kind === "desk") {
-        if (same(a.desk)) {
-          a.loc = { kind: "desk", desk: a.desk };
-          return;
-        }
-      } else {
-        const spot = layout[old.kind].find((s) => !s.occ && same(s));
-        if (spot) {
-          spot.occ = a;
-          a.loc = { kind: old.kind, spot };
-          return;
-        }
+  function stepTrips(dt) {
+    if (still) return;
+    if (!people.some((a) => a.trip) && inWorkday() && (nextTrip -= dt) < 0 && !pickTrip()) nextTrip = 4 + R() * 4;
+    for (const a of people) {
+      const trip = a.trip;
+      if (!trip) continue;
+      // Work (a loop, the chat) calls them back at once.
+      if (trip.phase !== "back" && a.state !== "idle") beginBack(a);
+      if (trip.phase === "out" && !a.path.length) {
+        trip.phase = "in";
+        trip.stay = between(STAY_S);
+      } else if (trip.phase === "in") {
+        if ((trip.stay -= dt) <= 0) beginBack(a);
+      } else if (trip.phase === "back" && !a.path.length) {
+        a.wantSit = true;
+        if (a.sit > 0.95) endTrip(a);
       }
     }
-    a.loc = null;
-    a.path = [];
-  }
-  function plan(a) {
-    const dest = target(a, a.loc.kind === "lounge" ? a.loc.spot : null);
-    if (!dest) return false;
-    if (dest.kind === "desk" && a.loc.kind === "desk" && a.loc.desk === dest.desk) return false;
-    const bothLounge = dest.kind === "lounge" && a.loc.kind === "lounge";
-    free(a.loc, a);
-    if (dest.spot) dest.spot.occ = a;
-    a.path = [...leavePts(a.loc, bothLounge), ...enterPts(dest, bothLounge)];
-    a.dest = dest;
-    return true;
   }
 
   // ---------- animation ----------
   function update(a, dt, t) {
-    if (!a.loc) return;
     const k = still ? a.t0 : t + a.t0;
+    const talkingTo = talking(a) ? (talk.a === a ? talk.b : talk.a) : null;
+    // Walking: stand first, then follow the path; facing follows the way, or the shop's counter/shelves.
     let walking = false;
-    if (!a.path.length) {
-      // Idle people wander between lounge spots now and then.
-      if (!still && a.state === "idle" && a.loc.kind === "lounge") {
-        a.wander -= dt;
-        // No free spot to wander to: wait a while before looking again.
-        if (a.wander < 0 && !plan(a)) a.wander = 8 + R() * 12;
-      }
-      // A person at the desk for a run that is already over stays a moment before leaving.
-      if (a.minWork && a.loc.kind === "desk" && a.loc.desk === a.desk && a.pendingUntil <= clock && a.state !== "working") {
-        a.dwell = (a.dwell === null ? MIN_DESK_S : a.dwell) - dt;
-        if (a.dwell <= 0) {
-          a.minWork = false;
-          a.dwell = null;
-        }
-      }
-      // A pending change of place (also a change that arrived mid-walk).
-      if (!a.path.length && needsMove(a)) {
-        if (still) place(a);
-        else plan(a);
-      }
-    }
-    const wantSit = !a.path.length && a.sitOn;
-    a.sit = still ? (wantSit ? 1 : 0) : lerp(a.sit, wantSit ? 1 : 0, Math.min(1, dt * 6));
     const p = a.group.position;
+    a.sit = still ? (a.wantSit ? 1 : 0) : lerp(a.sit, a.wantSit ? 1 : 0, Math.min(1, dt * 6));
     if (a.path.length && a.sit < 0.15) {
       const [tx, tz] = a.path[0];
-      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = WALK_SPEED * (a.slow ? SLOW_WALK : 1) * dt;
+      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = WALK_SPEED * dt;
       if (d <= step) {
         p.x = tx;
         p.z = tz;
-        a.path.shift();
-        if (!a.path.length) {
-          a.slow = false;
-          settle(a, a.dest);
-        }
+        a.trip.done.push(a.path.shift());
       } else {
         p.x += (dx / d) * step;
         p.z += (dz / d) * step;
         a.yawT = Math.atan2(-dx, -dz);
         walking = true;
       }
-    } else if (!a.path.length && a.faceT) {
-      a.yawT = yawTo(a, a.faceT);
+    } else if (a.trip && a.trip.phase === "in") {
+      a.yawT = Math.atan2(-(a.trip.spot.face[0] - p.x), -(a.trip.spot.face[1] - p.z));
+    } else if (talkingTo) {
+      const q = talkingTo.group.position;
+      a.yawT = Math.atan2(-(q.x - p.x), -(q.z - p.z));
+    } else if (!a.trip || a.trip.phase === "back") {
+      if (!a.path.length) a.yawT = a.faceYaw;
     }
     a.yaw = still ? a.yawT : a.yaw + angDiff(a.yaw, a.yawT) * Math.min(1, dt * 8);
     a.group.rotation.y = a.yaw;
-
-    const sit = a.sit;
-    a.body.position.y = lerp(0, a.sitY, sit);
-    const sw = walking ? Math.sin(t * (a.slow ? 5 : 9)) * 0.6 : 0;
+    const sit = a.sit, sw = walking ? Math.sin(t * 9) * 0.6 : 0;
+    a.body.position.y = lerp(0, -0.37, sit);
     a.legL.hip.rotation.x = lerp(sw, 1.5, sit);
     a.legR.hip.rotation.x = lerp(-sw, 1.5, sit);
     a.legL.knee.rotation.x = lerp(walking ? Math.max(0, -sw) * 0.8 : 0, -1.5, sit);
     a.legR.knee.rotation.x = lerp(walking ? Math.max(0, sw) * 0.8 : 0, -1.5, sit);
+    const atDesk = !a.trip && sit > 0.8;
+
     let lx = 0.15, rx = 0.15, lz = 0, rz = 0, hx = 0, bx = 0, swL = 0, swR = 0;
-    const atDesk = a.loc.kind === "desk" && !a.path.length;
+    const visiting = a.trip && a.trip.phase === "in" && !walking;
     if (walking) {
-      // The swing itself is not eased; only the pose it swings around is.
+      // The swing itself is not eased; only the pose it swings around is. A mug stays in the right hand.
       swL = -sw * 0.8;
-      if (a.state === "idle") rx = 1.1;
+      if (a.trip && a.trip.place === "coffee") rx = 1.1;
       else swR = sw * 0.8;
+    } else if (visiting && a.trip.place === "coffee") {
+      const sip = Math.sin(k * 0.9) > 0.7 ? 1 : 0;
+      lx = 0.5;
+      rx = lerp(1.1, 2.3, sip);
+      hx = sip * 0.15;
+    } else if (visiting) {
+      // Browsing: a book held open in both hands, head bent over it.
+      lx = 1.2;
+      rx = 1.2;
+      hx = 0.4 + Math.sin(k * 0.8) * 0.05;
     } else if (a.state === "working" && atDesk) {
       lx = 1.1 + Math.sin(k * 13) * 0.1;
       rx = 1.1 + Math.cos(k * 11) * 0.1;
@@ -408,31 +422,22 @@ export function createAgents(ctx) {
       rz = 0.3;
       hx = 0.35;
       bx = still ? 0 : Math.sin(k * 30) * 0.015;
-    } else if (a.state === "waiting" && a.loc.kind === "wait") {
+    } else if (a.state === "waiting") {
+      lx = 0.9;
       rz = 2.9 + Math.sin(k * 6) * 0.25;
       rx = 0;
       hx = -0.1;
-    } else if (a.state === "disabled" && a.loc.kind === "off") {
-      lx = 0.3;
-      rx = 0.3;
-      hx = 0.55 + Math.sin(k * 1.2) * 0.05;
-    } else if (a.state === "idle" && a.loc.kind === "lounge") {
-      const kind = a.loc.spot.kind, sip = Math.sin(k * 0.9) > 0.8 ? 1 : 0;
-      rx = lerp(1.1, 2.3, sip);
+    } else if (talkingTo) {
+      const speaking = talk.speaker === a;
+      lx = 0.9;
+      rx = speaking ? 1.0 + Math.sin(k * 4) * 0.5 : 0.9;
+      lz = speaking ? -0.3 : 0;
+      hx = speaking ? Math.sin(k * 5) * 0.08 : Math.sin(k * 2.4) * 0.12;
+    } else {
+      const sip = Math.sin(k * 0.9) > 0.8 ? 1 : 0;
+      lx = 0.9;
+      rx = lerp(1.0, 2.3, sip);
       hx = sip * 0.15;
-      if (kind === "chat") {
-        lx = 0.7 + Math.sin(k * 3.2) * 0.5;
-        lz = -0.2;
-        hx += Math.sin(k * 2.1) * 0.15;
-        setGlyph(a, Math.sin(k * 0.7) > 0 ? "💬" : "☕");
-      } else if (kind === "coffee") {
-        lx = 1.0;
-        setGlyph(a, "☕");
-      } else {
-        lx = 0.4;
-        hx += 0.05;
-        setGlyph(a, sip ? "☕" : "😌");
-      }
     }
     // Ease into each pose so changing activity never snaps a limb.
     const ps = a.pose, e = still ? 1 : Math.min(1, dt * POSE_EASE);
@@ -449,14 +454,11 @@ export function createAgents(ctx) {
     a.head.rotation.x = ps.hx;
     a.body.position.x = ps.bx;
     a.bubble.position.y = 2.6 + Math.sin(k * 3) * 0.05;
-    if (walking && a.state === "idle") setGlyph(a, "☕");
-    if (a.state === "waiting" && walking) setGlyph(a, "✋");
 
     // The seat's screen: green while working, flashing red when failed.
-    const onDesk = atDesk && a.sit > 0.8 && a.loc.desk === a.desk;
-    if (onDesk && (a.state === "working" || a.state === "failed")) {
-      const m = a.desk.screenMat;
-      a.desk.lit = true;
+    if (atDesk && (a.state === "working" || a.state === "failed")) {
+      const m = a.seat.screenMat;
+      a.seat.lit = true;
       if (a.state === "working") {
         m.emissive.setHex(COLORS.working);
         m.emissiveIntensity = 0.7 + Math.sin(k * 6) * 0.15;
@@ -465,10 +467,10 @@ export function createAgents(ctx) {
         m.emissiveIntensity = still ? 1 : Math.sin(k * 18) > 0 ? 1 : 0.25;
       }
     }
-    // A faint data beam from the AI centre while working at the table.
-    const on = onDesk && a.state === "working";
-    const ln = a.beam, i = a.idx;
-    const want = on ? (still ? 0.45 : 0.45 + Math.sin(t * 5 + i) * 0.15) : 0;
+    // A faint data beam from the AI centre while working at the desk.
+    const on = atDesk && a.state === "working";
+    const ln = a.beam;
+    const want = on ? (still ? 0.45 : 0.45 + Math.sin(t * 5 + a.idx) * 0.15) : 0;
     ln.material.opacity = still ? want : lerp(ln.material.opacity, want, Math.min(1, dt * 6));
     ln.visible = ln.material.opacity > 0.01;
     if (ln.visible) {
@@ -482,100 +484,60 @@ export function createAgents(ctx) {
     }
   }
 
-  function disposeTree(root) {
-    root.traverse((o) => {
-      if (o.geometry) o.geometry.dispose();
-      if (o.material) o.material.dispose();
-    });
+  function refreshStates() {
+    for (const a of people) {
+      const s = stateOf(a);
+      if (s !== a.state) setState(a, s);
+    }
   }
+  for (let i = 0; i < SEATS; i++) people.push(create(NAMES[i], i));
+  refreshStates();
 
   return {
-    /// Takes `/office/state`'s `loops`: the first MAX_DRAWN get a person and a
-    /// seat in list order; the rest only count towards `overflow`.
-    sync(loops) {
+    /// Takes `/office/state`'s `loops`: sorted by name and dealt out to the three colleagues in turn.
+    sync(next) {
       const seen = new Set();
-      const list = (Array.isArray(loops) ? loops : []).filter((l) => {
+      loops = (Array.isArray(next) ? next : []).filter((l) => {
         if (!l || typeof l.name !== "string" || seen.has(l.name)) return false;
         seen.add(l.name);
         return true;
       });
-      const next = buildLayout(list.length);
-      overflow = next.overflow;
-      let rebuilt = false, labelScaled = false;
-      if (!layout || next.key !== layout.key) {
-        if (furniture) {
-          scene.remove(furniture);
-          disposeTree(furniture);
-        }
-        layout = next;
-        furniture = furnish(scene, THREE, layout);
-        freezeStatic(furniture);
-        labelScale = Math.min(1, (layout.seats[0].gap * 2) / 2.2);
-        rebuilt = true;
-        labelScaled = true;
-      }
-      // With more loops than people drawn, disabled ones (idle on the bench) are the ones left out.
-      const drawn = list.length > MAX_DRAWN
-        ? [...list.filter((l) => l.state !== "disabled"), ...list.filter((l) => l.state === "disabled")].slice(0, MAX_DRAWN)
-        : list;
-      const keep = new Set(drawn.map((l) => l.name));
-      for (const [name, a] of agents) {
-        if (!keep.has(name)) {
-          dispose(a);
-          agents.delete(name);
-        }
-      }
-      order = drawn.map((l, i) => {
-        let a = agents.get(l.name);
-        if (!a) {
-          a = create(l.name);
-          agents.set(l.name, a);
-        }
-        a.desk = layout.seats[i];
-        a.idx = i;
-        a.info = l;
-        const title = typeof l.title === "string" && l.title ? l.title : l.name;
-        const retitled = title !== a.title;
-        a.title = title;
-        const s = Object.hasOwn(COLORS, l.state) ? l.state : "idle";
-        if (s !== a.state) setState(a, s);
-        else if (retitled) drawLabel(a);
-        return a;
-      });
-      if (rebuilt) for (const a of order) carryOver(a);
-      if (labelScaled) for (const a of agents.values()) scaleLabel(a);
-      // New people (and anyone whose spot is gone from a rebuilt layout) appear at their place.
-      for (const a of order) if (!a.loc) place(a);
+      const sorted = [...loops].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+      for (const a of people) a.loops = [];
+      sorted.forEach((l, i) => people[i % SEATS].loops.push(l));
+      refreshStates();
     },
     tick(dt, t) {
-      if (!layout) return;
       clock += dt;
+      refreshStates();
+      stepTrips(dt);
+      stepTalk(dt);
       for (const s of layout.seats) s.lit = false;
       let working = 0;
-      for (const a of order) {
+      for (const a of people) {
         update(a, dt, t);
         if (a.state === "working") working++;
       }
       for (const s of layout.seats) if (!s.lit) s.screenMat.emissive.setHex(0x000000);
       handles.aiRate = 1 + working * 0.5;
     },
-    /// The group holding the current layout's tables and chairs (hit-testing hides people behind it).
+    /// The group holding the desk, plant and chairs (hit-testing hides people behind it).
     furnitureGroup() {
       return furniture;
     },
-    /// The agent whose person contains `object3D` (e.g. a raycast hit), or null.
+    /// The colleague whose person contains `object3D` (e.g. a raycast hit), or null.
     agentAt(object3D) {
-      for (let o = object3D; o; o = o.parent) if (o.userData && o.userData.agent) return agents.get(o.userData.agent) || null;
+      for (let o = object3D; o; o = o.parent) if (o.userData && o.userData.agent) return people.find((a) => a.name === o.userData.agent) || null;
       return null;
     },
-    /// Every drawn person's group, for raycasting.
+    /// Every colleague's group, for raycasting.
     pickables() {
-      return order.map((a) => a.group);
+      return people.map((a) => a.group);
     },
     /// Highlights the name tags of exactly `names` (hover and selection).
     setHighlight(names) {
       const set = new Set(names);
-      for (const a of agents.values()) {
+      for (const a of people) {
         const hi = set.has(a.name);
         if (hi !== !!a.hi) {
           a.hi = hi;
@@ -583,43 +545,110 @@ export function createAgents(ctx) {
         }
       }
     },
-    /// Where `name` stands now as [x, y, z], or null.
+    /// Where `name` sits as [x, y, z], or null.
     positionOf(name) {
-      const a = agents.get(name);
+      const a = people.find((p) => p.name === name);
       return a ? [a.group.position.x, a.group.position.y, a.group.position.z] : null;
     },
-    /// A run was just started for `name` (Run now, a chat command): send that person to
-    /// the desk now instead of waiting for the state feed to show the run.
-    runRequested(name) {
-      const a = agents.get(name);
-      if (!a || a.state === "disabled" || a.state === "waiting" || still) return;
+    /// `{name, title, state, answering, loops}` for one colleague, or null.
+    employee(name) {
+      const a = people.find((p) => p.name === name);
+      return a ? view(a) : null;
+    },
+    employees() {
+      return people.map(view);
+    },
+    /// A run was just started for the loop `loopName` (Run now, a chat command): its owner
+    /// works now instead of waiting for the state feed to show the run.
+    runRequested(loopName) {
+      const a = ownerOf(loopName);
+      if (!a || still) return;
       a.pendingUntil = clock + PENDING_RUN_S;
-      a.minWork = true;
-      a.dwell = null;
     },
-    /// A chat tool call for `name` is running (reading mail, an issue...): like `runRequested`,
-    /// but the person strolls over instead of walking briskly.
-    toolRequested(name) {
-      const a = agents.get(name);
-      if (!a || a.state === "disabled" || a.state === "waiting" || still) return;
-      const away = !a.loc || a.loc.kind !== "desk" || a.path.length > 0;
-      this.runRequested(name);
-      if (away) a.slow = true;
+    /// The chat started (`busy`) or finished answering. `name` (tests) picks who; otherwise a
+    /// random colleague, preferring one who is not busy (with a loop or an earlier answer).
+    chatBusy(busy, name) {
+      if (busy) {
+        if (chatter) return;
+        // Free first; else anyone not running a loop (still finishing an answer); else anyone.
+        const noLoop = people.filter((a) => !a.loops.some((l) => l.state === "working") && !a.trip);
+        const free = noLoop.filter((a) => a.pendingUntil <= clock);
+        const pool = free.length ? free : noLoop.length ? noLoop : people;
+        chatter = people.find((a) => a.name === name) || pool[Math.floor(Math.random() * pool.length)];
+        chatter.chat = true;
+      } else if (chatter) {
+        chatter.chat = false;
+        chatter.pendingUntil = Math.max(chatter.pendingUntil, clock + MIN_DESK_S);
+        chatter = null;
+      }
+      refreshStates();
     },
-    /// Test hook: where everyone is.
+    /// A chat tool call is running (reading mail, an issue...): someone is on it even if the
+    /// start event was missed.
+    toolRequested() {
+      if (!chatter) this.chatBusy(true);
+    },
+    /// The user sends `name` to `place` ("coffee" or "books"), at any hour. False when they are
+    /// busy (a loop, an answer), already out, or the scene is still (reduced motion).
+    sendTo(name, place) {
+      const a = people.find((p) => p.name === name);
+      if (still || !a || !SHOPS[place] || a.trip || a.state !== "idle" || a.chat) return false;
+      if (talking(a)) endTalk();
+      startTrip(a, place);
+      return true;
+    },
+    /// The user calls `name` back from the shop.
+    callBack(name) {
+      const a = people.find((p) => p.name === name);
+      if (!a || !a.trip || a.trip.phase === "back") return false;
+      beginBack(a);
+      return true;
+    },
+    /// The user has `name` talk with `otherName` about `topic` (free text, or a random everyday
+    /// topic when empty). False when either is busy or out.
+    chatWith(name, otherName, topic) {
+      const a = people.find((p) => p.name === name), b = people.find((p) => p.name === otherName);
+      const ok = (x) => x && !x.trip && x.state === "idle" && !x.chat;
+      if (still || !ok(a) || !ok(b) || a === b) return false;
+      endTalk();
+      const text = String(topic || "").trim().slice(0, 60) || strings[HUMAN_TOPICS[Math.floor(R() * HUMAN_TOPICS.length)]] || "";
+      talk = { a, b, t: 0, turn: 0, speaker: a, topic: text, line: 0 };
+      say(a, b);
+      return true;
+    },
+    /// Test hook: who is where and what they are doing.
     debug() {
-      return order.map((a) => ({
+      return people.map((a) => ({
         name: a.name,
         state: a.state,
         x: Math.round(a.group.position.x * 100) / 100,
         z: Math.round(a.group.position.z * 100) / 100,
         seated: a.sit > 0.5,
         walking: a.path.length > 0,
-        at: a.loc ? (a.loc.spot ? a.loc.spot.kind : a.loc.kind) : null,
+        at: a.trip ? (a.trip.phase === "in" ? a.trip.place : "walking") : "desk",
+        away: a.trip ? a.trip.place : null,
+        loops: a.loops.map((l) => l.name),
+        chat: a.chat,
+        talking: talking(a),
+        said: a.said,
       }));
     },
+    /// The scene's hour of day (fractional): trips happen only during the workday, 09:00-17:00.
+    setHour(h) {
+      if (Number.isFinite(h)) hour = h;
+    },
+    /// Test hook: send the first idle colleague to `place` ("coffee" or "books") now, whatever the hour.
+    visitNow(place) {
+      if (still || !SHOPS[place]) return false;
+      return pickTrip(place);
+    },
+    /// Test hook: start a conversation between the first two idle colleagues now.
+    talkNow() {
+      endTalk();
+      return startTalk();
+    },
     get overflow() {
-      return overflow;
+      return 0;
     },
   };
 }

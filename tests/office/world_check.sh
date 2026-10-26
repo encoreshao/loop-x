@@ -56,7 +56,7 @@ SHOT_FLAGS="--force-prefers-reduced-motion" SHOT_TIMEOUT=9000 shoot 13 "$OUT/red
 PROFILE="$(mktemp -d)"
 "$CHROME" --headless=new --user-data-dir="$PROFILE" --disable-gpu --disable-software-rasterizer \
   --enable-logging=stderr --v=0 --window-size=1500,900 --timeout=6000 --dump-dom \
-  "$OFFICE_URL/loops?view=office" > "$OUT/nowebgl.html" 2> "$OUT/nowebgl.log" || true
+  "$OFFICE_URL/office" > "$OUT/nowebgl.html" 2> "$OUT/nowebgl.log" || true
 rm -rf "$PROFILE"
 
 python3 -I - "$OUT" <<'PY'
@@ -99,8 +99,8 @@ if not listing or "hidden" in listing.group(0):
     fails.append("no WebGL: the List is not shown")
 if "office-note" not in dom:
     fails.append("no WebGL: the note is missing")
-if 'class="card loop-section"' not in dom:
-    fails.append("no WebGL: the List sections are missing")
+if 'href="/?mode=dashboard"' not in dom:
+    fails.append("no WebGL: the Dashboard link is missing")
 log = open(os.path.join(out, "nowebgl.log"), encoding="utf-8", errors="replace").read()
 errors = [l for l in log.splitlines() if "Uncaught" in l]
 if errors:

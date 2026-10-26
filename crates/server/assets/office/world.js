@@ -1,41 +1,16 @@
 // The office's fixed world: the room shell, lounge furniture, plants, art, the AI
-// centre rack, the standby bench and "Needs you" mat, and everything outside the
-// windows. Tables, chairs and monitors are not built here (they depend on the loop
-// count). Ported from the approved prototype; every coordinate is in metres with
+// centre rack, and everything outside the windows. The round desk, its chairs and
+// screens are built by layout.js. Ported from the approved prototype; every coordinate is in metres with
 // the back wall at z = ROOM.Z0 and the windows looking north (towards -z).
 
-const art = await import("./art.js" + new URL(import.meta.url).search);
+const V = new URL(import.meta.url).search;
+const [art, shops] = await Promise.all([import("./art.js" + V), import("./shops.js" + V)]);
 
 export const ROOM = { W: 30, Z0: -10.5, Z1: 12.5 };
 const D = ROOM.Z1 - ROOM.Z0, ZC = (ROOM.Z0 + ROOM.Z1) / 2;
 
-/// The blue office carpet the work tables stand on (x0..x1, z0..z1).
+/// The blue office carpet the round desk stands on (x0..x1, z0..z1).
 export const CARPET = { x0: -14.5, x1: -1.5, z0: ZC - 11, z1: ZC + 11 };
-/// Corridor points people walk through between zones: the lounge hub and the
-/// central corridor.
-export const HUB = [3, 1];
-export const COR = [0, 1];
-/// Spots in the lounge: where an idle person stands or sits, what they face and
-/// the waypoints that lead there from HUB. `sitY` marks a seat.
-export const LOUNGE = [
-  { kind: "coffee", x: 7.4, z: -8.2, face: [7.4, -12], via: [[3, -7]] },
-  { kind: "coffee", x: 9.4, z: -8.2, face: [9.4, -12], via: [[3, -7]] },
-  { kind: "chat", x: 6.7, z: -3, face: [8, -3], via: [[3, -3]] },
-  { kind: "chat", x: 8, z: -4.3, face: [8, -3], via: [[3, -3]] },
-  { kind: "chat", x: 8, z: -1.7, face: [8, -3], via: [] },
-  { kind: "chat", x: 9.3, z: -3, face: [8, -3], via: [[9.3, -1]] },
-  { kind: "sofa", sitY: -0.45, x: 13.2, z: 3.2, face: [10.8, 4], via: [[12.2, 1.5], [12.2, 3.2]] },
-  { kind: "sofa", sitY: -0.45, x: 13.2, z: 4.8, face: [10.8, 4], via: [[12.2, 1.5], [12.2, 4.8]] },
-  { kind: "sofa", sitY: -0.45, x: 10.0, z: 7.9, face: [10.8, 4], via: [[8.5, 6.2], [10, 6.4]] },
-  { kind: "sofa", sitY: -0.45, x: 11.6, z: 7.9, face: [10.8, 4], via: [[8.5, 6.2], [11.6, 6.4]] },
-  { kind: "sofa", sitY: -0.45, x: 8.2, z: 4.0, face: [10.8, 4], via: [[8.2, 2.2]] },
-];
-/// The "Needs you" mat: where a person waiting for approval stands, facing the viewer.
-export const WAIT_MAT = { x: 2.2, z: 9.9, w: 7, d: 1.8 };
-export const WAIT = [-0.6, 0.8, 2.2, 3.6, 5.0].map((x) => ({ kind: "wait", x, z: 9.9, face: [x, 40], via: [] }));
-/// The standby bench on the left wall, for disabled loops.
-export const BENCH = { x: -14.4, z: 7.4, len: 5.4 };
-export const OFF = [5.4, 6.5, 7.6, 8.7, 9.8].map((z) => ({ kind: "off", sitY: -0.45, x: -14.3, z, face: [0, z], via: [] }));
 /// The AI centre rack (against the back wall) and the point its beams start from.
 export const AI_CENTRE = { x: 0, z: -9.1 };
 
@@ -89,11 +64,11 @@ export function buildLights(scene, THREE) {
 }
 
 /// Builds the world into `scene`. `opts.strings` is the translated client string
-/// table (for the two signs); `opts.reducedMotion` leaves clouds, cars, birds,
+/// table (for the shop signs); `opts.reducedMotion` leaves clouds, cars, birds,
 /// walkers and the rack LEDs still.
 export function buildWorld(scene, THREE, opts = {}) {
-  const strings = opts.strings || {};
   const still = !!opts.reducedMotion;
+  const strings = opts.strings || {};
   const R = rng(opts.seed || 7);
   const { W, Z0 } = ROOM;
 
@@ -293,26 +268,6 @@ export function buildWorld(scene, THREE, opts = {}) {
     scene.add(p);
   }
 
-  // ---------- standby bench for disabled loops (left wall) ----------
-  const benchMat = M(0x5a5f6b);
-  box(1.0, 0.45, BENCH.len, benchMat, BENCH.x, 0.22, BENCH.z);
-  box(0.25, 0.9, BENCH.len, benchMat, BENCH.x - 0.45, 0.7, BENCH.z);
-  box(0.1, 0.45, 0.1, M(0x333333), -14.0, 0.22, BENCH.z - 2.5);
-  box(0.1, 0.45, 0.1, M(0x333333), -14.0, 0.22, BENCH.z + 2.5);
-  box(1.4, 0.02, 6.2, M(0x7b7f8a), -13.6, 0.03, BENCH.z).castShadow = false; // grey mat
-  if (strings.disabled_standby) {
-    const tex = art.signTexture(THREE, strings.disabled_standby, { width: 480, height: 128, background: "rgba(60,64,74,.95)", color: "#e6e8ee", size: 56 });
-    sprite(tex, 3.0, 0.8, -13.2, 3.4, 4.6); // clear of the wall, which would clip it
-  }
-
-  // ---------- the "Needs you" mat and its icon ----------
-  box(WAIT_MAT.w, 0.02, WAIT_MAT.d, M(0xffb020, { emissive: 0x553500 }), WAIT_MAT.x, 0.03, WAIT_MAT.z).castShadow = false;
-  // Just a small hand icon above the mat, no wording.
-  {
-    const tex = art.signTexture(THREE, "✋", { width: 128, height: 128, background: "rgba(138,90,0,.95)", color: "#fff", size: 80 });
-    sprite(tex, 0.9, 0.9, WAIT_MAT.x, 3.2, 10.6);
-  }
-
   // ---------- AI centre: three racks of blinking LEDs, no label ----------
   const aiLeds = [];
   const aiCore = new THREE.Group();
@@ -473,6 +428,8 @@ export function buildWorld(scene, THREE, opts = {}) {
     om(new THREE.CylinderGeometry(0.05, 0.07, 3.4, 8), M(0x333333), x, 1.4, -13.3);
     om(new THREE.SphereGeometry(0.22, 10, 8), lampM, x, 3.2, -13.3);
   }
+  // The plaza in front of the office with the coffee shop and the bookstore.
+  shops.buildShops(scene, THREE, { art, strings, M });
   // Skyline: day windows in the colour map, night windows in the emissive map.
   function windowsTexture(lit) {
     const c = document.createElement("canvas");

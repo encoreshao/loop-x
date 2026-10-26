@@ -1,6 +1,7 @@
 // Entry module for the Office view: checks WebGL (falling back to the List view
 // with a note), mounts the renderer in #office, builds the world, runs day/night
-// and the render loop, and seats one person per loop from `/office/state`. Test
+// and the render loop, and seats the three colleagues around the round desk, dealing
+// them the loops of `/office/state`. Test
 // hooks in the URL hash: `h=<hour>` overrides the clock, `left`/`right`/`in` pick a
 // camera (e.g. `#left&h=23`). Hovering a person highlights their name tag; clicking
 // one (or `select(name)`) opens the details panel and eases the camera to them,
@@ -143,9 +144,9 @@ async function main() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x20232a);
   const camera = new THREE.PerspectiveCamera(42, w0 / h0, 0.1, 250);
-  camera.position.set(2, 22, 32);
+  camera.position.set(2, 29, 43);
   const controls = new OrbitControls(camera, canvas);
-  controls.target.set(0, 1, 1);
+  controls.target.set(0, 1, 5.5);
   controls.enableDamping = true;
   controls.maxPolarAngle = Math.PI / 2.05;
   const hooks = hashHooks();
@@ -156,8 +157,8 @@ async function main() {
     camera.position.set(40, 9, 1);
     controls.target.set(15, 3.5, 1);
   } else if (hooks.camera === "in") {
-    camera.position.set(0, 7, 17);
-    controls.target.set(0, 3.5, -2);
+    camera.position.set(-8, 7.5, 12);
+    controls.target.set(-8, 1.6, 1);
   }
   controls.update();
 
@@ -172,11 +173,6 @@ async function main() {
   const worldObjects = new Set(scene.children);
   const dayNight = createDayNight(THREE, scene, handles, lights);
   const agents = createAgents({ THREE, scene, handles, strings, reducedMotion });
-  // "and N more" for loops beyond the ones drawn; the List view has them all.
-  const more = document.createElement("p");
-  more.className = "office-more";
-  more.hidden = true;
-  root.append(more);
   // Shown while the server cannot be reached: what is drawn is the last state we got.
   const staleNote = document.createElement("p");
   staleNote.className = "office-stale";
@@ -193,17 +189,17 @@ async function main() {
   const panel = createPanel(root, strings, csrf(), {
     refresh: () => refresh(),
     onRun: (name) => name && agents.runRequested(name),
+    people: () => agents.employees(),
+    assign: (who, kind, arg) =>
+      kind === "coffee" || kind === "books" ? agents.sendTo(who, kind) : kind === "back" ? agents.callBack(who) : agents.chatWith(who, arg.with, arg.topic),
     onClose: () => release(),
   });
   function show(loops) {
     latest = Array.isArray(loops) ? loops : [];
     agents.sync(latest);
-    panel.update(latest);
+    panel.update(agents.employees());
     if (selected && !panel.isOpen) release();
-    const n = agents.overflow;
-    more.textContent = n ? (strings.and_more || "").replace("{n}", String(n)) : "";
-    more.hidden = !n;
-    office.overflow = n;
+    office.overflow = agents.overflow;
     office.syncs += 1;
     requestRender();
   }
@@ -243,14 +239,22 @@ async function main() {
   // A test override sticks until the server's own state next changes.
   office.setLoops = show;
   office.runRequested = (name) => agents.runRequested(name);
-  // A chat tool call sends the matching employee to their desk, slowly.
-  const TOOL_LOOP = { gitlab: "gitlab-loop", mail: "inbox-triage-loop", calendar: "inbox-triage-loop", rss: "topic-loop", web: "topic-loop" };
-  const onTool = (ev) => {
-    const prefix = String((ev.detail && ev.detail.name) || "").split(".")[0];
-    if (TOOL_LOOP[prefix]) agents.toolRequested(TOOL_LOOP[prefix]);
+  // A question in the chat puts a random colleague to work until the answer is done; a tool
+  // call during it keeps someone on it.
+  const onChat = (ev) => {
+    agents.chatBusy(!!(ev.detail && ev.detail.busy));
+    panel.update(agents.employees());
   };
+  const onTool = () => agents.toolRequested();
+  document.addEventListener("loopx:chat", onChat);
   document.addEventListener("loopx:tool", onTool);
-  office.toolRequested = (name) => agents.toolRequested(name);
+  office.chatBusy = (busy, name) => {
+    agents.chatBusy(busy, name);
+    panel.update(agents.employees());
+  };
+  office.toolRequested = () => agents.toolRequested();
+  office.talkNow = () => agents.talkNow();
+  office.visitNow = (place) => agents.visitNow(place);
   office.debug = () => agents.debug();
 
   // ---------- selection, hover and the camera ----------
@@ -347,26 +351,15 @@ async function main() {
     if (focusAnim && !focusAnim.done) focusAnim.done = true;
   });
   function select(name) {
-    const loop = name == null ? null : latest.find((l) => l && l.name === name);
-    if (!loop || !agents.positionOf(loop.name)) {
+    const who = name == null ? null : agents.employee(name);
+    if (!who) {
       release();
       return;
     }
-    selected = loop.name;
-    panel.open(loop);
+    selected = who.name;
+    panel.open(who);
     highlight();
-    startFocus(loop.name);
-    seedChat(loop);
-  }
-  /// Starts the chat's message about the picked loop, unless the person already typed.
-  function seedChat(loop) {
-    const box = document.querySelector("#ai-panel-form textarea[name='text']");
-    if (!box || !strings.chat_about) return;
-    const last = box.dataset.seeded;
-    if (box.value && box.value !== last) return;
-    box.value = strings.chat_about.replace("{name}", loop.title ? String(loop.title) : String(loop.name));
-    box.dataset.seeded = box.value;
-    box.dispatchEvent(new Event("input", { bubbles: true }));
+    startFocus(who.name);
   }
   // The chat changed something (a loop ran, was switched, an approval went through).
   document.addEventListener("loopx:changed", refresh);
@@ -428,7 +421,9 @@ async function main() {
   };
   let override = hooks.hour;
   const apply = () => {
-    dayNight.apply(dayNight.currentHour(override));
+    const hour = dayNight.currentHour(override);
+    agents.setHour(hour);
+    dayNight.apply(hour);
     requestRender();
   };
   apply();
@@ -515,6 +510,7 @@ async function main() {
     seen.disconnect();
     resizer.disconnect();
     document.removeEventListener("visibilitychange", sync);
+    document.removeEventListener("loopx:chat", onChat);
     document.removeEventListener("loopx:tool", onTool);
     controls.dispose();
     disposeScene(scene);
