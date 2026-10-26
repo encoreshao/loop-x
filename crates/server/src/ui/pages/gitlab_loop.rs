@@ -716,7 +716,7 @@ fn gitlab_item(ctx: &UiCtx, item: &Value, prefix: &str, alias: Option<&str>, com
     );
     if compact {
         return format!(
-            "<li class='gitlab-item'><div class='gitlab-item-row'>{link}{toggle}</div>{label_row}<div class='gitlab-item-meta gitlab-item-meta-standalone'>{}</div></li>",
+            "<li class='gitlab-item'><div class='gitlab-item-row'>{link}<span class='gitlab-item-meta'>{}</span>{toggle}</div>{label_row}</li>",
             pyfmt::escape(&updated)
         );
     }
@@ -847,7 +847,7 @@ pub fn live_fragment_html(ctx: &UiCtx, live: &[(String, AliasState)]) -> String 
             .map(|m| gitlab_item(ctx, m, "!", None, false))
             .collect();
         out.push_str(&format!(
-            "<div class='project-block'><h3>{}</h3><p>{} <span class='badge-count'>{}</span></p>{}<ul class='plain gitlab-list'>{}</ul><p>MRs <span class='badge-count'>{}</span></p>{}<ul class='plain gitlab-list'>{}</ul></div>",
+            "<div class='project-block'><h3>{}</h3><div class='gitlab-subsection'><p class='gitlab-subhead'>{} <span class='badge-count'>{}</span></p>{}<ul class='plain gitlab-list'>{}</ul></div><div class='gitlab-subsection'><p class='gitlab-subhead'>MRs <span class='badge-count'>{}</span></p>{}<ul class='plain gitlab-list'>{}</ul></div></div>",
             pyfmt::escape(alias),
             esc_t(ctx, "Backlog"),
             backlog.len(),

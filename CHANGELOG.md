@@ -12,6 +12,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Changed
+- GitLab loop → Tasks: issue and MR rows use the same bordered card style as the Chat tools list.
 - Office: the coffee shop, the bookstore and the LoopX office now stand in one row on a street with a road of passing cars and pedestrians; each shop has a staff member and customers who come and go; drag the view to slide along the street (right-drag or two fingers to turn it, scroll to zoom).
 - Office: you can send E1/E2/E3 to the coffee shop or the bookstore from their card (and call them back), or have two of them chat about any topic you type or pick; Ctrl+V switches between the Office and the Dashboard.
 

@@ -1654,21 +1654,24 @@ ul.plain li { font-size: 0.9rem; }
 .history-more { color: var(--md-on-surface-variant); font-size: 0.85rem; }
 .pill-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
 
-.gitlab-list { gap: 0.15rem; }
+/* Task rows share Settings -> Chat tools' bordered-card look (.chat-tool-row). */
+.gitlab-list { gap: 0.5rem; }
 .gitlab-item {
-  background: var(--md-surface-container);
-  border-radius: 8px;
-  padding: 0.3rem 0.65rem;
+  border: 0.5px solid color-mix(in srgb, var(--md-outline) 35%, transparent);
+  border-radius: 10px;
+  background: var(--md-surface-container-low);
+  padding: 0.7rem 0.9rem;
+  transition: background-color 120ms ease;
 }
+.gitlab-item:hover { background: var(--md-surface-container-high); }
 .gitlab-item-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
 .gitlab-item-title { font-weight: 500; color: var(--md-on-surface); text-decoration: none; flex: 1 1 auto; min-width: 0; }
 .gitlab-item-title:hover { color: var(--md-primary); text-decoration: underline; }
 .gitlab-item-meta { font-size: 0.78rem; color: var(--md-on-surface-variant); flex-shrink: 0; white-space: nowrap; text-align: right; }
-/* My Queue's per-row meta line (just "updated Xh ago") once the alias and
-   assignee name move up into the group's own .attn-group-title - a block
-   below the labels instead of sharing .gitlab-item-row's flex line with
-   the title. */
-.gitlab-item-meta-standalone { text-align: left; white-space: normal; margin-top: 0.2rem; }
+/* A project's Backlog and MRs are separate sub-sections split by a divider line
+   (My Queue and each project are split by the shared .project-block rule). */
+.gitlab-subsection + .gitlab-subsection { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed color-mix(in srgb, var(--md-outline) 35%, transparent); }
+.gitlab-subhead { margin: 0.5rem 0 0.25rem; font-weight: 600; }
 
 /* My Queue's per-project sub-groups (only rendered once 2+ projects have
    items assigned to you - see render_gitlab_live_fragment). */
