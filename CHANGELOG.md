@@ -13,7 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 - Chat: while the assistant is replying, the send button becomes a stop button (in the chat panel and on the Chat page); clicking it ends the reply at once, kills the AI process and anything it started, keeps the text written so far marked as stopped, and saves nothing for that reply.
-- Mission Control: loops that are due, and runs you start by hand, now wait in one run queue and run one at a time (a manual run goes first; a loop already waiting or running is never queued twice; a slot missed while the Mac slept is queued as a catch-up). A pill in the topbar shows how many are running and waiting and opens the new Mission Control page (`/queue`), which lists what runs, what is next and what just finished, with Stop, Move to front and Remove; the Mac island lists the waiting runs and says how many are queued.
+- Agents: loops that are due, and runs you start by hand, now wait in one run queue and run one at a time (a manual run goes first; a loop already waiting or running is never queued twice; a slot missed while the Mac slept is queued as a catch-up). A pill in the topbar shows how many are running and waiting and opens the new Agents page (`/queue`), which lists what runs, what is next and what just finished, with Stop, Move to front and Remove; the Mac island lists the waiting runs and says how many are queued.
 
 ### Changed
 - The scheduler now ticks every minute instead of every 15 minutes (the Mac app's built-in scheduler and the launchd job; reinstall the launchd job to pick it up). A tick only queues what is due and starts the queue worker, so a long loop no longer holds up the next tick.

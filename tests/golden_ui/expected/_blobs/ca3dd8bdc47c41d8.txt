@@ -2829,3 +2829,8 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .queue-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .queue-actions:not(:empty) { margin-top: 0.6rem; }
 #queue-pill { text-decoration: none; }
+.queue-root { display: flex; flex-direction: column; gap: 1.25rem; }
+.queue-root > .card { margin: 0; }
+.pill-outline { background: transparent; color: var(--md-primary); box-shadow: inset 0 0 0 1px var(--md-primary); }
+.btn-tonal { background: var(--md-primary-container); color: var(--md-on-primary-container); border-color: transparent; }
+.btn-tonal:hover { filter: brightness(0.96); }

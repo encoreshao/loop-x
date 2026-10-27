@@ -1,4 +1,4 @@
-//! Mission Control: `/queue` shows every loop that is running, waiting for its
+//! Agents: `/queue` shows every loop that is running, waiting for its
 //! turn or just finished, with Stop / Move to front / Remove; the topbar pill
 //! (`pill_html`) links here and polls `/queue/pill`. The queue itself lives in
 //! `loopx_core::run_queue`; this page only reads it and presses its buttons.
@@ -88,14 +88,14 @@ fn pill_parts(ctx: &UiCtx, snap: &Snapshot) -> (&'static str, String) {
     if snap.recent.first().is_some_and(|e| e.state == "failed") {
         return ("pill pill-red", ctx.t("Last run failed"));
     }
-    ("pill pill-grey", ctx.t("Mission Control"))
+    ("pill pill-outline", ctx.t("Agents"))
 }
 
-/// The topbar link to Mission Control; `JS in shell.tpl` keeps it current.
+/// The topbar link to Agents; `JS in shell.tpl` keeps it current.
 pub fn pill_html(ctx: &UiCtx) -> String {
     let snap = queue_for(ctx.state).snapshot(1);
     let (class, label) = pill_parts(ctx, &snap);
-    let title = pyfmt::escape(&ctx.t("Mission Control"));
+    let title = pyfmt::escape(&ctx.t("Agents"));
     format!(
         "<a class='{class}' id='queue-pill' href='/queue' title='{title}' aria-label='{title}'>{}<span>{}</span></a>",
         icons::icon("speed"),
@@ -122,7 +122,7 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
 fn action_button(ctx: &UiCtx, action: &str, id: &str, label: &str, icon: &str) -> String {
     let _ = ctx;
     format!(
-        "<button type='button' class='btn btn-neutral' data-queue-action='{action}' data-id='{}'>{}{}</button>",
+        "<button type='button' class='btn btn-tonal' data-queue-action='{action}' data-id='{}'>{}{}</button>",
         pyfmt::escape(id),
         icons::icon(icon),
         pyfmt::escape(label),
@@ -132,15 +132,15 @@ fn action_button(ctx: &UiCtx, action: &str, id: &str, label: &str, icon: &str) -
 fn row(ctx: &UiCtx, e: &Entry, detail: &str, actions: &str) -> String {
     let (pill_class, state_label) = match e.state.as_str() {
         "running" => ("pill-blue", ctx.t("Running")),
-        "queued" => ("pill-grey", ctx.t("Waiting")),
+        "queued" => ("pill-outline", ctx.t("Waiting")),
         "done" => ("pill-green", ctx.t("Done")),
         "failed" => ("pill-red", ctx.t("Failed")),
-        "cancelled" => ("pill-grey", ctx.t("Cancelled")),
-        _ => ("pill-grey", ctx.t("Skipped")),
+        "cancelled" => ("pill-outline", ctx.t("Cancelled")),
+        _ => ("pill-outline", ctx.t("Skipped")),
     };
     format!(
         "<div class='history-entry queue-row'><div class='history-entry-header'><strong>{}</strong>\
-         <div class='pill-row'><span class='pill {pill_class}'>{}</span><span class='pill pill-grey'>{}</span></div></div>\
+         <div class='pill-row'><span class='pill {pill_class}'>{}</span><span class='pill pill-outline'>{}</span></div></div>\
          <p class='history-entry-overview'>{}</p><div class='queue-actions'>{actions}</div></div>",
         pyfmt::escape(&e.loop_name),
         pyfmt::escape(&state_label),
@@ -228,7 +228,7 @@ fn fragment_html(ctx: &UiCtx) -> String {
 fn body_html(ctx: &UiCtx) -> String {
     format!(
         "<h1>{}</h1><p>{}</p>{}<div id='queue-root' class='queue-root'>{}</div>{SCRIPT}",
-        pyfmt::escape(&ctx.t("Mission Control")),
+        pyfmt::escape(&ctx.t("Agents")),
         pyfmt::escape(&ctx.t(
             "Loops that are due wait here and run one at a time; a run you start by hand goes first."
         )),
@@ -255,7 +255,7 @@ fetch('/queue/'+b.getAttribute('data-queue-action'),{method:'POST',body:p}).catc
 fn page(ctx: &UiCtx) -> UiResponse {
     UiResponse::html(render_shell(
         ctx,
-        "Mission Control · Loop X Engineering",
+        "Agents · Loop X Engineering",
         "queue",
         &default_badge(ctx),
         &body_html(ctx),
@@ -313,7 +313,7 @@ mod tests {
         let html = page.body_text();
         assert!(html.contains("Nothing is running") && html.contains("Nothing is waiting"), "{html}");
         let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap();
-        assert!(pill.body_text().contains("Mission Control"));
+        assert!(pill.body_text().contains("Agents"));
     }
 
     #[test]

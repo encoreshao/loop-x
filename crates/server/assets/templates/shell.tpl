@@ -1056,7 +1056,7 @@
 <div class="nav-tooltip" id="nav-tooltip" role="tooltip" hidden></div>
 <script>
 (function() {
-  // Mission Control pill in the topbar: how many loops run and wait (see
+  // Agents pill in the topbar: how many loops run and wait (see
   // pages/queue.rs). Kept current while the tab is visible.
   var pill = document.getElementById('queue-pill');
   if (!pill) return;

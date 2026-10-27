@@ -29,7 +29,7 @@ pub struct Paths {
     pub outputs: PathBuf,
     pub events_dir: PathBuf,
     pub approvals_dir: PathBuf,
-    /// The run queue (`~/.loopx/run_queue.json`) behind Mission Control.
+    /// The run queue (`~/.loopx/run_queue.json`) behind Agents.
     pub queue_path: PathBuf,
 }
 
@@ -158,7 +158,7 @@ fn app_state(loops: &Map<String, Value>, pending: usize) -> &'static str {
     }
 }
 
-/// Mission Control's view of the run queue: what runs, what waits (in start
+/// Agents's view of the run queue: what runs, what waits (in start
 /// order) and the last few finished. A running entry carries the loop's current step.
 fn queue_view(queue_path: &Path, loops: &Map<String, Value>) -> Value {
     let snap = loopx_core::run_queue::RunQueue::new(queue_path).snapshot(10);

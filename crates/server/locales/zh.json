@@ -19,7 +19,7 @@
   "{running} running": "{running} 个运行中",
   "{queued} queued": "{queued} 个排队中",
   "Last run failed": "上次运行失败",
-  "Mission Control": "任务控制台",
+  "Agents": "智能体",
   "Manual": "手动",
   "Catch-up": "补跑",
   "Scheduled": "计划",

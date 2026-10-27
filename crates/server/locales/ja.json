@@ -19,7 +19,7 @@
   "{running} running": "{running} 件実行中",
   "{queued} queued": "{queued} 件待機中",
   "Last run failed": "前回の実行は失敗しました",
-  "Mission Control": "ミッションコントロール",
+  "Agents": "エージェント",
   "Manual": "手動",
   "Catch-up": "取りこぼし分",
   "Scheduled": "スケジュール",
