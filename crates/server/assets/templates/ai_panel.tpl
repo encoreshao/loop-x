@@ -1,7 +1,7 @@
 <aside class='ai-panel' id='ai-panel' data-page='⟦html.escape(active_page, quote=True)⟧' aria-label='⟦panel_label⟧'>
 <div class='ai-panel-resizer' role='separator' aria-orientation='vertical' tabindex='0' aria-label='⟦html.escape(_t('Resize assistant panel'))⟧' aria-valuemin='320' aria-valuemax='720' aria-valuenow='400'></div>
 <div class='ai-panel-header'>
-<span class='ai-panel-title'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg>Loop X</span>
+<span class='ai-panel-title'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg>Loop<span class='brand-x'>X</span></span>
 <div class='ai-panel-header-actions'>
 <button type='button' class='ai-panel-icon-btn' data-ai-history-toggle aria-controls='ai-panel-history' aria-expanded='false' aria-label='⟦history⟧' title='⟦history⟧'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg></button>
 <button type='button' class='ai-panel-icon-btn' data-ai-new-chat aria-label='⟦new_chat⟧' title='⟦new_chat⟧'><svg class='icon' aria-hidden='true'><use href='#i-add_comment'/></svg></button>
@@ -28,6 +28,6 @@
 <button type='submit' class='ai-panel-send' aria-label='⟦html.escape(_t('Send'))⟧' title='⟦html.escape(_t('Send'))⟧' disabled><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>
 </form>
-<p class='ai-panel-disclaimer'>⟦html.escape(_t('Loop X can make mistakes - double-check before acting on it.'))⟧</p>
+<p class='ai-panel-disclaimer'>⟦html.escape(_t('LoopX can make mistakes - double-check before acting on it.'))⟧</p>
 </div>
 </aside>

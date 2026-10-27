@@ -18,7 +18,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let body = update::render_update_body(ctx.lang, &status, &progress);
     UiResponse::html(render_shell(
         ctx,
-        "Update · Loop X Engineering",
+        "Update · LoopX Engineering",
         "update",
         &default_badge(ctx),
         &body,
@@ -57,7 +57,7 @@ mod tests {
         let st = state(d.path());
         let resp = st.registry.dispatch(&st, &UiRequest::get("/update")).unwrap();
         assert_eq!(resp.status, 200);
-        assert!(resp.body_text().contains("Loop X is up to date."));
+        assert!(resp.body_text().contains("LoopX is up to date."));
         let p = st.registry.dispatch(&st, &UiRequest::get("/update/progress")).unwrap();
         assert_eq!(p.body_text(), r#"{"progress": {}, "status": {}}"#);
     }

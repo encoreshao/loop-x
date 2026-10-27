@@ -603,7 +603,7 @@
           show: function(value, streaming) {
             if (!textEl) {
               thinking.remove();
-              textEl = appendBubble('message-bubble-loop', "<span class='k' aria-label='Loop X'>" + ⟦json.dumps(_MESSAGE_BRAND_ICON)⟧ + "</span>", '');
+              textEl = appendBubble('message-bubble-loop', "<span class='k' aria-label='LoopX'>" + ⟦json.dumps(_MESSAGE_BRAND_ICON)⟧ + "</span>", '');
             }
             textEl.textContent = value;
             if (streaming) textEl.appendChild(caret); else caret.remove();
@@ -613,7 +613,7 @@
           host: function() {
             if (!textEl) {
               thinking.remove();
-              textEl = appendBubble('message-bubble-loop', "<span class='k' aria-label='Loop X'>" + ⟦json.dumps(_MESSAGE_BRAND_ICON)⟧ + "</span>", '');
+              textEl = appendBubble('message-bubble-loop', "<span class='k' aria-label='LoopX'>" + ⟦json.dumps(_MESSAGE_BRAND_ICON)⟧ + "</span>", '');
             }
             return textEl.parentNode;
           }

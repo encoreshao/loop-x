@@ -1,6 +1,6 @@
 //! Daily Digest loop on LoopKit (mirrors `bin/loop_plugins/daily_digest.py`):
 //! gathers todos / assigned issues / MRs / today's meetings / yesterday's
-//! Loop X outcomes into one payload, asks the model for a brief and sends it
+//! LoopX outcomes into one payload, asks the model for a brief and sends it
 //! through the loop's notifier.
 #![allow(
     clippy::type_complexity,
@@ -22,14 +22,14 @@ const SECTIONS: [(&str, &str); 5] = [
     ("needs_you", "Needs you"),
     ("waiting_on_others", "Waiting on others"),
     ("meetings", "Today's meetings"),
-    ("loop_x_did", "What Loop X did"),
+    ("loop_x_did", "What LoopX did"),
     ("fyi", "FYI"),
 ];
 const SHORT_LABELS: [(&str, &str); 5] = [
     ("needs_you", "need you"),
     ("waiting_on_others", "waiting"),
     ("meetings", "meetings"),
-    ("loop_x_did", "Loop X"),
+    ("loop_x_did", "LoopX"),
     ("fyi", "FYI"),
 ];
 const PER_PAGE: &str = "per_page=50";
@@ -82,7 +82,7 @@ impl DailyDigest {
         self.calendar_accounts_fn = Some(f);
         self
     }
-    /// Event-ledger directory for the default Loop X source (tests).
+    /// Event-ledger directory for the default LoopX source (tests).
     pub fn with_events_dir(mut self, dir: PathBuf) -> Self {
         self.events_dir = Some(dir);
         self

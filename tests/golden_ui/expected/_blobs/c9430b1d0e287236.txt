@@ -8,6 +8,8 @@
   --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 
   --seg-active-bg: var(--md-surface-container-highest);
+  /* the X in LoopX: blue, the complement of the office's warm cream walls */
+  --brand-x: #4F7CFF;
   --md-primary: #0A84FF;
   --md-on-primary: #FFFFFF;
   --md-primary-container: #1B3A5E;
@@ -66,36 +68,42 @@
   --md-nav-on-surface: var(--md-on-surface-variant);
   --md-nav-active-surface: var(--md-primary-container);
   --md-nav-active-on-surface: var(--md-on-primary-container);
+  --seg-thumb: var(--md-primary);
 }
 :root[data-accent="indigo"] {
   --md-nav-surface: #f4f0ff;
   --md-nav-on-surface: #3A3550;
   --md-nav-active-surface: #E0D6FF;
   --md-nav-active-on-surface: #4B3FA8;
+  --seg-thumb: #4B3FA8;
 }
 :root[data-accent="blue"] {
   --md-nav-surface: #e9f3fc;
   --md-nav-on-surface: #2C3E4A;
   --md-nav-active-surface: #CFE7FB;
   --md-nav-active-on-surface: #0B57D0;
+  --seg-thumb: #0B57D0;
 }
 :root[data-accent="green"] {
   --md-nav-surface: #ecf4ee;
   --md-nav-on-surface: #2A3B2D;
   --md-nav-active-surface: #D2E8D6;
   --md-nav-active-on-surface: #2E7D3C;
+  --seg-thumb: #2E7D3C;
 }
 :root[data-accent="red"] {
   --md-nav-surface: #fcf1ef;
   --md-nav-on-surface: #4A2F2B;
   --md-nav-active-surface: #F7D9D3;
   --md-nav-active-on-surface: #B3261E;
+  --seg-thumb: #B3261E;
 }
 :root[data-accent="gray"] {
   --md-nav-surface: #ececef;
   --md-nav-on-surface: #3A3A3D;
   --md-nav-active-surface: #D6D6DB;
   --md-nav-active-on-surface: #3A3A3D;
+  --seg-thumb: #3A3A3D;
 }
 
 /* Font (Preferences page): one rule per non-default choice, generated from
@@ -305,6 +313,11 @@ button:focus-visible,
 }
 .brand:hover { color: var(--md-nav-on-surface); text-decoration: none; }
 .brand-mark { display: inline-flex; width: 45px; height: 45px; color: var(--md-nav-on-surface); flex-shrink: 0; }
+.brand-x { color: var(--brand-x); font-weight: 800; }
+.pill-bar { position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 8px; z-index: 5; }
+.pill-btn { display: inline-flex; align-items: center; justify-content: center; font: inherit; padding: .4rem .9rem; border: 0; border-radius: 999px; background: rgba(20, 22, 28, .78); color: #e6e8ee; cursor: pointer; text-decoration: none; }
+.pill-btn:hover { background: rgba(20, 22, 28, .9); color: #fff; text-decoration: none; }
+.pill-btn-icon { width: 2.2rem; height: 2.2rem; padding: 0; }
 .brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sidebar-toggle {
@@ -1215,16 +1228,21 @@ html .chat-page.is-empty .activity-composer {
    list gap (0.5rem) - the first real use of this control surfaced how
    cramped the original placeholder values (0.25rem padding/gap) looked
    once actual multi-word labels ("Notifications", "AI CLI") sat in it. */
-.tab-list, .hub-tabs { display: inline-flex; gap: 2px; padding: 2px; margin: -0.25rem 0 1rem; max-width: 100%;
-  background: var(--md-surface-container-high); border-radius: 9px; border: 0; overflow-x: auto; scrollbar-width: none; }
-.tab-button, .hub-tab { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; border: 0; border-radius: 7px;
+/* Shared segmented control (macOS style): tabs (.tab-list, .hub-tabs) and the
+   Appearance options (.pref-segmented) all use it. The track is a wash of the
+   chosen theme colour (--seg-thumb, set per data-accent), the selected segment a
+   solid thumb of that colour, so it follows the theme in light and dark mode. */
+.tab-list, .hub-tabs, .pref-segmented { display: inline-flex; gap: 2px; padding: 2px; margin: -0.25rem 0 1rem; max-width: 100%;
+  background: color-mix(in srgb, var(--seg-thumb) 14%, transparent); border-radius: 9px; border: 0; overflow-x: auto; scrollbar-width: none; }
+.pref-segmented { margin: 0; flex-wrap: wrap; }
+.tab-button, .hub-tab, .pref-segmented-option { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; border: 0; border-radius: 7px;
   padding: 0.3rem 0.9rem; font-family: var(--font-family-stack); font-size: 0.82rem; font-weight: 500; color: var(--md-on-surface-variant); background: transparent;
   white-space: nowrap; text-decoration: none; cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
-.tab-button:hover, .hub-tab:hover { color: var(--md-on-surface); }
-.tab-button.is-active, .hub-tab.active { background: var(--seg-active-bg); color: var(--md-on-surface); box-shadow: var(--shadow-1); }
+.tab-button:hover, .hub-tab:hover, .pref-segmented-option:hover { color: var(--md-on-surface); text-decoration: none; background: color-mix(in srgb, var(--seg-thumb) 10%, transparent); }
+.tab-button.is-active, .hub-tab.active, .pref-segmented-option.is-active { background: var(--seg-thumb); color: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
 /* Inset ring: the tab strip scrolls (overflow-x), which would clip an outer one. */
-.tab-button:focus-visible, .hub-tab:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
-.tab-button.is-active:focus-visible, .hub-tab.active:focus-visible { box-shadow: var(--shadow-1), inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
+.tab-button:focus-visible, .hub-tab:focus-visible, .pref-segmented-option:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent); }
+.tab-button.is-active:focus-visible, .hub-tab.active:focus-visible, .pref-segmented-option.is-active:focus-visible { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), inset 0 0 0 2px rgba(255, 255, 255, 0.6); }
 .tab-button .icon { font-size: 16px; }
 /* Hub pages (render_hub_page): one sidebar entry, several tabbed views, each
    a plain link (?view=<key>) rather than a JS tab. Same tokens as .tab-list. */
@@ -2742,29 +2760,6 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
    row of swatches for accent - both apply instantly via a page-local
    <script> (see render_general_settings_page), no page reload, no
    server round-trip. */
-.pref-segmented {
-  display: inline-flex;
-  flex-wrap: wrap;
-  border: 1px solid var(--md-outline-variant);
-  border-radius: 999px;
-  padding: 0.2rem;
-  gap: 0.2rem;
-}
-.pref-segmented-option {
-  border: none;
-  background: none;
-  color: var(--md-on-surface-variant);
-  font-family: var(--font-family-stack);
-  font-size: 0.85rem;
-  font-weight: 500;
-  padding: 0.4rem 1.1rem;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
-}
-.pref-segmented-option:hover { background: var(--md-surface-container-high); }
-.pref-segmented-option.is-active { background: var(--md-primary-container); color: var(--md-on-primary-container); }
-
 .pref-swatches { display: flex; flex-wrap: wrap; gap: 1rem; }
 .pref-swatch {
   display: flex;

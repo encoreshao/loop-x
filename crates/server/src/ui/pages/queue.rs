@@ -256,7 +256,7 @@ fetch('/queue/'+b.getAttribute('data-queue-action'),{method:'POST',body:p}).catc
 fn page(ctx: &UiCtx) -> UiResponse {
     UiResponse::html(render_shell(
         ctx,
-        "Agents · Loop X Engineering",
+        "Agents · LoopX Engineering",
         "queue",
         &default_badge(ctx),
         &body_html(ctx),

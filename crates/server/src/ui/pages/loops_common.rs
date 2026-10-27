@@ -45,7 +45,7 @@ pub fn render_loop_page(
     let default = default_badge(ctx);
     render_shell(
         ctx,
-        &format!("{label} · Loop X Engineering"),
+        &format!("{label} · LoopX Engineering"),
         &format!("loop:{name}"),
         badge.unwrap_or(&default),
         &format!("{title}{tabs}{body}"),

@@ -4,7 +4,7 @@
 
 Every weekday morning, send one short brief: pending todos, issues assigned to
 you, merge requests awaiting your review (and your own open ones), today's
-calendar meetings, what Loop X completed or escalated yesterday, urgent inbox
+calendar meetings, what LoopX completed or escalated yesterday, urgent inbox
 counts and the latest topic headlines. It is read-only: it gathers data from
 every enabled `issues` connector account (GitLab, GitHub) and `calendar`
 account, asks the model to sort it into sections, and posts the result through

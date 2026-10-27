@@ -25,7 +25,7 @@ pub const MAX_SUMMARY: usize = 600;
 const MAX_DIFF_PAGES: u32 = 20;
 const MAX_DRAFT_PAGES: u32 = 20;
 const SEVERITIES: [&str; 4] = ["nit", "minor", "major", "blocker"];
-const SIGNATURE: &str = "\n\n_\u{2014} Loop X pre-review_";
+const SIGNATURE: &str = "\n\n_\u{2014} LoopX pre-review_";
 pub const DENIED_MESSAGE: &str = "token needs the api scope to write draft notes";
 
 /// What a poster can fail with.
@@ -134,7 +134,7 @@ fn post_draft(
 }
 
 /// Delete this loop's own earlier drafts (partial runs, older SHAs), across
-/// every page. Drafts without the Loop X signature are never touched. All pages
+/// every page. Drafts without the LoopX signature are never touched. All pages
 /// are listed before deleting, so a deletion never shifts a later page.
 fn clear_old_drafts(conn: &dyn Connector, mr: &Value) -> Result<(), ConnectorError> {
     let mut ours: Vec<i64> = Vec::new();
@@ -1011,7 +1011,7 @@ mod tests {
         })
     }
 
-    const SIG_NOTE: &str = "x\n\n_\u{2014} Loop X pre-review_";
+    const SIG_NOTE: &str = "x\n\n_\u{2014} LoopX pre-review_";
 
     #[test]
     fn old_loopx_drafts_deleted_foreign_untouched() {
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn draft_writes_never_retry() {
         let conn = fake2(
-            json!([{"id": 11, "note": "_\u{2014} Loop X pre-review_"}]),
+            json!([{"id": 11, "note": "_\u{2014} LoopX pre-review_"}]),
             None,
             502,
         );
@@ -1311,9 +1311,9 @@ mod tests {
 
     #[test]
     fn foreign_draft_quoting_signature_midtext_not_deleted() {
-        let quoted = "I disagree with \u{201c}_\u{2014} Loop X pre-review_\u{201d} being added here, thoughts?";
+        let quoted = "I disagree with \u{201c}_\u{2014} LoopX pre-review_\u{201d} being added here, thoughts?";
         let conn = fake2(
-            json!([{"id": 11, "note": "x\n\n_\u{2014} Loop X pre-review_\n"}, {"id": 12, "note": quoted}]),
+            json!([{"id": 11, "note": "x\n\n_\u{2014} LoopX pre-review_\n"}, {"id": 12, "note": quoted}]),
             None,
             502,
         );

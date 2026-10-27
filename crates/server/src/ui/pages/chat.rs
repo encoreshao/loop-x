@@ -275,7 +275,7 @@ pub fn messages_fragment(state: &UiState, lang: Lang, session_id: Option<&str>) 
         let who = if is_user {
             format!("<span class='k'>{}</span>", esc_t(lang, "You"))
         } else {
-            format!("<span class='k' aria-label='Loop X'>{brand}</span>")
+            format!("<span class='k' aria-label='LoopX'>{brand}</span>")
         };
         let edit = if is_user {
             format!(

@@ -36,7 +36,7 @@ under Review, and submit to publish them (or discard them).
 ## Re-runs, partial failures and read-only tokens
 
 - Before posting, the loop lists the MR's draft notes and deletes only those
-  carrying the "Loop X pre-review" signature (earlier partial runs, older
+  carrying the "LoopX pre-review" signature (earlier partial runs, older
   SHAs); your own drafts are never touched. Draft POST/DELETE calls are never
   auto-retried (`max_attempts=1`).
 - If a write fails after at least one draft was posted, the item is `done`

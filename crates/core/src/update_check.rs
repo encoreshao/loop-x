@@ -297,7 +297,7 @@ pub fn take_notification(state_dir: Option<&Path>) -> Option<String> {
         )
     };
     Some(format!(
-        "Loop X update available: {what}. Open Loop X and click Upgrade now."
+        "LoopX update available: {what}. Open LoopX and click Upgrade now."
     ))
 }
 
@@ -579,7 +579,7 @@ mod tests {
         let text = take_notification(Some(&r.state)).unwrap();
         assert_eq!(
             text,
-            "Loop X update available: 1 new change(s). Open Loop X and click Upgrade now."
+            "LoopX update available: 1 new change(s). Open LoopX and click Upgrade now."
         );
         assert_eq!(take_notification(Some(&r.state)), None);
         let sha = read_status(Some(&r.state))["origin_sha"].clone();
@@ -602,7 +602,7 @@ mod tests {
         check(Some(&r.work), Some(&r.state), true);
         assert_eq!(
             take_notification(Some(&r.state)).unwrap(),
-            "Loop X update available: v0.2.0. Open Loop X and click Upgrade now."
+            "LoopX update available: v0.2.0. Open LoopX and click Upgrade now."
         );
     }
 

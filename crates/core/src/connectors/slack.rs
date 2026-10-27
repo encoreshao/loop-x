@@ -97,7 +97,7 @@ mod tests {
         assert!(hooks[0].1["text"]
             .as_str()
             .unwrap()
-            .starts_with("Loop X test message from connector \"x\". "));
+            .starts_with("LoopX test message from connector \"x\". "));
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
         SlackConnector::new(a, Some(URL.into()), http.clone()).test();
         assert_eq!(
             http.webhooks.lock().unwrap()[0].1["text"],
-            "Loop X test message from connector \"Team alerts\" (team-alerts). Notifications sent through this connector will appear here."
+            "LoopX test message from connector \"Team alerts\" (team-alerts). Notifications sent through this connector will appear here."
         );
     }
 }

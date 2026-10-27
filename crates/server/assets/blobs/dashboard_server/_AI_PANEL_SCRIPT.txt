@@ -154,7 +154,7 @@
     return list;
   }
   // Same shape as render_activity_messages_fragment's saved bubbles
-  // (meta row with "You" / the Loop X icon), so nothing jumps when the
+  // (meta row with "You" / the LoopX icon), so nothing jumps when the
   // thread is re-fetched once the reply is saved.
   var BRAND_ICON = __BRAND_ICON__;
   var YOU_LABEL = __YOU__;
@@ -169,7 +169,7 @@
     meta.className = 'message-meta';
     var who = document.createElement('span');
     who.className = 'k';
-    if (fromUser) { who.textContent = YOU_LABEL; } else { who.setAttribute('aria-label', 'Loop X'); who.innerHTML = BRAND_ICON; }
+    if (fromUser) { who.textContent = YOU_LABEL; } else { who.setAttribute('aria-label', 'LoopX'); who.innerHTML = BRAND_ICON; }
     meta.appendChild(who);
     var textEl = document.createElement('div');
     textEl.className = 'message-text';

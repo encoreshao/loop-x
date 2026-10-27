@@ -330,7 +330,7 @@ fn review_card(ctx: &UiCtx, account: &Account, deck: &Value) -> String {
 fn shell(ctx: &UiCtx, title: &str, body: &str) -> UiResponse {
     UiResponse::html(render_shell(
         ctx,
-        &format!("{title} · Loop X Engineering"),
+        &format!("{title} · LoopX Engineering"),
         "connectors",
         &default_badge(ctx),
         body,

@@ -284,10 +284,7 @@ pub fn render_hub_page(
 ) -> String {
     let current = resolve_view(hub, requested_view);
     let tabs = tab_strip_html(ctx.lang, &hub.path, &hub.views, &current.key, "");
-    let title = format!(
-        "{} · Loop X Engineering",
-        i18n::t(ctx.lang, &hub.label, &[])
-    );
+    let title = format!("{} · LoopX Engineering", i18n::t(ctx.lang, &hub.label, &[]));
     render_shell(
         ctx,
         &title,

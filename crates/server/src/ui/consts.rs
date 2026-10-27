@@ -99,8 +99,8 @@ mod tests {
         for needle in [
             "backdrop-filter: saturate(180%) blur(20px)",
             "box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 60%, transparent)",
-            ".tab-list, .hub-tabs {",
-            "background: var(--md-surface-container-high); border-radius: 9px",
+            ".tab-list, .hub-tabs, .pref-segmented {",
+            "background: color-mix(in srgb, var(--seg-thumb) 14%, transparent); border-radius: 9px",
         ] {
             assert!(css.contains(needle), "missing: {needle}");
         }
@@ -117,14 +117,14 @@ mod tests {
         let ring = "inset 0 0 0 2px color-mix(in srgb, var(--md-primary) 60%, transparent)";
         assert!(
             css.contains(&format!(
-                ".tab-button:focus-visible, .hub-tab:focus-visible {{ box-shadow: {ring}; }}"
+                ".tab-button:focus-visible, .hub-tab:focus-visible, .pref-segmented-option:focus-visible {{ box-shadow: {ring}; }}"
             )),
             "inset tab ring"
         );
         assert!(
-            css.contains(&format!(
-                ".tab-button.is-active:focus-visible, .hub-tab.active:focus-visible {{ box-shadow: var(--shadow-1), {ring}; }}"
-            )),
+            css.contains(
+                ".tab-button.is-active:focus-visible, .hub-tab.active:focus-visible, .pref-segmented-option.is-active:focus-visible { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), inset 0 0 0 2px rgba(255, 255, 255, 0.6); }"
+            ),
             "active tab keeps its raised shadow under focus"
         );
     }
@@ -173,16 +173,19 @@ mod tests {
     }
 
     #[test]
-    fn segmented_active_tab_is_lighter_than_the_track_in_light_mode() {
+    fn segmented_selection_follows_the_theme_accent() {
         let css = ds("_STYLE");
-        assert!(css.contains("background: var(--seg-active-bg)"));
-        assert!(css.contains("--seg-active-bg: var(--md-surface-container-highest);"));
-        assert_eq!(
-            css.matches("--seg-active-bg: var(--md-surface-container-lowest);")
-                .count(),
-            2,
-            "both light blocks"
-        );
+        assert!(css.contains("background: var(--seg-thumb); color: #fff;"));
+        for accent in ["default", "indigo", "blue", "green", "red", "gray"] {
+            let a = css
+                .find(&format!(":root[data-accent=\"{accent}\"] {{"))
+                .unwrap();
+            let block = &css[a..a + css[a..].find('}').unwrap()];
+            assert!(
+                block.contains("--seg-thumb:"),
+                "{accent} sets the thumb colour"
+            );
+        }
     }
 
     #[test]

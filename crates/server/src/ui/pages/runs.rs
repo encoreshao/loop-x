@@ -482,7 +482,7 @@ fn loop_run_detail(ctx: &UiCtx) -> UiResponse {
     let body = render("runs_detail_body", &scope);
     UiResponse::html(render_shell(
         ctx,
-        &format!("{} \u{b7} Loop X Engineering", s_of(&data, "definition_name")),
+        &format!("{} \u{b7} LoopX Engineering", s_of(&data, "definition_name")),
         "loop_runs",
         &default_badge(ctx),
         &body,

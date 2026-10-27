@@ -19,6 +19,7 @@
 pub mod ai_cli;
 pub mod assets;
 pub mod badge;
+pub mod components;
 pub mod consts;
 pub mod csrf;
 pub mod gitlab;

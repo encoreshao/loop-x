@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/app-icon.svg" alt="Loop X logo" width="200" height="200">
+  <img src="assets/app-icon.svg" alt="LoopX logo" width="200" height="200">
 </p>
 
 <p align="center">
   <b>English</b> | <a href="README.ja.md">日本語</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.fr.md">Français</a>
 </p>
 
-<h1 align="center">Loop X Engineering</h1>
+<h1 align="center">LoopX Engineering</h1>
 
 <p align="center">
   <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
@@ -19,7 +19,7 @@
 
 ---
 
-Loop X is a teammate that runs quietly on your Mac. Every weekday it works through the routine, so you only spend attention on what needs your judgment. A local dashboard shows what it did.
+LoopX is a teammate that runs quietly on your Mac. Every weekday it works through the routine, so you only spend attention on what needs your judgment. A local dashboard shows what it did.
 
 ## Goal and mission
 
@@ -34,7 +34,7 @@ Loop X is a teammate that runs quietly on your Mac. Every weekday it works throu
 
 ## The problems it solves
 
-| The problem | What Loop X does | Loop |
+| The problem | What LoopX does | Loop |
 | --- | --- | --- |
 | Issues assigned to you sit untouched | Fixes the ones it can (opens a merge request), answers questions, and asks you about anything unclear | **GitLab issues** |
 | Your inbox buries the urgent mail | Labels new mail and drafts replies to urgent messages. It never sends | **Inbox triage** |
@@ -93,7 +93,7 @@ To update later, re-run the installer with `--upgrade`. To remove it, run `bin/s
 1. **Start small.** Keep only the GitLab issues and topic monitor loops on at first, and list one or two projects you know well.
 2. **Try one run before scheduling.** Run `loopx run gitlab-loop` by hand and read the result before loading the scheduler.
 3. **Give every project real checks.** Set `lint_cmd` and `test_cmd` for each project. A merge request only opens when they pass, so they are the loop's safety net.
-4. **Review every merge request.** Loop X stops at an open merge request. Read the diff as you would a teammate's.
+4. **Review every merge request.** LoopX stops at an open merge request. Read the diff as you would a teammate's.
 5. **Write clear issues.** Include the expected behaviour and how to reproduce it. A precise issue gets a fix, a vague one gets a question.
 6. **Use the gate verification mode** for projects that matter, so the loop re-runs your checks itself and escalates when they fail.
 7. **Keep secrets in the Keychain.** Add tokens through the dashboard, never in config files or issue text.

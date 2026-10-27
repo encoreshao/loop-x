@@ -1,6 +1,7 @@
 //! `GET /office/state`: the JSON the office view polls, one entry per loop.
 
 use crate::ui::assets;
+use crate::ui::components::{pill_bar, pill_button, pill_icon_link};
 use crate::ui::office;
 use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -160,7 +161,7 @@ pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
         ),
         h(&ctx.t("You can switch at any time.")),
     );
-    let html = render_shell(ctx, "Loop X · Loop X Engineering", "overview", "", &body, ShellOpts::default());
+    let html = render_shell(ctx, "LoopX · LoopX Engineering", "overview", "", &body, ShellOpts::default());
     UiResponse::html(with_html_class(html, "chooser-mode"))
 }
 
@@ -170,9 +171,8 @@ html.office-mode .content-area,html.office-mode .main-scroll,html.office-mode .w
 html.office-mode .ai-panel{top:0;right:0;bottom:0;border-radius:0;box-shadow:-1px 0 0 var(--md-outline-variant,#d0d0d0)}\
 html.office-mode #office{position:fixed;top:0;left:0;bottom:0;right:0;height:auto;min-height:0;border-radius:0}\
 html.office-mode.ai-panel-open #office{right:var(--ai-panel-width)}\
-.office-mode-switch{position:absolute;top:12px;left:12px;display:flex;align-items:center;justify-content:center;width:2.2rem;height:2.2rem;border-radius:999px;background:rgba(20,22,28,.78);color:#e6e8ee}\
-.office-chat-toggle{position:absolute;top:12px;right:12px;display:none;font:inherit;padding:.4rem .9rem;border:0;border-radius:999px;background:rgba(20,22,28,.78);color:#e6e8ee;cursor:pointer}\
-html.office-mode:not(.ai-panel-open) .office-chat-toggle{display:block}\
+.pill-btn.office-chat-toggle{display:none}\
+html.office-mode:not(.ai-panel-open) .pill-btn.office-chat-toggle{display:inline-flex}\
 html.office-mode:not(.ai-panel-open) .office-panel{top:56px}\
 #office-list:not([hidden]){position:fixed;top:0;left:0;bottom:0;right:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:1.5rem;text-align:center}\
 html.office-mode.ai-panel-open #office-list:not([hidden]){right:var(--ai-panel-width)}\
@@ -184,23 +184,26 @@ html.office-mode.ai-panel-open #office-list:not([hidden]){right:var(--ai-panel-w
 const OFFICE_CHAT_OPEN_JS: &str = "<script>try{if(localStorage.getItem('loop-ai-panel-open')===null)document.documentElement.classList.add('ai-panel-open')}catch(e){document.documentElement.classList.add('ai-panel-open')}window.__loopNoReloadOnChange=true;</script>";
 
 /// `GET /office`: the 3D office filling the window, with the assistant docked on the right
-/// and no menu: switching modes lives in the chat header.
+/// and no menu: the Dashboard and Open chat pills sit top right of the office view.
 fn office_page(ctx: &UiCtx) -> UiResponse {
-    let toggle = format!(
-        "<button type='button' class='office-chat-toggle' data-office-chat-toggle aria-label=\"{0}\">{0}</button>\
-         <a class='office-mode-switch' href='/?mode=dashboard' onclick=\"try{{localStorage.removeItem('loop-ai-panel-open')}}catch(e){{}}\" aria-label=\"{1}\" title=\"{1}\">{2}</a>",
-        h(&ctx.t("Open chat")),
-        h(&ctx.t("Switch to Dashboard")),
-        crate::ui::icons::icon("space_dashboard")
-    );
-    let view = office_view_html(ctx).replacen("</section>", &format!("{toggle}</section>"), 1);
+    let controls = pill_bar(&format!(
+        "{}{}",
+        pill_icon_link(
+            "/?mode=dashboard",
+            &ctx.t("Switch to Dashboard"),
+            &crate::ui::icons::icon("space_dashboard"),
+            "onclick=\"try{localStorage.removeItem('loop-ai-panel-open')}catch(e){}\""
+        ),
+        pill_button(&ctx.t("Open chat"), "office-chat-toggle", "data-office-chat-toggle")
+    ));
+    let view = office_view_html(ctx).replacen("</section>", &format!("{controls}</section>"), 1);
     // What shows when the scene cannot (no WebGL, a failed load): the way to the Dashboard.
     let fallback = format!(
         "<div id='office-list' hidden><a class='office-fallback-link' href='/?mode=dashboard' onclick=\"try{{localStorage.removeItem('loop-ai-panel-open')}}catch(e){{}}\">{}</a></div>",
         h(&ctx.t("Switch to Dashboard"))
     );
     let body = format!("{OFFICE_MODE_CSS}{OFFICE_CHAT_OPEN_JS}{view}{fallback}");
-    let html = render_shell(ctx, "Office · Loop X Engineering", "office", "", &body, ShellOpts::default());
+    let html = render_shell(ctx, "Office · LoopX Engineering", "office", "", &body, ShellOpts::default());
     let mut resp = UiResponse::html(with_html_class(html, "office-mode"));
     resp.headers.push(mode_cookie("office"));
     resp

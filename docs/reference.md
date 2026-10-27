@@ -1,6 +1,6 @@
-# Loop X reference
+# LoopX reference
 
-The detailed reference for Loop X: where files live, configuration, scheduling, the dashboard, connectors, CLI commands and safety rules. For the short overview, see the [README](../README.md).
+The detailed reference for LoopX: where files live, configuration, scheduling, the dashboard, connectors, CLI commands and safety rules. For the short overview, see the [README](../README.md).
 
 ## Directory layout
 

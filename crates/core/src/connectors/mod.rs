@@ -404,7 +404,7 @@ pub trait Connector: Send + Sync {
             format!("\"{}\" ({})", a.label, a.id)
         };
         format!(
-            "Loop X test message from connector {name}. Notifications sent through this connector will appear here."
+            "LoopX test message from connector {name}. Notifications sent through this connector will appear here."
         )
     }
 

@@ -428,7 +428,7 @@ fn content_record_html(ctx: &UiCtx, record: &Value) -> String {
             ("Needs you", "needs_you"),
             ("Waiting on others", "waiting_on_others"),
             ("Today's meetings", "meetings"),
-            ("What Loop X did", "loop_x_did"),
+            ("What LoopX did", "loop_x_did"),
             ("FYI", "fyi"),
         ] {
             parts.push(content_list(&ctx.t(heading), &linked(data.get(key), "text", "url")));
@@ -858,7 +858,7 @@ fn history_file(ctx: &UiCtx) -> UiResponse {
     let badge = status_badge_markup(ctx.lang, &read_status(ctx.state, name));
     UiResponse::html(render_shell(
         ctx,
-        &format!("{stem} · Loop X Engineering"),
+        &format!("{stem} · LoopX Engineering"),
         &format!("loop:{name}"),
         &badge,
         &body,
@@ -1350,7 +1350,7 @@ fn catalog_page(ctx: &UiCtx) -> UiResponse {
     let body = catalog_body(ctx, flash.as_deref(), ok);
     UiResponse::html(render_shell(
         ctx,
-        "Loops · Loop X Engineering",
+        "Loops · LoopX Engineering",
         "loops",
         &default_badge(ctx),
         &body,

@@ -143,7 +143,7 @@ pub fn ai_panel_html(ctx: &UiCtx, active_page: &str) -> String {
             "html.escape(active_page, quote=True)",
             pyfmt::escape(active_page),
         )
-        .var("panel_label", escaped_t(lang, "Loop X assistant"))
+        .var("panel_label", escaped_t(lang, "LoopX assistant"))
         .var("history", escaped_t(lang, "Chat history"))
         .var("new_chat", escaped_t(lang, "New chat"))
         .var("close", escaped_t(lang, "Close assistant"))
@@ -217,7 +217,7 @@ pub fn render_shell(
     };
 
     let mut scope = Scope::new(lang);
-    scope.var("ai_label", escaped_t(lang, "Ask Loop X"));
+    scope.var("ai_label", escaped_t(lang, "Ask LoopX"));
     let office_label = escaped_t(lang, "Switch to Office");
     let ai_trigger_html = format!(
         "{}<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
@@ -295,14 +295,14 @@ mod tests {
         let ctx = UiCtx::new(&state, &req);
         let html = render_shell(
             &ctx,
-            "Overview · Loop X Engineering",
+            "Overview · LoopX Engineering",
             "overview",
             "<b>badge</b>",
             "<p>body</p>",
             ShellOpts::default(),
         );
         assert!(html.starts_with("<!doctype html>\n<html lang=\"en\">"));
-        assert!(html.contains("<title>Overview · Loop X Engineering</title>"));
+        assert!(html.contains("<title>Overview · LoopX Engineering</title>"));
         assert!(html.contains("<p>body</p>"));
         assert!(html.contains("<b>badge</b>"));
         assert!(!html.contains('\u{27e6}'));

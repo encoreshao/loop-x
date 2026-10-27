@@ -102,7 +102,7 @@ fn step_label(lang: Lang, name: &str) -> String {
         "build" => i18n::t(lang, "Build app and DMG", &[]),
         "install" => i18n::t(lang, "Install app", &[]),
         "restart_dashboard" => i18n::t(lang, "Restart dashboard", &[]),
-        "relaunch" => i18n::t(lang, "Relaunch Loop X", &[]),
+        "relaunch" => i18n::t(lang, "Relaunch LoopX", &[]),
         other => other.to_string(),
     }
 }
@@ -279,7 +279,7 @@ pub fn render_update_body(lang: Lang, status: &Value, progress: &Value) -> Strin
             "<p>{}</p>",
             esc_t(
                 lang,
-                "Upgrading Loop X - this window will relaunch when it is done."
+                "Upgrading LoopX - this window will relaunch when it is done."
             )
         ));
     } else if truthy(status, "behind") {
@@ -288,7 +288,7 @@ pub fn render_update_body(lang: Lang, status: &Value, progress: &Value) -> Strin
             out.push_str(&format!("<p>{}</p>", pyfmt::escape(&b)));
         }
     } else {
-        out.push_str(&format!("<p>{}</p>", esc_t(lang, "Loop X is up to date.")));
+        out.push_str(&format!("<p>{}</p>", esc_t(lang, "LoopX is up to date.")));
     }
     out.push_str("</div>");
     if truthy(progress, "steps") || IN_FLIGHT.contains(&state) || TERMINAL.contains(&state) {
@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn body_states() {
         let up = render_update_body(Lang::En, &json!({}), &json!({}));
-        assert!(up.contains("Loop X is up to date.") && !up.contains("update-steps"));
+        assert!(up.contains("LoopX is up to date.") && !up.contains("update-steps"));
         let failed = render_update_body(
             Lang::En,
             &json!({}),
