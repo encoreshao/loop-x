@@ -13,6 +13,7 @@
   "(none yet)": "（暂无）",
   "(none)": "(无)",
   "(not set)": "（未设置）",
+  "(reply stopped)": "（回复已停止）",
   "(reply interrupted)": "（回复已中断）",
   "(use default webhook)": "(使用默认 Webhook)",
   "(use default)": "（使用默认值）",

@@ -200,7 +200,7 @@
   function autoGrow() {
     input.style.height = 'auto';
     input.style.height = input.scrollHeight + 'px';
-    sendBtn.disabled = busy || !input.value.trim();
+    sendBtn.disabled = !busy && !input.value.trim();
   }
   input.addEventListener('input', autoGrow);
   input.addEventListener('keydown', function(ev) {
@@ -211,7 +211,12 @@
       send(input.value);
     }
   });
-  form.addEventListener('submit', function(ev) { ev.preventDefault(); send(input.value); });
+  form.addEventListener('submit', function(ev) {
+    ev.preventDefault();
+    // While a reply is being written the send button is the stop button.
+    if (busy) { if (stopReply) stopReply(); return; }
+    send(input.value);
+  });
 
   panel.querySelectorAll('[data-ai-prompt]').forEach(function(chip) {
     chip.addEventListener('click', function() {
@@ -250,6 +255,17 @@
     }, function() {});
   });
 
+  var stopReply = null;
+  var sendIcon = sendBtn.querySelector('svg.icon use');
+  var sendLabel = sendBtn.getAttribute('aria-label');
+  function setSendMode(stop) {
+    var label = stop ? __STOP_TEXT__ : sendLabel;
+    sendBtn.setAttribute('aria-label', label);
+    sendBtn.setAttribute('title', label);
+    sendBtn.classList.toggle('is-stop', stop);
+    if (sendIcon) sendIcon.setAttribute('href', stop ? '#i-stop' : '#i-arrow_upward');
+  }
+
   function setBusy(value) {
     // The Office view picks a colleague to work on the question while it is answered.
     if (value !== busy) document.dispatchEvent(new CustomEvent('loopx:chat', { detail: { busy: value } }));
@@ -257,7 +273,8 @@
     window.__loopPanelChatStreaming = value;
     window.__loopChatStreaming = !!(value || window.__loopActivityChatStreaming);
     newChatBtn.disabled = value;
-    sendBtn.disabled = value || !input.value.trim();
+    setSendMode(value);
+    sendBtn.disabled = !value && !input.value.trim();
   }
 
   function send(text) {
@@ -294,9 +311,34 @@
     var reveal = window.__loopTextReveal(function(text) { showReply(text, true); });
     function fail(message) {
       reveal.stop();
+      stopReply = null;
       showReply(message || __ERROR_TEXT__, false);
       setBusy(false);
     }
+
+    // The stop button: end the stream, kill the AI process on the server and
+    // keep whatever was already written, marked as stopped.
+    var aborted = false;
+    var source = null;
+    var replyKey = '';
+    var accumulated = '';
+    function postStop(key) {
+      var stop = new URLSearchParams();
+      stop.set('reply_key', key);
+      stop.set('csrf_token', form.querySelector("input[name='csrf_token']").value);
+      return fetch('/activity/chat/stop', { method: 'POST', body: stop }).catch(function() {});
+    }
+    stopReply = function() {
+      if (aborted) return;
+      aborted = true;
+      stopReply = null;
+      if (source) source.close();
+      if (replyKey) postStop(replyKey);
+      reveal.stop();
+      showReply(accumulated ? accumulated + ' ' + __STOPPED_TEXT__ : __STOPPED_TEXT__, false);
+      setBusy(false);
+      input.focus();
+    };
 
     var params = new URLSearchParams();
     params.set('text', text);
@@ -306,11 +348,20 @@
     fetch('/activity/chat', { method: 'POST', body: params })
       .then(function(response) { return response.json().then(function(data) { return { ok: response.ok, data: data }; }); })
       .then(function(result) {
+        if (aborted) {
+          // Stopped before the server answered: stop the reply it just started.
+          if (result.ok) {
+            session = result.data.session || session;
+            store(KEY_SESSION, session);
+            postStop(result.data.reply_key);
+          }
+          return;
+        }
         if (!result.ok) { fail(result.data.error); return; }
         session = result.data.session || session;
         store(KEY_SESSION, session);
-        var source = new EventSource('/activity/chat-stream?reply_key=' + encodeURIComponent(result.data.reply_key));
-        var accumulated = '';
+        replyKey = result.data.reply_key;
+        source = new EventSource('/activity/chat-stream?reply_key=' + encodeURIComponent(replyKey));
         var changed = false;
         source.addEventListener('chunk', function(ev) {
           accumulated += JSON.parse(ev.data);
@@ -327,6 +378,7 @@
         source.addEventListener('changed', function() { changed = true; });
         source.addEventListener('done', function() {
           source.close();
+          stopReply = null;
           reveal.finish(function() {
             setBusy(false);
             if (changed && window.__loopNoReloadOnChange) {
@@ -337,13 +389,14 @@
           });
         });
         source.addEventListener('error', function(ev) {
+          if (aborted) return;
           source.close();
           var message = __ERROR_TEXT__;
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           fail(accumulated ? accumulated + ' ' + __INTERRUPTED_TEXT__ : message);
         });
       })
-      .catch(function() { fail(); });
+      .catch(function() { if (!aborted) fail(); });
   }
 
   trigger.setAttribute('aria-expanded', isOpen() ? 'true' : 'false');

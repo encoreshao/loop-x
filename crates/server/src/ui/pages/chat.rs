@@ -40,6 +40,7 @@ pub fn register(r: &mut Registry) {
     r.post("/activity/chat/approve", post_approve);
     r.post("/activity/chat/reject", post_reject);
     r.post("/activity/chat", post_chat);
+    r.post("/activity/chat/stop", post_stop);
 }
 
 // ----- shared state -----
@@ -1142,6 +1143,13 @@ fn post_chat(ctx: &UiCtx) -> UiResponse {
     }
 }
 
+/// `POST /activity/chat/stop`: kills the reply's CLI and everything it started.
+fn post_stop(ctx: &UiCtx) -> UiResponse {
+    let form = form_keep_blank(&ctx.req.body);
+    let stopped = jobs().cancel(field(&form, "reply_key").unwrap_or(""));
+    UiResponse::json(200, &json!({"ok": stopped}))
+}
+
 // ----- the SSE stream -----
 
 /// `GET /activity/chat-stream?reply_key=K` as a streaming response; the caller
@@ -1213,6 +1221,21 @@ mod tests {
             req = req.with_header("cookie", &format!("loop_lang={lang}"));
         }
         overview_body(&UiCtx::new(&state, &req), None, false, None)
+    }
+
+    #[test]
+    fn stop_cancels_a_live_reply_and_reports_an_unknown_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let key = jobs().create();
+        let stop = |key: &str| {
+            let req = UiRequest::new(axum::http::Method::POST, "/activity/chat/stop")
+                .with_body(format!("reply_key={key}"));
+            post_stop(&UiCtx::new(&state, &req))
+        };
+        assert!(String::from_utf8_lossy(&stop(&key).body).contains("true"));
+        assert!(jobs().is_cancelled(&key));
+        assert!(String::from_utf8_lossy(&stop("nope").body).contains("false"));
     }
 
     #[test]

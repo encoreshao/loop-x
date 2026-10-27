@@ -29,6 +29,11 @@ pub const STREAM_IDLE_TIMEOUT_SECONDS: u64 = 15;
 const SYSTEM_PROMPT: &str = include_str!("chat_prompts/system.txt");
 const TOOLS_PROMPT: &str = include_str!("chat_prompts/tools.txt");
 
+/// The error a reply finishes with when the user stops it.
+pub const STOPPED_MESSAGE: &str = "Stopped";
+/// How long a stopped CLI gets to exit on SIGTERM before it is SIGKILLed.
+const STOP_GRACE: Duration = Duration::from_secs(2);
+
 /// Where every chat error tells the user to go.
 const SWITCH_HINT: &str = "Switch CLI in Settings -> AI CLI.";
 /// Cursor Agent's workspace for the chat, relative to the repo root (the
@@ -965,6 +970,57 @@ pub fn sse_frame(event: &str, data: &Value) -> Vec<u8> {
 
 // ----- reply jobs -----
 
+/// `pid` and every descendant of it, found through `ps` since the CLI runs under
+/// a login shell and `timeout`, which put their children in other process groups.
+fn process_tree(pid: u32) -> Vec<i32> {
+    let out = Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let pairs: Vec<(i32, i32)> = out
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            Some((f.next()?.parse().ok()?, f.next()?.parse().ok()?))
+        })
+        .collect();
+    let mut tree = vec![pid as i32];
+    let mut i = 0;
+    while i < tree.len() {
+        let parent = tree[i];
+        tree.extend(
+            pairs
+                .iter()
+                .filter(|(_, pp)| *pp == parent)
+                .map(|(p, _)| *p),
+        );
+        i += 1;
+    }
+    tree
+}
+
+/// SIGTERMs the process tree rooted at `pid` (and its process group), then
+/// SIGKILLs whatever is still alive after [`STOP_GRACE`].
+fn kill_process_tree(pid: u32) {
+    let tree = process_tree(pid);
+    unsafe {
+        libc::killpg(pid as libc::pid_t, libc::SIGTERM);
+        for p in &tree {
+            libc::kill(*p, libc::SIGTERM);
+        }
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(STOP_GRACE);
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+            for p in &tree {
+                libc::kill(*p, libc::SIGKILL);
+            }
+        }
+    });
+}
+
 #[derive(Default)]
 struct JobState {
     chunks: Vec<String>,
@@ -974,6 +1030,9 @@ struct JobState {
     final_text: Option<String>,
     changed: bool,
     record: Option<ChatJobRecord>,
+    /// The CLI's pid while it runs, so [`ChatJobs::cancel`] can stop it.
+    pid: Option<u32>,
+    cancelled: bool,
 }
 
 /// How a reply job runs, for the chat page: the CLI, whether it streams, and
@@ -1074,6 +1133,47 @@ impl ChatJobs {
     /// The job's [`ChatJobRecord`], once its runner has started.
     pub fn record(&self, key: &str) -> Option<ChatJobRecord> {
         self.get(key)?.state.lock().ok()?.record.clone()
+    }
+
+    /// Records the running CLI's pid; `false` when the reply was already
+    /// stopped, in which case the caller must kill the process itself.
+    fn set_pid(&self, key: &str, pid: u32) -> bool {
+        let Some(job) = self.get(key) else {
+            return true;
+        };
+        let Ok(mut s) = job.state.lock() else {
+            return true;
+        };
+        s.pid = Some(pid);
+        !s.cancelled
+    }
+
+    pub fn is_cancelled(&self, key: &str) -> bool {
+        self.get(key)
+            .and_then(|j| j.state.lock().ok().map(|s| s.cancelled))
+            .unwrap_or(false)
+    }
+
+    /// Stops a running reply: marks it cancelled and kills the CLI with
+    /// everything it started. `false` for an unknown or already finished reply.
+    pub fn cancel(&self, key: &str) -> bool {
+        let Some(job) = self.get(key) else {
+            return false;
+        };
+        let pid = {
+            let Ok(mut s) = job.state.lock() else {
+                return false;
+            };
+            if s.done || s.cancelled {
+                return false;
+            }
+            s.cancelled = true;
+            s.pid
+        };
+        if let Some(pid) = pid {
+            kill_process_tree(pid);
+        }
+        true
     }
 
     pub fn mark_changed(&self, key: &str) {
@@ -1285,8 +1385,10 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
     }
     let argv = command.build_command(prompt, &(rt.tools_description)());
     let (program, rest) = argv.split_first().expect("non-empty argv");
+    use std::os::unix::process::CommandExt;
     let spawned = Command::new(program)
         .args(rest)
+        .process_group(0)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1298,6 +1400,9 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
         Ok(c) => c,
         Err(e) => return fail(crate::runner_util::could_not_start(cli, program, &e)),
     };
+    if !rt.jobs.set_pid(reply_key, child.id()) {
+        kill_process_tree(child.id());
+    }
     // Read stderr on the side (only failures show it); a process the CLI left
     // running may hold the pipe open, so the turn never waits long for it.
     let stderr = child.stderr.take();
@@ -1368,6 +1473,9 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
             }
         }
         let code = child.wait().ok().and_then(|s| s.code());
+        if rt.jobs.is_cancelled(reply_key) {
+            return Ok(());
+        }
         // Only a failure shows stderr, so only a failure waits for it.
         let stderr = || {
             stderr_rx
@@ -1428,14 +1536,22 @@ pub fn run_chat_job(rt: &ChatRuntime, reply_key: &str, prompt: &str, session_id:
             "Error while reading {name} output: {e}. {SWITCH_HINT}"
         ));
     }
-    match &finish_error {
-        Some(e) => append_unified_log(root, "chat-assistant", &format!("error ({name})"), Some(e)),
-        None => append_unified_log(
-            root,
-            "chat-assistant",
-            &format!("reply ({name})"),
-            finish_text.as_deref(),
-        ),
+    if rt.jobs.is_cancelled(reply_key) {
+        finish_error = Some(STOPPED_MESSAGE.to_string());
+        finish_text = None;
+        append_unified_log(root, "chat-assistant", &format!("stopped ({name})"), None);
+    } else {
+        match &finish_error {
+            Some(e) => {
+                append_unified_log(root, "chat-assistant", &format!("error ({name})"), Some(e))
+            }
+            None => append_unified_log(
+                root,
+                "chat-assistant",
+                &format!("reply ({name})"),
+                finish_text.as_deref(),
+            ),
+        }
     }
     rt.jobs.finish(reply_key, finish_error, finish_text);
 }
@@ -2696,5 +2812,68 @@ echo '{"type":"result","result":"Hello there","is_error":false}'"#,
             }
         );
         assert_eq!(rt.store.read_messages().len(), 1);
+    }
+
+    fn pid_is_alive(pid: i32) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    #[test]
+    fn cancelling_a_reply_kills_the_cli_and_its_children_and_persists_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let pidfile = d.path().join("child.pid");
+        let bin = fake_claude(
+            d.path(),
+            &format!("sleep 60 &\necho $! > {}\nwait", pidfile.display()),
+        );
+        let rt = runtime(d.path(), &bin);
+        let sid = rt.store.send_chat_message("hi", None).unwrap();
+        let key = rt.jobs.create();
+        let worker = {
+            let (rt, key, sid) = (rt.clone(), key.clone(), sid.clone());
+            std::thread::spawn(move || run_chat_job(&rt, &key, "hi", &sid))
+        };
+        let started = std::time::Instant::now();
+        let child_pid: i32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+            {
+                break pid;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "fake claude never started"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(pid_is_alive(child_pid));
+
+        assert!(rt.jobs.cancel(&key));
+        worker.join().unwrap();
+
+        let mut s = rt.jobs.stream(&key).unwrap();
+        let items = s.next_batch(Duration::from_millis(10)).unwrap();
+        assert_eq!(
+            items.last().unwrap(),
+            &StreamItem::Done {
+                error: Some(STOPPED_MESSAGE.into()),
+                final_text: None
+            }
+        );
+        let gone = std::time::Instant::now();
+        while pid_is_alive(child_pid) && gone.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !pid_is_alive(child_pid),
+            "the CLI's child survived the stop"
+        );
+        assert_eq!(rt.store.read_messages().len(), 1);
+        assert!(
+            !rt.jobs.cancel(&key),
+            "a finished reply cannot be stopped again"
+        );
+        assert!(!rt.jobs.cancel("no-such-key"));
     }
 }

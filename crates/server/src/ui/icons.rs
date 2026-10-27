@@ -63,6 +63,7 @@ pub const NAMES: &[&str] = &[
     "smart_toy",
     "space_dashboard",
     "speed",
+    "stop",
     "summarize",
     "system_update",
     "task_alt",

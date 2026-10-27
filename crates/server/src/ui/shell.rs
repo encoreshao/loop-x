@@ -84,6 +84,8 @@ fn ai_panel_script(lang: Lang) -> String {
             &json_t(lang, "Something went wrong - try again."),
         )
         .replace("__INTERRUPTED_TEXT__", &json_t(lang, "(reply interrupted)"))
+        .replace("__STOP_TEXT__", &json_t(lang, "Stop"))
+        .replace("__STOPPED_TEXT__", &json_t(lang, "(reply stopped)"))
         .replace("__THINKING_TEXT__", &json_t(lang, "Thinking…"))
         .replace(
             "__THINKING_HTML__",

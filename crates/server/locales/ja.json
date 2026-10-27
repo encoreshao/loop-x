@@ -13,6 +13,7 @@
   "(none yet)": "（まだありません）",
   "(none)": "(なし)",
   "(not set)": "（未設定）",
+  "(reply stopped)": "（返信を停止しました）",
   "(reply interrupted)": "（返信が中断されました）",
   "(use default webhook)": "(デフォルトの Webhook を使用)",
   "(use default)": "（デフォルトを使用）",

@@ -11,6 +11,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+- Chat: while the assistant is replying, the send button becomes a stop button (in the chat panel and on the Chat page); clicking it ends the reply at once, kills the AI process and anything it started, keeps the text written so far marked as stopped, and saves nothing for that reply.
+
 ### Changed
 - GitLab loop → Tasks: issue and MR rows use the same bordered card style as the Chat tools list.
 - Office: the coffee shop, the bookstore and the LoopX office now stand in one row on a street with a road of passing cars and pedestrians; each shop has a staff member and customers who come and go; drag the view to slide along the street (right-drag or two fingers to turn it, scroll to zoom).

@@ -545,13 +545,25 @@
       composerInput.addEventListener('keydown', function(ev) {
         if (ev.key === 'Enter' && !ev.shiftKey) {
           ev.preventDefault();
+          if (activeStop) return;
           form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true }));
         }
       });
     }
 
+    // While a reply is being written the send button is the stop button.
+    var activeStop = null;
+    function setSendMode(button, stop) {
+      var label = stop ? ⟦json.dumps(_t('Stop'))⟧ : ⟦json.dumps(_t('Send'))⟧;
+      button.setAttribute('aria-label', label);
+      button.setAttribute('title', label);
+      var use = button.querySelector('svg.icon use');
+      if (use) use.setAttribute('href', stop ? '#i-stop' : '#i-arrow_upward');
+    }
+
     form.addEventListener('submit', function(ev) {
       ev.preventDefault();
+      if (activeStop) { activeStop(); return; }
       var input = form.querySelector("[name='text']");
       var button = form.querySelector("button[type='submit']");
       var text = input.value.trim();
@@ -564,7 +576,7 @@
       appendBubble('message-bubble-user', "<span class='k'>" + ⟦json.dumps(html.escape(_t('You')))⟧ + "</span>", text);
       input.value = '';
       autoGrow();
-      button.disabled = true;
+      setSendMode(button, true);
 
       // The same "Thinking..." indicator as the AI panel (_AI_THINKING_HTML)
       // until the reply's first words arrive; then the reply bubble takes
@@ -632,9 +644,38 @@
         if (newChatBtn) newChatBtn.disabled = false;
       }
 
+      var aborted = false;
+      var source = null;
+      var activeKey = '';
+      var accumulated = '';
+      function postStop(key) {
+        var stop = new URLSearchParams();
+        stop.set('reply_key', key);
+        stop.set('csrf_token', csrfToken);
+        return fetch('/activity/chat/stop', { method: 'POST', body: stop }).catch(function() {});
+      }
+      function resetSendButton() {
+        activeStop = null;
+        button.disabled = false;
+        setSendMode(button, false);
+      }
+      // The stop button: end the stream, kill the AI process on the server and
+      // keep whatever was already written, marked as stopped.
+      activeStop = function() {
+        if (aborted) return;
+        aborted = true;
+        if (source) source.close();
+        if (activeKey) postStop(activeKey);
+        reveal.stop();
+        var stopped = ⟦json.dumps(_t('(reply stopped)'))⟧;
+        pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
+        resetSendButton();
+        stopStreamingFlag();
+      };
+
       function startStream(replyKey) {
-        var source = new EventSource('/activity/chat-stream?reply_key=' + encodeURIComponent(replyKey));
-        var accumulated = '';
+        activeKey = replyKey;
+        source = new EventSource('/activity/chat-stream?reply_key=' + encodeURIComponent(replyKey));
         source.addEventListener('chunk', function(ev) {
           accumulated += JSON.parse(ev.data);
           reveal.set(accumulated);
@@ -649,7 +690,7 @@
           source.close();
           // Let the paced reveal (see _TEXT_REVEAL_SCRIPT) catch up first.
           reveal.finish(function() {
-            button.disabled = false;
+            resetSendButton();
             stopStreamingFlag();
             // The reply is now persisted (see _chat_job_finish/append_message
             // on the server) - refresh so its bubble picks up markdown
@@ -662,6 +703,7 @@
           });
         });
         source.addEventListener('error', function(ev) {
+          if (aborted) return;
           var message = ⟦json.dumps(_t('Something went wrong - try again.'))⟧;
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
@@ -675,7 +717,7 @@
             // it visibly rather than leaving the bubble unchanged.
             pending.show(accumulated + ' ' + ⟦json.dumps(_t('(reply interrupted)'))⟧, false);
           }
-          button.disabled = false;
+          resetSendButton();
           stopStreamingFlag();
           source.close();
         });
@@ -684,9 +726,14 @@
       fetch('/activity/chat', { method: 'POST', body: body })
         .then(function(response) { return response.json().then(function(data) { return { ok: response.ok, data: data }; }); })
         .then(function(result) {
+          if (aborted) {
+            // Stopped before the server answered: stop the reply it just started.
+            if (result.ok) postStop(result.data.reply_key);
+            return;
+          }
           if (!result.ok) {
             pending.show(result.data.error || ⟦json.dumps(_t('Something went wrong.'))⟧, false);
-            button.disabled = false;
+            resetSendButton();
             stopStreamingFlag();
             return;
           }
@@ -704,6 +751,7 @@
           }
           refreshHistory();
           refreshMessageList().then(function() {
+            if (aborted) return;
             pending = appendPendingLoopBubble();
             reveal.stop();
             reveal = window.__loopTextReveal(function(text) { pending.show(text, true); });
@@ -712,7 +760,8 @@
         })
         .catch(function() {
           pending.show(⟦json.dumps(_t('Something went wrong - try again.'))⟧, false);
-          button.disabled = false;
+          if (aborted) return;
+          resetSendButton();
           stopStreamingFlag();
         });
     });
