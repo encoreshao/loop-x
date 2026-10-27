@@ -8,8 +8,8 @@
   --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 
   --seg-active-bg: var(--md-surface-container-highest);
-  /* the X in LoopX: blue, the complement of the office's warm cream walls */
-  --brand-x: #4F7CFF;
+  /* the X in LoopX: the orange of the logo mark, which stands out on the tinted sidebars */
+  --brand-x: #F2691F;
   --md-primary: #0A84FF;
   --md-on-primary: #FFFFFF;
   --md-primary-container: #1B3A5E;

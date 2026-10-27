@@ -18,7 +18,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Tabs and the Appearance options share one macOS-style segmented control whose track and selected segment follow the chosen theme colour.
 - Office: the Switch to Dashboard button moved out of the chat header to the top-left of the office, so it is reachable without opening the chat.
 - Office: the Switch to Dashboard button now sits at the top right of the office, to the left of Open chat.
-- The product is spelled "LoopX" everywhere it is shown (was "Loop X"), and the "X" in the sidebar and chat-panel wordmark takes a blue accent that complements the office walls.
+- The product is spelled "LoopX" everywhere it is shown (was "Loop X"), and the "X" in the sidebar and chat-panel wordmark takes a orange accent.
 
 ## [0.10.0] - 2026-10-27
 
