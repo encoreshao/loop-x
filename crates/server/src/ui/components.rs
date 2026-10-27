@@ -3,6 +3,10 @@
 
 use crate::ui::pyfmt::escape as h;
 
+/// The icons for the two modes, so every place that offers one shows the same glyph.
+pub const ICON_OFFICE: &str = "office";
+pub const ICON_DASHBOARD: &str = "space_dashboard";
+
 /// Wraps every "LoopX" in already-escaped HTML so the "X" takes the brand accent
 /// (`.brand-x`). Use it only for text content, never inside an attribute or `<title>`.
 pub fn wordmark(escaped_html: &str) -> String {

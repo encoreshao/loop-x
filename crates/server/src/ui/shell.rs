@@ -222,7 +222,7 @@ pub fn render_shell(
     let ai_trigger_html = format!(
         "{}<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
         super::pages::queue::pill_html(ctx),
-        icons::icon("office"),
+        icons::icon(super::components::ICON_OFFICE),
         render("shell_ai_trigger", &scope)
     );
 

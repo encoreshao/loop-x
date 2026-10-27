@@ -1,7 +1,7 @@
 //! `GET /office/state`: the JSON the office view polls, one entry per loop.
 
 use crate::ui::assets;
-use crate::ui::components::{pill_bar, pill_button, pill_icon_link};
+use crate::ui::components::{pill_bar, pill_button, pill_icon_link, wordmark, ICON_DASHBOARD, ICON_OFFICE};
 use crate::ui::office;
 use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -102,9 +102,9 @@ background:radial-gradient(900px 520px at 50% 18%,color-mix(in srgb,var(--md-pri
 .chooser-inner{margin:auto;width:min(760px,100%);display:flex;flex-direction:column;align-items:center;gap:2.25rem;text-align:center}\
 .chooser-lang{position:fixed;top:1rem;right:1.25rem;z-index:101}\
 .chooser-lang button,.chooser-lang .icon{color:var(--md-on-surface-variant)}\
-.chooser-mark{display:grid;place-items:center;width:64px;height:64px;margin:0 auto;border-radius:18px;background:linear-gradient(145deg,var(--md-primary),color-mix(in srgb,var(--md-primary) 55%,#7d5cff));color:var(--md-on-primary);box-shadow:0 10px 30px color-mix(in srgb,var(--md-primary) 38%,transparent)}\
-.chooser-mark .icon{width:32px;height:32px}\
-.chooser h1{margin:1.1rem 0 0;font-size:clamp(1.75rem,4vw,2.4rem);font-weight:650;letter-spacing:-.02em;line-height:1.15}\
+.chooser-mark{display:grid;place-items:center;margin:0 auto}\
+.chooser-mark .brand-mark{width:84px;height:84px}\
+.chooser h1{margin:.6rem 0 0;font-size:clamp(2rem,5vw,2.9rem);font-weight:750;letter-spacing:-.02em;line-height:1.1}\
 .chooser-sub{margin:.55rem 0 0;font-size:1.05rem;color:var(--md-on-surface-variant)}\
 .chooser-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.25rem;width:100%}\
 .chooser-card{display:flex;flex-direction:column;align-items:flex-start;gap:.5rem;box-sizing:border-box;padding:1.75rem;text-align:left;color:inherit;text-decoration:none;border-radius:28px;\
@@ -141,25 +141,25 @@ pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
     };
     let body = format!(
         "{CHOOSER_CSS}<div class='chooser'><div class='chooser-lang'>{}</div><div class='chooser-inner'>\
-<div><div class='chooser-mark'>{}</div><h1>{}</h1><p class='chooser-sub'>{}</p></div>\
+<div><div class='chooser-mark'>{}</div><h1 class='chooser-brand'>{}</h1><p class='chooser-sub'>{}</p></div>\
 <div class='chooser-grid'>{}{}</div><p class='chooser-hint'>{}</p></div></div>",
         crate::ui::shell::lang_switch_html(ctx.lang),
-        crate::ui::icons::icon("auto_awesome"),
-        h(&ctx.t("Choose how you want to work")),
-        h(&ctx.t("Pick a view to start with.")),
+        crate::ui::consts::ds("_BRAND_MARK_ICON"),
+        wordmark("LoopX"),
+        h(&ctx.t("Choose your view")),
         card(
             "/office",
-            "apartment",
+            ICON_OFFICE,
             ctx.t("Office"),
-            ctx.t("Three colleagues in a 3D office run your loops, with a chat beside it to talk to them.")
+            ctx.t("A 3D office with a chat")
         ),
         card(
             "/?mode=dashboard",
-            "space_dashboard",
+            ICON_DASHBOARD,
             ctx.t("Dashboard"),
-            ctx.t("The classic view: pages for loops, runs, insights and settings.")
+            ctx.t("Loops, runs and settings")
         ),
-        h(&ctx.t("You can switch at any time.")),
+        h(&ctx.t("You can switch any time.")),
     );
     let html = render_shell(ctx, "LoopX · LoopX Engineering", "overview", "", &body, ShellOpts::default());
     UiResponse::html(with_html_class(html, "chooser-mode"))
@@ -191,7 +191,7 @@ fn office_page(ctx: &UiCtx) -> UiResponse {
         pill_icon_link(
             "/?mode=dashboard",
             &ctx.t("Switch to Dashboard"),
-            &crate::ui::icons::icon("space_dashboard"),
+            &crate::ui::icons::icon(ICON_DASHBOARD),
             "onclick=\"try{localStorage.removeItem('loop-ai-panel-open')}catch(e){}\""
         ),
         pill_button(&ctx.t("Open chat"), "office-chat-toggle", "data-office-chat-toggle")
@@ -653,6 +653,9 @@ mod tests {
         assert!(body.contains("<html class=\"chooser-mode\""), "{body}");
         assert!(body.contains("href='/office'"));
         assert!(body.contains("href='/?mode=dashboard'"));
+        // The LoopX logo and wordmark, and the same mode icons the topbar and office use.
+        assert!(body.contains("<svg class='brand-mark'") && body.contains("Loop<span class='brand-x'>X</span>"));
+        assert!(body.contains("#i-office") && body.contains("#i-space_dashboard") && !body.contains("#i-apartment"));
         assert!(!body.contains("id='office'"));
     }
 
