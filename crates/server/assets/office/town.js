@@ -8,8 +8,8 @@ const [{ buildPerson, appearanceFor }, { SHOPS, STREET }] = await Promise.all([i
 
 const WALK_SPEED = 1.7;
 /// Where the walkers appear and disappear, either side of the row.
-const EDGE = 62;
-const STAY_S = [10, 22], WAIT_S = [3, 14];
+const EDGE = 50;
+const STAY_S = [10, 22], WAIT_S = [2, 8];
 const angDiff = (a, b) => {
   let d = b - a;
   while (d > Math.PI) d -= 2 * Math.PI;
@@ -51,7 +51,7 @@ export function buildTown(scene, THREE, { R, still }) {
     w.phase = "walk";
     w.wait = 0;
   };
-  const pedestrians = 4, customersPerShop = 2;
+  const pedestrians = 8, customersPerShop = 2;
   const entries = [];
   for (let i = 0; i < pedestrians; i++) entries.push({ name: "walker-" + i });
   for (const place of Object.keys(SHOPS)) for (let i = 0; i < customersPerShop; i++) entries.push({ name: `${place}-guest-${i}`, place });
@@ -62,7 +62,7 @@ export function buildTown(scene, THREE, { R, still }) {
     // Spread them along the street (and the customers over time) so they do not start in a queue.
     w.x = (R() - 0.5) * 2 * EDGE;
     if (w.place) {
-      w.wait = i * 2 + R() * 4;
+      w.wait = (i % 4) * 1.5 + R() * 3;
       w.phase = "idle";
       w.path = [];
     }

@@ -223,7 +223,7 @@ with Chrome() as c:
     c.screenshot(f"{out}/inside-13h.png")
 
 # 6b. Trips to the shops: only in the workday, one at a time, and back at once for work.
-SHOP = {"coffee": (-13.0, -5.0), "books": (5.0, 13.0)}
+SHOP = {"coffee": (-33.0, -25.0), "books": (-24.0, -16.0)}
 def idle_loops():
     return [loop("a-loop", "idle"), loop("b-loop", "idle"), loop("c-loop", "idle")]
 
@@ -251,7 +251,7 @@ with Chrome() as c:
     except TimeoutError:
         fails.append(f"trips: {who} never reached the {place} shop: {debug(c)}")
     me = next((a for a in debug(c) if a["name"] == who), None)
-    if me and not (lo < me["x"] < hi and 17.2 < me["z"] < 22.4 and me["state"] == "idle" and not me["seated"]):
+    if me and not (lo < me["x"] < hi and 5.5 < me["z"] < 12.5 and me["state"] == "idle" and not me["seated"]):
         fails.append(f"trips: {who} is not standing idle inside the {place} shop: {me}")
     c.evaluate(f"window.__office.select({json.dumps(who)})")
     card = c.evaluate("(() => { const n = document.querySelector('.office-panel-note'); return n && !n.hidden ? n.textContent : ''; })()")
@@ -353,6 +353,34 @@ with Chrome() as c:
             c.wait_for("location.pathname === '/office'", timeout=15, interval=0.25)
         except TimeoutError:
             fails.append("ctrl+v: did not go from the Dashboard back to the Office")
+
+# 6d. With no work an idle colleague strolls round the office (any hour, never leaving it), and
+# work calls them back to the desk.
+with Chrome() as c:
+    load(c, "h=20")
+    set_loops(c, idle_loops())
+    try:
+        c.wait_for("window.__office.debug().some(a => a.at === 'roam')", timeout=70, interval=0.5)
+    except TimeoutError:
+        fails.append(f"roam: nobody strolled round the office with no work: {debug(c)}")
+    else:
+        pts = []
+        for _ in range(20):
+            c.pump(0.5)
+            pts += [(a["x"], a["z"]) for a in debug(c) if a["at"] == "roam" or a["walking"]]
+        if any(not (-14.5 < x < -1.5 and -9 < z < 12.4) for x, z in pts):
+            fails.append(f"roam: someone left the office: {[p for p in pts if not (-14.5 < p[0] < -1.5 and -9 < p[1] < 12.4)][:3]}")
+        who = next((a for a in debug(c) if a["at"] == "roam"), None)
+        if who:
+            if who["away"]:
+                fails.append(f"roam: a stroll should not count as a shop trip: {who}")
+            set_loops(c, [loop(n, "working" if n in who["loops"] else "idle") for n in ("a-loop", "b-loop", "c-loop")])
+            try:
+                c.wait_for(f"window.__office.debug().some(a => a.name === {json.dumps(who['name'])} && a.seated && !a.walking && a.at === 'desk')", timeout=60, interval=0.5)
+            except TimeoutError:
+                fails.append(f"roam: {who['name']} did not go back to the desk when given work: {debug(c)}")
+    if c.errors:
+        fails.append("roam console errors: " + " | ".join(c.errors[:3]))
 
 # 7. Reduced motion: nobody talks, a state change shows at once, no errors.
 with Chrome(reduced_motion=True) as c:

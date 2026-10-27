@@ -264,6 +264,7 @@ async function main() {
   office.talkNow = () => agents.talkNow();
   office.visitNow = (place) => agents.visitNow(place);
   office.debug = () => agents.debug();
+  office.street = () => handles.folk.map((f) => [f.g.position.x, f.g.position.z, f.g.visible]);
 
   // ---------- selection, hover and the camera ----------
   const FOCUS_MS = 600, FOCUS_DIST = 11, CHEST = 1.5;

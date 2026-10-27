@@ -278,6 +278,7 @@ fn base_strings(ctx: &UiCtx) -> Value {
         "bookstore": ctx.t("Bookstore"),
         "at_coffee": ctx.t("At the coffee shop"),
         "at_books": ctx.t("At the bookstore"),
+        "at_roam": ctx.t("Strolling round the office"),
         "topic_1": ctx.t("Should the daily review run earlier?"),
         "topic_2": ctx.t("Which loop is costing us the most time?"),
         "topic_3": ctx.t("Can we trust the inbox triage on its own yet?"),
