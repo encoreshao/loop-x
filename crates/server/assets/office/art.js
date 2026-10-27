@@ -359,11 +359,7 @@ export function logoTexture(THREE) {
   x.font = "800 200px -apple-system,system-ui,sans-serif";
   x.fillText("Loop", 470, 290);
   const lw = x.measureText("Loop").width;
-  const gx = x.createLinearGradient(470 + lw, 100, 470 + lw + 190, 300);
-  gx.addColorStop(0, "#7AA2FF");
-  gx.addColorStop(0.5, "#FF8DB8");
-  gx.addColorStop(1, "#FF8A00");
-  x.fillStyle = gx;
+  x.fillStyle = "#4F7CFF"; // the same accent as the .brand-x wordmark in the UI
   x.fillText("X", 470 + lw, 290);
   return textureOf(THREE, c);
 }
