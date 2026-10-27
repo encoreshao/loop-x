@@ -429,7 +429,7 @@ export function buildWorld(scene, THREE, opts = {}) {
     om(new THREE.SphereGeometry(0.22, 10, 8), lampM, x, 3.2, -13.3);
   }
   // The coffee shop and the bookstore beside the office, and the street in front of all three.
-  shops.buildShops(scene, THREE, { art, strings, M });
+  const shopGlow = shops.buildShops(scene, THREE, { art, strings, M }).glow;
   // Skyline: day windows in the colour map, night windows in the emissive map.
   function windowsTexture(lit) {
     const c = document.createElement("canvas");
@@ -499,7 +499,8 @@ export function buildWorld(scene, THREE, opts = {}) {
     g.position.set((R() - 0.5) * 200, -0.3, lane ? shops.STREET.roadZ1 - 2 : shops.STREET.roadZ0 + 2);
     if (!lane) g.rotation.y = Math.PI;
     scene.add(g);
-    cars.push({ g, v: (4 + R() * 5) * (lane ? 1 : -1) });
+    // Each car drives, brakes to a halt for a while now and then, and sets off again at a new pace.
+    cars.push({ g, dir: lane ? 1 : -1, v: 0, top: 3 + R() * 7, goal: 3 + R() * 7, timer: R() * 8, resting: R() < 0.2 });
   }
   const birdM = bm(0x333333), wingGeo = new THREE.BoxGeometry(0.5, 0.02, 0.18);
   function placeBird(b, t) {
@@ -529,7 +530,7 @@ export function buildWorld(scene, THREE, opts = {}) {
     g.position.set(x, -0.3, -12.6);
     g.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2;
     scene.add(g);
-    walkers.push({ g, l, r, v: dir * (1 + R() * 0.6) });
+    walkers.push({ g, l, r, dir, v: 0, top: 1 + R() * 0.8, timer: R() * 6, resting: false });
   }
   walker(0xd1604b, -10, 1);
   walker(0x4b79c4, 6, -1);
@@ -568,6 +569,7 @@ export function buildWorld(scene, THREE, opts = {}) {
       lampShade.emissiveIntensity = lerp(1.8, 0.2, dayF);
       lampM.color.copy(mix(0xfff3a0, 0xbfc4cc, dayF));
       carLightM.color.copy(mix(0xfff2a0, 0xcfd3da, dayF));
+      shopGlow.set(1 - dayF);
       grass.material.color.copy(mix(0x24402a, 0x75b455, dayF)).lerp(new C(0x8a6a3c), tw * 0.12);
       cloudM.color.copy(mix(0x39425f, 0xffffff, dayF)).lerp(new C(0xffb08a), tw * 0.5);
       cloudM.opacity = lerp(0.7, 0.92, dayF);
@@ -583,7 +585,22 @@ export function buildWorld(scene, THREE, opts = {}) {
         if (c.position.x > 150) c.position.x = -150;
       }
       for (const c of cars) {
-        c.g.position.x += c.v * dt;
+        if ((c.timer -= dt) <= 0) {
+          c.resting = !c.resting && R() < 0.35;
+          c.timer = c.resting ? 3 + R() * 9 : 4 + R() * 12;
+          c.top = 2.5 + R() * 8.5;
+        }
+        // Never run into the car ahead in the same lane: slow to match it, stop when close.
+        let gap = Infinity;
+        for (const o of cars) {
+          if (o === c || o.dir !== c.dir) continue;
+          const d = (o.g.position.x - c.g.position.x) * c.dir;
+          if (d > 0 && d < gap) gap = d;
+        }
+        let goal = c.resting ? 0 : c.top;
+        if (gap < 4.5 + c.v * 0.9) goal = 0;
+        c.v += Math.max(-9 * dt, Math.min(3 * dt, goal - c.v));
+        c.g.position.x += c.v * c.dir * dt;
         if (c.g.position.x > 115) c.g.position.x = -115;
         if (c.g.position.x < -115) c.g.position.x = 115;
       }
@@ -593,10 +610,16 @@ export function buildWorld(scene, THREE, opts = {}) {
         placeBird(b, t);
       }
       for (const w of walkers) {
-        w.g.position.x += w.v * dt;
+        if ((w.timer -= dt) <= 0) {
+          w.resting = !w.resting && R() < 0.4;
+          w.timer = w.resting ? 2 + R() * 7 : 3 + R() * 9;
+          w.top = 0.6 + R() * 1.4;
+        }
+        w.v += Math.max(-4 * dt, Math.min(2 * dt, (w.resting ? 0 : w.top) - w.v));
+        w.g.position.x += w.v * w.dir * dt;
         if (w.g.position.x > 45) w.g.position.x = -45;
         if (w.g.position.x < -45) w.g.position.x = 45;
-        const s = Math.sin(t * 6 * Math.abs(w.v)) * 0.6;
+        const s = Math.sin(t * 6 * Math.abs(w.v)) * 0.6 * Math.min(1, w.v * 2);
         w.l.rotation.x = s;
         w.r.rotation.x = -s;
       }

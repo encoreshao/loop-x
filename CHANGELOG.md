@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 - Office: a "Dawn" time-of-day option and a violet-to-rose pre-dawn sky for the early hours before sunrise.
+- Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 
 ### Changed
 - The Office/Dashboard chooser shows the LoopX logo and wordmark, uses the same mode icons as the topbar and office, and has shorter wording.

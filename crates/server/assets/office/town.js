@@ -50,6 +50,9 @@ export function buildTown(scene, THREE, { R, still }) {
     w.path = [[dir * EDGE, w.z]];
     w.phase = "walk";
     w.wait = 0;
+    w.base = w.speed;
+    w.strollT = 2 + R() * 8;
+    w.rest = 0;
   };
   const pedestrians = 8, customersPerShop = 2;
   const entries = [];
@@ -101,10 +104,25 @@ export function buildTown(scene, THREE, { R, still }) {
     w.phase = "out";
   }
 
+  /// Pedestrians change pace now and then and stop for a breather (to look around, tie a shoe).
+  function stroll(w, dt) {
+    if (w.phase !== "walk" || w.place) return false;
+    if (w.rest > 0) {
+      w.rest -= dt;
+      return true;
+    }
+    if ((w.strollT -= dt) <= 0) {
+      w.strollT = 3 + R() * 9;
+      if (R() < 0.3) w.rest = 1.5 + R() * 6;
+      else w.speed = w.base * (0.5 + R() * 1.1);
+    }
+    return false;
+  }
+
   function stepWalker(w, dt, t) {
     const p = w.g.position;
     let walking = false;
-    if (w.path.length) {
+    if (w.path.length && !stroll(w, dt)) {
       const [tx, tz] = w.path[0], dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = w.speed * dt;
       if (d <= step) {
         p.x = tx;

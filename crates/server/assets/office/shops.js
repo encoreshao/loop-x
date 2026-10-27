@@ -71,6 +71,12 @@ export function buildShops(scene, THREE, ctx) {
 
   const glass = new THREE.MeshStandardMaterial({ color: 0xcfe9ff, transparent: true, opacity: 0.16, roughness: 0.05, metalness: 0.1, depthWrite: false });
   const frame = M(0xf7f5f0, { roughness: 0.5 });
+  // Each shop keeps a warm light on at night: glowing ceiling panels plus one point light, both
+  // driven by `glow.set(nightFactor)` (0 by day, 1 at night).
+  const glow = { mats: [], lights: [], set(night) {
+    for (const m of this.mats) m.emissiveIntensity = 0.1 + night * 1.7;
+    for (const l of this.lights) l.intensity = night * 22;
+  } };
   const sign = (text, color) => {
     const tex = art.signTexture(THREE, text, { width: 640, height: 160, background: color, color: "#ffffff", size: 78 });
     return new THREE.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: false });
@@ -102,6 +108,14 @@ export function buildShops(scene, THREE, ctx) {
     const board = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 1.35), sign(signText, signColor));
     board.position.set(cx, WALL + 0.75, Z0 + 0.1);
     group.add(board);
+    // Warm ceiling panels over the shop floor, and a point light under them.
+    const panelM = M(0xfff0d0, { emissive: 0xffc878, emissiveIntensity: 0.1 });
+    glow.mats.push(panelM);
+    for (const pz of [7.4, 10.4]) box(2.6, 0.08, 0.7, panelM, cx, WALL - 0.06, pz).castShadow = false;
+    const light = new THREE.PointLight(0xffc27a, 0, 11, 1.6);
+    light.position.set(cx, WALL - 0.5, 9);
+    group.add(light);
+    glow.lights.push(light);
     // A door mat and planters either side of the door.
     box(1.5, 0.03, 0.9, M(0x5a3d2b), cx, 0.07, Z1 + 0.55).castShadow = false;
     for (const sx of [-1, 1]) {
@@ -157,5 +171,5 @@ export function buildShops(scene, THREE, ctx) {
     box(0.9, 0.5, 0.9, M(0x9b3d3d), cx - 2.4, 0.3, 11.0);
     box(0.9, 0.8, 0.2, M(0x9b3d3d), cx - 2.4, 0.7, 11.4);
   }
-  return group;
+  return { group, glow };
 }
