@@ -170,6 +170,7 @@ html.office-mode .content-area,html.office-mode .main-scroll,html.office-mode .w
 html.office-mode .ai-panel{top:0;right:0;bottom:0;border-radius:0;box-shadow:-1px 0 0 var(--md-outline-variant,#d0d0d0)}\
 html.office-mode #office{position:fixed;top:0;left:0;bottom:0;right:0;height:auto;min-height:0;border-radius:0}\
 html.office-mode.ai-panel-open #office{right:var(--ai-panel-width)}\
+.office-mode-switch{position:absolute;top:12px;left:12px;display:flex;align-items:center;justify-content:center;width:2.2rem;height:2.2rem;border-radius:999px;background:rgba(20,22,28,.78);color:#e6e8ee}\
 .office-chat-toggle{position:absolute;top:12px;right:12px;display:none;font:inherit;padding:.4rem .9rem;border:0;border-radius:999px;background:rgba(20,22,28,.78);color:#e6e8ee;cursor:pointer}\
 html.office-mode:not(.ai-panel-open) .office-chat-toggle{display:block}\
 html.office-mode:not(.ai-panel-open) .office-panel{top:56px}\
@@ -186,8 +187,11 @@ const OFFICE_CHAT_OPEN_JS: &str = "<script>try{if(localStorage.getItem('loop-ai-
 /// and no menu: switching modes lives in the chat header.
 fn office_page(ctx: &UiCtx) -> UiResponse {
     let toggle = format!(
-        "<button type='button' class='office-chat-toggle' data-office-chat-toggle aria-label=\"{0}\">{0}</button>",
-        h(&ctx.t("Open chat"))
+        "<button type='button' class='office-chat-toggle' data-office-chat-toggle aria-label=\"{0}\">{0}</button>\
+         <a class='office-mode-switch' href='/?mode=dashboard' onclick=\"try{{localStorage.removeItem('loop-ai-panel-open')}}catch(e){{}}\" aria-label=\"{1}\" title=\"{1}\">{2}</a>",
+        h(&ctx.t("Open chat")),
+        h(&ctx.t("Switch to Dashboard")),
+        crate::ui::icons::icon("space_dashboard")
     );
     let view = office_view_html(ctx).replacen("</section>", &format!("{toggle}</section>"), 1);
     // What shows when the scene cannot (no WebGL, a failed load): the way to the Dashboard.
@@ -196,17 +200,7 @@ fn office_page(ctx: &UiCtx) -> UiResponse {
         h(&ctx.t("Switch to Dashboard"))
     );
     let body = format!("{OFFICE_MODE_CSS}{OFFICE_CHAT_OPEN_JS}{view}{fallback}");
-    let mut html = render_shell(ctx, "Office · Loop X Engineering", "office", "", &body, ShellOpts::default());
-    let switch = format!(
-        "<a class='ai-panel-icon-btn' href='/?mode=dashboard' onclick=\"try{{localStorage.removeItem('loop-ai-panel-open')}}catch(e){{}}\" aria-label=\"{0}\" title=\"{0}\">{1}</a>",
-        h(&ctx.t("Switch to Dashboard")),
-        crate::ui::icons::icon("space_dashboard")
-    );
-    html = html.replacen(
-        "<div class='ai-panel-header-actions'>",
-        &format!("<div class='ai-panel-header-actions'>{switch}"),
-        1,
-    );
+    let html = render_shell(ctx, "Office · Loop X Engineering", "office", "", &body, ShellOpts::default());
     let mut resp = UiResponse::html(with_html_class(html, "office-mode"));
     resp.headers.push(mode_cookie("office"));
     resp
@@ -267,6 +261,7 @@ fn base_strings(ctx: &UiCtx) -> Value {
         "time_of_day": ctx.t("Time of day"),
         "auto": ctx.t("Auto"),
         "day": ctx.t("Day"),
+        "dawn": ctx.t("Dawn"),
         "dusk": ctx.t("Dusk"),
         "night": ctx.t("Night"),
         "no_webgl": ctx.t("The office view needs WebGL, which this browser has turned off. Use the Dashboard instead."),

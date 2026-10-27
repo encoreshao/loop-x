@@ -11,6 +11,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+- Office: a "Dawn" time-of-day option and a violet-to-rose pre-dawn sky for the early hours before sunrise.
+
+### Changed
+- Office: the Switch to Dashboard button moved out of the chat header to the top-left of the office, so it is reachable without opening the chat.
+
 ## [0.10.0] - 2026-10-27
 
 ### Added

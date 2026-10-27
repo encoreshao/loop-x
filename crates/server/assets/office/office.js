@@ -69,7 +69,7 @@ function hashHooks() {
 }
 
 function timeControl(onPick, initial) {
-  const presets = [["auto", null], ["day", 13], ["dusk", 17.9], ["night", 23]];
+  const presets = [["auto", null], ["dawn", 5.2], ["day", 13], ["dusk", 17.9], ["night", 23]];
   const group = document.createElement("div");
   group.className = "office-tod";
   group.setAttribute("role", "group");
