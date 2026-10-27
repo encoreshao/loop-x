@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-27
+
 ### Added
 - Chat: while the assistant is replying, the send button becomes a stop button (in the chat panel and on the Chat page); clicking it ends the reply at once, kills the AI process and anything it started, keeps the text written so far marked as stopped, and saves nothing for that reply.
 - Agents: loops that are due, and runs you start by hand, now wait in one run queue and run one at a time (a manual run goes first; a loop already waiting or running is never queued twice; a slot missed while the Mac slept is queued as a catch-up). A pill in the topbar shows how many are running and waiting and opens the new Agents page (`/queue`), which lists what runs, what is next and what just finished, with Stop, Move to front and Remove; the Mac island lists the waiting runs and says how many are queued.
@@ -431,7 +433,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/encoreshao/loop-x/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/encoreshao/loop-x/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/encoreshao/loop-x/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/encoreshao/loop-x/compare/v0.7.0...v0.8.0
