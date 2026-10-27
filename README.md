@@ -19,7 +19,15 @@
 
 ---
 
-LoopX is a teammate that runs quietly on your Mac. Every weekday it works through the routine, so you only spend attention on what needs your judgment. A local dashboard shows what it did.
+LoopX is a local-first AI agent orchestration platform for macOS. It runs specialized, scheduled AI agents that automate engineering workflows and everyday knowledge work, so you only spend attention on what needs your judgment.
+
+- **Loops.** Independent, configurable workflows, each with its own task spec, schedule and run history.
+- **AI agents.** Coding agents such as Claude Code, Codex, Gemini, Kimi and Cursor reason about the task and do the work.
+- **Orchestration.** LoopX runs each loop on its own, manages the run and carries it from finding the task to a reviewable result.
+- **Human in the loop.** Agents fix issues and draft merge requests, replies and briefs. You keep control of merging and every other critical action.
+- **Local first.** Everything runs on your Mac with your existing tools and credentials.
+
+A local app shows what it did, in two views you can switch between at any time: a **Dashboard** for loops, runs and settings, and an **Office**, a 3D office with a chat, where you can talk to your agents.
 
 ## Goal and mission
 
@@ -59,7 +67,7 @@ The full list is in [Safety boundaries](docs/reference.md#safety-boundaries).
 
 ## Get started
 
-You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access token, and one AI CLI: Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), Kimi (`kimi`) or Cursor (`agent`/`cursor-agent`). Claude is the default; the others are chosen in Settings -> AI CLI. A Slack webhook is optional, for notifications.
+You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access token, and one AI CLI: Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), Kimi (`kimi`) or Cursor (`agent`/`cursor-agent`). Claude is the default; the others are chosen in Settings → AI CLI. A Slack webhook is optional, for notifications.
 
 **1. Install**
 

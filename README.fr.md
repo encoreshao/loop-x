@@ -19,7 +19,15 @@
 
 ---
 
-Loop X est un coéquipier qui travaille discrètement sur votre Mac. Chaque jour ouvré, il s'occupe de la routine, pour que vous ne consacriez votre attention qu'à ce qui demande votre jugement. Un tableau de bord local montre ce qu'il a fait.
+Loop X est une plateforme d'orchestration d'agents IA, locale d'abord, pour macOS. Elle exécute selon un planning des agents IA spécialisés qui automatisent les flux de travail d'ingénierie et le travail de connaissance de tous les jours, pour que vous ne consacriez votre attention qu'à ce qui demande votre jugement.
+
+- **Boucles.** Des flux de travail indépendants et configurables, chacun avec sa spécification de tâche, son planning et son historique d'exécutions.
+- **Agents IA.** Des agents de code comme Claude Code, Codex, Gemini, Kimi et Cursor réfléchissent à la tâche et font le travail.
+- **Orchestration.** Loop X exécute et gère chaque boucle séparément, de la découverte de la tâche jusqu'à un résultat prêt à relire.
+- **L'humain décide.** Les agents corrigent des tickets et rédigent des merge requests, des réponses et des briefs. Vous gardez la main sur la fusion et sur toute autre action critique.
+- **Local d'abord.** Tout s'exécute sur votre Mac, avec vos outils et vos identifiants existants.
+
+L'application locale montre ce qu'elle a fait, selon deux vues entre lesquelles vous pouvez basculer à tout moment : un **tableau de bord** (boucles, exécutions et réglages) et un **bureau** (un bureau 3D avec un chat, où vous pouvez parler à vos agents).
 
 ## Objectif et mission
 
