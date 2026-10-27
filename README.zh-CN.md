@@ -247,7 +247,7 @@ loopx run topic-loop    # the topic monitor loop
 
 | 代理                                    | 运行内容                                                                                                                                         |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------|
-| `com.hermes.loop-engineering`           | `loopx scheduler`，每 15 分钟一次（`StartInterval`）——运行 `~/.loopx/loops.json` 中已注册且到期的循环 |
+| `com.hermes.loop-engineering`           | `loopx scheduler`，每分钟一次（`StartInterval`）——将到期的循环加入队列，由 worker 逐个运行——运行 `~/.loopx/loops.json` 中已注册且到期的循环 |
 | `com.hermes.loop-engineering-dashboard` | Web 仪表盘（`loopx serve`），常驻运行（`RunAtLoad` + `KeepAlive`）                                                                                |
 | `com.hermes.loopx.backend`              | 随 `LoopX.app` 打包的后端，由应用自行注册（不是本仓库中的模板）                                                                                  |
 

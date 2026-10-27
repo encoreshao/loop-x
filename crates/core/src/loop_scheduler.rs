@@ -182,8 +182,7 @@ pub fn is_due(loop_: &Value, state: &SchedulerState, now: NaiveDateTime) -> bool
             .get("interval_minutes")
             .filter(|v| loops_config::py_truthy(v));
         if let Some(minutes) = minutes.and_then(Value::as_i64) {
-            // A minute interval is as long as the scheduler's own 15-minute
-            // poll, so allow a minute of slack.
+            // Ticks are a minute apart, so allow a minute of slack.
             return elapsed >= Duration::minutes(minutes) - Duration::minutes(1);
         }
         return elapsed >= Duration::hours(int_field(&schedule, "interval_hours"));
@@ -218,21 +217,36 @@ pub fn is_due(loop_: &Value, state: &SchedulerState, now: NaiveDateTime) -> bool
         != Some(today.as_str())
 }
 
-/// Run every due, not-already-running loop in registry order, one at a time.
-/// `runner` receives `["bash", <run-loop-now.sh>, <loop name>]` and blocks until
-/// the run ends; its failure never stops the rest. `last_attempted_*` is
-/// recorded right after each attempt regardless of outcome, so a failed run is
-/// not retried until its next slot. Returns the names attempted.
-pub fn run_due_loops(
+/// How late a daily/weekly/monthly slot may be picked up and still count as on time.
+const ON_TIME_MINUTES: i64 = 5;
+
+/// Whether `loop_`'s time-of-day slot passed more than [`ON_TIME_MINUTES`] ago:
+/// the Mac slept or LoopX was closed at the time. Hourly loops have no slot.
+fn slot_missed(loop_: &Value, now: NaiveDateTime) -> bool {
+    let schedule = loop_.get("schedule").cloned().unwrap_or(Value::Null);
+    if schedule.get("frequency").and_then(Value::as_str) == Some("hourly") {
+        return false;
+    }
+    let slot = now.date().and_hms_opt(
+        int_field(&schedule, "hour").clamp(0, 23) as u32,
+        int_field(&schedule, "minute").clamp(0, 59) as u32,
+        0,
+    );
+    slot.is_some_and(|slot| now - slot > Duration::minutes(ON_TIME_MINUTES))
+}
+
+/// The scheduler tick: queue every due loop that is not already queued or
+/// running (the worker starts them one by one) and record the attempt, so a loop
+/// is queued once per slot. Returns the names queued, in registry order.
+pub fn enqueue_due_loops(
     loops: &[Value],
     state_path: &Path,
-    run_loop_now_path: &Path,
+    queue: &crate::run_queue::RunQueue,
     now: NaiveDateTime,
-    is_running: &dyn Fn(&str) -> bool,
-    runner: &mut dyn FnMut(&[String]) -> std::io::Result<()>,
 ) -> Vec<String> {
+    use crate::run_queue::{Enqueued, Reason};
     let mut state = read_state(state_path);
-    let mut attempted = Vec::new();
+    let mut queued = Vec::new();
     for loop_ in loops {
         if !is_due(loop_, &state, now) {
             continue;
@@ -241,16 +255,19 @@ pub fn run_due_loops(
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if is_running(name) {
-            continue;
-        }
-        let argv = vec![
-            "bash".to_string(),
-            run_loop_now_path.display().to_string(),
-            name.to_string(),
-        ];
-        if let Err(e) = runner(&argv) {
-            eprintln!("loop_scheduler: {name} failed to run: {e}");
+        let reason = if slot_missed(loop_, now) {
+            Reason::CatchUp
+        } else {
+            Reason::Scheduled
+        };
+        match queue.enqueue(name, reason, &isoformat(now)) {
+            Ok(Enqueued::Queued { .. }) => queued.push(name.to_string()),
+            // Already waiting or running: leave it for the next slot.
+            Ok(Enqueued::Coalesced { .. }) => continue,
+            Err(e) => {
+                eprintln!("loop_scheduler: could not queue {name}: {e}");
+                continue;
+            }
         }
         let entry = state.entry(name.to_string()).or_insert_with(|| json!({}));
         if let Some(obj) = entry.as_object_mut() {
@@ -263,24 +280,8 @@ pub fn run_due_loops(
         if let Err(e) = write_state(&state, state_path) {
             eprintln!("loop_scheduler: failed to record state for {name}: {e}");
         }
-        attempted.push(name.to_string());
     }
-    attempted
-}
-
-/// The real runner: a child in its own session/process group (so a dashboard
-/// Stop button can `killpg` it without hitting the scheduler), awaited.
-#[cfg(unix)]
-pub fn spawn_and_wait(argv: &[String]) -> std::io::Result<()> {
-    use std::os::unix::process::CommandExt;
-    let (program, args) = argv
-        .split_first()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty command"))?;
-    std::process::Command::new(program)
-        .args(args)
-        .process_group(0)
-        .status()
-        .map(|_| ())
+    queued
 }
 
 #[cfg(test)]
@@ -456,63 +457,53 @@ mod tests {
     }
 
     #[test]
-    fn run_due_loops_runs_due_records_state_and_skips_running() {
+    fn enqueue_due_loops_queues_due_ones_once_and_records_state() {
         let d = tempfile::tempdir().unwrap();
         let sp = d.path().join("state.json");
+        let queue = crate::run_queue::RunQueue::new(d.path().join("q.json"));
         let loops = vec![
             json!({"name": "a", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}),
-            json!({"name": "busy", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}),
+            json!({"name": "b", "schedule": {"frequency": "daily", "hour": 10, "minute": 0}}),
             json!({"name": "later", "schedule": {"frequency": "daily", "hour": 23, "minute": 0}}),
             json!({"name": "off", "enabled": false, "schedule": {"frequency": "daily", "hour": 0, "minute": 0}}),
-            json!({"name": "boom", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}),
         ];
         let now = at(2026, 10, 22, 10, 0);
-        let mut calls: Vec<Vec<String>> = Vec::new();
-        let mut runner = |argv: &[String]| {
-            calls.push(argv.to_vec());
-            if argv[2] == "boom" {
-                Err(std::io::Error::other("nope"))
-            } else {
-                Ok(())
-            }
-        };
-        let attempted = run_due_loops(
-            &loops,
-            &sp,
-            Path::new("/r/run-loop-now.sh"),
-            now,
-            &|n| n == "busy",
-            &mut runner,
-        );
-        assert_eq!(attempted, ["a", "boom"]);
-        assert_eq!(calls[0], ["bash", "/r/run-loop-now.sh", "a"]);
-        let st = read_state(&sp);
-        assert_eq!(st["a"]["last_attempted_date"], "2026-10-22");
-        assert_eq!(st["a"]["last_attempted_at"], "2026-10-22T10:00:00");
-        assert!(st.contains_key("boom"), "a failed run is still recorded");
-        assert!(!st.contains_key("busy") && !st.contains_key("later"));
-        // Same day again: nothing is due any more.
-        let mut none = |_: &[String]| Ok(());
-        assert!(
-            run_due_loops(&loops, &sp, Path::new("x"), now, &|_| false, &mut none)
+        assert_eq!(enqueue_due_loops(&loops, &sp, &queue, now), ["a", "b"]);
+        let snap = queue.snapshot(10);
+        let reason = |n: &str| {
+            snap.queued
                 .iter()
-                .all(|n| n == "busy")
-        );
+                .find(|e| e.loop_name == n)
+                .unwrap()
+                .reason
+                .clone()
+        };
+        assert_eq!(reason("a"), "catch-up", "its 09:00 slot was an hour ago");
+        assert_eq!(reason("b"), "scheduled");
+        let st = read_state(&sp);
+        assert_eq!(st["a"]["last_attempted_at"], "2026-10-22T10:00:00");
+        assert!(!st.contains_key("later") && !st.contains_key("off"));
+        // Same day again: nothing is due any more.
+        assert!(enqueue_due_loops(&loops, &sp, &queue, now).is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn spawn_and_wait_runs_the_command() {
+    fn a_loop_still_queued_is_not_queued_or_marked_attempted_again() {
         let d = tempfile::tempdir().unwrap();
-        let marker = d.path().join("m");
-        let script = d.path().join("run.sh");
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\necho \"$1\" > {}\n", marker.display()),
-        )
-        .unwrap();
-        spawn_and_wait(&["bash".into(), script.display().to_string(), "name-1".into()]).unwrap();
-        assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "name-1");
-        assert!(spawn_and_wait(&["/nonexistent/prog".into()]).is_err());
+        let sp = d.path().join("state.json");
+        let queue = crate::run_queue::RunQueue::new(d.path().join("q.json"));
+        let loops =
+            vec![json!({"name": "h", "schedule": {"frequency": "hourly", "interval_minutes": 5}})];
+        assert_eq!(
+            enqueue_due_loops(&loops, &sp, &queue, at(2026, 10, 22, 10, 0)),
+            ["h"]
+        );
+        // Five minutes later it is due again but is still waiting behind a long run.
+        assert!(enqueue_due_loops(&loops, &sp, &queue, at(2026, 10, 22, 10, 6)).is_empty());
+        assert_eq!(queue.snapshot(10).queued.len(), 1);
+        assert_eq!(
+            read_state(&sp)["h"]["last_attempted_at"],
+            "2026-10-22T10:00:00"
+        );
     }
 }

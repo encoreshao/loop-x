@@ -165,8 +165,11 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Start every loop that is due (what launchd runs)
+    /// Queue every loop that is due and start the queue worker (what launchd runs every minute)
     Scheduler,
+    /// Internal: drains the run queue, one loop after another (started by `scheduler`)
+    #[command(name = "queue-worker", hide = true)]
+    QueueWorker,
     /// Internal: the supervised process behind `loopx run`
     #[command(name = "_entry", hide = true)]
     Entry {
@@ -308,6 +311,7 @@ fn main() -> ExitCode {
         Command::Approvals { args } => approvals_cmd::run(&args),
         Command::Run { args } => run_cmds::run(&args),
         Command::Scheduler => run_cmds::scheduler(&[]),
+        Command::QueueWorker => run_cmds::queue_worker(&[]),
         Command::Doctor { args } => doctor_cmd::run(&args),
         Command::Serve { args } => serve_cmd::run(&args),
         Command::Entry { args } => run_cmds::entry(&args),

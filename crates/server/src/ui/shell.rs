@@ -220,7 +220,8 @@ pub fn render_shell(
     scope.var("ai_label", escaped_t(lang, "Ask Loop X"));
     let office_label = escaped_t(lang, "Switch to Office");
     let ai_trigger_html = format!(
-        "<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
+        "{}<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
+        super::pages::queue::pill_html(ctx),
         icons::icon("office"),
         render("shell_ai_trigger", &scope)
     );

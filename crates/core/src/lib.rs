@@ -70,6 +70,7 @@ pub mod risk;
 pub mod run_control;
 pub mod run_history;
 pub mod run_loop;
+pub mod run_queue;
 pub mod runner_util;
 pub mod secrets;
 pub mod seen_store;

@@ -1056,6 +1056,23 @@
 <div class="nav-tooltip" id="nav-tooltip" role="tooltip" hidden></div>
 <script>
 (function() {
+  // Mission Control pill in the topbar: how many loops run and wait (see
+  // pages/queue.rs). Kept current while the tab is visible.
+  var pill = document.getElementById('queue-pill');
+  if (!pill) return;
+  function refresh() {
+    if (document.hidden) return;
+    fetch('/queue/pill').then(function(r) { return r.json(); }).then(function(d) {
+      pill.className = d.class;
+      var label = pill.querySelector('span');
+      if (label) label.textContent = d.label;
+    }).catch(function() {});
+  }
+  setInterval(refresh, 3000);
+})();
+</script>
+<script>
+(function() {
   // Topbar language switcher - see lang_switch_html and .lang-switch.
   var root = document.getElementById('lang-switch');
   if (!root) return;

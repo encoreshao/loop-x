@@ -2,7 +2,7 @@ import Foundation
 import LoopXKit
 
 /// The app-driven scheduler: while "Run scheduled loops" is on, `loopx scheduler` runs on launch and
-/// every 15 minutes.
+/// every minute.
 @MainActor
 final class SchedulerRunner {
     private let binary: URL?

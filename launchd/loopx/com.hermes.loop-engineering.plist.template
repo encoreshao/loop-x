@@ -23,6 +23,6 @@
 	<key>StandardOutPath</key>
 	<string>{{LOOP_DIR}}/outputs/history/launchd.out.log</string>
 	<key>StartInterval</key>
-	<integer>900</integer>
+	<integer>60</integer>
 </dict>
 </plist>

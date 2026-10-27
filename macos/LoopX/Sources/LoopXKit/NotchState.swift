@@ -100,16 +100,26 @@ public struct NotchState: Equatable, Sendable {
                               actions: [.openDashboard], approvals: [], alertKey: nil)
         }
 
-        let running = TaskNotifications.tasks(in: s).filter { $0.state == .running }
-        if s.appState == .running || !running.isEmpty {
-            let title: String, sub: String?
+        let all = TaskNotifications.tasks(in: s)
+        let running = all.filter { $0.state == .running }
+        let waiting = all.filter { $0.state == .queued }
+        if s.appState == .running || !running.isEmpty || !waiting.isEmpty {
+            var title: String, sub: String?
             if running.count > 1 {
                 title = "\(running.count) tasks running"
                 sub = running.map(\.name).joined(separator: ", ")
+            } else if let one = running.first {
+                title = "\(one.name) running"
+                sub = one.detail
+            } else if let next = waiting.first {
+                title = "\(waiting.count) queued"
+                sub = next.name
             } else {
-                let one = running.first
-                title = one.map { "\($0.name) running" } ?? "Running"
-                sub = one?.detail
+                title = "Running"
+                sub = nil
+            }
+            if !running.isEmpty, !waiting.isEmpty {
+                sub = [sub, "\(waiting.count) queued"].compactMap { $0 }.joined(separator: " · ")
             }
             return NotchState(kind: .running, title: title, subtitle: sub,
                               style: NotchStyle(accent: .blue, symbol: "arrow.triangle.2.circlepath", pulses: true,

@@ -2822,3 +2822,10 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes loading-dots-fade { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
 }
+
+/* Mission Control (/queue): one bordered row per run, its buttons below the detail line. */
+.queue-row { border: 1px solid var(--md-outline-variant); border-radius: 12px; padding: 0.75rem 1rem; }
+.queue-row + .queue-row { margin-top: 0.6rem; }
+.queue-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.queue-actions:not(:empty) { margin-top: 0.6rem; }
+#queue-pill { text-decoration: none; }

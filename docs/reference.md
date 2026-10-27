@@ -89,17 +89,17 @@ Both log to `outputs/history/`, and both also append every AI CLI invocation's o
 
 **On a schedule** — three ways:
 
-- the LoopX app's built-in scheduler: while the app is open and **Settings → Run scheduled loops while LoopX is open** is on, it runs `loopx scheduler` every 15 minutes;
+- the LoopX app's built-in scheduler: while the app is open and **Settings → Run scheduled loops while LoopX is open** is on, it runs `loopx scheduler` every minute;
 - launchd agents: `install-loopx.sh` renders the templates under [`launchd/loopx/`](https://github.com/encoreshao/loop-x/tree/main/launchd/loopx) into `<install dir>/launchd/` once, and you load them with a click each from the dashboard's **Settings → Daemons** page (which also shows whether each is currently loaded and its PID), or by hand with `launchctl load -w`;
 - or run `loopx scheduler` from any scheduler of your own.
 
 | Agent                                   | Runs                                                                                                                                             |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------|
-| `com.hermes.loop-engineering`           | `loopx scheduler`, every 15 minutes (`StartInterval`) — runs whichever loop(s) registered in `~/.loopx/loops.json` are due |
+| `com.hermes.loop-engineering`           | `loopx scheduler`, every minute (`StartInterval`) — queues what is due; a worker runs the queue one loop at a time — runs whichever loop(s) registered in `~/.loopx/loops.json` are due |
 | `com.hermes.loop-engineering-dashboard` | The web dashboard (`loopx serve`), always-on (`RunAtLoad` + `KeepAlive`)                                                                          |
 | `com.hermes.loopx.backend`              | The backend bundled in `LoopX.app`, registered by the app itself (not a template in this repo)                                                    |
 
-Which loops run and on what schedule is config, not code — edit `~/.loopx/loops.json` (see [`config/loops.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/loops.json.template)) to add a loop or change when it's due; adding a loop needs a new `loops.json` entry, not a new plist. The **Settings → Daemons** page's per-agent schedule editor only applies to a plist's own `StartCalendarInterval`, which `com.hermes.loop-engineering` does not have (it polls every 15 minutes on a fixed `StartInterval` and defers to `loops.json` for which loop is actually due) — editing a loop's own schedule is done in the **Loops** pages or by hand in `loops.json`.
+Which loops run and on what schedule is config, not code — edit `~/.loopx/loops.json` (see [`config/loops.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/loops.json.template)) to add a loop or change when it's due; adding a loop needs a new `loops.json` entry, not a new plist. The **Settings → Daemons** page's per-agent schedule editor only applies to a plist's own `StartCalendarInterval`, which `com.hermes.loop-engineering` does not have (it ticks every minute on a fixed `StartInterval` and defers to `loops.json` for which loop is actually due) — editing a loop's own schedule is done in the **Loops** pages or by hand in `loops.json`.
 
 
 ## The dashboard
@@ -170,7 +170,7 @@ Expand for the full list
 | Command / script | Purpose                                                                                                                                                                                                                              |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `loopx run <loop>` | Runs one registered loop now (looked up from `~/.loopx/loops.json`) — logs to `outputs/history/`, records events, notifies Slack on failure; `loopx run gitlab-loop <alias> <issue_iid>` works a single issue. Invoked by `loopx scheduler` (on schedule) or the dashboard (on demand) |
-| `loopx scheduler` | The poll loop launchd (or the app) runs every 15 minutes: reads `~/.loopx/loops.json` and starts whichever registered loop(s) are due |
+| `loopx scheduler` | The tick launchd (or the app) runs every minute: reads `~/.loopx/loops.json`, adds whichever registered loop(s) are due to the run queue (`~/.loopx/run_queue.json`) and starts the queue worker, which runs them one at a time |
 | `loopx loops`, `loopx ai-cli` | The loops registry (`loops.json`: name, schedule, entry point) and which AI CLI (`claude`, `codex`, `gemini`, `kimi` or `cursor`) every loop invokes (`ai_cli.json`) |
 | `loopx config` | Reads `~/.loopx/projects.json` (aliases, assignee, worktree root, per-project config) |
 | `loopx issues list`, `loopx issues comments` | Lists open GitLab issues assigned to the configured user across configured projects; detects which notes on a cached issue are new since the loop last looked |

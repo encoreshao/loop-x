@@ -1,6 +1,6 @@
 import Foundation
 
-/// Runs `loopx scheduler` (one poll that starts every loop that is due) now and then every
+/// Runs `loopx scheduler` (one tick that queues every loop that is due; the queue worker starts them one by one) now and then every
 /// `interval` while it is started. The scheduler decides what is due and skips a loop that is
 /// already running, so a poll that overlaps another is harmless.
 public final class SchedulerPoller: @unchecked Sendable {
@@ -12,7 +12,7 @@ public final class SchedulerPoller: @unchecked Sendable {
     private let lock = NSLock()
     private var task: Task<Void, Never>?
 
-    public init(interval: TimeInterval = 900, poll: @escaping @Sendable () async -> Void,
+    public init(interval: TimeInterval = 60, poll: @escaping @Sendable () async -> Void,
                 sleeper: @escaping Sleeper = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }) {
         self.interval = interval; self.poll = poll; self.sleeper = sleeper
     }

@@ -122,6 +122,11 @@ async fn run_loop(
         Some(TriggerOutcome::Started) => {
             (StatusCode::ACCEPTED, Json(json!({"started": true}))).into_response()
         }
+        Some(TriggerOutcome::Queued(ahead)) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"started": false, "queued": true, "ahead": ahead})),
+        )
+            .into_response(),
         Some(TriggerOutcome::AlreadyRunning) => {
             json_error(StatusCode::CONFLICT, "A run is already in progress")
         }

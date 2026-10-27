@@ -2,7 +2,7 @@ import Foundation
 
 /// One line of the island's task list: a loop or topic and what it is doing right now.
 public struct NotchTask: Equatable, Sendable, Identifiable {
-    public enum State: String, Equatable, Sendable { case running, failed, idle }
+    public enum State: String, Equatable, Sendable { case running, queued, failed, idle }
     public var id: String
     public var name: String
     public var state: State
@@ -23,7 +23,10 @@ public enum TaskNotifications {
     /// Every loop and topic that has anything to say, running first, then failed, then idle.
     public static func tasks(in s: Snapshot) -> [NotchTask] {
         var out: [NotchTask] = []
+        let waiting = Set(s.queue.queued.map(\.loop))
         for (name, l) in s.loops {
+            // A loop waiting its turn shows once, as queued, not also as idle.
+            if waiting.contains(name), state(l.state) == .idle { continue }
             let detail = [l.currentIssue, l.currentStep].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
             out.append(NotchTask(id: "loop:\(name)", name: name, state: state(l.state),
                                  detail: detail.isEmpty ? nil : detail))
@@ -32,8 +35,16 @@ public enum TaskNotifications {
             out.append(NotchTask(id: "topic:\(name)", name: name, state: state(t.state),
                                  detail: t.currentStep.flatMap { $0.isEmpty ? nil : $0 }))
         }
-        func rank(_ t: NotchTask) -> Int { t.state == .running ? 0 : t.state == .failed ? 1 : 2 }
-        return out.sorted { (rank($0), $0.name) < (rank($1), $1.name) }
+        let line = s.queue.queued.enumerated().map { i, e in
+            NotchTask(id: "queue:\(e.id)", name: e.loop, state: .queued, detail: "#\(i + 1) in line · \(e.reason)")
+        }
+        func rank(_ t: NotchTask) -> Int {
+            switch t.state { case .running: return 0; case .queued: return 1; case .failed: return 2; case .idle: return 3 }
+        }
+        // Queued rows keep their place in line; the rest sort by name.
+        let rest = out.sorted { (rank($0), $0.name) < (rank($1), $1.name) }
+        let running = rest.filter { $0.state == .running }
+        return running + line + rest.filter { $0.state != .running }
     }
 
     /// Notifications for what changed between two snapshots. Nothing for the first snapshot after

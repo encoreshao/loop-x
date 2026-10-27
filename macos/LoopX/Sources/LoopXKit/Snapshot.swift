@@ -152,6 +152,43 @@ public struct ApprovalsBlock: Codable, Equatable, Sendable {
     public init(pending: [Approval] = []) { self.pending = pending }
 }
 
+/// One run in the backend's run queue (Mission Control).
+public struct QueueEntry: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var loop: String
+    /// `scheduled`, `manual` or `catch-up`.
+    public var reason: String
+    /// `queued`, `running`, `done`, `failed`, `cancelled` or `skipped`.
+    public var state: String
+    public var enqueuedAt: String
+    public var step: String?
+    enum CodingKeys: String, CodingKey {
+        case id, loop, reason, state, step
+        case enqueuedAt = "enqueued_at"
+    }
+    public init(id: String, loop: String, reason: String = "scheduled", state: String = "queued",
+                enqueuedAt: String = "", step: String? = nil) {
+        self.id = id; self.loop = loop; self.reason = reason; self.state = state
+        self.enqueuedAt = enqueuedAt; self.step = step
+    }
+}
+
+/// What runs, what waits (in start order) and what just finished.
+public struct QueueBlock: Codable, Equatable, Sendable {
+    public var running: [QueueEntry]
+    public var queued: [QueueEntry]
+    public var recent: [QueueEntry]
+    public init(running: [QueueEntry] = [], queued: [QueueEntry] = [], recent: [QueueEntry] = []) {
+        self.running = running; self.queued = queued; self.recent = recent
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        running = (try? c.decode([QueueEntry].self, forKey: .running)) ?? []
+        queued = (try? c.decode([QueueEntry].self, forKey: .queued)) ?? []
+        recent = (try? c.decode([QueueEntry].self, forKey: .recent)) ?? []
+    }
+}
+
 /// The whole-state document pushed on every `event: snapshot`.
 public struct Snapshot: Codable, Equatable, Sendable {
     public var version: Int
@@ -161,17 +198,19 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var approvals: ApprovalsBlock
     public var attention: Attention?
     public var recentEvents: [RecentEvent]
+    public var queue: QueueBlock
 
     enum CodingKeys: String, CodingKey {
-        case version, loops, topics, approvals, attention
+        case version, loops, topics, approvals, attention, queue
         case appState = "app_state", recentEvents = "recent_events"
     }
 
     public init(version: Int = 1, appState: AppState = .idle, loops: [String: LoopStatus] = [:],
                 topics: [String: TopicStatus] = [:], approvals: ApprovalsBlock = .init(),
-                attention: Attention? = nil, recentEvents: [RecentEvent] = []) {
+                attention: Attention? = nil, recentEvents: [RecentEvent] = [], queue: QueueBlock = .init()) {
         self.version = version; self.appState = appState; self.loops = loops; self.topics = topics
         self.approvals = approvals; self.attention = attention; self.recentEvents = recentEvents
+        self.queue = queue
     }
 
     // Tolerant decoding: a field the backend adds or omits never breaks the whole stream.
@@ -184,6 +223,7 @@ public struct Snapshot: Codable, Equatable, Sendable {
         approvals = try c.decodeIfPresent(ApprovalsBlock.self, forKey: .approvals) ?? .init()
         attention = try? c.decodeIfPresent(Attention.self, forKey: .attention)
         recentEvents = try c.decodeIfPresent([RecentEvent].self, forKey: .recentEvents) ?? []
+        queue = (try? c.decodeIfPresent(QueueBlock.self, forKey: .queue)) ?? .init()
     }
 
     public static func decode(_ data: Data) throws -> Snapshot { try JSONDecoder().decode(Snapshot.self, from: data) }

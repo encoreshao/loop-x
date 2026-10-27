@@ -4,7 +4,7 @@
 
 use chrono::Local;
 use loopx_core::run_loop::{self, RunLoopOpts};
-use loopx_core::{ledger, loop_scheduler, loops_config};
+use loopx_core::{ledger, loop_scheduler, loops_config, run_queue};
 use std::process::{Command, ExitCode};
 
 fn code(c: i32) -> ExitCode {
@@ -43,18 +43,19 @@ pub fn entry(args: &[String]) -> ExitCode {
     code(run_loop::run_entry(entry_point, rest))
 }
 
-/// `loopx scheduler`: what launchd runs every 15 minutes. Starts every loop
-/// that is due and not already running, one after another.
+/// `loopx scheduler`: the tick, run every minute. Queues every loop that is due
+/// and not already queued or running, then makes sure a worker is draining the
+/// queue; it never waits for a loop itself.
 pub fn scheduler(_args: &[String]) -> ExitCode {
-    // One poller at a time: the LoopX app and a launchd `loopx scheduler` may both
-    // be on, and both would otherwise start the same due loop.
+    // One ticker at a time: the LoopX app and a launchd `loopx scheduler` may both
+    // be on, and both would otherwise queue the same due loop.
     let Some(_poll) = loop_scheduler::try_lock_poll(&loop_scheduler::default_lock_path()) else {
         println!("loop_scheduler: another scheduler is already polling; skipping");
         return ExitCode::SUCCESS;
     };
     // Best-effort, idempotent: catches runs that predate loop.result events.
     ledger::run_startup_backfill(None, None);
-    // Throttled to every few hours; never fails the poll.
+    // Throttled to every few hours; never fails the tick.
     loopx_core::auth_health::run_if_due(None, None, None, None);
     let loops = match loops_config::list_loops(&loops_config::default_config_path(), None) {
         Ok(l) => l,
@@ -63,40 +64,72 @@ pub fn scheduler(_args: &[String]) -> ExitCode {
             return ExitCode::SUCCESS;
         }
     };
+    let queue = run_queue::RunQueue::new(run_queue::default_queue_path());
+    let queued = loop_scheduler::enqueue_due_loops(
+        &loops,
+        &loop_scheduler::default_state_path(),
+        &queue,
+        Local::now().naive_local(),
+    );
+    if !queued.is_empty() {
+        println!("loop_scheduler: queued {}", queued.join(", "));
+    }
+    if !queue.snapshot(0).queued.is_empty() {
+        start_worker_if_idle();
+    }
+    ExitCode::SUCCESS
+}
+
+/// Starts a detached `loopx queue-worker` unless one already holds the worker
+/// lock. Two ticks racing here is fine: the second worker finds the lock taken
+/// and exits at once.
+fn start_worker_if_idle() {
+    use std::os::unix::process::CommandExt;
+    let lock = run_queue::default_worker_lock_path();
+    match loop_scheduler::try_lock_poll(&lock) {
+        Some(guard) => drop(guard),
+        None => return,
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("queue-worker")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    if let Err(e) = cmd.spawn() {
+        eprintln!("loop_scheduler: could not start the queue worker: {e}");
+    }
+}
+
+/// `loopx queue-worker`: drains the run queue, one loop after another, then exits.
+/// Only one worker runs at a time (the worker lock).
+pub fn queue_worker(_args: &[String]) -> ExitCode {
+    let Some(_lock) = loop_scheduler::try_lock_poll(&run_queue::default_worker_lock_path()) else {
+        return ExitCode::SUCCESS;
+    };
+    let queue = run_queue::RunQueue::new(run_queue::default_queue_path());
     let exe = std::env::current_exe()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "loopx".to_string());
-    let is_running = |name: &str| {
-        let path = loop_scheduler::status_path_for_loop(name, None);
-        loop_scheduler::read_status_state(&path) == "running"
-    };
-    // `run_due_loops` hands over `["bash", <run-loop-now path>, <name>]`; the
-    // name is all we need, since this binary is the runner now.
-    let mut runner = |argv: &[String]| -> std::io::Result<()> {
-        let name = argv.get(2).cloned().unwrap_or_default();
-        spawn_run(&exe, &name)
-    };
-    let attempted = loop_scheduler::run_due_loops(
-        &loops,
-        &loop_scheduler::default_state_path(),
-        std::path::Path::new("unused"),
-        Local::now().naive_local(),
-        &is_running,
-        &mut runner,
-    );
-    if !attempted.is_empty() {
-        println!("loop_scheduler: attempted {}", attempted.join(", "));
+    let now = || loop_scheduler::isoformat(Local::now().naive_local());
+    let ran = run_queue::drain(&queue, &now, 1, &mut |entry| {
+        spawn_run(&exe, &entry.loop_name)
+    });
+    if ran > 0 {
+        println!("queue-worker: ran {ran} loop(s)");
     }
     ExitCode::SUCCESS
 }
 
 /// A child `loopx run <name>` in its own process group (so the dashboard's
-/// Stop button can `killpg` it without hitting the scheduler), awaited.
-fn spawn_run(exe: &str, name: &str) -> std::io::Result<()> {
+/// Stop button can `killpg` it without hitting the worker).
+fn spawn_run(exe: &str, name: &str) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
     Command::new(exe)
         .args(["run", name])
         .process_group(0)
-        .status()
-        .map(|_| ())
+        .spawn()
 }

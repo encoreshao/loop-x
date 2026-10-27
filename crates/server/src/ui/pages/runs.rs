@@ -527,8 +527,9 @@ fn topic_history_page(ctx: &UiCtx) -> UiResponse {
 
 // ---- POST routes ----------------------------------------------------------
 
-fn launcher<'a>(ctx: &'a UiCtx, fallback: &'a PathBuf) -> Launcher<'a> {
+fn launcher<'a>(ctx: &'a UiCtx, fallback: &'a PathBuf, queue: &'a std::path::Path) -> Launcher<'a> {
     Launcher {
+        queue: Some(queue),
         cmd: &ctx.state.run_cmd,
         cwd: &ctx.state.repo_root,
         fallback_path: fallback,
@@ -541,6 +542,13 @@ fn trigger_message(ctx: &UiCtx, outcome: TriggerOutcome, started: &str) -> (bool
         TriggerOutcome::LauncherMissing(path) => (
             false,
             ctx.tf("run-loop-now.sh not found at {path}", &[("path", &path)]),
+        ),
+        TriggerOutcome::Queued(ahead) => (
+            true,
+            ctx.tf(
+                "Queued - {count} run(s) ahead of it; it starts when they finish",
+                &[("count", &ahead.to_string())],
+            ),
         ),
         TriggerOutcome::Started => (true, ctx.t(started)),
     }
@@ -566,7 +574,8 @@ fn run_script_path(ctx: &UiCtx) -> PathBuf {
 /// Starts one of the three built-in loops; `None` for any other name.
 pub(crate) fn trigger_named(state: &UiState, name: &str) -> Option<TriggerOutcome> {
     let fallback = state.repo_root.join("run-loop-now.sh");
-    let launcher = Launcher { cmd: &state.run_cmd, cwd: &state.repo_root, fallback_path: &fallback };
+    let queue = state.home_dir.join("run_queue.json");
+    let launcher = Launcher { cmd: &state.run_cmd, cwd: &state.repo_root, fallback_path: &fallback, queue: Some(&queue) };
     Some(match name {
         "gitlab-loop" => run_control::trigger_manual_run(&state.status_path(), name, &launcher),
         "topic-loop" => run_control::trigger_topic_monitor_run(
@@ -581,10 +590,11 @@ pub(crate) fn trigger_named(state: &UiState, name: &str) -> Option<TriggerOutcom
 
 fn run_now(ctx: &UiCtx) -> UiResponse {
     let fallback = run_script_path(ctx);
+    let queue = ctx.state.home_dir.join("run_queue.json");
     let outcome = run_control::trigger_manual_run(
         &ctx.state.status_path(),
         "gitlab-loop",
-        &launcher(ctx, &fallback),
+        &launcher(ctx, &fallback, &queue),
     );
     let (ok, message) = trigger_message(ctx, outcome, STARTED);
     UiResponse::flash_redirect(ok, &message, gitlab_return_path(ctx.req.header("referer")))
@@ -621,10 +631,11 @@ fn stop_topic(ctx: &UiCtx) -> UiResponse {
 
 fn run_topic(ctx: &UiCtx) -> UiResponse {
     let fallback = run_script_path(ctx);
+    let queue = ctx.state.home_dir.join("run_queue.json");
     let outcome = run_control::trigger_topic_monitor_run(
         &topic_status_path(ctx),
         "topic-loop",
-        &launcher(ctx, &fallback),
+        &launcher(ctx, &fallback, &queue),
     );
     let (ok, message) = trigger_message(ctx, outcome, STARTED);
     UiResponse::flash_redirect(ok, &message, "/loops/topic-loop")
@@ -632,10 +643,11 @@ fn run_topic(ctx: &UiCtx) -> UiResponse {
 
 fn run_inbox(ctx: &UiCtx) -> UiResponse {
     let fallback = run_script_path(ctx);
+    let queue = ctx.state.home_dir.join("run_queue.json");
     let outcome = run_control::trigger_inbox_triage_run(
         &ctx.state.status_path_for_loop("inbox-triage-loop"),
         "inbox-triage-loop",
-        &launcher(ctx, &fallback),
+        &launcher(ctx, &fallback, &queue),
     );
     let (ok, message) = trigger_message(ctx, outcome, "Inbox triage started - check back here for results");
     UiResponse::flash_redirect(ok, &message, "/loops/inbox-triage-loop")
@@ -656,10 +668,11 @@ fn run_loop(ctx: &UiCtx) -> UiResponse {
         return UiResponse::not_found(ctx.lang);
     }
     let fallback = run_script_path(ctx);
+    let queue = ctx.state.home_dir.join("run_queue.json");
     let outcome = run_control::trigger_manual_run(
         &ctx.state.status_path_for_loop(name),
         name,
-        &launcher(ctx, &fallback),
+        &launcher(ctx, &fallback, &queue),
     );
     let (ok, message) = trigger_message(ctx, outcome, STARTED);
     UiResponse::flash_redirect(ok, &message, &format!("/loops/{}", pyfmt::quote(name, "/")))

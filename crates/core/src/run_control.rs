@@ -154,6 +154,8 @@ pub fn stop_topic_loop_with(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerOutcome {
     AlreadyRunning,
+    /// Waiting in the run queue behind this many other runs.
+    Queued(usize),
     /// The launcher could not be started (carries the path shown to the user).
     LauncherMissing(String),
     Started,
@@ -166,6 +168,9 @@ pub struct Launcher<'a> {
     pub cwd: &'a Path,
     /// Shown in the "not found" message when `cmd` is empty.
     pub fallback_path: &'a Path,
+    /// The run queue file: when set, a manual run is queued (ahead of scheduled
+    /// work) and the queue worker started, instead of launching `cmd` directly.
+    pub queue: Option<&'a Path>,
 }
 
 /// `subprocess.Popen(..., start_new_session=True)` with every stdio detached.
@@ -205,6 +210,39 @@ pub fn launch_detached(launcher: &Launcher, _loop_name: &str) -> TriggerOutcome 
     TriggerOutcome::LauncherMissing(launcher.fallback_path.display().to_string())
 }
 
+/// Starts `loop_name`: through the run queue when the launcher has one, else
+/// directly. The worker is `cmd[0] queue-worker`; it exits at once when another
+/// worker is already draining the queue.
+fn start_run(launcher: &Launcher, loop_name: &str) -> TriggerOutcome {
+    use crate::run_queue::{Enqueued, Reason, RunQueue};
+    let Some(path) = launcher.queue else {
+        return launch_detached(launcher, loop_name);
+    };
+    let Some(program) = launcher.cmd.first() else {
+        return launch_detached(launcher, loop_name);
+    };
+    let queue = RunQueue::new(path);
+    let now = crate::loop_scheduler::isoformat(chrono::Local::now().naive_local());
+    let (position, running) = match queue.enqueue(loop_name, Reason::Manual, &now) {
+        Ok(Enqueued::Queued { position, .. }) => (position, queue.snapshot(0).running.len()),
+        Ok(Enqueued::Coalesced { .. }) => return TriggerOutcome::AlreadyRunning,
+        Err(_) => return launch_detached(launcher, loop_name),
+    };
+    let worker = Launcher {
+        cmd: std::slice::from_ref(program),
+        cwd: launcher.cwd,
+        fallback_path: launcher.fallback_path,
+        queue: None,
+    };
+    if let TriggerOutcome::LauncherMissing(p) = launch_detached(&worker, "queue-worker") {
+        return TriggerOutcome::LauncherMissing(p);
+    }
+    match position + running {
+        0 => TriggerOutcome::Started,
+        ahead => TriggerOutcome::Queued(ahead),
+    }
+}
+
 /// `trigger_manual_run`: refuse while the loop's status says "running".
 pub fn trigger_manual_run(
     status_path: &Path,
@@ -215,7 +253,7 @@ pub fn trigger_manual_run(
     if status.get("state").and_then(Value::as_str) == Some("running") {
         return TriggerOutcome::AlreadyRunning;
     }
-    launch_detached(launcher, loop_name)
+    start_run(launcher, loop_name)
 }
 
 /// `trigger_topic_monitor_run`: refuse while any topic is running.
@@ -232,7 +270,7 @@ pub fn trigger_topic_monitor_run(
     if any_running {
         return TriggerOutcome::AlreadyRunning;
     }
-    launch_detached(launcher, loop_name)
+    start_run(launcher, loop_name)
 }
 
 /// `trigger_inbox_triage_run`: refuse only while the loop-level status says
@@ -247,7 +285,7 @@ pub fn trigger_inbox_triage_run(
     if status.get("state").and_then(Value::as_str) == Some("running") && alive {
         return TriggerOutcome::AlreadyRunning;
     }
-    launch_detached(launcher, loop_name)
+    start_run(launcher, loop_name)
 }
 
 #[cfg(all(test, unix))]
@@ -339,6 +377,68 @@ mod tests {
     }
 
     #[test]
+    fn a_manual_run_is_queued_ahead_of_scheduled_work_and_starts_the_worker() {
+        use crate::run_queue::{Reason, RunQueue};
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let marker = d.path().join("worker");
+        // The worker is started as `<cmd[0]> queue-worker`.
+        let script = d.path().join("fake-loopx");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho \"$1\" > {}\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cmd: Vec<String> = vec![script.display().to_string(), "run".to_string()];
+        let qpath = d.path().join("run_queue.json");
+        let launcher = Launcher {
+            cmd: &cmd,
+            cwd: d.path(),
+            fallback_path: d.path(),
+            queue: Some(&qpath),
+        };
+        let status = d.path().join("status.json");
+        let queue = RunQueue::new(&qpath);
+        queue
+            .enqueue("scheduled-one", Reason::Scheduled, "2026-10-27T10:00:00")
+            .unwrap();
+
+        // Nothing runs yet and a manual run outranks the scheduled one: it starts next.
+        assert_eq!(
+            trigger_manual_run(&status, "rss-loop", &launcher),
+            TriggerOutcome::Started
+        );
+        let queued: Vec<String> = queue
+            .snapshot(5)
+            .queued
+            .iter()
+            .map(|e| e.loop_name.clone())
+            .collect();
+        assert_eq!(queued, ["rss-loop", "scheduled-one"]);
+        for _ in 0..100 {
+            if marker.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            "queue-worker"
+        );
+
+        // A second manual run for another loop waits behind the first; the same loop is a no-op.
+        assert_eq!(
+            trigger_manual_run(&status, "other", &launcher),
+            TriggerOutcome::Queued(1)
+        );
+        assert_eq!(
+            trigger_manual_run(&status, "rss-loop", &launcher),
+            TriggerOutcome::AlreadyRunning
+        );
+    }
+
+    #[test]
     fn triggers_refuse_while_running_and_report_a_missing_launcher() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("status.json");
@@ -355,6 +455,7 @@ mod tests {
             cmd: &cmd,
             cwd: d.path(),
             fallback_path: d.path(),
+            queue: None,
         };
         status::write_status(&p, "running", &[]).unwrap();
         assert_eq!(
@@ -391,6 +492,7 @@ mod tests {
             cmd: &none,
             cwd: d.path(),
             fallback_path: Path::new("/x/run-loop-now.sh"),
+            queue: None,
         };
         assert_eq!(
             trigger_inbox_triage_run(&p, "inbox-triage-loop", &missing),

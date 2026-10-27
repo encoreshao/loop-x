@@ -236,12 +236,13 @@ struct TaskList: View {
     }
 
     static func label(_ s: NotchTask.State) -> String {
-        switch s { case .running: return "running"; case .failed: return "failed"; case .idle: return "idle" }
+        switch s { case .running: return "running"; case .queued: return "queued"; case .failed: return "failed"; case .idle: return "idle" }
     }
 
     static func style(_ s: NotchTask.State) -> NotchStyle {
         switch s {
         case .running: return NotchStyle(accent: .blue, symbol: "arrow.triangle.2.circlepath", pulses: true, autoExpands: false, autoCollapseAfter: nil)
+        case .queued: return NotchStyle(accent: .orange, symbol: "clock.fill", pulses: false, autoExpands: false, autoCollapseAfter: nil)
         case .failed: return NotchStyle(accent: .red, symbol: "xmark.octagon.fill", pulses: false, autoExpands: false, autoCollapseAfter: nil)
         case .idle: return NotchStyle(accent: .neutral, symbol: "circle.dotted", pulses: false, autoExpands: false, autoCollapseAfter: nil)
         }

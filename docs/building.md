@@ -54,7 +54,7 @@ open dist/LoopX.app
 `loopx serve` only serves the dashboard. Loops run when `loopx scheduler` polls. The
 Mac app can do that for you: Settings > "Run scheduled loops while LoopX is open"
 (off by default, since a due loop acts on the real GitLab and Slack) polls on launch and
-every 15 minutes. Loops therefore only run while the app is open (turn on "Launch LoopX at
+every minute. Loops therefore only run while the app is open (turn on "Launch LoopX at
 login" to cover that). Use one scheduler at a time: if you also load the `com.hermes.loop-engineering` launchd
 agent (Web mode, `install-loopx.sh`), leave this setting off — the app no longer checks for it.
 

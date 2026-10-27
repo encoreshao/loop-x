@@ -247,7 +247,7 @@ loopx run topic-loop    # the topic monitor loop
 
 | エージェント                             | 実行内容                                                                                                                                         |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------|
-| `com.hermes.loop-engineering`           | `loopx scheduler`。15 分ごと（`StartInterval`）に、`~/.loopx/loops.json` に登録されたループのうち実行時刻になったものを実行します |
+| `com.hermes.loop-engineering`           | `loopx scheduler`。毎分（`StartInterval`）、実行時刻になったループをキューに入れ、ワーカーが 1 つずつ実行します。、`~/.loopx/loops.json` に登録されたループのうち実行時刻になったものを実行します |
 | `com.hermes.loop-engineering-dashboard` | Web ダッシュボード（`loopx serve`）。常時稼働（`RunAtLoad` + `KeepAlive`）                                                                          |
 | `com.hermes.loopx.backend`              | `LoopX.app` に同梱のバックエンド。アプリ自身が登録します（このリポジトリのテンプレートではありません）                                          |
 

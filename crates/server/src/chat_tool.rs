@@ -422,6 +422,10 @@ fn trigger_message(outcome: TriggerOutcome, started: &str) -> Value {
         TriggerOutcome::LauncherMissing(path) => {
             json!({ "ok": false, "message": format!("run-loop-now.sh not found at {path}") })
         }
+        TriggerOutcome::Queued(ahead) => json!({
+            "ok": true,
+            "message": format!("Queued - {ahead} run(s) ahead of it; it starts when they finish")
+        }),
         TriggerOutcome::Started => json!({ "ok": true, "message": started }),
     }
 }
@@ -430,10 +434,12 @@ const STARTED: &str = "Run started - check back here for progress";
 
 fn run_now(state: &UiState, kind: &str) -> Value {
     let fallback = state.repo_root.join("run-loop-now.sh");
+    let queue = state.home_dir.join("run_queue.json");
     let launcher = Launcher {
         cmd: &state.run_cmd,
         cwd: &state.repo_root,
         fallback_path: &fallback,
+        queue: Some(&queue),
     };
     match kind {
         "gitlab" => trigger_message(

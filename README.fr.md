@@ -247,7 +247,7 @@ Les deux journalisent dans `outputs/history/`, et ajoutent aussi la sortie de ch
 
 | Agent                                   | Exécute                                                                                                                                          |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------|
-| `com.hermes.loop-engineering`           | `loopx scheduler`, toutes les 15 minutes (`StartInterval`) — lance les boucles enregistrées dans `~/.loopx/loops.json` qui sont dues |
+| `com.hermes.loop-engineering`           | `loopx scheduler`, toutes les minutes (`StartInterval`) — met en file ce qui est dû ; un worker exécute la file une boucle à la fois — lance les boucles enregistrées dans `~/.loopx/loops.json` qui sont dues |
 | `com.hermes.loop-engineering-dashboard` | Le tableau de bord web (`loopx serve`), toujours actif (`RunAtLoad` + `KeepAlive`)                                                               |
 | `com.hermes.loopx.backend`              | Le backend embarqué dans `LoopX.app`, enregistré par l'application elle-même (ce n'est pas un modèle de ce dépôt)                                |
 
