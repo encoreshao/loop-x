@@ -96,8 +96,9 @@ pub fn pill_html(ctx: &UiCtx) -> String {
     let snap = queue_for(ctx.state).snapshot(1);
     let (class, label) = pill_parts(ctx, &snap);
     let title = pyfmt::escape(&ctx.t("Agents"));
+    let active = if ctx.req.path == "/queue" { " is-active" } else { "" };
     format!(
-        "<a class='{class}' id='queue-pill' href='/queue' title='{title}' aria-label='{title}'>{}<span>{}</span></a>",
+        "<a class='topbar-agents {class}{active}' id='queue-pill' href='/queue' title='{title}' aria-label='{title}'>{}<span>{}</span></a>",
         icons::icon("speed"),
         pyfmt::escape(&label),
     )
@@ -314,6 +315,16 @@ mod tests {
         assert!(html.contains("Nothing is running") && html.contains("Nothing is waiting"), "{html}");
         let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap();
         assert!(pill.body_text().contains("Agents"));
+    }
+
+    #[test]
+    fn the_topbar_pill_is_selected_only_on_the_agents_page() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let on = st.registry.dispatch(&st, &UiRequest::get("/queue")).unwrap().body_text();
+        assert!(on.contains("topbar-agents pill pill-outline is-active"), "{on}");
+        let off = st.registry.dispatch(&st, &UiRequest::get("/runs")).unwrap().body_text();
+        assert!(off.contains("topbar-agents pill pill-outline'"), "{off}");
     }
 
     #[test]

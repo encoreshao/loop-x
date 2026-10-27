@@ -1063,7 +1063,7 @@
   function refresh() {
     if (document.hidden) return;
     fetch('/queue/pill').then(function(r) { return r.json(); }).then(function(d) {
-      pill.className = d.class;
+      pill.className = 'topbar-agents ' + d.class + (location.pathname === '/queue' ? ' is-active' : '');
       var label = pill.querySelector('span');
       if (label) label.textContent = d.label;
     }).catch(function() {});
