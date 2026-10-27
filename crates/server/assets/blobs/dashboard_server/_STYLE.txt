@@ -2627,6 +2627,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .btn-primary:hover { background: var(--md-primary); color: var(--md-on-primary); filter: brightness(1.08); }
 .btn-neutral { background: var(--md-surface-container-high); color: var(--md-on-surface); border-color: transparent; }
 .btn-neutral:hover { background: var(--md-surface-container-highest); }
+.btn-danger { background: var(--md-error-container); color: var(--md-on-error-container); border-color: transparent; }
 .btn-warning { background: var(--md-warning-container); color: var(--md-on-warning-container); border-color: transparent; }
 .btn-warning:hover { background: var(--md-warning-container); filter: brightness(1.1); }
 .btn:disabled { opacity: 0.45; cursor: default; }
@@ -2826,8 +2827,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 /* Mission Control (/queue): one bordered row per run, its buttons below the detail line. */
 .queue-row { border: 1px solid var(--md-outline-variant); border-radius: 12px; padding: 0.75rem 1rem; }
 .queue-row + .queue-row { margin-top: 0.6rem; }
-.queue-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.queue-actions:not(:empty) { margin-top: 0.6rem; }
+.queue-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-left: auto; }
 #queue-pill { text-decoration: none; }
 .queue-root { display: flex; flex-direction: column; gap: 1.25rem; }
 .queue-root > .card { margin: 0; }

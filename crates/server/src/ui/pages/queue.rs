@@ -120,10 +120,9 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
     }
 }
 
-fn action_button(ctx: &UiCtx, action: &str, id: &str, label: &str, icon: &str) -> String {
-    let _ = ctx;
+fn action_button(action: &str, style: &str, id: &str, label: &str, icon: &str) -> String {
     format!(
-        "<button type='button' class='btn btn-tonal' data-queue-action='{action}' data-id='{}'>{}{}</button>",
+        "<button type='button' class='btn {style}' data-queue-action='{action}' data-id='{}'>{}{}</button>",
         pyfmt::escape(id),
         icons::icon(icon),
         pyfmt::escape(label),
@@ -141,8 +140,9 @@ fn row(ctx: &UiCtx, e: &Entry, detail: &str, actions: &str) -> String {
     };
     format!(
         "<div class='history-entry queue-row'><div class='history-entry-header'><strong>{}</strong>\
-         <div class='pill-row'><span class='pill {pill_class}'>{}</span><span class='pill pill-outline'>{}</span></div></div>\
-         <p class='history-entry-overview'>{}</p><div class='queue-actions'>{actions}</div></div>",
+         <div class='pill-row'><span class='pill {pill_class}'>{}</span><span class='pill pill-outline'>{}</span></div>\
+         <div class='queue-actions'>{actions}</div></div>\
+         <p class='history-entry-overview'>{}</p></div>",
         pyfmt::escape(&e.loop_name),
         pyfmt::escape(&state_label),
         pyfmt::escape(&reason_label(ctx, &e.reason)),
@@ -179,7 +179,7 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
                 Some(s) if !s.is_empty() => format!("{s} · {elapsed}"),
                 _ => elapsed,
             };
-            row(ctx, e, &detail, &action_button(ctx, "stop", &e.id, &ctx.t("Stop"), "close"))
+            row(ctx, e, &detail, &action_button("stop", "btn-danger", &e.id, &ctx.t("Stop"), "close"))
         })
         .collect();
     let queued = snap
@@ -196,9 +196,9 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
             );
             let mut actions = String::new();
             if i > 0 {
-                actions.push_str(&action_button(ctx, "front", &e.id, &ctx.t("Move to front"), "arrow_upward"));
+                actions.push_str(&action_button("front", "btn-tonal", &e.id, &ctx.t("Move to front"), "arrow_upward"));
             }
-            actions.push_str(&action_button(ctx, "stop", &e.id, &ctx.t("Remove"), "close"));
+            actions.push_str(&action_button("stop", "btn-warning", &e.id, &ctx.t("Remove"), "close"));
             row(ctx, e, &detail, &actions)
         })
         .collect();
