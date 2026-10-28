@@ -2457,6 +2457,10 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .daemon-action-form.single-field input,
 .daemon-action-form.single-field .custom-select { flex: 1 1 auto; min-width: 0; }
 .daemon-action-form.single-field button[type='submit'] { flex: 0 0 120px; justify-content: center; }
+/* Slack's message-template picker: a short dropdown, then Save and the
+   sample-report button on the same line instead of a full-width field. */
+.template-picker-row { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.template-picker-row .daemon-action-form.single-field .custom-select { flex: 0 1 260px; min-width: 200px; max-width: 300px; }
 
 /* Inbox Setup's per-inbox/OAuth-client forms (see inbox_pages.py's
    _client_form/_inbox_form) - a vertically stacked form of several

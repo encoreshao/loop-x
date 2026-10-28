@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:5359ea51f05f8f22--></style>
+<style><!--@blob:8898c1c889066e93--></style>
 <script><!--@blob:c0057738e44e8d4e--></script>
 </head>
 <body>
@@ -179,6 +179,7 @@
 <h3>メッセージテンプレート</h3>
 <p class='section-subtitle'>各ループの実行終了レポートを Slack でどのように表示するかを選びます。</p>
 <ul><li><strong>レポート</strong> — 実行ごとに 1 件の構造化メッセージ：ステータス、セクション、表、対応が必要な項目。</li><li><strong>クラシック</strong> — 同じ内容を Block Kit なしのプレーンテキストで送信します。</li></ul>
+<div class='template-picker-row'>
 <form method='post' action='/notifications/message-template' class='daemon-action-form single-field'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <div class='custom-select'><select name='message_template' class='custom-select-native'><option value='report' selected>レポート</option><option value='classic'>クラシック</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>レポート</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='report'>レポート</div><div class='custom-select-option' role='option' tabindex='-1' data-value='classic'>クラシック</div></div></div>
@@ -188,6 +189,7 @@
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <button type='submit' class='btn btn-neutral'>サンプルレポートを送信</button>
 </form>
+</div>
 </section>
 
 <section class="card block-kit-card">

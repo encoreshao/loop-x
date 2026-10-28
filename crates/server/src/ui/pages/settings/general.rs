@@ -168,10 +168,11 @@ fn message_template_html(ctx: &UiCtx, csrf: &str, slack: &Value) -> String {
         .collect();
     format!(
         "<h3>{heading}</h3>\n<p class='section-subtitle'>{subtitle}</p>\n<ul>{descriptions}</ul>\n\
+<div class='template-picker-row'>\n\
 <form method='post' action='/notifications/message-template' class='daemon-action-form single-field'>\n{csrf}\n{select}\n\
 <button type='submit' class='btn btn-neutral'>{save}</button>\n</form>\n\
 <form method='post' action='/notifications/message-template/test' class='daemon-action-form'>\n{csrf}\n\
-<button type='submit' class='btn btn-neutral'>{sample}</button>\n</form>",
+<button type='submit' class='btn btn-neutral'>{sample}</button>\n</form>\n</div>",
         heading = pyfmt::escape(&ctx.t("Message template")),
         subtitle = pyfmt::escape(&ctx.t("How each loop's end-of-run report looks in Slack.")),
         select = custom_select("message_template", &options, Some(current.id()), None),
@@ -444,6 +445,10 @@ mod tests {
         assert!(html.contains("<option value='report'>Report</option>"), "{html}");
         assert!(html.contains("action='/notifications/message-template'"));
         assert!(html.contains("action='/notifications/message-template/test'"));
+        // The picker, Save and the sample button share one line.
+        let row = html.split("<div class='template-picker-row'>").nth(1).expect("picker row");
+        let row = row.split("</form>\n</div>").next().unwrap();
+        assert!(row.contains("name='message_template'") && row.contains("/notifications/message-template/test"), "{row}");
     }
 
     /// The AI CLI panel with `cli` selected and only `on_path` binaries installed.
