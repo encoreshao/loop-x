@@ -1768,6 +1768,10 @@ a.chip:hover, a.chip:focus-visible { text-decoration: underline; }
    tile. Rows are divided by a hairline. */
 .loop-settings-body > form + form { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--md-outline-variant); }
 .loop-settings-body .daemon-action-form { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0.45rem; }
+/* In this column form the shared `flex: 1 1 160px` would become a 160px+
+   height; inputs keep their natural single-line height here. */
+.loop-settings-body .daemon-action-form > input[type='text'],
+.loop-settings-body .daemon-action-form > input[type='password'] { flex: 0 0 auto; min-width: 0; }
 .loop-settings-body .setting-label { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; color: var(--md-on-surface-variant); }
 .loop-settings-body .setting-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .loop-settings-body .weekly-controls { flex: 1 1 100%; gap: 0.35rem 0.6rem; }
