@@ -121,6 +121,16 @@ box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.10)}\
 .chooser-open{display:inline-flex;align-items:center;gap:.3rem;margin-top:auto;padding-top:1rem;font-weight:500;color:var(--md-primary)}\
 .chooser-open .icon{width:18px;height:18px}\
 .chooser-hint{margin:0;font-size:.9rem;color:var(--md-on-surface-variant)}\
+@keyframes chooser-assemble{from{opacity:0;transform:translate(var(--fx),var(--fy)) rotate(var(--fr)) scale(.6)}60%{opacity:1}to{opacity:1;transform:none}}\
+.chooser-mark .brand-mark path:nth-child(1){--fx:-6px;--fy:-16px;--fr:-70deg}\
+.chooser-mark .brand-mark path:nth-child(2){--fx:17px;--fy:-8px;--fr:80deg}\
+.chooser-mark .brand-mark path:nth-child(3){--fx:7px;--fy:16px;--fr:-60deg}\
+.chooser-mark .brand-mark path:nth-child(4){--fx:-17px;--fy:9px;--fr:75deg}\
+.chooser-mark .brand-mark path:nth-child(5){--fx:-14px;--fy:-13px;--fr:-120deg}\
+.chooser-mark .brand-mark path:nth-child(6){--fx:14px;--fy:-12px;--fr:110deg}\
+@media(prefers-reduced-motion:no-preference){.chooser-mark .brand-mark path{transform-box:fill-box;transform-origin:center;animation:chooser-assemble 1.1s cubic-bezier(.22,1,.36,1) both}\
+.chooser-mark .brand-mark path:nth-child(2){animation-delay:.08s}.chooser-mark .brand-mark path:nth-child(3){animation-delay:.16s}.chooser-mark .brand-mark path:nth-child(4){animation-delay:.24s}\
+.chooser-mark .brand-mark path:nth-child(5){animation-delay:.38s}.chooser-mark .brand-mark path:nth-child(6){animation-delay:.46s}}\
 @media(prefers-reduced-motion:no-preference){.chooser-card{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}.chooser-card:hover{transform:translateY(-3px)}}\
 @media(max-width:640px){.chooser-grid{grid-template-columns:1fr}.chooser-card{padding:1.4rem}}\
 </style>";
@@ -657,6 +667,20 @@ mod tests {
         assert!(body.contains("<svg class='brand-mark'") && body.contains("Loop<span class='brand-x'>X</span>"));
         assert!(body.contains("#i-office") && body.contains("#i-space_dashboard") && !body.contains("#i-apartment"));
         assert!(!body.contains("id='office'"));
+    }
+
+    #[test]
+    fn chooser_logo_assembles_from_scattered_strokes_unless_motion_is_reduced() {
+        let f = fx(four());
+        let body = page(&f, "/?mode=choose", None, None).body_text();
+        assert!(body.contains("@keyframes chooser-assemble"), "{body}");
+        // All six strokes (four arcs, two X strokes) fly in, and only for people who allow motion.
+        for n in 1..=6 {
+            assert!(body.contains(&format!(".chooser-mark .brand-mark path:nth-child({n})")), "stroke {n}");
+        }
+        let at = body.find("@media(prefers-reduced-motion:no-preference){.chooser-mark").expect("gated animation");
+        assert!(body[at..].contains("animation:chooser-assemble"));
+        assert!(!body[..at].contains("animation:chooser-assemble"), "the animation must sit inside the media query");
     }
 
     #[test]

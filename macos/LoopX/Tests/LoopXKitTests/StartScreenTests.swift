@@ -22,10 +22,35 @@ import Testing
         // Reduce Motion is on for some users, and the ripples are what they asked for: a slow, small
         // version always runs; the larger, faster one (and the entrance/float) only without the setting.
         #expect(ungated.contains("animation:ripple ") && ungated.contains("animation:wave "))
-        #expect(gated.contains("rippleBig") && gated.contains("pop") && gated.contains("float"))
+        #expect(gated.contains("rippleBig") && gated.contains("assemble") && gated.contains("float"))
         // The orbit ring and spinner are never gated: that motion means "still starting".
         #expect(!gated.contains("animation:orbit") && !gated.contains("animation:s "))
         #expect(ungated.contains("animation:orbit") && ungated.contains("animation:s "))
+    }
+
+    @Test func theLogoAssemblesFromItsFragmentsOnlyWithoutReducedMotion() {
+        let h = html()
+        #expect(h.contains("@keyframes assemble"))
+        // The four arcs and the two X strokes each fly in on their own, gated like the other entrances.
+        let open = "@media(prefers-reduced-motion:no-preference){"
+        let gated = h.components(separatedBy: open)[1].components(separatedBy: "}}")[0]
+        for part in ["a1", "a2", "a3", "a4", "x1", "x2"] {
+            #expect(h.contains(".logo .\(part){"), "\(part) has a scattered start")
+            #expect(gated.contains(".logo .\(part){animation:assemble"), "\(part) animates only when motion is allowed")
+        }
+    }
+
+    @Test func theIntroHoldLastsUntilTheLastFragmentHasLanded() {
+        // Each "animation:assemble <duration>s <easing> [<delay>s] both": the hold must cover the latest end.
+        let rules = html().components(separatedBy: "animation:assemble ").dropFirst()
+        let ends = rules.map { rule -> Double in
+            let secs = rule.components(separatedBy: " both")[0].split(separator: " ")
+                .filter { $0.hasSuffix("s") }.compactMap { Double($0.dropLast()) }
+            return secs.reduce(0, +)
+        }
+        #expect(ends.count == 6)
+        #expect(StartScreen.introSeconds >= ends.max()!)
+        #expect(StartScreen.introSeconds < ends.max()! + 0.5, "no dead time after the logo is whole")
     }
 
     @Test func theBodyDoesNotPaintOverTheWaterLayer() {

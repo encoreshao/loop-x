@@ -18,15 +18,22 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     var onNeedsBackend: () -> Void = {}
     /// Shown in the placeholder's footer.
     var appVersion = ""
+    /// The start screen plays once per launch, backend or not; `introPending` holds the page back until it ends.
+    private var introPlayed = false
+    private var introPending = false
+    private var introTarget: URL?
 
     func show() {
         ensureWindow()
         guard let base = baseURLProvider() else {
+            introPlayed = true
             showPlaceholder()
             loadedBase = nil
             onNeedsBackend()
             present(); return
         }
+        if playIntro(then: base) { present(); return }
+        if introPending { present(); return }
         if loadedBase?.port != base.port {
             webView?.load(URLRequest(url: base)); loadedBase = base
         }
@@ -37,6 +44,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     func open(path: String) {
         guard let base = baseURLProvider(), let url = DashboardMenu.url(for: path, base: base) else { show(); return }
         ensureWindow()
+        if playIntro(then: url) || introPending { introTarget = url; present(); return }
         webView?.load(URLRequest(url: url)); loadedBase = base
         present()
     }
@@ -61,6 +69,21 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     func goBack() { webView?.goBack() }
     func goForward() { webView?.goForward() }
 
+    /// Shows the start screen for `StartScreen.introSeconds` the first time the window opens with a
+    /// backend already running, then loads `url` (or whatever page was asked for meanwhile).
+    private func playIntro(then url: URL) -> Bool {
+        guard !introPlayed else { return false }
+        introPlayed = true; introPending = true; introTarget = url
+        webView?.loadHTMLString(Self.placeholder("Opening LoopX…", failed: false, version: appVersion), baseURL: nil)
+        loadedBase = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + StartScreen.introSeconds) { [weak self] in
+            guard let self, let target = self.introTarget else { return }
+            self.introPending = false
+            self.webView?.load(URLRequest(url: target)); self.loadedBase = self.baseURLProvider()
+        }
+        return true
+    }
+
     private func showPlaceholder() {
         let s = statusProvider()
         webView?.loadHTMLString(Self.placeholder(s.text, failed: s.failed, version: appVersion), baseURL: nil)
@@ -68,7 +91,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     /// The backend's state changed while the placeholder is up (starting -> failed): redraw it.
     func refreshPlaceholder() {
-        guard window != nil, loadedBase == nil, baseURLProvider() == nil else { return }
+        guard window != nil, !introPending, loadedBase == nil, baseURLProvider() == nil else { return }
         showPlaceholder()
     }
 
@@ -132,7 +155,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     /// Reload after the backend moved to another port.
     func backendChanged() {
-        guard window != nil, let base = baseURLProvider(), loadedBase?.port != base.port else { return }
+        guard window != nil, !introPending, let base = baseURLProvider(), loadedBase?.port != base.port else { return }
         webView?.load(URLRequest(url: base)); loadedBase = base
     }
 

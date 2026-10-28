@@ -4,9 +4,13 @@ import Foundation
 /// three layers of drifting gradient tides with loop-shaped bubbles rising from them, a slow colour wash), the name, what LoopX does, one status line (a spinner while starting,
 /// the reason and a Retry link when it failed) and the author. Follows the system appearance.
 /// Under Reduce Motion the ripples and waves still run, but small, slow and faint; the larger ripples, faster
-/// waves, wash drift, entrance, float and glow are gated on it. The orbiting ring and the spinner are never
+/// waves, wash drift, logo assembly, float and glow are gated on it. The orbiting ring and the spinner are never
 /// gated, since their motion is the sign that startup is still going.
 public enum StartScreen {
+    /// How long the app holds this page on launch, even with a backend already up, so the logo
+    /// assembly (last fragment: .6s delay + 1.3s) plays to the end before the dashboard loads.
+    public static let introSeconds = 2.0
+
     public static func html(_ text: String, failed: Bool, version: String = "", logo: String) -> String {
         func escape(_ t: String) -> String {
             t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
@@ -59,7 +63,10 @@ public enum StartScreen {
         .track{border:1.5px dashed var(--glow)}
         .ring{animation:orbit 5s linear infinite;background:conic-gradient(from 0deg,transparent 0 50%,var(--accent) 82%,var(--pink));-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px));filter:drop-shadow(0 0 6px var(--accent))}
         .logo::before{content:'';position:absolute;inset:-18%;border-radius:50%;background:radial-gradient(circle,var(--glow),transparent 68%)}
-        .logo svg{position:relative;width:240px;height:240px;display:block}
+        .logo svg{position:relative;width:240px;height:240px;display:block;overflow:visible}
+        .logo .a1{--fx:-120px;--fy:-380px;--fr:-70deg}.logo .a2{--fx:390px;--fy:-170px;--fr:80deg}
+        .logo .a3{--fx:150px;--fy:380px;--fr:-60deg}.logo .a4{--fx:-390px;--fy:190px;--fr:75deg}
+        .logo .x1{--fx:-300px;--fy:-280px;--fr:-120deg}.logo .x2{--fx:310px;--fy:-260px;--fr:110deg}
         @media(prefers-reduced-motion:no-preference){
         .ripple{animation:rippleBig 6s ease-out infinite}
         .r2{animation-delay:1.5s}.r3{animation-delay:3s}.r4{animation-delay:4.5s}
@@ -70,7 +77,14 @@ public enum StartScreen {
         .water::before{animation:drift 18s ease-in-out infinite alternate}
         .water::after{animation:drift 24s ease-in-out infinite alternate-reverse}
         .logo::before{animation:glow 3.2s ease-in-out infinite}
-        .logo svg{animation:pop .9s cubic-bezier(.2,.9,.3,1.2) both,float 5s ease-in-out .9s infinite}
+        .logo .frag{transform-box:fill-box;transform-origin:center}
+        .logo .a1{animation:assemble 1.3s cubic-bezier(.22,1,.36,1) both}
+        .logo .a2{animation:assemble 1.3s cubic-bezier(.22,1,.36,1) .1s both}
+        .logo .a3{animation:assemble 1.3s cubic-bezier(.22,1,.36,1) .2s both}
+        .logo .a4{animation:assemble 1.3s cubic-bezier(.22,1,.36,1) .3s both}
+        .logo .x1{animation:assemble 1.3s cubic-bezier(.22,1,.36,1) .5s both}
+        .logo .x2{animation:assemble 1.3s cubic-bezier(.22,1,.36,1) .6s both}
+        .logo svg{animation:float 5s ease-in-out 1.9s infinite}
         h1{animation:rise .7s ease-out .25s both}
         .tag{animation:rise .7s ease-out .45s both}
         .row,.err,.retry{animation:rise .7s ease-out .65s both}
@@ -82,7 +96,7 @@ public enum StartScreen {
         @keyframes bubble{0%{transform:translate(0,0) scale(.6);opacity:0}12%{opacity:.5}50%{transform:translate(14px,-22vh) scale(1)}100%{transform:translate(-10px,-46vh) scale(1.25);opacity:0}}
         @keyframes drift{to{transform:translate(8vmax,6vmax) scale(1.15)}}
         @keyframes glow{50%{transform:scale(1.12);opacity:.65}}
-        @keyframes pop{from{opacity:0;transform:scale(.6) rotate(-14deg)}}
+        @keyframes assemble{from{opacity:0;transform:translate(var(--fx),var(--fy)) rotate(var(--fr)) scale(.6)}60%{opacity:1}to{opacity:1;transform:none}}
         @keyframes float{50%{transform:translateY(-10px)}}
         @keyframes rise{from{opacity:0;transform:translateY(12px)}}
         h1{margin:0;font-size:44px;font-weight:700;color:var(--fg);letter-spacing:.3px}

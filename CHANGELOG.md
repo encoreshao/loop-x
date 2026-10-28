@@ -12,6 +12,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Added
+- Mac app: every launch opens on the start screen, whose logo assembles itself from scattered fragments (the four arcs, then the X) before the dashboard loads, even when the backend is already running; Reduce Motion shows the finished logo.
+- Landing page: the LoopX logo now assembles itself from scattered strokes every time the chooser opens (skipped when the system asks for reduced motion).
 - Office: a "Dawn" time-of-day option and a violet-to-rose pre-dawn sky for the early hours before sunrise.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 
