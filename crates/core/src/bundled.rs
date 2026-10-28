@@ -97,12 +97,12 @@ const VERSION_MARKER: &str = ".loopx-bundled-version";
 /// Write the bundled files under `root`. A git checkout (`.git` present) is
 /// never touched, so development edits stay authoritative. Elsewhere, missing
 /// files are created (existing ones are kept) and, after an upgrade (a marker from
-/// another version), the files are refreshed so the instructions match the binary. Best effort.
+/// another version or bundled text), the files are refreshed so the instructions match the binary. Best effort.
 pub fn seed(root: &Path) {
     if root.join(".git").exists() {
         return;
     }
-    let version = env!("CARGO_PKG_VERSION");
+    let version = stamp();
     let marker = root.join(VERSION_MARKER);
     // No marker means files already there came from an install script or the user:
     // fill in what is missing, never overwrite. Only a marker from another version
@@ -119,9 +119,22 @@ pub fn seed(root: &Path) {
         }
         let _ = std::fs::write(&path, text);
     }
-    if recorded.as_deref() != Some(version) {
+    if recorded.as_deref() != Some(version.as_str()) {
         let _ = std::fs::write(&marker, version);
     }
+}
+
+/// The crate version plus a digest of the bundled text, so a rebuild that
+/// changes an instruction without bumping the version still refreshes it.
+fn stamp() -> String {
+    // FNV-1a: stable across builds and toolchains, unlike `DefaultHasher`.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for (rel, text) in FILES {
+        for b in rel.bytes().chain([0]).chain(text.bytes()).chain([0]) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{}+{h:016x}", env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]
@@ -179,6 +192,19 @@ mod tests {
         std::fs::write(root.path().join(VERSION_MARKER), "0.0.0").unwrap();
         seed(root.path());
         assert_ne!(std::fs::read_to_string(&md).unwrap(), "local edit");
+    }
+
+    #[test]
+    fn refreshes_when_the_bundled_text_changed_under_the_same_version() {
+        // A rebuild that changes an instruction file without bumping the
+        // crate version must still replace the stale copy.
+        let root = tempfile::tempdir().unwrap();
+        seed(root.path());
+        let md = root.path().join("instructions/loopx/gitlab-issue.md");
+        std::fs::write(&md, "stale copy").unwrap();
+        std::fs::write(root.path().join(VERSION_MARKER), env!("CARGO_PKG_VERSION")).unwrap();
+        seed(root.path());
+        assert_ne!(std::fs::read_to_string(&md).unwrap(), "stale copy");
     }
 
     #[test]

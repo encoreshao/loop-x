@@ -418,6 +418,8 @@ fn invoke_cli_with_prompt(
     let worktree_root = worktree_root()?;
     let ai_cli = ai_cli_config::selected_cli();
     let repo_root = ctx.repo_root.display().to_string();
+    let run_id = std::env::var("LOOP_RUN_ID").ok();
+    let prompt_text = &prompt::with_run_id(prompt_text.to_string(), run_id.as_deref());
     let extra_dirs = issue
         .map(|(alias, _)| in_place_dirs(&project_config_path(ctx), alias))
         .unwrap_or_default();

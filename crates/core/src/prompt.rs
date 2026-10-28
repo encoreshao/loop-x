@@ -42,6 +42,18 @@ pub fn single_issue(loop_dir: &Path, alias: &str, issue_iid: &str) -> String {
     )
 }
 
+/// Spells out this run's id. Claude Code refuses a Bash command whose
+/// shell variables it cannot check, so `"$LOOP_RUN_ID"` in an instruction
+/// would block every `loopx events emit` the agent runs.
+pub fn with_run_id(prompt: String, run_id: Option<&str>) -> String {
+    match run_id.filter(|r| !r.is_empty()) {
+        Some(id) => format!(
+            "{prompt}\n\nThis run's id is `{id}`. Wherever the instructions write `$LOOP_RUN_ID` or `${{LOOP_RUN_ID}}`, write `{id}` literally instead (e.g. `--issue-run-id \"{id}_<alias>_<issue_iid>\"`): the permission checker refuses any command that contains a shell variable."
+        ),
+        None => prompt,
+    }
+}
+
 /// No args: the legacy whole-batch prompt (kept for manual use).
 pub fn whole_batch(loop_dir: &Path) -> String {
     format!(
@@ -141,6 +153,17 @@ mod tests {
         ] {
             assert!(p.contains(needle), "missing {needle}");
         }
+    }
+
+    #[test]
+    fn with_run_id_spells_out_the_literal_id() {
+        let p = with_run_id("base".into(), Some("run_20261028_190944"));
+        assert!(p.starts_with("base\n\n"));
+        assert!(p.contains("`run_20261028_190944`"));
+        assert!(p.contains("`$LOOP_RUN_ID`"));
+        assert!(p.contains("`${LOOP_RUN_ID}`"));
+        assert_eq!(with_run_id("base".into(), None), "base");
+        assert_eq!(with_run_id("base".into(), Some("")), "base");
     }
 
     #[test]

@@ -31,6 +31,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - The product is spelled "LoopX" everywhere it is shown (was "Loop X"), and the "X" in the sidebar and chat-panel wordmark takes a orange accent.
 
 ### Fixed
+- GitLab issue loop: a rebuilt app that keeps the same version number now refreshes the agent instructions it seeds into `~/.loopx`, so the agent no longer follows an old copy that limited it to saved install/lint/test commands.
+- GitLab issue loop: the agent is given the run id literally, so its event calls are no longer refused for containing `$LOOP_RUN_ID`.
+- GitLab issue loop: the agent corrects a misspelled or unusable saved command hint from the repo's own CI instead of escalating, and may run `bundle audit` and `brakeman`.
 - Chat: when the assistant runs several tools in one step, every one of them now shows as finished once it returns, instead of all but the last spinning forever (live and after reload).
 
 ## [0.10.0] - 2026-10-27

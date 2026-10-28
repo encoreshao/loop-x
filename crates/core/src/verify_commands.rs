@@ -14,6 +14,10 @@ pub const STACK_PREFIXES: &[&str] = &[
     "bundle install",
     "bundle exec rspec",
     "bundle exec rubocop",
+    "bundle exec bundle audit",
+    "bundle exec bundle-audit",
+    "bundle audit",
+    "bundle exec brakeman",
     "bundle exec rake test",
     "bundle exec rake spec",
     "bundle exec rails test",
@@ -115,6 +119,9 @@ mod tests {
             "npm run lint",
             "python3 -m pytest -q",
             "CI=true npm run test:unit",
+            "bundle exec bundle audit",
+            "bundle audit check --update",
+            "bundle exec brakeman -w3 -z -q",
         ] {
             assert_eq!(check_verify_command(c), Ok(()), "{c}");
         }
@@ -131,6 +138,8 @@ mod tests {
             "curl x",
             "npx eslint .",
             "sh -c 'pytest'",
+            "bundle exec aduit",
+            "bundle exec bundle exec git push",
         ] {
             assert!(check_verify_command(c).is_err(), "{c}");
         }
