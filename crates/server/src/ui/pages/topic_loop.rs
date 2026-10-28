@@ -6,7 +6,7 @@ use super::chat::topic_latest_data_html;
 use super::runs::{history_entry_html, topic_history_dir};
 use super::loops_common::{
     custom_select_plain, empty_state_html, esc_t, flash_html, relative_time, render_loop_page,
-    run_now_action_html,
+    run_now_action_html, stop_action_html,
 };
 use crate::ui::badge::status_badge_markup;
 use crate::ui::hub::{builtin_loop_page, resolve_view};
@@ -61,7 +61,14 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         .values()
         .any(|e| e.get("state").and_then(Value::as_str) == Some("running"));
 
-    let run_now_form = if any_running || topics.is_empty() {
+    let run_now_form = if any_running {
+        stop_action_html(
+            ctx,
+            "/topic-monitor/stop",
+            &ctx.t("Stop the running topic loop? The in-progress topic's work will be abandoned."),
+            &ctx.csrf_input(),
+        )
+    } else if topics.is_empty() {
         String::new()
     } else {
         run_now_action_html(
@@ -133,7 +140,7 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         &[("link", &history_link)],
     );
     format!(
-        "\n<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{subtitle}</p>\n</div>\n\n{}\n\n<div class=\"grid\">\n<section class=\"card\">\n<div class=\"section-header\">{icon}<h2>{}</h2></div>\n{warning_html}{topics_html}\n{run_now_form}\n</section>\n</div>\n{latest_section}\n",
+        "\n<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{subtitle}</p>\n</div>\n\n{}\n\n<div class=\"grid\">\n<section class=\"card\">\n<div class='status-head'><div class=\"section-header\">{icon}<h2>{}</h2></div>{run_now_form}</div>\n{warning_html}{topics_html}\n</section>\n</div>\n{latest_section}\n",
         esc_t(ctx, "Topic Monitor"),
         flash_html(flash, flash_ok),
         esc_t(ctx, "Topics"),
@@ -268,6 +275,29 @@ mod tests {
     fn history_html(state: &UiState) -> String {
         let req = UiRequest::get("/loops/topic-loop?view=history");
         String::from_utf8(page(&UiCtx::new(state, &req)).body).unwrap()
+    }
+
+    fn live_html(state: &UiState) -> String {
+        let req = UiRequest::get("/loops/topic-loop?view=live");
+        String::from_utf8(page(&UiCtx::new(state, &req)).body).unwrap()
+    }
+
+    #[test]
+    fn the_live_tabs_run_now_and_stop_sit_top_right_like_the_gitlab_loop() {
+        let (dir, state) = sandbox();
+        std::fs::write(dir.path().join("topics.json"), r#"[{"name": "ai", "label": "AI"}]"#).unwrap();
+        let html = live_html(&state);
+        let head = html.find("<div class='status-head'>").expect("status head");
+        let run = html.find("action='/topic-monitor/run-now'").expect("run now");
+        let first_topic = html.find("<div class='project-block'>").expect("topic row");
+        assert!(head < run && run < first_topic, "{html}");
+
+        let status = dir.path().join("outputs/topic-monitor/status.json");
+        std::fs::create_dir_all(status.parent().unwrap()).unwrap();
+        std::fs::write(&status, r#"{"topics": {"ai": {"state": "running"}}}"#).unwrap();
+        let html = live_html(&state);
+        assert!(html.contains("action='/topic-monitor/stop'"), "{html}");
+        assert!(!html.contains("action='/topic-monitor/run-now'"), "{html}");
     }
 
     #[test]

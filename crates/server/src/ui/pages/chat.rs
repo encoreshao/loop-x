@@ -12,7 +12,7 @@ use crate::ui::{ai_cli, hub, icons};
 use crate::ui::i18n::{self, Lang};
 use crate::ui::markdown;
 use crate::ui::pages::loops_common::{
-    aware, flash_html, relative_time, run_now_action_html, stop_action_html,
+    aware, flash_html, relative_time,
 };
 use crate::ui::pyfmt;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -537,26 +537,13 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
 
 // ----- the activity body -----
 
-/// `str.capitalize()`.
-fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars.flat_map(char::to_lowercase)).collect(),
-        None => String::new(),
-    }
-}
-
-fn read_json(path: &std::path::Path) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-}
-
 /// `get_configured_topics`: `[]` when topics.json is missing or malformed.
-fn configured_topics(state: &UiState) -> Vec<Value> {
+pub(crate) fn configured_topics(state: &UiState) -> Vec<Value> {
     topics::load(&state.home_dir.join("topics.json")).unwrap_or_default()
 }
 
 /// `_topic_monitor_progress_text`.
-fn topic_progress_text(lang: Lang, topic_status: &serde_json::Map<String, Value>, topics: &[Value]) -> String {
+pub(crate) fn topic_progress_text(lang: Lang, topic_status: &serde_json::Map<String, Value>, topics: &[Value]) -> String {
     for (name, entry) in topic_status {
         if entry.get("state").and_then(Value::as_str) == Some("running") {
             let label = topics
@@ -663,177 +650,25 @@ fn today_log_tail(state: &UiState, lines: usize) -> Option<String> {
 fn activity_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     let state = ctx.state;
     let lang = ctx.lang;
-    let status = core_status::read_status(&state.status_path());
     let review = std::fs::read(state.repo_root.join("outputs").join("daily-review.md"))
         .map_or_else(|_| "No run yet.".to_string(), |b| String::from_utf8_lossy(&b).into_owned());
-    let run_state = status
-        .get("state")
-        .map_or_else(|| "unknown".to_string(), pydumps::py_str);
-    let csrf = csrf_input(state);
-    let prefixes = prefixes(state);
-
-    let (badge_class, badge_icon) = badge::status_badge(&run_state);
-    let state_hero = format!(
-        "<div class='status-hero'><span class='pill pill-lg {badge_class}'>{badge_icon}{}</span></div>",
-        pyfmt::escape(&badge::state_label(lang, &status))
-    );
-    let mut status_lines = String::new();
-    if let Value::Object(map) = &status {
-        for (key, value) in map {
-            if key == "state" {
-                continue;
-            }
-            let label = t(lang, &capitalize(&key.replace('_', " ")));
-            let (display, title_attr) = if key == "updated_at" && loopx_core::loops_config::py_truthy(value) {
-                (
-                    relative_time(state.now(), &pydumps::py_str(value)),
-                    format!(" title='{}'", pyfmt::escape(&pydumps::py_str(value))),
-                )
-            } else {
-                (pydumps::py_str(value), String::new())
-            };
-            status_lines.push_str(&format!(
-                "<li><span class='k'>{}</span><span{title_attr}>{}</span></li>",
-                pyfmt::escape(&label),
-                pyfmt::escape(&display)
-            ));
-        }
-    }
-    let log_html = if run_state == "running" {
-        match today_log_tail(state, 30).filter(|s| !s.is_empty()) {
-            Some(tail) => format!(
-                "<p><strong>{}</strong></p><pre class='log'>{}</pre>",
-                pyfmt::escape_with(&t(lang, "Today's log (tail):"), false),
-                pyfmt::escape(&tail)
-            ),
-            None => String::new(),
-        }
-    } else {
-        String::new()
-    };
-
-    let has_projects = read_json(&state.home_dir.join("projects.json"))
-        .and_then(|c| c.get("projects").cloned())
-        .is_some_and(|p| loopx_core::loops_config::py_truthy(&p));
-    let gitlab_run_now = if run_state == "running" {
-        stop_action_html(
-            ctx,
-            "/gitlab/stop",
-            &t(lang, "Stop the running GitLab loop? The in-progress issue's work will be abandoned."),
-            &csrf,
-        )
-    } else if !has_projects {
-        run_now_action_html(
-            ctx,
-            "/run-now",
-            &csrf,
-            Some(&t(
-                lang,
-                "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.",
-            )),
-        )
-    } else {
-        run_now_action_html(
-            ctx,
-            "/run-now",
-            &csrf,
-            None,
-        )
-    };
-
+    let log_tail = today_log_tail(state, 30).filter(|s| !s.is_empty());
+    let (progress_html, loops_html) = super::activity::activity_top_html(ctx, log_tail.as_deref());
     let topics = configured_topics(state);
-    let topic_status = core_status::read_topic_status(
-        &state
-            .repo_root
-            .join("outputs")
-            .join("topic-monitor")
-            .join("status.json"),
-    );
-    let empty = serde_json::Map::new();
-    let topic_status = topic_status
-        .get("topics")
-        .and_then(Value::as_object)
-        .unwrap_or(&empty);
-    let any_running = topic_status
-        .values()
-        .any(|e| e.get("state").and_then(Value::as_str) == Some("running"));
-    let (tb_class, tb_icon, tb_label) = if any_running {
-        let (c, i) = badge::status_badge("running");
-        (c, i, topic_progress_text(lang, topic_status, &topics))
-    } else if topics.is_empty() {
-        let (c, i) = badge::status_badge("never_run");
-        (c, i, t(lang, "Not configured"))
-    } else {
-        let (c, i) = badge::status_badge("idle");
-        (c, i, t(lang, "Idle"))
-    };
-    let topic_hero = format!(
-        "<div class='status-hero'><span class='pill pill-lg {tb_class}'>{tb_icon}{}</span></div>",
-        pyfmt::escape(&tb_label)
-    );
-    let mut topic_fields = format!(
-        "<li><span class='k'>{}</span><span>{}</span></li>",
-        esc_t(lang, "Configured topics"),
-        topics.len()
-    );
-    let most_recent = topic_status
-        .values()
-        .filter_map(|e| e.get("updated_at"))
-        .filter(|v| loopx_core::loops_config::py_truthy(v))
-        .map(pydumps::py_str)
-        .max();
-    if let Some(recent) = most_recent {
-        topic_fields.push_str(&format!(
-            "<li><span class='k'>{}</span><span title='{}'>{}</span></li>",
-            esc_t(lang, "Last run"),
-            pyfmt::escape(&recent),
-            pyfmt::escape(&relative_time(state.now(), &recent))
-        ));
-    }
-    let topic_run_now = if any_running {
-        stop_action_html(
-            ctx,
-            "/topic-monitor/stop",
-            &t(lang, "Stop the running topic loop? The in-progress topic's work will be abandoned."),
-            &csrf,
-        )
-    } else if topics.is_empty() {
-        run_now_action_html(
-            ctx,
-            "/topic-monitor/run-now",
-            &csrf,
-            Some(&t(
-                lang,
-                "No topics configured yet - <a href='/loops/topic-loop?view=topics'>add one on the Topic Settings page</a>.",
-            )),
-        )
-    } else {
-        run_now_action_html(
-            ctx,
-            "/topic-monitor/run-now",
-            &csrf,
-            None,
-        )
-    };
 
     let mut scope = Scope::new(lang);
     scope
         .var(
             "activity_subtitle",
             pyfmt::escape_with(
-                &t(lang, "What each automated loop is doing right now, plus the GitLab loop's most recent report."),
+                &t(lang, "The latest progress first, then where every loop stands, then the most recent reports."),
                 false,
             ),
         )
         .var("flash_html", flash_html(flash, flash_ok))
-        .var("state_hero_html", state_hero)
-        .set("''.join(status_lines)", status_lines)
-        .var("gitlab_run_now_html", gitlab_run_now)
-        .var("log_html", log_html)
-        .var("topic_state_hero_html", topic_hero)
-        .set("''.join(topic_fields)", topic_fields)
-        .var("topic_run_now_html", topic_run_now)
-        .set("render_markdown(review)", markdown::render_markdown(&review, &prefixes))
+        .var("progress_html", progress_html)
+        .var("loops_html", loops_html)
+        .set("render_markdown(review)", markdown::render_markdown(&review, &prefixes(state)))
         .set(
             "_topic_latest_data_html(topics)",
             topic_latest_data_html(state, lang, &topics),

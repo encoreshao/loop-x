@@ -18,6 +18,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 
 ### Changed
+- Dashboard → Activity: a "Latest progress" card now heads the page (what a running loop is doing, its newest steps from the event ledger - started, classified, verifying, MR opened, escalated - and its Stop button, or "All loops idle"), followed by one status card per loop (GitLab, Topic Monitor, Inbox Triage and every enabled plugin loop) and then the run reviews.
+- Topic Monitor → Live: the Run now button sits at the top right of the Topics card like the other loop pages, and becomes Stop while a topic is running.
 - Topbar: the Agents pill now shows what a running loop is doing (a spinner and "Processing <project> #<issue> — <step>", cut short with the full text on hover) instead of a second status pill beside it, which also stops the centred pill from overlapping the topbar icons.
 - GitLab: tracking a project for the issue loop is now a Track switch on its row in Project aliases (local checkout, target branch, and a "Use worktree" switch that is on by default); the separate Tracked Projects card and its install/lint/test command fields are gone. Loop settings moved into the GitLab card.
 - GitLab issue loop: the agent works out each project's install, lint and test commands itself (starting from any commands already saved, its earlier runs and other projects on the same stack), fixes verification setup such as RuboCop's cache, and logs what it used; the Live view shows those checks under each issue.
