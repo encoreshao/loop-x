@@ -176,6 +176,18 @@
 <input type='password' name='webhook_url' placeholder='collez la nouvelle URL du webhook Slack' required>
 <button type='submit' class='btn btn-neutral'>Enregistrer</button>
 </form>
+<h3>Modèle de message</h3>
+<p class='section-subtitle'>L&#x27;apparence du rapport de fin d&#x27;exécution de chaque boucle dans Slack.</p>
+<ul><li><strong>Rapport</strong> — Un message structuré par exécution : statut, sections, un tableau et ce qui requiert votre attention.</li><li><strong>Classique</strong> — Le même contenu en texte brut, sans Block Kit.</li></ul>
+<form method='post' action='/notifications/message-template' class='daemon-action-form single-field'>
+<input type='hidden' name='csrf_token' value="golden-csrf-token">
+<div class='custom-select'><select name='message_template' class='custom-select-native'><option value='report' selected>Rapport</option><option value='classic'>Classique</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>Rapport</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='report'>Rapport</div><div class='custom-select-option' role='option' tabindex='-1' data-value='classic'>Classique</div></div></div>
+<button type='submit' class='btn btn-neutral'>Enregistrer</button>
+</form>
+<form method='post' action='/notifications/message-template/test' class='daemon-action-form'>
+<input type='hidden' name='csrf_token' value="golden-csrf-token">
+<button type='submit' class='btn btn-neutral'>Envoyer un rapport d&#x27;exemple</button>
+</form>
 </section>
 
 <section class="card block-kit-card">
@@ -194,7 +206,7 @@
     <label>Associer à une notification
       <select id="bkb-notification-key">
         <option value="">(aucun)</option>
-        <option value='gitlab_wrapup_failed'>Boucle GitLab : échec du récapitulatif de fin d&#x27;exécution</option><option value='gitlab_issues_incomplete'>Boucle GitLab : issues incomplètes</option><option value='topic_monitor_incomplete'>Veille de sujets : sujets incomplets</option><option value='inbox_triage_digest'>Tri de la boîte de réception : récapitulatif d&#x27;exécution</option>
+        <option value='inbox_triage_digest'>Tri de la boîte de réception : récapitulatif d&#x27;exécution</option>
       </select>
     </label>
   </div>

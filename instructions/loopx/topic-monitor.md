@@ -14,7 +14,7 @@ If they exist and are non-empty, also read `~/.loopx/instructions.md` (global, a
 
 A *scheduled* run no longer happens in a single agent session. `loopx topic run` does Step 1's discovery itself, in Rust, and then starts a separate agent session per configured topic — each with its own prompt from its own prompt builder, each with its own runtime budget. Which mode you are in is stated in your own prompt; if your prompt does not name one specific topic, you are in the whole-run mode (Step 1 onwards, the whole day's topic list in this one session) and this section does not apply.
 
-**One topic — your prompt names a single topic.** Skip Step 1 entirely; the task list is just the one topic named in your prompt. Look its details up with `loopx topic config topic <name>` and do Step 2's per-topic procedure for exactly that topic — its own status writes (steps 2 and 8), its own briefing file, its own seen-items records, its own Slack message. Then **stop**: do not process, inspect, or reason about any other topic. The other topics are other sessions' work, running before or after yours, and you cannot see them.
+**One topic — your prompt names a single topic.** Skip Step 1 entirely; the task list is just the one topic named in your prompt. Look its details up with `loopx topic config topic <name>` and do Step 2's per-topic procedure for exactly that topic — its own status writes (steps 2 and 8), its own briefing file, its own seen-items records, its own saved Slack briefing (step 7). Then **stop**: do not process, inspect, or reason about any other topic. The other topics are other sessions' work, running before or after yours, and you cannot see them.
 
 In particular, the **"Verification checklist (before ending the run)" section's whole-run bullets do not apply to a single-topic session** — neither "every topic from `loopx topic config names` has a briefing file for today" nor "every topic's status was written as `idle` or `failed`". A single-topic session cannot see, let alone satisfy, either one. What applies to you is the same check narrowed to your own one topic: *this* topic has a briefing file for today, and *this* topic's status was written as `idle` or `failed`. The other topics' briefings and statuses being absent or still `running` is expected in your session, never a failed verification.
 
@@ -67,41 +67,24 @@ For each topic name:
    loopx topic seen add <name> "<url>" "<title>"
    ```
 
-7. **Notify Slack.** Send the full briefing as **Slack Block Kit blocks** via `loopx notify`'s `--blocks=` flag, not a single wall-of-text message — a header block, then one section block per notable item, so it renders as distinct rows instead of one dense paragraph. Every notable item from today's briefing file gets its own section block, each with its own description and source link. Text inside each block still uses **Slack's mrkdwn**, not GitHub-flavored Markdown (Slack does not render `#` headings or `[text](url)` links inside block text either; use `*bold*`, `_italic_`, and `<url|link text>` for links). The dashboard is localhost-only, so never link to it.
+7. **Hand the briefing to Slack.** Save it as data with `loopx topic report`; the loop itself posts it to the topic's Slack channel when your session ends, laid out in the message template the user picked, with the run's real duration and item count. Never post to Slack yourself (`loopx notify` is not available to you).
 
-   Blocks array, in order:
-   - A `header` block: `{"type": "header", "text": {"type": "plain_text", "text": "<label> briefing (<YYYY-MM-DD>)"}}`
-   - If nothing new turned up: exactly one more block, a `section` whose text is `_Nothing notable since the last run._`, then skip straight to the invocation below (no summary block, no divider, no item blocks).
-   - Otherwise: a `section` block whose text is the same one-sentence summary written at the top of today's briefing file (step 5), in `_italics_`.
-   - A `divider` block.
-   - One `section` block per notable item, text: `*<item title>*: <one-or-two sentence description> — <<url>|<domain>>` — where `<domain>` is the item's source domain (the URL's host with any leading `www.` stripped, e.g. `techcrunch.com`), never the literal word "source".
+   The JSON has the same one-sentence summary written at the top of today's briefing file (step 5), and one entry per notable item in that file, each with its title, its one-or-two sentence description and its source URL. Write plain text only: no Markdown, no Slack mrkdwn, no `<url|text>` links (the template adds the source's domain as the link itself). The dashboard is localhost-only, so never use a dashboard URL.
 
-   `loopx notify` requires a trailing positional message too — Slack's own fallback text, shown in notification previews and by any client that can't render blocks. Use the same header line for it.
-
-   Example invocation (use a `$(cat <<'BLOCKS' ... BLOCKS)` heredoc for the JSON so newlines and quotes survive):
+   Use a `$(cat <<'BRIEFING' ... BRIEFING)` heredoc so newlines and quotes survive:
    ```
-   loopx notify<bundle_flag> --blocks="$(cat <<'BLOCKS'
-   [
-     {"type": "header", "text": {"type": "plain_text", "text": "<label> briefing (<YYYY-MM-DD>)"}},
-     {"type": "section", "text": {"type": "mrkdwn", "text": "_<one-sentence summary>_"}},
-     {"type": "divider"},
-     {"type": "section", "text": {"type": "mrkdwn", "text": "*<item 1 title>*: <description> — <<url1>|techcrunch.com>"}},
-     {"type": "section", "text": {"type": "mrkdwn", "text": "*<item 2 title>*: <description> — <<url2>|siliconangle.com>"}}
-   ]
-   BLOCKS
-   )" "<label> briefing (<YYYY-MM-DD>)"
+   loopx topic report <name> "$(cat <<'BRIEFING'
+   {
+     "summary": "<one-sentence summary>",
+     "items": [
+       {"title": "<item 1 title>", "description": "<one or two sentences>", "url": "<url1>"},
+       {"title": "<item 2 title>", "description": "<one or two sentences>", "url": "<url2>"}
+     ]
+   }
+   BRIEFING
+   )"
    ```
-   And for a quiet day:
-   ```
-   loopx notify<bundle_flag> --blocks="$(cat <<'BLOCKS'
-   [
-     {"type": "header", "text": {"type": "plain_text", "text": "<label> briefing (<YYYY-MM-DD>)"}},
-     {"type": "section", "text": {"type": "mrkdwn", "text": "_Nothing notable since the last run._"}}
-   ]
-   BLOCKS
-   )" "<label> briefing (<YYYY-MM-DD>)"
-   ```
-   `<bundle_flag>` is the empty string if this topic's `slack_bundle` is `null`, or ` --bundle=<slack_bundle>` (including the leading space) otherwise — same convention `instructions/gitlab-issue.md` uses for GitLab loop notifications.
+   On a quiet day, save the summary with an empty item list (`"items": []`) — the report then says nothing new turned up. The command checks the JSON and prints `Saved the <name> briefing (N items)`; if it prints an error instead, fix the JSON and run it again.
 
 8. **Report you're done.**
    ```
@@ -128,7 +111,7 @@ this loop's write boundary becomes policy this document asks the agent
 to follow, not a technically enforced boundary. Switch to Codex only
 with that trade-off in mind.
 
-Allowed: `WebSearch`, `WebFetch`; file access scoped to `outputs/topic-monitor/` via `Read(**/outputs/topic-monitor/**)` and `Edit(**/outputs/topic-monitor/**)` — plus read-only access to this file and `docs/tasks/topic-monitor-loop.md`, the two documents the run itself has to read; `loopx topic config`, `loopx topic seen`, `loopx notify`, ``loopx status`/`loopx messages`` (relative or absolute path); `cd`.
+Allowed: `WebSearch`, `WebFetch`; file access scoped to `outputs/topic-monitor/` via `Read(**/outputs/topic-monitor/**)` and `Edit(**/outputs/topic-monitor/**)` — plus read-only access to this file and `docs/tasks/topic-monitor-loop.md`, the two documents the run itself has to read; `loopx topic config`, `loopx topic seen`, `loopx topic report`, ``loopx status`/`loopx messages`` (relative or absolute path); `cd`.
 
 Not allowed: any `git` command, any command touching a project checkout, reading `.env`/credentials/SSH keys, writing anywhere outside `outputs/topic-monitor/`.
 

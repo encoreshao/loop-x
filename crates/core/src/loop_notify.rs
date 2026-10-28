@@ -8,6 +8,7 @@
 //! [`NotifyConnector`], so the later connectors port plugs in without changes here.
 
 use crate::slack;
+use crate::slack_report::{self, Report, Template};
 use link_flatten::flatten_links;
 use serde_json::Value;
 use std::path::Path;
@@ -142,15 +143,76 @@ pub fn notify(
     loader: ConnectorLoader,
     default_sender: DefaultSender,
 ) -> Vec<NotifyResult> {
+    route(
+        loop_name,
+        loop_lookup,
+        loader,
+        default_sender,
+        &|send, kind| {
+            if kind == "slack" || kind == "webhook" {
+                send(text, blocks)
+            } else {
+                send(&flatten_links(text), blocks)
+            }
+        },
+    )
+}
+
+/// Route a [`Report`] like [`notify`]: Slack and webhook targets get
+/// `template`'s layout, retried down to plain text if rejected; any other
+/// connector gets the plain text with its links flattened.
+pub fn notify_report(
+    loop_name: &str,
+    report: &Report,
+    template: Template,
+    loop_lookup: LoopLookup,
+    loader: ConnectorLoader,
+    default_sender: DefaultSender,
+) -> Vec<NotifyResult> {
+    let attempts = slack_report::attempts(report, template);
+    let plain = flatten_links(&slack_report::plain_text(report));
+    route(
+        loop_name,
+        loop_lookup,
+        loader,
+        default_sender,
+        &|send, kind| {
+            if kind != "slack" && kind != "webhook" {
+                return send(&plain, None);
+            }
+            let mut last = Ok(());
+            for attempt in &attempts {
+                last = send(&attempt.text, attempt.blocks.as_ref());
+                if last.is_ok() {
+                    break;
+                }
+            }
+            last
+        },
+    )
+}
+
+type Send<'a> = &'a dyn Fn(&str, Option<&Value>) -> Result<(), SendError>;
+
+/// Every target of `loop_name` (or the default sender), each handed to
+/// `deliver` with its send function and connector kind.
+fn route(
+    loop_name: &str,
+    loop_lookup: LoopLookup,
+    loader: ConnectorLoader,
+    default_sender: DefaultSender,
+    deliver: &dyn Fn(Send, &str) -> Result<(), SendError>,
+) -> Vec<NotifyResult> {
+    let result = |id: &str, sent: Result<(), SendError>| match sent {
+        Ok(()) => (id.to_string(), true, "sent".to_string()),
+        Err(e) => (id.to_string(), false, e.describe()),
+    };
     let ids: Option<Vec<Value>> = loop_lookup(loop_name)
         .ok()
         .and_then(|l| l.get("notify").and_then(Value::as_array).cloned())
         .filter(|a| !a.is_empty());
     let Some(ids) = ids else {
-        return vec![match default_sender(text, blocks) {
-            Ok(()) => (DEFAULT_ID.to_string(), true, "sent".to_string()),
-            Err(e) => (DEFAULT_ID.to_string(), false, e.describe()),
-        }];
+        return vec![result(DEFAULT_ID, deliver(default_sender, "slack"))];
     };
     ids.iter()
         .map(|id| {
@@ -158,39 +220,24 @@ pub fn notify(
                 Value::String(s) => s.clone(),
                 other => crate::pydumps::py_str(other),
             };
-            let (ok, message) = send_one(&account_id, text, blocks, loader);
-            (account_id, ok, message)
+            let conn = match loader(&account_id) {
+                Ok(c) => c,
+                Err(e) => {
+                    let message = match e {
+                        LoadError::Unknown => "unknown connector".to_string(),
+                        LoadError::Config => "connector config error".to_string(),
+                        LoadError::Other(name) => name,
+                    };
+                    return (account_id, false, message);
+                }
+            };
+            if !conn.capabilities().iter().any(|c| c == "notify") {
+                return (account_id, false, "not a notify connector".to_string());
+            }
+            let send = |t: &str, b: Option<&Value>| conn.send(t, b);
+            result(&account_id, deliver(&send, &conn.kind()))
         })
         .collect()
-}
-
-fn send_one(
-    account_id: &str,
-    text: &str,
-    blocks: Option<&Value>,
-    loader: ConnectorLoader,
-) -> (bool, String) {
-    let conn = match loader(account_id) {
-        Ok(c) => c,
-        Err(LoadError::Unknown) => return (false, "unknown connector".to_string()),
-        Err(LoadError::Config) => return (false, "connector config error".to_string()),
-        Err(LoadError::Other(name)) => return (false, name),
-    };
-    if !conn.capabilities().iter().any(|c| c == "notify") {
-        return (false, "not a notify connector".to_string());
-    }
-    let kind = conn.kind();
-    let rendered;
-    let body = if kind == "slack" || kind == "webhook" {
-        text
-    } else {
-        rendered = flatten_links(text);
-        &rendered
-    };
-    match conn.send(body, blocks) {
-        Ok(()) => (true, "sent".to_string()),
-        Err(e) => (false, e.describe()),
-    }
 }
 
 /// The Block Kit blocks for `notification_key` with `{{message}}` substituted,
@@ -279,6 +326,61 @@ mod tests {
 
     fn never_load(_: &str) -> Result<Box<dyn NotifyConnector>, LoadError> {
         Err(LoadError::Unknown)
+    }
+
+    #[test]
+    fn a_report_goes_as_blocks_to_slack_and_as_flat_text_elsewhere() {
+        let sent = Rc::new(RefCell::new(Vec::new()));
+        let rejecting = RefCell::new(Vec::new());
+        let loader = |id: &str| -> Result<Box<dyn NotifyConnector>, LoadError> {
+            Ok(Box::new(fake(
+                &["notify"],
+                if id == "mail" { "email" } else { "slack" },
+                None,
+                &sent,
+            )))
+        };
+        let report = slack_report::sample();
+        let out = notify_report(
+            "l",
+            &report,
+            Template::Report,
+            &lookup_with(json!({"notify": ["s", "mail"]})),
+            &loader,
+            &no_default,
+        );
+        assert!(out.iter().all(|r| r.1), "{out:?}");
+        let sent = sent.borrow();
+        assert_eq!(
+            sent[0],
+            "Daily GitLab loop - Completed (12m 4s, 3/3 issues)"
+        );
+        assert!(
+            sent[1].contains("#12 (web) (https://gitlab.example.com/web/-/issues/12)"),
+            "{}",
+            sent[1]
+        );
+        let default = |t: &str, b: Option<&Value>| {
+            rejecting.borrow_mut().push((t.to_string(), b.is_some()));
+            if b.is_some() {
+                Err(SendError::Http(400))
+            } else {
+                Ok(())
+            }
+        };
+        let out = notify_report(
+            "l",
+            &report,
+            Template::Report,
+            &lookup_with(json!({})),
+            &never_load,
+            &default,
+        );
+        assert_eq!(out, vec![("slack-default".into(), true, "sent".into())]);
+        assert_eq!(
+            rejecting.borrow().iter().map(|r| r.1).collect::<Vec<_>>(),
+            [true, true, false]
+        );
     }
 
     #[test]

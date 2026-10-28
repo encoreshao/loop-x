@@ -1196,5 +1196,16 @@
   "Today's log (tail)": "Journal du jour (fin)",
   "Latest progress": "Dernière progression",
   "Last update {when}": "Dernière mise à jour {when}",
-  "The latest progress first, then where every loop stands, then the most recent reports.": "D'abord la dernière progression, puis l'état de chaque boucle, puis les rapports les plus récents."
+  "The latest progress first, then where every loop stands, then the most recent reports.": "D'abord la dernière progression, puis l'état de chaque boucle, puis les rapports les plus récents.",
+  "Message template": "Modèle de message",
+  "How each loop's end-of-run report looks in Slack.": "L'apparence du rapport de fin d'exécution de chaque boucle dans Slack.",
+  "Send a sample report": "Envoyer un rapport d'exemple",
+  "Report": "Rapport",
+  "Classic": "Classique",
+  "One structured message per run: status, sections, a table and what needs you.": "Un message structuré par exécution : statut, sections, un tableau et ce qui requiert votre attention.",
+  "The same content as plain text, without Block Kit.": "Le même contenu en texte brut, sans Block Kit.",
+  "Unknown message template: {name}": "Modèle de message inconnu : {name}",
+  "Slack messages now use the {name} template": "Les messages Slack utilisent désormais le modèle {name}",
+  "Sent a sample report to Slack": "Rapport d'exemple envoyé à Slack",
+  "The sample report could not be sent - check the webhook": "Le rapport d'exemple n'a pas pu être envoyé - vérifiez le webhook"
 }

@@ -8,6 +8,7 @@
 <input type='password' name='webhook_url' placeholder='⟦html.escape(_t('paste new Slack webhook URL'))⟧' required>
 <button type='submit' class='btn btn-neutral'>⟦html.escape(_t('Save'))⟧</button>
 </form>
+⟦message_template_html⟧
 </section>
 
 <section class="card block-kit-card">

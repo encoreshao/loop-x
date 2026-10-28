@@ -34,7 +34,7 @@ Topics are processed one at a time, in the order listed, never in parallel — s
 Each run produces, per configured topic:
 - `outputs/topic-monitor/history/<date>-<topic-name>.md` — that day's briefing
 - A status update the dashboard's Loops → Topic Monitor page reads (idle/running/last-run-time per topic)
-- One Slack message via the webhook at `~/.slack/config.json` (or the topic's `slack_bundle` override), containing the briefing text directly — the dashboard is localhost-only, so messages never link to it
+- One Slack message via the webhook at `~/.slack/config.json` (or the topic's `slack_bundle` override), containing the briefing text directly — the dashboard is localhost-only, so messages never link to it. The agent saves the briefing as data (`loopx topic report`); the runner posts it once the session ends, in the message template picked in Settings, and posts a "did not finish" report for a session that failed.
 
 And, across the whole run:
 - `outputs/topic-monitor/state/<topic-name>.json` — a rolling 7-day window of already-reported item URLs/titles, so the same story isn't repeated day over day

@@ -176,6 +176,18 @@
 <input type='password' name='webhook_url' placeholder='粘贴新的 Slack Webhook URL' required>
 <button type='submit' class='btn btn-neutral'>保存</button>
 </form>
+<h3>消息模板</h3>
+<p class='section-subtitle'>每个循环的运行结束报告在 Slack 中的显示方式。</p>
+<ul><li><strong>报告</strong> — 每次运行一条结构化消息：状态、分节、表格以及需要你处理的事项。</li><li><strong>经典</strong> — 相同内容，以纯文本发送，不使用 Block Kit。</li></ul>
+<form method='post' action='/notifications/message-template' class='daemon-action-form single-field'>
+<input type='hidden' name='csrf_token' value="golden-csrf-token">
+<div class='custom-select'><select name='message_template' class='custom-select-native'><option value='report' selected>报告</option><option value='classic'>经典</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>报告</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='report'>报告</div><div class='custom-select-option' role='option' tabindex='-1' data-value='classic'>经典</div></div></div>
+<button type='submit' class='btn btn-neutral'>保存</button>
+</form>
+<form method='post' action='/notifications/message-template/test' class='daemon-action-form'>
+<input type='hidden' name='csrf_token' value="golden-csrf-token">
+<button type='submit' class='btn btn-neutral'>发送示例报告</button>
+</form>
 </section>
 
 <section class="card block-kit-card">
@@ -194,7 +206,7 @@
     <label>绑定到通知
       <select id="bkb-notification-key">
         <option value="">(无)</option>
-        <option value='gitlab_wrapup_failed'>GitLab 循环:运行结束摘要失败</option><option value='gitlab_issues_incomplete'>GitLab 循环:Issue 未完成</option><option value='topic_monitor_incomplete'>主题监控:主题未完成</option><option value='inbox_triage_digest'>收件箱分拣:运行摘要</option>
+        <option value='inbox_triage_digest'>收件箱分拣:运行摘要</option>
       </select>
     </label>
   </div>

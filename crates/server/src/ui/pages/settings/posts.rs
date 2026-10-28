@@ -29,6 +29,8 @@ pub fn register(r: &mut Registry) {
     r.post("/daemons/:file/schedule", daemon_schedule);
     r.post("/settings/chat-tools", chat_tools);
     r.post("/notifications/webhook", webhook);
+    r.post("/notifications/message-template", message_template);
+    r.post("/notifications/message-template/test", message_template_test);
     r.post("/notifications/block-templates", block_template_save);
     r.post("/notifications/block-templates/:name/delete", block_template_delete);
     r.post("/notifications/block-templates/:name/test", block_template_test);
@@ -335,6 +337,18 @@ fn slack_config(ctx: &UiCtx) -> PathBuf {
 fn webhook(ctx: &UiCtx) -> UiResponse {
     let url = ctx.form().first("webhook_url").unwrap_or("").to_string();
     outcome(ctx, store::update_slack_webhook(&url, &slack_config(ctx)), NOTIFICATIONS)
+}
+
+fn message_template(ctx: &UiCtx) -> UiResponse {
+    let id = ctx.form().first("message_template").unwrap_or("").to_string();
+    outcome(ctx, store::set_message_template(&id, &slack_config(ctx)), NOTIFICATIONS)
+}
+
+fn message_template_test(ctx: &UiCtx) -> UiResponse {
+    let post = |url: &str, text: &str, blocks: Option<&serde_json::Value>| {
+        loopx_core::slack::post_message(url, text, blocks).map(|_| ())
+    };
+    outcome(ctx, store::send_sample_report(&slack_config(ctx), &post), NOTIFICATIONS)
 }
 
 fn block_template_save(ctx: &UiCtx) -> UiResponse {

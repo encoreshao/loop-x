@@ -5,6 +5,7 @@ webhook_display
 csrf_input
 html.escape(_t('paste new Slack webhook URL'))
 html.escape(_t('Save'))
+message_template_html
 _SECTION_ICON_BLOCK_KIT_BUILDER
 bkb_subtitle
 block_templates_json

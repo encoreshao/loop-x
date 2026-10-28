@@ -1196,5 +1196,16 @@
   "Today's log (tail)": "今日のログ（末尾）",
   "Latest progress": "最新の進捗",
   "Last update {when}": "最終更新 {when}",
-  "The latest progress first, then where every loop stands, then the most recent reports.": "最新の進捗、各ループの状況、最新のレポートの順に表示します。"
+  "The latest progress first, then where every loop stands, then the most recent reports.": "最新の進捗、各ループの状況、最新のレポートの順に表示します。",
+  "Message template": "メッセージテンプレート",
+  "How each loop's end-of-run report looks in Slack.": "各ループの実行終了レポートを Slack でどのように表示するかを選びます。",
+  "Send a sample report": "サンプルレポートを送信",
+  "Report": "レポート",
+  "Classic": "クラシック",
+  "One structured message per run: status, sections, a table and what needs you.": "実行ごとに 1 件の構造化メッセージ：ステータス、セクション、表、対応が必要な項目。",
+  "The same content as plain text, without Block Kit.": "同じ内容を Block Kit なしのプレーンテキストで送信します。",
+  "Unknown message template: {name}": "不明なメッセージテンプレート: {name}",
+  "Slack messages now use the {name} template": "Slack メッセージは {name} テンプレートを使うようになりました",
+  "Sent a sample report to Slack": "サンプルレポートを Slack に送信しました",
+  "The sample report could not be sent - check the webhook": "サンプルレポートを送信できませんでした - Webhook を確認してください"
 }

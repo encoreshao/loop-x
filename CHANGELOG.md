@@ -16,8 +16,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Landing page: the LoopX logo now assembles itself from scattered strokes every time the chooser opens (skipped when the system asks for reduced motion).
 - Office: a "Dawn" time-of-day option and a violet-to-rose pre-dawn sky for the early hours before sunrise.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
+- Settings → General → Slack: a "Message template" picker for loop run reports - **Report** (a status line, headed lists, a table and a "Needs you" callout, in Block Kit) or **Classic** (the same content as plain text) - and a "Send a sample report" button.
 
 ### Changed
+- GitLab issue loop: a scheduled batch now posts one run report per Slack channel when it finishes (MRs opened, answered, waiting on review, a by-project table, and what needs you) instead of a start line and a Finished/Escalated line per issue, a separate digest and a separate "issues incomplete" alert. An approval request is still sent the moment it is needed.
+- Topic Monitor: the agent saves its briefing as data (`loopx topic report`) and the loop posts it once the topic finishes, with the run time and item count; a topic that fails now gets a "did not finish" report instead of a separate alert.
+- Inbox Triage, plugin loops (Daily Digest, RSS Watch, MR Review and the rest), sign-in health warnings, "loop failed" alerts and the dashboard's single-issue GitLab run now send their Slack messages as run reports in the picked message template; a plugin loop sends one report with its digest and any failed items instead of two messages. Email and other non-Slack connectors still get plain text.
 - Dashboard → Activity: a "Latest progress" card now heads the page (what a running loop is doing, its newest steps from the event ledger - started, classified, verifying, MR opened, escalated - and its Stop button, or "All loops idle"), followed by one status card per loop (GitLab, Topic Monitor, Inbox Triage and every enabled plugin loop) and then the run reviews.
 - Topic Monitor → Live: the Run now button sits at the top right of the Topics card like the other loop pages, and becomes Stop while a topic is running.
 - Topbar: the Agents pill now shows what a running loop is doing (a spinner and "Processing <project> #<issue> — <step>", cut short with the full text on hover) instead of a second status pill beside it, which also stops the centred pill from overlapping the topbar icons.
@@ -41,6 +45,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - GitLab issue loop: the agent is given the run id literally, so its event calls are no longer refused for containing `$LOOP_RUN_ID`.
 - GitLab issue loop: the agent corrects a misspelled or unusable saved command hint from the repo's own CI instead of escalating, and may run `bundle audit` and `brakeman`.
 - Chat: when the assistant runs several tools in one step, every one of them now shows as finished once it returns, instead of all but the last spinning forever (live and after reload).
+
+### Removed
+- Settings → Block Kit Builder: the "GitLab loop: end-of-run digest failed", "GitLab loop: issues incomplete" and "Topic monitor: topics incomplete" bindings and their example templates, since those alerts are now part of the run reports. A template bound to "Inbox Triage: run digest" still replaces that report.
 
 ## [0.10.0] - 2026-10-27
 

@@ -23,7 +23,8 @@ use crate::runner_util::{
     STDERR_EXCERPT_CHARS,
 };
 use crate::{
-    ai_cli_config, approvals, cost, events, issue_tracking_config, learning, mr, proc, prompt,
+    ai_cli_config, approvals, cost, events, gitlab_report, issue_tracking_config, learning, mr,
+    proc, prompt, slack_report,
 };
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -346,6 +347,9 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
     // The golden eval always runs in gate mode.
     let gate = req.gate || offline;
     let mut env = Vec::new();
+    if matches!(req.mode, InvokeMode::Batch | InvokeMode::Single) {
+        env.push(hold_slack());
+    }
     if gate {
         let (t, e) = gate_prompt_and_env(
             &text,
@@ -356,7 +360,7 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         )
         .map_err(fail)?;
         text = t;
-        env = e;
+        env.extend(e);
     }
     invoke_cli_with_prompt(
         ctx,
@@ -376,7 +380,22 @@ pub fn invoke_batch_end_of_run(
     timeout_seconds: f64,
 ) -> Result<AgentOutput, AgentError> {
     let text = prompt::batch_end_of_run(&ctx.repo_root);
-    invoke_cli_with_prompt(ctx, &text, timeout_seconds, None, &[], false, None, false)
+    invoke_cli_with_prompt(
+        ctx,
+        &text,
+        timeout_seconds,
+        None,
+        &[hold_slack()],
+        false,
+        None,
+        false,
+    )
+}
+
+/// The agent's own `loopx notify` calls in a batch are held, not posted: the
+/// run sends one report at the end instead (`loopx notify` reads this).
+fn hold_slack() -> (String, String) {
+    (crate::slack_report::HOLD_ENV.to_string(), "1".to_string())
 }
 
 /// The checkout of `alias` when it works in place (`use_worktree: false`):
@@ -780,8 +799,8 @@ pub fn slack_issue_link(alias: &str, issue_iid: &str, project_url: Option<&str>)
     }
 }
 
-/// One plain sentence on why the loop escalated.
-fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) -> String {
+/// One plain sentence on why the loop (or the agent) escalated.
+pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) -> String {
     match reason {
         "run_incomplete" => stop_reason
             .and_then(stop_reason_text)
@@ -801,6 +820,10 @@ fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) -> String {
                 .into()
         }
         "project_config_error" => "The project's config could not be read.".into(),
+        "needs_clarification" => {
+            "The issue needs clarification - the agent asked on the issue.".into()
+        }
+        "worktree_creation_failed" => "A worktree for the fix could not be created.".into(),
         "approval_denied" => "Opening the merge request was not approved.".into(),
         "approval_timeout" => {
             "Nobody approved opening the merge request before the request expired.".into()
@@ -1011,6 +1034,9 @@ pub struct FinalizeDeps<'a> {
     pub approval_poll: Option<std::time::Duration>,
     /// A worktree-off checkout the loop could not keep safe; escalated first.
     pub checkout_problem: Option<String>,
+    /// A batch issue: the run posts one Slack report at the end, so only the
+    /// approval request (which waits on a human) is sent from here.
+    pub quiet: bool,
 }
 
 /// Is a human's OK needed before opening the merge request? A per-project
@@ -1072,10 +1098,15 @@ pub fn finalize_gated_issue(
 
     let mut bundle: Option<String> = None;
     let mut issue_label = slack_issue_link(alias, issue_iid, None);
-    let notify = |bundle: &Option<String>, message: String| match deps.notifier {
+    let send = |bundle: &Option<String>, message: String| match deps.notifier {
         Some(n) => n(&message),
         None => {
             notify_slack_best_effort(&message, None, bundle.as_deref());
+        }
+    };
+    let notify = |bundle: &Option<String>, message: String| {
+        if !deps.quiet {
+            send(bundle, message);
         }
     };
 
@@ -1222,7 +1253,7 @@ pub fn finalize_gated_issue(
             "approval.requested",
             json!({"approval_id": approval_id, "kind": "open_mr", "branch": branch, "expires_at": approval["expires_at"]}),
         );
-        notify(
+        send(
             &bundle,
             format!(
                 "*Approval needed* {issue_label}: open MR `{branch}` \u{2192} `{target}`? Approve it in LoopX (expires {}).",
@@ -1341,7 +1372,7 @@ fn issue_comment(
 
 /// First `https?://<non-space>/merge_requests/<digits>` in `text`.
 /// The merge request's number from its web URL.
-fn mr_iid(url: &str) -> Option<&str> {
+pub(crate) fn mr_iid(url: &str) -> Option<&str> {
     url.rsplit_once("/merge_requests/")
         .map(|(_, iid)| iid)
         .filter(|iid| !iid.is_empty() && iid.bytes().all(|b| b.is_ascii_digit()))
@@ -1446,6 +1477,9 @@ pub fn run_one_issue(
     let timeout_seconds = definition.stop_conditions.max_runtime_minutes * 60.0;
     let verification_mode = definition.verification.mode.clone();
     let gate = verification_mode == "gate";
+    // The scheduled batch and the dashboard's single-issue run each end with
+    // one Slack report; only the golden eval's offline mode skips it.
+    let quiet = matches!(mode, InvokeMode::Batch | InvokeMode::Single);
     let raw_costs: Arc<Mutex<Vec<Option<f64>>>> = Arc::default();
     let raw_usages: Arc<Mutex<Vec<Option<Value>>>> = Arc::default();
     let handoff = gate.then(|| handoff_path(run_id, alias, issue_iid, &ctx.repo_root));
@@ -1611,6 +1645,7 @@ pub fn run_one_issue(
                 notifier,
                 gitlab_config_path: fakes.map(|f| f.gitlab_config_path.clone()),
                 checkout_problem,
+                quiet,
                 ..FinalizeDeps::default()
             },
         );
@@ -1728,6 +1763,7 @@ pub fn run_all_issues(
     aliases: Option<Vec<String>>,
     username: Option<String>,
 ) -> Result<Vec<IssueRun>, String> {
+    let started = std::time::Instant::now();
     let cfg = Config::load(&default_config_path()).map_err(|e| e.to_string())?;
     let aliases = match aliases {
         Some(a) => a,
@@ -1760,18 +1796,6 @@ pub fn run_all_issues(
             }
         }
     }
-    // One title message so the per-issue Starting/Finished lines that follow
-    // read as a single run in Slack.
-    let count = todo.len();
-    notify_slack_best_effort(
-        &format!(
-            "*GitLab loop started* \u{2014} {count} issue{} to check",
-            if count != 1 { "s" } else { "" }
-        ),
-        None,
-        None,
-    );
-
     let mut results = Vec::new();
     for (alias, issue) in todo {
         let iid_text = value_text(&issue["iid"]);
@@ -1804,6 +1828,7 @@ pub fn run_all_issues(
     // UNCONDITIONAL, and outside LoopRuntime: "End of run" is housekeeping, not
     // a verifiable task. It must run even with zero results: a morning with no
     // assigned issues is exactly when nothing else would report anything.
+    let mut wrapup_error = None;
     if let Err(e) = invoke_batch_end_of_run(ctx, timeout_seconds) {
         let detail = format!("AgentError: {}", e.message);
         ctx.log(&format!(
@@ -1817,11 +1842,7 @@ pub fn run_all_issues(
                 ..Default::default()
             },
         );
-        notify_slack_best_effort(
-            &format!("*Daily GitLab loop:* the end-of-run wrap-up FAILED, so today's digest/daily-review was NOT produced \u{2014} {detail}"),
-            Some("gitlab_wrapup_failed"),
-            None,
-        );
+        wrapup_error = Some(tail(&detail, STDERR_EXCERPT_CHARS));
     }
 
     // Down-weight lessons whose reuse preceded a failure. Best-effort and
@@ -1838,7 +1859,69 @@ pub fn run_all_issues(
     if let Err(e) = learning::apply_outcomes(&recent, None, Some(&applied)) {
         ctx.log(&format!("memory down-weighting FAILED: {e}"));
     }
+    send_run_report(
+        ctx,
+        run_id,
+        "Daily GitLab loop",
+        &results,
+        started.elapsed().as_secs_f64(),
+        wrapup_error,
+    );
     Ok(results)
+}
+
+/// The batch's one Slack report per bundle, built from this run's events.
+/// Replaces the per-issue Starting/Finished/Escalated lines, the agent's
+/// digest and the "issues incomplete" alert, all held during the batch.
+pub fn send_run_report(
+    ctx: &RunCtx,
+    run_id: &str,
+    title: &str,
+    runs: &[IssueRun],
+    elapsed_seconds: f64,
+    wrapup_error: Option<String>,
+) {
+    let since = (Utc::now() - Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let events = events::iter_events(ctx.events_dir.as_deref(), Some(&since), None);
+    let unfinished: Vec<(String, String)> = runs
+        .iter()
+        .filter(|r| r.result.final_state != LoopState::Completed)
+        .map(|r| {
+            (
+                r.result.run_id.clone(),
+                format!(
+                    "{}: {}",
+                    r.result.final_state.as_str(),
+                    r.result.stop_reason
+                ),
+            )
+        })
+        .collect();
+    let lines = gitlab_report::issue_lines(run_id, &events, &unfinished);
+    let facts = gitlab_report::RunFacts {
+        title: title.to_string(),
+        run_id: run_id.to_string(),
+        elapsed_seconds,
+        cost_usd: aggregate_cost_usd(runs),
+        wrapup_error,
+    };
+    let fakes = ctx.fakes.as_deref();
+    let gitlab_config = fakes.map(|f| f.gitlab_config_path.clone());
+    let bundle_of =
+        |alias: &str| project_slack_target(alias, &json!({}), gitlab_config.as_deref()).0;
+    for (bundle, lines) in gitlab_report::by_bundle(lines, &bundle_of) {
+        let report = gitlab_report::build(&lines, &facts);
+        match fakes {
+            Some(f) => (f.notifier)(&slack_report::plain_text(&report)),
+            None => {
+                if !slack_report::send(&report, bundle.as_deref()) {
+                    ctx.log("the run's Slack report was not sent (see the loop's stderr)");
+                }
+            }
+        }
+    }
 }
 
 fn value_text(v: &Value) -> String {
@@ -1919,44 +2002,6 @@ fn emit_run_completed(ctx: &RunCtx, run_id: &str, runs: &[IssueRun]) {
     );
 }
 
-/// A per-issue failure is caught by `LoopRuntime` and never reaches the exit
-/// code, so announce it in Slack. A gated issue the loop already escalated
-/// notified from `finalize_gated_issue`, so it is skipped to alert exactly once.
-pub fn alert_on_incomplete_results(runs: &[IssueRun]) -> usize {
-    let incomplete: Vec<&IssueRun> = runs
-        .iter()
-        .filter(|r| {
-            r.result.final_state != LoopState::Completed
-                && !is_loop_escalation(r.gate_outcome.as_deref())
-        })
-        .collect();
-    if incomplete.is_empty() {
-        return 0;
-    }
-    let detail = incomplete
-        .iter()
-        .map(|r| {
-            format!(
-                "{} ({}: {})",
-                r.result.run_id,
-                r.result.final_state.as_str(),
-                r.result.stop_reason
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    notify_slack_best_effort(
-        &format!(
-            "*Daily GitLab loop:* {} of {} issues did not complete \u{2014} {detail} \u{2014} see outputs/loop-runs/ and logs/loop-engineering.log",
-            incomplete.len(),
-            runs.len()
-        ),
-        Some("gitlab_issues_incomplete"),
-        None,
-    );
-    incomplete.len()
-}
-
 /// `loopx` entry for the GitLab loop: `<run_id>` (the batch) or
 /// `<run_id> <alias> <issue_iid>` (a scoped single issue). Anything else is a
 /// mistake, not a batch run: a typo like `harbor` alone must not fall through
@@ -1967,8 +2012,21 @@ pub fn main(ctx: &RunCtx, argv: &[String], invoker: Invoker) -> i32 {
         return 2;
     }
     let run_id = &argv[0];
+    let started = std::time::Instant::now();
     let runs = if argv.len() == 3 {
-        run_single_issue(ctx, run_id, &argv[1], &argv[2], invoker).map(|r| vec![r])
+        run_single_issue(ctx, run_id, &argv[1], &argv[2], invoker).map(|r| {
+            let runs = vec![r];
+            let title = format!("GitLab issue run: {} #{}", argv[1], argv[2]);
+            send_run_report(
+                ctx,
+                run_id,
+                &title,
+                &runs,
+                started.elapsed().as_secs_f64(),
+                None,
+            );
+            runs
+        })
     } else {
         run_all_issues(ctx, run_id, invoker, None, None)
     };
@@ -1980,9 +2038,8 @@ pub fn main(ctx: &RunCtx, argv: &[String], invoker: Invoker) -> i32 {
         }
     };
     emit_run_completed(ctx, run_id, &runs);
-    alert_on_incomplete_results(&runs);
     // Still 0 when issues failed: each failure is contained, recorded in its
-    // own LoopResult, and announced in Slack. A non-zero exit would report the
+    // own LoopResult, and said in the run's Slack report. A non-zero exit would report the
     // whole run as failed, which it wasn't.
     0
 }
@@ -2332,8 +2389,8 @@ mod tests {
         }));
         assert_eq!(t.head(), "feature-x");
         assert!(
-            !t.slack.lock().unwrap().is_empty(),
-            "escalation went to the recorded notifier"
+            t.slack.lock().unwrap().is_empty(),
+            "a batch issue's escalation waits for the run's report"
         );
     }
 
@@ -2746,12 +2803,104 @@ mod tests {
             },
         );
         assert_eq!(outcome, "escalated:run_incomplete");
+        assert_eq!(sent.lock().unwrap().len(), 1);
+        let quiet = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(d.path().join("none.json")),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("gitlab.json")),
+                quiet: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(quiet, "escalated:run_incomplete");
         let sent = sent.lock().unwrap();
-        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent.len(), 1, "quiet: no second message {sent:?}");
         assert!(
             sent[0].starts_with("*Escalated* <https://g.example/g/p/-/issues/7|web #7>\n"),
             "{}",
             sent[0]
+        );
+    }
+
+    #[test]
+    fn a_batch_ends_with_one_report_per_slack_bundle_from_its_events() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(&gitlab, r#"{"projects": {"api": {"bundle": "team-api"}}}"#).unwrap();
+        let sent: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = sent.clone();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.fakes = Some(Arc::new(RunFakes {
+            gitlab: Box::new(Notes(Default::default())),
+            notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
+            gitlab_config_path: gitlab,
+        }));
+        let emit = |kind: &str, alias: &str, data: Value| {
+            ctx.emit(
+                kind,
+                Some("R"),
+                EventFields {
+                    issue_run_id: Some(format!("R_{alias}_7")),
+                    project: Some(alias.into()),
+                    issue_iid: Some(7),
+                    data: Some(data),
+                },
+            )
+        };
+        emit(
+            "issue.queued",
+            "web",
+            json!({"title": "Fix login", "web_url": ""}),
+        );
+        emit(
+            "issue.completed",
+            "web",
+            json!({"action": "fix", "mr_url": "https://g/web/-/merge_requests/3"}),
+        );
+        emit(
+            "issue.queued",
+            "api",
+            json!({"title": "Crashes", "web_url": ""}),
+        );
+        let failed = IssueRun {
+            result: LoopResult::new(
+                "l",
+                "R_api_7",
+                "gitlab-issue",
+                LoopState::Failed,
+                vec![],
+                "agent_failed",
+            ),
+            usage: None,
+            gate_outcome: None,
+        };
+        send_run_report(&ctx, "R", "Daily GitLab loop", &[failed], 61.0, None);
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(
+            sent[0].contains("Completed (61.0s, 1/1 issues)"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains("#7 (web)* \u{2014} Fix login <https://g/web/-/merge_requests/3|!3>"),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[1].contains("Finished with problems"), "{}", sent[1]);
+        assert!(
+            sent[1].contains("Crashes - the run did not finish (failed: agent_failed)"),
+            "{}",
+            sent[1]
         );
     }
 

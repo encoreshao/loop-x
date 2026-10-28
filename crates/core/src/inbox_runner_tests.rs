@@ -807,14 +807,49 @@ fn digest_covers_every_status() {
         ..outcome_ok()
     };
     let ok = outcome_ok();
-    let text = format_digest(&[&ok, &quiet, &reauth, &failed], now());
-    assert!(text.starts_with("*Inbox Triage* - "));
-    assert!(text.contains("*Work*: 1 urgent (drafts ready), 2 action, 3 other"));
-    assert!(text.contains("Prod | down"));
-    assert!(text.contains("*Quiet*: no new mail"));
-    assert!(text.contains("*Home*: needs re-auth"));
-    assert!(text.contains("*Side*: failed - AI triage failed: x"));
-    assert!(text.contains("<https://mail/m1|draft>"));
+    let report = digest_report(&[&ok, &quiet, &reauth, &failed], now());
+    let status = report.status.as_ref().unwrap();
+    assert_eq!(status.state, slack_report::State::Failed);
+    assert!(
+        status.text.starts_with("4 inboxes checked \u{b7} "),
+        "{}",
+        status.text
+    );
+    let text = slack_report::plain_text(&report);
+    assert!(text.starts_with("*Inbox Triage* :x: "), "{text}");
+    assert!(
+        text.contains("\n3 urgent \u{b7} 6 action \u{b7} 9 other\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "\u{2022} *Alice &lt;a@x.com&gt;* \u{2014} Prod | down <https://mail/m1|draft>"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Work   1       2       3      drafts ready"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Quiet  0       0       0      no new mail"),
+        "{text}"
+    );
+    assert!(text.contains(":zap: *3 things need you*"), "{text}");
+    assert!(
+        text.contains(
+            "*Home* \u{2014} needs re-auth - reconnect it from the dashboard's Inbox Triage page"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("*Side* \u{2014} failed - AI triage failed: x"),
+        "{text}"
+    );
+    assert!(
+        text.contains("*Side* \u{2014} more waiting - over 50 new messages"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -823,12 +858,15 @@ fn digest_manual_reply_and_overflow() {
     o.urgent[0].draft_link = None;
     o.urgent[0].needs_manual_reply = true;
     o.overflow = true;
-    let text = format_digest(&[&o], now());
+    let text = slack_report::plain_text(&digest_report(&[&o], now()));
     assert!(
-        text.contains("(reply manually)") && text.contains("more waiting - over 50 new messages")
+        text.contains("Prod | down (reply manually)")
+            && text.contains("more waiting - over 50 new messages"),
+        "{text}"
     );
     o.urgent[0].draft_failed = true;
-    assert!(format_digest(&[&o], now()).contains("draft failed - reply manually"));
+    assert!(slack_report::plain_text(&digest_report(&[&o], now()))
+        .contains("draft failed - reply manually"));
 }
 
 #[test]
@@ -837,9 +875,12 @@ fn digest_escapes_untrusted_text_for_slack() {
     o.label = "<!channel> & co".into();
     o.urgent[0].from = "<https://evil|Open>".into();
     o.urgent[0].subject = "a>b".into();
-    let text = format_digest(&[&o], now());
-    assert!(text.contains("*&lt;!channel&gt; &amp; co*"));
-    assert!(text.contains("&lt;https://evil|Open&gt; - \"a&gt;b\""));
+    let text = slack_report::plain_text(&digest_report(&[&o], now()));
+    assert!(text.contains("&lt;!channel&gt; &amp; co"), "{text}");
+    assert!(
+        text.contains("*&lt;https://evil|Open&gt;* \u{2014} a&gt;b"),
+        "{text}"
+    );
     assert!(!text.contains("<!channel>") && !text.contains("<https://evil"));
     assert_eq!(slack_escape("<&>"), "&lt;&amp;&gt;");
 }
@@ -898,12 +939,19 @@ fn digests_are_grouped_by_bundle() {
     send_digests(&[a, b], now(), &cfg, &recording_post(&posts));
     let posts = posts.lock().unwrap();
     assert_eq!(posts.len(), 2);
-    assert!(posts[0].0.starts_with("http://default|") && posts[0].0.contains("*Work*"));
-    assert!(posts[1].0.starts_with("http://team|") && posts[1].0.contains("*B*"));
+    assert!(posts[0]
+        .0
+        .starts_with("http://default|Inbox Triage - 1 inbox checked"));
+    assert!(posts[1]
+        .0
+        .starts_with("http://team|Inbox Triage - 1 inbox checked"));
+    let blocks = |i: usize| posts[i].1.as_ref().unwrap().to_string();
+    assert!(blocks(0).contains("Alice") && !blocks(0).contains("\"B\""));
+    assert!(blocks(1).contains("Alice"));
 }
 
 #[test]
-fn a_slack_failure_never_raises_and_a_rejected_template_is_retried_as_plain_text() {
+fn a_slack_failure_never_raises_and_a_bound_block_template_still_overrides_the_report() {
     let d = tempdir().unwrap();
     let cfg = d.path().join("slack.json");
     std::fs::write(
@@ -1137,7 +1185,12 @@ fn run_all_sends_one_digest_for_the_run() {
     run_all_inboxes(&w.ctx, "run_1", now(), &deps).unwrap();
     let posts = posts.lock().unwrap();
     assert_eq!(posts.len(), 1);
-    assert!(posts[0].0.contains("*Work*") && posts[0].0.contains("*Home*"));
+    assert!(posts[0].0.contains("2 inboxes checked"), "{}", posts[0].0);
+    let blocks = posts[0].1.as_ref().unwrap().to_string();
+    assert!(
+        blocks.contains("\"Work\"") && blocks.contains("\"Home\""),
+        "{blocks}"
+    );
 }
 
 #[test]

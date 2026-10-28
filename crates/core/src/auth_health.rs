@@ -150,8 +150,28 @@ fn write_state(state: &Map<String, Value>, path: &Path) -> std::io::Result<()> {
 }
 
 fn default_send(text: &str) -> Result<(), String> {
-    let url = crate::slack::load_webhook_url(&crate::slack::default_config_path(), None)?;
-    crate::slack::post_message(&url, text, None).map(|_| ())
+    if crate::slack_report::send(&alert_report(text), None) {
+        Ok(())
+    } else {
+        Err("Slack report not sent".into())
+    }
+}
+
+/// `Sign-in needs attention: <account> - <why>` as a one-message report.
+pub fn alert_report(text: &str) -> crate::slack_report::Report {
+    use crate::slack_report::State;
+    let (title, rest) = text.split_once(": ").unwrap_or(("Sign-in check", text));
+    let state = if title == "Sign-in recovered" {
+        State::Done
+    } else {
+        State::Warning
+    };
+    let status = if state == State::Done {
+        "Connected again"
+    } else {
+        "Needs attention"
+    };
+    crate::slack_report::alert(title, state, status, rest)
 }
 
 /// `datetime.fromisoformat` for the naive local times this file stores.
@@ -378,6 +398,18 @@ pub fn run_if_due(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn alerts_become_reports() {
+        let r = alert_report("Sign-in needs attention: Gmail (Work) - expired. Reconnect it.");
+        assert_eq!(
+            crate::slack_report::plain_text(&r),
+            "*Sign-in needs attention* :warning: Needs attention\nGmail (Work) - expired. Reconnect it.\n\n_LoopX_"
+        );
+        let r = alert_report("Sign-in recovered: Gmail (Work) is connected again.");
+        assert_eq!(r.status.unwrap().state, crate::slack_report::State::Done);
+    }
+
     use super::*;
     use chrono::NaiveDate;
 

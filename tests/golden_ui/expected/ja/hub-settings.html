@@ -176,6 +176,18 @@
 <input type='password' name='webhook_url' placeholder='新しい Slack Webhook URL を貼り付け' required>
 <button type='submit' class='btn btn-neutral'>保存</button>
 </form>
+<h3>メッセージテンプレート</h3>
+<p class='section-subtitle'>各ループの実行終了レポートを Slack でどのように表示するかを選びます。</p>
+<ul><li><strong>レポート</strong> — 実行ごとに 1 件の構造化メッセージ：ステータス、セクション、表、対応が必要な項目。</li><li><strong>クラシック</strong> — 同じ内容を Block Kit なしのプレーンテキストで送信します。</li></ul>
+<form method='post' action='/notifications/message-template' class='daemon-action-form single-field'>
+<input type='hidden' name='csrf_token' value="golden-csrf-token">
+<div class='custom-select'><select name='message_template' class='custom-select-native'><option value='report' selected>レポート</option><option value='classic'>クラシック</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>レポート</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value='report'>レポート</div><div class='custom-select-option' role='option' tabindex='-1' data-value='classic'>クラシック</div></div></div>
+<button type='submit' class='btn btn-neutral'>保存</button>
+</form>
+<form method='post' action='/notifications/message-template/test' class='daemon-action-form'>
+<input type='hidden' name='csrf_token' value="golden-csrf-token">
+<button type='submit' class='btn btn-neutral'>サンプルレポートを送信</button>
+</form>
 </section>
 
 <section class="card block-kit-card">
@@ -194,7 +206,7 @@
     <label>通知に紐付け
       <select id="bkb-notification-key">
         <option value="">(なし)</option>
-        <option value='gitlab_wrapup_failed'>GitLab ループ: 実行終了ダイジェストが失敗</option><option value='gitlab_issues_incomplete'>GitLab ループ: 未完了の Issue</option><option value='topic_monitor_incomplete'>トピックモニター: 未完了のトピック</option><option value='inbox_triage_digest'>受信トレイ仕分け: 実行ダイジェスト</option>
+        <option value='inbox_triage_digest'>受信トレイ仕分け: 実行ダイジェスト</option>
       </select>
     </label>
   </div>

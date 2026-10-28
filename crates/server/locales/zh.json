@@ -1196,5 +1196,16 @@
   "Today's log (tail)": "今日日志（末尾）",
   "Latest progress": "最新进展",
   "Last update {when}": "最近更新 {when}",
-  "The latest progress first, then where every loop stands, then the most recent reports.": "先显示最新进展，然后是每个循环的状态，最后是最近的报告。"
+  "The latest progress first, then where every loop stands, then the most recent reports.": "先显示最新进展，然后是每个循环的状态，最后是最近的报告。",
+  "Message template": "消息模板",
+  "How each loop's end-of-run report looks in Slack.": "每个循环的运行结束报告在 Slack 中的显示方式。",
+  "Send a sample report": "发送示例报告",
+  "Report": "报告",
+  "Classic": "经典",
+  "One structured message per run: status, sections, a table and what needs you.": "每次运行一条结构化消息：状态、分节、表格以及需要你处理的事项。",
+  "The same content as plain text, without Block Kit.": "相同内容，以纯文本发送，不使用 Block Kit。",
+  "Unknown message template: {name}": "未知的消息模板：{name}",
+  "Slack messages now use the {name} template": "Slack 消息现在使用 {name} 模板",
+  "Sent a sample report to Slack": "已向 Slack 发送示例报告",
+  "The sample report could not be sent - check the webhook": "示例报告发送失败 - 请检查 Webhook"
 }

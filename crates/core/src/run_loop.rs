@@ -8,10 +8,8 @@ use crate::ai_cli_safety::{self, CallSite};
 use crate::config::default_config_path as projects_config_path;
 use crate::events::EventFields;
 use crate::gitlab_runner::{self, RunCtx};
-use crate::runner_util::{
-    append_unified_log, emit_best_effort, notify_slack_best_effort, repo_root, unified_log_path,
-};
-use crate::{ai_cli_config, loop_scheduler, loops_config, status, topic_runner};
+use crate::runner_util::{append_unified_log, emit_best_effort, repo_root, unified_log_path};
+use crate::{ai_cli_config, loop_scheduler, loops_config, slack_report, status, topic_runner};
 use chrono::{Local, Utc};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -98,6 +96,16 @@ fn fresh_run_id() -> String {
     format!("run_{}", Utc::now().format("%Y%m%d_%H%M%S"))
 }
 
+/// The one Slack message for a loop run that failed outright.
+pub fn failed_report(loop_name: &str, status: &str, detail: &str) -> slack_report::Report {
+    slack_report::alert(
+        &format!("{loop_name} loop"),
+        slack_report::State::Failed,
+        status,
+        detail,
+    )
+}
+
 /// Run `loop_name` to completion; the return value is the process exit code.
 pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) -> i32 {
     let unified = unified_log_path(&opts.root);
@@ -113,9 +121,12 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
                 ),
                 &unified,
             );
-            notify_slack_best_effort(
-                &format!("*{loop_name} loop FAILED* - could not resolve its registry entry: {msg}"),
-                None,
+            slack_report::send(
+                &failed_report(
+                    loop_name,
+                    "Could not start",
+                    &format!("Its loop registry entry could not be resolved: {msg}"),
+                ),
                 None,
             );
             return 1;
@@ -155,11 +166,12 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
             ),
             &unified,
         );
-        notify_slack_best_effort(
-            &format!(
-                "*{loop_name} loop FAILED* (exit {exit}) \u{2014} see outputs/history/{log_name}"
+        slack_report::send(
+            &failed_report(
+                loop_name,
+                &format!("Failed (exit {exit})"),
+                &format!("See outputs/history/{log_name} for the run's log."),
             ),
-            None,
             None,
         );
         let _ = status::write_status(&status_path, "failed", &[("last_exit_code", json!(exit))]);
@@ -357,6 +369,17 @@ pub fn selected_cli_summary() -> Value {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_failed_run_is_a_failed_report() {
+        let text =
+            slack_report::plain_text(&failed_report("topic-loop", "Failed (exit 3)", "See log."));
+        assert_eq!(
+            text,
+            "*topic-loop loop* :x: Failed (exit 3)\nSee log.\n\n_LoopX_"
+        );
+    }
+
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Mutex;

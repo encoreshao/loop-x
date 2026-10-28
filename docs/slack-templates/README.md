@@ -4,9 +4,12 @@ Default/example templates for the Block Kit Builder (Settings → Notifications)
 Each file is one template; the filename (without `.json`) is the template's
 name in `~/.slack/config.json`'s `block_templates` map.
 
-- `gitlab-wrapup-failed.json` — bound to `gitlab_wrapup_failed`
-- `gitlab-issues-incomplete.json` — bound to `gitlab_issues_incomplete`
-- `topic-monitor-incomplete.json` — bound to `topic_monitor_incomplete`
+Loop messages are run reports, laid out by the message template picked in
+Settings → General → Slack (`crates/core/src/slack_report.rs`). The only alert
+a Block Kit template can still be bound to is `inbox_triage_digest`, which
+then replaces the Inbox Triage report (its `{{message}}` gets the report as
+plain text).
+
 - `example-rich-incident-report.json` — unbound; shows a section `accessory`
   image, which the Block Kit Builder UI can't add/edit itself (hand-edit only)
 - `example-success-celebration.json` — unbound; there is no "loop succeeded"
@@ -21,7 +24,7 @@ keyed by the filename (no `.json`):
 {
   "webhook_url": "...",
   "block_templates": {
-    "gitlab-wrapup-failed": { "notification_key": "gitlab_wrapup_failed", "blocks": [ /* ... */ ] }
+    "my-inbox-digest": { "notification_key": "inbox_triage_digest", "blocks": [ /* ... */ ] }
   }
 }
 ```

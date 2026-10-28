@@ -11,18 +11,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// `notification_key` choices of a Block Kit template and their English labels.
-pub const BLOCK_TEMPLATE_NOTIFICATION_KEYS: [(&str, &str); 4] = [
-    (
-        "gitlab_wrapup_failed",
-        "GitLab loop: end-of-run digest failed",
-    ),
-    ("gitlab_issues_incomplete", "GitLab loop: issues incomplete"),
-    (
-        "topic_monitor_incomplete",
-        "Topic monitor: topics incomplete",
-    ),
-    ("inbox_triage_digest", "Inbox Triage: run digest"),
-];
+/// Every other loop message is a run report in the picked message template.
+pub const BLOCK_TEMPLATE_NOTIFICATION_KEYS: [(&str, &str); 1] =
+    [("inbox_triage_digest", "Inbox Triage: run digest")];
 
 /// The chat write tools (`bin/chat_tools/registry.py`, mode WRITE), name and description.
 pub const CHAT_WRITE_TOOLS: [(&str, &str); 4] = [
@@ -161,6 +152,36 @@ pub fn update_slack_webhook(webhook_url: &str, config_path: &Path) -> Outcome {
     match atomic_write_json(&config, config_path) {
         Ok(()) => ok(Msg::tr("Slack webhook updated")),
         Err(e) => io_fail(e),
+    }
+}
+
+/// Pick the run-report message template (`slack_report::Template`) by id.
+pub fn set_message_template(id: &str, config_path: &Path) -> Outcome {
+    let Some(template) = crate::slack_report::Template::from_id(id) else {
+        return fail(Msg::tra(
+            "Unknown message template: {name}",
+            &[("name", id)],
+        ));
+    };
+    let mut config = read_object(config_path);
+    obj_mut(&mut config).insert("message_template".into(), json!(template.id()));
+    match atomic_write_json(&config, config_path) {
+        Ok(()) => ok(Msg::tra(
+            "Slack messages now use the {name} template",
+            &[("name", template.label())],
+        )),
+        Err(e) => io_fail(e),
+    }
+}
+
+/// Post a sample run report to the default webhook in the selected template.
+pub fn send_sample_report(config_path: &Path, post: crate::slack_report::Post) -> Outcome {
+    if crate::slack_report::send_with(&crate::slack_report::sample(), None, config_path, post) {
+        ok(Msg::tr("Sent a sample report to Slack"))
+    } else {
+        fail(Msg::tr(
+            "The sample report could not be sent - check the webhook",
+        ))
     }
 }
 
@@ -485,15 +506,45 @@ mod tests {
     }
 
     #[test]
+    fn the_message_template_is_validated_and_kept_beside_other_keys() {
+        let d = dir();
+        let p = d.path().join("config.json");
+        std::fs::write(&p, r#"{"webhook_url": "https://hooks/x"}"#).unwrap();
+        let (okk, m) = set_message_template("classic", &p);
+        assert!(okk && m.english() == "Slack messages now use the Classic template");
+        let v = read_object(&p);
+        assert_eq!(v["message_template"], "classic");
+        assert_eq!(v["webhook_url"], "https://hooks/x");
+        assert!(!set_message_template("fancy", &p).0);
+        assert_eq!(read_object(&p)["message_template"], "classic");
+    }
+
+    #[test]
+    fn the_sample_report_goes_to_the_default_webhook() {
+        let d = dir();
+        let p = d.path().join("config.json");
+        std::fs::write(&p, r#"{"webhook_url": "https://hooks/x"}"#).unwrap();
+        let urls = std::cell::RefCell::new(Vec::new());
+        let post = |u: &str, _t: &str, b: Option<&Value>| {
+            urls.borrow_mut().push((u.to_string(), b.is_some()));
+            Ok(())
+        };
+        assert!(send_sample_report(&p, &post).0);
+        assert_eq!(*urls.borrow(), [("https://hooks/x".to_string(), true)]);
+        let down = |_: &str, _: &str, _: Option<&Value>| Err("down".to_string());
+        assert!(!send_sample_report(&p, &down).0);
+    }
+
+    #[test]
     fn block_templates_validate_bind_rename_and_delete() {
         let d = dir();
         let p = d.path().join("config.json");
-        let (a, m) = upsert_block_template("one", "[]", "gitlab_wrapup_failed", "", &p);
+        let (a, m) = upsert_block_template("one", "[]", "inbox_triage_digest", "", &p);
         assert!(a && m.english() == "Added template one");
         let (a, m) = upsert_block_template(
             "two",
             "[{\"type\":\"divider\"}]",
-            "gitlab_wrapup_failed",
+            "inbox_triage_digest",
             "",
             &p,
         );

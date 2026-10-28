@@ -8,7 +8,7 @@ use crate::ui::pyfmt;
 use crate::ui::routes::UiCtx;
 use crate::ui::template::{Scope, Template};
 use loopx_core::settings_store as store;
-use loopx_core::{ai_cli_config, ai_cli_safety};
+use loopx_core::{ai_cli_config, ai_cli_safety, slack_report};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -138,6 +138,7 @@ and Save to make it your own (Delete is disabled until then).",
     );
     let mut scope = Scope::new(ctx.lang);
     scope
+        .var("message_template_html", message_template_html(ctx, csrf, &slack))
         .var("webhook_display", webhook_display)
         .var("csrf_input", csrf)
         .var("bkb_subtitle", subtitle)
@@ -145,6 +146,38 @@ and Save to make it your own (Delete is disabled until then).",
         .var("default_only_names_json", js_safe(&Value::Array(default_only)))
         .var("notification_key_options", key_options);
     render("settings_notifications_panel", &scope)
+}
+
+/// The run-report template picker: which `slack_report::Template` every loop's
+/// Slack report uses, plus a button that posts a sample in it.
+fn message_template_html(ctx: &UiCtx, csrf: &str, slack: &Value) -> String {
+    let current = slack_report::selected_template(slack);
+    let options: Vec<(String, String)> = slack_report::Template::ALL
+        .iter()
+        .map(|t| (t.id().to_string(), i18n::t(ctx.lang, t.label(), &[])))
+        .collect();
+    let descriptions: String = slack_report::Template::ALL
+        .iter()
+        .map(|t| {
+            format!(
+                "<li><strong>{}</strong> \u{2014} {}</li>",
+                pyfmt::escape(&i18n::t(ctx.lang, t.label(), &[])),
+                pyfmt::escape(&i18n::t(ctx.lang, t.description(), &[]))
+            )
+        })
+        .collect();
+    format!(
+        "<h3>{heading}</h3>\n<p class='section-subtitle'>{subtitle}</p>\n<ul>{descriptions}</ul>\n\
+<form method='post' action='/notifications/message-template' class='daemon-action-form single-field'>\n{csrf}\n{select}\n\
+<button type='submit' class='btn btn-neutral'>{save}</button>\n</form>\n\
+<form method='post' action='/notifications/message-template/test' class='daemon-action-form'>\n{csrf}\n\
+<button type='submit' class='btn btn-neutral'>{sample}</button>\n</form>",
+        heading = pyfmt::escape(&ctx.t("Message template")),
+        subtitle = pyfmt::escape(&ctx.t("How each loop's end-of-run report looks in Slack.")),
+        select = custom_select("message_template", &options, Some(current.id()), None),
+        save = pyfmt::escape(&ctx.t("Save")),
+        sample = pyfmt::escape(&ctx.t("Send a sample report")),
+    )
 }
 
 /// Whether `cli` is installed under any of its binary names; `None` until probed.
@@ -395,6 +428,22 @@ mod tests {
         assert!(fr.contains("font-family: system-ui, "), "{fr}");
         assert!(!fr.contains("'system-ui'"));
         assert!(font_buttons(Lang::En).contains(">System</button>"));
+    }
+
+    #[test]
+    fn the_slack_card_offers_the_message_templates_with_the_saved_one_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        let slack = dir.path().join(".slack").join("config.json");
+        std::fs::create_dir_all(slack.parent().unwrap()).unwrap();
+        std::fs::write(&slack, r#"{"message_template": "classic"}"#).unwrap();
+        let state = crate::ui::UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let req = crate::ui::UiRequest::get("/settings?tab=notifications");
+        let ctx = UiCtx::new(&state, &req);
+        let html = notifications_panel(&ctx, "<csrf>");
+        assert!(html.contains("<option value='classic' selected>Classic</option>"), "{html}");
+        assert!(html.contains("<option value='report'>Report</option>"), "{html}");
+        assert!(html.contains("action='/notifications/message-template'"));
+        assert!(html.contains("action='/notifications/message-template/test'"));
     }
 
     /// The AI CLI panel with `cli` selected and only `on_path` binaries installed.

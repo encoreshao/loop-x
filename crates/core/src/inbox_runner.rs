@@ -27,7 +27,7 @@ use crate::mail_http::MailError;
 use crate::mail_provider::{self, MailMessage, MailProvider, RefreshFn};
 use crate::mail_time::isoformat_utc;
 use crate::runner_util::{append_unified_log, notify_slack_with, repo_root, unified_log_path};
-use crate::{ai_cli_config, config, content_archive, cost, slack};
+use crate::{ai_cli_config, config, content_archive, cost, slack, slack_report};
 use chrono::{DateTime, Local, Utc};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -766,68 +766,156 @@ pub fn write_history(
     Ok(path)
 }
 
-fn summary_line(o: &Outcome) -> String {
-    let label = slack_escape(&o.label);
-    match o.status.as_str() {
-        "quiet" => format!("*{label}*: no new mail"),
-        "needs_reauth" => {
-            format!(
-                "*{label}*: needs re-auth - reconnect it from the dashboard's Inbox Triage page"
-            )
-        }
-        "failed" => format!(
-            "*{label}*: failed - {}",
-            slack_escape(o.error.as_deref().unwrap_or("None"))
-        ),
-        _ => {
-            let n = |k: &str| o.counts.get(k).and_then(Value::as_i64).unwrap_or(0);
-            let (urgent, action) = (n("urgent"), n("action"));
-            let other: i64 = o
-                .counts
-                .iter()
-                .filter(|(k, _)| *k != "urgent" && *k != "action")
-                .filter_map(|(_, v)| v.as_i64())
-                .sum();
-            let ready = if o.urgent.iter().any(|u| u.draft_link.is_some()) {
-                " (drafts ready)"
-            } else {
-                ""
-            };
-            format!("*{label}*: {urgent} urgent{ready}, {action} action, {other} other")
-        }
-    }
+fn count(o: &Outcome, key: &str) -> i64 {
+    o.counts.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
 
-pub fn format_digest(outcomes: &[&Outcome], now: DateTime<Utc>) -> String {
-    let mut lines = vec![format!(
-        "*Inbox Triage* - {}",
-        now.with_timezone(&Local).format("%Y-%m-%d %H:%M")
-    )];
-    for o in outcomes {
-        lines.push(summary_line(o));
-        for item in &o.urgent {
-            let note = match (&item.draft_link, item.draft_failed) {
-                (Some(l), _) => format!("<{l}|draft>"),
-                (None, true) => "draft failed - reply manually".to_string(),
-                (None, false) => "reply manually".to_string(),
+fn other_count(o: &Outcome) -> i64 {
+    o.counts
+        .iter()
+        .filter(|(k, _)| *k != "urgent" && *k != "action")
+        .filter_map(|(_, v)| v.as_i64())
+        .sum()
+}
+
+/// One bundle's share of the run as a Slack report: totals, an inbox table,
+/// the urgent mail with its drafts, and the inboxes that need a human.
+pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report::Report {
+    use slack_report::{Item, Link, Report, Section, State, Status};
+    let failed = outcomes.iter().any(|o| o.status == "failed");
+    let attention = outcomes
+        .iter()
+        .any(|o| o.status == "needs_reauth" || o.overflow);
+    let n = outcomes.len();
+    let total = |k: fn(&Outcome) -> i64| outcomes.iter().map(|o| k(o)).sum::<i64>();
+    let status = Status {
+        state: if failed {
+            State::Failed
+        } else if attention {
+            State::Warning
+        } else {
+            State::Done
+        },
+        text: format!(
+            "{n} {} checked \u{b7} {}",
+            if n == 1 { "inbox" } else { "inboxes" },
+            now.with_timezone(&Local).format("%Y-%m-%d %H:%M")
+        ),
+    };
+    let summary = format!(
+        "{} urgent \u{b7} {} action \u{b7} {} other",
+        total(|o| count(o, "urgent")),
+        total(|o| count(o, "action")),
+        total(other_count)
+    );
+    let urgent: Vec<Item> = outcomes
+        .iter()
+        .flat_map(|o| &o.urgent)
+        .map(|item| {
+            let (text, link) = match (&item.draft_link, item.draft_failed) {
+                (Some(l), _) => (
+                    item.subject.clone(),
+                    Some(Link {
+                        text: "draft".into(),
+                        url: Some(l.clone()),
+                    }),
+                ),
+                (None, true) => (
+                    format!("{} (draft failed - reply manually)", item.subject),
+                    None,
+                ),
+                (None, false) => (format!("{} (reply manually)", item.subject), None),
             };
-            lines.push(format!(
-                "    \u{2022} {} - \"{}\" ({note})",
-                slack_escape(&item.from),
-                slack_escape(&item.subject)
-            ));
+            Item {
+                title: item.from.clone(),
+                text,
+                url: None,
+                link,
+            }
+        })
+        .collect();
+    let rows = outcomes
+        .iter()
+        .map(|o| {
+            let state = match o.status.as_str() {
+                "quiet" => "no new mail",
+                "needs_reauth" => "needs re-auth",
+                "failed" => "failed",
+                _ if o.urgent.iter().any(|u| u.draft_link.is_some()) => "drafts ready",
+                _ => "new mail",
+            };
+            vec![
+                o.label.clone(),
+                count(o, "urgent").to_string(),
+                count(o, "action").to_string(),
+                other_count(o).to_string(),
+                state.to_string(),
+            ]
+        })
+        .collect();
+    let mut needs = Vec::new();
+    for o in outcomes {
+        let mut note = |text: String| {
+            needs.push(Item {
+                title: o.label.clone(),
+                text,
+                ..Item::default()
+            })
+        };
+        match o.status.as_str() {
+            "needs_reauth" => {
+                note("needs re-auth - reconnect it from the dashboard's Inbox Triage page".into())
+            }
+            "failed" => note(format!("failed - {}", o.error.as_deref().unwrap_or("None"))),
+            _ => {}
         }
         if o.overflow {
-            lines.push(format!(
-                "    more waiting - over {MESSAGE_CAP} new messages, the rest are picked up next run"
+            note(format!(
+                "more waiting - over {MESSAGE_CAP} new messages, the rest are picked up next run"
             ));
         }
     }
-    lines.join("\n")
+    let mut sections = Vec::new();
+    if !urgent.is_empty() {
+        sections.push(Section::List {
+            heading: "Urgent".into(),
+            items: urgent,
+        });
+    }
+    sections.push(Section::Table {
+        heading: "By inbox".into(),
+        columns: ["Inbox", "Urgent", "Action", "Other", "Status"]
+            .map(String::from)
+            .to_vec(),
+        rows,
+    });
+    if !needs.is_empty() {
+        sections.push(Section::Callout {
+            heading: if needs.len() == 1 {
+                "One thing needs you".into()
+            } else {
+                format!("{} things need you", needs.len())
+            },
+            text: String::new(),
+            items: needs,
+        });
+    }
+    Report {
+        title: "Inbox Triage".into(),
+        status: Some(status),
+        summary: Some(summary),
+        fields: Vec::new(),
+        sections,
+        footer: vec![Link {
+            text: "LoopX Inbox Triage".into(),
+            url: None,
+        }],
+    }
 }
 
-/// One digest per Slack bundle; best-effort (a rejected Block Kit template is
-/// retried once as plain text), never fails the run.
+/// One report per Slack bundle; best-effort, never fails the run. A Block Kit
+/// template bound to `inbox_triage_digest` in Settings still overrides the
+/// message template (its `{{message}}` gets the report as plain text).
 pub fn send_digests(
     outcomes: &[Outcome],
     now: DateTime<Utc>,
@@ -842,16 +930,25 @@ pub fn send_digests(
         }
     }
     for (bundle, group) in groups {
-        let text = format_digest(&group, now);
-        notify_slack_with(
-            &text,
-            Some("inbox_triage_digest"),
-            bundle.as_deref(),
-            slack_config,
-            &|u, t, b| post(u, t, b),
-        );
+        let report = digest_report(&group, now);
+        let text = slack_report::plain_text(&report);
+        if crate::loop_notify::resolve_blocks(Some(DIGEST_KEY), &text, slack_config).is_some() {
+            notify_slack_with(
+                &text,
+                Some(DIGEST_KEY),
+                bundle.as_deref(),
+                slack_config,
+                &|u, t, b| post(u, t, b),
+            );
+        } else {
+            slack_report::send_with(&report, bundle.as_deref(), slack_config, &|u, t, b| {
+                post(u, t, b)
+            });
+        }
     }
 }
+
+const DIGEST_KEY: &str = "inbox_triage_digest";
 
 /// Keep the reply drafts this run wrote (text included) so the dashboard's
 /// Drafts tab can show them any time. Best-effort, like [`write_history`].

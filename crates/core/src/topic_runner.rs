@@ -8,7 +8,7 @@
 //!   `outputs/topic-monitor/status.json` blocks every future run while any
 //!   entry reads "running" - so [`mark_topic_failed`] is that reaper;
 //! - `LoopRuntime` contains a per-topic failure, so it never reaches the exit
-//!   code - [`alert_on_incomplete_results`] announces it in Slack instead.
+//!   code - the topic's Slack report (posted here, never by the agent) says so.
 
 use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
 use crate::ai_cli_safety::{self, CallSite};
@@ -19,10 +19,11 @@ use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::build_verifiers;
 use crate::runner_util::{
-    append_unified_log, could_not_start, head, notify_slack_best_effort, parse_envelope,
-    resolved_program, tail, unified_log_path,
+    append_unified_log, could_not_start, head, parse_envelope, resolved_program, tail,
+    unified_log_path,
 };
-use crate::{ai_cli_config, cost, proc, prompt, status, topics};
+use crate::topic_report::{self, Ending};
+use crate::{ai_cli_config, cost, proc, prompt, slack, slack_report, status, topics};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -34,7 +35,7 @@ pub const DEFINITION_RELATIVE_PATH: &str = "loops/topic-monitor/loop.yaml";
 const CLI_MESSAGE_CHARS: usize = 300;
 
 /// `loopx` subcommands the topic agent may run (its only helpers).
-const AGENT_BASH: [&str; 4] = ["topic config", "topic seen", "notify", "status"];
+const AGENT_BASH: [&str; 4] = ["topic config", "topic seen", "topic report", "status"];
 
 /// The allow list. The real write boundary is the deny list below: an allow rule
 /// grants, it never revokes, and `--add-dir` only adds directories.
@@ -170,6 +171,14 @@ pub struct TopicCtx {
     pub status_path: PathBuf,
     pub unified_log: PathBuf,
     pub exe: String,
+    /// Where each topic's Slack report goes; injectable so tests never post.
+    pub slack_config: PathBuf,
+    pub topics_config: PathBuf,
+    pub slack_post: fn(&str, &str, Option<&Value>) -> Result<(), String>,
+}
+
+fn post_to_slack(url: &str, text: &str, blocks: Option<&Value>) -> Result<(), String> {
+    slack::post_message(url, text, blocks).map(|_| ())
 }
 
 impl TopicCtx {
@@ -184,6 +193,9 @@ impl TopicCtx {
             events_dir: None,
             results_dir: None,
             exe,
+            slack_config: slack::default_config_path(),
+            topics_config: topics::default_config_path(),
+            slack_post: post_to_slack,
         }
     }
 
@@ -241,7 +253,10 @@ fn run_topic_cli(
     timeout_seconds: f64,
 ) -> Result<TopicOutput, TopicError> {
     let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]).current_dir(&ctx.repo_root);
+    command.args(&argv[1..]).current_dir(&ctx.repo_root).env(
+        topic_report::PATH_ENV,
+        topic_report::default_path(&ctx.repo_root, name),
+    );
     if let Some(dir) = Path::new(&ctx.exe)
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
@@ -387,6 +402,10 @@ pub fn run_one_topic(
     };
     let verifiers =
         build_verifiers(&definition.verifiers, None, None, "observe").map_err(|e| e.to_string())?;
+    // Only this session's own briefing may be posted.
+    let briefing_path = topic_report::default_path(&ctx.repo_root, name);
+    let _ = std::fs::remove_file(&briefing_path);
+    let started = std::time::Instant::now();
     let mut runtime = LoopRuntime::new(agent_fn, verifiers);
     if let Some(dir) = &ctx.events_dir {
         runtime = runtime.with_events_dir(dir.clone());
@@ -403,10 +422,20 @@ pub fn run_one_topic(
     // Only on a non-COMPLETED result: a topic that finished normally wrote its
     // own `idle` (or its own `failed`) from inside its session, which is the
     // more accurate self-report.
+    let error = last_error.lock().unwrap().clone();
     if result.final_state != LoopState::Completed {
-        let error = last_error.lock().unwrap().clone();
         mark_topic_failed(name, &ctx.status_path, error.as_deref());
     }
+    let failure = (result.final_state != LoopState::Completed).then(|| {
+        error.unwrap_or_else(|| format!("{}: {}", result.final_state.as_str(), result.stop_reason))
+    });
+    send_topic_report(
+        ctx,
+        name,
+        topic_report::load(&briefing_path).as_ref(),
+        failure.as_deref(),
+        started.elapsed().as_secs_f64(),
+    );
     if let Err(e) = write_result(
         &result,
         ctx.results_dir.as_deref(),
@@ -450,42 +479,38 @@ pub fn run_all_topics(
         .collect()
 }
 
-/// A per-topic failure never reaches the exit code, so ping Slack here.
-pub fn alert_on_incomplete_results(results: &[LoopResult]) -> usize {
-    let incomplete: Vec<&LoopResult> = results
-        .iter()
-        .filter(|r| r.final_state != LoopState::Completed)
-        .collect();
-    if incomplete.is_empty() {
-        return 0;
+/// The topic's one Slack message, to its own bundle. Best-effort.
+fn send_topic_report(
+    ctx: &TopicCtx,
+    name: &str,
+    briefing: Option<&topic_report::Briefing>,
+    failure: Option<&str>,
+    elapsed_seconds: f64,
+) {
+    let topic = topics::get(&ctx.topics_config, name).unwrap_or(Value::Null);
+    let label = topic["label"]
+        .as_str()
+        .filter(|l| !l.is_empty())
+        .unwrap_or(name);
+    let bundle = topic["slack_bundle"].as_str().filter(|b| !b.is_empty());
+    let ending = match failure {
+        Some(why) => Ending::Failed(why),
+        None => Ending::Completed,
+    };
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let report = topic_report::build(label, &date, briefing, ending, elapsed_seconds);
+    let post = ctx.slack_post;
+    if !slack_report::send_with(&report, bundle, &ctx.slack_config, &post) {
+        append_unified_log(
+            &format!("topic '{name}': its Slack report was not sent"),
+            &ctx.unified_log,
+        );
     }
-    let detail = incomplete
-        .iter()
-        .map(|r| {
-            format!(
-                "{} ({}: {})",
-                r.run_id,
-                r.final_state.as_str(),
-                r.stop_reason
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    notify_slack_best_effort(
-        &format!(
-            "*Topic monitor loop:* {} of {} topics did not complete \u{2014} {detail} \u{2014} see outputs/loop-runs/ and logs/loop-engineering.log",
-            incomplete.len(),
-            results.len()
-        ),
-        Some("topic_monitor_incomplete"),
-        None,
-    );
-    incomplete.len()
 }
 
 /// `<run_id>` only. Still 0 when topics failed: each failure is contained,
 /// recorded in its own result, its status written back as `failed`, and
-/// announced in Slack.
+/// said in that topic's Slack report.
 pub fn main(ctx: &TopicCtx, argv: &[String], invoker: TopicInvoker) -> i32 {
     if argv.len() != 1 {
         eprintln!("Usage: loopx run topic-loop: <run_id>");
@@ -493,10 +518,7 @@ pub fn main(ctx: &TopicCtx, argv: &[String], invoker: TopicInvoker) -> i32 {
     }
     record_run_warning(&ctx.status_path, &ai_cli_config::selected_cli());
     match run_all_topics(ctx, &argv[0], invoker, None) {
-        Ok(results) => {
-            alert_on_incomplete_results(&results);
-            0
-        }
+        Ok(_) => 0,
         Err(e) => {
             eprintln!("{e}");
             1
@@ -530,7 +552,11 @@ mod tests {
         let a = allowed_tools("/bin/loopx");
         assert!(a.contains("WebSearch WebFetch"));
         assert!(a.contains("Bash(loopx topic seen*)"));
-        assert!(a.contains("Bash(/bin/loopx notify*)"));
+        assert!(a.contains("Bash(/bin/loopx topic report*)"));
+        assert!(
+            !a.contains("notify"),
+            "the runner posts the briefing, not the agent"
+        );
         assert!(!a.contains("git"));
         assert!(!a.contains("Bash(loopx gitlab"));
     }
@@ -648,12 +674,72 @@ mod tests {
         assert!(e.message.contains("quota exceeded"), "{}", e.message);
     }
 
+    thread_local! {
+        static POSTED: std::cell::RefCell<Vec<(String, String)>> = Default::default();
+    }
+
+    fn record_post(url: &str, text: &str, _blocks: Option<&Value>) -> Result<(), String> {
+        POSTED.with(|p| p.borrow_mut().push((url.to_string(), text.to_string())));
+        Ok(())
+    }
+
+    fn posted() -> Vec<(String, String)> {
+        POSTED.with(|p| p.borrow_mut().drain(..).collect())
+    }
+
     fn topic_ctx(d: &Path) -> TopicCtx {
         let mut ctx = TopicCtx::new(d.to_path_buf());
         ctx.status_path = d.join("status.json");
         ctx.events_dir = Some(d.join("events"));
         ctx.results_dir = Some(d.join("results"));
+        ctx.slack_config = d.join("slack.json");
+        std::fs::write(
+            &ctx.slack_config,
+            r#"{"webhook_url": "https://hooks/D", "bundle_webhooks": {"news-room": "https://hooks/N"}, "message_template": "classic"}"#,
+        )
+        .unwrap();
+        ctx.topics_config = d.join("topics.json");
+        std::fs::write(
+            &ctx.topics_config,
+            r#"[{"name": "news", "label": "AI news", "brief": "b", "slack_bundle": "news-room", "enabled": true}]"#,
+        )
+        .unwrap();
+        ctx.slack_post = record_post;
         ctx
+    }
+
+    #[test]
+    fn a_completed_topic_posts_its_saved_briefing_to_its_bundle() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = topic_ctx(d.path());
+        let stale = topic_report::default_path(d.path(), "news");
+        topic_report::save(&stale, r#"{"summary": "stale"}"#).unwrap();
+        let root = d.path().to_path_buf();
+        let ok: TopicInvoker = Arc::new(move |name, _, _| {
+            let path = topic_report::default_path(&root, name);
+            assert!(!path.exists(), "an earlier run's briefing is cleared first");
+            topic_report::save(
+                &path,
+                r#"{"summary": "One launch.", "items": [{"title": "Acme ships X", "description": "New.", "url": "https://www.example.com/x"}]}"#,
+            )
+            .unwrap();
+            Ok(TopicOutput::default())
+        });
+        posted();
+        run_one_topic(&ctx, "run_1", "news", &definition(), ok).unwrap();
+        let sent = posted();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].0, "https://hooks/N");
+        let text = &sent[0].1;
+        assert!(text.starts_with("*AI news briefing ("), "{text}");
+        assert!(text.contains(":white_check_mark: Completed ("), "{text}");
+        assert!(text.contains("1 new item)"), "{text}");
+        assert!(
+            text.contains(
+                "\u{2022} *Acme ships X* \u{2014} New. <https://www.example.com/x|example.com>"
+            ),
+            "{text}"
+        );
     }
 
     fn definition() -> LoopDefinition {
@@ -675,10 +761,21 @@ mod tests {
                 cost_usd: None,
             })
         });
+        posted();
         run_one_topic(&ctx, "run_1", "news", &definition(), failing).unwrap();
         let doc = status::read_topic_status(&ctx.status_path);
         assert_eq!(doc["topics"]["news"]["state"], "failed");
         assert_eq!(doc["topics"]["news"]["error"], "exited 3: quota exceeded");
+        let sent = posted();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].1.contains(":x: Did not finish"), "{}", sent[0].1);
+        assert!(
+            sent[0]
+                .1
+                .contains("did not finish: exited 3: quota exceeded"),
+            "{}",
+            sent[0].1
+        );
     }
 
     #[test]

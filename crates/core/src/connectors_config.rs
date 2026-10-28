@@ -762,6 +762,40 @@ pub fn notify_loop_with(
     loop_notify::notify(loop_name, text, blocks, &lookup, &loader, &sender)
 }
 
+/// [`loop_notify::notify_report`] against the real registry, connectors and
+/// default Slack webhook, in the message template picked in Settings.
+pub fn notify_loop_report(
+    loop_name: &str,
+    report: &crate::slack_report::Report,
+) -> Vec<NotifyResult> {
+    let source = ConfigConnectors::real();
+    let lookup = |name: &str| -> Result<Value, String> {
+        loops_config::get_loop(name, &loops_config::default_config_path(), None)
+            .map_err(|e| e.to_string())
+    };
+    let loader = |id: &str| -> Result<Box<dyn loop_notify::NotifyConnector>, LoadError> {
+        source
+            .load(id)
+            .map(|c| Box::new(NotifyAdapter(c)) as Box<dyn loop_notify::NotifyConnector>)
+            .map_err(LoadError::from)
+    };
+    let sender = |text: &str, blocks: Option<&Value>| -> Result<(), SendError> {
+        let url = slack::load_webhook_url(&slack::default_config_path(), None)
+            .map_err(|m| SendError::Other(slack_error_class(&m)))?;
+        slack::post_message(&url, text, blocks)
+            .map(|_| ())
+            .map_err(|m| SendError::Other(slack_error_class(&m)))
+    };
+    loop_notify::notify_report(
+        loop_name,
+        report,
+        crate::slack_report::configured_template(),
+        &lookup,
+        &loader,
+        &sender,
+    )
+}
+
 // ---- connector test results ---------------------------------------------------------
 
 /// `<checkout root>/outputs/connectors/test-results.json`.

@@ -16,6 +16,7 @@ use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::{build_verifiers, Verifier};
 use crate::seen_store::{py_isoformat, SeenStore};
+use crate::slack_report::{self, Report};
 use crate::{content_archive, cost, loops_config, pyjson, runner_util};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
@@ -163,7 +164,8 @@ impl ModelError {
 /// `(prompt, timeout_seconds, max_budget_usd)` -> the model's answer.
 pub type ModelFn =
     Arc<dyn Fn(&str, f64, Option<f64>) -> Result<ModelAnswer, ModelError> + Send + Sync>;
-pub type Notifier = Arc<dyn Fn(&str, &str) -> Vec<NotifyResult> + Send + Sync>;
+/// Sends one run report for a loop to its notification targets.
+pub type Notifier = Arc<dyn Fn(&str, &Report) -> Vec<NotifyResult> + Send + Sync>;
 pub type LoopLookupFn = Arc<dyn Fn(&str) -> Result<Value, String> + Send + Sync>;
 pub type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -930,10 +932,12 @@ pub fn run_plugin(
         .clone()
         .unwrap_or_else(|| loop_dir.join("history"));
     let notifier: Notifier = opts.notifier.clone().unwrap_or_else(|| {
-        Arc::new(|loop_name: &str, text: &str| {
-            crate::connectors_config::notify_loop(loop_name, text, None)
+        Arc::new(|loop_name: &str, report: &Report| {
+            crate::connectors_config::notify_loop_report(loop_name, report)
         })
     });
+    let started = std::time::Instant::now();
+    let title = display_name(&loop_name);
     let lookup = opts.loop_lookup.clone().unwrap_or_else(default_loop_lookup);
     let log = make_logger(&repo_root, &loop_name);
     let io_err = |e: std::io::Error| PluginError::new("OSError", e.to_string());
@@ -972,9 +976,14 @@ pub fn run_plugin(
         Err(e) => {
             notifier(
                 &loop_name,
-                &format!(
-                    "{loop_name} FAILED during discovery: {}",
-                    chat_text(&e.class, 300)
+                &slack_report::alert(
+                    &title,
+                    slack_report::State::Failed,
+                    &format!(
+                        "Failed while looking for work ({})",
+                        slack_report::fmt_duration(started.elapsed().as_secs_f64())
+                    ),
+                    &chat_text(&e.class, 300),
                 ),
             );
             log(&format!("discovery failed: {}", e.class));
@@ -995,8 +1004,8 @@ pub fn run_plugin(
     items.truncate(plugin.max_items_per_run());
     log(&format!("processing {} item(s)", items.len()));
 
-    let send = |text: &str| -> Vec<NotifyResult> {
-        let results = notifier(&loop_name, text);
+    let send = |report: &Report| -> Vec<NotifyResult> {
+        let results = notifier(&loop_name, report);
         for (cid, ok, _) in &results {
             log(&format!(
                 "notify {}: {}",
@@ -1067,26 +1076,96 @@ pub fn run_plugin(
     )
     .map_err(io_err)?;
     let text = plugin.digest(&outcomes, &ctx).filter(|t| !t.is_empty());
-    let mut sends: Vec<NotifyResult> = Vec::new();
-    let mut digest_sends: Vec<NotifyResult> = Vec::new();
-    if let Some(text) = &text {
-        digest_sends = send(text);
-        sends = digest_sends.clone();
-    }
     let failed = counts.get("failed").and_then(Value::as_u64).unwrap_or(0);
-    if failed > 0 {
-        sends.extend(send(&format!(
-            "{loop_name}: {failed} of {} item(s) failed",
-            outcomes.len()
-        )));
-    }
-    if !sends.is_empty() {
+    let mut sends: Vec<NotifyResult> = Vec::new();
+    // One message for the run: the plugin's digest and any failed items.
+    if text.is_some() || failed > 0 {
+        let report = run_report(
+            &title,
+            text.as_deref(),
+            &outcomes,
+            started.elapsed().as_secs_f64(),
+        );
+        sends = send(&report);
         record_notified(&last_run, &sends);
     }
     let report = RunReport {
-        notify_failed: text.is_some() && !digest_sends.iter().any(|r| r.1),
+        notify_failed: text.is_some() && !sends.iter().any(|r| r.1),
     };
     Ok((outcomes, report))
+}
+
+/// `daily-digest-loop` -> `Daily digest`.
+fn display_name(loop_name: &str) -> String {
+    let base = loop_name.strip_suffix("-loop").unwrap_or(loop_name);
+    let words = base.replace(['-', '_'], " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => words,
+    }
+}
+
+/// A plugin run as a Slack report: its digest text, then the items that failed.
+pub fn run_report(
+    title: &str,
+    digest: Option<&str>,
+    outcomes: &[Outcome],
+    elapsed_seconds: f64,
+) -> Report {
+    use slack_report::{Item, Link, Section, State};
+    let failed: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|o| o.status == Status::Failed)
+        .collect();
+    let ok = outcomes.len() - failed.len();
+    let elapsed = slack_report::fmt_duration(elapsed_seconds);
+    let mut sections = Vec::new();
+    if let Some(text) = digest {
+        sections.push(Section::Text {
+            heading: String::new(),
+            text: text.to_string(),
+        });
+    }
+    if !failed.is_empty() {
+        sections.push(Section::Callout {
+            heading: format!("{} of {} items failed", failed.len(), outcomes.len()),
+            text: "They are retried on the next run.".into(),
+            items: failed
+                .iter()
+                .map(|o| Item {
+                    title: o.item_key.clone(),
+                    text: chat_text(&o.summary, 300),
+                    url: (!o.url.is_empty()).then(|| o.url.clone()),
+                    link: None,
+                })
+                .collect(),
+        });
+    }
+    Report {
+        title: title.to_string(),
+        status: Some(if failed.is_empty() {
+            slack_report::Status {
+                state: State::Done,
+                text: format!("Completed ({elapsed}, {ok}/{} items)", outcomes.len()),
+            }
+        } else {
+            slack_report::Status {
+                state: State::Warning,
+                text: format!(
+                    "Finished with problems ({elapsed}, {ok}/{} items)",
+                    outcomes.len()
+                ),
+            }
+        }),
+        summary: None,
+        fields: Vec::new(),
+        sections,
+        footer: vec![Link {
+            text: format!("LoopX {title}"),
+            url: None,
+        }],
+    }
 }
 
 /// `loopkit.main`: `<run_id> [--force]`; returns the process exit code.
@@ -1254,8 +1333,8 @@ retry: {enabled: true, max_attempts: 2}
             loop_lookup: Some(Arc::new(|n: &str| {
                 Ok(json!({"name": n, "settings": {"k": "v"}}))
             })),
-            notifier: Some(Arc::new(move |_l: &str, t: &str| {
-                s.lock().unwrap().push(t.to_string());
+            notifier: Some(Arc::new(move |_l: &str, r: &Report| {
+                s.lock().unwrap().push(slack_report::plain_text(r));
                 vec![("slack-default".to_string(), true, "sent".to_string())]
             })),
             now: Some(Utc.with_ymd_and_hms(2026, 10, 6, 0, 0, 0).unwrap()),
@@ -1288,7 +1367,14 @@ retry: {enabled: true, max_attempts: 2}
         let w = world();
         let p = Arc::new(Demo::new(vec![item("a"), item("b")], &[OK, OK]));
         assert_eq!(statuses(&run(&w, &p, "run_1")), ["done", "done"]);
-        assert_eq!(*w.sent.lock().unwrap(), ["2 done"]);
+        let sent = w.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            sent[0].starts_with("*Demo* :white_check_mark: Completed (")
+                && sent[0].contains(", 2/2 items)\n\n2 done\n"),
+            "{}",
+            sent[0]
+        );
     }
 
     #[test]
@@ -1322,12 +1408,20 @@ retry: {enabled: true, max_attempts: 2}
             ]),
         );
         assert_eq!(statuses(&run(&w, &p, "run_1")), ["failed", "done"]);
-        assert!(w
-            .sent
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|s| s.to_lowercase().contains("failed")));
+        {
+            let sent = w.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1, "digest and failures in one report: {sent:?}");
+            assert!(
+                sent[0].contains(":warning: Finished with problems ("),
+                "{}",
+                sent[0]
+            );
+            assert!(
+                sent[0].contains(":zap: *1 of 2 items failed*"),
+                "{}",
+                sent[0]
+            );
+        }
         let p2 = Arc::new(Demo::new(vec![item("a")], &[OK]));
         assert_eq!(statuses(&run(&w, &p2, "run_2")), ["done"]);
     }

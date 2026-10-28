@@ -274,6 +274,12 @@ enum TopicCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Save this run's briefing; the loop posts it to Slack when the topic ends
+    Report {
+        /// `<topic> '<briefing json>'`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -349,6 +355,9 @@ fn main() -> ExitCode {
         Command::Topic {
             command: TopicCommand::Seen { args },
         } => topic_cmd::seen(&args),
+        Command::Topic {
+            command: TopicCommand::Report { args },
+        } => topic_cmd::report(&args),
         Command::Issues {
             command: IssuesCommand::List { args },
         } => issues_cmd::list(&args),

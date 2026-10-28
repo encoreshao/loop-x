@@ -509,9 +509,10 @@ Consumers must tolerate: missing file, non-dict, missing `instances`,
 |---|---|---|---|
 | `webhook_url` | string | yes for posting | Default Slack incoming webhook. |
 | `bundle_webhooks` | object bundle-name -> webhook url string | optional | Per-bundle override. `slack_notify --bundle=<name>` uses `bundle_webhooks[name]` **if truthy**, else falls back to `webhook_url`. The bundle name is shared with `~/.gitlab/config.json` `bundles` and `topics.json` `slack_bundle`; the two files are joined only by that name. |
+| `message_template` | string | optional | The run-report layout every loop's Slack message uses: `report` (default; Block Kit status line, lists, table, "needs you" callout) or `classic` (the same content as plain mrkdwn text). Unknown values fall back to `report`. Set from Settings → General → Slack. |
 | `block_templates` | object name -> template | optional | Block Kit templates. |
 | `block_templates.<name>.blocks` | array | yes | Slack Block Kit blocks. Any string anywhere inside may contain the literal `{{message}}`, replaced recursively (`substitute_message`) by the alert text. Must be a JSON list on save. |
-| `block_templates.<name>.notification_key` | string or `null` | yes on write | Binds the template to an alert. Allowed values: `gitlab_wrapup_failed`, `gitlab_issues_incomplete`, `topic_monitor_incomplete`, `inbox_triage_digest`. Each key binds to at most one template: saving a template with a key sets `notification_key` to `null` on whichever other template held it. |
+| `block_templates.<name>.notification_key` | string or `null` | yes on write | Binds the template to an alert. Allowed value: `inbox_triage_digest` (it then replaces the Inbox Triage run report). Each key binds to at most one template: saving a template with a key sets `notification_key` to `null` on whichever other template held it. |
 
 Message POST contract (`post_message`): HTTP POST to the webhook with header
 `Content-Type: application/json` and body `{"text": "<text>"}` plus
@@ -534,8 +535,8 @@ this file unless the user saves them.
     "ops": "https://hooks.slack.example/services/T000/B001/REDACTEDEXAMPLE2"
   },
   "block_templates": {
-    "wrapup-failed": {
-      "notification_key": "gitlab_wrapup_failed",
+    "inbox-digest": {
+      "notification_key": "inbox_triage_digest",
       "blocks": [
         {"type": "section", "text": {"type": "mrkdwn", "text": "{{message}}"}}
       ]

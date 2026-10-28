@@ -582,8 +582,10 @@ mod tests {
             history_dir: Some(t.join("h")),
             lock_path: Some(t.join("lock")),
             loop_lookup: Some(Arc::new(|_| Ok(json!({"settings": {}})))),
-            notifier: Some(Arc::new(move |_l, text| {
-                sink.lock().unwrap().push(text.to_string());
+            notifier: Some(Arc::new(move |_l, report: &crate::slack_report::Report| {
+                sink.lock()
+                    .unwrap()
+                    .push(crate::slack_report::plain_text(report));
                 vec![("default".into(), true, "sent".into())]
             })),
             ..Default::default()
@@ -594,7 +596,12 @@ mod tests {
             [Status::Done]
         );
         let sent = sent.lock().unwrap();
-        assert!(sent[0].starts_with("Stale work - 2026-10-07"));
+        assert!(
+            sent[0].starts_with("*Stale sweeper* :white_check_mark: Completed ("),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[0].contains("\nStale work - 2026-10-07"), "{}", sent[0]);
     }
 
     #[test]
