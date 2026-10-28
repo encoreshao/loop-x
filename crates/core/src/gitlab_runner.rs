@@ -67,7 +67,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<2-4 sentences on what you changed and why; the loop posts it on the issue next to the merge request link>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}}\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}}\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
 
 fn tool_patterns(exe: &str, subs: &[&str]) -> Vec<String> {
     subs.iter()
@@ -1270,19 +1270,13 @@ pub fn finalize_gated_issue(
     };
     let checks: Vec<String> = ran.iter().map(|c| format!("- `{c}` \u{2705}")).collect();
     let summary = data.get("summary").and_then(Value::as_str).unwrap_or("");
-    let body = format!(
-        "Opened merge request for this fix: {branch} \u{2192} {target}. Verified by the loop with:\n{}\n\n{summary}",
-        checks.join("\n")
-    )
-    .trim_end()
-    .to_string();
+    // Same shape the batch wrap-up reads from an agent-emitted fix event.
+    let mr_url = find_mr_url(&detail);
     api(
         "POST",
         &format!("{notes_path}/notes"),
-        json!({"body": body}),
+        json!({"body": issue_comment(mr_url.as_deref(), &branch, &target, summary, checks.len())}),
     );
-    // Same shape the batch wrap-up reads from an agent-emitted fix event.
-    let mr_url = find_mr_url(&detail);
     // A push option can't carry a multi-line description, so set it once the MR exists.
     match mr_url.as_deref().and_then(mr_iid) {
         Some(mr) => api(
@@ -1306,6 +1300,32 @@ pub fn finalize_gated_issue(
         format!("*Finished* {issue_label}: MR opened \u{2192} {link}"),
     );
     "mr_opened".to_string()
+}
+
+/// The comment posted on the issue: the merge request link, then the agent's goal and
+/// key results, then how many checks the loop ran. The commands themselves, like
+/// everything else about how it was done, are in the merge request description.
+fn issue_comment(
+    mr_url: Option<&str>,
+    branch: &str,
+    target: &str,
+    summary: &str,
+    checks: usize,
+) -> String {
+    let mr = match mr_url.and_then(mr_iid) {
+        Some(iid) => format!("!{iid}"),
+        None => format!("`{branch}`"),
+    };
+    let summary = summary.trim();
+    // Continue the agent's bullet list when it ends in one, else start a new one.
+    let sep = match summary.lines().last() {
+        None => "",
+        Some(l) if l.trim_start().starts_with("- ") => "\n",
+        Some(_) => "\n\n",
+    };
+    format!(
+        "**Merge request ready for review:** {mr} \u{2192} `{target}`\n\n{summary}{sep}- Checks: {checks}/{checks} passed \u{2705} (commands in the MR)"
+    )
 }
 
 /// First `https?://<non-space>/merge_requests/<digits>` in `text`.
@@ -1994,7 +2014,7 @@ mod tests {
     }
 
     #[test]
-    fn mr_comment_lists_commands_actually_run() {
+    fn mr_description_lists_commands_actually_run() {
         let d = tempfile::tempdir().unwrap();
         let handoff = d.path().join("h.json");
         std::fs::write(
@@ -2013,7 +2033,12 @@ mod tests {
         );
         let project = json!({"project_id": "g/p", "local_path": "/x", "instance": "g", "test_cmd": "bundle exec rspec"});
         let notes = Notes(Default::default());
-        let opener = |_: &str, _: &str, _: &str, _: &str| (true, String::new());
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
         let ctx = RunCtx {
             repo_root: d.path().into(),
             events_dir: Some(d.path().join("events")),
@@ -2042,8 +2067,8 @@ mod tests {
             },
         );
         assert_eq!(outcome, "mr_opened");
-        let calls = notes.0.lock().unwrap();
-        let body = calls[0].2["body"].as_str().unwrap();
+        let calls = notes.0.into_inner().unwrap();
+        let body = mr_description(&calls);
         assert!(body.contains("`pnpm test`"), "{body}");
         assert!(!body.contains("rspec"), "{body}");
     }
@@ -2119,6 +2144,27 @@ mod tests {
         let body = mr_description(&calls);
         assert!(body.starts_with("Closes #7\n\n## What and why"), "{body}");
         assert!(body.ends_with("- h"), "{body}");
+    }
+
+    #[test]
+    fn the_issue_comment_is_goal_based_and_leaves_commands_to_the_mr() {
+        let summary = "**Goal:** users can add a missing company by its domain.\n- Duplicates return the existing company";
+        let calls = finalize_fix(
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+            "title": "fix: #7 x", "summary": summary}),
+        );
+        let note = calls
+            .iter()
+            .find(|(m, e, _)| m == "POST" && e.ends_with("/notes"))
+            .unwrap_or_else(|| panic!("no issue comment in {calls:?}"));
+        let body = note.2["body"].as_str().unwrap();
+        assert_eq!(
+            body,
+            "**Merge request ready for review:** !1489 \u{2192} `main`\n\n\
+             **Goal:** users can add a missing company by its domain.\n\
+             - Duplicates return the existing company\n\
+             - Checks: 1/1 passed \u{2705} (commands in the MR)"
+        );
     }
 
     #[test]
