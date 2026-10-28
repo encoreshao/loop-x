@@ -15,6 +15,7 @@ use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::template::{Scope, Template};
 use crate::ui::{ai_cli, consts, gitlab as ui_gitlab};
 use chrono::{DateTime, Local, Utc};
+use loopx_core::config::use_worktree;
 use loopx_core::loops_config::py_truthy;
 use loopx_core::worktree::{self, CheckoutProblem, RootProblem};
 use loopx_core::{events, gitlab, issue_tracking_config, pydumps, pyjson, status};
@@ -85,23 +86,22 @@ pub fn register(r: &mut Registry) {
             )
         })
     });
-    r.post("/settings/loop-projects", |c| {
+    r.post("/settings/loop-projects/:alias/track", |c| {
         flash_post(c, |c, f| {
-            let g = |k: &str| f.first(k).unwrap_or("").to_string();
-            upsert_tracked_project(
+            track_project(
                 c,
-                &[
-                    g("alias"),
-                    g("project_id"),
-                    g("local_path"),
-                    g("target_branch"),
-                    g("install_cmd"),
-                    g("lint_cmd"),
-                    g("test_cmd"),
-                    g("instance"),
-                    g("original_alias"),
-                ],
+                c.param("alias"),
+                f.first("local_path").unwrap_or(""),
+                f.first("target_branch").unwrap_or(""),
+                f.first("use_worktree").is_some(),
             )
+        })
+    });
+    r.post("/settings/loop-projects/:alias/worktree/:state", |c| {
+        flash_post(c, |c, _| match c.param("state") {
+            "on" => set_project_worktree(c, c.param("alias"), true),
+            "off" => set_project_worktree(c, c.param("alias"), false),
+            other => (false, name_msg(c, "Unknown setting: {name}", other)),
         })
     });
     r.post("/settings/loop-projects/:alias/delete", |c| {
@@ -215,6 +215,8 @@ struct IssueRow {
     timestamp: String,
     title: String,
     web_url: String,
+    /// The checks the agent chose (`verification.commands`), already HTML.
+    checks: String,
 }
 
 struct Activity {
@@ -252,7 +254,7 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
             continue;
         }
         let iid = event.get("issue_iid").cloned().unwrap_or(Value::Null);
-        if !etype.starts_with("issue.") || iid.is_null() {
+        if !(etype.starts_with("issue.") || etype == "verification.commands") || iid.is_null() {
             continue;
         }
         let this_run = event.get("run_id").cloned().unwrap_or(Value::Null);
@@ -277,6 +279,7 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                     timestamp: String::new(),
                     title: String::new(),
                     web_url: String::new(),
+                    checks: String::new(),
                 });
                 issues.len() - 1
             }
@@ -288,6 +291,21 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
             "issue.queued" => {
                 row.title = str_or_empty(data.get("title"));
                 row.web_url = str_or_empty(data.get("web_url"));
+                continue;
+            }
+            "verification.commands" => {
+                let commands: Vec<String> = ["lint", "test"]
+                    .iter()
+                    .map(|k| str_or_empty(data.get(*k)))
+                    .filter(|c| !c.trim().is_empty())
+                    .map(|c| format!("<code>{}</code>", pyfmt::escape(&c)))
+                    .collect();
+                let summary = pyfmt::escape(&str_or_empty(data.get("summary")));
+                row.checks = [summary, commands.join(" ")]
+                    .into_iter()
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" \u{2014} ");
                 continue;
             }
             "issue.completed" => {
@@ -491,6 +509,13 @@ fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
                 detail.push_str(&format!("<p class='result-summary'>{}</p>", pyfmt::escape(message)));
             }
             detail.push_str(&format!("<p class='result-summary'>{}</p>", ai_cli::settings_link(ctx.lang)));
+        }
+        if !issue.checks.is_empty() {
+            detail.push_str(&format!(
+                "<p class='result-summary'>{}: {}</p>",
+                esc_t(ctx, "Checks"),
+                issue.checks
+            ));
         }
         let ago = match super::loops_common::aware(&issue.timestamp) {
             Some(stamp) => format!(
@@ -930,6 +955,57 @@ fn table(headers: &[String], rows: &[String]) -> String {
     )
 }
 
+/// The Track-on / edit form for `alias`, prefilled from its projects.json entry.
+fn track_form(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
+    let empty = json!({});
+    let project = project.unwrap_or(&empty);
+    let checked = if use_worktree(project) { " checked" } else { "" };
+    format!(
+        "<form method='post' action='/settings/loop-projects/{}/track' class='daemon-action-form'>{csrf}{}{}<label><input type='checkbox' name='use_worktree' value='1'{checked}> {}</label><button type='submit' class='btn btn-neutral'>{}</button></form>",
+        pyfmt::quote(alias, ""),
+        input_text("local_path", &text(project, "local_path"), "/abs/path/to/checkout", " required"),
+        input_text("target_branch", &text(project, "target_branch"), &esc_t(ctx, "target branch"), " required"),
+        esc_t(ctx, "Use worktree"),
+        esc_t(ctx, if project.get("local_path").is_some() { "Save" } else { "Track" })
+    )
+}
+
+/// An on switch that stops tracking `alias` (removes its projects.json entry).
+fn untrack_switch(ctx: &UiCtx, alias: &str, csrf: &str) -> String {
+    let label = pyfmt::escape(&ctx.tf("Stop tracking {alias}", &[("alias", alias)]));
+    let confirm = pyfmt::escape(&ctx.tf("Stop tracking project {alias}?", &[("alias", alias)]));
+    format!(
+        "<form method='post' action='/settings/loop-projects/{}/delete' class='daemon-action-form'>{csrf}<button type='submit' class='switch is-on' role='switch' aria-checked='true' aria-label='{label}' title='{label}' data-confirm=\"{confirm}\"><span class='switch-thumb'></span></button></form>",
+        pyfmt::quote(alias, "")
+    )
+}
+
+/// The Track column for one GitLab alias: a collapsed Track form when it is
+/// not tracked; otherwise the untrack switch, where it lives, its worktree
+/// switch and an edit form.
+fn track_cell(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
+    let Some(project) = project else {
+        return format!(
+            "<details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</summary><div class='loop-settings-body'>{}</div></details>",
+            esc_t(ctx, "Track"),
+            track_form(ctx, alias, None, csrf)
+        );
+    };
+    let on = use_worktree(project);
+    let (state, class, checked) = if on { ("off", "is-on", "true") } else { ("on", "is-off", "false") };
+    let label = esc_t(ctx, "Use worktree");
+    format!(
+        "<div class='loop-toggle'>{}<span class='loop-toggle-text'>{}</span></div><div class='loop-meta'><span class='loop-meta-item'><code>{}</code></span><span class='loop-meta-item'><code>{}</code></span></div><div class='loop-toggle'><form method='post' action='/settings/loop-projects/{}/worktree/{state}' class='daemon-action-form'>{csrf}<button type='submit' class='switch {class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button></form><span class='loop-toggle-text'>{label}</span></div><details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}</summary><div class='loop-settings-body'>{}</div></details>",
+        untrack_switch(ctx, alias, csrf),
+        esc_t(ctx, "Tracked"),
+        pyfmt::escape(&text(project, "target_branch")),
+        pyfmt::escape(&text(project, "local_path")),
+        pyfmt::quote(alias, ""),
+        esc_t(ctx, "Edit"),
+        track_form(ctx, alias, Some(project), csrf)
+    )
+}
+
 fn settings_fragment_html(ctx: &UiCtx) -> String {
     let gitlab_config = read_json_or_empty(&gitlab_config_path(ctx));
     let slack_config = read_json_or_empty(&slack_config_path(ctx));
@@ -940,6 +1016,8 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
     let projects = gitlab_config.get("projects").unwrap_or(&empty);
     let bundles = gitlab_config.get("bundles").unwrap_or(&empty);
     let bundle_webhooks = slack_config.get("bundle_webhooks").unwrap_or(&empty);
+    let no_projects = Map::new();
+    let tracked = loop_config.get("projects").and_then(Value::as_object).unwrap_or(&no_projects);
     let default_instance = text(&gitlab_config, "default");
     let instance_names = keys_of(&gitlab_config, "instances");
     let bundle_names = keys_of(&gitlab_config, "bundles");
@@ -992,19 +1070,28 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         let url_safe = pyfmt::quote(alias, "");
         let confirm = ctx.tf("Delete project alias {alias}?", &[("alias", alias)]);
         rows.push(format!(
-            "<tr><td>{safe}</td><td><form method='post' action='/settings/gitlab/projects' class='daemon-action-form'>{csrf}<input type='hidden' name='alias' value='{safe}'><input type='text' name='project_id' value='{}' placeholder='namespace/project'>{}{}<button type='submit' class='btn btn-neutral'>{}</button></form></td><td>{}</td></tr>",
+            "<tr><td>{safe}</td><td><form method='post' action='/settings/gitlab/projects' class='daemon-action-form'>{csrf}<input type='hidden' name='alias' value='{safe}'><input type='text' name='project_id' value='{}' placeholder='namespace/project'>{}{}<button type='submit' class='btn btn-neutral'>{}</button></form></td><td>{}</td><td>{}</td></tr>",
             pyfmt::escape(&text(project, "project_id")),
             custom_select_plain("instance", &instance_names, Some(&text(project, "instance")), None),
             custom_select_plain("bundle", &bundle_names, Some(&text(project, "bundle")), Some(&t("(use instance default)"))),
             et("Save"),
+            track_cell(ctx, alias, tracked.get(alias.as_str()), &csrf),
             delete_form(ctx, &format!("/settings/gitlab/projects/{url_safe}/delete"), &confirm, &csrf)
         ));
     }
-    let projects_html = if rows.is_empty() {
+    let mut projects_html = if rows.is_empty() {
         format!("<p>{}</p>", et("(no project aliases configured)"))
     } else {
-        table(&[et("Alias"), et("Edit"), et("Delete")], &rows)
+        table(&[et("Alias"), et("Edit"), et("Track"), et("Delete")], &rows)
     };
+    // Tracked in projects.json but no longer a GitLab alias: only untrack.
+    for alias in tracked.keys().filter(|a| projects.get(a.as_str()).is_none()) {
+        projects_html.push_str(&format!(
+            "<div class='loop-toggle'>{}<span class='loop-toggle-text'>{}</span></div>",
+            untrack_switch(ctx, alias, &csrf),
+            pyfmt::escape(&ctx.tf("{alias}: no matching GitLab alias", &[("alias", alias)]))
+        ));
+    }
     let add_project_form = format!(
         "\n<form method='post' action='/settings/gitlab/projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n{}\n{}\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
         et("project alias"),
@@ -1020,41 +1107,6 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         pyfmt::escape(&text(&loop_config, "worktree_root")),
         custom_select_plain("gitlab_instance", &instance_names, Some(&text(&loop_config, "gitlab_instance")), None),
         et("Save")
-    );
-
-    let mut rows = Vec::new();
-    for (alias, project) in loop_config.get("projects").and_then(Value::as_object).into_iter().flatten() {
-        let safe = pyfmt::escape(alias);
-        let url_safe = pyfmt::quote(alias, "");
-        let confirm = ctx.tf("Stop tracking project {alias}?", &[("alias", alias)]);
-        rows.push(format!(
-            "<tr><td><form method='post' action='/settings/loop-projects' class='daemon-action-form'>{csrf}<input type='hidden' name='original_alias' value='{safe}'><input type='text' name='alias' value='{safe}' placeholder='{}' required>{}{}{}{}{}{}{}<button type='submit' class='btn btn-neutral'>{}</button></form></td><td>{}</td></tr>",
-            et("project alias"),
-            input_text("project_id", &text(project, "project_id"), "namespace/project", ""),
-            input_text("local_path", &text(project, "local_path"), "/abs/path/to/checkout", ""),
-            input_text("target_branch", &text(project, "target_branch"), &et("target branch"), ""),
-            input_text("install_cmd", &text(project, "install_cmd"), &et("install command"), ""),
-            input_text("lint_cmd", &text(project, "lint_cmd"), &et("lint command"), ""),
-            input_text("test_cmd", &text(project, "test_cmd"), &et("test command"), ""),
-            custom_select_plain("instance", &instance_names, Some(&text(project, "instance")), Some(&t("(use default)"))),
-            et("Save"),
-            delete_form(ctx, &format!("/settings/loop-projects/{url_safe}/delete"), &confirm, &csrf)
-        ));
-    }
-    let tracked_projects_html = if rows.is_empty() {
-        format!("<p>{}</p>", et("(no tracked projects configured)"))
-    } else {
-        table(&[et("Project"), et("Delete")], &rows)
-    };
-    let add_tracked_project_form = format!(
-        "\n<form method='post' action='/settings/loop-projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n<input type='text' name='local_path' placeholder='/abs/path/to/checkout'>\n<input type='text' name='target_branch' placeholder='{}'>\n<input type='text' name='install_cmd' placeholder='{}'>\n<input type='text' name='lint_cmd' placeholder='{}'>\n<input type='text' name='test_cmd' placeholder='{}'>\n{}\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
-        et("project alias"),
-        et("target branch"),
-        et("install command"),
-        et("lint command"),
-        et("test command"),
-        custom_select_plain("instance", &instance_names, None, Some(&t("(use default)"))),
-        et("Add project")
     );
 
     let mut rows = Vec::new();
@@ -1113,6 +1165,10 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         .var("default_form", default_form)
         .var("instances_html", instances_html)
         .var("add_instance_form", add_instance_form)
+        .var(
+            "aliases_subtitle",
+            pyfmt::escape_text(&t("Turn on Track to let the GitLab issue loop work on a project: give its local checkout and target branch. The agent works out each project's install, lint and test commands itself and logs what it used.")),
+        )
         .var("projects_html", projects_html)
         .var("add_project_form", add_project_form)
         .var(
@@ -1121,13 +1177,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         )
         .var("bundles_html", bundles_html)
         .var("add_bundle_form", add_bundle_form)
-        .var(
-            "tracked_subtitle",
-            pyfmt::escape_text(&t("This loop's own ~/.loopx/projects.json - where each project lives locally, its target branch and install/lint/test commands, and (if it differs from the default instance above) which GitLab instance it's on. Different from \"Project aliases\" above, which is only about GitLab API auth routing.")),
-        )
-        .var("loop_settings_form", loop_settings_form)
-        .var("tracked_projects_html", tracked_projects_html)
-        .var("add_tracked_project_form", add_tracked_project_form);
+        .var("loop_settings_form", loop_settings_form);
     let _ = consts::ds("_SECTION_ICON_SETTINGS");
     render("gitlab_settings_fragment", &scope)
 }
@@ -1455,24 +1505,25 @@ fn checkout_problem_message(ctx: &UiCtx, problem: CheckoutProblem, path: &str) -
     }
 }
 
-/// `fields`: alias, project_id, local_path, target_branch, install_cmd, lint_cmd,
-/// test_cmd, instance, original_alias.
-fn upsert_tracked_project(ctx: &UiCtx, fields: &[String; 9]) -> (bool, String) {
-    let f: Vec<&str> = fields.iter().map(|s| s.trim()).collect();
-    let (alias, project_id, instance, original) = (f[0], f[1], f[7], f[8]);
-    if alias.is_empty() {
-        return (false, ctx.t("Project alias is required"));
-    }
-    if project_id.is_empty() {
-        return (false, ctx.t("Project ID is required"));
-    }
-    if f[3].is_empty() {
+/// Track the GitLab alias `alias` for the issue loop (or update how it is
+/// tracked): its project id and instance come from the GitLab alias, and any
+/// other keys already in its projects.json entry (command hints included) are
+/// kept.
+fn track_project(ctx: &UiCtx, alias: &str, local_path: &str, target_branch: &str, use_worktree: bool) -> (bool, String) {
+    let (alias, target_branch) = (alias.trim(), target_branch.trim());
+    let gitlab_config = read_json_or_empty(&gitlab_config_path(ctx));
+    let Some(gitlab_alias) = gitlab_config.get("projects").and_then(|p| p.get(alias)) else {
+        return (false, name_msg(ctx, "Unknown project: {name}", alias));
+    };
+    let project_id = text(gitlab_alias, "project_id");
+    let instance = text(gitlab_alias, "instance");
+    if target_branch.is_empty() {
         return (false, ctx.t("Target branch is required"));
     }
-    if f[2].is_empty() {
+    if local_path.trim().is_empty() {
         return (false, ctx.t("Local checkout path is required"));
     }
-    let local_path = worktree::expand_home(f[2], &ctx.state.user_home);
+    let local_path = worktree::expand_home(local_path.trim(), &ctx.state.user_home);
     if let Err(problem) = worktree::check_checkout(&local_path) {
         return (false, checkout_problem_message(ctx, problem, &local_path));
     }
@@ -1489,36 +1540,39 @@ fn upsert_tracked_project(ctx: &UiCtx, fields: &[String; 9]) -> (bool, String) {
         }
     }
     let projects = obj_mut(&mut config, "projects");
-    let renaming = !original.is_empty() && original != alias;
-    if renaming {
-        if !projects.contains_key(original) {
-            return (false, name_msg(ctx, "Unknown project: {name}", original));
-        }
-        if projects.contains_key(alias) {
-            return (false, name_msg(ctx, "Project alias already in use: {name}", alias));
-        }
-        projects.shift_remove(original);
-    }
     let is_new = !projects.contains_key(alias);
-    let mut entry = json!({
-        "project_id": project_id,
-        "local_path": local_path,
-        "target_branch": f[3],
-        "install_cmd": f[4],
-        "lint_cmd": f[5],
-        "test_cmd": f[6],
-    });
-    if !instance.is_empty() {
-        entry["instance"] = json!(instance);
+    let entry = projects.entry(alias.to_string()).or_insert_with(|| json!({}));
+    if !entry.is_object() {
+        *entry = json!({});
     }
-    projects.insert(alias.to_string(), entry);
+    entry["project_id"] = json!(project_id);
+    entry["local_path"] = json!(local_path);
+    entry["target_branch"] = json!(target_branch);
+    entry["use_worktree"] = json!(use_worktree);
+    match entry.as_object_mut() {
+        Some(obj) if instance.is_empty() => {
+            obj.shift_remove("instance");
+        }
+        _ => entry["instance"] = json!(instance),
+    }
     tryw!(save(ctx, &config, &path));
-    if renaming {
-        return (true, ctx.tf("Renamed project {old} to {new}", &[("old", original), ("new", alias)]));
-    }
     (
         true,
-        name_msg(ctx, if is_new { "Added project {name}" } else { "Updated project {name}" }, alias),
+        name_msg(ctx, if is_new { "Tracking project {name}" } else { "Updated project {name}" }, alias),
+    )
+}
+
+fn set_project_worktree(ctx: &UiCtx, alias: &str, on: bool) -> (bool, String) {
+    let path = projects_path(ctx);
+    let mut config = read_json_or_empty(&path);
+    if !has_key(&config, "projects", alias) {
+        return (false, name_msg(ctx, "Unknown project: {name}", alias));
+    }
+    config["projects"][alias]["use_worktree"] = json!(on);
+    tryw!(save(ctx, &config, &path));
+    (
+        true,
+        name_msg(ctx, if on { "Worktree on for {name}" } else { "Worktree off for {name}" }, alias),
     )
 }
 
@@ -1555,7 +1609,7 @@ mod tests {
             std::fs::create_dir_all(home.join(".gitlab")).unwrap();
             std::fs::write(
                 home.join(".gitlab/config.json"),
-                r#"{"instances":{"g":{"url":"https://g.example","token":"t"}}}"#,
+                r#"{"instances":{"g":{"url":"https://g.example","token":"t"}},"projects":{"app":{"project_id":"g/app","instance":"g"}}}"#,
             )
             .unwrap();
             let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), &home, dir.path(), "tok", None);
@@ -1580,11 +1634,10 @@ mod tests {
             p.display().to_string()
         }
         fn project(&self, local_path: &str, branch: &str) -> (bool, String) {
-            let f = |s: &str| s.to_string();
-            upsert_tracked_project(
-                &self.ctx(),
-                &[f("app"), f("g/app"), f(local_path), f(branch), f(""), f(""), f(""), f(""), f("")],
-            )
+            track_project(&self.ctx(), "app", local_path, branch, true)
+        }
+        fn seed_projects(&self, value: Value) {
+            write_json_atomic(&value, &projects_path(&self.ctx())).unwrap();
         }
         fn saved(&self) -> Value {
             read_json_or_empty(&projects_path(&self.ctx()))
@@ -1604,8 +1657,92 @@ mod tests {
         let bare = sb.repo("local-only", false);
         assert!(sb.project(&bare, "main").1.contains("has no origin remote"));
         assert!(sb.saved().get("projects").is_none(), "nothing saved after rejections");
-        assert_eq!(sb.project(&repo, "main"), (true, "Added project app".to_string()));
+        assert_eq!(sb.project(&repo, "main"), (true, "Tracking project app".to_string()));
         assert_eq!(sb.saved()["projects"]["app"]["local_path"], repo);
+    }
+
+    #[test]
+    fn track_on_takes_id_and_instance_from_the_gitlab_alias() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        assert!(sb.project(&repo, "main").0);
+        let app = &sb.saved()["projects"]["app"];
+        assert_eq!(app["project_id"], "g/app");
+        assert_eq!(app["instance"], "g");
+        assert_eq!(app["target_branch"], "main");
+        assert_eq!(app["use_worktree"], true);
+        assert!(app.get("test_cmd").is_none());
+    }
+
+    #[test]
+    fn track_preserves_command_hints_and_unknown_keys() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        sb.seed_projects(json!({"projects": {"app": {"project_id": "old", "local_path": repo, "target_branch": "dev", "lint_cmd": "bundle exec rubocop .", "x": 1}}}));
+        assert_eq!(sb.project(&repo, "main"), (true, "Updated project app".to_string()));
+        let app = &sb.saved()["projects"]["app"];
+        assert_eq!(app["lint_cmd"], "bundle exec rubocop .");
+        assert_eq!(app["x"], 1);
+        assert_eq!(app["target_branch"], "main");
+        assert_eq!(app["project_id"], "g/app");
+    }
+
+    #[test]
+    fn track_off_then_on_keeps_no_stale_entry() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        assert!(sb.project(&repo, "dev").0);
+        assert!(delete_tracked_project(&sb.ctx(), "app").0);
+        assert!(sb.saved()["projects"].get("app").is_none());
+        assert!(sb.project(&repo, "main").0);
+        assert_eq!(sb.saved()["projects"]["app"]["target_branch"], "main");
+    }
+
+    #[test]
+    fn worktree_switch_sets_flag() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        assert!(!set_project_worktree(&sb.ctx(), "app", false).0, "untracked alias");
+        assert!(sb.project(&repo, "main").0);
+        assert_eq!(set_project_worktree(&sb.ctx(), "app", false), (true, "Worktree off for app".to_string()));
+        assert_eq!(sb.saved()["projects"]["app"]["use_worktree"], false);
+        assert!(set_project_worktree(&sb.ctx(), "app", true).0);
+        assert_eq!(sb.saved()["projects"]["app"]["use_worktree"], true);
+    }
+
+    #[test]
+    fn track_requires_gitlab_alias() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        assert_eq!(track_project(&sb.ctx(), "nope", &repo, "main", true), (false, "Unknown project: nope".to_string()));
+    }
+
+    #[test]
+    fn settings_render_has_track_switch_and_no_tracked_card() {
+        let sb = Sandbox::new();
+        let html = settings_fragment_html(&sb.ctx());
+        assert!(html.contains("action='/settings/loop-projects/app/track'"), "{html}");
+        assert!(html.contains("name='use_worktree'"), "{html}");
+        assert!(!html.contains("Tracked Projects"), "{html}");
+        assert!(!html.contains("install command"), "{html}");
+        assert!(!html.contains("name='lint_cmd'"), "{html}");
+        assert!(!html.contains("action='/settings/loop-projects'"), "{html}");
+        assert!(html.contains("action='/settings/loop-config'"), "loop settings kept: {html}");
+        let repo = sb.repo("repo", true);
+        assert!(sb.project(&repo, "main").0);
+        let html = settings_fragment_html(&sb.ctx());
+        assert!(html.contains("action='/settings/loop-projects/app/worktree/off'"), "{html}");
+        assert!(html.contains("action='/settings/loop-projects/app/delete'"), "{html}");
+    }
+
+    #[test]
+    fn orphan_alias_is_listed_with_track_off_only() {
+        let sb = Sandbox::new();
+        sb.seed_projects(json!({"projects": {"ghost": {"project_id": "x/ghost", "local_path": "/g", "target_branch": "main"}}}));
+        let html = settings_fragment_html(&sb.ctx());
+        assert!(html.contains("no matching GitLab alias"), "{html}");
+        assert!(html.contains("action='/settings/loop-projects/ghost/delete'"), "{html}");
+        assert!(!html.contains("action='/settings/loop-projects/ghost/track'"), "{html}");
     }
 
     #[test]
@@ -1662,6 +1799,25 @@ mod tests {
         assert!(html.contains("href='/settings?tab=ai-cli'"), "{html}");
         assert!(html.contains("<div class='flash flash-warning'>"), "{html}");
         assert!(html.contains("full tool access"), "{html}");
+    }
+
+    #[test]
+    fn live_row_shows_logged_checks() {
+        let sb = Sandbox::new();
+        let dir = Some(sb.state.events_dir.as_path());
+        let fields = |data: Value| events::EventFields { project: Some("app".into()), issue_iid: Some(7), data: Some(data), ..Default::default() };
+        events::emit("issue.queued", "run_1", fields(json!({"title": "Fix it"})), dir).unwrap();
+        events::emit(
+            "verification.commands",
+            "run_1",
+            fields(json!({"summary": "Rails app <script>", "lint": "", "test": "bundle exec rspec"})),
+            dir,
+        )
+        .unwrap();
+        let html = live_body(&sb.ctx(), None, false);
+        assert!(html.contains("Rails app &lt;script&gt;"), "{html}");
+        assert!(html.contains("<code>bundle exec rspec</code>"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
     }
 
     #[test]

@@ -36,7 +36,7 @@ Then read any custom instructions the user has set, if present: `~/.loopx/instru
 
 ## Configuration
 
-All project-specific facts — which projects to track, their GitLab project IDs, their local checkout paths, their target branch, their install/lint/test commands, which GitLab username to track, and the worktree scratch directory — live in `~/.loopx/projects.json`, not in this file. This file is the same for every team member; the config file is per-machine.
+All project-specific facts — which projects to track, their GitLab project IDs, their local checkout paths, their target branch, whether each uses per-issue worktrees (`use_worktree`), optional install/lint/test command hints, which GitLab username to track, and the worktree scratch directory — live in `~/.loopx/projects.json`, not in this file. This file is the same for every team member; the config file is per-machine.
 
 ## `<loop_dir>`: always invoke this repo's scripts by absolute path
 
@@ -47,7 +47,8 @@ The reason: during an issue's work you `cd` into that issue's worktree (step 5),
 Look things up as you go:
 ```
 loopx config aliases                 # every configured project alias, one per line
-loopx config project <alias>          # {project_id, local_path, target_branch, install_cmd, lint_cmd, test_cmd, instance} for one alias
+loopx config project <alias>          # {project_id, local_path, target_branch, instance, use_worktree, hints: {install, lint, test}} for one alias
+loopx config command-hints <alias>    # starting points for choosing install/lint/test (see step 7)
 loopx config assignee                 # the GitLab username to track
 loopx config instance                 # the config's default GitLab instance (only used when an alias doesn't set its own `instance`)
 loopx config worktree-root            # where per-issue worktrees are created
@@ -78,7 +79,7 @@ escalate or stop.
 
 ## Step 2: Process issues ONE AT A TIME
 
-For each project alias and each issue in that project's list, in order — never in parallel. Before starting work on a given alias, run `loopx config project <alias>` once and keep its `project_id`, `local_path`, `target_branch`, `install_cmd`, `lint_cmd`, `test_cmd`, and `instance` values on hand for every step below — `instance` is this alias's own GitLab instance (its own override if `projects.json` set one for it, otherwise the config's default), never the same for every alias when projects span more than one instance. Also run `loopx gitlab project-info <alias>` once and note its `bundle` field. Every `loopx notify` call below for this alias's issues has `<bundle_flag>` inserted immediately after `loopx notify`, where `<bundle_flag>` is: the empty string, if `bundle` is `null` (those calls are then unchanged from today); or the string ` --bundle=<that value>` — including its own leading space — if `bundle` is non-null. Either way, `loopx notify<bundle_flag>` produces a correctly-spaced command; don't add or remove any extra space when substituting it. Also keep the issue's own `web_url` (GitLab's permalink to that issue, already present in step 1's output for each issue) on hand alongside its `issue_iid` and title — that is the `<issue_url>` used in every Slack message below.
+For each project alias and each issue in that project's list, in order — never in parallel. Before starting work on a given alias, run `loopx config project <alias>` once and keep its `project_id`, `local_path`, `target_branch`, `use_worktree`, `hints`, and `instance` values on hand for every step below — `instance` is this alias's own GitLab instance (its own override if `projects.json` set one for it, otherwise the config's default), never the same for every alias when projects span more than one instance. Also run `loopx gitlab project-info <alias>` once and note its `bundle` field. Every `loopx notify` call below for this alias's issues has `<bundle_flag>` inserted immediately after `loopx notify`, where `<bundle_flag>` is: the empty string, if `bundle` is `null` (those calls are then unchanged from today); or the string ` --bundle=<that value>` — including its own leading space — if `bundle` is non-null. Either way, `loopx notify<bundle_flag>` produces a correctly-spaced command; don't add or remove any extra space when substituting it. Also keep the issue's own `web_url` (GitLab's permalink to that issue, already present in step 1's output for each issue) on hand alongside its `issue_iid` and title — that is the `<issue_url>` used in every Slack message below.
 
 Slack messages in this file use Slack's own `mrkdwn` syntax — bold is `*text*` and a link is `<url|link text>` — **not** GitHub-flavored markdown (`**text**`, `[text](url)`), which Slack does not render. `loopx notify` posts a plain `{"text": ...}` payload, which Slack renders as `mrkdwn` automatically, so the formatting lives entirely in the message strings written below. Keep it that way when editing them.
 
@@ -177,6 +178,8 @@ loopx events emit --type issue.started --run-id "$LOOP_RUN_ID" --issue-run-id "$
 
    All further file edits for this issue happen ONLY inside the printed worktree path. Never edit files in `<local_path>` directly.
 
+   **When `use_worktree` is `false`** for this alias, the same command branches `<local_path>` itself in place instead of creating a worktree: it refuses if the checkout has any uncommitted or untracked changes, switches it to `loop/issue-<issue_iid>`, and prints `<local_path>`. `cd` there and work exactly as above; the printed path is your work directory. The loop switches the checkout back to the user's own branch after the issue, so leave nothing uncommitted behind (a dirty checkout cannot be switched back and is escalated), and never create files there outside your commits — no copied config files, no scratch files.
+
    If this command fails (e.g. a merge conflict pulling in the latest branch), treat it as a verification failure for this issue — go to "Escalate: verification failed" below rather than trying to resolve the conflict yourself. Use reason `worktree_creation_failed` in that block's emit call, since verification itself never ran.
 
    Report the phase change:
@@ -197,9 +200,17 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
    loopx events emit --type verification.started --run-id "$LOOP_RUN_ID" --issue-run-id "${LOOP_RUN_ID}_<alias>_<issue_iid>" --project <alias> --issue-iid <issue_iid>
    ```
 
-   using ONLY `install_cmd`, `lint_cmd`, and `test_cmd` from `loopx config project <alias>` — run `install_cmd` once if dependencies look missing, then `lint_cmd`, then `test_cmd`. Also run `git status` and `git diff` and confirm only files relevant to this issue changed.
+   Choose this project's install, lint and test commands yourself — there is no fixed list in the config:
 
-   For a Rails project (`install_cmd` starts with `bundle`): if `test_cmd` fails because the test database schema is out of date, you may run `RAILS_ENV=test bundle exec rake db:test:prepare` ONCE and retry `test_cmd` ONCE. Do not run any other `rake db:*` task.
+   1. Run `loopx config command-hints <alias>`. Start from `stored` (commands a person saved for this project), then `recent` (what you logged on earlier runs of this project), then `other_projects` entries with the same stack. Confirm or adjust them by reading the repo itself: `Gemfile`/`Rakefile`, `package.json` scripts, `pyproject.toml`/`setup.cfg`, `Makefile`, `Cargo.toml`, `go.mod`, and its CI config (`.gitlab-ci.yml`) for what the project really runs.
+   2. Every command must start with one of the allowed stack commands — `bundle check`, `bundle install`, `bundle exec rspec`, `bundle exec rubocop`, `bundle exec rake test`/`spec`, `bundle exec rails test`, `bin/rails test`, `bin/rspec`, `rake test`/`spec`, `npm ci`, `npm test`, `npm run test`/`lint`, `pnpm install`/`test`/`lint`, `pnpm run test`/`lint`, `yarn install`/`test`/`lint`, `yarn run test`/`lint`, `pytest`, `python3 -m pytest`, `python -m pytest`, `uv sync`, `uv run pytest`/`ruff`/`mypy`, `make test`/`lint`/`check`, `cargo test`/`clippy`/`fmt`, `go test`, `go vet` (a script name may continue with `:`, e.g. `npm run test:unit`) — optionally behind `RAILS_ENV=test `, `NODE_ENV=test ` or `CI=true `. The lint and test commands you log must each be ONE such command: no `&&`, `||`, `;`, `|`, `&`, `$(...)`, backticks or redirects — the loop runs them without a shell and refuses anything else. Commands outside this list are denied to you as well.
+   3. You may fix what blocks verification itself (not the project): inside a worktree, copy a gitignored per-developer file the checks need from `<local_path>` (e.g. `config/database.yml`, `.ruby-version`) with Read/Write; pass RuboCop an explicit path and `--cache false` (`bundle exec rubocop . --cache false`) — a bare `rubocop` under a dot-directory worktree root skips the project's per-file excludes, and its global cache can serve stale results for cops that read `config/database.yml`; for Rails, if the test database schema is out of date, run `RAILS_ENV=test bundle exec rake db:test:prepare` once and retry the test command once (no other `rake db:*` task). With worktree off, only flags and environment prefixes — create no files in the checkout. Never commit a setup change unless the issue is about it.
+   4. Record what you chose, before running anything:
+      ```
+      loopx events emit --type verification.commands --run-id "$LOOP_RUN_ID" --issue-run-id "${LOOP_RUN_ID}_<alias>_<issue_iid>" --project <alias> --issue-iid <issue_iid> --data '{"install": "<or empty>", "lint": "<or empty>", "test": "<command>", "cwd": "<absolute work directory>", "stack": "<rails|node|python|...>", "summary": "<1-3 sentences: what you detected, which commands and why, any setup you fixed>"}'
+      ```
+      This is what the user reads in the run log, and what later runs start from. If the repo has no linter, leave `lint` empty and say "no linter" in the summary; a test command is always required.
+   5. Run the install command once if dependencies look missing, then lint, then test, from the work directory. Also run `git status` and `git diff` and confirm only files relevant to this issue changed. Use the same commands in the handoff's `verification` block — the loop re-runs exactly those before opening the merge request.
 
    - **Any command fails, or unexpected files changed** →
      ```
@@ -317,7 +328,7 @@ Some issues don't need a fix at all — a question about behavior, a request to 
    ```
    loopx worktree new <local_path> <target_branch> <issue_iid> <worktree_root>
    ```
-   then `cd` into the printed path and read there. This is a read-only visit: make no edits, run no install/lint/test commands, commit nothing, push nothing, open no MR. If the command fails, go to "Escalate: verification failed" below instead of working around it — use reason `worktree_creation_failed` in that block's emit call, since verification itself never ran. Skip this entirely when the answer comes from GitLab data or recorded learnings alone — most questions of this kind don't need the source at all.
+   then `cd` into the printed path and read there. When `use_worktree` is `false` for this alias, do not run `worktree new` (it would switch the user's checkout); read `<local_path>` as it is instead. This is a read-only visit: make no edits, run no install/lint/test commands, commit nothing, push nothing, open no MR. If the command fails, go to "Escalate: verification failed" below instead of working around it — use reason `worktree_creation_failed` in that block's emit call, since verification itself never ran. Skip this entirely when the answer comes from GitLab data or recorded learnings alone — most questions of this kind don't need the source at all.
 2. Post the answer as a comment:
    ```
    loopx gitlab post-issue-comment <alias> <issue_iid> "<the answer, written for the person who asked>"
@@ -391,13 +402,13 @@ Claude's per-git-subcommand/per-glob allow list - the rules below become policy
 this document asks the agent to follow, not a technically enforced
 boundary. Switch to Codex only with that trade-off in mind.
 
-Allowed: `git status`, `git diff`, `git add`, and `git commit` scoped to the checkouts and worktrees listed in `~/.loopx/projects.json`, plus `git push origin loop/issue-*` (issue branches only); the exact `install_cmd`/`lint_cmd`/`test_cmd` per project from that config; `cd`; the `loopx` helper subcommands this file names — `config`, `events`, `notify`, `gitlab` (and `gitlab cache`), `issues`, `memory`, `memory-store`, `risk`, `status`, `messages`, `worktree new` and `mr open` (never `loopx run`, `loopx serve` or any other subcommand); reading and editing files inside an issue's own worktree; reading/writing `PROGRESS.md` and `outputs/`.
+Allowed: `git status`, `git diff`, `git add`, and `git commit` scoped to the checkouts and worktrees listed in `~/.loopx/projects.json`, plus `git push origin loop/issue-*` (issue branches only); the per-stack install/lint/test commands listed in step 7; `cd`; the `loopx` helper subcommands this file names — `config`, `events`, `notify`, `gitlab` (and `gitlab cache`), `issues`, `memory`, `memory-store`, `risk`, `status`, `messages`, `worktree new` and `mr open` (never `loopx run`, `loopx serve` or any other subcommand); reading and editing files inside an issue's own worktree; reading/writing `PROGRESS.md` and `outputs/`.
 
 When the harness gate is ON (`verification.mode: gate`), `loopx mr open` and `git push origin loop/issue-*` are removed from the allowlist and explicitly denied (the runner pushes and opens the MR itself after verification passes), and the agent may write its handoff JSON under `outputs/handoffs/`. On Codex this gate enforcement is prompt-only: Codex still receives the gate override and `LOOP_HANDOFF_PATH`, but has no per-command allowlist to technically block the script or the push.
 
 Not allowed: any other shell command, installing new dependencies beyond the lockfile-respecting install commands above, reading `.env`/credentials/SSH private keys, editing files outside an issue's own worktree, pushing to any project's target branch directly (only `loop/issue-*` branches may be pushed), force-pushing, `git merge`/`git checkout`/`git reset`/`git clean` as direct commands, merging any merge request, running more than one issue's worktree/fix at a time.
 
-Note that the projects' primary checkouts (`local_path`) are deliberately not exposed to the Read/Edit/Write tools at all — only this loop directory and the worktree root are. Editing a file in `<local_path>` is therefore impossible, not merely discouraged.
+Note that the projects' primary checkouts (`local_path`) are deliberately not exposed to the Read/Edit/Write tools at all — only this loop directory and the worktree root are. Editing a file in `<local_path>` is therefore impossible, not merely discouraged. The one exception is a project with `use_worktree: false`: its checkout is exposed for that issue's run only, because the work happens there.
 
 Note also that the git allowlist matches on the literal command prefix, so `git -C <path> ...` is **not** permitted as a direct Bash command in any form — the allowed entries all begin `git status`/`git diff`/`git add`/`git commit`/`git push origin loop/issue-`. Reach a repo by `cd`-ing into it and running bare git, as step 5 instructs. The one place `<local_path>` is still operated on is `loopx mr open`, which takes it as an argument and runs `git -C` inside the command — that is allowed because the approved unit is the `loopx` invocation, not the git command it happens to build.
 

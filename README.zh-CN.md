@@ -44,10 +44,10 @@ Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划�
 
 1. **从小处开始。** 起初只开启 GitLab issue 和主题监控两个循环，并只列出一两个你熟悉的项目。
 2. **调度前先试跑一次。** 手动运行 `loopx run gitlab-loop` 并查看结果，再加载调度器。
-3. **为每个项目配置真实的检查。** 设置 `lint_cmd` 和 `test_cmd`。只有它们通过，合并请求才会打开，因此它们是循环的安全网。
+3. **看一眼代理选的检查。** 代理会自行确定每个项目的 lint 和测试命令，并在 Live 视图的每个 issue 下记录。只有循环自己重新运行它们并通过，合并请求才会打开；已保存的 `lint_cmd`/`test_cmd` 只是它的起点提示。
 4. **审阅每一个合并请求。** Loop X 只会停在打开的合并请求上。请像审阅队友的代码一样查看差异。
 5. **把 issue 写清楚。** 写明预期行为和复现方式。清晰的 issue 会得到修复，含糊的 issue 会得到提问。
-6. **重要项目使用 gate 验证模式。** 循环会自己重新运行你的检查，并在失败时升级。
+6. **保持 gate 验证模式（默认）。** 循环会自己重新运行检查，并在失败时升级。
 7. **密钥放进钥匙串。** 通过仪表盘添加令牌，不要写进配置文件或 issue 正文。
 8. **运行 `loopx doctor`。** 安装后和每次升级后都运行一次。
 9. **一次只启用一个循环。** 添加下一个之前，先在仪表盘的 **Runs** 中观察。
@@ -197,7 +197,7 @@ bin/scripts/uninstall-loopx.sh --keep-config   # 去掉 --keep-config 则全部�
 
 | 文件                                  | 内容                                                                                                                                                                                                                   | 管理方式                                                                                                                                                                   |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.loopx/projects.json`   | 要跟踪哪些项目、它们的本地检出路径、目标分支、install/lint/test 命令、你的 GitLab 用户名，以及 worktree 临时目录（`worktree_root`，默认为 `~/.loopx/worktrees`） | 仪表盘 **Loops → GitLab Issues → Projects** 页面的 “Tracked Projects” 区域，或手动复制 [`config/projects.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/projects.json.template)，或交给 `install-loopx.sh` 完成 |
+| `~/.loopx/projects.json`   | 要跟踪哪些项目、它们的本地检出路径、目标分支、是否使用 worktree、可选的 install/lint/test 命令提示、你的 GitLab 用户名，以及 worktree 临时目录（`worktree_root`，默认为 `~/.loopx/worktrees`） | 仪表盘 **Loops → GitLab Issues → Projects** 页面上 Project aliases 每一行的 Track 开关，或手动复制 [`config/projects.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/projects.json.template)，或交给 `install-loopx.sh` 完成 |
 | ↳ 每个项目的 `instance`（可选）   | 为单个项目覆盖顶层的 `gitlab_instance`——当你的项目分布在多个 GitLab 实例上时设置。省略时回退到 `gitlab_instance`。                                               | 同一文件中的各项目条目——参见模板中的 `harbor` 示例                                                                                                            |
 | `~/.loopx/topics.json`     | 要监控哪些主题，以及每个主题中什么算值得关注（仅主题监控循环）                                                                                                                               | 手动复制 [`config/topics.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/topics.json.template)，或交给 `install-loopx.sh` 完成                                                                |
 | `~/.loopx/inboxes.json`    | 要分诊哪些邮箱（服务商、账号、分类、VIP/排除的发件人、Slack bundle）以及共享的默认分类集（仅 Inbox Triage 循环）                                                              | 仪表盘的 **Loops → Inbox Triage → Setup** 页面（`/inbox/setup`），或由 `install-loopx.sh` 从 [`config/inboxes.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/inboxes.json.template) 生成骨架               |
@@ -355,7 +355,7 @@ loopx run topic-loop    # the topic monitor loop
 
 - **从不合并 merge request。** 循环的工作止于“MR 已创建、验证通过”——合并始终是人工手动步骤。
 - 每次代码变更都在独立的 git worktree 中、在 `loop/issue-<iid>` 分支上进行，绝不直接在目标分支上修改。
-- 只有当项目自身配置的 `test_cmd`/`lint_cmd` 通过，且 diff 只涉及与该 issue 相关的文件时，才会创建 MR。
+- 只有当循环自己重新运行代理记录的测试/lint 命令并通过，且 diff 只涉及与该 issue 相关的文件时，才会创建 MR。
 - 不允许任意 shell 命令、不升级依赖、不读取 `.env`/凭据/SSH 密钥——只允许 `instructions/loopx/gitlab-issue.md` 中的命令白名单。
 - issue 逐个按顺序处理，绝不并行。
 - 同一 issue 的验证失败在一次运行内绝不重试——而是通过 GitLab 评论升级处理。（启用 `verification.mode: gate` 后，循环会自行重新运行项目的检查，并允许带着失败输出作为反馈进行一次有限重试；测试/lint 失败的 MR 绝不会被创建，而是以 `loop:needs-human` 标签升级处理。）

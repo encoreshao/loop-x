@@ -21,12 +21,13 @@ use std::path::{Path, PathBuf};
 /// context can carry third-party GitLab text, so a prompt-injected reply must
 /// never set them.
 const TOPIC_FIELDS: [&str; 4] = ["name", "label", "brief", "slack_bundle"];
-const PROJECT_FIELDS: [&str; 5] = [
+const PROJECT_FIELDS: [&str; 6] = [
     "alias",
     "project_id",
     "local_path",
     "target_branch",
     "instance",
+    "use_worktree",
 ];
 const CONNECTOR_SETTINGS_KEYS: [&str; 4] = ["url", "api_url", "site_url", "format"];
 /// The daemons chat must never disable: doing so would kill the process
@@ -611,16 +612,30 @@ fn project_save(state: &UiState, fields: &[(String, String)]) -> Value {
         return json!({ "ok": false, "message": "Project ID is required" });
     }
     let instance = pick("instance");
-    let mut entry = json!({
-        "project_id": project_id,
-        "local_path": pick("local_path"),
-        "target_branch": pick("target_branch"),
-        "install_cmd": pick("install_cmd"),
-        "lint_cmd": pick("lint_cmd"),
-        "test_cmd": pick("test_cmd"),
-    });
-    if !instance.is_empty() {
-        entry["instance"] = json!(instance);
+    let use_worktree = match field(fields, "use_worktree").map(str::trim) {
+        None => None,
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(_) => return json!({ "ok": false, "message": "use_worktree must be true or false" }),
+    };
+    // Start from the existing entry so keys this action doesn't set (the
+    // install/lint/test hints, anything else) survive an update.
+    let mut entry = if existing.is_object() {
+        existing.clone()
+    } else {
+        json!({})
+    };
+    entry["project_id"] = json!(project_id);
+    entry["local_path"] = json!(pick("local_path"));
+    entry["target_branch"] = json!(pick("target_branch"));
+    if let Some(on) = use_worktree {
+        entry["use_worktree"] = json!(on);
+    }
+    match entry.as_object_mut() {
+        Some(obj) if instance.is_empty() => {
+            obj.shift_remove("instance");
+        }
+        _ => entry["instance"] = json!(instance),
     }
     if !config["projects"].is_object() {
         config["projects"] = json!({});
@@ -797,12 +812,31 @@ mod tests {
         let refused = call(&s, "project-save", &["alias=web", "lint_cmd=rm -rf /"]).unwrap();
         assert_eq!(refused["ok"], false);
         let cfg = read_object(&projects_path(&s));
-        assert_eq!(cfg["projects"]["web"]["lint_cmd"], "");
+        assert!(cfg["projects"]["web"].get("lint_cmd").is_none());
         let updated = call(&s, "project-save", &["alias=web", "target_branch=main"]).unwrap();
         assert_eq!(updated["message"], "Updated project web");
         let cfg = read_object(&projects_path(&s));
         assert_eq!(cfg["projects"]["web"]["project_id"], "g/web");
         assert_eq!(cfg["projects"]["web"]["target_branch"], "main");
+    }
+
+    #[test]
+    fn project_save_keeps_existing_commands_and_sets_use_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let s = state(d.path());
+        write_json_atomic(
+            &json!({"projects": {"web": {"project_id": "g/web", "lint_cmd": "bundle exec rubocop .", "x": 1}}}),
+            &projects_path(&s),
+        )
+        .unwrap();
+        let saved = call(&s, "project-save", &["alias=web", "use_worktree=false"]).unwrap();
+        assert_eq!(saved["ok"], true);
+        let cfg = read_object(&projects_path(&s));
+        assert_eq!(cfg["projects"]["web"]["lint_cmd"], "bundle exec rubocop .");
+        assert_eq!(cfg["projects"]["web"]["x"], 1);
+        assert_eq!(cfg["projects"]["web"]["use_worktree"], false);
+        let bad = call(&s, "project-save", &["alias=web", "use_worktree=maybe"]).unwrap();
+        assert_eq!(bad["ok"], false);
     }
 
     #[test]

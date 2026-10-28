@@ -67,7 +67,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"Fix #<iid>: <short title>\", \"summary\": \"<2-4 sentences on what you changed and why; the loop posts it on the issue next to the merge request link>\"}\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"Fix #<iid>: <short title>\", \"summary\": \"<2-4 sentences on what you changed and why; the loop posts it on the issue next to the merge request link>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}}\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
 
 fn tool_patterns(exe: &str, subs: &[&str]) -> Vec<String> {
     subs.iter()
@@ -102,22 +102,8 @@ pub fn allowed_tools(repo_root: &str, exe: &str, gate: bool, offline: bool) -> S
         t.push("Bash(python3 -m pytest*)".into());
         t.extend(tool_patterns(exe, &OFFLINE_SUBCOMMANDS));
     } else {
-        t.extend(
-            [
-                "Bash(RAILS_ENV=test bundle exec rspec*)",
-                "Bash(bundle exec rspec*)",
-                "Bash(bundle exec rubocop*)",
-                "Bash(bundle check*)",
-                "Bash(bundle install*)",
-                "Bash(RAILS_ENV=test bundle exec rake db:test:prepare*)",
-                "Bash(npm run test*)",
-                "Bash(npm run lint*)",
-                "Bash(npm ci*)",
-                "Bash(yarn install*)",
-            ]
-            .iter()
-            .map(|s| s.to_string()),
-        );
+        t.extend(crate::verify_commands::claude_patterns());
+        t.push("Bash(RAILS_ENV=test bundle exec rake db:test:prepare*)".into());
         t.extend(tool_patterns(exe, &AGENT_SUBCOMMANDS));
         if !gate {
             t.extend(tool_patterns(exe, &["mr"]));
@@ -154,12 +140,15 @@ pub fn cli_command(
     gate: bool,
     max_budget_usd: Option<f64>,
     offline: bool,
+    extra_dirs: &[String],
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
+    let mut roots = vec![s(repo_root), s(worktree_root)];
+    roots.extend(extra_dirs.iter().cloned());
     if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
         // No tool allowlist exists for these; cursor's workspace is the repo root.
         let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
-        opts.add_dirs = vec![PathBuf::from(repo_root), PathBuf::from(worktree_root)];
+        opts.add_dirs = roots.iter().map(PathBuf::from).collect();
         let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
         return std::iter::once(resolved_program(ai_cli))
             .chain(args)
@@ -169,7 +158,7 @@ pub fn cli_command(
         // `codex exec` has no --add-dir/--ask-for-approval; the two roots become
         // a writable_roots override, and network access is needed for git push
         // and GitLab calls.
-        let roots = serde_json::to_string(&[repo_root, worktree_root]).expect("serialisable");
+        let roots = serde_json::to_string(&roots).expect("serialisable");
         return vec![
             s("codex"),
             s("exec"),
@@ -184,20 +173,18 @@ pub fn cli_command(
             s(prompt),
         ];
     }
-    let mut cmd = vec![
-        s("claude"),
-        s("-p"),
-        s("--add-dir"),
-        s(repo_root),
-        s("--add-dir"),
-        s(worktree_root),
+    let mut cmd = vec![s("claude"), s("-p")];
+    for root in &roots {
+        cmd.extend([s("--add-dir"), root.clone()]);
+    }
+    cmd.extend([
         s("--permission-mode"),
         s("acceptEdits"),
         s("--allowedTools"),
         allowed_tools(repo_root, exe, gate, offline),
         s("--disallowedTools"),
         disallowed_tools(exe, gate, offline),
-    ];
+    ]);
     cmd.extend(cost::budget_args(max_budget_usd));
     cmd.extend([s("--output-format"), s("json"), s(prompt)]);
     cmd
@@ -214,6 +201,23 @@ pub struct RunCtx {
     pub unified_log: PathBuf,
     /// The `loopx` binary the agent is told it may run.
     pub exe: String,
+    /// projects.json to read (default: the per-machine one).
+    pub config_path: Option<PathBuf>,
+    /// Tests: GitLab calls and Slack messages made by the gated finalize go
+    /// here instead of to the real services.
+    pub fakes: Option<Arc<RunFakes>>,
+}
+
+pub struct RunFakes {
+    pub gitlab: Box<dyn GitlabCalls + Send + Sync>,
+    pub notifier: Box<dyn Fn(&str) + Send + Sync>,
+    pub gitlab_config_path: PathBuf,
+}
+
+impl std::fmt::Debug for RunFakes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RunFakes")
+    }
 }
 
 impl RunCtx {
@@ -228,6 +232,8 @@ impl RunCtx {
             results_dir: None,
             unified_log,
             exe,
+            config_path: None,
+            fakes: None,
         }
     }
 
@@ -373,6 +379,22 @@ pub fn invoke_batch_end_of_run(
     invoke_cli_with_prompt(ctx, &text, timeout_seconds, None, &[], false, None, false)
 }
 
+/// The checkout of `alias` when it works in place (`use_worktree: false`):
+/// the agent edits it directly, so it must be a writable dir for that issue.
+fn in_place_dirs(config_path: &Path, alias: &str) -> Vec<String> {
+    Config::load(config_path)
+        .and_then(|c| c.project(alias))
+        .ok()
+        .filter(|p| !crate::config::use_worktree(p))
+        .and_then(|p| {
+            p.get("local_path")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .into_iter()
+        .collect()
+}
+
 fn worktree_root() -> Result<String, AgentError> {
     Config::load(&default_config_path())
         .and_then(|c| c.worktree_root())
@@ -396,6 +418,9 @@ fn invoke_cli_with_prompt(
     let worktree_root = worktree_root()?;
     let ai_cli = ai_cli_config::selected_cli();
     let repo_root = ctx.repo_root.display().to_string();
+    let extra_dirs = issue
+        .map(|(alias, _)| in_place_dirs(&project_config_path(ctx), alias))
+        .unwrap_or_default();
     let argv = cli_command(
         &ai_cli,
         prompt_text,
@@ -405,6 +430,7 @@ fn invoke_cli_with_prompt(
         gate,
         max_budget_usd,
         offline,
+        &extra_dirs,
     );
     run_cli(
         ctx,
@@ -733,6 +759,54 @@ fn failure_text(result: &LoopResult) -> String {
     tail(&parts.join("\n\n"), FAILURE_TAIL_CHARS)
 }
 
+/// The issue as Slack mrkdwn: `<url|alias #iid>`, or bold text with no URL.
+pub fn slack_issue_link(alias: &str, issue_iid: &str, project_url: Option<&str>) -> String {
+    match project_url {
+        Some(url) => format!("<{url}/-/issues/{issue_iid}|{alias} #{issue_iid}>"),
+        None => format!("*{alias} #{issue_iid}*"),
+    }
+}
+
+/// One plain sentence on why the loop escalated.
+fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) -> String {
+    match reason {
+        "run_incomplete" => stop_reason
+            .and_then(stop_reason_text)
+            .unwrap_or("The run stopped before the agent finished.")
+            .to_string(),
+        "verification_failed" => {
+            "The loop's own checks of the fix failed, so no merge request was opened.".into()
+        }
+        "handoff_invalid" => {
+            "The agent left no valid handoff, so the loop could not tell what to do next.".into()
+        }
+        "mr_open_failed" => {
+            "The fix passed the loop's checks, but the merge request could not be opened.".into()
+        }
+        "checkout_problem" => {
+            "The project's own checkout (worktree off) is in a state the loop will not touch."
+                .into()
+        }
+        "project_config_error" => "The project's config could not be read.".into(),
+        "approval_denied" => "Opening the merge request was not approved.".into(),
+        "approval_timeout" => {
+            "Nobody approved opening the merge request before the request expired.".into()
+        }
+        "approval_unavailable" => {
+            "The approval request for the merge request could not be created.".into()
+        }
+        other => format!("The loop stopped this issue ({}).", other.replace('_', " ")),
+    }
+}
+
+/// The one Slack message for an issue the loop escalated.
+pub fn escalation_slack(issue_link: &str, reason: &str, stop_reason: Option<&str>) -> String {
+    format!(
+        "*Escalated* {issue_link}\n{}\nNeeds a human - the details are on the issue.",
+        escalation_reason_text(reason, stop_reason)
+    )
+}
+
 fn stop_reason_text(stop_reason: &str) -> Option<&'static str> {
     match stop_reason {
         "agent_failed" => {
@@ -778,6 +852,10 @@ pub fn escalation_comment(
                     if fenced.is_empty() { "\n(No output.)" } else { &fenced }
                 ),
             },
+        ),
+        "checkout_problem" => (
+            "This project is worked on in its own checkout (worktree off), and the loop found that checkout in a state it will not touch, so no merge request was opened.".to_string(),
+            format!("What the loop found:{fenced}"),
         ),
         "mr_open_failed" => (
             "I fixed this and the loop's own checks passed, but the merge request could not be opened.".to_string(),
@@ -918,6 +996,8 @@ pub struct FinalizeDeps<'a> {
     pub approval_dir: Option<PathBuf>,
     /// How often to look for a decision (default 1s).
     pub approval_poll: Option<std::time::Duration>,
+    /// A worktree-off checkout the loop could not keep safe; escalated first.
+    pub checkout_problem: Option<String>,
 }
 
 /// Is a human's OK needed before opening the merge request? A per-project
@@ -978,7 +1058,7 @@ pub fn finalize_gated_issue(
     };
 
     let mut bundle: Option<String> = None;
-    let mut issue_label = format!("#{issue_iid} ({alias})");
+    let mut issue_label = slack_issue_link(alias, issue_iid, None);
     let notify = |bundle: &Option<String>, message: String| match deps.notifier {
         Some(n) => n(&message),
         None => {
@@ -988,7 +1068,7 @@ pub fn finalize_gated_issue(
 
     let project = match deps.project.clone() {
         Some(p) => Ok(p),
-        None => Config::load(&default_config_path())
+        None => Config::load(&project_config_path(ctx))
             .and_then(|c| c.project(alias))
             .map_err(|e| e.to_string()),
     };
@@ -1022,14 +1102,14 @@ pub fn finalize_gated_issue(
                 );
                 notify(
                     &bundle,
-                    format!("Loop escalated {issue_label} (project_config_error); see the issue for details."),
+                    escalation_slack(&issue_label, "project_config_error", None),
                 );
                 return "escalated:project_config_error".to_string();
             }
         };
     bundle = b;
     if let Some(url) = url {
-        issue_label = format!("<{url}/-/issues/{issue_iid}|{issue_label}>");
+        issue_label = slack_issue_link(alias, issue_iid, Some(&url));
     }
     let notes_path = format!("projects/{}/issues/{issue_iid}", quote(&project_id));
     let real_gitlab = RealGitlab { instance };
@@ -1053,13 +1133,13 @@ pub fn finalize_gated_issue(
             data["stop_reason"] = json!(s);
         }
         emit("issue.escalated", data);
-        notify(
-            &bundle,
-            format!("Loop escalated {issue_label} ({reason}); see the issue for details."),
-        );
+        notify(&bundle, escalation_slack(&issue_label, reason, stop_reason));
         format!("escalated:{reason}")
     };
 
+    if let Some(problem) = &deps.checkout_problem {
+        return escalate("checkout_problem", problem, None);
+    }
     let data = read_handoff(&handoff, issue_iid);
     if let Some(outcome) = data
         .as_ref()
@@ -1161,16 +1241,32 @@ pub fn finalize_gated_issue(
         return escalate("mr_open_failed", &tail(&detail, FAILURE_TAIL_CHARS), None);
     }
 
-    let checks: Vec<String> = ["test_cmd", "lint_cmd"]
-        .iter()
-        .filter_map(|k| {
-            project
-                .get(*k)
-                .and_then(Value::as_str)
-                .filter(|v| !v.is_empty())
-        })
-        .map(|c| format!("- `{c}` \u{2705}"))
+    // The commands the verifier actually ran (the agent's logged ones),
+    // else the stored ones for a result without that evidence.
+    let ran: Vec<String> = result
+        .iterations
+        .last()
+        .into_iter()
+        .flat_map(|i| &i.verification_results)
+        .filter_map(|r| r.evidence.get("commands").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|c| c.get("command").and_then(Value::as_str).map(str::to_owned))
         .collect();
+    let ran = if ran.is_empty() {
+        ["test_cmd", "lint_cmd"]
+            .iter()
+            .filter_map(|k| {
+                project
+                    .get(*k)
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+            })
+            .map(str::to_owned)
+            .collect()
+    } else {
+        ran
+    };
+    let checks: Vec<String> = ran.iter().map(|c| format!("- `{c}` \u{2705}")).collect();
     let summary = data.get("summary").and_then(Value::as_str).unwrap_or("");
     let body = format!(
         "Opened merge request for this fix: {branch} \u{2192} {target}. Verified by the loop with:\n{}\n\n{summary}",
@@ -1287,6 +1383,11 @@ pub fn run_one_issue(
     let mut issue = IssueContext::new(alias, issue_iid, timeout_seconds);
     issue.handoff_path = handoff.clone();
 
+    // Worktree off: never start the agent on a checkout holding the user's
+    // uncommitted work (a leftover restore record is healed by `worktree new`).
+    let guard = checkout_guard(ctx, alias);
+    let dirty_before = guard.as_ref().is_some_and(|g| !g.clean && !g.marked);
+
     let max_cost = definition.stop_conditions.max_cost_usd;
     let agent_fn: AgentFn = {
         let (raw_costs, raw_usages) = (raw_costs.clone(), raw_usages.clone());
@@ -1294,6 +1395,12 @@ pub fn run_one_issue(
             (alias.to_string(), issue_iid.to_string(), run_id.to_string());
         let handoff = handoff.clone();
         Box::new(move |context| {
+            if dirty_before {
+                return Err(AgentFailure {
+                    message: "checkout_dirty".into(),
+                    cost_usd: None,
+                });
+            }
             if let Some(h) = &handoff {
                 // Each attempt starts with no handoff, so finalize can never
                 // read an earlier attempt's.
@@ -1381,9 +1488,35 @@ pub fn run_one_issue(
     if let Some(dir) = &ctx.events_dir {
         runtime = runtime.with_events_dir(dir.clone());
     }
-    let mut result = runtime
+    let started = runtime
         .start(definition, &issue_run_id, None)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string());
+    // Whatever happened, a checkout branched in place goes back to the
+    // user's branch (the push below needs only the branch ref).
+    let checkout_problem = if dirty_before {
+        guard.as_ref().map(|g| {
+            format!(
+                "The checkout {} has uncommitted or untracked changes, so the agent did not start. Commit or stash them and the next run picks this issue up again.",
+                g.local_path
+            )
+        })
+    } else {
+        restore_in_place_checkout(ctx, alias, guard.as_ref())
+    };
+    if let Some(problem) = checkout_problem.as_deref().filter(|_| !gate) {
+        ctx.log(&format!("{alias} #{issue_iid} checkout: {problem}"));
+        ctx.emit(
+            "issue.escalated",
+            Some(run_id),
+            EventFields {
+                issue_run_id: Some(issue_run_id.clone()),
+                project: Some(alias.to_string()),
+                issue_iid: issue_iid.parse().ok(),
+                data: Some(json!({"reason": "checkout_problem", "detail": problem})),
+            },
+        );
+    }
+    let mut result = started?;
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
     // un-coerced figure to keep "cost $0" apart from "never got a cost".
@@ -1395,13 +1528,21 @@ pub fn run_one_issue(
 
     let mut gate_outcome = None;
     if gate {
+        let fakes = ctx.fakes.as_deref();
+        let notifier = fakes.map(|f| &*f.notifier as &dyn Fn(&str));
         let outcome = finalize_gated_issue(
             &result,
             alias,
             issue_iid,
             run_id,
             ctx,
-            FinalizeDeps::default(),
+            FinalizeDeps {
+                gitlab: fakes.map(|f| &*f.gitlab as &dyn GitlabCalls),
+                notifier,
+                gitlab_config_path: fakes.map(|f| f.gitlab_config_path.clone()),
+                checkout_problem,
+                ..FinalizeDeps::default()
+            },
         );
         if is_loop_escalation(Some(&outcome)) && result.final_state == LoopState::Completed {
             // Visible on Loop Runs as an escalation, not "completed".
@@ -1426,6 +1567,86 @@ pub fn run_one_issue(
         usage,
         gate_outcome,
     })
+}
+
+fn project_config_path(ctx: &RunCtx) -> PathBuf {
+    ctx.config_path.clone().unwrap_or_else(default_config_path)
+}
+
+/// A worktree-off project's checkout, as the runner sees it around a run.
+struct CheckoutGuard {
+    local_path: String,
+    head: String,
+    clean: bool,
+    marked: bool,
+}
+
+fn git_out(dir: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn restore_marked(local_path: &str) -> bool {
+    git_out(local_path, &["rev-parse", "--absolute-git-dir"])
+        .is_some_and(|d| Path::new(&d).join("loopx-restore-branch").exists())
+}
+
+/// The checkout of `alias` when it is worked on in place, with its state now.
+fn checkout_guard(ctx: &RunCtx, alias: &str) -> Option<CheckoutGuard> {
+    let project = Config::load(&project_config_path(ctx))
+        .and_then(|c| c.project(alias))
+        .ok()?;
+    if crate::config::use_worktree(&project) {
+        return None;
+    }
+    let local_path = project.get("local_path")?.as_str()?.to_string();
+    Some(CheckoutGuard {
+        head: git_out(&local_path, &["rev-parse", "HEAD"]).unwrap_or_default(),
+        clean: git_out(&local_path, &["status", "--porcelain"]).is_some_and(|s| s.is_empty()),
+        marked: restore_marked(&local_path),
+        local_path,
+    })
+}
+
+/// Put an in-place checkout back on the user's branch whenever a restore
+/// record exists (whatever `use_worktree` says now), and check the agent did
+/// not change a checkout it never branched. `Some(problem)` to escalate.
+fn restore_in_place_checkout(
+    ctx: &RunCtx,
+    alias: &str,
+    before: Option<&CheckoutGuard>,
+) -> Option<String> {
+    let local_path = match before {
+        Some(g) => g.local_path.clone(),
+        None => Config::load(&project_config_path(ctx))
+            .and_then(|c| c.project(alias))
+            .ok()?
+            .get("local_path")?
+            .as_str()?
+            .to_string(),
+    };
+    match crate::worktree::restore_in_place(&local_path) {
+        Err(e) => Some(e.message),
+        Ok(Some(_)) => None,
+        Ok(None) => {
+            let g = before.filter(|g| !g.marked)?;
+            let head = git_out(&local_path, &["rev-parse", "HEAD"]).unwrap_or_default();
+            let clean =
+                git_out(&local_path, &["status", "--porcelain"]).is_some_and(|s| s.is_empty());
+            (head != g.head || clean != g.clean).then(|| {
+                format!(
+                    "The checkout {local_path} changed during the run without `loopx worktree new` branching it first, so the loop left it exactly as it is for you to review."
+                )
+            })
+        }
+    }
 }
 
 // ---- whole runs -------------------------------------------------------------
@@ -1722,6 +1943,286 @@ mod tests {
         }
     }
 
+    struct Notes(std::sync::Mutex<Vec<(String, String, Value)>>);
+    impl GitlabCalls for Notes {
+        fn call(&self, method: &str, endpoint: &str, body: &Value) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((method.into(), endpoint.into(), body.clone()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn mr_comment_lists_commands_actually_run() {
+        let d = tempfile::tempdir().unwrap();
+        let handoff = d.path().join("h.json");
+        std::fs::write(
+            &handoff,
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main", "title": "Fix #7"}).to_string(),
+        )
+        .unwrap();
+        let evidence = json!({"commands": [{"kind": "test", "command": "pnpm test", "passed": true, "source": "handoff"}]});
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Completed,
+            vec![iteration(vec![v("project_commands", true, "", evidence)])],
+            "",
+        );
+        let project = json!({"project_id": "g/p", "local_path": "/x", "instance": "g", "test_cmd": "bundle exec rspec"});
+        let notes = Notes(Default::default());
+        let opener = |_: &str, _: &str, _: &str, _: &str| (true, String::new());
+        let ctx = RunCtx {
+            repo_root: d.path().into(),
+            events_dir: Some(d.path().join("events")),
+            results_dir: None,
+            unified_log: d.path().join("log"),
+            exe: "loopx".into(),
+            config_path: None,
+            fakes: None,
+        };
+        let notifier = |_: &str| {};
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(handoff),
+                project: Some(project),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "mr_opened");
+        let calls = notes.0.lock().unwrap();
+        let body = calls[0].2["body"].as_str().unwrap();
+        assert!(body.contains("`pnpm test`"), "{body}");
+        assert!(!body.contains("rspec"), "{body}");
+    }
+
+    /// A worktree-off project `web` whose checkout (a clone of a bare origin
+    /// with one commit on `main`) is on `feature-x`, and a run context whose
+    /// GitLab calls and Slack messages are recorded, never sent.
+    type Log = Arc<Mutex<Vec<String>>>;
+
+    struct InPlace {
+        d: tempfile::TempDir,
+        local: PathBuf,
+        ctx: RunCtx,
+        notes: Log,
+        slack: Log,
+    }
+
+    struct RecordingGitlab(Log);
+    impl GitlabCalls for RecordingGitlab {
+        fn call(&self, _method: &str, _endpoint: &str, body: &Value) -> Result<(), String> {
+            if let Some(b) = body.get("body").and_then(Value::as_str) {
+                self.0.lock().unwrap().push(b.to_string());
+            }
+            Ok(())
+        }
+    }
+
+    fn sh(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    impl InPlace {
+        fn new() -> Self {
+            let d = tempfile::tempdir().unwrap();
+            let origin = d.path().join("origin.git");
+            std::fs::create_dir(&origin).unwrap();
+            sh(&origin, &["init", "-q", "--bare", "-b", "main"]);
+            sh(
+                d.path(),
+                &["clone", "-q", &origin.display().to_string(), "local"],
+            );
+            let local = d.path().join("local");
+            sh(&local, &["checkout", "-q", "-b", "main"]);
+            std::fs::write(local.join("a.txt"), "1").unwrap();
+            sh(&local, &["add", "."]);
+            sh(&local, &["commit", "-qm", "init"]);
+            sh(&local, &["push", "-q", "origin", "main"]);
+            sh(&local, &["checkout", "-q", "-b", "feature-x"]);
+            let config = d.path().join("projects.json");
+            let (notes, slack): (Log, Log) = Default::default();
+            let slack_sink = slack.clone();
+            let ctx = RunCtx {
+                repo_root: d.path().into(),
+                events_dir: Some(d.path().join("events")),
+                results_dir: Some(d.path().join("results")),
+                unified_log: d.path().join("log"),
+                exe: "loopx".into(),
+                config_path: Some(config),
+                fakes: Some(Arc::new(RunFakes {
+                    gitlab: Box::new(RecordingGitlab(notes.clone())),
+                    notifier: Box::new(move |m: &str| {
+                        slack_sink.lock().unwrap().push(m.to_string())
+                    }),
+                    gitlab_config_path: d.path().join("gitlab.json"),
+                })),
+            };
+            let me = Self {
+                d,
+                local,
+                ctx,
+                notes,
+                slack,
+            };
+            me.set_use_worktree(false);
+            me
+        }
+        fn set_use_worktree(&self, on: bool) {
+            std::fs::write(
+                self.ctx.config_path.as_ref().unwrap(),
+                json!({"gitlab_instance": "g", "worktree_root": self.d.path().join("wt").display().to_string(),
+                       "projects": {"web": {"project_id": "g/web", "local_path": self.local.display().to_string(),
+                                            "target_branch": "main", "use_worktree": on}}})
+                .to_string(),
+            )
+            .unwrap();
+        }
+        fn run(&self, invoker: Invoker) {
+            let definition = LoopDefinition::from_yaml(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+            )
+            .unwrap();
+            let _ = run_one_issue(
+                &self.ctx,
+                "r1",
+                "web",
+                "7",
+                &definition,
+                invoker,
+                InvokeMode::Batch,
+            );
+        }
+        fn head(&self) -> String {
+            sh(&self.local, &["rev-parse", "--abbrev-ref", "HEAD"])
+        }
+        fn path(&self) -> String {
+            self.local.display().to_string()
+        }
+    }
+
+    fn failing() -> Result<AgentOutput, AgentError> {
+        Err(AgentError {
+            message: "boom".into(),
+            cost_usd: None,
+        })
+    }
+
+    #[test]
+    fn restores_checkout_after_agent_error() {
+        let t = InPlace::new();
+        let local = t.path();
+        t.run(Arc::new(move |_req| {
+            let _ = crate::worktree::prepare_in_place(&local, "main", "7");
+            failing()
+        }));
+        assert_eq!(t.head(), "feature-x");
+        assert!(
+            !t.slack.lock().unwrap().is_empty(),
+            "escalation went to the recorded notifier"
+        );
+    }
+
+    #[test]
+    fn restores_checkout_even_if_worktree_is_switched_on_mid_run() {
+        let t = InPlace::new();
+        let local = t.path();
+        let config = t.ctx.config_path.clone().unwrap();
+        t.run(Arc::new(move |_req| {
+            let _ = crate::worktree::prepare_in_place(&local, "main", "7");
+            let text = std::fs::read_to_string(&config)
+                .unwrap()
+                .replace("\"use_worktree\":false", "\"use_worktree\":true");
+            std::fs::write(&config, text).unwrap();
+            failing()
+        }));
+        assert_eq!(t.head(), "feature-x");
+    }
+
+    #[test]
+    fn dirty_checkout_is_refused_before_the_agent_runs() {
+        let t = InPlace::new();
+        std::fs::write(t.local.join("mine.txt"), "user work").unwrap();
+        let calls = Arc::new(Mutex::new(0));
+        let counter = calls.clone();
+        t.run(Arc::new(move |_req| {
+            *counter.lock().unwrap() += 1;
+            failing()
+        }));
+        assert_eq!(*calls.lock().unwrap(), 0, "agent never started");
+        assert_eq!(t.head(), "feature-x");
+        assert_eq!(
+            std::fs::read_to_string(t.local.join("mine.txt")).unwrap(),
+            "user work"
+        );
+        let notes = t.notes.lock().unwrap();
+        assert!(notes.iter().any(|n| n.contains("uncommitted")), "{notes:?}");
+    }
+
+    #[test]
+    fn agent_changing_the_checkout_without_branching_escalates() {
+        let t = InPlace::new();
+        let local = t.path();
+        t.run(Arc::new(move |_req| {
+            std::fs::write(
+                Path::new(&local).join("a.txt"),
+                "edited on the user's branch",
+            )
+            .unwrap();
+            failing()
+        }));
+        let notes = t.notes.lock().unwrap();
+        assert!(
+            notes.iter().any(|n| n.contains("loopx worktree new")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn gate_prompt_asks_for_verification_block() {
+        let d = tempfile::tempdir().unwrap();
+        let (prompt, _) = gate_prompt_and_env("p", "web", "7", d.path(), Some("r")).unwrap();
+        assert!(prompt.contains("\"verification\""), "{prompt}");
+        assert!(prompt.contains("\"cwd\""), "{prompt}");
+    }
+
+    #[test]
+    fn shipped_gitlab_loop_is_gated() {
+        let definition = LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+        )
+        .unwrap();
+        assert_eq!(definition.verification.mode, "gate");
+    }
+
     #[test]
     fn allowed_tools_in_gate_mode_withhold_push_and_mr_open() {
         let t = allowed_tools("/r", "/bin/loopx", true, false);
@@ -1734,6 +2235,16 @@ mod tests {
         assert!(normal.contains("Bash(git push origin loop/issue-*)"));
         assert!(normal.contains("Bash(loopx mr*)"));
         assert!(!normal.contains("handoffs"));
+    }
+
+    #[test]
+    fn allowed_tools_include_stack_patterns() {
+        let t = allowed_tools("/r", "loopx", true, false);
+        assert!(t.contains("Bash(pnpm test*)"));
+        assert!(t.contains("Bash(RAILS_ENV=test bin/rails test*)"));
+        assert!(!t.contains("Bash(bundle exec *)"));
+        let offline = allowed_tools("/r", "loopx", true, true);
+        assert!(!offline.contains("Bash(pnpm test*)"));
     }
 
     #[test]
@@ -1762,6 +2273,7 @@ mod tests {
             false,
             Some(1.5),
             false,
+            &[],
         );
         assert_eq!(&c[..2], ["claude", "-p"]);
         let i = c.iter().position(|a| a == "--max-budget-usd").unwrap();
@@ -1769,13 +2281,39 @@ mod tests {
         assert_eq!(c.last().unwrap(), "PROMPT");
         assert_eq!(c[c.len() - 3], "--output-format");
         assert!(c.contains(&"--add-dir".to_string()));
-        let nocap = cli_command("claude", "P", "/r", "/wt", "x", false, None, false);
+        let nocap = cli_command("claude", "P", "/r", "/wt", "x", false, None, false, &[]);
         assert!(!nocap.contains(&"--max-budget-usd".to_string()));
     }
 
     #[test]
+    fn in_place_checkout_is_added_as_a_writable_dir() {
+        let extra = ["/co".to_string()];
+        let c = cli_command("claude", "P", "/r", "/wt", "x", true, None, false, &extra);
+        let i = c.iter().rposition(|a| a == "/co").unwrap();
+        assert_eq!(c[i - 1], "--add-dir");
+        let x = cli_command("codex", "P", "/r", "/wt", "x", true, None, false, &extra);
+        assert!(
+            x.contains(&r#"sandbox_workspace_write.writable_roots=["/r","/wt","/co"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn only_a_worktree_off_project_exposes_its_checkout() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("projects.json");
+        std::fs::write(
+            &p,
+            r#"{"gitlab_instance": "g", "projects": {"a": {"local_path": "/a", "use_worktree": false}, "b": {"local_path": "/b"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(in_place_dirs(&p, "a"), ["/a"]);
+        assert!(in_place_dirs(&p, "b").is_empty());
+        assert!(in_place_dirs(&p, "zzz").is_empty());
+    }
+
+    #[test]
     fn codex_command_uses_compact_writable_roots() {
-        let c = cli_command("codex", "P", "/r", "/wt", "x", false, None, false);
+        let c = cli_command("codex", "P", "/r", "/wt", "x", false, None, false, &[]);
         assert_eq!(&c[..4], ["codex", "exec", "--sandbox", "workspace-write"]);
         assert!(c.contains(&r#"sandbox_workspace_write.writable_roots=["/r","/wt"]"#.to_string()));
         assert_eq!(c.last().unwrap(), "P");
@@ -1788,7 +2326,7 @@ mod tests {
             ("kimi", "--yolo"),
             ("cursor", "--force"),
         ] {
-            let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false);
+            let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false, &[]);
             assert!(
                 ai_cli_config::binary_candidates(cli).contains(&c[0].as_str()),
                 "{cli}: {}",
@@ -1797,11 +2335,11 @@ mod tests {
             assert!(c.contains(&"P".to_string()), "{cli}");
             assert!(c.contains(&flag.to_string()), "{cli}");
         }
-        let g = cli_command("gemini", "P", "/r", "/wt", "x", false, None, false);
+        let g = cli_command("gemini", "P", "/r", "/wt", "x", false, None, false, &[]);
         assert!(g
             .windows(2)
             .any(|w| w[0] == "--include-directories" && w[1] == "/r,/wt"));
-        let c = cli_command("cursor", "P", "/r", "/wt", "x", false, None, false);
+        let c = cli_command("cursor", "P", "/r", "/wt", "x", false, None, false, &[]);
         assert!(c.windows(2).any(|w| w[0] == "--workspace" && w[1] == "/r"));
     }
 
@@ -1922,6 +2460,74 @@ mod tests {
         w("not json");
         assert!(read_handoff(&p, "7").is_none());
         assert!(read_handoff(&d.path().join("missing.json"), "7").is_none());
+    }
+
+    #[test]
+    fn slack_escalation_links_the_issue_and_says_why() {
+        let link = slack_issue_link("web", "7", Some("https://g.example/g/web"));
+        assert_eq!(link, "<https://g.example/g/web/-/issues/7|web #7>");
+        assert_eq!(slack_issue_link("web", "7", None), "*web #7*");
+        let m = escalation_slack(&link, "run_incomplete", Some("agent_failed"));
+        assert_eq!(
+            m,
+            "*Escalated* <https://g.example/g/web/-/issues/7|web #7>\nThe agent session failed or timed out (details in the loop's log).\nNeeds a human - the details are on the issue."
+        );
+        let m = escalation_slack(&link, "verification_failed", None);
+        assert!(
+            m.contains(
+                "\nThe loop's own checks of the fix failed, so no merge request was opened.\n"
+            ),
+            "{m}"
+        );
+        assert!(!escalation_slack(&link, "some_new_reason", None).contains('_'));
+    }
+
+    #[test]
+    fn finalize_slack_messages_link_the_issue() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"g": {"url": "https://g.example"}}}"#,
+        )
+        .unwrap();
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Failed,
+            vec![],
+            "agent_failed",
+        );
+        let project = json!({"project_id": "g/p", "local_path": "/x", "instance": "g"});
+        let sent = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+        let notes = Notes(Default::default());
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(d.path().join("none.json")),
+                project: Some(project),
+                gitlab_config_path: Some(gitlab),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "escalated:run_incomplete");
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].starts_with("*Escalated* <https://g.example/g/p/-/issues/7|web #7>\n"),
+            "{}",
+            sent[0]
+        );
     }
 
     #[test]

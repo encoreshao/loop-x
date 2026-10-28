@@ -100,10 +100,10 @@ To update later, re-run the installer with `--upgrade`. To remove it, run `bin/s
 
 1. **Start small.** Keep only the GitLab issues and topic monitor loops on at first, and list one or two projects you know well.
 2. **Try one run before scheduling.** Run `loopx run gitlab-loop` by hand and read the result before loading the scheduler.
-3. **Give every project real checks.** Set `lint_cmd` and `test_cmd` for each project. A merge request only opens when they pass, so they are the loop's safety net.
+3. **Check the checks the agent picks.** The agent works out each project's lint and test commands and logs them under each issue in the Live view. A merge request only opens when the loop's own re-run of them passes, so glance at them for a new project; saved `lint_cmd`/`test_cmd` values act as hints it starts from.
 4. **Review every merge request.** LoopX stops at an open merge request. Read the diff as you would a teammate's.
 5. **Write clear issues.** Include the expected behaviour and how to reproduce it. A precise issue gets a fix, a vague one gets a question.
-6. **Use the gate verification mode** for projects that matter, so the loop re-runs your checks itself and escalates when they fail.
+6. **Keep the gate verification mode** (the default) so the loop re-runs the checks itself and escalates when they fail.
 7. **Keep secrets in the Keychain.** Add tokens through the dashboard, never in config files or issue text.
 8. **Run `loopx doctor`** after installing and after any upgrade.
 9. **Enable more loops one at a time**, and watch **Runs** on the dashboard before adding the next.

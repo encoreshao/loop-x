@@ -102,9 +102,10 @@ Project object:
 | `project_id` | string | yes | GitLab path (`group/sub/project`) or numeric id as string. A URL is only derivable when it contains `/`. Non-empty on dashboard save. |
 | `local_path` | string | yes | Absolute checkout path. Dashboard saves it stripped, may be `""`. |
 | `target_branch` | string | yes | Branch worktrees are cut from / MRs target. May be `""` when saved from the UI. |
-| `install_cmd` | string | yes | Shell command; may be `""`. |
-| `lint_cmd` | string | yes | Shell command; may be `""`. See `CLAUDE.md` on pass-an-explicit-path (`rubocop .`) and `--cache false`. |
-| `test_cmd` | string | yes | Shell command; may be `""`. |
+| `use_worktree` | bool | optional | Default `true`. `false`: issues are worked on a `loop/issue-<iid>` branch of `local_path` itself (refused when the checkout is dirty; the original branch is restored after the issue). |
+| `install_cmd` | string | optional | A **hint** only: the agent chooses its own commands (step 7 of `instructions/loopx/gitlab-issue.md`) and starts from this. Not written by the dashboard; kept when it saves. |
+| `lint_cmd` | string | optional | Hint, as above. In gate mode it is also the verifier's fallback when the agent logged no lint command. See `CLAUDE.md` on pass-an-explicit-path (`rubocop .`) and `--cache false`. |
+| `test_cmd` | string | optional | Hint, as above; the verifier's fallback when the agent logged no test command. |
 | `instance` | string | optional | Per-project GitLab instance override. **Omitted entirely** (never `""`) when unset. |
 
 ### Semantics and quirks
@@ -121,13 +122,13 @@ Project object:
   (`config.setdefault("projects", {})`, edits one entry). Rust must do a
   round-trip on a generic JSON value, not a fixed struct that drops unknown
   fields.
-- `upsert_tracked_project` rebuilds the project entry from exactly the six
-  string fields (+ optional `instance`), so any extra per-project keys an
-  operator added are dropped when that project is edited from the UI. A
-  rename (`original_alias` != `alias`) deletes the old key and inserts the
-  new one at the **end** of the object (alias order changes).
-- Dashboard save validation: alias and project_id non-empty after strip;
-  rename target must not exist; unknown `original_alias` rejected.
+- The dashboard's Track action (`track_project`) updates the entry in place:
+  it sets `project_id`/`instance` (from the GitLab alias), `local_path`,
+  `target_branch` and `use_worktree`, and keeps every other key, including
+  the command hints. The alias is the GitLab alias and cannot be renamed here.
+- Dashboard save validation: the alias must exist in `~/.gitlab/config.json`;
+  target branch required; the checkout must be an absolute git repo with an
+  `origin`.
 
 ### Example
 

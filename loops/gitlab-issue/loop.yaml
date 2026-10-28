@@ -32,18 +32,19 @@ actions:
   - run_tests
   - create_merge_request
 
-# `project_commands` is resolved per issue at runtime: it re-runs the issue
-# project's own test_cmd/lint_cmd (from projects.json) inside the worktree the
-# agent used, via bin/loop_verifiers.py's ProjectCommandsVerifier. No worktree
-# (the agent made no code change) is a vacuous pass, not a failure.
-# mode: observe records the real result in the iteration's evidence
-# (`observed_passed`) but always passes, so outcomes are unchanged; mode: gate
-# makes a failure fail the iteration, and LoopRuntime retries with the failing
-# output as feedback. Stay on observe until the Harness page shows the agent's
-# own "fixed" claim agreeing with this check; flipping is a one-line change.
+# `project_commands` is resolved per issue at runtime: in gate mode it re-runs
+# the test/lint commands the agent logged in its fix handoff (falling back to
+# the project's stored test_cmd/lint_cmd hints), inside the issue's worktree or,
+# for a project with use_worktree: false, its checkout. A logged command outside
+# the per-stack allowlist (crates/core/src/verify_commands.rs) is refused, and a
+# fix with no test command does not verify. No fix handoff is a vacuous pass.
+# mode: gate makes a failure fail the iteration (LoopRuntime retries with the
+# failing output as feedback), and the loop, not the agent, pushes and opens
+# the merge request only after it passes. mode: observe would record the
+# result without enforcing it and let the agent open the MR itself.
 verification:
   required: [project_commands]
-  mode: observe
+  mode: gate
 
 verifiers:
   - name: project_commands

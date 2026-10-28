@@ -206,6 +206,10 @@ Harness → Gates.
 
 ## A bare `bundle exec rubocop` lint_cmd silently breaks under `worktree_root`
 
+The GitLab agent now chooses its own lint/test commands (step 7 of
+`instructions/loopx/gitlab-issue.md`, which carries the short form of this and
+the next section); a project's stored `lint_cmd` is only a hint it starts from.
+
 Any `worktree_root` nested under a dot-directory (the scaffolded default,
 `~/.loopx/worktrees`, is one) trips a real RuboCop quirk:
 `TargetFinder#hidden_path?` (`lib/rubocop/target_finder.rb`) treats any

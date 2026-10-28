@@ -7,8 +7,9 @@
       "project_id": "loop/brightleaf/brightleaf.web",
       "local_path": "/absolute/path/to/your/brightleaf.web/checkout",
       "target_branch": "staging",
+      "use_worktree": true,
       "install_cmd": "bundle check || bundle install",
-      "lint_cmd": "bundle exec rubocop",
+      "lint_cmd": "bundle exec rubocop . --cache false",
       "test_cmd": "RAILS_ENV=test bundle exec rspec"
     },
     "orchard": {

@@ -1165,5 +1165,16 @@
   "Hey, got any thoughts on {topic}?": "ねえ、{topic}についてどう思う？",
   "Hmm, {topic}... I would love to hear more.": "うーん、{topic}か…もっと聞きたいな。",
   "Ha, that reminds me of something from last week.": "はは、先週のことを思い出したよ。",
-  "We should chat about {topic} over coffee sometime.": "{topic}の話はコーヒーでも飲みながらしよう。"
+  "We should chat about {topic} over coffee sometime.": "{topic}の話はコーヒーでも飲みながらしよう。",
+  "Use worktree": "worktree を使う",
+  "Stop tracking {alias}": "{alias} の追跡を停止",
+  "Track": "追跡",
+  "Tracked": "追跡中",
+  "{alias}: no matching GitLab alias": "{alias}: 対応する GitLab エイリアスがありません",
+  "Turn on Track to let the GitLab issue loop work on a project: give its local checkout and target branch. The agent works out each project's install, lint and test commands itself and logs what it used.": "追跡をオンにすると、GitLab Issue ループがそのプロジェクトで作業します。ローカルのチェックアウトとターゲットブランチを指定してください。各プロジェクトのインストール・lint・テストのコマンドはエージェントが自分で判断し、使ったコマンドをログに残します。",
+  "Tracking project {name}": "プロジェクト {name} を追跡しています",
+  "Worktree on for {name}": "{name} の worktree をオンにしました",
+  "Worktree off for {name}": "{name} の worktree をオフにしました",
+  "Unknown setting: {name}": "不明な設定: {name}",
+  "Checks": "チェック"
 }

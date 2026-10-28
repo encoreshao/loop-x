@@ -18,6 +18,11 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 
 ### Changed
+- GitLab: tracking a project for the issue loop is now a Track switch on its row in Project aliases (local checkout, target branch, and a "Use worktree" switch that is on by default); the separate Tracked Projects card and its install/lint/test command fields are gone. Loop settings moved into the GitLab card.
+- GitLab issue loop: the agent works out each project's install, lint and test commands itself (starting from any commands already saved, its earlier runs and other projects on the same stack), fixes verification setup such as RuboCop's cache, and logs what it used; the Live view shows those checks under each issue.
+- GitLab issue loop: runs in gate mode by default - the loop re-runs the agent's logged lint and test commands, refuses anything outside a per-stack allowlist, and opens the merge request itself only when they pass.
+- GitLab issue loop: an escalation's Slack message links the issue as `project #N` and says in plain words why it needs a human, instead of a raw reason code.
+- GitLab issue loop: a project tracked with worktree off is worked on a `loop/issue-<iid>` branch of its own checkout, refused if the checkout has uncommitted changes, and switched back to your branch afterwards.
 - Meeting Prep: a brief now goes out on the minute a meeting comes within your "Minutes ahead" setting, instead of at the next 15-minute calendar refresh (which could send it up to 15 minutes early); the scheduler checks the saved agenda every minute, and the 15-minute refresh still picks up new or moved meetings.
 - The Office/Dashboard chooser shows the LoopX logo and wordmark, uses the same mode icons as the topbar and office, and has shorter wording.
 - Tabs and the Appearance options share one macOS-style segmented control whose track and selected segment follow the chosen theme colour.

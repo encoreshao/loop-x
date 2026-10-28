@@ -44,10 +44,10 @@ Loop X は、macOS 向けのローカルファーストな AI エージェント
 
 1. **小さく始める。** 最初は GitLab Issue ループとトピック監視ループだけをオンにし、よく知っているプロジェクトを 1〜2 件登録します。
 2. **スケジュール前に 1 回実行する。** `loopx run gitlab-loop` を手動で実行し、結果を確認してからスケジューラーを読み込みます。
-3. **すべてのプロジェクトに実際のチェックを設定する。** `lint_cmd` と `test_cmd` を設定します。マージリクエストはこれらが通ったときだけ開かれるため、ループの安全網になります。
+3. **エージェントが選んだチェックを確認する。** エージェントが各プロジェクトの lint とテストのコマンドを判断し、Live ビューの各 Issue の下に記録します。ループ自身が再実行して通ったときだけマージリクエストが開かれます。保存済みの `lint_cmd`/`test_cmd` は出発点のヒントです。
 4. **すべてのマージリクエストをレビューする。** Loop X はオープンなマージリクエストで止まります。チームメイトの変更と同じように差分を読んでください。
 5. **明確な Issue を書く。** 期待する動作と再現手順を含めます。明確な Issue には修正が、曖昧な Issue には質問が返ります。
-6. **重要なプロジェクトでは gate 検証モードを使う。** ループ自身がチェックを再実行し、失敗時にはエスカレーションします。
+6. **gate 検証モード（デフォルト）のままにする。** ループ自身がチェックを再実行し、失敗時にはエスカレーションします。
 7. **シークレットは Keychain に置く。** トークンはダッシュボードから追加し、設定ファイルや Issue 本文には書かないでください。
 8. **`loopx doctor` を実行する。** インストール後とアップグレード後に実行します。
 9. **ループは 1 つずつ有効にする。** 次を追加する前に、ダッシュボードの **Runs** を確認します。
@@ -197,7 +197,7 @@ bin/scripts/uninstall-loopx.sh --keep-config   # すべて削除するには --k
 
 | ファイル                              | 内容                                                                                                                                                                                                                    | 管理方法                                                                                                                                                                      |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `~/.loopx/projects.json`   | 追跡するプロジェクト、そのローカルチェックアウトのパス、ターゲットブランチ、install/lint/test コマンド、GitLab ユーザー名、worktree の作業ディレクトリ（`worktree_root`、デフォルトは `~/.loopx/worktrees`） | ダッシュボードの **Loops → GitLab Issues → Projects** ページの「Tracked Projects」セクション、または [`config/projects.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/projects.json.template) を手動でコピー、または `install-loopx.sh` に任せる |
+| `~/.loopx/projects.json`   | 追跡するプロジェクト、そのローカルチェックアウトのパス、ターゲットブランチ、worktree を使うかどうか、任意の install/lint/test コマンドのヒント、GitLab ユーザー名、worktree の作業ディレクトリ（`worktree_root`、デフォルトは `~/.loopx/worktrees`） | ダッシュボードの **Loops → GitLab Issues → Projects** ページの Project aliases 各行にある Track スイッチ、または [`config/projects.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/projects.json.template) を手動でコピー、または `install-loopx.sh` に任せる |
 | ↳ プロジェクトごとの `instance`（任意） | 1 つのプロジェクトについてトップレベルの `gitlab_instance` を上書きします。プロジェクトが複数の GitLab インスタンスにまたがる場合に設定します。省略時は `gitlab_instance` が使われます。                               | 同じファイルの各プロジェクトエントリ — テンプレートの `harbor` の例を参照                                                                                                     |
 | `~/.loopx/topics.json`     | 監視するトピックと、それぞれで注目に値するものの基準（トピックモニターループのみ）                                                                                                                                      | [`config/topics.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/topics.json.template) を手動でコピー、または `install-loopx.sh` に任せる                                                                |
 | `~/.loopx/inboxes.json`    | トリアージするメールボックス（プロバイダー、アカウント、カテゴリ、VIP/除外する送信者、Slack バンドル）と、共有のデフォルトカテゴリセット（Inbox Triage ループのみ）                                                    | ダッシュボードの **Loops → Inbox Triage → Setup** ページ（`/inbox/setup`）、または `install-loopx.sh` に [`config/inboxes.json.template`](https://github.com/encoreshao/loop-x/blob/main/config/inboxes.json.template) から雛形を作成させる               |
@@ -355,7 +355,7 @@ localhost 専用の Web UI（サーバーサイドレンダリング、JS フレ
 
 - **マージリクエストを決してマージしません。** ループの仕事は「MR を作成し、検証が通っている」状態で終わります。マージは常に人間が手動で行うステップです。
 - すべてのコード変更は、専用の git worktree の `loop/issue-<iid>` ブランチ上で行われ、ターゲットブランチ上で直接行われることはありません。
-- MR が作成されるのは、プロジェクト自身に設定された `test_cmd`/`lint_cmd` が通り、かつ diff が Issue に関連するファイルだけに触れている場合に限られます。
+- MR が作成されるのは、エージェントが記録したテスト/lint コマンドをループ自身が再実行して通り、かつ diff が Issue に関連するファイルだけに触れている場合に限られます。
 - 任意のシェル実行、依存関係のアップグレード、`.env`/認証情報/SSH キーの読み取りは行いません — 使えるのは `instructions/loopx/gitlab-issue.md` の許可コマンドリストだけです。
 - Issue は一度に 1 件ずつ順番に処理され、決して並列には処理されません。
 - 同じ Issue で検証が失敗した場合、その実行内で再試行されることはなく、代わりに GitLab コメントでエスカレーションされます。（`verification.mode: gate` では、ループ自身がプロジェクトのチェックを再実行し、失敗出力をフィードバックとして上限付きで再試行します。テストや lint が失敗する MR は決して作成されず、`loop:needs-human` ラベルでエスカレーションされます。）

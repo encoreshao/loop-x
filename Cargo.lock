@@ -834,6 +834,7 @@ dependencies = [
  "loopx-core",
  "loopx-server",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]

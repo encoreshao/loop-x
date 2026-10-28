@@ -1165,5 +1165,16 @@
   "Hey, got any thoughts on {topic}?": "嘿，你怎么看{topic}？",
   "Hmm, {topic}... I would love to hear more.": "嗯，{topic}……我想多听听。",
   "Ha, that reminds me of something from last week.": "哈，这让我想起上周的一件事。",
-  "We should chat about {topic} over coffee sometime.": "改天喝咖啡时再聊聊{topic}吧。"
+  "We should chat about {topic} over coffee sometime.": "改天喝咖啡时再聊聊{topic}吧。",
+  "Use worktree": "使用 worktree",
+  "Stop tracking {alias}": "停止跟踪 {alias}",
+  "Track": "跟踪",
+  "Tracked": "已跟踪",
+  "{alias}: no matching GitLab alias": "{alias}：没有匹配的 GitLab 别名",
+  "Turn on Track to let the GitLab issue loop work on a project: give its local checkout and target branch. The agent works out each project's install, lint and test commands itself and logs what it used.": "开启跟踪后，GitLab Issue 循环会处理该项目：请提供本地检出目录和目标分支。每个项目的安装、lint 和测试命令由代理自行判断，并记录所用的命令。",
+  "Tracking project {name}": "正在跟踪项目 {name}",
+  "Worktree on for {name}": "已为 {name} 开启 worktree",
+  "Worktree off for {name}": "已为 {name} 关闭 worktree",
+  "Unknown setting: {name}": "未知设置：{name}",
+  "Checks": "检查"
 }

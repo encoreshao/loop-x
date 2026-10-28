@@ -4,6 +4,14 @@
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
+/// A project's `use_worktree`: false only when explicitly `false`.
+pub fn use_worktree(project: &Value) -> bool {
+    project
+        .get("use_worktree")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(

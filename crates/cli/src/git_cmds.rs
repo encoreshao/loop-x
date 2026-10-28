@@ -11,7 +11,14 @@ pub fn worktree_new(args: &[String]) -> ExitCode {
         );
         return ExitCode::from(1);
     };
-    match worktree::new_worktree(repo_path, default_branch, issue_iid, worktree_root) {
+    // A project with worktree off is branched in place instead.
+    let config = loopx_core::config::default_config_path();
+    let prepared = if worktree::uses_worktree_for(repo_path, &config) {
+        worktree::new_worktree(repo_path, default_branch, issue_iid, worktree_root)
+    } else {
+        worktree::prepare_in_place(repo_path, default_branch, issue_iid)
+    };
+    match prepared {
         Ok(path) => {
             println!("{path}");
             ExitCode::SUCCESS

@@ -213,8 +213,9 @@ All require `csrf_token` in the form body (section 2); missing/invalid returns 4
 | `POST /settings/access-bundles/<name>/delete` | none | same |
 | `POST /settings/access-bundles/<name>/clear-webhook` | none | same |
 | `POST /settings/loop-config` | `assignee_username`, `worktree_root`, `gitlab_instance` | same |
-| `POST /settings/loop-projects` | `alias`, `original_alias`, `project_id`, `local_path`, `target_branch`, `install_cmd`, `lint_cmd`, `test_cmd`, `instance` | same (upsert in `projects.json`; `original_alias` for rename) |
-| `POST /settings/loop-projects/<alias>/delete` | none | same |
+| `POST /settings/loop-projects/<alias>/track` | `local_path`, `target_branch`, `use_worktree` (checkbox: present = true) | same (upsert in `projects.json` for the GitLab alias `<alias>`; `project_id`/`instance` come from `~/.gitlab/config.json`, other keys kept) |
+| `POST /settings/loop-projects/<alias>/worktree/<on\|off>` | none | same (sets `use_worktree`) |
+| `POST /settings/loop-projects/<alias>/delete` | none | same (stop tracking) |
 | `POST /notifications/webhook` | `webhook_url` | `/settings?tab=notifications` (`~/.slack/config.json`) |
 | `POST /notifications/block-templates` | `name`, `original_name`, `notification_key`, `blocks_json` (default `[]`) | `/settings?tab=notifications` |
 | `POST /notifications/block-templates/<name>/delete` | none | same |

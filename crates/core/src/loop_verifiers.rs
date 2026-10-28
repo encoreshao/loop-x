@@ -9,11 +9,12 @@
 //! `evidence` carries `"error": true`, which is what
 //! `ProjectCommandsVerifier` already did.
 
-use crate::config::{default_config_path, Config};
+use crate::config::{default_config_path, use_worktree, Config};
 use crate::loop_result::VerificationResult;
 use crate::loop_runtime::LoopContext;
 use crate::loops_config::{py_repr, py_repr_str};
 use crate::proc;
+use crate::verify_commands::check_verify_command;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -110,8 +111,30 @@ impl CommandVerifier {
                 kind: "ValueError",
                 message: format!("cannot parse command {}", py_repr_str(&self.command)),
             })?;
+        // Leading `KEY=value` words set the environment, as a shell would.
+        let is_assignment = |a: &String| {
+            a.split_once('=').is_some_and(|(k, _)| {
+                !k.is_empty()
+                    && !k.starts_with(|c: char| c.is_ascii_digit())
+                    && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        };
+        let n_env = argv.iter().take_while(|a| is_assignment(a)).count();
+        let (env, argv) = argv.split_at(n_env);
+        if argv.is_empty() {
+            return Err(Raised {
+                kind: "ValueError",
+                message: format!(
+                    "no command after the environment in {}",
+                    py_repr_str(&self.command)
+                ),
+            });
+        }
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]);
+        for (k, v) in env.iter().filter_map(|a| a.split_once('=')) {
+            cmd.env(k, v);
+        }
         if let Some(cwd) = &self.cwd {
             cmd.current_dir(cwd);
         }
@@ -295,14 +318,13 @@ impl ProjectCommandsVerifier {
         self
     }
 
-    fn claims_fix(&self) -> bool {
-        let Some(path) = &self.handoff_path else {
-            return false;
-        };
+    /// The fix handoff, if there is one: `None` for any other action.
+    fn fix_handoff(&self) -> Option<Value> {
+        let path = self.handoff_path.as_ref()?;
         std::fs::read_to_string(path)
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .is_some_and(|v| v.get("action").and_then(Value::as_str) == Some("fix"))
+            .filter(|v| v.get("action").and_then(Value::as_str) == Some("fix"))
     }
 
     fn project(&self) -> Result<Value, Raised> {
@@ -346,36 +368,76 @@ impl ProjectCommandsVerifier {
             output: why.into(),
             evidence: json!({"vacuous": true}),
         };
-        if self.handoff_path.is_some() && !self.claims_fix() {
+        let handoff = self.fix_handoff();
+        if self.handoff_path.is_some() && handoff.is_none() {
             return Ok(vacuous("no fix handoff - nothing to verify"));
         }
         let project = self.project()?;
         let root = self.worktree_root()?;
-        let local_path = project
-            .get("local_path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| Raised {
+        if project.get("local_path").and_then(Value::as_str).is_none() {
+            return Err(Raised {
                 kind: "KeyError",
                 message: "'local_path'".into(),
-            })?;
-        let repo = Path::new(local_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let worktree = root.join(format!("{repo}-issue-{}", self.issue_iid));
-        if !worktree.is_dir() {
+            });
+        }
+        let worktree = expected_work_dir(&project, &root, &self.issue_iid);
+        if use_worktree(&project) && !worktree.is_dir() {
             return Ok(vacuous("no worktree - nothing to verify"));
+        }
+        let fail = |output: String| VerificationResult {
+            name: self.name.clone(),
+            passed: false,
+            exit_code: Some(1),
+            duration_ms: elapsed_ms(start),
+            output,
+            evidence: json!({"commands": []}),
+        };
+
+        // Gated: the commands the agent logged in its handoff, else the
+        // stored hint; test is required, lint may be skipped. Without a
+        // handoff (observe mode): the stored commands, as before.
+        let logged = handoff.as_ref().and_then(|h| h.get("verification"));
+        if handoff.is_some() {
+            let cwd = logged
+                .and_then(|v| v.get("cwd"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if Path::new(cwd) != worktree {
+                return Ok(fail(format!(
+                    "handoff cwd {cwd} is not the issue's work dir {}",
+                    worktree.display()
+                )));
+            }
+        }
+        let mut chosen = Vec::new();
+        for kind in ["test", "lint"] {
+            let non_empty = |v: Option<&Value>| {
+                v.and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .map(str::to_owned)
+            };
+            let from_handoff = non_empty(logged.and_then(|v| v.get(kind)));
+            let hint = non_empty(project.get(format!("{kind}_cmd")));
+            let (command, source) = match (handoff.is_some(), from_handoff, hint) {
+                (true, Some(c), _) => (c, "handoff"),
+                (_, _, Some(c)) => (c, "hint"),
+                (true, None, None) if kind == "test" => {
+                    return Ok(fail("no test command logged".into()))
+                }
+                _ => continue,
+            };
+            if handoff.is_some() {
+                if let Err(reason) = check_verify_command(&command) {
+                    return Ok(fail(format!("refused {kind} command: {reason}")));
+                }
+            }
+            chosen.push((kind, command, source));
         }
 
         let (mut commands, mut lines, mut passed) = (Vec::new(), Vec::new(), true);
-        for kind in ["test", "lint"] {
-            let Some(command) = project
-                .get(format!("{kind}_cmd"))
-                .and_then(Value::as_str)
-                .filter(|c| !c.is_empty())
-            else {
-                continue;
-            };
+        for (kind, command, source) in chosen {
+            let command = command.as_str();
             let verifier = CommandVerifier::new(&format!("{}_{kind}", self.name), command)
                 .with_cwd(&worktree)
                 .with_timeout(self.timeout_seconds);
@@ -387,6 +449,7 @@ impl ProjectCommandsVerifier {
                 "passed": result.passed,
                 "exit_code": result.exit_code,
                 "output": tail_chars(&result.output, OUTPUT_TAIL_CHARS),
+                "source": source,
             }));
             // The tail lives only in evidence; output is one line per command.
             let status = if result.passed {
@@ -407,6 +470,23 @@ impl ProjectCommandsVerifier {
             evidence: json!({"commands": commands}),
         })
     }
+}
+
+/// Where an issue's work happens: `<root>/<repo>-issue-<iid>`, or the
+/// checkout itself when the project has `use_worktree: false`.
+pub fn expected_work_dir(project: &Value, worktree_root: &Path, issue_iid: &str) -> PathBuf {
+    let local_path = project
+        .get("local_path")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !use_worktree(project) {
+        return PathBuf::from(local_path);
+    }
+    let repo = Path::new(local_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    worktree_root.join(format!("{repo}-issue-{issue_iid}"))
 }
 
 /// The last `n` characters (Python `s[-n:]`).
@@ -599,6 +679,13 @@ mod tests {
     }
 
     #[test]
+    fn leading_env_assignments_are_set_not_run() {
+        let r = run(&CommandVerifier::new("e", "FOO=bar BAZ=1 printenv FOO"));
+        assert!(r.passed, "{}", r.output);
+        assert!(r.output.contains("bar"), "{}", r.output);
+    }
+
+    #[test]
     fn cwd_is_used_and_recorded() {
         let d = tempfile::tempdir().unwrap();
         fs::write(d.path().join("marker.txt"), "x").unwrap();
@@ -717,6 +804,127 @@ mod tests {
             .with_project_fn(move |_| Ok(project.clone()))
             .with_worktree_root_fn(move || Ok(root.clone()));
         (d, v)
+    }
+
+    /// A gated verifier: `project` extras merged over a checkout at `<d>/repo`,
+    /// and `handoff` written as the fix handoff (`cwd` defaults to the worktree).
+    fn pc_gated(
+        project: Value,
+        verification: Value,
+    ) -> (tempfile::TempDir, ProjectCommandsVerifier) {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let mut p = json!({"local_path": repo.display().to_string()});
+        for (k, v) in project.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let worktree = d.path().join("wt/repo-issue-7");
+        fs::create_dir_all(&worktree).unwrap();
+        for dir in [&repo, &worktree] {
+            fs::write(
+                dir.join("Makefile"),
+                "test:\n\t@true\ncheck:\n\t@true\nlint:\n\t@false\n",
+            )
+            .unwrap();
+        }
+        let mut verification = verification;
+        if verification.get("cwd").is_none() {
+            let cwd = if p.get("use_worktree") == Some(&json!(false)) {
+                &repo
+            } else {
+                &worktree
+            };
+            verification["cwd"] = json!(cwd.display().to_string());
+        }
+        let handoff = d.path().join("handoff.json");
+        fs::write(
+            &handoff,
+            json!({"action": "fix", "branch": "loop/issue-7", "verification": verification})
+                .to_string(),
+        )
+        .unwrap();
+        let root = d.path().join("wt");
+        let v = ProjectCommandsVerifier::new("pc", "web", 7, 30.0)
+            .with_handoff_path(Some(handoff))
+            .with_project_fn(move |_| Ok(p.clone()))
+            .with_worktree_root_fn(move || Ok(root.clone()));
+        (d, v)
+    }
+
+    #[test]
+    fn handoff_commands_are_run_over_hints() {
+        let (_d, v) = pc_gated(
+            json!({"test_cmd": "make lint"}),
+            json!({"test": "make test"}),
+        );
+        let r = run(&v);
+        assert!(r.passed, "{}", r.output);
+        assert_eq!(r.evidence["commands"][0]["command"], "make test");
+        assert_eq!(r.evidence["commands"][0]["source"], "handoff");
+    }
+
+    #[test]
+    fn missing_lint_falls_back_to_hint_then_skips() {
+        let (_d, v) = pc_gated(
+            json!({"lint_cmd": "make check"}),
+            json!({"test": "make test"}),
+        );
+        let r = run(&v);
+        assert_eq!(r.evidence["commands"][1]["kind"], "lint");
+        assert_eq!(r.evidence["commands"][1]["source"], "hint");
+        let (_d, v) = pc_gated(json!({}), json!({"test": "make test"}));
+        let r = run(&v);
+        assert!(r.passed);
+        assert_eq!(r.evidence["commands"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn missing_test_fails() {
+        let (_d, v) = pc_gated(json!({}), json!({"lint": "make check"}));
+        let r = run(&v);
+        assert!(!r.passed);
+        assert!(r.output.contains("no test command logged"), "{}", r.output);
+    }
+
+    #[test]
+    fn refused_command_is_not_run() {
+        let (d, v) = pc_gated(json!({}), json!({"test": "make test; touch PWNED"}));
+        let r = run(&v);
+        assert!(!r.passed);
+        assert!(r.output.contains("refused test command"), "{}", r.output);
+        assert!(!d.path().join("wt/repo-issue-7/PWNED").exists());
+        let (_d, v) = pc_gated(json!({}), json!({"test": "true"}));
+        assert!(!run(&v).passed);
+    }
+
+    #[test]
+    fn cwd_mismatch_fails() {
+        let (_d, v) = pc_gated(json!({}), json!({"test": "make test", "cwd": "/tmp"}));
+        let r = run(&v);
+        assert!(!r.passed);
+        assert!(
+            r.output.contains("is not the issue's work dir"),
+            "{}",
+            r.output
+        );
+    }
+
+    #[test]
+    fn env_prefixed_handoff_command_runs() {
+        let (_d, v) = pc_gated(json!({}), json!({"test": "CI=true make test"}));
+        let r = run(&v);
+        assert!(r.passed, "{}", r.output);
+    }
+
+    #[test]
+    fn worktree_off_uses_local_path() {
+        let (d, v) = pc_gated(json!({"use_worktree": false}), json!({"test": "make test"}));
+        fs::remove_dir_all(d.path().join("wt/repo-issue-7")).unwrap();
+        let r = run(&v);
+        assert!(r.passed, "{}", r.output);
+        assert_ne!(r.evidence["vacuous"], true);
+        assert_eq!(r.evidence["commands"][0]["command"], "make test");
     }
 
     fn make_worktree(d: &tempfile::TempDir) {
