@@ -33,6 +33,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - The product is spelled "LoopX" everywhere it is shown (was "Loop X"), and the "X" in the sidebar and chat-panel wordmark takes a orange accent.
 
 ### Fixed
+- GitLab issue loop: Node projects now install, lint and test under the Node version they need (a `.nvmrc`/`.node-version`/`.tool-versions` pin, else the `engines` of `package.json` and its lockfile) picked from the versions nvm, fnm, mise, asdf or Volta have installed, instead of whichever `node` is first on PATH. Before, an older default Node made `npm ci` skip native bindings and `npm run lint`/`npm test` fail with "Cannot find native binding".
 - GitLab issue loop: merge requests the loop opens now get a description ("Closes #<issue>", Problem / Fix / Result, How, Verified, and Related when the issue thread has any), written by the agent to the create-mr template, or built from its summary and the checks the loop ran when it gives none; MR titles follow the same `fix: #<issue> <what was fixed>` format.
 - GitLab issue loop: a rebuilt app that keeps the same version number now refreshes the agent instructions it seeds into `~/.loopx`, so the agent no longer follows an old copy that limited it to saved install/lint/test commands.
 - GitLab issue loop: the agent is given the run id literally, so its event calls are no longer refused for containing `$LOOP_RUN_ID`.

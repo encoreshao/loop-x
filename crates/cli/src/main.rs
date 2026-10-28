@@ -199,6 +199,12 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// What the agent's `node`/`npm`/... shims run: `<shim-dir> <tool> [args]`
+    #[command(name = "_node-shim", hide = true)]
+    NodeShim {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// The command the dashboard chat assistant runs: `<action> [args]` (status, history-*, run-now, topic-save, call <tool> <json>, ...)
     ChatTool {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -308,6 +314,9 @@ fn main() -> ExitCode {
         Command::Messages { args } => messages_cmd::run(&args),
         Command::ChatTool { args } => chat_tool_cmd::run(&args),
         Command::ChatEvalStub { args } => chat_tool_cmd::eval_stub(&args),
+        Command::NodeShim { args } => {
+            ExitCode::from(loopx_core::node_env::shim_main(&args).clamp(0, 255) as u8)
+        }
         Command::Approvals { args } => approvals_cmd::run(&args),
         Command::Run { args } => run_cmds::run(&args),
         Command::Scheduler => run_cmds::scheduler(&[]),

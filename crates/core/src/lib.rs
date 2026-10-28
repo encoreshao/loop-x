@@ -60,6 +60,7 @@ pub mod messages;
 pub mod metrics;
 pub mod mr;
 pub mod msg;
+pub mod node_env;
 pub mod oauth;
 pub mod policy;
 pub mod proc;

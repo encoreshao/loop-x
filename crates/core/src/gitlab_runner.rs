@@ -489,14 +489,25 @@ fn run_cli(
     for (k, v) in env {
         command.env(k, v);
     }
+    let mut path = std::env::var("PATH").unwrap_or_default();
+    // `node`/`npm`/... resolve to the Node each project needs, not whichever
+    // is first on PATH (see `node_env`).
+    let shims = ctx.repo_root.join("outputs/node-shims");
+    match crate::node_env::write_shims(&shims, Path::new(&ctx.exe)) {
+        Ok(()) => path = format!("{}:{path}", shims.display()),
+        Err(e) => ctx.log(&format!(
+            "cannot write Node shims to {}: {e}",
+            shims.display()
+        )),
+    }
     // Make `loopx` resolvable for the agent whatever PATH the scheduler gave us.
     if let Some(dir) = Path::new(&ctx.exe)
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
     {
-        let path = std::env::var("PATH").unwrap_or_default();
-        command.env("PATH", format!("{}:{path}", dir.display()));
+        path = format!("{}:{path}", dir.display());
     }
+    command.env("PATH", path);
     let timeout = std::time::Duration::from_secs_f64(timeout_seconds.max(0.0));
     let out = match proc::run(&mut command, None, Some(timeout)) {
         Ok(out) => out,
@@ -2589,6 +2600,29 @@ mod tests {
             let e = run_cli(&ctx, cli, &argv, 30.0, None, &[], None).unwrap_err();
             assert!(e.message.contains(want), "{cli}: {}", e.message);
         }
+    }
+
+    #[test]
+    fn the_agent_finds_node_through_the_per_project_shims() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().to_path_buf());
+        ctx.exe = "/opt/loopx/bin/loopx".into();
+        let argv = vec![script_cli(
+            d.path(),
+            r#"echo "{\"response\":\"PATH=$PATH\"}""#,
+        )];
+        run_cli(&ctx, "gemini", &argv, 30.0, None, &[], None).unwrap();
+        let shims = d.path().join("outputs/node-shims");
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(
+            log.contains(&format!("PATH=/opt/loopx/bin:{}:", shims.display())),
+            "{log}"
+        );
+        let npm = std::fs::read_to_string(shims.join("npm")).unwrap();
+        assert!(
+            npm.contains("exec '/opt/loopx/bin/loopx' _node-shim"),
+            "{npm}"
+        );
     }
 
     #[test]

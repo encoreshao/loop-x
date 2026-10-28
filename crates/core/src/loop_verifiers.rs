@@ -13,6 +13,7 @@ use crate::config::{default_config_path, use_worktree, Config};
 use crate::loop_result::VerificationResult;
 use crate::loop_runtime::LoopContext;
 use crate::loops_config::{py_repr, py_repr_str};
+use crate::node_env::Toolchains;
 use crate::proc;
 use crate::verify_commands::check_verify_command;
 use serde_json::{json, Map, Value};
@@ -70,6 +71,8 @@ pub struct CommandVerifier {
     pub command: String,
     pub cwd: Option<PathBuf>,
     pub timeout_seconds: Option<f64>,
+    /// Where to look for installed Node versions (default: this user's).
+    pub toolchains: Option<Toolchains>,
 }
 
 impl CommandVerifier {
@@ -79,7 +82,13 @@ impl CommandVerifier {
             command: command.into(),
             cwd: None,
             timeout_seconds: None,
+            toolchains: None,
         }
+    }
+
+    pub fn with_toolchains(mut self, toolchains: Toolchains) -> Self {
+        self.toolchains = Some(toolchains);
+        self
     }
 
     pub fn with_cwd(mut self, cwd: &Path) -> Self {
@@ -132,11 +141,15 @@ impl CommandVerifier {
         }
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]);
-        for (k, v) in env.iter().filter_map(|a| a.split_once('=')) {
-            cmd.env(k, v);
-        }
         if let Some(cwd) = &self.cwd {
             cmd.current_dir(cwd);
+            // The Node this project needs, not just whichever is first on PATH.
+            let tc = self.toolchains.clone().unwrap_or_else(Toolchains::from_env);
+            let path = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", crate::node_env::path_for(cwd, &path, &tc));
+        }
+        for (k, v) in env.iter().filter_map(|a| a.split_once('=')) {
+            cmd.env(k, v);
         }
         let timeout = self.timeout_seconds.map(Duration::from_secs_f64);
         let out = proc::run(&mut cmd, None, timeout).map_err(|e| Raised {
@@ -692,6 +705,31 @@ mod tests {
         let r = run(&CommandVerifier::new("c", "test -f marker.txt").with_cwd(d.path()));
         assert!(r.passed);
         assert_eq!(r.evidence["cwd"], d.path().display().to_string());
+    }
+
+    #[test]
+    fn commands_run_under_the_node_the_work_directory_needs() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".nvm/versions/node/v99.1.0/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("node"), "#!/bin/sh\necho v99.1.0\n").unwrap();
+        fs::set_permissions(bin.join("node"), fs::Permissions::from_mode(0o755)).unwrap();
+        let d = tempfile::tempdir().unwrap();
+        fs::write(
+            d.path().join("package.json"),
+            r#"{"engines":{"node":">=99"}}"#,
+        )
+        .unwrap();
+        let tc = crate::node_env::Toolchains {
+            home: home.path().to_path_buf(),
+            nvm_dir: None,
+        };
+        let r = run(&CommandVerifier::new("n", "node -v")
+            .with_cwd(d.path())
+            .with_toolchains(tc));
+        assert!(r.passed, "{}", r.output);
+        assert_eq!(r.output.trim(), "v99.1.0");
     }
 
     #[test]
