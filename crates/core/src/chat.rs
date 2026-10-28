@@ -905,7 +905,8 @@ pub fn chat_tool_actions_for(cli: &str, line: &str) -> Vec<String> {
 /// `merge_tool_events`: `[{"name","summary","ok"[,"pending"]}]` in call order.
 pub fn merge_tool_events(events: &[Value]) -> Vec<Value> {
     let mut order: Vec<Map<String, Value>> = Vec::new();
-    let mut by_id: HashMap<String, usize> = HashMap::new();
+    // One shell call can chain several `chat-tool` commands; they share its id.
+    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
     for e in events {
         let id = e
             .get("id")
@@ -918,16 +919,16 @@ pub fn merge_tool_events(events: &[Value]) -> Vec<Value> {
                 m.insert("name".into(), e["name"].clone());
                 m.insert("summary".into(), e["summary"].clone());
                 m.insert("ok".into(), Value::Null);
-                by_id.insert(id, order.len());
+                by_id.entry(id).or_default().push(order.len());
                 order.push(m);
             }
             Some("result") => {
-                if let Some(&i) = by_id.get(&id) {
+                for &i in by_id.get(&id).into_iter().flatten() {
                     order[i].insert("ok".into(), e["ok"].clone());
                 }
             }
             Some("pending") => {
-                if let Some(&i) = by_id.get(&id) {
+                if let Some(&i) = by_id.get(&id).and_then(|v| v.last()) {
                     let pending: Map<String, Value> = e
                         .as_object()
                         .into_iter()
@@ -1802,6 +1803,26 @@ mod tests {
         assert_eq!(merged[0]["ok"], true);
         assert_eq!(merged[0]["pending"]["tool"], "gitlab.comment");
         assert!(merged[1]["ok"].is_null());
+    }
+
+    #[test]
+    fn one_result_finishes_every_command_chained_in_the_same_call() {
+        let line = json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "input": {"command":
+              "loopx chat-tool status && loopx chat-tool daemon-list && loopx chat-tool loop-list"}}
+        ]}})
+        .to_string();
+        let res = json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "{}"}]}})
+        .to_string();
+        let mut all = chat_tool_events_in_stream_line(&line);
+        all.extend(chat_tool_events_in_stream_line(&res));
+        let merged = merge_tool_events(&all);
+        let names: Vec<_> = merged.iter().map(|m| m["name"].clone()).collect();
+        assert_eq!(names, ["status", "daemon-list", "loop-list"]);
+        for m in &merged {
+            assert_eq!(m["ok"], true, "{m}");
+        }
     }
 
     #[test]

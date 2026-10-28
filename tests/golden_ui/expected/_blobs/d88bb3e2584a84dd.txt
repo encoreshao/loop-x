@@ -39,6 +39,7 @@ window.__loopToolChips = function(host, getSession) {
     svg.appendChild(use);
     return svg;
   }
+  // One shell call can chain several commands; they share its id.
   var chips = {};
   var row = null;
   var status = null;
@@ -62,7 +63,7 @@ window.__loopToolChips = function(host, getSession) {
   }
   return function(ev) {
     if (!ev || typeof ev !== 'object') return;
-    var chip = chips[ev.id];
+    var mine = chips[ev.id];
     if (ev.kind === 'start') {
       setStatus(false);
       if (!row) {
@@ -74,7 +75,7 @@ window.__loopToolChips = function(host, getSession) {
         if (anchor && anchor.parentNode === container) container.insertBefore(row, anchor);
         else container.insertBefore(row, container.firstChild);
       }
-      chip = document.createElement('span');
+      var chip = document.createElement('span');
       chip.className = 'tool-chip tool-chip-run';
       var icon = svgIcon('autorenew', 'tool-chip-icon');
       var text = document.createElement('span');
@@ -82,12 +83,14 @@ window.__loopToolChips = function(host, getSession) {
       text.textContent = (window.__loopToolLabels[ev.name] || ev.name) + (ev.summary ? ' \u00b7 ' + ev.summary : '');
       chip.appendChild(icon);
       chip.appendChild(text);
-      chips[ev.id] = chip;
+      (chips[ev.id] = chips[ev.id] || []).push(chip);
       row.appendChild(chip);
       document.dispatchEvent(new CustomEvent('loopx:tool', { detail: { name: ev.name } }));
-    } else if (ev.kind === 'result' && chip) {
-      chip.className = 'tool-chip ' + (ev.ok ? 'tool-chip-ok' : 'tool-chip-err');
-      chip.querySelector('.tool-chip-icon use').setAttribute('href', '#i-' + (ev.ok ? 'check_circle' : 'error'));
+    } else if (ev.kind === 'result' && mine) {
+      mine.forEach(function(chip) {
+        chip.className = 'tool-chip ' + (ev.ok ? 'tool-chip-ok' : 'tool-chip-err');
+        chip.querySelector('.tool-chip-icon use').setAttribute('href', '#i-' + (ev.ok ? 'check_circle' : 'error'));
+      });
       var running = row.querySelector('.tool-chip-run');
       setStatus(!running);
     } else if (ev.kind === 'pending' && row && window.__loopPendingCard) {
@@ -214,7 +217,14 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      location.reload();
+      var indicator = document.getElementById('gitlab-refresh-indicator');
+      if (indicator) { indicator.style.display = ''; }
+      Promise.all(Array.prototype.map.call(
+        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
+      )).then(function() {
+        if (indicator) { indicator.style.display = 'none'; }
+        __loopScheduleRefresh();
+      });
     }, refreshSeconds * 1000);
   })();
 })();

@@ -24,6 +24,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Office: the Switch to Dashboard button now sits at the top right of the office, to the left of Open chat.
 - The product is spelled "LoopX" everywhere it is shown (was "Loop X"), and the "X" in the sidebar and chat-panel wordmark takes a orange accent.
 
+### Fixed
+- Chat: when the assistant runs several tools in one step, every one of them now shows as finished once it returns, instead of all but the last spinning forever (live and after reload).
+
 ## [0.10.0] - 2026-10-27
 
 ### Added

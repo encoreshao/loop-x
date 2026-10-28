@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Issue \u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gitlab.list_issues": "Issue \u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gitlab.comment": "Issue \u306b\u30b3\u30e1\u30f3\u30c8\u4e2d", "github.read_issue": "Issue \u3092\u8aad\u307f\u53d6\u308a\u4e2d", "github.read_pr": "\u30d7\u30eb\u30ea\u30af\u30a8\u30b9\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "github.comment": "\u30b3\u30e1\u30f3\u30c8\u4e2d", "rss.read_feed": "\u30d5\u30a3\u30fc\u30c9\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "calendar.list_events": "\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "mail.search": "\u30e1\u30fc\u30eb\u3092\u691c\u7d22\u4e2d", "mail.read": "\u30e1\u30fc\u30eb\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "mail.send": "\u30e1\u30fc\u30eb\u3092\u9001\u4fe1\u4e2d", "calendar.create_event": "\u4e88\u5b9a\u3092\u4f5c\u6210\u4e2d", "docs.save": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4fdd\u5b58\u4e2d", "web.search": "\u30a6\u30a7\u30d6\u3092\u691c\u7d22\u4e2d"};
-window.__loopToolStatusText = "\u7d50\u679c\u3092\u5206\u6790\u4e2d\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document", "web.search": "Searching the web"};
+window.__loopToolStatusText = "Analyzing results\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -39,6 +39,7 @@ window.__loopToolChips = function(host, getSession) {
     svg.appendChild(use);
     return svg;
   }
+  // One shell call can chain several commands; they share its id.
   var chips = {};
   var row = null;
   var status = null;
@@ -62,7 +63,7 @@ window.__loopToolChips = function(host, getSession) {
   }
   return function(ev) {
     if (!ev || typeof ev !== 'object') return;
-    var chip = chips[ev.id];
+    var mine = chips[ev.id];
     if (ev.kind === 'start') {
       setStatus(false);
       if (!row) {
@@ -74,7 +75,7 @@ window.__loopToolChips = function(host, getSession) {
         if (anchor && anchor.parentNode === container) container.insertBefore(row, anchor);
         else container.insertBefore(row, container.firstChild);
       }
-      chip = document.createElement('span');
+      var chip = document.createElement('span');
       chip.className = 'tool-chip tool-chip-run';
       var icon = svgIcon('autorenew', 'tool-chip-icon');
       var text = document.createElement('span');
@@ -82,12 +83,14 @@ window.__loopToolChips = function(host, getSession) {
       text.textContent = (window.__loopToolLabels[ev.name] || ev.name) + (ev.summary ? ' \u00b7 ' + ev.summary : '');
       chip.appendChild(icon);
       chip.appendChild(text);
-      chips[ev.id] = chip;
+      (chips[ev.id] = chips[ev.id] || []).push(chip);
       row.appendChild(chip);
       document.dispatchEvent(new CustomEvent('loopx:tool', { detail: { name: ev.name } }));
-    } else if (ev.kind === 'result' && chip) {
-      chip.className = 'tool-chip ' + (ev.ok ? 'tool-chip-ok' : 'tool-chip-err');
-      chip.querySelector('.tool-chip-icon use').setAttribute('href', '#i-' + (ev.ok ? 'check_circle' : 'error'));
+    } else if (ev.kind === 'result' && mine) {
+      mine.forEach(function(chip) {
+        chip.className = 'tool-chip ' + (ev.ok ? 'tool-chip-ok' : 'tool-chip-err');
+        chip.querySelector('.tool-chip-icon use').setAttribute('href', '#i-' + (ev.ok ? 'check_circle' : 'error'));
+      });
       var running = row.querySelector('.tool-chip-run');
       setStatus(!running);
     } else if (ev.kind === 'pending' && row && window.__loopPendingCard) {
@@ -119,7 +122,7 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "\u627f\u8a8d\u5f85\u3061\u3067\u3059"));
+  head.appendChild(el('span', '', "Waiting for your approval"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
@@ -129,12 +132,12 @@ window.__loopPendingCard = function(ev, session) {
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("\u627f\u8a8d"));
+  approve.appendChild(document.createTextNode("Approve"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("\u5374\u4e0b"));
+  reject.appendChild(document.createTextNode("Reject"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -165,14 +168,14 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "\u627f\u8a8d\u3057\u307e\u3057\u305f\u3002" : "\u5374\u4e0b\u3057\u307e\u3057\u305f\u3002") : ((data && data.error) || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002");
+        if (status) status.textContent = ok ? (approving ? "Approved." : "Rejected.") : ((data && data.error) || "Something went wrong - try again.");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
+        if (status) status.textContent = "Something went wrong - try again.";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -230,7 +233,7 @@ if (!window.__loopPendingCardClicks) {
     var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
     var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
     var el = document.getElementById('refresh-note-text');
-    if (el) el.textContent = "{interval}\u3054\u3068\u306b\u81ea\u52d5\u66f4\u65b0".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
+    if (el) el.textContent = "auto-refreshes every {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
   });
 })();
 (function() {
@@ -462,12 +465,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002";
+      var docFailed = "Could not load the document.";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f";
+      var docCopiedText = "Copied";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -579,7 +582,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u305f\u3063\u305f\u4eca" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "just now" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -679,10 +682,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u7de8\u96c6" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "Edit message" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "\u30ad\u30e3\u30f3\u30bb\u30eb" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "\u9001\u4fe1" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Cancel" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "Send" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -743,7 +746,7 @@ if (!window.__loopPendingCardClicks) {
     // While a reply is being written the send button is the stop button.
     var activeStop = null;
     function setSendMode(button, stop) {
-      var label = stop ? "\u505c\u6b62" : "\u9001\u4fe1";
+      var label = stop ? "Stop" : "Send";
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       var use = button.querySelector('svg.icon use');
@@ -762,7 +765,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "\u3042\u306a\u305f" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "You" + "</span>", text);
       input.value = '';
       autoGrow();
       setSendMode(button, true);
@@ -781,7 +784,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "\u8003\u3048\u4e2d\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -856,7 +859,7 @@ if (!window.__loopPendingCardClicks) {
         if (source) source.close();
         if (activeKey) postStop(activeKey);
         reveal.stop();
-        var stopped = "\uff08\u8fd4\u4fe1\u3092\u505c\u6b62\u3057\u307e\u3057\u305f\uff09";
+        var stopped = "(reply stopped)";
         pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
         resetSendButton();
         stopStreamingFlag();
@@ -893,7 +896,7 @@ if (!window.__loopPendingCardClicks) {
         });
         source.addEventListener('error', function(ev) {
           if (aborted) return;
-          var message = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
+          var message = "Something went wrong - try again.";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -904,7 +907,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "\uff08\u8fd4\u4fe1\u304c\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f\uff09", false);
+            pending.show(accumulated + ' ' + "(reply interrupted)", false);
           }
           resetSendButton();
           stopStreamingFlag();
@@ -921,7 +924,7 @@ if (!window.__loopPendingCardClicks) {
             return;
           }
           if (!result.ok) {
-            pending.show(result.data.error || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002", false);
+            pending.show(result.data.error || "Something went wrong.", false);
             resetSendButton();
             stopStreamingFlag();
             return;
@@ -948,7 +951,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002", false);
+          pending.show("Something went wrong - try again.", false);
           if (aborted) return;
           resetSendButton();
           stopStreamingFlag();
@@ -999,7 +1002,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "\u3053\u306e\u9805\u76ee\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002";
+    if (text) text.textContent = field.validationMessage || "Please fill out this field.";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -1077,7 +1080,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "\u3053\u306e\u30bb\u30af\u30b7\u30e7\u30f3\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002" + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Couldn't load this section." + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1184,7 +1187,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "#{iid} \u306e\u8ffd\u8de1\u3092\u505c\u6b62" : "#{iid} \u306e\u8ffd\u8de1\u3092\u518d\u958b").replace('{iid}', issueIid);
+          var label = (enabled ? "Stop tracking #{iid}" : "Track #{iid} again").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }
