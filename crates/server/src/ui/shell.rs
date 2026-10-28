@@ -179,6 +179,8 @@ pub fn lang_switch_html(lang: Lang) -> String {
 }
 
 /// `_render_shell(title, active_page, status_badge_html, body_html, ...)`.
+/// `status_badge_html` is the page's loop status; it only lights the topbar's progress
+/// sliver now, since the Agents pill (`queue::pill_html`) carries the progress text.
 pub fn render_shell(
     ctx: &UiCtx,
     title: &str,
@@ -304,7 +306,10 @@ mod tests {
         assert!(html.starts_with("<!doctype html>\n<html lang=\"en\">"));
         assert!(html.contains("<title>Overview · LoopX Engineering</title>"));
         assert!(html.contains("<p>body</p>"));
-        assert!(html.contains("<b>badge</b>"));
+        assert!(
+            !html.contains("<b>badge</b>"),
+            "a running loop's progress shows in the Agents pill instead"
+        );
         assert!(!html.contains('\u{27e6}'));
         assert!(html.contains("name='csrf_token' value=\"test-csrf-token\""));
     }

@@ -18,6 +18,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 
 ### Changed
+- Topbar: the Agents pill now shows what a running loop is doing (a spinner and "Processing <project> #<issue> — <step>", cut short with the full text on hover) instead of a second status pill beside it, which also stops the centred pill from overlapping the topbar icons.
 - GitLab: tracking a project for the issue loop is now a Track switch on its row in Project aliases (local checkout, target branch, and a "Use worktree" switch that is on by default); the separate Tracked Projects card and its install/lint/test command fields are gone. Loop settings moved into the GitLab card.
 - GitLab issue loop: the agent works out each project's install, lint and test commands itself (starting from any commands already saved, its earlier runs and other projects on the same stack), fixes verification setup such as RuboCop's cache, and logs what it used; the Live view shows those checks under each issue.
 - GitLab issue loop: runs in gate mode by default - the loop re-runs the agent's logged lint and test commands, refuses anything outside a per-stack allowlist, and opens the merge request itself only when they pass.

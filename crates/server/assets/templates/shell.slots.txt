@@ -33,7 +33,6 @@ _sidebar_html(active_page)
 update_chip_html
 ai_trigger_html
 ai_cli_badge_html
-status_badge_html
 refresh_html
 lang_switch_html
 update_banner_html

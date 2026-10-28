@@ -1037,7 +1037,6 @@
 ⟦update_chip_html⟧
 ⟦ai_trigger_html⟧
 ⟦ai_cli_badge_html⟧
-⟦status_badge_html⟧
 ⟦refresh_html⟧
 ⟦lang_switch_html⟧
 </div>
@@ -1056,16 +1055,17 @@
 <div class="nav-tooltip" id="nav-tooltip" role="tooltip" hidden></div>
 <script>
 (function() {
-  // Agents pill in the topbar: how many loops run and wait (see
-  // pages/queue.rs). Kept current while the tab is visible.
+  // Agents pill in the topbar: what a running loop is doing, else how many
+  // loops run and wait (see pages/queue.rs). Kept current while the tab is visible.
   var pill = document.getElementById('queue-pill');
   if (!pill) return;
   function refresh() {
     if (document.hidden) return;
     fetch('/queue/pill').then(function(r) { return r.json(); }).then(function(d) {
       pill.className = 'topbar-agents ' + d.class + (location.pathname === '/queue' ? ' is-active' : '');
-      var label = pill.querySelector('span');
-      if (label) label.textContent = d.label;
+      pill.innerHTML = d.icon + '<span></span>';
+      pill.lastChild.textContent = d.label;
+      pill.title = d.label;
     }).catch(function() {});
   }
   setInterval(refresh, 3000);

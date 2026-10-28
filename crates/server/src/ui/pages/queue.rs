@@ -3,11 +3,11 @@
 //! (`pill_html`) links here and polls `/queue/pill`. The queue itself lives in
 //! `loopx_core::run_queue`; this page only reads it and presses its buttons.
 
-use crate::ui::badge::default_badge;
+use crate::ui::badge::{default_badge, progress_text};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
 use crate::ui::state::UiState;
-use crate::ui::{icons, pyfmt};
+use crate::ui::{consts, icons, pyfmt};
 use chrono::{Local, NaiveDateTime};
 use loopx_core::run_queue::{self, Entry, RunQueue, Snapshot};
 use serde_json::json;
@@ -68,8 +68,22 @@ fn short_age(secs: i64) -> String {
 
 // ----- the topbar pill -----
 
-/// `(css class, label)` for the topbar pill from the queue's counts.
-fn pill_parts(ctx: &UiCtx, snap: &Snapshot) -> (&'static str, String) {
+/// What a running loop is doing right now, from its status file: the GitLab loop
+/// first (it also runs outside the queue), then each running queue entry.
+fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
+    std::iter::once("gitlab-loop")
+        .chain(snap.running.iter().map(|e| e.loop_name.as_str()))
+        .map(|name| loopx_core::status::read_status(&ctx.state.status_path_for_loop(name)))
+        .find(|status| status.get("state").and_then(|s| s.as_str()) == Some("running"))
+        .map(|status| progress_text(ctx.lang, &status))
+}
+
+/// `(css class, label, busy)` for the topbar pill: a running loop's progress,
+/// else the queue's counts.
+fn pill_parts(ctx: &UiCtx, snap: &Snapshot) -> (&'static str, String, bool) {
+    if let Some(progress) = running_progress(ctx, snap) {
+        return ("pill pill-blue", progress, true);
+    }
     let (running, queued) = (snap.running.len(), snap.queued.len());
     if running > 0 {
         let label = if queued > 0 {
@@ -80,34 +94,42 @@ fn pill_parts(ctx: &UiCtx, snap: &Snapshot) -> (&'static str, String) {
         } else {
             ctx.tf("{running} running", &[("running", &running.to_string())])
         };
-        return ("pill pill-blue", label);
+        return ("pill pill-blue", label, true);
     }
     if queued > 0 {
-        return ("pill pill-blue", ctx.tf("{queued} queued", &[("queued", &queued.to_string())]));
+        return ("pill pill-blue", ctx.tf("{queued} queued", &[("queued", &queued.to_string())]), false);
     }
     if snap.recent.first().is_some_and(|e| e.state == "failed") {
-        return ("pill pill-red", ctx.t("Last run failed"));
+        return ("pill pill-red", ctx.t("Last run failed"), false);
     }
-    ("pill pill-outline", ctx.t("Agents"))
+    ("pill pill-outline", ctx.t("Agents"), false)
 }
 
-/// The topbar link to Agents; `JS in shell.tpl` keeps it current.
+fn pill_icon(busy: bool) -> String {
+    if busy {
+        consts::ds("_SPINNER_ICON").to_string()
+    } else {
+        icons::icon("speed")
+    }
+}
+
+/// The topbar link to Agents, which also says what a running loop is doing;
+/// `JS in shell.tpl` keeps it current.
 pub fn pill_html(ctx: &UiCtx) -> String {
     let snap = queue_for(ctx.state).snapshot(1);
-    let (class, label) = pill_parts(ctx, &snap);
-    let title = pyfmt::escape(&ctx.t("Agents"));
+    let (class, label, busy) = pill_parts(ctx, &snap);
+    let label = pyfmt::escape(&label);
     let active = if ctx.req.path == "/queue" { " is-active" } else { "" };
     format!(
-        "<a class='topbar-agents {class}{active}' id='queue-pill' href='/queue' title='{title}' aria-label='{title}'>{}<span>{}</span></a>",
-        icons::icon("speed"),
-        pyfmt::escape(&label),
+        "<a class='topbar-agents {class}{active}' id='queue-pill' href='/queue' title='{label}'>{}<span>{label}</span></a>",
+        pill_icon(busy),
     )
 }
 
 fn pill(ctx: &UiCtx) -> UiResponse {
     let snap = queue_for(ctx.state).snapshot(1);
-    let (class, label) = pill_parts(ctx, &snap);
-    UiResponse::json(200, &json!({"class": class, "label": label}))
+    let (class, label, busy) = pill_parts(ctx, &snap);
+    UiResponse::json(200, &json!({"class": class, "label": label, "icon": pill_icon(busy)}))
 }
 
 // ----- the page -----
@@ -343,6 +365,49 @@ mod tests {
         assert!(pill.contains("1 running") && pill.contains("2 queued"), "{pill}");
         let shell = st.registry.dispatch(&st, &UiRequest::get("/queue")).unwrap().body_text();
         assert!(shell.contains("id='queue-pill'") && shell.contains("1 running · 2 queued"));
+    }
+
+    fn write_status(dir: &std::path::Path, rel: &str, body: &str) {
+        let path = dir.join("outputs").join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn the_pill_carries_a_running_loops_progress_with_a_spinner() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        write_status(
+            d.path(),
+            "status.json",
+            r#"{"state": "running", "current_issue": "web #1362", "current_step": "analyzing"}"#,
+        );
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        let pill: serde_json::Value = serde_json::from_str(&pill).unwrap();
+        assert_eq!(pill["label"], "Processing web #1362 — Analyzing");
+        assert_eq!(pill["class"], "pill pill-blue");
+        assert!(pill["icon"].as_str().unwrap().contains("md-spinner"), "{pill}");
+        let shell = st.registry.dispatch(&st, &UiRequest::get("/runs")).unwrap().body_text();
+        let start = shell.find("id='queue-pill'").unwrap();
+        let tag = &shell[start..start + shell[start..].find("</a>").unwrap()];
+        assert!(tag.contains("md-spinner") && tag.contains("Processing web #1362 — Analyzing"), "{tag}");
+        assert_eq!(shell.matches("Processing web #1362").count(), 2, "only the pill and its title");
+    }
+
+    #[test]
+    fn a_queued_loops_own_progress_wins_over_the_run_count() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let q = RunQueue::new(d.path().join("run_queue.json"));
+        q.enqueue("topic-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
+        q.claim_next("2026-10-27T10:00:05", 1).unwrap();
+        write_status(
+            d.path(),
+            "status/topic-loop.json",
+            r#"{"state": "running", "current_step": "analyzing"}"#,
+        );
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        assert!(pill.contains(r#""label": "Analyzing""#), "{pill}");
     }
 
     #[test]
