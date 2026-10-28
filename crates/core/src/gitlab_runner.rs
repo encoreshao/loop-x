@@ -67,7 +67,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"Fix #<iid>: <short title>\", \"summary\": \"<2-4 sentences on what you changed and why; the loop posts it on the issue next to the merge request link>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}}\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<2-4 sentences on what you changed and why; the loop posts it on the issue next to the merge request link>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}}\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
 
 fn tool_patterns(exe: &str, subs: &[&str]) -> Vec<String> {
     subs.iter()
@@ -1283,6 +1283,15 @@ pub fn finalize_gated_issue(
     );
     // Same shape the batch wrap-up reads from an agent-emitted fix event.
     let mr_url = find_mr_url(&detail);
+    // A push option can't carry a multi-line description, so set it once the MR exists.
+    match mr_url.as_deref().and_then(mr_iid) {
+        Some(mr) => api(
+            "PUT",
+            &format!("projects/{}/merge_requests/{mr}", quote(&project_id)),
+            json!({"description": mr_description(&data, issue_iid, summary, &checks)}),
+        ),
+        None => log("no merge request URL in the push output; its description was not set"),
+    }
     emit(
         "issue.completed",
         json!({"outcome": "mr_opened", "gated": true, "action": "fix", "mr_url": mr_url}),
@@ -1300,6 +1309,34 @@ pub fn finalize_gated_issue(
 }
 
 /// First `https?://<non-space>/merge_requests/<digits>` in `text`.
+/// The merge request's number from its web URL.
+fn mr_iid(url: &str) -> Option<&str> {
+    url.rsplit_once("/merge_requests/")
+        .map(|(_, iid)| iid)
+        .filter(|iid| !iid.is_empty() && iid.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The merge request description: the agent's (written to the create-mr skill's
+/// template), led by `Closes #<iid>` so GitLab links and closes the issue; else one
+/// built from the handoff summary and the checks the loop ran.
+fn mr_description(data: &Value, issue_iid: &str, summary: &str, checks: &[String]) -> String {
+    let closes = format!("Closes #{issue_iid}");
+    match data
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+    {
+        Some(d) if !d.is_empty() && d.contains(&closes) => d.to_string(),
+        Some(d) if !d.is_empty() => format!("{closes}\n\n{d}"),
+        _ => format!(
+            "## What and why\n\n{closes}\n\n{summary}\n\n## Verified\n\n{}",
+            checks.join("\n")
+        )
+        .trim_end()
+        .to_string(),
+    }
+}
+
 fn find_mr_url(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut start = 0;
@@ -2011,6 +2048,96 @@ mod tests {
         assert!(!body.contains("rspec"), "{body}");
     }
 
+    /// Finalize a passed gated fix for `web #7` from `handoff`, with a push whose
+    /// output names MR !1489; the GitLab calls it made.
+    fn finalize_fix(handoff: Value) -> Vec<(String, String, Value)> {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(&path, handoff.to_string()).unwrap();
+        let evidence = json!({"commands": [{"kind": "test", "command": "pnpm test", "passed": true, "source": "handoff"}]});
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Completed,
+            vec![iteration(vec![v("project_commands", true, "", evidence)])],
+            "",
+        );
+        let notes = Notes(Default::default());
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote: View merge request for loop/issue-7:\nremote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
+        let ctx = RunCtx {
+            repo_root: d.path().into(),
+            events_dir: Some(d.path().join("events")),
+            results_dir: None,
+            unified_log: d.path().join("log"),
+            exe: "loopx".into(),
+            config_path: None,
+            fakes: None,
+        };
+        let notifier = |_: &str| {};
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "mr_opened");
+        notes.0.into_inner().unwrap()
+    }
+
+    fn mr_description(calls: &[(String, String, Value)]) -> String {
+        let put = calls
+            .iter()
+            .find(|(m, e, _)| m == "PUT" && e == "projects/g%2Fp/merge_requests/1489")
+            .unwrap_or_else(|| panic!("no description update in {calls:?}"));
+        put.2["description"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn the_opened_mr_gets_the_agents_description_closing_the_issue() {
+        let description = "## What and why\n\n- Problem: p\n- Fix: f\n- Result: r\n\n## How\n\n- h";
+        let calls = finalize_fix(
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+            "title": "fix: #7 x", "summary": "S.", "description": description}),
+        );
+        let body = mr_description(&calls);
+        assert!(body.starts_with("Closes #7\n\n## What and why"), "{body}");
+        assert!(body.ends_with("- h"), "{body}");
+    }
+
+    #[test]
+    fn an_mr_without_an_agent_description_still_gets_one_from_the_summary_and_checks() {
+        let calls = finalize_fix(
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+            "title": "fix: #7 x", "summary": "Fixed the thing."}),
+        );
+        let body = mr_description(&calls);
+        assert!(
+            body.starts_with("## What and why\n\nCloses #7\n\nFixed the thing."),
+            "{body}"
+        );
+        assert!(
+            body.contains("## Verified") && body.contains("- `pnpm test` \u{2705}"),
+            "{body}"
+        );
+    }
+
     /// A worktree-off project `web` whose checkout (a clone of a bare origin
     /// with one commit on `main`) is on `feature-x`, and a run context whose
     /// GitLab calls and Slack messages are recorded, never sent.
@@ -2214,6 +2341,22 @@ mod tests {
         let (prompt, _) = gate_prompt_and_env("p", "web", "7", d.path(), Some("r")).unwrap();
         assert!(prompt.contains("\"verification\""), "{prompt}");
         assert!(prompt.contains("\"cwd\""), "{prompt}");
+    }
+
+    #[test]
+    fn gate_prompt_asks_for_an_mr_description_in_the_create_mr_shape() {
+        let d = tempfile::tempdir().unwrap();
+        let (prompt, _) = gate_prompt_and_env("p", "web", "7", d.path(), Some("r")).unwrap();
+        for part in [
+            "\"description\"",
+            "Closes #<iid>",
+            "## What and why",
+            "## How",
+            "## Verified",
+        ] {
+            assert!(prompt.contains(part), "{part}: {prompt}");
+        }
+        assert!(prompt.contains("\"title\": \"<fix|feat"), "{prompt}");
     }
 
     #[test]

@@ -245,7 +245,7 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
      ```
    - Otherwise, open a new one:
      ```
-     loopx mr open <local_path> loop/issue-<issue_iid> <target_branch> "Fix #<issue_iid>: <short title>"
+     loopx mr open <local_path> loop/issue-<issue_iid> <target_branch> "<fix|feat|refactor|test|chore|docs>: #<issue_iid> <what was fixed or added, from the user's point of view>"
      ```
      `<local_path>` is passed as the script's first *argument*, not as a directory you have to be in — `loopx mr open` uses `git -C` internally against it. That `git -C` lives inside an already-approved script, so it is unaffected by the direct-command allowlist. Do not `cd` anywhere for this command: the script is named by absolute path and takes its repo as an argument, so it runs correctly from wherever the step-5 `cd` left you (the worktree). Always push the `loop/issue-<issue_iid>` branch by name.
    If the prompt contains a "Harness gate is ON" section, follow that section instead of this step.
