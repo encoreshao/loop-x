@@ -19,7 +19,7 @@ loop(s) are due — there is no longer a separate `launchd/*.plist` per task.
 | Pipeline Doctor loop | [`docs/tasks/pipeline-doctor-loop.md`](docs/tasks/pipeline-doctor-loop.md) | Hourly once enabled, from its `loops.json` entry (disabled by default) |
 | RSS Watch loop | [`docs/tasks/rss-watch-loop.md`](docs/tasks/rss-watch-loop.md) | Daily 08:00 once enabled, from its `loops.json` entry (disabled by default) |
 | LinkedIn Autopilot loop | [`docs/tasks/linkedin-autopilot-loop.md`](docs/tasks/linkedin-autopilot-loop.md) | Daily 09:00 once enabled, from its `loops.json` entry (disabled by default) |
-| Meeting Prep loop | [`docs/tasks/meeting-prep-loop.md`](docs/tasks/meeting-prep-loop.md) | Every 15 minutes once enabled, from its `loops.json` entry (disabled by default) |
+| Meeting Prep loop | [`docs/tasks/meeting-prep-loop.md`](docs/tasks/meeting-prep-loop.md) | Every 15 minutes once enabled, from its `loops.json` entry (disabled by default), plus on the minute a meeting comes within its "Minutes ahead" |
 | Release Notes loop | [`docs/tasks/release-notes-loop.md`](docs/tasks/release-notes-loop.md) | Hourly once enabled, from its `loops.json` entry (disabled by default) |
 | Stale Work Sweeper loop | [`docs/tasks/stale-sweeper-loop.md`](docs/tasks/stale-sweeper-loop.md) | Mondays 09:00 once enabled, from its `loops.json` entry (disabled by default) |
 

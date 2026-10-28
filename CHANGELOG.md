@@ -18,6 +18,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 
 ### Changed
+- Meeting Prep: a brief now goes out on the minute a meeting comes within your "Minutes ahead" setting, instead of at the next 15-minute calendar refresh (which could send it up to 15 minutes early); the scheduler checks the saved agenda every minute, and the 15-minute refresh still picks up new or moved meetings.
 - The Office/Dashboard chooser shows the LoopX logo and wordmark, uses the same mode icons as the topbar and office, and has shorter wording.
 - Tabs and the Appearance options share one macOS-style segmented control whose track and selected segment follow the chosen theme colour.
 - Office: the Switch to Dashboard button moved out of the chat header to the top-left of the office, so it is reachable without opening the chat.

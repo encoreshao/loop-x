@@ -552,6 +552,34 @@ pub fn lead_minutes(settings: &Value) -> i64 {
     )
 }
 
+/// The agenda `discover` saves for the Live page, under `repo_root`.
+pub fn today_path(repo_root: &Path) -> PathBuf {
+    repo_root
+        .join("outputs")
+        .join("loops")
+        .join("meeting-prep-loop")
+        .join("today.json")
+}
+
+/// Has a meeting in the saved agenda come within the lead window since `since`?
+/// Lets the scheduler start a run the minute a brief is due rather than at the
+/// next calendar refresh.
+pub fn lead_window_opened(
+    today: &Path,
+    settings: &Value,
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> bool {
+    let lead = Duration::minutes(lead_minutes(settings));
+    read_json(today)
+        .get("meetings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|m| parse_time(m.get("start")))
+        .any(|start| start > now && start - lead > since && start - lead <= now)
+}
+
 pub fn mail_days(settings: &Value) -> i64 {
     int_setting(settings, "mail_days", DEFAULT_MAIL_DAYS, 0, MAX_MAIL_DAYS)
 }
@@ -1631,6 +1659,33 @@ mod tests {
             keys(&discover(&h, json!({"include_solo": "yes"}))),
             ["solo", "ok"]
         );
+    }
+
+    #[test]
+    fn the_lead_window_opens_once_per_meeting_in_the_saved_agenda() {
+        let d = tempfile::tempdir().unwrap();
+        let today = d.path().join("today.json");
+        let t = |m: i64| now() + Duration::minutes(m);
+        assert!(!lead_window_opened(&today, &json!({}), t(-1), now()));
+        std::fs::write(
+            &today,
+            json!({"meetings": [{"start": t(30).to_rfc3339()}]}).to_string(),
+        )
+        .unwrap();
+        let lead = json!({"lead_minutes": "30"});
+        // Just came within 30 minutes since the last run: due.
+        assert!(lead_window_opened(&today, &lead, t(-1), now()));
+        // Already inside the window at the last run, which briefed it: not again.
+        assert!(!lead_window_opened(&today, &lead, t(0), t(1)));
+        // Not within the 15 minutes yet.
+        assert!(!lead_window_opened(
+            &today,
+            &json!({"lead_minutes": "15"}),
+            t(-1),
+            now()
+        ));
+        // The meeting has started: too late to brief.
+        assert!(!lead_window_opened(&today, &lead, t(-1), t(31)));
     }
 
     #[test]

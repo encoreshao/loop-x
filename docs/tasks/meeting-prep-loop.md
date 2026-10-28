@@ -14,7 +14,11 @@ per-meeting complement.
   `loops/calendar-prep/prompt.md`.
 - Schedule: every 15 minutes (`{"frequency": "hourly", "interval_minutes": 15}`)
   from its `loops.json` entry, disabled by default; `requires: ["calendar"]`,
-  so add a Google Calendar connector first.
+  so add a Google Calendar connector first. Between those calendar refreshes
+  the minute scheduler also starts a run on the tick a meeting in the agenda
+  the last run saved (`today.json`) comes within `lead_minutes`
+  (`loop_scheduler::meeting_prep_due`), so a brief goes out about
+  `lead_minutes` before the meeting rather than whenever the next refresh lands.
 - Discovery: for each calendar account (or only `settings.calendar_account`),
   events starting within the next `lead_minutes` (default 45). All-day events,
   events already started, events you declined and events with no other

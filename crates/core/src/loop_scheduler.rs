@@ -235,6 +235,45 @@ fn slot_missed(loop_: &Value, now: NaiveDateTime) -> bool {
     slot.is_some_and(|slot| now - slot > Duration::minutes(ON_TIME_MINUTES))
 }
 
+/// Meeting Prep between its calendar refreshes: due on the tick a meeting in the
+/// agenda it last saved comes within the user's "Minutes ahead".
+pub fn meeting_prep_due(
+    loop_: &Value,
+    state: &SchedulerState,
+    now: NaiveDateTime,
+    repo_root: &Path,
+) -> bool {
+    use crate::loop_plugins::calendar_prep;
+    use chrono::{Local, TimeZone, Utc};
+    let name = "meeting-prep-loop";
+    if loop_.get("name").and_then(Value::as_str) != Some(name)
+        || !loop_.get("enabled").is_none_or(loops_config::py_truthy)
+    {
+        return false;
+    }
+    let utc = |t: NaiveDateTime| {
+        Local
+            .from_local_datetime(&t)
+            .earliest()
+            .map(|d| d.with_timezone(&Utc))
+    };
+    let since = state
+        .get(name)
+        .and_then(|s| s.get("last_attempted_at"))
+        .and_then(Value::as_str)
+        .and_then(parse_iso)
+        .and_then(utc);
+    let (Some(since), Some(now)) = (since, utc(now)) else {
+        return false;
+    };
+    calendar_prep::lead_window_opened(
+        &calendar_prep::today_path(repo_root),
+        loop_.get("settings").unwrap_or(&Value::Null),
+        since,
+        now,
+    )
+}
+
 /// The scheduler tick: queue every due loop that is not already queued or
 /// running (the worker starts them one by one) and record the attempt, so a loop
 /// is queued once per slot. Returns the names queued, in registry order.
@@ -247,8 +286,9 @@ pub fn enqueue_due_loops(
     use crate::run_queue::{Enqueued, Reason};
     let mut state = read_state(state_path);
     let mut queued = Vec::new();
+    let repo_root = crate::runner_util::repo_root();
     for loop_ in loops {
-        if !is_due(loop_, &state, now) {
+        if !is_due(loop_, &state, now) && !meeting_prep_due(loop_, &state, now, &repo_root) {
             continue;
         }
         let name = loop_
@@ -286,6 +326,44 @@ pub fn enqueue_due_loops(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn meeting_prep_is_due_between_refreshes_when_a_meeting_enters_its_lead_window() {
+        use chrono::{Local, TimeZone};
+        let d = tempfile::tempdir().unwrap();
+        let last = at(2026, 10, 28, 10, 0);
+        let now = at(2026, 10, 28, 10, 3);
+        let local = |t: NaiveDateTime| Local.from_local_datetime(&t).earliest().unwrap();
+        let prep = json!({"name": "meeting-prep-loop",
+            "schedule": {"frequency": "hourly", "interval_minutes": 15},
+            "settings": {"lead_minutes": "45"}});
+        let mut state = SchedulerState::new();
+        state.insert(
+            "meeting-prep-loop".into(),
+            json!({"last_attempted_at": isoformat(last)}),
+        );
+        assert!(
+            !is_due(&prep, &state, now),
+            "the 15-minute refresh is not due"
+        );
+        assert!(
+            !meeting_prep_due(&prep, &state, now, d.path()),
+            "no agenda yet"
+        );
+
+        let today = crate::loop_plugins::calendar_prep::today_path(d.path());
+        std::fs::create_dir_all(today.parent().unwrap()).unwrap();
+        let start = local(at(2026, 10, 28, 10, 47)).to_rfc3339();
+        std::fs::write(&today, json!({"meetings": [{"start": start}]}).to_string()).unwrap();
+        assert!(meeting_prep_due(&prep, &state, now, d.path()));
+
+        let mut off = prep.clone();
+        off["enabled"] = json!(false);
+        assert!(!meeting_prep_due(&off, &state, now, d.path()));
+        let mut other = prep.clone();
+        other["name"] = json!("other-loop");
+        assert!(!meeting_prep_due(&other, &state, now, d.path()));
+    }
+
     #[test]
     fn seeding_marks_every_loop_attempted_today_and_never_overwrites() {
         let d = tempfile::tempdir().unwrap();
