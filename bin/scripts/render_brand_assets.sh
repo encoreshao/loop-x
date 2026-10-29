@@ -5,7 +5,7 @@ set -euo pipefail
 #
 #   bin/scripts/render_brand_assets.sh
 #
-# Masters (unmixed from the brand mockup, assets/brand/mockup.png, onto a fully transparent
+# Masters (unmixed from the brand mockup onto a fully transparent
 # background: the glows are translucent colour, with no dark tile, gray rim or halo):
 #   mark.png              the infinity-X mark alone, ~1100px wide
 #   name.png              the "LoopX" name with white lettering, for dark backgrounds
