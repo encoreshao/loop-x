@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-29
+
 ### Added
 - GitLab → Tasks: every tracked issue in My Queue gets a "Run now" button that starts the GitLab loop on just that issue (hidden while its tracking switch is off).
 - GitLab loop: each run first deletes the local `loop/issue-<iid>` branch, and its worktree, of every issue that is closed or whose merge request is merged. A worktree with uncommitted changes, or a branch the checkout itself is on, is kept and logged.
@@ -487,7 +489,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/encoreshao/loop-x/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/encoreshao/loop-x/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/encoreshao/loop-x/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/encoreshao/loop-x/compare/v0.8.1...v0.9.0
