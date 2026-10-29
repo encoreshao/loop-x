@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-29
+
 ### Added
 - Brand assets in `assets/brand/`, cut from the brand mockup (`mockup.png`): the 1024px app icon, the "LoopX" name image for dark and light backgrounds, and the name + tagline ("Dynamic Orchestration Workspace") and icon + name + tagline images, with and without their dark background. `bin/scripts/render_brand_assets.sh` renders the full macOS iconset (16-1024px), the favicon and the dashboard's `/brand/*.png` images from them.
 - Mac app: every launch opens on the start screen, whose logo flies in and settles before the dashboard loads, even when the backend is already running; Reduce Motion shows the finished logo.
@@ -473,7 +475,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/encoreshao/loop-x/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/encoreshao/loop-x/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/encoreshao/loop-x/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/encoreshao/loop-x/compare/v0.8.0...v0.8.1
