@@ -11,6 +11,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+- The topbar's chat button is now a chat-bubble line icon, in the same style as the Office icon, instead of the LoopX logo.
+
+### Fixed
+- Auto-refreshing pages no longer reload while the chat side panel is open, so a message being typed there is not wiped.
+
 ## [0.12.0] - 2026-10-29
 
 ### Added

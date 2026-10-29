@@ -219,7 +219,9 @@ pub fn render_shell(
     };
 
     let mut scope = Scope::new(lang);
-    scope.var("ai_label", escaped_t(lang, "Ask LoopX"));
+    scope
+        .var("ai_label", escaped_t(lang, "Ask LoopX"))
+        .var("chat_icon", icons::icon("chat"));
     let office_label = escaped_t(lang, "Switch to Office");
     let ai_trigger_html = format!(
         "{}<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
@@ -340,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn the_chat_button_and_panel_header_carry_the_brand_logo() {
+    fn the_chat_button_uses_the_chat_glyph_and_the_panel_header_the_brand_logo() {
         let state = UiState::for_tests();
         let req = UiRequest::get("/");
         let ctx = UiCtx::new(&state, &req);
@@ -355,8 +357,7 @@ mod tests {
         let start = html.find("id='ai-panel-trigger'").expect("chat button");
         let trigger = &html[start..start + html[start..].find("</button>").unwrap()];
         assert!(
-            trigger.contains(&format!("src='{}'", assets::brand_url("mark.png")))
-                && !trigger.contains("#i-auto_awesome"),
+            trigger.contains(&icons::icon("chat")) && !trigger.contains("<img"),
             "{trigger}"
         );
         let panel = panel_for("claude");
@@ -395,6 +396,12 @@ mod tests {
         );
         assert!(on.contains("location.reload();"));
         assert!(on.contains("id='refresh-note-text'"));
+        let reload = &on[on.find("__loopScheduleRefresh() {").unwrap()..];
+        let reload = &reload[..reload.find("location.reload();").unwrap()];
+        assert!(
+            reload.contains("classList.contains('ai-panel-open')"),
+            "a reload while the chat panel is open would wipe the draft: {reload}"
+        );
         let off = render_shell(&ctx, "Logs · X", "logs", "", "", ShellOpts::default());
         assert!(!off.contains("location.reload();"));
     }

@@ -10,6 +10,7 @@ pub const NAMES: &[&str] = &[
     "add",
     "apartment",
     "office",
+    "chat",
     "add_comment",
     "arrow_back",
     "arrow_forward",

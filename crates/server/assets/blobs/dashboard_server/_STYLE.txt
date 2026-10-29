@@ -542,7 +542,6 @@ button:focus-visible,
 .sidebar-nav a.nav-child { padding-left: 2.1rem; font-size: 0.8rem; }
 html.collapsed .sidebar-nav a.nav-child { padding-left: 0.9rem; }
 .ai-panel-trigger .icon { font-size: 22px; }
-.ai-panel-trigger .brand-chip { width: 28px; height: 28px; display: block; }
 .ai-panel-trigger:hover { background: var(--md-nav-active-surface); }
 html.ai-panel-open .ai-panel-trigger {
   background: color-mix(in srgb, var(--md-primary) 16%, var(--md-nav-surface));

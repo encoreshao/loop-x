@@ -217,6 +217,7 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
+      if (document.documentElement.classList.contains('ai-panel-open')) { __loopScheduleRefresh(); return; }
       location.reload();
     }, refreshSeconds * 1000);
   })();
