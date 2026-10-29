@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-29
+
 ### Changed
 - The topbar's chat button is now a chat-bubble line icon, in the same style as the Office icon, instead of the LoopX logo.
 
@@ -496,7 +498,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/encoreshao/loop-x/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/encoreshao/loop-x/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/encoreshao/loop-x/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/encoreshao/loop-x/compare/v0.9.0...v0.10.0
