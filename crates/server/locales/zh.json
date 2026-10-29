@@ -1207,5 +1207,8 @@
   "Unknown message template: {name}": "未知的消息模板：{name}",
   "Slack messages now use the {name} template": "Slack 消息现在使用 {name} 模板",
   "Sent a sample report to Slack": "已向 Slack 发送示例报告",
-  "The sample report could not be sent - check the webhook": "示例报告发送失败 - 请检查 Webhook"
+  "The sample report could not be sent - check the webhook": "示例报告发送失败 - 请检查 Webhook",
+  "Run the GitLab loop on #{iid} now": "立即对 #{iid} 运行 GitLab 循环",
+  "#{iid} is not tracked - turn its switch on first": "#{iid} 未被跟踪 - 请先打开其开关",
+  "Started work on {alias} #{iid}": "已开始处理 {alias} #{iid}"
 }

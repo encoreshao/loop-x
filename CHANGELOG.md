@@ -11,6 +11,13 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+- GitLab → Tasks: every tracked issue in My Queue gets a "Run now" button that starts the GitLab loop on just that issue (hidden while its tracking switch is off).
+- GitLab loop: each run first deletes the local `loop/issue-<iid>` branch, and its worktree, of every issue that is closed or whose merge request is merged. A worktree with uncommitted changes, or a branch the checkout itself is on, is kept and logged.
+
+### Changed
+- The sidebar's logo sits 25px lower, clear of the top edge.
+
 ## [0.11.0] - 2026-10-29
 
 ### Added

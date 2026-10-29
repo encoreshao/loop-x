@@ -380,6 +380,95 @@ pub fn restore_in_place(repo_path: &str) -> Result<Option<String>, Failure> {
     Ok(Some(original))
 }
 
+/// What [`sweep_finished_issue_branches`] did, by issue iid.
+#[derive(Debug, Default)]
+pub struct Sweep {
+    pub removed: Vec<String>,
+    /// Finished, but kept: the iid and why.
+    pub skipped: Vec<(String, String)>,
+}
+
+/// Every worktree of `repo_path` as `(path, branch)`, the main checkout first.
+fn worktrees(repo_path: &str) -> Result<Vec<(String, String)>, Failure> {
+    let mut out = Vec::new();
+    let mut path = None;
+    for line in git_stdout(repo_path, &["worktree", "list", "--porcelain"])?.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(p.to_string());
+        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+            if let Some(p) = path.take() {
+                out.push((p, b.to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Delete each local `loop/issue-<iid>` branch whose issue `is_finished` says
+/// is done (closed, or its MR merged), removing its worktree first. A worktree
+/// with uncommitted changes, or a branch the checkout itself is on, is kept.
+pub fn sweep_finished_issue_branches(
+    repo_path: &str,
+    is_finished: &mut dyn FnMut(&str) -> bool,
+) -> Result<Sweep, Failure> {
+    // Forget worktrees whose directory was deleted by hand.
+    git(repo_path, &["worktree", "prune"])?;
+    let trees = worktrees(repo_path)?;
+    let refs = git_stdout(
+        repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/loop/",
+        ],
+    )?;
+    let mut sweep = Sweep::default();
+    for branch in refs.lines() {
+        let Some(iid) = branch.strip_prefix("loop/issue-") else {
+            continue;
+        };
+        if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) || !is_finished(iid) {
+            continue;
+        }
+        let tree = trees.iter().position(|(_, b)| b == branch);
+        if tree == Some(0) {
+            sweep.skipped.push((
+                iid.to_string(),
+                format!("{branch} is checked out in {repo_path}"),
+            ));
+            continue;
+        }
+        if let Some(path) = tree.map(|i| trees[i].0.as_str()) {
+            if !git_stdout(path, &["status", "--porcelain"])?
+                .trim()
+                .is_empty()
+            {
+                sweep
+                    .skipped
+                    .push((iid.to_string(), format!("{path} has uncommitted changes")));
+                continue;
+            }
+            // Clean, so --force only gets past git's refusal to remove a
+            // worktree that has submodules.
+            if !git(repo_path, &["worktree", "remove", "--force", path])? {
+                sweep
+                    .skipped
+                    .push((iid.to_string(), format!("could not remove {path}")));
+                continue;
+            }
+        }
+        // -D: a squash-merged MR leaves the branch looking unmerged locally.
+        if git(repo_path, &["branch", "-D", branch])? {
+            sweep.removed.push(iid.to_string());
+        } else {
+            sweep
+                .skipped
+                .push((iid.to_string(), format!("could not delete {branch}")));
+        }
+    }
+    Ok(sweep)
+}
+
 /// `<git-dir>/loopx-restore-branch`: the branch to return an in-place checkout to.
 fn restore_marker(repo_path: &str) -> Result<std::path::PathBuf, Failure> {
     let git_dir = git_stdout(repo_path, &["rev-parse", "--absolute-git-dir"])?;
@@ -644,6 +733,63 @@ mod tests {
         let repo = clone_on_feature(d.path());
         assert_eq!(restore_in_place(&repo).unwrap(), None);
         assert_eq!(head(&repo), "feature-x");
+    }
+
+    fn branches(repo: &str) -> String {
+        sh(
+            Path::new(repo),
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/loop/",
+            ],
+        )
+    }
+
+    #[test]
+    fn finished_issue_branches_and_their_worktrees_are_removed() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt3 = new_worktree(&repo, "main", "3", &root).unwrap();
+        let wt4 = new_worktree(&repo, "main", "4", &root).unwrap();
+        let wt5 = new_worktree(&repo, "main", "5", &root).unwrap();
+        std::fs::write(Path::new(&wt5).join("wip.txt"), "x").unwrap();
+        sh(Path::new(&repo), &["branch", "loop/issue-6"]);
+        sh(Path::new(&repo), &["branch", "loop/other"]);
+        let mut asked = Vec::new();
+        let sweep = sweep_finished_issue_branches(&repo, &mut |iid| {
+            asked.push(iid.to_string());
+            iid != "4"
+        })
+        .unwrap();
+        assert_eq!(asked, ["3", "4", "5", "6"]);
+        assert_eq!(sweep.removed, ["3", "6"]);
+        assert_eq!(sweep.skipped.len(), 1);
+        assert_eq!(sweep.skipped[0].0, "5");
+        assert!(
+            sweep.skipped[0].1.contains("uncommitted"),
+            "{:?}",
+            sweep.skipped
+        );
+        assert!(!Path::new(&wt3).exists());
+        assert!(Path::new(&wt4).exists() && Path::new(&wt5).exists());
+        assert_eq!(branches(&repo), "loop/issue-4\nloop/issue-5\nloop/other");
+    }
+
+    #[test]
+    fn a_finished_branch_checked_out_in_place_is_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        prepare_in_place(&repo, "main", "7").unwrap();
+        let sweep = sweep_finished_issue_branches(&repo, &mut |_| true).unwrap();
+        assert!(sweep.removed.is_empty());
+        assert!(
+            sweep.skipped[0].1.contains("checked out"),
+            "{:?}",
+            sweep.skipped
+        );
+        assert_eq!(head(&repo), "loop/issue-7");
     }
 
     #[test]

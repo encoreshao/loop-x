@@ -1207,5 +1207,8 @@
   "Unknown message template: {name}": "Modèle de message inconnu : {name}",
   "Slack messages now use the {name} template": "Les messages Slack utilisent désormais le modèle {name}",
   "Sent a sample report to Slack": "Rapport d'exemple envoyé à Slack",
-  "The sample report could not be sent - check the webhook": "Le rapport d'exemple n'a pas pu être envoyé - vérifiez le webhook"
+  "The sample report could not be sent - check the webhook": "Le rapport d'exemple n'a pas pu être envoyé - vérifiez le webhook",
+  "Run the GitLab loop on #{iid} now": "Lancer la boucle GitLab sur #{iid} maintenant",
+  "#{iid} is not tracked - turn its switch on first": "#{iid} n'est pas suivi - activez d'abord son interrupteur",
+  "Started work on {alias} #{iid}": "Travail démarré sur {alias} #{iid}"
 }

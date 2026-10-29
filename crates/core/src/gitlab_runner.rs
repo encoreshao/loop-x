@@ -24,7 +24,7 @@ use crate::runner_util::{
 };
 use crate::{
     ai_cli_config, approvals, cost, events, gitlab_report, issue_tracking_config, learning, mr,
-    proc, prompt, slack_report,
+    proc, prompt, slack_report, worktree,
 };
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -1756,6 +1756,66 @@ fn restore_in_place_checkout(
 
 // ---- whole runs -------------------------------------------------------------
 
+/// Deletes each tracked checkout's `loop/issue-<iid>` branch (and worktree) once
+/// GitLab says the issue is done. Best-effort: anything it cannot check or
+/// remove is logged and kept for the next run.
+fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
+    let gitlab_config = gitlab::load_config();
+    for alias in aliases {
+        let Some(local_path) = cfg.project(alias).ok().and_then(|p| {
+            p.get("local_path")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }) else {
+            continue;
+        };
+        let (project_id, instance, bundle) =
+            gitlab::resolve_project_alias(gitlab_config.as_ref(), alias, None);
+        let client = match Client::from_config(
+            gitlab_config.as_ref(),
+            instance.as_deref(),
+            bundle.as_deref(),
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                ctx.log(&format!("branch cleanup skipped for {alias}: {e}"));
+                continue;
+            }
+        };
+        let mut is_finished =
+            |iid: &str| match iid.parse().map(|n| client.issue_finished(&project_id, n)) {
+                Ok(Ok(done)) => done,
+                Ok(Err(e)) => {
+                    ctx.log(&format!(
+                        "branch cleanup: could not check {alias} #{iid}: {e}"
+                    ));
+                    false
+                }
+                Err(_) => false,
+            };
+        match worktree::sweep_finished_issue_branches(&local_path, &mut is_finished) {
+            Ok(sweep) => {
+                for iid in &sweep.removed {
+                    ctx.log(&format!(
+                        "branch cleanup: deleted {} ({alias} #{iid} is done)",
+                        worktree::branch_name(iid)
+                    ));
+                }
+                for (iid, why) in &sweep.skipped {
+                    ctx.log(&format!(
+                        "branch cleanup: kept {} ({alias} #{iid}): {why}",
+                        worktree::branch_name(iid)
+                    ));
+                }
+            }
+            Err(e) => ctx.log(&format!(
+                "branch cleanup skipped for {alias}: {}",
+                e.message
+            )),
+        }
+    }
+}
+
 pub fn run_all_issues(
     ctx: &RunCtx,
     run_id: &str,
@@ -1779,6 +1839,7 @@ pub fn run_all_issues(
         gitlab::list_assigned_issues(gitlab::load_config().as_ref(), &aliases, &username)
             .map_err(|e| e.to_string())?;
     let timeout_seconds = definition.stop_conditions.max_runtime_minutes * 60.0;
+    sweep_finished_branches(ctx, &cfg, &aliases);
 
     let tracking = issue_tracking_config::default_tracking_path();
     let mut todo: Vec<(String, Value)> = Vec::new();

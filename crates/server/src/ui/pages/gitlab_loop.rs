@@ -17,6 +17,7 @@ use crate::ui::{ai_cli, consts, gitlab as ui_gitlab};
 use chrono::{DateTime, Local, Utc};
 use loopx_core::config::use_worktree;
 use loopx_core::loops_config::py_truthy;
+use loopx_core::run_control::{self, Launcher, TriggerOutcome};
 use loopx_core::worktree::{self, CheckoutProblem, RootProblem};
 use loopx_core::{events, gitlab, issue_tracking_config, pydumps, pyjson, status};
 use serde_json::{json, Map, Value};
@@ -709,6 +710,19 @@ fn tracking_toggle_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
     )
 }
 
+/// "Run now" for one tracked issue: starts the loop on just this issue. Hidden by
+/// CSS while the row's tracking switch is off (the route refuses it then too).
+fn issue_run_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
+    let safe_alias = pyfmt::quote(alias, "");
+    let iid = pydumps::py_str(issue_iid);
+    let label = pyfmt::escape(&ctx.tf("Run the GitLab loop on #{iid} now", &[("iid", &iid)]));
+    format!(
+        "<form method='post' action='/gitlab/issues/{safe_alias}/{iid}/run' class='daemon-action-form issue-run-now'>{}<button type='submit' class='btn btn-tonal' aria-label='{label}' title='{label}'><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {}</button></form>",
+        ctx.csrf_input(),
+        esc_t(ctx, "Run now")
+    )
+}
+
 fn item_str(item: &Value, key: &str, default: &str) -> String {
     match item.get(key) {
         Some(Value::Null) | None => default.to_string(),
@@ -730,7 +744,7 @@ fn gitlab_item(ctx: &UiCtx, item: &Value, prefix: &str, alias: Option<&str>, com
     };
     let iid = item.get("iid").filter(|v| !v.is_null());
     let toggle = match (alias, iid) {
-        (Some(a), Some(i)) => tracking_toggle_html(ctx, a, i),
+        (Some(a), Some(i)) => format!("{}{}", issue_run_html(ctx, a, i), tracking_toggle_html(ctx, a, i)),
         _ => String::new(),
     };
     let link = format!(
@@ -887,10 +901,13 @@ pub fn live_fragment_html(ctx: &UiCtx, live: &[(String, AliasState)]) -> String 
 }
 
 // ---------------------------------------------------------------------------
-// POST /gitlab/issues/<alias>/<iid>/enable|disable
+// POST /gitlab/issues/<alias>/<iid>/enable|disable|run
 
 fn issue_tracking_toggle(ctx: &UiCtx) -> UiResponse {
     let rest = ctx.param("rest").to_string();
+    if let Some(middle) = rest.strip_suffix("/run") {
+        return issue_run(ctx, middle);
+    }
     let (enabled, middle) = if let Some(m) = rest.strip_suffix("/enable") {
         (true, m)
     } else if let Some(m) = rest.strip_suffix("/disable") {
@@ -908,6 +925,36 @@ fn issue_tracking_toggle(ctx: &UiCtx) -> UiResponse {
         Err(e) => (false, e),
     };
     UiResponse::json(200, &json!({"ok": ok, "enabled": enabled, "message": message}))
+}
+
+/// Starts the GitLab loop on one tracked issue, then shows the Live view.
+fn issue_run(ctx: &UiCtx, middle: &str) -> UiResponse {
+    let (alias, iid_part) = middle.rsplit_once('/').unwrap_or(("", middle));
+    let Some(iid) = py_int(iid_part) else {
+        return UiResponse::not_found(ctx.lang);
+    };
+    let back = "/loops/gitlab-loop?view=live";
+    let path = ctx.state.home_dir.join("issue_tracking.json");
+    if !issue_tracking_config::is_issue_enabled(alias, iid, &path).unwrap_or(true) {
+        let message = ctx.tf("#{iid} is not tracked - turn its switch on first", &[("iid", &iid.to_string())]);
+        return UiResponse::flash_redirect(false, &message, back);
+    }
+    let fallback = ctx.state.repo_root.join("run-loop-now.sh");
+    let launcher = Launcher {
+        cmd: &ctx.state.run_cmd,
+        cwd: &ctx.state.repo_root,
+        fallback_path: &fallback,
+        queue: None,
+    };
+    let (ok, message) = match run_control::trigger_issue_run(&ctx.state.status_path(), alias, iid, &launcher) {
+        TriggerOutcome::AlreadyRunning => (false, ctx.t("A run is already in progress")),
+        TriggerOutcome::LauncherMissing(p) => (false, ctx.tf("run-loop-now.sh not found at {path}", &[("path", &p)])),
+        TriggerOutcome::Started | TriggerOutcome::Queued(_) => (
+            true,
+            ctx.tf("Started work on {alias} #{iid}", &[("alias", alias), ("iid", &iid.to_string())]),
+        ),
+    };
+    UiResponse::flash_redirect(ok, &message, back)
 }
 
 /// Python's `int(text)`: optional sign and underscores between digits, surrounding spaces.
@@ -1615,6 +1662,12 @@ mod tests {
             let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), &home, dir.path(), "tok", None);
             Self { dir, state, req: UiRequest::get("/") }
         }
+        /// "Run now" writes its arguments to `marker` instead of starting a run.
+        fn with_echo_launcher(self, marker: &Path) -> Self {
+            let script = format!("echo \"$@\" > {}", marker.display());
+            let Sandbox { dir, state, req } = self;
+            Sandbox { dir, state: state.with_run_cmd(&["sh", "-c", &script, "sh"]), req }
+        }
         fn ctx(&self) -> UiCtx<'_> {
             UiCtx::new(&self.state, &self.req)
         }
@@ -1850,4 +1903,69 @@ mod tests {
         assert!(!html.contains("quota gone"), "{html}");
         assert!(!html.contains("tab=ai-cli"), "{html}");
     }
+    fn post(state: &UiState, path: &str) -> crate::ui::routes::UiResponse {
+        let req = UiRequest::new(axum::http::Method::POST, path)
+            .with_header("content-type", "application/x-www-form-urlencoded")
+            .with_body("csrf_token=tok");
+        Registry::with_pages().dispatch(state, &req).expect("route")
+    }
+
+    fn wait_for(path: &Path) -> String {
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if !text.is_empty() {
+                    return text;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("{} never written", path.display());
+    }
+
+    #[test]
+    fn a_tracked_issue_gets_a_run_now_button_and_the_backlog_does_not() {
+        let sb = Sandbox::new();
+        let issue = json!({"iid": 7, "title": "Fix it", "web_url": "https://g.example/app/-/issues/7"});
+        let row = gitlab_item(&sb.ctx(), &issue, "#", Some("app"), true);
+        assert!(
+            row.contains("<form method='post' action='/gitlab/issues/app/7/run' class='daemon-action-form issue-run-now'>"),
+            "{row}"
+        );
+        assert!(row.contains("name='csrf_token'"), "{row}");
+        assert!(row.contains("Run now"), "{row}");
+        let backlog = gitlab_item(&sb.ctx(), &issue, "#", None, false);
+        assert!(!backlog.contains("issue-run-now"), "{backlog}");
+    }
+
+    #[test]
+    fn run_now_on_an_issue_starts_the_loop_scoped_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("started");
+        let sb = Sandbox::new().with_echo_launcher(&marker);
+        let state = &sb.state;
+        let resp = post(state, "/gitlab/issues/app/7/run");
+        assert_eq!(resp.status, 303);
+        let location = resp.header("Location").unwrap();
+        assert!(location.starts_with("/loops/gitlab-loop?view=live&flash="), "{location}");
+        assert!(location.ends_with("&ok=1"), "{location}");
+        assert_eq!(wait_for(&marker).trim(), "gitlab-loop app 7");
+    }
+
+    #[test]
+    fn run_now_on_an_issue_is_refused_when_untracked_or_a_run_is_going() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("started");
+        let sb = Sandbox::new().with_echo_launcher(&marker);
+        let state = &sb.state;
+        issue_tracking_config::set_issue_enabled("app", 7, false, &state.home_dir.join("issue_tracking.json")).unwrap();
+        let resp = post(state, "/gitlab/issues/app/7/run");
+        assert!(resp.header("Location").unwrap().ends_with("&ok=0"));
+        status::write_status(&state.status_path(), "running", &[]).unwrap();
+        let resp = post(state, "/gitlab/issues/app/8/run");
+        assert!(resp.header("Location").unwrap().ends_with("&ok=0"));
+        assert_eq!(post(state, "/gitlab/issues/app/x/run").status, 404);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!marker.exists());
+    }
 }
+

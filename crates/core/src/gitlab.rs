@@ -347,6 +347,22 @@ impl Client {
         Ok(issue)
     }
 
+    /// Is the loop done with this issue for good: closed, or the MR from its
+    /// `loop/issue-<iid>` branch merged? Decides when that branch is deleted.
+    pub fn issue_finished(&self, project_id: &str, iid: i64) -> Result<bool, GitlabError> {
+        let base = format!("projects/{}", quote(project_id));
+        let issue = self.get_json(&format!("{base}/issues/{iid}"))?;
+        if issue.get("state").and_then(Value::as_str) == Some("closed") {
+            return Ok(true);
+        }
+        let branch = crate::worktree::branch_name(&iid.to_string());
+        let merged = self.get_all(
+            &format!("{base}/merge_requests"),
+            &[("source_branch", &branch), ("state", "merged")],
+        )?;
+        Ok(!merged.is_empty())
+    }
+
     /// The merge request plus its `changes` and `notes`.
     pub fn get_merge_request(&self, project_id: &str, iid: i64) -> Result<Value, GitlabError> {
         let base = format!("projects/{}/merge_requests/{iid}", quote(project_id));
@@ -558,5 +574,46 @@ mod tests {
             .err()
             .unwrap();
         assert!(matches!(err, GitlabError::BundleInstanceMismatch { .. }));
+    }
+    /// Answers each request from `reply(path_and_query)` until dropped.
+    fn stub(reply: fn(&str) -> &'static str) -> String {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            for s in l.incoming().flatten() {
+                let mut line = String::new();
+                let mut r = BufReader::new(&s);
+                r.read_line(&mut line).unwrap();
+                while {
+                    let mut h = String::new();
+                    r.read_line(&mut h).unwrap() > 2
+                } {}
+                let path = line.split(' ').nth(1).unwrap_or("").to_string();
+                let body = reply(&path);
+                let _ = write!(&s, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            }
+        });
+        url
+    }
+
+    #[test]
+    fn an_issue_is_finished_when_closed_or_its_loop_mr_merged() {
+        let url = stub(|path| {
+            if path.contains("/issues/1") {
+                r#"{"iid": 1, "state": "closed"}"#
+            } else if path.contains("/issues/") {
+                r#"{"state": "opened"}"#
+            } else if path.contains("source_branch=loop%2Fissue-2") && path.contains("state=merged")
+            {
+                r#"[{"iid": 9, "state": "merged"}]"#
+            } else {
+                "[]"
+            }
+        });
+        let client = Client::new(&url, "t".into());
+        assert!(client.issue_finished("g/app", 1).unwrap());
+        assert!(client.issue_finished("g/app", 2).unwrap());
+        assert!(!client.issue_finished("g/app", 3).unwrap());
     }
 }

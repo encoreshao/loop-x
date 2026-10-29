@@ -1207,5 +1207,8 @@
   "Unknown message template: {name}": "不明なメッセージテンプレート: {name}",
   "Slack messages now use the {name} template": "Slack メッセージは {name} テンプレートを使うようになりました",
   "Sent a sample report to Slack": "サンプルレポートを Slack に送信しました",
-  "The sample report could not be sent - check the webhook": "サンプルレポートを送信できませんでした - Webhook を確認してください"
+  "The sample report could not be sent - check the webhook": "サンプルレポートを送信できませんでした - Webhook を確認してください",
+  "Run the GitLab loop on #{iid} now": "#{iid} で GitLab ループを今すぐ実行",
+  "#{iid} is not tracked - turn its switch on first": "#{iid} は追跡されていません - 先にスイッチをオンにしてください",
+  "Started work on {alias} #{iid}": "{alias} #{iid} の作業を開始しました"
 }

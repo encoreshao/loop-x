@@ -496,41 +496,22 @@ fn run_issue(state: &UiState, url: &str) -> Value {
     let Some((alias, iid)) = resolve_issue_url(url, &prefixes) else {
         return json!({ "ok": false, "message": format!("Could not match {} to a tracked project", py_repr(url)) });
     };
-    if status::read_status(&state.status_path())
-        .get("state")
-        .and_then(Value::as_str)
-        == Some("running")
-    {
-        return json!({ "ok": false, "message": "A run is already in progress" });
-    }
     let fallback = state.repo_root.join("run-loop-now.sh");
-    let Some((program, rest)) = state.run_cmd.split_first() else {
-        return json!({ "ok": false, "message": format!("run-loop-now.sh not found at {}", fallback.display()) });
+    let launcher = Launcher {
+        cmd: &state.run_cmd,
+        cwd: &state.repo_root,
+        fallback_path: &fallback,
+        queue: None,
     };
-    let mut command = std::process::Command::new(program);
-    command
-        .args(rest)
-        .args(["gitlab-loop", &alias, &iid.to_string()])
-        .current_dir(&state.repo_root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            command.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-    }
-    match command.spawn() {
-        Ok(child) => {
-            std::mem::forget(child);
+    match run_control::trigger_issue_run(&state.status_path(), &alias, iid, &launcher) {
+        TriggerOutcome::Started | TriggerOutcome::Queued(_) => {
             json!({ "ok": true, "message": format!("Started work on {alias} #{iid}") })
         }
-        Err(_) => {
-            json!({ "ok": false, "message": format!("run-loop-now.sh not found at {program}") })
+        TriggerOutcome::AlreadyRunning => {
+            json!({ "ok": false, "message": "A run is already in progress" })
+        }
+        TriggerOutcome::LauncherMissing(path) => {
+            json!({ "ok": false, "message": format!("run-loop-now.sh not found at {path}") })
         }
     }
 }

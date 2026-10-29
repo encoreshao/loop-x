@@ -297,6 +297,7 @@ button:focus-visible,
   justify-content: space-between;
   gap: 0.5rem;
   min-height: var(--shell-top);
+  margin-top: 25px;
   padding: 0 1rem;
   flex-shrink: 0;
 }
@@ -815,7 +816,6 @@ html.collapsed .sidebar-top {
   flex-direction: column;
   justify-content: center;
   gap: 0.4rem;
-  margin-top: 1rem;
 }
 
 /* Label bubble shown beside a nav icon on hover/focus while the sidebar is
@@ -1717,6 +1717,10 @@ ul.plain li { font-size: 0.9rem; }
 .gitlab-item-title { font-weight: 500; color: var(--md-on-surface); text-decoration: none; flex: 1 1 auto; min-width: 0; }
 .gitlab-item-title:hover { color: var(--md-primary); text-decoration: underline; }
 .gitlab-item-meta { font-size: 0.78rem; color: var(--md-on-surface-variant); flex-shrink: 0; white-space: nowrap; text-align: right; }
+.issue-run-now { flex-shrink: 0; align-self: center; }
+.issue-run-now .btn { padding: 0.2rem 0.7rem; font-size: 0.75rem; }
+/* Only a tracked issue can be run: follows the row's switch, which flips without a reload. */
+.gitlab-item-row:has(.issue-tracking-toggle .is-off) .issue-run-now { display: none; }
 /* A project's Backlog and MRs are separate sub-sections split by a divider line
    (My Queue and each project are split by the shared .project-block rule). */
 .gitlab-subsection + .gitlab-subsection { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed color-mix(in srgb, var(--md-outline) 35%, transparent); }

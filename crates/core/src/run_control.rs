@@ -174,8 +174,13 @@ pub struct Launcher<'a> {
 }
 
 /// `subprocess.Popen(..., start_new_session=True)` with every stdio detached.
-#[cfg(unix)]
 pub fn launch_detached(launcher: &Launcher, loop_name: &str) -> TriggerOutcome {
+    launch_detached_with(launcher, &[loop_name])
+}
+
+/// [`launch_detached`] with `args` (the loop name and any extras) appended to `cmd`.
+#[cfg(unix)]
+fn launch_detached_with(launcher: &Launcher, extra: &[&str]) -> TriggerOutcome {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let Some((program, args)) = launcher.cmd.split_first() else {
@@ -184,7 +189,7 @@ pub fn launch_detached(launcher: &Launcher, loop_name: &str) -> TriggerOutcome {
     let mut command = Command::new(program);
     command
         .args(args)
-        .arg(loop_name)
+        .args(extra)
         .current_dir(launcher.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -206,7 +211,7 @@ pub fn launch_detached(launcher: &Launcher, loop_name: &str) -> TriggerOutcome {
 }
 
 #[cfg(not(unix))]
-pub fn launch_detached(launcher: &Launcher, _loop_name: &str) -> TriggerOutcome {
+fn launch_detached_with(launcher: &Launcher, _extra: &[&str]) -> TriggerOutcome {
     TriggerOutcome::LauncherMissing(launcher.fallback_path.display().to_string())
 }
 
@@ -254,6 +259,22 @@ pub fn trigger_manual_run(
         return TriggerOutcome::AlreadyRunning;
     }
     start_run(launcher, loop_name)
+}
+
+/// One GitLab issue, now: `gitlab-loop <alias> <iid>` (the runner's scoped
+/// single-issue mode). Refused while the GitLab loop's status says "running".
+/// Always launched directly: queue entries carry only a loop name.
+pub fn trigger_issue_run(
+    status_path: &Path,
+    alias: &str,
+    issue_iid: i64,
+    launcher: &Launcher,
+) -> TriggerOutcome {
+    let status = status::read_status(status_path);
+    if status.get("state").and_then(Value::as_str) == Some("running") {
+        return TriggerOutcome::AlreadyRunning;
+    }
+    launch_detached_with(launcher, &["gitlab-loop", alias, &issue_iid.to_string()])
 }
 
 /// `trigger_topic_monitor_run`: refuse while any topic is running.
@@ -436,6 +457,51 @@ mod tests {
             trigger_manual_run(&status, "rss-loop", &launcher),
             TriggerOutcome::AlreadyRunning
         );
+    }
+
+    #[test]
+    fn an_issue_run_starts_the_loop_scoped_to_that_issue_unless_one_is_running() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("status.json");
+        let marker = d.path().join("started");
+        let cmd: Vec<String> = [
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo \"$@\" > {}", marker.display()),
+            "sh".to_string(),
+        ]
+        .to_vec();
+        // A queue is configured, but a scoped run cannot go through it (entries
+        // carry only a loop name), so it is launched directly.
+        let queue = d.path().join("run_queue.json");
+        let launcher = Launcher {
+            cmd: &cmd,
+            cwd: d.path(),
+            fallback_path: d.path(),
+            queue: Some(&queue),
+        };
+        status::write_status(&p, "running", &[]).unwrap();
+        assert_eq!(
+            trigger_issue_run(&p, "app", 42, &launcher),
+            TriggerOutcome::AlreadyRunning
+        );
+        assert!(!marker.exists());
+        status::write_status(&p, "idle", &[]).unwrap();
+        assert_eq!(
+            trigger_issue_run(&p, "app", 42, &launcher),
+            TriggerOutcome::Started
+        );
+        for _ in 0..100 {
+            if marker.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            "gitlab-loop app 42"
+        );
+        assert!(!queue.exists());
     }
 
     #[test]
