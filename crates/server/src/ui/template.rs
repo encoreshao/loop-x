@@ -70,6 +70,7 @@ impl Template {
         }
         let src = assets::text(&format!("templates/{name}.tpl"))
             .unwrap_or_else(|| panic!("template {name} missing: run tools/extract_ui_assets.py"));
+        let src: &'static str = Box::leak(assets::versioned_brand_urls(src).into_boxed_str());
         let leaked: &'static Template = Box::leak(Box::new(Template::parse(name, src)));
         cache.insert(name.to_string(), leaked);
         leaked

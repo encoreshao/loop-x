@@ -12,7 +12,8 @@ use std::sync::OnceLock;
 fn all() -> &'static Value {
     static CONSTANTS: OnceLock<Value> = OnceLock::new();
     CONSTANTS.get_or_init(|| {
-        serde_json::from_str(assets::text("constants.json").expect("assets/constants.json"))
+        let text = assets::text("constants.json").expect("assets/constants.json");
+        serde_json::from_str(&assets::versioned_brand_urls(text))
             .expect("assets/constants.json is valid JSON")
     })
 }

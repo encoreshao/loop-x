@@ -91,6 +91,7 @@ mod tests {
             assert_eq!(resp.content_type(), Some("image/png"), "{name}");
             assert!(resp.body.starts_with(b"\x89PNG"), "{name}");
         }
+        assert_eq!(go(&crate::ui::assets::brand_url("mark.png")).status, 200);
         assert_eq!(go("/brand/nope.png").status, 404);
         assert_eq!(go("/brand/../constants.json").status, 404);
         assert_eq!(go("/brand/../favicon.ico").status, 404);

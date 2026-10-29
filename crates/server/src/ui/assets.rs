@@ -18,20 +18,27 @@ pub fn text(path: &str) -> Option<&'static str> {
 /// The first 8 hex digits of the SHA-256 over every asset under `prefix` (names and
 /// bytes): one cache-buster for a set of files that import each other.
 pub fn version_of(prefix: &str) -> String {
-    // The Office page asks on every render and its set (three.js included) is large;
-    // embedded assets never change, so hash that prefix once.
-    if prefix == "office/" {
-        static OFFICE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        return OFFICE.get_or_init(|| hash_prefix(prefix)).clone();
+    // Embedded assets never change, so the two sets asked on every render are hashed
+    // once: the Office set (three.js included) is large, and the brand images are
+    // versioned into every page. The Office modules load the brand images, so their
+    // version covers those too.
+    static OFFICE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static BRAND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    match prefix {
+        "office/" => OFFICE
+            .get_or_init(|| hash_of(&["office/", "brand/"]))
+            .clone(),
+        "brand/" => BRAND.get_or_init(|| hash_of(&["brand/"])).clone(),
+        _ => hash_of(&[prefix]),
     }
-    hash_prefix(prefix)
 }
 
-fn hash_prefix(prefix: &str) -> String {
+/// The first 8 hex digits of the SHA-256 over every asset under any of `prefixes`.
+pub fn hash_of(prefixes: &[&str]) -> String {
     let mut all = Vec::new();
     let mut files: Vec<_> = EMBEDDED
         .iter()
-        .filter(|(p, _)| p.starts_with(prefix))
+        .filter(|(p, _)| prefixes.iter().any(|prefix| p.starts_with(prefix)))
         .collect();
     files.sort_by_key(|(p, _)| *p);
     for (path, bytes) in files {
@@ -40,6 +47,27 @@ fn hash_prefix(prefix: &str) -> String {
         all.extend_from_slice(bytes);
     }
     loopx_core::sha256::hex(&loopx_core::sha256::sha256(&all))[..8].to_string()
+}
+
+/// `/brand/<name>` with the brand images' version as a cache-buster, so a new logo
+/// shows as soon as the server serving it is updated.
+pub fn brand_url(name: &str) -> String {
+    format!("/brand/{name}?v={}", version_of("brand/"))
+}
+
+/// `text` with every `/brand/<image>` URL of an embedded brand image made a [`brand_url`].
+pub fn versioned_brand_urls(text: &str) -> String {
+    let mut out = text.to_string();
+    for (path, _) in EMBEDDED.iter().filter(|(p, _)| p.starts_with("brand/")) {
+        let name = &path["brand/".len()..];
+        for quote in ['\'', '"'] {
+            out = out.replace(
+                &format!("/{path}{quote}"),
+                &format!("{}{quote}", brand_url(name)),
+            );
+        }
+    }
+    out
 }
 
 pub fn favicon() -> &'static [u8] {
@@ -54,4 +82,23 @@ pub fn favicon_version() -> String {
         return "0".to_string();
     }
     loopx_core::sha256::hex(&loopx_core::sha256::sha256(icon))[..8].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brand_urls_carry_the_brand_images_version() {
+        let v = version_of("brand/");
+        assert_eq!(brand_url("mark.png"), format!("/brand/mark.png?v={v}"));
+        assert_eq!(
+            versioned_brand_urls("<img src='/brand/mark.png'><img src=\"/brand/name-light.png\">"),
+            format!("<img src='/brand/mark.png?v={v}'><img src=\"/brand/name-light.png?v={v}\">")
+        );
+        assert_eq!(
+            versioned_brand_urls("/brand/nope.png /x.png"),
+            "/brand/nope.png /x.png"
+        );
+    }
 }

@@ -355,7 +355,8 @@ mod tests {
         let start = html.find("id='ai-panel-trigger'").expect("chat button");
         let trigger = &html[start..start + html[start..].find("</button>").unwrap()];
         assert!(
-            trigger.contains("src='/brand/mark.png'") && !trigger.contains("#i-auto_awesome"),
+            trigger.contains(&format!("src='{}'", assets::brand_url("mark.png")))
+                && !trigger.contains("#i-auto_awesome"),
             "{trigger}"
         );
         let panel = panel_for("claude");
@@ -368,7 +369,8 @@ mod tests {
                     .find("<div class='ai-panel-header-actions'>")
                     .unwrap()];
         assert!(
-            title.contains("src='/brand/mark.png'") && title.contains("src='/brand/name.png'"),
+            title.contains(&format!("src='{}'", assets::brand_url("mark.png")))
+                && title.contains(&format!("src='{}'", assets::brand_url("name.png"))),
             "{title}"
         );
         assert!(!title.contains("#i-auto_awesome"), "{title}");

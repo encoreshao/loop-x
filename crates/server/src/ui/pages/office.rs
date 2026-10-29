@@ -23,6 +23,10 @@ fn asset(ctx: &UiCtx) -> UiResponse {
     let Some(body) = assets::get(&format!("office/{rest}")) else {
         return UiResponse::not_found(ctx.lang);
     };
+    let body = match std::str::from_utf8(body) {
+        Ok(text) if rest.ends_with(".js") => assets::versioned_brand_urls(text).into_bytes(),
+        _ => body.to_vec(),
+    };
     let content_type = if rest.ends_with(".js") {
         "text/javascript; charset=utf-8"
     } else {
@@ -34,7 +38,7 @@ fn asset(ctx: &UiCtx) -> UiResponse {
             ("Content-Type".to_string(), content_type.to_string()),
             ("Cache-Control".to_string(), "public, max-age=31536000, immutable".to_string()),
         ],
-        body: body.to_vec(),
+        body,
     }
 }
 
@@ -142,13 +146,18 @@ pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
             crate::ui::icons::icon("arrow_forward")
         )
     };
+    let brand_name = format!(
+        "<img class='brand-name-img on-light' src='{}' alt='LoopX'><img class='brand-name-img on-dark' src='{}' alt='LoopX'>",
+        assets::brand_url("name-light.png"),
+        assets::brand_url("name.png")
+    );
     let body = format!(
         "{CHOOSER_CSS}<div class='chooser'><div class='chooser-lang'>{}</div><div class='chooser-inner'>\
 <div><div class='chooser-mark'>{}</div><h1 class='chooser-brand'>{}</h1><p class='chooser-sub'>{}</p></div>\
 <div class='chooser-grid'>{}{}</div><p class='chooser-hint'>{}</p></div></div>",
         crate::ui::shell::lang_switch_html(ctx.lang),
         crate::ui::consts::ds("_BRAND_MARK_ICON"),
-        "<img class='brand-name-img on-light' src='/brand/name-light.png' alt='LoopX'><img class='brand-name-img on-dark' src='/brand/name.png' alt='LoopX'>",
+        brand_name,
         h(&ctx.t("Choose your view")),
         card(
             "/office",
@@ -603,6 +612,15 @@ mod tests {
     }
 
     #[test]
+    fn office_art_loads_the_versioned_brand_images() {
+        let f = fx(four());
+        let art = page(&f, "/office/assets/art.js", None, None).body_text();
+        assert!(art.contains(&assets::brand_url("mark.png")) && art.contains(&assets::brand_url("name-light.png")), "{art}");
+        let v = assets::version_of("office/");
+        assert_ne!(v, assets::hash_of(&["office/"]), "a new brand image must bust the cached office modules too");
+    }
+
+    #[test]
     fn office_script_version_covers_every_office_module() {
         let f = fx(four());
         let body = page(&f, "/office", None, None).body_text();
@@ -657,7 +675,7 @@ mod tests {
         assert!(body.contains("href='/office'"));
         assert!(body.contains("href='/?mode=dashboard'"));
         // The LoopX logo and name, and the same mode icons the topbar and office use.
-        assert!(body.contains("<img class='brand-mark'") && body.contains("src='/brand/name.png'"));
+        assert!(body.contains("<img class='brand-mark'") && body.contains(&format!("src='{}'", assets::brand_url("name.png"))));
         assert!(body.contains("#i-office") && body.contains("#i-space_dashboard") && !body.contains("#i-apartment"));
         assert!(!body.contains("id='office'"));
     }
@@ -676,12 +694,18 @@ mod tests {
     fn brand_mark_and_name_are_the_brand_images() {
         for key in ["_BRAND_MARK_ICON", "_MESSAGE_BRAND_ICON"] {
             let mark = crate::ui::consts::ds(key);
-            assert!(mark.starts_with("<img ") && mark.contains("src='/brand/mark.png'"), "{key}: {mark}");
+            assert!(mark.starts_with("<img ") && mark.contains(&format!("src='{}'", assets::brand_url("mark.png"))), "{key}: {mark}");
         }
         let f = fx(four());
         let body = page(&f, "/?mode=choose", None, None).body_text();
         // One name image per background: white lettering for dark, ink lettering for light.
-        assert!(body.contains("src='/brand/name.png'") && body.contains("src='/brand/name-light.png'"), "{body}");
+        assert!(
+            body.contains(&format!("src='{}'", assets::brand_url("name.png")))
+                && body.contains(&format!("src='{}'", assets::brand_url("name-light.png"))),
+            "{body}"
+        );
+        let unversioned = body.match_indices("/brand/").any(|(i, _)| !body[i..].split(['\'', '"']).next().unwrap().contains("?v="));
+        assert!(!unversioned, "every brand image is versioned: {body}");
         assert!(body.contains("alt='LoopX'"));
     }
 

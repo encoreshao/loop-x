@@ -156,8 +156,8 @@
   // Same shape as render_activity_messages_fragment's saved bubbles
   // (meta row with "You" / the LoopX icon), so nothing jumps when the
   // thread is re-fetched once the reply is saved.
-  var BRAND_ICON = "<img class='message-brand-icon' src='/brand/mark.png' width='20' height='20' alt='' aria-hidden='true'>";
-  var YOU_LABEL = "You";
+  var BRAND_ICON = "<img class='message-brand-icon' src='/brand/mark.png?v=e50e9808' width='20' height='20' alt='' aria-hidden='true'>";
+  var YOU_LABEL = "\u3042\u306a\u305f";
   function appendBubble(fromUser, text) {
     var row = document.createElement('li');
     row.className = 'message-row ' + (fromUser ? 'message-row-user' : 'message-row-loop');
@@ -191,7 +191,7 @@
     var row = document.createElement('li');
     row.className = 'message-row message-row-loop ai-thinking-row';
     row.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-    row.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
+    row.querySelector('.ai-thinking-label').textContent = "\u8003\u3048\u4e2d\u2026";
     messageList().appendChild(row);
     scrollToBottom();
     return row;
@@ -259,7 +259,7 @@
   var sendIcon = sendBtn.querySelector('svg.icon use');
   var sendLabel = sendBtn.getAttribute('aria-label');
   function setSendMode(stop) {
-    var label = stop ? "Stop" : sendLabel;
+    var label = stop ? "\u505c\u6b62" : sendLabel;
     sendBtn.setAttribute('aria-label', label);
     sendBtn.setAttribute('title', label);
     sendBtn.classList.toggle('is-stop', stop);
@@ -312,7 +312,7 @@
     function fail(message) {
       reveal.stop();
       stopReply = null;
-      showReply(message || "Something went wrong - try again.", false);
+      showReply(message || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002", false);
       setBusy(false);
     }
 
@@ -335,7 +335,7 @@
       if (source) source.close();
       if (replyKey) postStop(replyKey);
       reveal.stop();
-      showReply(accumulated ? accumulated + ' ' + "(reply stopped)" : "(reply stopped)", false);
+      showReply(accumulated ? accumulated + ' ' + "\uff08\u8fd4\u4fe1\u3092\u505c\u6b62\u3057\u307e\u3057\u305f\uff09" : "\uff08\u8fd4\u4fe1\u3092\u505c\u6b62\u3057\u307e\u3057\u305f\uff09", false);
       setBusy(false);
       input.focus();
     };
@@ -391,9 +391,9 @@
         source.addEventListener('error', function(ev) {
           if (aborted) return;
           source.close();
-          var message = "Something went wrong - try again.";
+          var message = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
-          fail(accumulated ? accumulated + ' ' + "(reply interrupted)" : message);
+          fail(accumulated ? accumulated + ' ' + "\uff08\u8fd4\u4fe1\u304c\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f\uff09" : message);
         });
       })
       .catch(function() { if (!aborted) fail(); });
