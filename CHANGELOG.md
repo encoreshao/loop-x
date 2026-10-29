@@ -12,13 +12,15 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Added
-- Mac app: every launch opens on the start screen, whose logo assembles itself from scattered fragments (the four arcs, then the X) before the dashboard loads, even when the backend is already running; Reduce Motion shows the finished logo.
-- Landing page: the LoopX logo now assembles itself from scattered strokes every time the chooser opens (skipped when the system asks for reduced motion).
+- Brand assets in `assets/brand/`, cut from the brand mockup (`mockup.png`): the 1024px app icon, the "LoopX" name image for dark and light backgrounds, and the name + tagline ("Dynamic Orchestration Workspace") and icon + name + tagline images, with and without their dark background. `bin/scripts/render_brand_assets.sh` renders the full macOS iconset (16-1024px), the favicon and the dashboard's `/brand/*.png` images from them.
+- Mac app: every launch opens on the start screen, whose logo flies in and settles before the dashboard loads, even when the backend is already running; Reduce Motion shows the finished logo.
+- Landing page: the LoopX logo now zooms in every time the chooser opens (skipped when the system asks for reduced motion).
 - Office: a "Dawn" time-of-day option and a violet-to-rose pre-dawn sky for the early hours before sunrise.
 - Office: the coffee shop and bookstore keep a warm light on at night, and cars and pedestrians now speed up, slow down, stop and rest at random instead of moving at one steady pace.
 - Settings → General → Slack: a "Message template" picker for loop run reports - **Report** (a status line, headed lists, a table and a "Needs you" callout, in Block Kit) or **Classic** (the same content as plain text) - and a "Send a sample report" button.
 
 ### Changed
+- New LoopX logo and brand from the brand mockup: a glowing infinity loop crossed into an X on a dark tile. It is the Mac app icon, the favicon, the sidebar and chat mark, and the logo on the landing page, the Mac start screen and the Office wall; the sidebar, landing page and start screen show the "LoopX" name as the brand image (white lettering in dark mode, ink lettering in light mode), and the X in "LoopX" elsewhere in the text carries the brand gradient.
 - GitLab issue loop: a scheduled batch now posts one run report per Slack channel when it finishes (MRs opened, answered, waiting on review, a by-project table, and what needs you) instead of a start line and a Finished/Escalated line per issue, a separate digest and a separate "issues incomplete" alert. An approval request is still sent the moment it is needed.
 - Topic Monitor: the agent saves its briefing as data (`loopx topic report`) and the loop posts it once the topic finishes, with the run time and item count; a topic that fails now gets a "did not finish" report instead of a separate alert.
 - Inbox Triage, plugin loops (Daily Digest, RSS Watch, MR Review and the rest), sign-in health warnings, "loop failed" alerts and the dashboard's single-issue GitLab run now send their Slack messages as run reports in the picked message template; a plugin loop sends one report with its digest and any failed items instead of two messages. Email and other non-Slack connectors still get plain text.

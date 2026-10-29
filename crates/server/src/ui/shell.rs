@@ -340,6 +340,41 @@ mod tests {
     }
 
     #[test]
+    fn the_chat_button_and_panel_header_carry_the_brand_logo() {
+        let state = UiState::for_tests();
+        let req = UiRequest::get("/");
+        let ctx = UiCtx::new(&state, &req);
+        let html = render_shell(
+            &ctx,
+            "Overview",
+            "overview",
+            "",
+            "<p>body</p>",
+            ShellOpts::default(),
+        );
+        let start = html.find("id='ai-panel-trigger'").expect("chat button");
+        let trigger = &html[start..start + html[start..].find("</button>").unwrap()];
+        assert!(
+            trigger.contains("src='/brand/mark.png'") && !trigger.contains("#i-auto_awesome"),
+            "{trigger}"
+        );
+        let panel = panel_for("claude");
+        let start = panel
+            .find("<span class='ai-panel-title'>")
+            .expect("panel title");
+        let title = &panel[start
+            ..start
+                + panel[start..]
+                    .find("<div class='ai-panel-header-actions'>")
+                    .unwrap()];
+        assert!(
+            title.contains("src='/brand/mark.png'") && title.contains("src='/brand/name.png'"),
+            "{title}"
+        );
+        assert!(!title.contains("#i-auto_awesome"), "{title}");
+    }
+
+    #[test]
     fn refresh_options_add_the_timer_scripts() {
         let state = UiState::for_tests();
         let req = UiRequest::get("/");

@@ -27,7 +27,8 @@ is no Python runtime left.
 - `instructions/loopx/*.md`, `loops/*/`, `templates/`, `config/` — agent
   prompts and loop definitions; some are embedded into the binary at build time.
 - `bin/scripts/*.sh` — shell only: `build_loopx_app.sh`, `install-loopx.sh`,
-  `uninstall-loopx.sh`, `release_notes.sh`, and `setup.sh` (installs the
+  `uninstall-loopx.sh`, `release_notes.sh`, `render_brand_assets.sh` (brand image masters →
+  iconset, favicon, dashboard images), and `setup.sh` (installs the
   `gitlab-config` skill). `tests/golden_ui/` — page snapshots.
 
 ## Development mode: never touch the real `~/.loopx` or real daemons

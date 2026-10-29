@@ -1,7 +1,7 @@
 <aside class='ai-panel' id='ai-panel' data-page='⟦html.escape(active_page, quote=True)⟧' aria-label='⟦panel_label⟧'>
 <div class='ai-panel-resizer' role='separator' aria-orientation='vertical' tabindex='0' aria-label='⟦html.escape(_t('Resize assistant panel'))⟧' aria-valuemin='320' aria-valuemax='720' aria-valuenow='400'></div>
 <div class='ai-panel-header'>
-<span class='ai-panel-title'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg><span>Loop<span class='brand-x'>X</span></span></span>
+<span class='ai-panel-title'><img class='brand-chip' src='/brand/mark.png' width='28' height='28' alt='' aria-hidden='true'><img class='brand-name-img on-light' src='/brand/name-light.png' alt='LoopX'><img class='brand-name-img on-dark' src='/brand/name.png' alt='LoopX'></span>
 <div class='ai-panel-header-actions'>
 <button type='button' class='ai-panel-icon-btn' data-ai-history-toggle aria-controls='ai-panel-history' aria-expanded='false' aria-label='⟦history⟧' title='⟦history⟧'><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg></button>
 <button type='button' class='ai-panel-icon-btn' data-ai-new-chat aria-label='⟦new_chat⟧' title='⟦new_chat⟧'><svg class='icon' aria-hidden='true'><use href='#i-add_comment'/></svg></button>

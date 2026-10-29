@@ -77,10 +77,16 @@ ditto "$SPARKLE_FW" "$OUT/Contents/Frameworks/Sparkle.framework"
 cp "$LOOPX_BIN" "$OUT/Contents/Helpers/loopx"
 chmod 755 "$OUT/Contents/MacOS/LoopX" "$OUT/Contents/Helpers/loopx"
 
-# App icon: assets/app-icon.png (1024px) -> AppIcon.icns, via sips + iconutil (both ship with macOS).
+# App icon: assets/brand/AppIcon.iconset (every size pre-rendered by render_brand_assets.sh)
+# -> AppIcon.icns via iconutil. Falls back to downscaling assets/app-icon.png (1024px) with sips.
+# Both tools ship with macOS.
+ICON_SET_SRC="$LOOP_DIR/assets/brand/AppIcon.iconset"
 ICON_SRC="$LOOP_DIR/assets/app-icon.png"
 ICON_KEY=""
-if [ -f "$ICON_SRC" ]; then
+if [ -d "$ICON_SET_SRC" ]; then
+  iconutil -c icns "$ICON_SET_SRC" -o "$OUT/Contents/Resources/AppIcon.icns"
+  ICON_KEY="  <key>CFBundleIconFile</key><string>AppIcon</string>"
+elif [ -f "$ICON_SRC" ]; then
   ICONSET="$(mktemp -d)/AppIcon.iconset"
   mkdir -p "$ICONSET"
   for size in 16 32 128 256 512; do
@@ -91,6 +97,12 @@ if [ -f "$ICON_SRC" ]; then
   rm -rf "$(dirname "$ICONSET")"
   ICON_KEY="  <key>CFBundleIconFile</key><string>AppIcon</string>"
 fi
+
+# The start screen's logo and name images (LogoSVG.swift reads them from Resources).
+BRAND_SERVED="$LOOP_DIR/crates/server/assets/brand"
+[ -f "$ICON_SET_SRC/icon_256x256@2x.png" ] && cp "$ICON_SET_SRC/icon_256x256@2x.png" "$OUT/Contents/Resources/brand-mark.png"
+[ -f "$BRAND_SERVED/name.png" ] && cp "$BRAND_SERVED/name.png" "$OUT/Contents/Resources/brand-name.png"
+[ -f "$BRAND_SERVED/name-light.png" ] && cp "$BRAND_SERVED/name-light.png" "$OUT/Contents/Resources/brand-name-light.png"
 
 SPARKLE_KEYS=""
 if [ -n "${SPARKLE_FEED_URL:-}" ] && [ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]; then

@@ -53,6 +53,14 @@ import Testing
         #expect(StartScreen.introSeconds < ends.max()! + 0.5, "no dead time after the logo is whole")
     }
 
+    @Test func theNameIsTheBrandImageWhenGivenAndTextOtherwise() {
+        let name = "<img class='brand-name' src='data:image/png;base64,AA' alt='LoopX'>"
+        let withImage = StartScreen.html("Starting…", failed: false, logo: "", name: name)
+        #expect(withImage.contains("<h1>\(name)</h1>"))
+        #expect(!withImage.contains("<h1>LoopX</h1>"))
+        #expect(html().contains("<h1>LoopX</h1>"))
+    }
+
     @Test func theBodyDoesNotPaintOverTheWaterLayer() {
         let h = html()
         #expect(h.contains("html{background:var(--bg)"))

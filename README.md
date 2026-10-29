@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/app-icon.svg" alt="LoopX logo" width="200" height="200">
+  <img src="assets/app-icon.png" alt="LoopX logo" width="200" height="200">
 </p>
 
 <p align="center">

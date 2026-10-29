@@ -9,7 +9,8 @@
 
   --seg-active-bg: var(--md-surface-container-highest);
   /* the X in LoopX: the orange of the logo mark, which stands out on the tinted sidebars */
-  --brand-x: #F2691F;
+  --brand-x: #E03FB8;
+  --brand-x-gradient: linear-gradient(135deg, #8B5CFF 0%, #E445C8 55%, #FF8A3D 100%);
   --md-primary: #0A84FF;
   --md-on-primary: #FFFFFF;
   --md-primary-container: #1B3A5E;
@@ -313,7 +314,21 @@ button:focus-visible,
 }
 .brand:hover { color: var(--md-nav-on-surface); text-decoration: none; }
 .brand-mark { display: inline-flex; width: 45px; height: 45px; color: var(--md-nav-on-surface); flex-shrink: 0; }
-.brand-x { color: var(--brand-x); font-weight: 800; }
+/* The brand name is an image: white lettering (on-dark) for the dark scheme, ink lettering
+   (on-light) for the light one. The sidebar's accent washes stay light in either scheme, so
+   any non-default accent always takes the ink version there. */
+.brand-name-img { display: block; height: 30px; width: auto; }
+.brand-name-img.on-light { display: none; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-color-mode="dark"]) .brand-name-img.on-light { display: block; }
+  :root:not([data-color-mode="dark"]) .brand-name-img.on-dark { display: none; }
+}
+:root[data-color-mode="light"] .brand-name-img.on-light { display: block; }
+:root[data-color-mode="light"] .brand-name-img.on-dark { display: none; }
+:root:not([data-accent="default"]) .brand .brand-name-img.on-light { display: block; }
+:root:not([data-accent="default"]) .brand .brand-name-img.on-dark { display: none; }
+.brand-x { color: var(--brand-x); font-weight: 800; background: var(--brand-x-gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+@media (forced-colors: active) { .brand-x { -webkit-text-fill-color: currentColor; } }
 .pill-bar { position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 8px; z-index: 5; }
 .pill-btn { display: inline-flex; align-items: center; justify-content: center; font: inherit; padding: .4rem .9rem; border: 0; border-radius: 999px; background: rgba(20, 22, 28, .78); color: #e6e8ee; cursor: pointer; text-decoration: none; }
 .pill-btn:hover { background: rgba(20, 22, 28, .9); color: #fff; text-decoration: none; }
@@ -526,6 +541,7 @@ button:focus-visible,
 .sidebar-nav a.nav-child { padding-left: 2.1rem; font-size: 0.8rem; }
 html.collapsed .sidebar-nav a.nav-child { padding-left: 0.9rem; }
 .ai-panel-trigger .icon { font-size: 22px; }
+.ai-panel-trigger .brand-chip { width: 28px; height: 28px; display: block; }
 .ai-panel-trigger:hover { background: var(--md-nav-active-surface); }
 html.ai-panel-open .ai-panel-trigger {
   background: color-mix(in srgb, var(--md-primary) 16%, var(--md-nav-surface));
@@ -591,6 +607,8 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
 }
 .ai-panel-title { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 1.05rem; font-weight: 500; }
 .ai-panel-title .icon { color: var(--md-primary); font-size: 22px; }
+.ai-panel-title .brand-chip { width: 26px; height: 26px; display: block; }
+.ai-panel-title .brand-name-img { height: 24px; }
 .ai-panel-header-actions { display: flex; align-items: center; gap: 0.15rem; }
 .ai-panel.is-history [data-ai-history-toggle] { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
 /* Chat history view: replaces the thread and composer while open. It

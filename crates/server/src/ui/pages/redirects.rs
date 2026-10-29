@@ -1,5 +1,5 @@
 //! The legacy dashboard paths that 301 to their hub or loop page
-//! (`_LEGACY_REDIRECTS` and `/learnings`), plus `/favicon.ico`.
+//! (`_LEGACY_REDIRECTS` and `/learnings`), plus `/favicon.ico` and the `/brand/*.png` images.
 
 use crate::ui::consts;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -14,6 +14,7 @@ pub fn register(r: &mut Registry) {
     }
     r.get("/learnings", learnings);
     r.get("/favicon.ico", favicon);
+    r.get("/brand/*rest", brand_image);
 }
 
 /// `legacy_redirect_target`: the target with the request's query appended.
@@ -45,6 +46,24 @@ fn favicon(_: &UiCtx) -> UiResponse {
     }
 }
 
+/// The logo and name images (`assets/brand/*.png`, rendered by `bin/scripts/render_brand_assets.sh`).
+/// Unversioned URLs, since they sit in static constants: a short cache picks up a new brand after an update.
+fn brand_image(ctx: &UiCtx) -> UiResponse {
+    let rest = ctx.param("rest");
+    let plain = !rest.is_empty() && rest.ends_with(".png") && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.');
+    let Some(body) = plain.then(|| crate::ui::assets::get(&format!("brand/{rest}"))).flatten() else {
+        return UiResponse::not_found(ctx.lang);
+    };
+    UiResponse {
+        status: 200,
+        headers: vec![
+            ("Content-Type".into(), "image/png".into()),
+            ("Cache-Control".into(), "public, max-age=3600".into()),
+        ],
+        body: body.to_vec(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ui::routes::UiRequest;
@@ -60,5 +79,20 @@ mod tests {
         assert_eq!(go("/learnings?x=1").header("Location"), Some("/insights?view=memory"));
         assert_eq!(go("/learnings").status, 301);
         assert_eq!(go("/favicon.ico").content_type(), Some("image/x-icon"));
+    }
+
+    #[test]
+    fn brand_images_are_served_as_png_and_nothing_else_is() {
+        let st = UiState::for_tests();
+        let go = |p: &str| st.registry.dispatch(&st, &UiRequest::get(p)).unwrap();
+        for name in ["mark.png", "name.png", "name-light.png"] {
+            let resp = go(&format!("/brand/{name}"));
+            assert_eq!(resp.status, 200, "{name}");
+            assert_eq!(resp.content_type(), Some("image/png"), "{name}");
+            assert!(resp.body.starts_with(b"\x89PNG"), "{name}");
+        }
+        assert_eq!(go("/brand/nope.png").status, 404);
+        assert_eq!(go("/brand/../constants.json").status, 404);
+        assert_eq!(go("/brand/../favicon.ico").status, 404);
     }
 }

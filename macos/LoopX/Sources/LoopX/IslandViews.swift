@@ -195,7 +195,7 @@ struct ChatReplyView: View {
                 }
                 switch r.phase {
                 case .thinking:
-                    HStack(spacing: 6) { Image(systemName: "sparkle"); Text("Thinking…"); ProgressView().controlSize(.small) }
+                    HStack(spacing: 6) { Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 16, height: 16); Text("Thinking…"); ProgressView().controlSize(.small) }
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
                         .padding(.horizontal, 10).padding(.vertical, 5).background(Capsule().fill(Color.white.opacity(0.1)))
                 case .failed(let m): Text(m).font(.system(size: 11)).foregroundStyle(.red).lineLimit(3)

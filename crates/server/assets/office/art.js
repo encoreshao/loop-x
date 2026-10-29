@@ -325,43 +325,26 @@ export function graffitiTexture(THREE, words, extras, rng) {
   return t;
 }
 
-/// The LoopX mark on a transparent background: the four-arrow ring, the X inside
-/// it and the "LoopX" word mark. Drawn on a 1400x480 canvas (aspect 35:12).
+/// The LoopX mark on a transparent background: the app icon tile and the "LoopX" name image
+/// (ink lettering, for the light wall), both served under /brand/. Drawn on a 1400x480 canvas
+/// (aspect 35:12); the images load asynchronously, so the texture fills in once both arrive.
 export function logoTexture(THREE) {
   const c = canvasOf(1400, 480), x = c.getContext("2d");
-  const cx = 250, cy = 240, r = 140;
-  const arcs = [["#7AA2FF", "#2F5BFF", -90], ["#5EE0B5", "#0FA37F", 0], ["#FF8DB8", "#E8336F", 90], ["#FFC46B", "#FF8A00", 180]];
-  x.lineCap = "round";
-  x.lineWidth = 44;
-  for (const [c0, c1, deg] of arcs) {
-    const g = x.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
-    g.addColorStop(0, c0);
-    g.addColorStop(1, c1);
-    const a = deg * Math.PI / 180;
-    x.strokeStyle = g;
-    x.beginPath();
-    x.arc(cx, cy, r, a - 0.6, a + 0.6);
-    x.stroke();
-    x.fillStyle = c1;
-    x.beginPath();
-    x.arc(cx + Math.cos(a + 0.6) * r, cy + Math.sin(a + 0.6) * r, 28, 0, 7);
-    x.fill();
-  }
-  x.strokeStyle = "#1b1738";
-  x.lineWidth = 40;
-  x.beginPath();
-  x.moveTo(cx - 80, cy - 80);
-  x.lineTo(cx + 80, cy + 80);
-  x.moveTo(cx - 80, cy + 80);
-  x.lineTo(cx + 80, cy - 80);
-  x.stroke();
-  x.fillStyle = "#14112B";
-  x.font = "800 200px -apple-system,system-ui,sans-serif";
-  x.fillText("Loop", 470, 290);
-  const lw = x.measureText("Loop").width;
-  x.fillStyle = "#F2691F"; // the same accent as the .brand-x wordmark in the UI
-  x.fillText("X", 470 + lw, 290);
-  return textureOf(THREE, c);
+  const tex = textureOf(THREE, c);
+  const mark = new Image(), name = new Image();
+  let loaded = 0;
+  const draw = () => {
+    if (++loaded < 2) return;
+    x.drawImage(mark, 40, 40, 400, 400);
+    const h = 300, w = Math.min(880, name.naturalWidth * h / name.naturalHeight);
+    x.drawImage(name, 480, 90, w, h);
+    tex.needsUpdate = true;
+  };
+  mark.onload = draw;
+  name.onload = draw;
+  mark.src = "/brand/mark.png";
+  name.src = "/brand/name-light.png";
+  return tex;
 }
 
 /// A rounded sign plate with one line of (already translated) text, shrunk to fit.

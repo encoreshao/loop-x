@@ -11,7 +11,8 @@ public enum StartScreen {
     /// assembly (last fragment: .6s delay + 1.3s) plays to the end before the dashboard loads.
     public static let introSeconds = 2.0
 
-    public static func html(_ text: String, failed: Bool, version: String = "", logo: String) -> String {
+    /// `name` is the brand name's markup (the name images); empty falls back to the plain text "LoopX".
+    public static func html(_ text: String, failed: Bool, version: String = "", logo: String, name: String = "") -> String {
         func escape(_ t: String) -> String {
             t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
         }
@@ -100,6 +101,8 @@ public enum StartScreen {
         @keyframes float{50%{transform:translateY(-10px)}}
         @keyframes rise{from{opacity:0;transform:translateY(12px)}}
         h1{margin:0;font-size:44px;font-weight:700;color:var(--fg);letter-spacing:.3px}
+        h1 .brand-name{display:block;height:72px;width:auto;margin:0 auto}h1 .brand-name.on-dark{display:none}
+        @media(prefers-color-scheme:dark){h1 .brand-name.on-light{display:none}h1 .brand-name.on-dark{display:block}}
         .tag{margin:-6px 0 0;font-size:16px;color:var(--sub);max-width:460px;line-height:1.45}
         .row{display:flex;align-items:center;gap:10px;margin-top:6px}
         .spin{width:14px;height:14px;border:2px solid var(--sub);border-top-color:var(--accent);border-radius:50%;animation:s 0.9s linear infinite}
@@ -113,7 +116,7 @@ public enum StartScreen {
         footer a{color:var(--accent);text-decoration:none}
         </style></head><body><div class='\(TitlebarChrome.dragStripClass)'></div>
         <div class='water'><svg width='0' height='0' style='position:absolute'><defs><linearGradient id='tideA' x1='0' y1='0' x2='0' y2='1'><stop offset='0' style='stop-color:var(--accent)'/><stop offset='1' style='stop-color:var(--pink)'/></linearGradient><linearGradient id='tideB' x1='0' y1='0' x2='0' y2='1'><stop offset='0' style='stop-color:var(--pink)'/><stop offset='1' style='stop-color:var(--accent)'/></linearGradient></defs></svg>\(bubbles)\(svg("w1", wave(100, 62, 360)))\(svg("w2", wave(120, 44, 240)))\(svg("w3", wave(90, 36, 720)))</div>
-        <div class='logo'><i class='ripple r1'></i><i class='ripple r2'></i><i class='ripple r3'></i><i class='ripple r4'></i><i class='track'></i><i class='ring'></i>\(logo)</div><h1>LoopX</h1>
+        <div class='logo'><i class='ripple r1'></i><i class='ripple r2'></i><i class='ripple r3'></i><i class='ripple r4'></i><i class='track'></i><i class='ring'></i>\(logo)</div><h1>\(name.isEmpty ? "LoopX" : name)</h1>
         <p class='tag'>Get your time back from the daily grind.</p>
         \(status)
         <footer>\(versionLine)<span>Created by <strong>Encore Shao</strong></span><span class='dot'>&middot;</span><a href='mailto:encore.shao@gmail.com'>encore.shao@gmail.com</a></footer>

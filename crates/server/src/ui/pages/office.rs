@@ -1,7 +1,7 @@
 //! `GET /office/state`: the JSON the office view polls, one entry per loop.
 
 use crate::ui::assets;
-use crate::ui::components::{pill_bar, pill_button, pill_icon_link, wordmark, ICON_DASHBOARD, ICON_OFFICE};
+use crate::ui::components::{pill_bar, pill_button, pill_icon_link, ICON_DASHBOARD, ICON_OFFICE};
 use crate::ui::office;
 use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -103,7 +103,8 @@ background:radial-gradient(900px 520px at 50% 18%,color-mix(in srgb,var(--md-pri
 .chooser-lang{position:fixed;top:1rem;right:1.25rem;z-index:101}\
 .chooser-lang button,.chooser-lang .icon{color:var(--md-on-surface-variant)}\
 .chooser-mark{display:grid;place-items:center;margin:0 auto}\
-.chooser-mark .brand-mark{width:84px;height:84px}\
+.chooser-mark .brand-mark{width:96px;height:96px}\
+.chooser-brand{display:flex;justify-content:center}.chooser-brand .brand-name-img{height:76px;width:auto}\
 .chooser h1{margin:.6rem 0 0;font-size:clamp(2rem,5vw,2.9rem);font-weight:750;letter-spacing:-.02em;line-height:1.1}\
 .chooser-sub{margin:.55rem 0 0;font-size:1.05rem;color:var(--md-on-surface-variant)}\
 .chooser-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.25rem;width:100%}\
@@ -121,16 +122,8 @@ box-shadow:0 1px 2px rgba(0,0,0,.06),0 12px 32px rgba(0,0,0,.10)}\
 .chooser-open{display:inline-flex;align-items:center;gap:.3rem;margin-top:auto;padding-top:1rem;font-weight:500;color:var(--md-primary)}\
 .chooser-open .icon{width:18px;height:18px}\
 .chooser-hint{margin:0;font-size:.9rem;color:var(--md-on-surface-variant)}\
-@keyframes chooser-assemble{from{opacity:0;transform:translate(var(--fx),var(--fy)) rotate(var(--fr)) scale(.6)}60%{opacity:1}to{opacity:1;transform:none}}\
-.chooser-mark .brand-mark path:nth-child(1){--fx:-6px;--fy:-16px;--fr:-70deg}\
-.chooser-mark .brand-mark path:nth-child(2){--fx:17px;--fy:-8px;--fr:80deg}\
-.chooser-mark .brand-mark path:nth-child(3){--fx:7px;--fy:16px;--fr:-60deg}\
-.chooser-mark .brand-mark path:nth-child(4){--fx:-17px;--fy:9px;--fr:75deg}\
-.chooser-mark .brand-mark path:nth-child(5){--fx:-14px;--fy:-13px;--fr:-120deg}\
-.chooser-mark .brand-mark path:nth-child(6){--fx:14px;--fy:-12px;--fr:110deg}\
-@media(prefers-reduced-motion:no-preference){.chooser-mark .brand-mark path{transform-box:fill-box;transform-origin:center;animation:chooser-assemble 1.1s cubic-bezier(.22,1,.36,1) both}\
-.chooser-mark .brand-mark path:nth-child(2){animation-delay:.08s}.chooser-mark .brand-mark path:nth-child(3){animation-delay:.16s}.chooser-mark .brand-mark path:nth-child(4){animation-delay:.24s}\
-.chooser-mark .brand-mark path:nth-child(5){animation-delay:.38s}.chooser-mark .brand-mark path:nth-child(6){animation-delay:.46s}}\
+@keyframes chooser-assemble{from{opacity:0;transform:scale(.6) rotate(-12deg)}60%{opacity:1}to{opacity:1;transform:none}}\
+@media(prefers-reduced-motion:no-preference){.chooser-mark .brand-mark{animation:chooser-assemble 1.1s cubic-bezier(.22,1,.36,1) both}}\
 @media(prefers-reduced-motion:no-preference){.chooser-card{transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}.chooser-card:hover{transform:translateY(-3px)}}\
 @media(max-width:640px){.chooser-grid{grid-template-columns:1fr}.chooser-card{padding:1.4rem}}\
 </style>";
@@ -155,7 +148,7 @@ pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
 <div class='chooser-grid'>{}{}</div><p class='chooser-hint'>{}</p></div></div>",
         crate::ui::shell::lang_switch_html(ctx.lang),
         crate::ui::consts::ds("_BRAND_MARK_ICON"),
-        wordmark("LoopX"),
+        "<img class='brand-name-img on-light' src='/brand/name-light.png' alt='LoopX'><img class='brand-name-img on-dark' src='/brand/name.png' alt='LoopX'>",
         h(&ctx.t("Choose your view")),
         card(
             "/office",
@@ -663,24 +656,33 @@ mod tests {
         assert!(body.contains("<html class=\"chooser-mode\""), "{body}");
         assert!(body.contains("href='/office'"));
         assert!(body.contains("href='/?mode=dashboard'"));
-        // The LoopX logo and wordmark, and the same mode icons the topbar and office use.
-        assert!(body.contains("<svg class='brand-mark'") && body.contains("Loop<span class='brand-x'>X</span>"));
+        // The LoopX logo and name, and the same mode icons the topbar and office use.
+        assert!(body.contains("<img class='brand-mark'") && body.contains("src='/brand/name.png'"));
         assert!(body.contains("#i-office") && body.contains("#i-space_dashboard") && !body.contains("#i-apartment"));
         assert!(!body.contains("id='office'"));
     }
 
     #[test]
-    fn chooser_logo_assembles_from_scattered_strokes_unless_motion_is_reduced() {
+    fn chooser_logo_zooms_in_unless_motion_is_reduced() {
         let f = fx(four());
         let body = page(&f, "/?mode=choose", None, None).body_text();
         assert!(body.contains("@keyframes chooser-assemble"), "{body}");
-        // All six strokes (four arcs, two X strokes) fly in, and only for people who allow motion.
-        for n in 1..=6 {
-            assert!(body.contains(&format!(".chooser-mark .brand-mark path:nth-child({n})")), "stroke {n}");
-        }
         let at = body.find("@media(prefers-reduced-motion:no-preference){.chooser-mark").expect("gated animation");
         assert!(body[at..].contains("animation:chooser-assemble"));
         assert!(!body[..at].contains("animation:chooser-assemble"), "the animation must sit inside the media query");
+    }
+
+    #[test]
+    fn brand_mark_and_name_are_the_brand_images() {
+        for key in ["_BRAND_MARK_ICON", "_MESSAGE_BRAND_ICON"] {
+            let mark = crate::ui::consts::ds(key);
+            assert!(mark.starts_with("<img ") && mark.contains("src='/brand/mark.png'"), "{key}: {mark}");
+        }
+        let f = fx(four());
+        let body = page(&f, "/?mode=choose", None, None).body_text();
+        // One name image per background: white lettering for dark, ink lettering for light.
+        assert!(body.contains("src='/brand/name.png'") && body.contains("src='/brand/name-light.png'"), "{body}");
+        assert!(body.contains("alt='LoopX'"));
     }
 
     #[test]

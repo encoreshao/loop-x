@@ -1,1 +1,1 @@
-<button type='button' class='ai-panel-trigger' id='ai-panel-trigger' aria-controls='ai-panel' aria-expanded='false' aria-label='⟦ai_label⟧' title='⟦ai_label⟧'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></button>
+<button type='button' class='ai-panel-trigger' id='ai-panel-trigger' aria-controls='ai-panel' aria-expanded='false' aria-label='⟦ai_label⟧' title='⟦ai_label⟧'><img class='brand-chip' src='/brand/mark.png' width='28' height='28' alt='' aria-hidden='true'></button>

@@ -34,6 +34,9 @@ open dist/LoopX.app
 - `--install [DIR]` also copies the app to `/Applications` (or DIR) after quitting a running LoopX,
   so Launchpad and Spotlight find it; it does not open it.
 - `--arch universal` needs a universal `loopx` (`lipo -create` the two cargo targets).
+- The app icon comes from `assets/brand/AppIcon.iconset`. After replacing an image master in
+  `assets/brand/`, rerun `bin/scripts/render_brand_assets.sh` (needs ImageMagick) and commit the
+  rendered iconset, favicons and `crates/server/assets/brand/` images.
 - Auto-update is on only when both `SPARKLE_FEED_URL` (https) and
   `SPARKLE_PUBLIC_ED_KEY` (base64 Ed25519 public key) are set at build time;
   setting only one is an error. See [RELEASING.md](RELEASING.md).
