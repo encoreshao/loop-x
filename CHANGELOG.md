@@ -18,7 +18,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ### Changed
 - The sidebar's logo sits 25px lower, clear of the top edge.
 - The app icon, favicon, dashboard logo and every brand image are now fully transparent: the mark and the "LoopX" name are unmixed from the mockup's dark background with no tile, gray rim or halo, re-cut at higher resolution, and small icon sizes are rendered smoothly. The `*-on-dark` brand images are removed.
-- The Mac app icon puts the mark on a rounded dark tile again, with a subtle vertical gradient (`#31354f` to `#212336`) sampled from the app's own background; the favicon and dashboard logo stay transparent.
+- The Mac app icon puts the mark on a rounded dark tile again, with a subtle vertical gradient (`#31354f` to `#212336`) sampled from the app's own background, and every dashboard page uses the same icon: the favicon, the sidebar and chat mark, the landing chooser and the Office wall.
 
 ## [0.11.0] - 2026-10-29
 

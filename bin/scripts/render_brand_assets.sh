@@ -15,7 +15,7 @@ set -euo pipefail
 # Outputs:
 #   assets/app-icon.png                         the 1024px icon: the mark on the 824px macOS grid (README, release pages)
 #   assets/brand/AppIcon.iconset                every macOS size, 16-1024px (build_loopx_app.sh -> AppIcon.icns)
-#   assets/favicon.ico, crates/server/assets/favicon.ico   16-64px, the mark without the icon-grid padding
+#   assets/favicon.ico, crates/server/assets/favicon.ico   16-64px, the icon tile without the icon-grid padding
 #   crates/server/assets/brand/{mark,name,name-light}.png  what the dashboard serves under /brand/
 #
 # Needs ImageMagick (`brew install imagemagick`). Rerun it after replacing a master and commit the
@@ -43,19 +43,21 @@ resize() {
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-# The mark squared up (centred, transparent padding): the favicon and the dashboard mark,
-# where every pixel counts and the macOS padding would only shrink it.
+# The mark squared up (centred, transparent padding).
 side=$(magick identify -format '%[fx:max(w,h)]' "$BRAND/mark.png")
 magick "$BRAND/mark.png" -background none -gravity center -extent "${side}x${side}" "$TMP/tile.png"
 
 # The app icon puts the mark on a dark tile: the macOS 824px rounded square on the 1024px
 # canvas, filled with a vertical gradient sampled from the app's own background (#31354f at
 # the top to #212336 at the bottom; left and right edges match, so it is purely vertical),
-# with a soft drop shadow. The favicon and the dashboard mark stay transparent.
+# with a soft drop shadow. The favicon and the dashboard mark use the same tile, cropped to it
+# (no macOS padding or shadow), so every page shows the app icon at full size.
 ICON="$ASSETS/app-icon.png"
 magick -size 824x824 gradient:'#31354f-#212336' \
   \( -size 824x824 xc:none -fill white -draw "roundrectangle 0,0 823,823 185,185" \) \
   -compose CopyOpacity -composite "$TMP/bg.png"
+magick "$TMP/bg.png" \( "$TMP/tile.png" -background none -filter Lanczos -resize 560x560 \) \
+  -gravity center -compose Over -composite "$TMP/icon-tile.png"
 magick "$TMP/bg.png" -background none -gravity center -extent 1024x1024 "$TMP/bg-canvas.png"
 magick "$TMP/bg-canvas.png" \( +clone -background black -shadow 35x14+0+10 \) +swap \
   -background none -layers merge +repage -gravity center -crop 1024x1024+0+0 +repage "$TMP/bg-shadow.png"
@@ -72,14 +74,14 @@ done
 
 ICO_PNGS=()
 for size in 16 24 32 48 64; do
-  resize "$TMP/tile.png" "$size" "$TMP/fav-$size.png"
+  resize "$TMP/icon-tile.png" "$size" "$TMP/fav-$size.png"
   ICO_PNGS+=("$TMP/fav-$size.png")
 done
 magick "${ICO_PNGS[@]}" "$ASSETS/favicon.ico"
 cp "$ASSETS/favicon.ico" "$LOOP_DIR/crates/server/assets/favicon.ico"
 
 mkdir -p "$SERVED"
-resize "$TMP/tile.png" 256 "$SERVED/mark.png"
+resize "$TMP/icon-tile.png" 256 "$SERVED/mark.png"
 for name in name name-light; do
   magick "$BRAND/$name.png" -filter Lanczos -resize x160 -strip "PNG32:$SERVED/$name.png"
 done
