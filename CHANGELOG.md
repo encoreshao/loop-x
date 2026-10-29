@@ -16,6 +16,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 - Auto-refreshing pages no longer reload while the chat side panel is open, so a message being typed there is not wiped.
+- Slack: the links in a plugin loop's message (Daily digest, Calendar prep) are clickable again instead of showing as raw `<url|text>`.
 
 ## [0.12.0] - 2026-10-29
 

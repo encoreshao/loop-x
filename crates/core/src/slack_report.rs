@@ -103,7 +103,8 @@ pub enum Section {
         heading: String,
         steps: Vec<String>,
     },
-    /// Free text kept line by line, e.g. a plugin loop's own digest.
+    /// Free text kept line by line, e.g. a plugin loop's own digest. Escaped,
+    /// except its `<http(s)://url|label>` links.
     Text {
         #[serde(default)]
         heading: String,
@@ -367,6 +368,42 @@ pub fn escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// [`escape`], except well-formed `<http(s)://url>` / `<http(s)://url|label>`
+/// links pass through, so a plugin digest's links stay clickable. Anything
+/// else in angle brackets (`<!channel>`, `<@U1>`) is still escaped.
+fn escape_keeping_links(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<http") {
+        out.push_str(&escape(&rest[..start]));
+        let after = &rest[start + 1..];
+        let link = after
+            .find('>')
+            .map(|end| (&after[..end], end))
+            .filter(|(inner, _)| {
+                let url = inner.split('|').next().unwrap_or("");
+                (url.starts_with("http://") || url.starts_with("https://"))
+                    && !inner.contains('<')
+                    && !url.chars().any(|c| c.is_whitespace() || c == '"')
+            });
+        match link {
+            Some((inner, end)) => {
+                out.push_str(&match inner.split_once('|') {
+                    Some((url, label)) => mrkdwn_link(label, Some(url)),
+                    None => format!("<{inner}>"),
+                });
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str("&lt;");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(&escape(rest));
+    out
+}
+
 fn mrkdwn_link(text: &str, url: Option<&str>) -> String {
     match url.filter(|u| !u.is_empty()) {
         Some(u) => format!("<{}|{}>", u.replace(['|', '>'], ""), escape(text)),
@@ -583,7 +620,7 @@ fn report_blocks(report: &Report, table_block_ok: bool) -> Vec<Value> {
                     format!("*{}*\n", escape(heading))
                 };
                 for line in text.lines() {
-                    let line = escape(line);
+                    let line = escape_keeping_links(line);
                     if chunk.chars().count() + line.chars().count() > MAX_SECTION_CHARS {
                         blocks.push(mrkdwn_section(&chunk));
                         chunk.clear();
@@ -693,7 +730,7 @@ pub fn plain_text(report: &Report) -> String {
                 if !heading.is_empty() {
                     out.push(format!("*{}*", escape(heading)));
                 }
-                out.push(escape(text));
+                out.push(escape_keeping_links(text));
             }
             Section::Steps { heading, steps } => {
                 out.push(format!("\n*{}*", escape(heading)));
@@ -933,6 +970,17 @@ mod tests {
         let b = blocks(&report, true);
         assert_eq!(b[2]["text"]["text"], "*Digest*\nline &lt;1&gt;\n:one: two");
         assert!(plain_text(&report).ends_with("\n*Digest*\nline &lt;1&gt;\n:one: two"));
+        let linked = Report {
+            title: "T".into(),
+            sections: vec![Section::Text {
+                heading: String::new(),
+                text: "\u{2022} <https://x.test/1?a=1|MR 1 & co> <!channel> <http://y.test>\n<https://bad url|x> <@U1>".into(),
+            }],
+            ..Report::default()
+        };
+        let want = "\u{2022} <https://x.test/1?a=1|MR 1 &amp; co> &lt;!channel&gt; <http://y.test>\n&lt;https://bad url|x&gt; &lt;@U1&gt;";
+        assert_eq!(blocks(&linked, true)[2]["text"]["text"], want);
+        assert!(plain_text(&linked).contains(want));
         let long = Report {
             title: "T".into(),
             sections: vec![Section::Text {
