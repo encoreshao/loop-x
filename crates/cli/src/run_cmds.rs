@@ -4,7 +4,7 @@
 
 use chrono::Local;
 use loopx_core::run_loop::{self, RunLoopOpts};
-use loopx_core::{ledger, loop_scheduler, loops_config, run_queue};
+use loopx_core::{ledger, loop_scheduler, loops_config, run_queue, scheduler_health};
 use std::process::{Command, ExitCode};
 
 fn code(c: i32) -> ExitCode {
@@ -46,7 +46,15 @@ pub fn entry(args: &[String]) -> ExitCode {
 /// `loopx scheduler`: the tick, run every minute. Queues every loop that is due
 /// and not already queued or running, then makes sure a worker is draining the
 /// queue; it never waits for a loop itself.
-pub fn scheduler(_args: &[String]) -> ExitCode {
+pub fn scheduler(args: &[String]) -> ExitCode {
+    match args {
+        [] => {}
+        [cmd, rest @ ..] if cmd == "status" => return scheduler_status(rest),
+        _ => {
+            eprintln!("Usage: loopx scheduler [status [--json]]");
+            return ExitCode::from(2);
+        }
+    }
     // One ticker at a time: the LoopX app and a launchd `loopx scheduler` may both
     // be on, and both would otherwise queue the same due loop.
     let Some(_poll) = loop_scheduler::try_lock_poll(&loop_scheduler::default_lock_path()) else {
@@ -74,10 +82,45 @@ pub fn scheduler(_args: &[String]) -> ExitCode {
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));
     }
+    let heartbeat = scheduler_health::heartbeat_path(&loopx_core::config::home_dir());
+    if let Err(e) = scheduler_health::record_tick(&heartbeat, Local::now().naive_local(), &queued) {
+        eprintln!("loop_scheduler: could not record the tick: {e}");
+    }
     if !queue.snapshot(0).queued.is_empty() {
         start_worker_if_idle();
     }
     ExitCode::SUCCESS
+}
+
+/// `loopx scheduler status [--json]`: is the scheduler ticking, what is queued
+/// and when each loop is next due. Exits 1 when it is not running correctly.
+fn scheduler_status(args: &[String]) -> ExitCode {
+    let json = match args {
+        [] => false,
+        [a] if a == "--json" => true,
+        _ => {
+            eprintln!("Usage: loopx scheduler status [--json]");
+            return ExitCode::from(2);
+        }
+    };
+    let report = scheduler_health::report(
+        &loopx_core::config::home_dir(),
+        Local::now().naive_local(),
+        &loopx_core::run_control::process_alive,
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
+    } else {
+        print!("{}", scheduler_health::render(&report));
+    }
+    if report["healthy"] == true {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 /// Starts a detached `loopx queue-worker` unless one already holds the worker

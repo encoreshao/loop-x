@@ -75,6 +75,7 @@ pub mod run_history;
 pub mod run_loop;
 pub mod run_queue;
 pub mod runner_util;
+pub mod scheduler_health;
 pub mod secrets;
 pub mod seen_store;
 pub mod settings_store;

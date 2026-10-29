@@ -11,6 +11,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+- `loopx scheduler status [--json]` shows whether the scheduler is actually ticking (every tick now records a heartbeat), what is queued or running (flagging a run whose process is gone), and each loop's schedule, next due time and last run; it exits 1 when the scheduler is not running correctly. `loopx doctor` gets a matching Scheduler section.
+
 ## [0.13.0] - 2026-10-29
 
 ### Changed

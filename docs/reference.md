@@ -93,6 +93,8 @@ Both log to `outputs/history/`, and both also append every AI CLI invocation's o
 - launchd agents: `install-loopx.sh` renders the templates under [`launchd/loopx/`](https://github.com/encoreshao/loop-x/tree/main/launchd/loopx) into `<install dir>/launchd/` once, and you load them with a click each from the dashboard's **Settings → Daemons** page (which also shows whether each is currently loaded and its PID), or by hand with `launchctl load -w`;
 - or run `loopx scheduler` from any scheduler of your own.
 
+To check it is working, run `loopx scheduler status` (add `--json` for scripts): it shows when the last tick ran (each tick writes `~/.loopx/scheduler_heartbeat.json`; more than 3 minutes ago counts as stalled), what is queued or running, and each loop's next due time and last run, and exits 1 when something is wrong. `loopx doctor` includes the same tick check.
+
 | Agent                                   | Runs                                                                                                                                             |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------|
 | `com.hermes.loop-engineering`           | `loopx scheduler`, every minute (`StartInterval`) — queues what is due; a worker runs the queue one loop at a time — runs whichever loop(s) registered in `~/.loopx/loops.json` are due |

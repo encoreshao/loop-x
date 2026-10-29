@@ -2,7 +2,7 @@
 //!
 //! Detects the AI CLIs (`claude`, `codex`, `gemini`, `kimi`, `cursor`) on `PATH`, the `gitlab-config` skill,
 //! the GitLab/Slack credential files, the three loop config files, and whether a
-//! `loopx serve` backend is alive. Pure data in, pure data out: the caller picks
+//! `loopx serve` backend is alive, and whether the scheduler is ticking. Pure data in, pure data out: the caller picks
 //! the environment ([`Env`]) so tests can point it at scratch dirs and a fake
 //! `PATH`. Token values are never read into the report: a credential file is only
 //! checked for existing and parsing.
@@ -177,6 +177,8 @@ pub fn check(env: &Env) -> Value {
     let loops = json_file_report(&env.loop_home.join("loops.json"));
     let topics = json_file_report(&env.loop_home.join("topics.json"));
     let backend = backend_report(&env.loop_home.join("loopx.lock"));
+    let scheduler =
+        crate::scheduler_health::tick_status(&env.loop_home, chrono::Local::now().naive_local());
 
     let mut steps: Vec<String> = Vec::new();
     if installed.is_empty() {
@@ -226,6 +228,11 @@ pub fn check(env: &Env) -> Value {
     if !flag(&backend, "/running") {
         steps.push("Start the dashboard backend: `loopx serve` (or open the Mac app).".into());
     }
+    if scheduler["state"] != "ok" {
+        steps.push(
+            "The scheduler is not ticking, so no loop runs on its schedule: open the LoopX app and turn on \"Run scheduled loops while LoopX is open\". `loopx scheduler status` shows the details.".into(),
+        );
+    }
 
     json!({
         "version": crate::VERSION,
@@ -240,6 +247,7 @@ pub fn check(env: &Env) -> Value {
         "slack_config": slack,
         "config": { "projects": projects, "loops": loops, "topics": topics },
         "backend": backend,
+        "scheduler": scheduler,
         "next_steps": steps,
     })
 }
@@ -314,6 +322,23 @@ pub fn render(report: &Value) -> String {
         s.push_str("  [MISSING] not running (stale loopx.lock, it will be replaced on start)\n");
     } else {
         s.push_str("  [MISSING] loopx serve is not running\n");
+    }
+    s.push_str("\nScheduler\n");
+    let sched = &report["scheduler"];
+    let last = sched["last_tick_at"]
+        .as_str()
+        .map(|t| t.get(..19).unwrap_or(t).replace('T', " "))
+        .unwrap_or_default();
+    match sched["state"].as_str() {
+        Some("ok") => s.push_str(&format!(
+            "  [ok     ] ticking: last tick {}s ago ({last})\n",
+            sched["age_seconds"]
+        )),
+        Some("stale") => s.push_str(&format!(
+            "  [STALE  ] last tick {} min ago ({last})\n",
+            sched["age_seconds"].as_i64().unwrap_or(0) / 60
+        )),
+        _ => s.push_str("  [MISSING] no scheduler tick recorded yet\n"),
     }
     s.push('\n');
     let steps = report["next_steps"].as_array().cloned().unwrap_or_default();
@@ -525,8 +550,37 @@ mod tests {
             ),
         )
         .unwrap();
+        crate::scheduler_health::record_tick(
+            &crate::scheduler_health::heartbeat_path(&f.env.loop_home),
+            chrono::Local::now().naive_local(),
+            &[],
+        )
+        .unwrap();
         let r = check(&f.env);
         assert_eq!(r["next_steps"].as_array().unwrap().len(), 0);
+        assert_eq!(r["scheduler"]["state"], "ok");
         assert!(render(&r).contains("All set."));
+    }
+
+    #[test]
+    fn a_scheduler_that_never_ticked_or_stopped_ticking_gets_a_next_step() {
+        let f = fx();
+        let r = check(&f.env);
+        assert_eq!(r["scheduler"]["state"], "never");
+        assert!(render(&r).contains("Scheduler"));
+        assert!(r["next_steps"]
+            .to_string()
+            .contains("loopx scheduler status"));
+
+        let old = chrono::Local::now().naive_local() - chrono::Duration::minutes(30);
+        crate::scheduler_health::record_tick(
+            &crate::scheduler_health::heartbeat_path(&f.env.loop_home),
+            old,
+            &[],
+        )
+        .unwrap();
+        let r = check(&f.env);
+        assert_eq!(r["scheduler"]["state"], "stale");
+        assert!(render(&r).contains("[STALE  ]"));
     }
 }
