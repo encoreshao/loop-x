@@ -48,8 +48,19 @@ trap 'rm -rf "$TMP"' EXIT
 side=$(magick identify -format '%[fx:max(w,h)]' "$BRAND/mark.png")
 magick "$BRAND/mark.png" -background none -gravity center -extent "${side}x${side}" "$TMP/tile.png"
 
+# The app icon puts the mark on a dark tile: the macOS 824px rounded square on the 1024px
+# canvas, filled with a vertical gradient sampled from the app's own background (#31354f at
+# the top to #212336 at the bottom; left and right edges match, so it is purely vertical),
+# with a soft drop shadow. The favicon and the dashboard mark stay transparent.
 ICON="$ASSETS/app-icon.png"
-magick "$TMP/tile.png" -background none -filter Lanczos -resize 824x824 -gravity center -extent 1024x1024 -strip "PNG32:$ICON"
+magick -size 824x824 gradient:'#31354f-#212336' \
+  \( -size 824x824 xc:none -fill white -draw "roundrectangle 0,0 823,823 185,185" \) \
+  -compose CopyOpacity -composite "$TMP/bg.png"
+magick "$TMP/bg.png" -background none -gravity center -extent 1024x1024 "$TMP/bg-canvas.png"
+magick "$TMP/bg-canvas.png" \( +clone -background black -shadow 35x14+0+10 \) +swap \
+  -background none -layers merge +repage -gravity center -crop 1024x1024+0+0 +repage "$TMP/bg-shadow.png"
+magick "$TMP/bg-shadow.png" \( "$TMP/tile.png" -background none -filter Lanczos -resize 560x560 \) \
+  -gravity center -compose Over -composite -strip "PNG32:$ICON"
 
 ICONSET="$BRAND/AppIcon.iconset"
 rm -rf "$ICONSET"
