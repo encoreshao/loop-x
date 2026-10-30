@@ -147,16 +147,19 @@ fn list_mrs(ctx: &UiCtx) -> Result<Vec<AccountMrs>, String> {
     Ok(mr_review::list_my_mrs(&source))
 }
 
-fn state_pill(ctx: &UiCtx, state: ReviewState) -> String {
+fn state_pill(ctx: &UiCtx, state: ReviewState, failure: Option<&str>) -> String {
     let (kind, label) = match state {
         ReviewState::Reviewed => ("done", "Reviewed"),
         ReviewState::Requested => ("done", "Queued for review"),
         ReviewState::Pending => ("skipped", "Waiting for next run"),
         ReviewState::Skipped => ("skipped", "Skipped by you"),
+        ReviewState::Failed => ("failed", "Review failed \u{b7} skipped until Review now"),
         ReviewState::Draft => ("skipped", "Draft \u{b7} not reviewed"),
         ReviewState::Own => ("skipped", "Your MR \u{b7} not reviewed"),
     };
-    format!("<span class='pill history-pill history-{kind}'>{}</span>", h(&ctx.t(label)))
+    // Why it failed, on hover: the full error would crowd the row.
+    let title = failure.map_or(String::new(), |f| format!(" title='{}'", h(f)));
+    format!("<span class='pill history-pill history-{kind}'{title}>{}</span>", h(&ctx.t(label)))
 }
 
 fn hidden_mr(mr: &MyMr) -> String {
@@ -211,11 +214,15 @@ fn mr_row(ctx: &UiCtx, mr: &MyMr, prefs: &MrPrefs, seen: &dyn Fn(&str) -> bool, 
     }
     let kind = match state {
         ReviewState::Reviewed | ReviewState::Requested => "done",
+        ReviewState::Failed => "failed",
         _ => "skipped",
     };
+    let failure = (state == ReviewState::Failed)
+        .then(|| prefs.failed.get(&mr.mr_ref()).map(String::as_str))
+        .flatten();
     format!(
         "<li class='result-row result-{kind}'><div class='result-head'><span class='result-title'>{title}</span>{}</div>{}{}</li>",
-        state_pill(ctx, state),
+        state_pill(ctx, state, failure),
         meta_line(ctx, &mr.reference, &mr.web_url, &mr.author, &mr.created_at, &extra),
         actions_html(ctx, mr, state)
     )
@@ -464,6 +471,21 @@ mod tests {
         assert!(assigned.contains("class='btn btn-tonal'"), "Review now is accent-tinted like GitLab's run button");
         assert!(created.contains("MR &lt;4&gt;") && created.contains("Your MR \u{b7} not reviewed"));
         assert!(!created.contains("Review now"));
+    }
+
+    #[test]
+    fn a_failed_mr_shows_why_and_offers_review_now() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        MrPrefs::update(&d.path().join("outputs/loops"), |p| {
+            p.failed.insert("work:9!1".into(), "model <timed> out".into());
+        })
+        .unwrap();
+        let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
+        assert!(html.contains("result-row result-failed"), "{html}");
+        assert!(html.contains("history-failed'") && html.contains("Review failed \u{b7} skipped until Review now"));
+        assert!(html.contains("title='model &lt;timed&gt; out'"));
+        assert!(html.contains("value='work:9!1'") && html.contains("Review now"));
     }
 
     #[test]

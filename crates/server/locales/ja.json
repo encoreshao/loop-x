@@ -1244,5 +1244,6 @@
   "Draft · not reviewed": "ドラフト · レビュー対象外",
   "Your MR · not reviewed": "自分の MR · レビュー対象外",
   "Loading your merge requests": "マージリクエストを読み込み中",
-  "Updated {when} · refreshing…": "{when} に更新 · 更新中…"
+  "Updated {when} · refreshing…": "{when} に更新 · 更新中…",
+  "Review failed · skipped until Review now": "レビュー失敗 · 「今すぐレビュー」まで保留"
 }

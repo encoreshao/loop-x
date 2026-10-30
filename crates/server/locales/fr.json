@@ -1244,5 +1244,6 @@
   "Draft · not reviewed": "Brouillon · non relue",
   "Your MR · not reviewed": "Votre MR · non relue",
   "Loading your merge requests": "Chargement de vos merge requests",
-  "Updated {when} · refreshing…": "Mis à jour {when} · actualisation…"
+  "Updated {when} · refreshing…": "Mis à jour {when} · actualisation…",
+  "Review failed · skipped until Review now": "Échec de la relecture · ignorée jusqu’à « Relire maintenant »"
 }

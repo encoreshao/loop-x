@@ -1244,5 +1244,6 @@
   "Draft · not reviewed": "草稿 · 不评审",
   "Your MR · not reviewed": "你的 MR · 不评审",
   "Loading your merge requests": "正在加载你的合并请求",
-  "Updated {when} · refreshing…": "{when}更新 · 正在刷新…"
+  "Updated {when} · refreshing…": "{when}更新 · 正在刷新…",
+  "Review failed · skipped until Review now": "评审失败 · 点击“立即评审”前跳过"
 }

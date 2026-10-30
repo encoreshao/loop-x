@@ -571,12 +571,14 @@ fn row_ref(account_id: &str, row: &Value) -> String {
 }
 
 /// The user's per-MR choices, kept beside the loop's `seen.json`
-/// (`<state root>/mr-review-loop/mr-prefs.json`): MRs never to review, and
-/// MRs to review on the next run even when already reviewed.
+/// (`<state root>/mr-review-loop/mr-prefs.json`): MRs never to review, MRs
+/// to review on the next run even when already reviewed, and MRs whose review
+/// failed (with why), left alone on every commit until "Review now".
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MrPrefs {
     pub skip: BTreeSet<String>,
     pub requested: BTreeSet<String>,
+    pub failed: BTreeMap<String, String>,
 }
 
 impl MrPrefs {
@@ -599,9 +601,17 @@ impl MrPrefs {
                 .map(str::to_string)
                 .collect()
         };
+        let failed = data
+            .get("failed")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+            .collect();
         Self {
             skip: set("skip"),
             requested: set("requested"),
+            failed,
         }
     }
 
@@ -614,7 +624,8 @@ impl MrPrefs {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("json.tmp");
-        let body = json!({"skip": prefs.skip, "requested": prefs.requested});
+        let body =
+            json!({"skip": prefs.skip, "requested": prefs.requested, "failed": prefs.failed});
         std::fs::write(&tmp, serde_json::to_string_pretty(&body)? + "\n")?;
         std::fs::rename(&tmp, &path)?;
         Ok(prefs)
@@ -661,6 +672,8 @@ pub enum ReviewState {
     Draft,
     /// The user chose to skip it.
     Skipped,
+    /// Its review failed; left alone until "Review now".
+    Failed,
     /// "Review now" was pressed; the next run reviews it.
     Requested,
     /// Its current head SHA has been reviewed.
@@ -679,6 +692,8 @@ pub fn review_state(mr: &MyMr, prefs: &MrPrefs, seen: impl Fn(&str) -> bool) -> 
         ReviewState::Requested
     } else if prefs.skip.contains(&r) {
         ReviewState::Skipped
+    } else if prefs.failed.contains_key(&r) {
+        ReviewState::Failed
     } else if !mr.sha.is_empty() && seen(&item_key(&mr.account, &mr.project_id, &mr.iid, &mr.sha)) {
         ReviewState::Reviewed
     } else {
@@ -808,6 +823,37 @@ pub fn list_my_mrs(source: &dyn ConnectorSource) -> Vec<AccountMrs> {
             }
         })
         .collect()
+}
+
+/// `account:project_id!iid` of an item key `mr:<that>@<sha>`.
+fn ref_of_key(key: &str) -> Option<&str> {
+    key.strip_prefix("mr:")?.rsplit_once('@').map(|(r, _)| r)
+}
+
+/// A failed review is left alone on later runs until "Review now"; one that
+/// went through again is forgotten.
+fn remember_failures(outcomes: &[Outcome], ctx: &LoopContext) {
+    if outcomes.is_empty() {
+        return;
+    }
+    let state_root = ctx
+        .state_dir
+        .clone()
+        .unwrap_or_else(crate::seen_store::default_state_root);
+    if let Err(e) = MrPrefs::update(&state_root, |p| {
+        for o in outcomes {
+            let Some(r) = ref_of_key(&o.item_key) else {
+                continue;
+            };
+            if o.status == Status::Failed {
+                p.failed.insert(r.to_string(), o.summary.clone());
+            } else {
+                p.failed.remove(r);
+            }
+        }
+    }) {
+        ctx.log(&format!("mr-review: could not save failed reviews: {e}"));
+    }
 }
 
 fn sev_rank(name: &str) -> usize {
@@ -1021,6 +1067,7 @@ impl LoopPlugin for MrReview {
             .unwrap_or_else(crate::seen_store::default_state_root);
         let prefs = MrPrefs::load(&state_root);
         let (mut requested, mut items) = (Vec::new(), Vec::new());
+        let mut load_failures: Vec<(String, String)> = Vec::new();
         for account in self
             .connectors
             .accounts_with_capability(crate::connectors::MERGE_REQUESTS)
@@ -1078,8 +1125,10 @@ impl LoopPlugin for MrReview {
                 if is_draft(row) {
                     continue;
                 }
-                let wanted = prefs.requested.contains(&row_ref(&account.id, row));
-                if !wanted && prefs.skip.contains(&row_ref(&account.id, row)) {
+                let r = row_ref(&account.id, row);
+                let wanted = prefs.requested.contains(&r);
+                // Skipped by the user, or failed before: only "Review now" brings it back.
+                if !wanted && (prefs.skip.contains(&r) || prefs.failed.contains_key(&r)) {
                     continue;
                 }
                 // The list already carries the head SHA: skip a reviewed one
@@ -1102,19 +1151,23 @@ impl LoopPlugin for MrReview {
                     Ok(Some(item)) if wanted => requested.push(item.with_force()),
                     Ok(Some(item)) => items.push(item),
                     Ok(None) => {}
-                    Err(e) => ctx.log(&format!(
-                        "mr-review: MR !{} failed to load: {}",
-                        row.get("iid").map_or("None".into(), py_str),
-                        e.class_name()
-                    )),
+                    Err(e) => {
+                        ctx.log(&format!(
+                            "mr-review: MR !{} failed to load: {}",
+                            row.get("iid").map_or("None".into(), py_str),
+                            e.class_name()
+                        ));
+                        load_failures.push((r, format!("could not load: {}", e.class_name())));
+                    }
                 }
             }
         }
         // A request is answered by this run (or the MR is gone): drop it.
-        if !prefs.requested.is_empty() {
+        if !prefs.requested.is_empty() || !load_failures.is_empty() {
             let taken = prefs.requested.clone();
             if let Err(e) = MrPrefs::update(&state_root, |p| {
                 p.requested.retain(|r| !taken.contains(r));
+                p.failed.extend(load_failures);
             }) {
                 ctx.log(&format!("mr-review: could not save requests: {e}"));
             }
@@ -1265,7 +1318,8 @@ impl LoopPlugin for MrReview {
             ))
     }
 
-    fn digest(&self, outcomes: &[Outcome], _ctx: &LoopContext) -> Option<String> {
+    fn digest(&self, outcomes: &[Outcome], ctx: &LoopContext) -> Option<String> {
+        remember_failures(outcomes, ctx);
         let done: Vec<&Outcome> = outcomes
             .iter()
             .filter(|o| o.status == Status::Done)
@@ -2277,6 +2331,86 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
     }
 
     #[test]
+    fn failed_mrs_round_trip_with_their_reason() {
+        let d = tempfile::tempdir().unwrap();
+        MrPrefs::update(d.path(), |p| {
+            p.failed.insert("a:1!2".into(), "HTTPError".into());
+        })
+        .unwrap();
+        assert_eq!(
+            MrPrefs::load(d.path())
+                .failed
+                .get("a:1!2")
+                .map(String::as_str),
+            Some("HTTPError")
+        );
+    }
+
+    #[test]
+    fn a_failed_mr_is_skipped_on_every_commit_until_review_now() {
+        let d = tempfile::tempdir().unwrap();
+        MrPrefs::update(d.path(), |p| {
+            p.failed.insert("work:9!7".into(), "boom".into());
+        })
+        .unwrap();
+        // A new head SHA does not bring it back.
+        let conn = rows_handler(json!([
+            {"project_id": 9, "iid": 7, "sha": "new", "author": {"id": 2}, "title": "T"}
+        ]));
+        let plugin = plugin_with(conn.clone());
+        assert!(plugin.discover(&ctx_in(d.path())).unwrap().is_empty());
+        assert!(!conn
+            .calls()
+            .iter()
+            .any(|c| c.1.contains("/merge_requests/7")));
+        // "Review now" is the way to continue: it is tried once more.
+        MrPrefs::update(d.path(), |p| {
+            p.requested.insert("work:9!7".into());
+        })
+        .unwrap();
+        let items = plugin.discover(&ctx_in(d.path())).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(items[0].force);
+    }
+
+    #[test]
+    fn an_mr_that_fails_to_load_is_remembered_as_failed() {
+        let d = tempfile::tempdir().unwrap();
+        let conn = Conn::new(|m, p, _| {
+            if p.ends_with("/merge_requests/7") {
+                return Err(http_err(Some(500)));
+            }
+            d_handler(m, p, None)
+        });
+        assert!(plugin_with(conn)
+            .discover(&ctx_in(d.path()))
+            .unwrap()
+            .is_empty());
+        let failed = MrPrefs::load(d.path()).failed;
+        assert!(failed.contains_key("work:9!7"), "{failed:?}");
+    }
+
+    #[test]
+    fn digest_remembers_failed_reviews_and_forgets_ones_that_now_work() {
+        let d = tempfile::tempdir().unwrap();
+        MrPrefs::update(d.path(), |p| {
+            p.failed.insert("work:9!6".into(), "old".into());
+        })
+        .unwrap();
+        let outcomes = [
+            Outcome::new("mr:work:9!7@h", Status::Failed, "model timed out"),
+            Outcome::new("mr:work:9!6@h2", Status::Done, "ok"),
+        ];
+        plugin_with(ok_conn()).digest(&outcomes, &ctx_in(d.path()));
+        let failed = MrPrefs::load(d.path()).failed;
+        assert_eq!(
+            failed.get("work:9!7").map(String::as_str),
+            Some("model timed out")
+        );
+        assert!(!failed.contains_key("work:9!6"));
+    }
+
+    #[test]
     fn prefs_round_trip_and_tolerate_a_broken_file() {
         let d = tempfile::tempdir().unwrap();
         assert_eq!(MrPrefs::load(d.path()), MrPrefs::default());
@@ -2366,6 +2500,11 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         assert_eq!(review_state(&mr, &prefs, never), ReviewState::Skipped);
         prefs.requested.insert("w:9!7".into());
         assert_eq!(review_state(&mr, &prefs, never), ReviewState::Requested);
+        let mut failed = MrPrefs::default();
+        failed.failed.insert("w:9!7".into(), "x".into());
+        assert_eq!(review_state(&mr, &failed, never), ReviewState::Failed);
+        failed.requested.insert("w:9!7".into());
+        assert_eq!(review_state(&mr, &failed, never), ReviewState::Requested);
         let draft = MyMr {
             draft: true,
             ..mr.clone()
