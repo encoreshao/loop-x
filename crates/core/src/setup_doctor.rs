@@ -149,9 +149,9 @@ pub fn doctor_report_markdown(blocked: &Value, result: Option<&DoctorResult>) ->
 }
 
 /// The feedback handed to the main agent when the doctor fixed the setup.
-pub fn doctor_feedback(result: &DoctorResult) -> String {
+pub fn doctor_feedback(result: &DoctorResult, issue_iid: &str) -> String {
     format!(
-        "## Setup was fixed by the setup doctor\n\nThe environment blockers you reported were fixed:\n\n{}\n\nRun step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), then continue from step 7 (Verify) on the `loop/issue-<iid>` branch, with the existing WIP commit.",
+        "## Setup was fixed by the setup doctor\n\nThe environment blockers you reported were fixed:\n\n{}\n\nRun step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), then continue from step 7 (Verify) on the `loop/issue-{issue_iid}` branch, with the existing WIP commit.",
         blocker_lines(&result.blockers)
     )
 }
@@ -184,7 +184,8 @@ pub fn repeat_block_report(first: &DoctorResult, second: &Value) -> String {
 
 /// The doctor session's CLI argv, shaped like the main agent's
 /// (`gitlab_runner::cli_command`) but writable only in the issue's worktree
-/// and the handoffs directory. Claude gets no `acceptEdits`: that would
+/// and, for Claude, its two result files beside `handoff` (the handoffs
+/// directory is added for reading; the other CLIs get it writable). Claude gets no `acceptEdits`: that would
 /// auto-approve edits in every added directory and undo the scoped
 /// Edit/Write rules of [`doctor_allowed_tools`]. The other CLIs have no
 /// allowlist, so there the prompt is the only fence, as for the main agent.
@@ -193,6 +194,7 @@ pub fn doctor_cli_command(
     prompt: &str,
     repo_root: &str,
     work_dir: &str,
+    handoff: &Path,
     exe: &str,
     max_budget_usd: Option<f64>,
 ) -> Vec<String> {
@@ -230,7 +232,7 @@ pub fn doctor_cli_command(
     }
     cmd.extend([
         s("--allowedTools"),
-        doctor_allowed_tools(repo_root, exe, work_dir),
+        doctor_allowed_tools(exe, work_dir, handoff),
         s("--disallowedTools"),
         doctor_disallowed_tools(exe),
     ]);
@@ -240,8 +242,9 @@ pub fn doctor_cli_command(
 }
 
 /// Claude permission patterns for the doctor session: the worktree and
-/// machine fixes of the spec, no pushes, commits or GitLab access.
-pub fn doctor_allowed_tools(repo_root: &str, exe: &str, work_dir: &str) -> String {
+/// machine fixes of the spec, no pushes, commits or GitLab access. Beside
+/// `handoff` it may write only its own two files, never the handoff itself.
+pub fn doctor_allowed_tools(exe: &str, work_dir: &str, handoff: &Path) -> String {
     // Edit/Write are scoped to the worktree (`//` marks an absolute path).
     let mut t: Vec<String> = ["Read", "WebSearch", "WebFetch"]
         .iter()
@@ -275,7 +278,8 @@ pub fn doctor_allowed_tools(repo_root: &str, exe: &str, work_dir: &str) -> Strin
             "Bash(nvm install*)",
             "Bash(fnm install*)",
             "Bash(corepack enable*)",
-            "Bash(gem install bundler*)",
+            "Bash(gem install bundler:*)",
+            "Bash(gem install bundler -v*)",
             "Bash(brew install*)",
             "Bash(brew services start*)",
             "Bash(createuser*)",
@@ -296,7 +300,9 @@ pub fn doctor_allowed_tools(repo_root: &str, exe: &str, work_dir: &str) -> Strin
     let abs = |p: &str| format!("/{}", p.trim_end_matches('/'));
     t.push(format!("Edit({}/**)", abs(work_dir)));
     t.push(format!("Write({}/**)", abs(work_dir)));
-    t.push(format!("Write({}/outputs/handoffs/**)", abs(repo_root)));
+    for own in [doctor_result_path(handoff), setup_draft_path(handoff)] {
+        t.push(format!("Write({})", abs(&own.display().to_string())));
+    }
     t.join(" ")
 }
 
@@ -309,6 +315,11 @@ pub fn doctor_disallowed_tools(exe: &str) -> String {
         "git commit*",
         "dropdb*",
         "brew uninstall*",
+        "brew tap*",
+        "createuser -h*",
+        "createuser --host*",
+        "createdb -h*",
+        "createdb --host*",
         "loopx gitlab*",
         "loopx notify*",
         "loopx mr*",
@@ -316,11 +327,23 @@ pub fn doctor_disallowed_tools(exe: &str) -> String {
         "Edit(**/.git/**)",
         "Write(**/.git/**)",
         "Read(~/.ssh/**)",
-        "Read(**/id_*)",
+        "Read(**/id_rsa*)",
+        "Read(**/id_ed25519*)",
+        "Read(**/id_ecdsa*)",
         "Read(~/.gitlab/**)",
         "Read(~/.slack/**)",
         "Read(~/.netrc)",
         "Read(~/.aws/**)",
+        "Read(~/.bundle/**)",
+        "Read(~/.gem/credentials)",
+        "Read(~/.npmrc)",
+        "Read(**/.npmrc)",
+        "Read(~/.yarnrc*)",
+        "Read(~/.pgpass)",
+        "Read(~/.config/gh/**)",
+        "Read(~/.docker/config.json)",
+        "Read(~/.claude*/**)",
+        "Read(~/.loopx/**)",
     ] {
         if pat.contains('(') {
             parts.push(pat.to_string());
@@ -339,12 +362,15 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const HANDOFF: &str = "/r/outputs/handoffs/run1/web-7.json";
+
     fn doctor_command(cli: &str) -> Vec<String> {
         doctor_cli_command(
             cli,
             "PROMPT",
             "/r",
             "/wt/web-issue-7",
+            Path::new(HANDOFF),
             "/bin/loopx",
             Some(2.0),
         )
@@ -371,7 +397,7 @@ mod tests {
         };
         assert_eq!(
             flag("--allowedTools"),
-            doctor_allowed_tools("/r", "/bin/loopx", "/wt/web-issue-7")
+            doctor_allowed_tools("/bin/loopx", "/wt/web-issue-7", Path::new(HANDOFF))
         );
         assert_eq!(
             flag("--disallowedTools"),
@@ -488,13 +514,18 @@ mod tests {
 
     #[test]
     fn allowlist_allows_machine_fixes_and_denies_push_and_sudo() {
-        let allowed = doctor_allowed_tools("/repo", "/bin/loopx", "/wt/orbit-issue-10");
+        let allowed = doctor_allowed_tools(
+            "/bin/loopx",
+            "/wt/orbit-issue-10",
+            Path::new("/repo/outputs/handoffs/run1/orbit-10.json"),
+        );
         for want in [
             "Bash(rbenv install*)",
             "Bash(createuser*)",
             "WebSearch",
             "Bash(shasum*)",
-            "Write(//repo/outputs/handoffs/**)",
+            "Write(//repo/outputs/handoffs/run1/orbit-10.doctor.json)",
+            "Write(//repo/outputs/handoffs/run1/orbit-10.setup.md)",
             "Edit(//wt/orbit-issue-10/**)",
             "Write(//wt/orbit-issue-10/**)",
             "Bash(git submodule update*)",
@@ -502,6 +533,9 @@ mod tests {
         ] {
             assert!(has(&allowed, want), "{want} missing");
         }
+        // Not the main handoff, nor anything else beside it.
+        assert!(!allowed.contains("outputs/handoffs/**"), "{allowed}");
+        assert!(!allowed.contains("orbit-10.json"), "{allowed}");
         assert!(!allowed.contains("git push"));
         assert!(!allowed.contains("foreach"));
         assert!(!has(&allowed, "Bash(git submodule*)"));
@@ -520,7 +554,9 @@ mod tests {
             "Edit(**/.git/**)",
             "Write(**/.git/**)",
             "Read(~/.ssh/**)",
-            "Read(**/id_*)",
+            "Read(**/id_rsa*)",
+            "Read(**/id_ed25519*)",
+            "Read(**/id_ecdsa*)",
             "Read(~/.gitlab/**)",
             "Read(~/.slack/**)",
             "Read(~/.netrc)",
@@ -528,6 +564,49 @@ mod tests {
         ] {
             assert!(has(&denied, want), "{want} missing");
         }
+        // Too broad: it would hide every `id_*` source file.
+        assert!(!has(&denied, "Read(**/id_*)"), "{denied}");
+    }
+
+    #[test]
+    fn denylist_hides_package_manager_and_tool_credentials() {
+        let denied = doctor_disallowed_tools("/bin/loopx");
+        for want in [
+            "Read(~/.bundle/**)",
+            "Read(~/.gem/credentials)",
+            "Read(~/.npmrc)",
+            "Read(**/.npmrc)",
+            "Read(~/.yarnrc*)",
+            "Read(~/.pgpass)",
+            "Read(~/.config/gh/**)",
+            "Read(~/.docker/config.json)",
+            "Read(~/.claude*/**)",
+            "Read(~/.loopx/**)",
+        ] {
+            assert!(has(&denied, want), "{want} missing");
+        }
+    }
+
+    #[test]
+    fn databases_stay_local_and_taps_stay_out() {
+        let denied = doctor_disallowed_tools("/bin/loopx");
+        for want in [
+            "Bash(createuser -h*)",
+            "Bash(createuser --host*)",
+            "Bash(createdb -h*)",
+            "Bash(createdb --host*)",
+            "Bash(brew tap*)",
+        ] {
+            assert!(has(&denied, want), "{want} missing");
+        }
+    }
+
+    #[test]
+    fn only_bundler_itself_may_be_gem_installed() {
+        let allowed = doctor_allowed_tools("/bin/loopx", "/wt/x", Path::new("/r/h/x-1.json"));
+        assert!(has(&allowed, "Bash(gem install bundler:*)"), "{allowed}");
+        assert!(has(&allowed, "Bash(gem install bundler -v*)"), "{allowed}");
+        assert!(!has(&allowed, "Bash(gem install bundler*)"), "{allowed}");
     }
 
     fn blocked() -> Value {
@@ -596,11 +675,12 @@ mod tests {
 
     #[test]
     fn feedback_tells_the_agent_to_continue_on_the_branch() {
-        let f = doctor_feedback(&result(DoctorStatus::Fixed));
+        let f = doctor_feedback(&result(DoctorStatus::Fixed), "42");
         assert!(f.starts_with("## Setup was fixed by the setup doctor"));
         assert!(f.contains("rbenv install 4.0.7"));
         assert!(f.contains("step 7"));
-        assert!(f.contains("loop/issue-"));
+        assert!(f.contains("`loop/issue-42`"), "{f}");
+        assert!(!f.contains("<iid>"), "{f}");
         assert!(f.contains("WIP commit"));
         assert!(
             f.contains("Run step 5's `loopx worktree new` again first"),

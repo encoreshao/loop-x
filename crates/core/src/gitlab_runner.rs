@@ -451,6 +451,7 @@ fn invoke_doctor(
         &text,
         &ctx.repo_root.display().to_string(),
         &doctor.work_dir,
+        &handoff,
         &ctx.exe,
         req.max_budget_usd,
     );
@@ -1537,8 +1538,8 @@ pub fn finalize_gated_issue(
         None => branch.clone(),
     };
     let setup_note = match deps.setup_fixed {
-        Some(n) => setup_fixed_note(n),
-        None => String::new(),
+        Some(n) if n > 0 => setup_fixed_note(n),
+        _ => String::new(),
     };
     notify(
         &bundle,
@@ -2110,6 +2111,24 @@ fn after_setup_blocked(
             ));
         }
     };
+    // The doctor's own dirty-tree check must only ever see what it did. A
+    // missing worktree (`loopx worktree new` failed) has nothing to lose.
+    let uncommitted = worktree_changes(&work_dir);
+    if !uncommitted.is_empty() {
+        let report = format!(
+            "The agent handed off setup_blocked without committing its work first, so the setup doctor did not run. Uncommitted in the worktree `{}`: {}.\n\n{}",
+            work_dir.display(),
+            backticked(&uncommitted),
+            setup_doctor::report_without_doctor(&blocked, "the worktree had uncommitted changes")
+        );
+        return Ok((
+            pass,
+            SetupOutcome {
+                report: Some(report),
+                fixed: None,
+            },
+        ));
+    }
     let (first, mut costs, mut usages) = pass;
     let doctor = run_doctor(issue, invoker, mode, &blocked, &work_dir);
     costs.push(doctor.cost_usd);
@@ -2122,12 +2141,7 @@ fn after_setup_blocked(
                 report = format!(
                     "After the setup doctor ran, the worktree `{}` has uncommitted changes, so the loop stopped instead of continuing on it: {}. The doctor may only write gitignored files; review these and remove them before re-running the issue.\n\n{report}",
                     work_dir.display(),
-                    doctor
-                        .changes
-                        .iter()
-                        .map(|f| format!("`{f}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    backticked(&doctor.changes)
                 );
             }
             let outcome = SetupOutcome {
@@ -2145,7 +2159,7 @@ fn after_setup_blocked(
         issue.definition,
         invoker.clone(),
         mode.clone(),
-        Some(setup_doctor::doctor_feedback(&fixed)),
+        Some(setup_doctor::doctor_feedback(&fixed, issue.issue_iid)),
         false,
         first.iterations.len() as i64,
     )
@@ -2322,6 +2336,15 @@ fn worktree_changes(work_dir: &Path) -> Vec<String> {
             .collect(),
         _ => vec![format!("(git status failed in {})", work_dir.display())],
     }
+}
+
+/// `a`, `b`: file names as inline code, comma-separated.
+fn backticked(files: &[String]) -> String {
+    files
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The note on an issue's Slack line when the setup doctor fixed its setup.
@@ -2655,7 +2678,11 @@ pub fn send_run_report(
             .iter()
             .find(|r| r.result.run_id == issue_run_id)
             .and_then(|r| r.setup_fixed)
+            .filter(|&n| n > 0)
         {
+            if matches!(line.outcome, gitlab_report::Outcome::Escalated(_)) {
+                continue;
+            }
             line.title.push_str(&setup_fixed_note(n));
         }
     }
@@ -3575,6 +3602,9 @@ mod tests {
     enum Step {
         /// The main agent writes this handoff.
         Main(Value),
+        /// The main agent writes this handoff and leaves the listed
+        /// untracked files in the worktree.
+        MainLeaving(Value, Vec<&'static str>),
         /// The doctor writes this result (none when `None`), a SETUP.md
         /// draft, and leaves the listed untracked files in the worktree.
         Doctor(Option<Value>, Vec<&'static str>),
@@ -3654,13 +3684,20 @@ mod tests {
                     .expect("an unscripted call");
                 assert_eq!(
                     req.doctor.is_some(),
-                    !matches!(step, Step::Main(_)),
+                    !matches!(step, Step::Main(_) | Step::MainLeaving(..)),
                     "call kind"
                 );
                 std::fs::create_dir_all(handoff.parent().unwrap()).unwrap();
                 let cost = match step {
                     Step::Main(h) => {
                         std::fs::write(&handoff, h.to_string()).unwrap();
+                        0.5
+                    }
+                    Step::MainLeaving(h, junk) => {
+                        std::fs::write(&handoff, h.to_string()).unwrap();
+                        for f in junk {
+                            std::fs::write(wt.join(f), "uncommitted").unwrap();
+                        }
                         0.5
                     }
                     Step::Doctor(result, junk) => {
@@ -3886,6 +3923,71 @@ mod tests {
     }
 
     #[test]
+    fn the_run_report_skips_the_setup_note_on_escalations_and_zero() {
+        for (kind, data, outcome, fixed) in [
+            (
+                "issue.escalated",
+                json!({"reason": "setup_blocked"}),
+                "escalated:setup_blocked",
+                Some(2),
+            ),
+            (
+                "issue.completed",
+                json!({"action": "fix", "mr_url": "https://g/web/-/merge_requests/3"}),
+                "mr_opened",
+                Some(0),
+            ),
+        ] {
+            let d = tempfile::tempdir().unwrap();
+            let sent: Arc<Mutex<Vec<String>>> = Arc::default();
+            let sink = sent.clone();
+            let mut ctx = RunCtx::new(d.path().into());
+            ctx.events_dir = Some(d.path().join("events"));
+            ctx.config_path = Some(d.path().join("projects.json"));
+            ctx.fakes = Some(Arc::new(RunFakes {
+                gitlab: Box::new(Notes(Default::default())),
+                notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
+                gitlab_config_path: d.path().join("gitlab.json"),
+            }));
+            let emit = |kind: &str, data: Value| {
+                ctx.emit(
+                    kind,
+                    Some("R"),
+                    EventFields {
+                        issue_run_id: Some("R_web_7".into()),
+                        project: Some("web".into()),
+                        issue_iid: Some(7),
+                        data: Some(data),
+                    },
+                )
+            };
+            emit("issue.queued", json!({"title": "Fix login", "web_url": ""}));
+            emit(kind, data);
+            let run = IssueRun {
+                result: LoopResult::new(
+                    "l",
+                    "R_web_7",
+                    "gitlab-issue",
+                    LoopState::Completed,
+                    vec![],
+                    "",
+                ),
+                usage: None,
+                gate_outcome: Some(outcome.to_string()),
+                setup_fixed: fixed,
+            };
+            send_run_report(&ctx, "R", "Daily GitLab loop", &[run], 5.0, None);
+            let sent = sent.lock().unwrap();
+            assert!(sent[0].contains("Fix login"), "{}", sent[0]);
+            assert!(
+                !sent[0].contains("setup fixed automatically"),
+                "{}",
+                sent[0]
+            );
+        }
+    }
+
+    #[test]
     fn doctor_without_result_escalates_setup_blocked() {
         for doctor in [Step::DoctorCrash, Step::Doctor(None, vec![])] {
             let h = Doctored::new();
@@ -3920,6 +4022,43 @@ mod tests {
             .find(|e| e["event_type"] == "setup.doctor_finished")
             .unwrap();
         assert_eq!(finished["data"]["status"], "needs_human");
+    }
+
+    #[test]
+    fn uncommitted_work_before_the_doctor_escalates_without_it() {
+        let h = Doctored::new();
+        let run = h.run(vec![Step::MainLeaving(
+            blocked("No module named generated"),
+            vec!["half_done.rb"],
+        )]);
+        assert_eq!(h.kinds(), "m", "the doctor never sees a dirty worktree");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        let notes = h.notes();
+        assert!(
+            notes.contains("The agent handed off setup_blocked without committing its work first, so the setup doctor did not run"),
+            "{notes}"
+        );
+        assert!(notes.contains("half_done.rb"), "{notes}");
+        assert!(notes.contains("No module named generated"), "{notes}");
+        assert!(!h.event_types().iter().any(|e| e == "setup.doctor_started"));
+    }
+
+    #[test]
+    fn a_missing_worktree_still_gets_the_doctor() {
+        // `loopx worktree new` itself failed: there is nothing to be dirty.
+        let h = Doctored::new();
+        std::fs::remove_dir_all(&h.wt).unwrap();
+        let blockers = json!([{"error": "submodules not initialised: sub", "cause": "no access",
+                               "tried": ["git submodule update --init"], "result": "failed"}]);
+        let mut wt_failed = blocked("submodules not initialised: sub");
+        wt_failed["command"] = json!("loopx worktree new web 7");
+        let run = h.run(vec![
+            Step::Main(wt_failed),
+            Step::Doctor(doctor_result("needs_human", blockers), vec![]),
+        ]);
+        assert_eq!(h.kinds(), "md");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        assert!(!h.notes().contains("without committing"), "{}", h.notes());
     }
 
     #[test]

@@ -260,15 +260,35 @@ pub fn new_worktree(
 /// `submodule update` can leave a checkout that git status still reports as
 /// clean, so the status (`-` prefix = not initialised) is checked afterwards.
 pub(crate) fn ensure_submodules(wt: &str) -> Result<(), Failure> {
-    let updated = git_ok(wt, &["submodule", "update", "--init", "--recursive"]);
+    let args = ["submodule", "update", "--init", "--recursive"];
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(wt)
+        .args(args)
+        .output()
+        .map_err(|e| Failure::new(format!("failed to run git: {e}")))?;
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    eprint!("{}", String::from_utf8_lossy(&out.stdout));
+    if !stderr.is_empty() {
+        eprintln!("{stderr}");
+    }
+    // Why the update failed, for the error the agent hands to the doctor.
+    let why = if out.status.success() || stderr.is_empty() {
+        String::new()
+    } else {
+        format!("; `git {}` said: {stderr}", args.join(" "))
+    };
     let missing = uninitialised_submodules(wt)?;
     if !missing.is_empty() {
         return Err(Failure::new(format!(
-            "submodules not initialised: {}",
+            "submodules not initialised: {}{why}",
             missing.join(", ")
         )));
     }
-    updated
+    if !out.status.success() {
+        return Err(Failure::new(format!("git {} failed{why}", args.join(" "))));
+    }
+    Ok(())
 }
 
 /// Paths of the submodules (recursively) that `git submodule status` marks
@@ -1097,5 +1117,12 @@ mod tests {
             "{}",
             err.message
         );
+        // Why the update could not populate it.
+        assert!(
+            err.message.contains("git submodule update"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("fatal:"), "{}", err.message);
     }
 }
