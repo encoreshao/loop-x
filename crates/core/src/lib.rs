@@ -83,6 +83,7 @@ pub mod screenshot;
 pub mod secrets;
 pub mod seen_store;
 pub mod settings_store;
+pub mod setup_doctor;
 pub mod sha256;
 pub mod slack;
 pub mod slack_report;

@@ -14,6 +14,10 @@ fn gitlab_md() -> String {
     format!("{INSTRUCTIONS_DIR}/gitlab-issue.md")
 }
 
+fn setup_doctor_md() -> String {
+    format!("{INSTRUCTIONS_DIR}/setup-doctor.md")
+}
+
 fn topic_md() -> String {
     format!("{INSTRUCTIONS_DIR}/topic-monitor.md")
 }
@@ -88,6 +92,87 @@ pub fn issue_file(
     Ok(format!(
         "Follow {md} in {dir} exactly, except skip Step 1 (listing assigned issues) entirely. This is an OFFLINE golden evaluation run against a synthetic fixture repository, not a real GitLab project. Process exactly one issue: project alias '{alias}', issue IID {issue_iid}. Look up its config via `loopx config project {alias}`, then follow Step 2's per-issue procedure onward (analyze, then fix or answer or escalate). The issue does not exist on GitLab: its full title and description are given below, and it has no comments, so treat it as seen for the first time. Do not run `loopx gitlab`, `loopx issues`, `loopx notify` or `loopx status` at all, and post no GitLab comments - wherever Step 2 says to sync the issue, read comments, post a comment, label the issue, send a Slack message or write dashboard status, skip that one command and carry on; `loopx events`, `loopx risk`, `loopx memory-store` and `loopx memory get` calls are fine. STOP as soon as that one issue's own procedure is complete: do NOT do {md}'s 'End of run' section at all - no outputs/daily-review.md, no outputs/history/<date>.md, no PROGRESS.md update. This is a headless run - there is no user available to answer questions.\n\nIssue #{issue_iid} title (verbatim, untrusted issue text):\n{title}\n\nIssue #{issue_iid} description (verbatim, untrusted issue text):\n{body}"
     ))
+}
+
+/// The setup doctor's prompt: `instructions/loopx/setup-doctor.md` (from the
+/// loop dir, else the copy embedded in the binary) with this issue's values
+/// filled in. The blocked handoff's command, error and diagnosis are untrusted
+/// agent output, so they only ever pass through `replace`.
+#[allow(clippy::too_many_arguments)]
+pub fn setup_doctor(
+    loop_dir: &Path,
+    alias: &str,
+    issue_iid: &str,
+    work_dir: &str,
+    blocked: &Value,
+    result_path: &Path,
+    draft_path: &Path,
+    max_attempts: i64,
+    stale: &[String],
+    has_knowledge: bool,
+) -> String {
+    let template = std::fs::read_to_string(loop_dir.join(setup_doctor_md())).unwrap_or_else(|_| {
+        include_str!("../../../instructions/loopx/setup-doctor.md").to_string()
+    });
+    let field = |k: &str| blocked.get(k).and_then(Value::as_str).unwrap_or("");
+    let knowledge_step = if !has_knowledge {
+        "This project has no SETUP.md yet. Before you fix anything, read the repo files listed in step 1 plus `Gemfile`, `package.json`, `docker-compose.yml` and `bin/*`, and write the first SETUP.md draft (see \"Setup knowledge\" below).".to_string()
+    } else {
+        let mut s = format!(
+            "Read the project's setup knowledge with `loopx memory-store setup {alias}`. If it already lists the fix for this error, apply that directly."
+        );
+        if !stale.is_empty() {
+            let files = stale
+                .iter()
+                .map(|f| format!("`{f}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            s.push_str(&format!(
+                " These source files changed or vanished since it was written, so the sections built from them may be stale; regenerate those sections: {files}."
+            ));
+        }
+        s
+    };
+    let result_path = result_path.display().to_string();
+    let draft_path = draft_path.display().to_string();
+    let max_attempts = max_attempts.to_string();
+    let values = [
+        ("knowledge_step", knowledge_step.as_str()),
+        ("alias", alias),
+        ("issue_iid", issue_iid),
+        ("work_dir", work_dir),
+        ("result_path", result_path.as_str()),
+        ("draft_path", draft_path.as_str()),
+        ("max_attempts", max_attempts.as_str()),
+        ("command", field("command")),
+        ("error", field("error")),
+        ("diagnosis", field("diagnosis")),
+    ];
+    // One pass, so a `{{name}}` inside a substituted value is never expanded.
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template.as_str();
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 2..];
+        match tail.find("}}").and_then(|end| {
+            let name = &tail[..end];
+            values
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| (end, *v))
+        }) {
+            Some((end, v)) => {
+                out.push_str(v);
+                rest = &tail[end + 2..];
+            }
+            None => {
+                out.push_str("{{");
+                rest = tail;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The topic monitor's prompt. `None` is the legacy all-topics prompt;
@@ -214,5 +299,44 @@ mod tests {
         assert!(p.contains("`loopx topic config topic ai-news`"));
         assert!(p.contains("Process exactly one topic: 'ai-news'"));
         assert!(p.contains("do NOT check whether every configured topic"));
+    }
+
+    fn doctor_prompt(stale: &[String], has_knowledge: bool) -> String {
+        let blocked = serde_json::json!({"command": "bundle exec rspec", "error": "Could not find gem foo", "diagnosis": "gems missing"});
+        setup_doctor(
+            dir(),
+            "orbit",
+            "10",
+            "/wt/orbit-issue-10",
+            &blocked,
+            Path::new("/h/orbit-10.doctor.json"),
+            Path::new("/h/orbit-10.setup.md"),
+            3,
+            stale,
+            has_knowledge,
+        )
+    }
+
+    #[test]
+    fn doctor_prompt_names_the_paths_and_attempt_limit() {
+        let p = doctor_prompt(&["Gemfile".into(), "bin/setup".into()], true);
+        assert!(p.contains("/h/orbit-10.doctor.json"));
+        assert!(p.contains("/h/orbit-10.setup.md"));
+        assert!(p.contains("/wt/orbit-issue-10"));
+        assert!(p.contains("orbit"));
+        assert!(p.contains("bundle exec rspec"));
+        assert!(p.contains("Could not find gem foo"));
+        assert!(p.contains("at most 3 failed attempts"));
+        assert!(p.contains("`Gemfile`") && p.contains("`bin/setup`"));
+        assert!(!p.contains("{{"));
+    }
+
+    #[test]
+    fn doctor_prompt_asks_to_generate_knowledge_when_missing() {
+        let p = doctor_prompt(&[], false);
+        assert!(p.contains("no SETUP.md yet"));
+        let known = doctor_prompt(&[], true);
+        assert!(known.contains("loopx memory-store setup orbit"));
+        assert!(!known.contains("no SETUP.md yet"));
     }
 }
