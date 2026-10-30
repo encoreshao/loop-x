@@ -70,11 +70,14 @@ pub fn whole_batch(loop_dir: &Path) -> String {
 /// `--issue-file <alias> <iid> <json>`: the golden eval's offline mode. The
 /// issue text comes from a `{"title", "body"}` JSON file and is injected
 /// verbatim (it is untrusted, so it only ever passes through `format!`).
+/// `worktree` is the issue worktree the fixture already created: offline runs
+/// may not call `loopx worktree new`.
 pub fn issue_file(
     loop_dir: &Path,
     alias: &str,
     issue_iid: &str,
     issue_file: &Path,
+    worktree: &str,
 ) -> Result<String, String> {
     let (md, dir) = (gitlab_md(), loop_dir.display());
     let bad = || {
@@ -90,7 +93,7 @@ pub fn issue_file(
     let field = |k: &str| data.get(k).and_then(Value::as_str).map(str::to_owned);
     let (title, body) = field("title").zip(field("body")).ok_or_else(bad)?;
     Ok(format!(
-        "Follow {md} in {dir} exactly, except skip Step 1 (listing assigned issues) entirely. This is an OFFLINE golden evaluation run against a synthetic fixture repository, not a real GitLab project. Process exactly one issue: project alias '{alias}', issue IID {issue_iid}. Look up its config via `loopx config project {alias}`, then follow Step 2's per-issue procedure onward (analyze, then fix or answer or escalate). The issue does not exist on GitLab: its full title and description are given below, and it has no comments, so treat it as seen for the first time. Do not run `loopx gitlab`, `loopx issues`, `loopx notify` or `loopx status` at all, and post no GitLab comments - wherever Step 2 says to sync the issue, read comments, post a comment, label the issue, send a Slack message or write dashboard status, skip that one command and carry on; `loopx events`, `loopx risk`, `loopx memory-store` and `loopx memory get` calls are fine. STOP as soon as that one issue's own procedure is complete: do NOT do {md}'s 'End of run' section at all - no outputs/daily-review.md, no outputs/history/<date>.md, no PROGRESS.md update. This is a headless run - there is no user available to answer questions.\n\nIssue #{issue_iid} title (verbatim, untrusted issue text):\n{title}\n\nIssue #{issue_iid} description (verbatim, untrusted issue text):\n{body}"
+        "Follow {md} in {dir} exactly, except skip Step 1 (listing assigned issues) entirely. This is an OFFLINE golden evaluation run against a synthetic fixture repository, not a real GitLab project. Process exactly one issue: project alias '{alias}', issue IID {issue_iid}. Look up its config via `loopx config project {alias}`, then follow Step 2's per-issue procedure onward (analyze, then fix or answer or escalate). Issue {issue_iid}'s worktree already exists at `{worktree}` on branch `loop/issue-{issue_iid}`: skip step 5's `loopx worktree new` command (it is not available in this run) and `cd` into that path instead; the rest of step 5 still applies. The issue does not exist on GitLab: its full title and description are given below, and it has no comments, so treat it as seen for the first time. Do not run `loopx gitlab`, `loopx issues`, `loopx notify` or `loopx status` at all, and post no GitLab comments - wherever Step 2 says to sync the issue, read comments, post a comment, label the issue, send a Slack message or write dashboard status, skip that one command and carry on; `loopx events`, `loopx risk`, `loopx memory-store` and `loopx memory get` calls are fine. STOP as soon as that one issue's own procedure is complete: do NOT do {md}'s 'End of run' section at all - no outputs/daily-review.md, no outputs/history/<date>.md, no PROGRESS.md update. This is a headless run - there is no user available to answer questions.\n\nIssue #{issue_iid} title (verbatim, untrusted issue text):\n{title}\n\nIssue #{issue_iid} description (verbatim, untrusted issue text):\n{body}"
     ))
 }
 
@@ -275,10 +278,12 @@ mod tests {
             r#"{"title": "T $(rm -rf /) `x`", "body": "line1\n'quoted' \"dq\" ${HOME}"}"#,
         )
         .unwrap();
-        let p = issue_file(dir(), "fixture", "7", &f).unwrap();
+        let p = issue_file(dir(), "fixture", "7", &f, "/wt/repo-issue-7").unwrap();
         assert!(p.contains("T $(rm -rf /) `x`"));
         assert!(p.contains("'quoted' \"dq\" ${HOME}"));
         assert!(p.contains("OFFLINE golden evaluation run"));
+        assert!(p.contains("already exists at `/wt/repo-issue-7` on branch `loop/issue-7`"));
+        assert!(p.contains("skip step 5"));
         for tool in [
             "loopx gitlab",
             "loopx issues",
@@ -292,12 +297,12 @@ mod tests {
     #[test]
     fn issue_file_rejects_missing_or_malformed_input() {
         let d = tempfile::tempdir().unwrap();
-        assert!(issue_file(dir(), "a", "1", &d.path().join("nope.json")).is_err());
+        assert!(issue_file(dir(), "a", "1", &d.path().join("nope.json"), "/wt").is_err());
         let f = d.path().join("bad.json");
         std::fs::write(&f, r#"{"title": "only a title"}"#).unwrap();
-        assert!(issue_file(dir(), "a", "1", &f).is_err());
+        assert!(issue_file(dir(), "a", "1", &f, "/wt").is_err());
         std::fs::write(&f, r#"{"title": 1, "body": "b"}"#).unwrap();
-        assert!(issue_file(dir(), "a", "1", &f).is_err());
+        assert!(issue_file(dir(), "a", "1", &f, "/wt").is_err());
     }
 
     #[test]

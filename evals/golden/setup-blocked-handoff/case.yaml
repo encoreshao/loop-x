@@ -64,3 +64,7 @@ expect:
   allowed_paths: ["lib/**", "tests/**"]
   # The fixture's tests stay as they are; a new test file is fine.
   protected_paths: ["tests/**"]
+  # The failing check is the pytest run, not a worktree command.
+  handoff_command_contains: pytest
+  # The change must be committed as WIP before the handoff.
+  clean_worktree: true

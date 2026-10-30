@@ -52,6 +52,10 @@ pub struct Expect {
     pub allowed_paths: Vec<String>,
     pub protected_paths: Vec<String>,
     pub checks_pass: Option<bool>,
+    /// The handoff's `command` must contain this (a `setup_blocked` case).
+    pub handoff_command_contains: Option<String>,
+    /// The issue worktree must have no uncommitted or untracked files.
+    pub clean_worktree: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +160,14 @@ pub fn parse_case(text: &str, path: &str) -> Result<GoldenCase, String> {
             allowed_paths: str_list(expect.get("allowed_paths")),
             protected_paths: str_list(expect.get("protected_paths")),
             checks_pass: expect.get("checks_pass").and_then(Value::as_bool),
+            handoff_command_contains: expect
+                .get("handoff_command_contains")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            clean_worktree: expect
+                .get("clean_worktree")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         },
     })
 }
@@ -307,6 +319,15 @@ pub fn changed_paths(repo: &Path, worktree: &Path) -> Result<Vec<String>, String
     Ok(changed.into_iter().collect())
 }
 
+/// `git status --porcelain` in the issue worktree, one entry per line.
+pub fn worktree_status(worktree: &Path) -> Result<Vec<String>, String> {
+    Ok(git(&["status", "--porcelain"], worktree)?
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// Python's `fnmatch.fnmatchcase`: `*` (any run, `/` included), `?`, `[seq]`,
 /// `[!seq]`.
 pub fn fnmatchcase(name: &str, pattern: &str) -> bool {
@@ -367,12 +388,14 @@ fn allowed(path: &str, patterns: &[String]) -> bool {
 
 /// `(passed, reasons)`. `handoff` is the validated handoff or `None`;
 /// `checks_passed` is the project's checks after the last attempt (`None` when
-/// they were not run, i.e. no fix was handed off).
+/// they were not run, i.e. no fix was handed off); `dirty` is the worktree's
+/// `git status --porcelain` after the run.
 pub fn grade(
     case: &GoldenCase,
     handoff: Option<&Value>,
     changed: &[String],
     checks_passed: Option<bool>,
+    dirty: &[String],
 ) -> (bool, Vec<String>) {
     let expect = &case.expect;
     let Some(handoff) = handoff else {
@@ -399,6 +422,16 @@ pub fn grade(
             reasons.push(format!("changed protected fixture file {path}"));
         }
     }
+    if let Some(needle) = &expect.handoff_command_contains {
+        let command = handoff.get("command").and_then(Value::as_str).unwrap_or("");
+        if !command.contains(needle.as_str()) {
+            reasons.push(format!(
+                "handoff command {} does not contain {}",
+                crate::pydumps::py_repr_str(command),
+                crate::pydumps::py_repr_str(needle)
+            ));
+        }
+    }
     if expect.checks_pass == Some(true) && checks_passed != Some(true) {
         reasons.push(
             if checks_passed == Some(false) {
@@ -408,6 +441,12 @@ pub fn grade(
             }
             .to_string(),
         );
+    }
+    if expect.clean_worktree && !dirty.is_empty() {
+        reasons.push(format!(
+            "worktree not clean after the run: {}",
+            dirty.join(", ")
+        ));
     }
     (reasons.is_empty(), reasons)
 }
@@ -879,7 +918,8 @@ pub fn run_case_real(
             }));
         }
         let changed = changed_paths(&sandbox.repo, &sandbox.worktree)?;
-        Ok(grade(case, handoff.as_ref(), &changed, checks))
+        let dirty = worktree_status(&sandbox.worktree)?;
+        Ok(grade(case, handoff.as_ref(), &changed, checks, &dirty))
     })();
     let (passed, grade_reasons) = match graded {
         Ok(g) => g,
@@ -996,6 +1036,8 @@ mod tests {
                 allowed_paths: vec!["lib/**".into(), "tests/**".into()],
                 protected_paths: vec!["tests/**".into()],
                 checks_pass: Some(true),
+                handoff_command_contains: None,
+                clean_worktree: false,
             },
         }
     }
@@ -1015,7 +1057,7 @@ mod tests {
 
     #[test]
     fn grade_requires_a_handoff() {
-        let (ok, why) = grade(&case("fix"), None, &[], None);
+        let (ok, why) = grade(&case("fix"), None, &[], None, &[]);
         assert!(!ok);
         assert_eq!(why, ["no handoff (missing or malformed)"]);
     }
@@ -1029,7 +1071,7 @@ mod tests {
             "tests/test_a.py".to_string(),
             "tests/new.py".to_string(),
         ];
-        let (ok, why) = grade(&c, Some(&h), &changed, Some(false));
+        let (ok, why) = grade(&c, Some(&h), &changed, Some(false), &[]);
         assert!(!ok);
         assert_eq!(
             why,
@@ -1040,15 +1082,39 @@ mod tests {
                 "project checks did not pass",
             ]
         );
-        let (_, why) = grade(&c, Some(&json!({"action": "fix"})), &[], None);
+        let (_, why) = grade(&c, Some(&json!({"action": "fix"})), &[], None, &[]);
         assert_eq!(why, ["project checks were not run"]);
         let (ok, _) = grade(
             &c,
             Some(&json!({"action": "fix"})),
             &["lib/a.py".into()],
             Some(true),
+            &[],
         );
         assert!(ok);
+    }
+
+    #[test]
+    fn grade_checks_the_handoff_command_and_a_clean_worktree() {
+        let mut c = case("setup_blocked");
+        c.expect.checks_pass = None;
+        c.expect.handoff_command_contains = Some("pytest".into());
+        c.expect.clean_worktree = true;
+        let h = json!({"action": "setup_blocked", "command": "loopx worktree new /r main 1 /w"});
+        let (ok, why) = grade(&c, Some(&h), &[], None, &["?? lib/x.py".into()]);
+        assert!(!ok);
+        assert_eq!(
+            why,
+            [
+                "handoff command 'loopx worktree new /r main 1 /w' does not contain 'pytest'",
+                "worktree not clean after the run: ?? lib/x.py",
+            ]
+        );
+        let h = json!({"action": "setup_blocked", "command": "python3 -m pytest -q"});
+        assert_eq!(
+            grade(&c, Some(&h), &["lib/a.py".into()], None, &[]),
+            (true, vec![])
+        );
     }
 
     #[test]
@@ -1058,6 +1124,15 @@ mod tests {
         assert_eq!(c.files, vec![("a.py".to_string(), "x\n".to_string())]);
         assert_eq!(c.expect.checks_pass, None);
         assert!(c.expect.allowed_paths.is_empty());
+        assert_eq!(c.expect.handoff_command_contains, None);
+        assert!(!c.expect.clean_worktree);
+        let strict = ok.replace(
+            "{action: fix}",
+            "{action: setup_blocked, handoff_command_contains: pytest, clean_worktree: true}",
+        );
+        let c = parse_case(&strict, "p").unwrap();
+        assert_eq!(c.expect.handoff_command_contains.as_deref(), Some("pytest"));
+        assert!(c.expect.clean_worktree);
         assert_eq!(
             parse_case("- a", "p").unwrap_err(),
             "p: case must be a mapping"
@@ -1090,6 +1165,11 @@ mod tests {
         assert_eq!(all.len(), 7);
         let one = load_cases(&dir, Some(&["setup-blocked-handoff".to_string()])).unwrap();
         assert_eq!(one[0].expect.action, "setup_blocked");
+        assert_eq!(
+            one[0].expect.handoff_command_contains.as_deref(),
+            Some("pytest")
+        );
+        assert!(one[0].expect.clean_worktree);
         let one = load_cases(&dir, Some(&["fix-off-by-one".to_string()])).unwrap();
         assert_eq!(one.len(), 1);
         let err = load_cases(&dir, Some(&["nope".to_string()])).unwrap_err();
@@ -1201,6 +1281,7 @@ mod tests {
             changed_paths(&sb.repo, &sb.worktree).unwrap(),
             Vec::<String>::new()
         );
+        assert!(worktree_status(&sb.worktree).unwrap().is_empty());
         std::fs::write(sb.worktree.join("lib/a.py"), "changed").unwrap();
         std::fs::write(sb.worktree.join("new.txt"), "n").unwrap();
         std::fs::create_dir_all(sb.worktree.join("__pycache__")).unwrap();
@@ -1208,6 +1289,10 @@ mod tests {
         assert_eq!(
             changed_paths(&sb.repo, &sb.worktree).unwrap(),
             ["lib/a.py", "new.txt"]
+        );
+        assert_eq!(
+            worktree_status(&sb.worktree).unwrap(),
+            [" M lib/a.py", "?? new.txt"]
         );
         let projects: Value =
             serde_json::from_str(&std::fs::read_to_string(sb.home.join("projects.json")).unwrap())
