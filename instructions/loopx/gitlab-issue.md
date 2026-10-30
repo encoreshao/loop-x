@@ -112,7 +112,7 @@ Two decisions are needed before I can write code for the remaining items.
 
 Pass the body to `post-issue-comment` as a single-quoted shell argument with real line breaks inside it (write any literal `'` as `'\''`). Single quotes stop the shell from expanding the backticks and `$` that markdown uses; a double-quoted body would run every `` `code` `` span as a command.
 
-Also run `loopx memory get <instance> <project_id>` (legacy lessons) and `loopx memory-store list <alias>` (file-based task memory, one entry per issue previously recorded) once per alias, using that alias's own `instance` from `project <alias>` above. Read both, merged, before analyzing any issue on that project — a lesson recorded before this repo moved to file-based memory is exactly as relevant as one recorded yesterday; it often shortcuts step 3 below.
+Also run `loopx memory get <instance> <project_id>` (legacy lessons) and `loopx memory-store list <alias>` (file-based task memory, one entry per issue previously recorded) once per alias, using that alias's own `instance` from `project <alias>` above. Read both, merged, before analyzing any issue on that project — a lesson recorded before this repo moved to file-based memory is exactly as relevant as one recorded yesterday; it often shortcuts step 3 below. Lessons in the `screenshot-recipe` category say how to screenshot this project's UI; start from them in "UI changes: before/after screenshots" below.
 
 Before starting each issue's own numbered steps below, check for pending messages from the dashboard:
 ```
@@ -189,7 +189,7 @@ loopx events emit --type issue.started --run-id "$LOOP_RUN_ID" --issue-run-id "$
    loopx status write running --current-issue "<alias> #<issue_iid>" --current-step "implementing"
    ```
 
-6. **Implement the minimal fix** inside the worktree: understand the root cause, make the smallest change that addresses it, no drive-by refactors, no unrelated files touched.
+6. **Implement the minimal fix** inside the worktree: understand the root cause, make the smallest change that addresses it, no drive-by refactors, no unrelated files touched. If the fix visibly changes the UI and the harness gate is ON, take the "before" shots first, before editing any code — see "UI changes: before/after screenshots" below.
 
 Report the phase change before verifying:
 ```
@@ -230,6 +230,7 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
    git add <the specific files you changed>
    git commit -m "Fix #<issue_iid>: <short title>"
    ```
+   Never stage a screenshot, mock or session file, or the throwaway screenshot spec.
 
 Report the phase change before opening the MR:
 ```
@@ -284,6 +285,33 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
    cd <loop_dir>
    ```
    Step 5 left you inside this issue's worktree; the next issue starts its own worktree from scratch and must not inherit this one as its working directory. Every command in this file names its scripts by absolute path so this is belt-and-braces rather than load-bearing, but do it anyway so the invariant "cwd is `<loop_dir>` at the start of each issue" always holds.
+
+### UI changes: before/after screenshots
+
+Only for a fix that visibly changes the UI, in a run where the harness gate is ON (the images travel in the handoff). Skip it for `use_worktree: false` projects (no scratch files may be created in that checkout), and skip it when nothing visible changes. Screenshots are a bonus: they never block or fail a fix. Below, `<screens>` is `<loop_dir>/outputs/screens/<alias>-<issue_iid>`.
+
+1. **Plan the shots.** One pair per distinct visual change, at most 6. A whole page (`--full-page` / `full: true`) for a layout or page-level request; just the element (`--selector`, or a shot of that element) for a single control. Start from this project's `screenshot-recipe` lessons in `loopx memory-store list <alias>`.
+2. **Choose a path.**
+   - **Path A — the project has Capybara and selenium-webdriver.** Write a throwaway spec at `tmp/loopx_screenshots/issue_<issue_iid>_spec.rb` in the worktree: `driven_by :selenium_chrome_headless`, records from the project's factories or fixtures, sign-in through the project's own test sign-in helper, records rolled back or deleted in `after`, and `page.save_screenshot("<screens>/<n>-before.png", full: true)` (or `-after`). Run it with `RAILS_ENV=test bundle exec rspec tmp/loopx_screenshots/issue_<issue_iid>_spec.rb`.
+   - **Path B — otherwise.** Write a mock file and a session file in `<screens>` and capture with the dev server:
+     ```
+     loopx screenshot --serve "yarn dev" --cwd <worktree> --url http://localhost:<port>/<page> --out <screens>/<n>-before.png --mock <screens>/mocks.json --session <screens>/session.json [--selector CSS] [--full-page] [--wait-for CSS]
+     ```
+     `--serve` takes `yarn dev`, `pnpm dev`, `npm run dev`, `next dev` or `RAILS_ENV=test bin/rails server`, and refuses to start one when the URL already answers. The mock file is a JSON array of `{"url_pattern": "...", "status": 200, "json": {...}}`; mock every backend call the page makes (unmocked cross-origin requests are blocked). The session file is `{"cookies": [<CDP Network.setCookie params>], "local_storage": {"key": "value"}}`; fake sign-in with it, never with a real token.
+3. **Never write to the development database.** Treat it as read-only. Fake data goes only in the test database (path A) or in mocks (path B), and every test record you create is cleaned up.
+4. **Use only the browser already on this Mac.** Never install or download one: no `npx playwright install`, no Chrome for Testing, no `brew install`. For path A, point Selenium at the installed Chrome binary. Selenium may fetch the matching **chromedriver** once into `~/.cache/selenium`; the user allowed that, because it is a driver, not a browser. No usable browser → skip screenshots and say so in `screenshots_note`.
+5. **"Before" first, before editing any code**, into `<screens>/<n>-before.png`. If that file already exists (a retry, a later run), reuse it. Never reset or check out code to get "before" back: if there is no before image and the branch has already diverged from `<target_branch>`, take the after shot only and leave `before` out of the pair.
+6. **Build assets before each capture** when the project has a build (`yarn build*`, `npm run build*`, `pnpm build*`, `RAILS_ENV=test bin/rails assets:precompile*`).
+7. **"After" last**: after step 8's commit and step 10's bookkeeping, right before writing the handoff, so running out of budget only ever costs the screenshots. Same framing, same file names with `-after`.
+8. **Give up after two failed attempts** to get capture working, and say why in `screenshots_note`. Never escalate over screenshots.
+9. **Look at every image.** Never list one that shows an error page, a stack trace, env values, or anything that looks like real data.
+10. **Clean up.** Delete the throwaway spec and confirm `git status` shows no screenshot, mock or session files. Images go only to `<screens>` and the handoff directory; never copy them anywhere else (`/tmp`, the worktree, the Desktop). The loop deletes all of them once the merge request is finalized.
+11. **List them in the handoff** as `"screenshots": [{"label": "...", "before": "1-before.png", "after": "1-after.png"}]`, by file name inside `<screens>`, plus an optional `"screenshots_note"`.
+12. **Record the recipe** so the next run starts from it — which path, the build and serve commands, how sign-in is faked, the factories or mock shapes needed, and the gotchas you hit:
+    ```
+    loopx memory-store add <alias> <issue_iid> "<recipe>" "screenshots,ui" "screenshot-recipe"
+    ```
+    Update it when something changed; emit `memory.created` for a new lesson as in step 10. Nothing project-specific belongs anywhere else.
 
 ### Wait for reviewer
 
@@ -404,11 +432,11 @@ Claude's per-git-subcommand/per-glob allow list - the rules below become policy
 this document asks the agent to follow, not a technically enforced
 boundary. Switch to Codex only with that trade-off in mind.
 
-Allowed: `git status`, `git diff`, `git add`, and `git commit` scoped to the checkouts and worktrees listed in `~/.loopx/projects.json`, plus `git push origin loop/issue-*` (issue branches only); the per-stack install/lint/test commands listed in step 7; `cd`; the `loopx` helper subcommands this file names — `config`, `events`, `notify`, `gitlab` (and `gitlab cache`), `issues`, `memory`, `memory-store`, `risk`, `status`, `messages`, `worktree new` and `mr open` (never `loopx run`, `loopx serve` or any other subcommand); reading and editing files inside an issue's own worktree; reading/writing `PROGRESS.md` and `outputs/`.
+Allowed: `git status`, `git diff`, `git add`, and `git commit` scoped to the checkouts and worktrees listed in `~/.loopx/projects.json`, plus `git push origin loop/issue-*` (issue branches only); the per-stack install/lint/test commands listed in step 7; `cd`; the `loopx` helper subcommands this file names — `config`, `events`, `notify`, `gitlab` (and `gitlab cache`), `issues`, `memory`, `memory-store`, `risk`, `status`, `messages`, `worktree new`, `screenshot` and `mr open` (never `loopx run`, `loopx serve` or any other subcommand); the asset builds `yarn build*`, `npm run build*`, `pnpm build*` and `RAILS_ENV=test bin/rails assets:precompile*`, for screenshots only (they are not verification commands); reading and editing files inside an issue's own worktree; reading/writing `PROGRESS.md` and `outputs/`.
 
 When the harness gate is ON (`verification.mode: gate`), `loopx mr open` and `git push origin loop/issue-*` are removed from the allowlist and explicitly denied (the runner pushes and opens the MR itself after verification passes), and the agent may write its handoff JSON under `outputs/handoffs/`. On Codex this gate enforcement is prompt-only: Codex still receives the gate override and `LOOP_HANDOFF_PATH`, but has no per-command allowlist to technically block the script or the push.
 
-Not allowed: any other shell command, installing new dependencies beyond the lockfile-respecting install commands above, reading `.env`/credentials/SSH private keys, editing files outside an issue's own worktree, pushing to any project's target branch directly (only `loop/issue-*` branches may be pushed), force-pushing, `git merge`/`git checkout`/`git reset`/`git clean` as direct commands, merging any merge request, running more than one issue's worktree/fix at a time.
+Not allowed: any other shell command, installing new dependencies beyond the lockfile-respecting install commands above, installing or downloading a browser (only Selenium's one-time chromedriver fetch into `~/.cache/selenium` is allowed), reading `.env`/credentials/SSH private keys, editing files outside an issue's own worktree, pushing to any project's target branch directly (only `loop/issue-*` branches may be pushed), force-pushing, `git merge`/`git checkout`/`git reset`/`git clean` as direct commands, merging any merge request, running more than one issue's worktree/fix at a time.
 
 Note that the projects' primary checkouts (`local_path`) are deliberately not exposed to the Read/Edit/Write tools at all — only this loop directory and the worktree root are. Editing a file in `<local_path>` is therefore impossible, not merely discouraged. The one exception is a project with `use_worktree: false`: its checkout is exposed for that issue's run only, because the work happens there.
 

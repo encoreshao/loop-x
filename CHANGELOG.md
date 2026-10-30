@@ -12,6 +12,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Added
+- GitLab loop: merge requests for UI fixes now show before/after screenshots in the description. The agent captures them with the Mac's installed Chrome against test data or mocked backends (never the development database), learns how to shoot each project as a `screenshot-recipe` lesson, and the loop deletes every local image once the issue is finalized.
 - GitLab loop: issue worktrees of Rails projects now get the checkout's `config/master.key` (and `config/credentials/development.key` / `test.key`) when the project gitignores them, so development and test can read the project's encrypted credentials. The production key is never copied.
 
 ### Changed
