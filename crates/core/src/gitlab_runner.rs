@@ -33,7 +33,13 @@ use std::sync::{Arc, Mutex};
 
 pub const DEFINITION_RELATIVE_PATH: &str = "loops/gitlab-issue/loop.yaml";
 pub const NEEDS_HUMAN_LABEL: &str = "loop:needs-human";
-const HANDOFF_ACTIONS: [&str; 4] = ["fix", "answer", "escalate", "wait_for_review"];
+const HANDOFF_ACTIONS: [&str; 5] = [
+    "fix",
+    "answer",
+    "escalate",
+    "wait_for_review",
+    "setup_blocked",
+];
 const FAILURE_TAIL_CHARS: usize = 1500;
 const OPENER_TIMEOUT_SECONDS: u64 = 300;
 const FEEDBACK_MAX_CHARS: usize = 6000;
@@ -740,7 +746,7 @@ fn emit_verification_events(
 
 /// The agent's handoff JSON, or `None` when missing/malformed. A `fix` must
 /// name exactly this issue's `loop/issue-<iid>` branch and carry a non-empty
-/// `target_branch` and `title`.
+/// `target_branch` and `title`; a `setup_blocked` a non-empty `command` and `error`.
 pub fn read_handoff(path: &Path, issue_iid: &str) -> Option<Value> {
     let data: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let action = data.get("action")?.as_str()?;
@@ -757,6 +763,13 @@ pub fn read_handoff(path: &Path, issue_iid: &str) -> Option<Value> {
             return None;
         }
         for key in ["target_branch", "title"] {
+            if data.get(key)?.as_str()?.trim().is_empty() {
+                return None;
+            }
+        }
+    }
+    if action == "setup_blocked" {
+        for key in ["command", "error"] {
             if data.get(key)?.as_str()?.trim().is_empty() {
                 return None;
             }
@@ -835,6 +848,9 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
             "The issue needs clarification - the agent asked on the issue.".into()
         }
         "worktree_creation_failed" => "A worktree for the fix could not be created.".into(),
+        "setup_blocked" => {
+            "Setup problems blocked the checks and the setup doctor could not fix them all.".into()
+        }
         "approval_denied" => "Opening the merge request was not approved.".into(),
         "approval_timeout" => {
             "Nobody approved opening the merge request before the request expired.".into()
@@ -870,6 +886,13 @@ pub fn escalation_comment(
     failure_text: &str,
     stop_reason: Option<&str>,
 ) -> String {
+    let footer = format!(
+        "**Where the work is**\n- Branch `loop/issue-{issue_iid}` in this issue's local worktree (not pushed)."
+    );
+    if reason == "setup_blocked" {
+        // The setup report is already the whole comment body.
+        return format!("{}\n\n{footer}", failure_text.trim_end());
+    }
     let fenced = if failure_text.is_empty() {
         String::new()
     } else {
@@ -935,7 +958,7 @@ pub fn escalation_comment(
         }
     };
     format!(
-        "**What I tried**\n{tried}\n\n**What failed**\n{failed}\n\n**Where the work is**\n- Branch `loop/issue-{issue_iid}` in this issue's local worktree (not pushed).\n\n**What I need from you**\n- Look at the failure above and the unpushed branch, then fix it or tell me how to proceed."
+        "**What I tried**\n{tried}\n\n**What failed**\n{failed}\n\n{footer}\n\n**What I need from you**\n- Look at the failure above and the unpushed branch, then fix it or tell me how to proceed."
     )
 }
 
@@ -1083,6 +1106,10 @@ pub struct FinalizeDeps<'a> {
     /// A batch issue: the run posts one Slack report at the end, so only the
     /// approval request (which waits on a human) is sent from here.
     pub quiet: bool,
+    /// The setup doctor's pre-rendered markdown report for a `setup_blocked` handoff.
+    pub setup_report: Option<String>,
+    /// How many setup blockers the doctor fixed before the checks passed.
+    pub setup_fixed: Option<usize>,
 }
 
 /// Is a human's OK needed before opening the merge request? A per-project
@@ -1249,6 +1276,17 @@ pub fn finalize_gated_issue(
     {
         return outcome.to_string();
     }
+    if data
+        .as_ref()
+        .and_then(|d| d.get("action"))
+        .and_then(Value::as_str)
+        == Some("setup_blocked")
+    {
+        let report = deps.setup_report.clone().unwrap_or_else(|| {
+            crate::setup_doctor::doctor_report_markdown(data.as_ref().unwrap_or(&json!({})), None)
+        });
+        return escalate("setup_blocked", &report, None);
+    }
     let stop_reason = Some(result.stop_reason.as_str());
     // The handoff is cleared before every attempt, so after a crash or a
     // budget stop a missing handoff means "never got that far", not a bad one.
@@ -1407,9 +1445,13 @@ pub fn finalize_gated_issue(
         Some(u) => format!("<{u}|view MR>"),
         None => branch.clone(),
     };
+    let setup_note = match deps.setup_fixed {
+        Some(n) => format!(" (setup fixed automatically: {n} blockers)"),
+        None => String::new(),
+    };
     notify(
         &bundle,
-        format!("*Finished* {issue_label}: MR opened \u{2192} {link}"),
+        format!("*Finished* {issue_label}: MR opened \u{2192} {link}{setup_note}"),
     );
     "mr_opened".to_string()
 }
@@ -3339,6 +3381,170 @@ mod tests {
         w("not json");
         assert!(read_handoff(&p, "7").is_none());
         assert!(read_handoff(&d.path().join("missing.json"), "7").is_none());
+    }
+
+    #[test]
+    fn setup_blocked_handoff_needs_command_and_error() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("h.json");
+        let w = |s: &str| std::fs::write(&p, s).unwrap();
+        w(
+            r#"{"action":"setup_blocked","command":"bundle exec rspec","error":"Could not load database configuration","diagnosis":"no database.yml"}"#,
+        );
+        assert!(read_handoff(&p, "7").is_some());
+        w(r#"{"action":"setup_blocked","command":"bundle exec rspec"}"#);
+        assert!(read_handoff(&p, "7").is_none());
+        w(r#"{"action":"setup_blocked","error":"boom"}"#);
+        assert!(read_handoff(&p, "7").is_none());
+        w(r#"{"action":"setup_blocked","command":" ","error":"boom"}"#);
+        assert!(read_handoff(&p, "7").is_none());
+        w(r#"{"action":"setup_blocked","command":"x","error":""}"#);
+        assert!(read_handoff(&p, "7").is_none());
+        w(r#"{"action":"setup_blocked","command":1,"error":"boom"}"#);
+        assert!(read_handoff(&p, "7").is_none());
+    }
+
+    #[test]
+    fn finalize_escalates_setup_blocked_with_the_report() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(
+            &path,
+            json!({"action": "setup_blocked", "command": "bundle exec rspec",
+                "error": "Could not load database configuration"})
+            .to_string(),
+        )
+        .unwrap();
+        let result = LoopResult::new("l", "r", "gitlab-issue", LoopState::Completed, vec![], "");
+        let posted: Log = Default::default();
+        let gitlab = RecordingGitlab(posted.clone());
+        let sent = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let report = "**Problem**\n\nBLOCKER-TEXT: no database.yml";
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                gitlab: Some(&gitlab),
+                notifier: Some(&notifier),
+                handoff: Some(path.clone()),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                setup_report: Some(report.to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "escalated:setup_blocked");
+        let notes = posted.lock().unwrap();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].starts_with(report), "{}", notes[0]);
+        assert!(!notes[0].contains("What I tried"), "{}", notes[0]);
+        assert!(notes[0].contains("**Where the work is**"), "{}", notes[0]);
+        drop(notes);
+        let events = events::iter_events(ctx.events_dir.as_deref(), None, None);
+        let ev = events
+            .iter()
+            .find(|e| e["event_type"] == "issue.escalated")
+            .unwrap_or_else(|| panic!("no escalation event in {events:?}"));
+        assert_eq!(ev["data"]["reason"], "setup_blocked");
+        assert!(
+            sent.lock().unwrap()[0].contains("could not fix them all"),
+            "{sent:?}"
+        );
+
+        // Without a pre-rendered report, the handoff alone still yields one.
+        posted.lock().unwrap().clear();
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                gitlab: Some(&gitlab),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "escalated:setup_blocked");
+        let notes = posted.lock().unwrap();
+        assert!(
+            notes[0].contains("Could not load database configuration"),
+            "{}",
+            notes[0]
+        );
+    }
+
+    #[test]
+    fn opened_mr_slack_mentions_auto_fixed_setup() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(
+            &path,
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+                "title": "fix: #7 x"})
+            .to_string(),
+        )
+        .unwrap();
+        let evidence = json!({"commands": [{"kind": "test", "command": "pnpm test", "passed": true, "source": "handoff"}]});
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Completed,
+            vec![iteration(vec![v("project_commands", true, "", evidence)])],
+            "",
+        );
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let gitlab = Notes(Default::default());
+        let sent = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+        for fixed in [Some(2), None] {
+            sent.lock().unwrap().clear();
+            let outcome = finalize_gated_issue(
+                &result,
+                "web",
+                "7",
+                "r",
+                &ctx,
+                FinalizeDeps {
+                    opener: Some(&opener),
+                    gitlab: Some(&gitlab),
+                    notifier: Some(&notifier),
+                    handoff: Some(path.clone()),
+                    project: Some(
+                        json!({"project_id": "g/p", "local_path": "/x", "instance": "g"}),
+                    ),
+                    gitlab_config_path: Some(d.path().join("none.json")),
+                    require_approval: Some(false),
+                    setup_fixed: fixed,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(outcome, "mr_opened");
+            let sent = sent.lock().unwrap();
+            let finished = sent.iter().find(|m| m.contains("MR opened")).unwrap();
+            assert_eq!(
+                finished.contains(" (setup fixed automatically: 2 blockers)"),
+                fixed.is_some(),
+                "{finished}"
+            );
+        }
     }
 
     #[test]
