@@ -107,6 +107,26 @@ impl Default for RetryConfig {
     }
 }
 
+/// Budget for the setup-doctor pass, on top of `stop_conditions`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SetupDoctorConfig {
+    pub enabled: bool,
+    pub max_attempts: i64,
+    pub max_runtime_minutes: f64,
+    pub max_cost_usd: f64,
+}
+
+impl Default for SetupDoctorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_attempts: 3,
+            max_runtime_minutes: 25.0,
+            max_cost_usd: 2.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct PermissionsConfig {
     pub credentials_read: bool,
@@ -125,6 +145,7 @@ pub struct LoopDefinition {
     pub stop_conditions: StopConditions,
     pub human_gates: Vec<String>,
     pub retry: RetryConfig,
+    pub setup_doctor: SetupDoctorConfig,
     /// Raw verifier specs, resolved by `loop_verifiers::build_verifiers`.
     pub verifiers: Vec<Value>,
     pub permissions: PermissionsConfig,
@@ -257,6 +278,7 @@ impl LoopDefinition {
         let verification = section(data, "verification")?;
         let stop = section(data, "stop_conditions")?;
         let retry = section(data, "retry")?;
+        let setup_doctor = section(data, "setup_doctor")?;
         let permissions = section(data, "permissions")?;
 
         let mode = match get(verification, "mode") {
@@ -279,6 +301,7 @@ impl LoopDefinition {
         };
         let stop_defaults = StopConditions::default();
         let retry_defaults = RetryConfig::default();
+        let doctor_defaults = SetupDoctorConfig::default();
         Ok(LoopDefinition {
             name: required_str(data, "name", "name")?,
             version,
@@ -335,6 +358,32 @@ impl LoopDefinition {
                     "max_attempts",
                     "retry.max_attempts",
                     retry_defaults.max_attempts,
+                )?,
+            },
+            setup_doctor: SetupDoctorConfig {
+                enabled: bool_or(
+                    setup_doctor,
+                    "enabled",
+                    "setup_doctor.enabled",
+                    doctor_defaults.enabled,
+                )?,
+                max_attempts: int_or(
+                    setup_doctor,
+                    "max_attempts",
+                    "setup_doctor.max_attempts",
+                    doctor_defaults.max_attempts,
+                )?,
+                max_runtime_minutes: float_or(
+                    setup_doctor,
+                    "max_runtime_minutes",
+                    "setup_doctor.max_runtime_minutes",
+                    doctor_defaults.max_runtime_minutes,
+                )?,
+                max_cost_usd: float_or(
+                    setup_doctor,
+                    "max_cost_usd",
+                    "setup_doctor.max_cost_usd",
+                    doctor_defaults.max_cost_usd,
                 )?,
             },
             verifiers: match data.get("verifiers") {
@@ -543,6 +592,56 @@ mod tests {
             }
         }
         assert!(seen >= 10, "expected the shipped loops, found {seen}");
+    }
+
+    #[test]
+    fn setup_doctor_defaults_to_disabled() {
+        let d = LoopDefinition::from_value(&minimal()).unwrap();
+        assert_eq!(d.setup_doctor, SetupDoctorConfig::default());
+        assert!(!d.setup_doctor.enabled);
+        assert_eq!(d.setup_doctor.max_attempts, 3);
+        assert_eq!(d.setup_doctor.max_runtime_minutes, 25.0);
+        assert_eq!(d.setup_doctor.max_cost_usd, 2.0);
+    }
+
+    #[test]
+    fn setup_doctor_is_parsed() {
+        let mut v = minimal();
+        v["setup_doctor"] = json!({"enabled": true, "max_attempts": 4, "max_runtime_minutes": 10, "max_cost_usd": 1.5});
+        let d = LoopDefinition::from_value(&v).unwrap();
+        assert_eq!(
+            d.setup_doctor,
+            SetupDoctorConfig {
+                enabled: true,
+                max_attempts: 4,
+                max_runtime_minutes: 10.0,
+                max_cost_usd: 1.5,
+            }
+        );
+    }
+
+    #[test]
+    fn setup_doctor_rejects_wrong_types() {
+        for (field, bad) in [
+            ("enabled", json!("yes")),
+            ("max_attempts", json!("3")),
+            ("max_runtime_minutes", json!("25")),
+            ("max_cost_usd", json!("2")),
+        ] {
+            let mut v = minimal();
+            v["setup_doctor"] = json!({ field: bad });
+            assert!(
+                err(&v).contains(&format!("setup_doctor.{field}")),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn gitlab_loop_enables_the_doctor() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml");
+        let d = LoopDefinition::from_yaml(&path).unwrap();
+        assert!(d.setup_doctor.enabled && d.setup_doctor.max_attempts == 3);
     }
 
     #[test]
