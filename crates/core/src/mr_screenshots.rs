@@ -141,6 +141,8 @@ pub struct UploadedPair {
     pub label: String,
     pub before: Option<String>,
     pub after: String,
+    /// The handoff named a before image but its upload failed.
+    pub before_failed: bool,
 }
 
 /// Make a label safe inside bold text and a Markdown table.
@@ -164,6 +166,7 @@ pub fn screenshots_section(pairs: &[UploadedPair], note: Option<&str>) -> Option
     for pair in pairs {
         let before = match &pair.before {
             Some(url) => format!("![before]({url})"),
+            None if pair.before_failed => "Before image could not be uploaded".to_string(),
             None => "New page \u{2014} no before".to_string(),
         };
         blocks.push(format!(
@@ -179,8 +182,9 @@ pub fn screenshots_section(pairs: &[UploadedPair], note: Option<&str>) -> Option
 }
 
 /// Delete every screenshot artefact of a finished run: the whole screens
-/// directory, and each image the handoff names that lies inside the handoff
-/// directory. Best effort; nothing outside those two places is touched.
+/// directory, and each `.png` the handoff names that lies inside the handoff
+/// directory. That directory is shared by every issue of the run, so nothing
+/// else in it is touched, whatever the handoff names. Best effort.
 pub fn remove_screenshots(data: Option<&Value>, handoff_dir: &Path, screens_dir: &Path) {
     if let Err(e) = fs::remove_dir_all(screens_dir) {
         if e.kind() != std::io::ErrorKind::NotFound {
@@ -203,7 +207,11 @@ pub fn remove_screenshots(data: Option<&Value>, handoff_dir: &Path, screens_dir:
             let Ok(path) = handoff_dir.join(rel).canonicalize() else {
                 continue;
             };
-            if path.starts_with(&root) && path.is_file() {
+            let is_png = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+            if path.starts_with(&root) && is_png && path.is_file() {
                 if let Err(e) = fs::remove_file(&path) {
                     eprintln!("could not remove {}: {e}", path.display());
                 }
@@ -318,6 +326,7 @@ mod tests {
             label: label.into(),
             before: before.map(String::from),
             after: after.into(),
+            before_failed: false,
         }
     }
 
@@ -365,6 +374,38 @@ mod tests {
     fn labels_are_markdown_safe() {
         let out = screenshots_section(&[up("a|b <script>", None, "/u/1.png")], None).unwrap();
         assert!(out.contains("**a\\|b &lt;script&gt;**"), "{out}");
+    }
+
+    #[test]
+    fn remove_never_deletes_a_named_file_that_is_not_a_png() {
+        let root = tempfile::tempdir().unwrap();
+        let handoff = root.path().join("handoff");
+        let screens = root.path().join("screens");
+        // The handoff dir is shared by every issue of the run.
+        fs::create_dir_all(&handoff).unwrap();
+        fs::write(handoff.join("web-8.json"), "{}").unwrap();
+        fs::write(handoff.join("notes.txt"), "x").unwrap();
+        png(&handoff.join("shot.PNG"));
+        let data = json!({"screenshots": [
+            {"label": "x", "before": "web-8.json", "after": "notes.txt"},
+            {"label": "y", "after": "shot.PNG"}
+        ]});
+        remove_screenshots(Some(&data), &handoff, &screens);
+        assert!(handoff.join("web-8.json").exists());
+        assert!(handoff.join("notes.txt").exists());
+        assert!(!handoff.join("shot.PNG").exists());
+    }
+
+    #[test]
+    fn a_before_that_failed_to_upload_is_not_called_a_new_page() {
+        let mut pair = up("x", None, "/u/1.png");
+        pair.before_failed = true;
+        let out = screenshots_section(&[pair], None).unwrap();
+        assert!(
+            out.contains("| Before image could not be uploaded | ![after](/u/1.png) |"),
+            "{out}"
+        );
+        assert!(!out.contains("New page"), "{out}");
     }
 
     #[test]

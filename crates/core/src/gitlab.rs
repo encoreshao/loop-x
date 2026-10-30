@@ -543,7 +543,6 @@ pub fn filter_assigned_to(issues: Vec<Value>, username: &str) -> Vec<Value> {
         .collect()
 }
 
-/// `urllib.parse.quote(s, safe='')`.
 /// A `multipart/form-data` body with one PNG `file` part.
 pub fn multipart_body(boundary: &str, filename: &str, bytes: &[u8]) -> Vec<u8> {
     let filename = filename.replace(['"', '\r', '\n'], "_");
@@ -556,6 +555,7 @@ pub fn multipart_body(boundary: &str, filename: &str, bytes: &[u8]) -> Vec<u8> {
     body
 }
 
+/// `urllib.parse.quote(s, safe='')`.
 pub fn quote(s: &str) -> String {
     utf8_percent_encode(s, QUOTE).to_string()
 }

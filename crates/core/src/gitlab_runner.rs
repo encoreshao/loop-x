@@ -1447,6 +1447,7 @@ fn screenshots_description(
         });
         uploaded.push(mr_screenshots::UploadedPair {
             label: pair.label,
+            before_failed: pair.before.is_some() && before.is_none(),
             before,
             after,
         });
@@ -1454,24 +1455,29 @@ fn screenshots_description(
     for p in &problems {
         log(&format!("screenshots: {p}"));
     }
-    let mut note = match problems.is_empty() {
-        true => None,
-        false => Some(format!(
-            "Some screenshots could not be uploaded: {}",
+    // Validation drops and upload failures alike, then the agent's own note
+    // as a sentence of its own.
+    let mut sentences = Vec::new();
+    if !problems.is_empty() {
+        sentences.push(format!(
+            "Some screenshots were left out: {}.",
             problems.join("; ")
-        )),
-    };
+        ));
+    }
     if let Some(extra) = data
         .get("screenshots_note")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        note = Some(match note {
-            Some(n) => format!("{n} {extra}"),
-            None => extra.to_string(),
-        });
+        let end = if extra.ends_with(['.', '!', '?']) {
+            ""
+        } else {
+            "."
+        };
+        sentences.push(format!("{extra}{end}"));
     }
+    let note = (!sentences.is_empty()).then(|| sentences.join(" "));
     mr_screenshots::screenshots_section(&uploaded, note.as_deref())
 }
 
@@ -1751,7 +1757,22 @@ pub fn run_one_issue(
             },
         );
     }
-    let mut result = started?;
+    let mut result = match started {
+        Ok(r) => r,
+        Err(e) => {
+            // finalize never runs, so the screenshots go here.
+            let handoff = handoff_path(run_id, alias, issue_iid, &ctx.repo_root);
+            let data = std::fs::read_to_string(&handoff)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+            mr_screenshots::remove_screenshots(
+                data.as_ref(),
+                handoff.parent().unwrap_or(Path::new(".")),
+                &mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid),
+            );
+            return Err(e);
+        }
+    };
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
     // un-coerced figure to keep "cost $0" apart from "never got a cost".
@@ -2440,7 +2461,8 @@ mod tests {
         fn upload(&self, _project_id: &str, path: &Path) -> Result<String, String> {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             self.seen.lock().unwrap().push(name.clone());
-            if self.ok {
+            // A file named "unuploadable" fails even when the rest go through.
+            if self.ok && !name.contains("unuploadable") {
                 Ok(format!("/uploads/h/{name}"))
             } else {
                 Err("boom".into())
@@ -2585,7 +2607,51 @@ mod tests {
         assert_eq!(s.outcome, "mr_opened");
         let body = mr_description(&s.calls);
         assert!(body.contains("## Screenshots"), "{body}");
-        assert!(body.contains("could not be uploaded"), "{body}");
+        assert!(
+            body.ends_with("Some screenshots were left out: \"Home\" dropped: upload failed."),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn left_out_shots_and_the_agents_note_are_separate_sentences() {
+        let handoff = fix_with_shots(json!({
+            "screenshots": [
+                {"label": "Home", "before": "1-before.png", "after": "1-after.png"},
+                {"label": "Gone", "after": "missing.png"}
+            ],
+            "screenshots_note": "The settings page needs a real account"
+        }));
+        let s = finalize_shots(handoff, true, LoopState::Completed, make_pair_files);
+        let body = mr_description(&s.calls);
+        assert!(
+            body.ends_with(
+                "Some screenshots were left out: \"Gone\" dropped: missing.png not found. \
+                 The settings page needs a real account."
+            ),
+            "{body}"
+        );
+        assert!(!body.contains("could not be uploaded"), "{body}");
+    }
+
+    #[test]
+    fn a_before_that_fails_to_upload_is_not_shown_as_a_new_page() {
+        let handoff = fix_with_shots(json!({"screenshots": [
+            {"label": "Home", "before": "1-unuploadable.png", "after": "1-after.png"}
+        ]}));
+        let s = finalize_shots(handoff, true, LoopState::Completed, |h, sc| {
+            write_png(&h.join("1-unuploadable.png"));
+            write_png(&sc.join("1-after.png"));
+        });
+        assert_eq!(s.outcome, "mr_opened");
+        let body = mr_description(&s.calls);
+        assert!(
+            body.contains(
+                "| Before image could not be uploaded | ![after](/uploads/h/1-after.png) |"
+            ),
+            "{body}"
+        );
+        assert!(!body.contains("New page"), "{body}");
     }
 
     #[test]
@@ -2839,6 +2905,40 @@ mod tests {
             message: "boom".into(),
             cost_usd: None,
         })
+    }
+
+    #[test]
+    fn screenshots_are_deleted_when_the_runtime_fails_before_finalize() {
+        let t = InPlace::new();
+        let root = t.d.path();
+        let screens = crate::mr_screenshots::screens_dir(root, "web", "7");
+        let handoff = handoff_path("r1", "web", "7", root);
+        write_png(&screens.join("1-before.png"));
+        write_png(&handoff.with_file_name("1-after.png"));
+        std::fs::write(
+            &handoff,
+            json!({"action": "fix", "screenshots": [{"label": "x", "after": "1-after.png"}]})
+                .to_string(),
+        )
+        .unwrap();
+        // An L3 action outside human_gates makes LoopRuntime::start refuse.
+        let mut definition = LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+        )
+        .unwrap();
+        definition.actions.push("drop_everything".into());
+        let r = run_one_issue(
+            &t.ctx,
+            "r1",
+            "web",
+            "7",
+            &definition,
+            Arc::new(|_req| failing()),
+            InvokeMode::Batch,
+        );
+        assert!(r.is_err());
+        assert!(!screens.exists());
+        assert!(!handoff.with_file_name("1-after.png").exists());
     }
 
     #[test]
