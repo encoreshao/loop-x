@@ -22,6 +22,7 @@
   "Agents": "Agents",
   "Manual": "Manuel",
   "Catch-up": "Rattrapage",
+  "Outside the queue": "Hors file d'attente",
   "Scheduled": "Planifié",
   "Cancelled": "Annulé",
   "running for {time}": "en cours depuis {time}",

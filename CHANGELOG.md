@@ -11,6 +11,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Fixed
+- Agents: a GitLab loop run started outside the queue (launchd or Run now) now shows under Running with its current step, matching the topbar pill, instead of "Nothing is running". A run whose process has died no longer shows as running in the pill or on the page.
+
 ## [0.14.0] - 2026-10-30
 
 ### Added

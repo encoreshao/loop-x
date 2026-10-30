@@ -68,13 +68,27 @@ fn short_age(secs: i64) -> String {
 
 // ----- the topbar pill -----
 
+/// A loop's status file when it says the loop is running and its process is alive.
+fn live_status(ctx: &UiCtx, name: &str) -> Option<serde_json::Value> {
+    let status = loopx_core::status::read_status(&ctx.state.status_path_for_loop(name));
+    (crate::snapshot::effective_state(&status) == "running").then_some(status)
+}
+
+/// A GitLab loop run started outside the queue (launchd, Run now): the pill and
+/// the page both show it alongside the queue's own running entries.
+fn outside_gitlab_run(ctx: &UiCtx, snap: &Snapshot) -> Option<serde_json::Value> {
+    if snap.running.iter().any(|e| e.loop_name == "gitlab-loop") {
+        return None;
+    }
+    live_status(ctx, "gitlab-loop")
+}
+
 /// What a running loop is doing right now, from its status file: the GitLab loop
 /// first (it also runs outside the queue), then each running queue entry.
 fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
     std::iter::once("gitlab-loop")
         .chain(snap.running.iter().map(|e| e.loop_name.as_str()))
-        .map(|name| loopx_core::status::read_status(&ctx.state.status_path_for_loop(name)))
-        .find(|status| status.get("state").and_then(|s| s.as_str()) == Some("running"))
+        .find_map(|name| live_status(ctx, name))
         .map(|status| progress_text(ctx.lang, &status))
 }
 
@@ -138,6 +152,7 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
     match reason {
         "manual" => ctx.t("Manual"),
         "catch-up" => ctx.t("Catch-up"),
+        "outside" => ctx.t("Outside the queue"),
         _ => ctx.t("Scheduled"),
     }
 }
@@ -185,24 +200,37 @@ fn section(ctx: &UiCtx, title: &str, empty: &str, rows: Vec<String>) -> String {
 }
 
 fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
-    let running = snap
-        .running
-        .iter()
-        .map(|e| {
-            let step = loopx_core::status::read_status(&ctx.state.status_path_for_loop(&e.loop_name))
-                .get("current_step")
-                .and_then(|v| v.as_str())
-                .map(String::from);
+    let outside = outside_gitlab_run(ctx, snap).map(|status| {
+        let e = Entry {
+            id: String::new(),
+            loop_name: "gitlab-loop".into(),
+            reason: "outside".into(),
+            priority: 0,
+            enqueued_at: String::new(),
+            state: "running".into(),
+            started_at: None,
+            finished_at: None,
+            pid: None,
+            exit_code: None,
+            note: None,
+            cancel_requested: false,
+        };
+        row(ctx, &e, &progress_text(ctx.lang, &status), "")
+    });
+    let running = outside
+        .into_iter()
+        .chain(snap.running.iter().map(|e| {
+            let progress = live_status(ctx, &e.loop_name).map(|s| progress_text(ctx.lang, &s));
             let elapsed = ctx.tf(
                 "running for {time}",
                 &[("time", &short_age(age_secs(e.started_at.as_deref())))],
             );
-            let detail = match step {
-                Some(s) if !s.is_empty() => format!("{s} · {elapsed}"),
-                _ => elapsed,
+            let detail = match progress {
+                Some(p) => format!("{p} · {elapsed}"),
+                None => elapsed,
             };
             row(ctx, e, &detail, &action_button("stop", "btn-danger", &e.id, &ctx.t("Stop"), "close"))
-        })
+        }))
         .collect();
     let queued = snap
         .queued
@@ -392,6 +420,33 @@ mod tests {
         let tag = &shell[start..start + shell[start..].find("</a>").unwrap()];
         assert!(tag.contains("md-spinner") && tag.contains("Processing web #1362 — Analyzing"), "{tag}");
         assert_eq!(shell.matches("Processing web #1362").count(), 2, "only the pill and its title");
+    }
+
+    #[test]
+    fn a_gitlab_run_outside_the_queue_shows_under_running_like_the_pill() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        write_status(
+            d.path(),
+            "status.json",
+            r#"{"state": "running", "current_issue": "web #10", "current_step": "running_verification"}"#,
+        );
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(!html.contains("Nothing is running"), "{html}");
+        assert!(html.contains("gitlab-loop") && html.contains("Processing web #10"), "{html}");
+    }
+
+    #[test]
+    fn a_queued_gitlab_run_is_not_listed_twice() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let q = RunQueue::new(d.path().join("run_queue.json"));
+        q.enqueue("gitlab-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
+        q.claim_next("2026-10-27T10:00:05", 1).unwrap();
+        write_status(d.path(), "status.json", r#"{"state": "running", "current_step": "analyzing"}"#);
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert_eq!(html.matches("<strong>gitlab-loop</strong>").count(), 1, "{html}");
+        assert!(html.contains("Analyzing"), "{html}");
     }
 
     #[test]

@@ -22,6 +22,7 @@
   "Agents": "智能体",
   "Manual": "手动",
   "Catch-up": "补跑",
+  "Outside the queue": "队列外运行",
   "Scheduled": "计划",
   "Cancelled": "已取消",
   "running for {time}": "已运行 {time}",

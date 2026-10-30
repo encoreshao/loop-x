@@ -22,6 +22,7 @@
   "Agents": "エージェント",
   "Manual": "手動",
   "Catch-up": "取りこぼし分",
+  "Outside the queue": "キュー外の実行",
   "Scheduled": "スケジュール",
   "Cancelled": "キャンセル済み",
   "running for {time}": "{time} 実行中",
