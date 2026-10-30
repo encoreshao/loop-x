@@ -2,14 +2,18 @@
 //! dev server first (see `loopx_core::screenshot`).
 
 use loopx_core::screenshot::{
-    capture, check_serve_command, DevServer, MockRule, ServeCommand, Session, ShotOptions,
+    capture, check_serve_command, clean_up_on_signals, DevServer, MockRule, ServeCommand, Session,
+    ShotOptions,
 };
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: loopx screenshot --url URL --out FILE.png [--serve \"CMD\"] [--cwd DIR] [--selector CSS] [--full-page] [--viewport WxH] [--mock FILE] [--session FILE] [--wait-for CSS] [--timeout-s N] (a capture can run somewhat past --timeout-s: each browser command has its own 60 s limit)";
+const USAGE: &str = "usage: loopx screenshot --url URL --out FILE.png [--serve \"CMD\"] [--cwd DIR] [--selector CSS] [--full-page] [--viewport WxH] [--mock FILE] [--session FILE] [--wait-for CSS] [--timeout-s N] (--url must be on localhost; --timeout-s, default 90, covers starting the dev server and the capture together; closing Chrome and the server can add about 20 s)";
+
+/// Default overall budget: with teardown it stays under a 2-minute Bash timeout.
+const DEFAULT_TIMEOUT_S: u64 = 90;
 
 #[derive(Debug)]
 struct Args {
@@ -49,7 +53,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         mock: None,
         session: None,
         wait_for: None,
-        timeout_s: 120,
+        timeout_s: DEFAULT_TIMEOUT_S,
     };
     let (mut url, mut out) = (None, None);
     let mut it = argv.iter();
@@ -177,13 +181,14 @@ fn read_json<T: serde::de::DeserializeOwned>(
 }
 
 fn execute(a: &Args) -> Result<(), String> {
+    // One budget for the dev server's start and the capture together.
     let timeout = Duration::from_secs(a.timeout_s);
+    let deadline = Instant::now() + timeout;
     let mut opts = ShotOptions::new(&a.url, &a.out);
     opts.selector = a.selector.clone();
     opts.full_page = a.full_page;
     opts.viewport = a.viewport;
     opts.wait_for = a.wait_for.clone();
-    opts.timeout = timeout;
     if let Some(p) = &a.mock {
         opts.mocks = read_json::<Vec<MockRule>>(p, "mock")?;
     }
@@ -208,10 +213,19 @@ fn execute(a: &Args) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
+    opts.timeout = deadline.saturating_duration_since(Instant::now());
+    if opts.timeout.is_zero() {
+        return Err(format!(
+            "the dev server used the whole {}s budget",
+            a.timeout_s
+        ));
+    }
     capture(&opts)
 }
 
 pub fn run(argv: &[String]) -> ExitCode {
+    // A Bash timeout's SIGTERM must not orphan the dev server or Chrome.
+    clean_up_on_signals();
     let args = match parse_args(argv) {
         Ok(a) => a,
         Err(e) => {
@@ -253,7 +267,7 @@ mod tests {
         assert_eq!(a.out, PathBuf::from("a/b.png"));
         assert_eq!(a.cwd, PathBuf::from("."));
         assert_eq!(a.viewport, (1280, 800));
-        assert_eq!(a.timeout_s, 120);
+        assert_eq!(a.timeout_s, 90);
         assert!(a.serve.is_none() && !a.full_page && a.selector.is_none());
         let a = parse_args(&v(&[
             "--url",

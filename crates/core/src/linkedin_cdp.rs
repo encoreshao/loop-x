@@ -231,6 +231,10 @@ pub fn find_chrome() -> Option<PathBuf> {
 pub struct LaunchOptions {
     pub chrome_path: Option<PathBuf>,
     pub extra_args: Vec<String>,
+    /// How long Chrome may take to open DevTools (30 s if unset).
+    pub startup_timeout: Option<Duration>,
+    /// Told Chrome's pid as soon as it is spawned.
+    pub on_spawn: Option<fn(u32)>,
 }
 
 /// A running Chrome on a persistent profile, with its browser-level CDP socket.
@@ -275,7 +279,10 @@ impl Chrome {
         let mut child = cmd
             .spawn()
             .map_err(|_| unavailable("Chrome could not be started"))?;
-        let deadline = Instant::now() + Duration::from_secs(30);
+        if let Some(f) = opts.on_spawn {
+            f(child.id());
+        }
+        let deadline = Instant::now() + opts.startup_timeout.unwrap_or(Duration::from_secs(30));
         let (port, path) = loop {
             if let Some((p, path)) = read_port_file(&port_file) {
                 break (p, path);
@@ -308,19 +315,28 @@ impl Chrome {
 
     /// Attach to the first page (or a new one) with a flat session.
     pub fn page(&self) -> Result<CdpPage, BrowserError> {
-        let targets = self.call("Target.getTargets", json!({}))?;
+        self.page_within(DEFAULT_CALL_TIMEOUT)
+    }
+
+    /// [`page`](Self::page), each CDP call waiting at most `t`.
+    pub fn page_within(&self, t: Duration) -> Result<CdpPage, BrowserError> {
+        let call = |method: &str, params: Value| {
+            let mut c = self.cdp.lock().unwrap_or_else(|e| e.into_inner());
+            c.call(None, method, params, t)
+        };
+        let targets = call("Target.getTargets", json!({}))?;
         let existing = targets["targetInfos"]
             .as_array()
             .and_then(|a| a.iter().find(|t| t["type"] == "page"))
             .and_then(|t| t["targetId"].as_str().map(str::to_string));
         let target_id = match existing {
             Some(id) => id,
-            None => self.call("Target.createTarget", json!({"url": "about:blank"}))?["targetId"]
+            None => call("Target.createTarget", json!({"url": "about:blank"}))?["targetId"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string(),
         };
-        let attached = self.call(
+        let attached = call(
             "Target.attachToTarget",
             json!({"targetId": target_id, "flatten": true}),
         )?;
@@ -332,7 +348,7 @@ impl Chrome {
             })?
             .to_string();
         let page = CdpPage::new(self.cdp.clone(), session);
-        page.send("Page.enable", json!({}))?;
+        page.send_timeout("Page.enable", json!({}), t)?;
         Ok(page)
     }
 
@@ -421,7 +437,8 @@ impl CdpPage {
         self.send_timeout(method, params, DEFAULT_CALL_TIMEOUT)
     }
 
-    fn send_timeout(
+    /// [`send`](Self::send), waiting at most `t` for the answer.
+    pub fn send_timeout(
         &self,
         method: &str,
         params: Value,

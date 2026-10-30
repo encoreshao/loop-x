@@ -831,6 +831,7 @@ version = "0.15.0"
 dependencies = [
  "chrono",
  "clap",
+ "libc",
  "loopx-core",
  "loopx-server",
  "serde",

@@ -9,7 +9,7 @@
 //! A fake signed-in [`Session`] (cookies and localStorage) is set up before
 //! the page loads. The profile dir is removed on every exit path.
 
-use crate::linkedin_cdp::{box_script, CdpPage, Chrome, LaunchOptions};
+use crate::linkedin_cdp::{box_script, CdpPage, Chrome, LaunchOptions, DEFAULT_CALL_TIMEOUT};
 use crate::linkedin_humanize::Selector;
 use crate::loop_plugins::linkedin_autopilot::BrowserError;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -21,6 +21,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -62,6 +63,100 @@ pub fn check_serve_command(cmd: &str) -> Result<ServeCommand, String> {
         }
     }
     Ok((env, argv))
+}
+
+// ---- cleanup on a signal -------------------------------------------------------------
+
+/// What a signal must clean up: dev-server groups, Chrome processes and
+/// profile dirs that are live right now.
+struct Live {
+    groups: Vec<i32>,
+    pids: Vec<i32>,
+    dirs: Vec<PathBuf>,
+}
+
+static LIVE: Mutex<Live> = Mutex::new(Live {
+    groups: Vec::new(),
+    pids: Vec::new(),
+    dirs: Vec::new(),
+});
+static SIGNALLED: AtomicI32 = AtomicI32::new(0);
+
+fn live() -> std::sync::MutexGuard<'static, Live> {
+    LIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn register_chrome(pid: u32) {
+    live().pids.push(pid as i32);
+}
+
+extern "C" fn on_signal(sig: libc::c_int) {
+    // Only an atomic store: everything else happens on the watcher thread.
+    SIGNALLED.store(sig, Ordering::SeqCst);
+}
+
+/// Makes SIGTERM, SIGINT and SIGHUP stop every live dev server and Chrome,
+/// remove every live profile dir, and exit with `128 + signal`. Without it a
+/// killed `loopx screenshot` (a Bash tool timeout) would orphan its dev
+/// server, whose port then blocks the next attempt. Call it once, from the
+/// CLI; library callers keep their own signal handling.
+pub fn clean_up_on_signals() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let handler = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            // SAFETY: the handler only stores to an atomic.
+            unsafe { libc::signal(sig, handler) };
+        }
+        std::thread::spawn(|| loop {
+            let sig = SIGNALLED.load(Ordering::SeqCst);
+            if sig != 0 {
+                // Held until exit, so nothing new is registered meanwhile.
+                let mut l = live();
+                stop_all(&mut l);
+                std::process::exit(128 + sig);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        });
+    });
+}
+
+/// Reaps `pid` (our own child) if it exited; true once it is gone.
+fn reaped(pid: i32) -> bool {
+    let mut status = 0;
+    // SAFETY: plain syscall; ECHILD means someone else already reaped it.
+    let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    r == pid || r == -1
+}
+
+fn stop_all(l: &mut Live) {
+    for g in &l.groups {
+        unsafe { libc::kill(-g, libc::SIGTERM) };
+    }
+    for p in &l.pids {
+        unsafe { libc::kill(*p, libc::SIGTERM) };
+    }
+    let leaders: Vec<i32> = l.groups.iter().chain(&l.pids).copied().collect();
+    let until = Instant::now() + Duration::from_secs(3);
+    let mut left = leaders.clone();
+    while !left.is_empty() && Instant::now() < until {
+        left.retain(|p| !reaped(*p));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Group members that ignored SIGTERM, and anything still up.
+    for g in &l.groups {
+        unsafe { libc::kill(-g, libc::SIGKILL) };
+    }
+    for p in &left {
+        unsafe { libc::kill(*p, libc::SIGKILL) };
+    }
+    for p in &left {
+        let mut status = 0;
+        unsafe { libc::waitpid(*p, &mut status, 0) };
+    }
+    for d in &l.dirs {
+        let _ = remove_profile(d);
+    }
 }
 
 /// A running dev server in its own process group. Dropping it stops the whole
@@ -124,6 +219,8 @@ impl DevServer {
         timeout: Duration,
     ) -> Result<DevServer, String> {
         let (prog, args) = argv.split_first().ok_or("empty command")?;
+        // Spawned and registered under the lock, so a signal can't fall between.
+        let mut registry = live();
         let mut child = Command::new(prog)
             .args(args)
             .envs(env.iter().map(|(k, v)| (k, v)))
@@ -134,6 +231,8 @@ impl DevServer {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("could not start {prog}: {e}"))?;
+        registry.groups.push(child.id() as i32);
+        drop(registry);
         let tail = OutputTail::default();
         if let Some(out) = child.stdout.take() {
             tail.drain(out);
@@ -143,10 +242,10 @@ impl DevServer {
         }
         // From here Drop owns cleanup, including on the error returns below.
         let mut server = DevServer { child, tail };
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(5))
-            .build();
         let deadline = Instant::now() + timeout;
+        let mut agent = ureq::AgentBuilder::new()
+            .timeout(timeout.min(Duration::from_secs(5)))
+            .build();
         loop {
             match server.child.try_wait() {
                 Ok(Some(status)) => {
@@ -161,7 +260,15 @@ impl DevServer {
                 Ok(_) | Err(ureq::Error::Status(..)) => return Ok(server),
                 Err(ureq::Error::Transport(_)) => {}
             }
-            if Instant::now() >= deadline {
+            let now = Instant::now();
+            agent = ureq::AgentBuilder::new()
+                .timeout(
+                    deadline
+                        .saturating_duration_since(now)
+                        .min(Duration::from_secs(5)),
+                )
+                .build();
+            if now >= deadline {
                 return Err(server.tail.quote(format!(
                     "dev server did not answer {url} within {}s",
                     timeout.as_secs()
@@ -188,6 +295,7 @@ impl Drop for DevServer {
         // when the leader already exited.
         unsafe { libc::kill(-pgid, libc::SIGKILL) };
         let _ = self.child.wait();
+        live().groups.retain(|g| *g != pgid);
     }
 }
 
@@ -354,9 +462,11 @@ pub fn capture(opts: &ShotOptions) -> Result<(), String> {
     std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
         .create(&profile)
         .map_err(|e| format!("could not make a Chrome profile dir: {e}"))?;
+    live().dirs.push(profile.clone());
     // Chrome is closed inside `shoot`, before its profile goes.
     let result = shoot(&exe, &profile, &origin, opts);
     let removed = remove_profile(&profile);
+    live().dirs.retain(|d| d != &profile);
     match (result, removed) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
@@ -454,13 +564,39 @@ struct Shot<'a> {
 }
 
 fn shoot(exe: &Path, profile: &Path, origin: &str, opts: &ShotOptions) -> Result<(), String> {
+    let deadline = Instant::now() + opts.timeout;
     let launch = LaunchOptions {
         chrome_path: Some(exe.to_path_buf()),
         extra_args: QUIET_ARGS.iter().map(|a| a.to_string()).collect(),
+        startup_timeout: Some(call_limit(deadline).min(Duration::from_secs(30))),
+        on_spawn: Some(register_chrome),
     };
-    let deadline = Instant::now() + opts.timeout;
-    let chrome = Chrome::launch(profile, true, &launch).map_err(browser_error)?;
-    let page = chrome.page().map_err(browser_error)?;
+    let launched = Chrome::launch(profile, true, &launch);
+    let result = launched
+        .map_err(browser_error)
+        .and_then(|chrome| shoot_on(chrome, deadline, origin, opts));
+    // Chrome is closed (or never came up) by now.
+    live().pids.clear();
+    result
+}
+
+/// How long one browser step may wait: what is left of the budget, at least
+/// a second, never more than CDP's own 60 s.
+fn call_limit(deadline: Instant) -> Duration {
+    deadline
+        .saturating_duration_since(Instant::now())
+        .clamp(Duration::from_secs(1), DEFAULT_CALL_TIMEOUT)
+}
+
+fn shoot_on(
+    chrome: Chrome,
+    deadline: Instant,
+    origin: &str,
+    opts: &ShotOptions,
+) -> Result<(), String> {
+    let page = chrome
+        .page_within(call_limit(deadline))
+        .map_err(browser_error)?;
     let mut shot = Shot {
         chrome,
         page,
@@ -484,7 +620,7 @@ fn auto_attach() -> Value {
 impl Shot<'_> {
     fn send(&self, method: &str, params: Value) -> Result<Value, String> {
         self.page
-            .send(method, params)
+            .send_timeout(method, params, call_limit(self.deadline))
             .map_err(|e| format!("{method}: {}", browser_error(e)))
     }
 
@@ -622,17 +758,23 @@ impl Shot<'_> {
                     p["sessionId"].as_str().unwrap_or_default().to_string(),
                 );
                 // Failures here only mean the target already went away.
+                let t = call_limit(self.deadline);
                 if p["targetInfo"]["type"] == json!("worker") {
-                    let _ = child.send(
+                    let _ = child.send_timeout(
                         "Runtime.evaluate",
                         json!({"expression": guard_js(self.origin)}),
+                        t,
                     );
-                    let _ = child.send("Target.setAutoAttach", auto_attach());
-                    let _ = child.send("Network.enable", json!({}));
+                    let _ = child.send_timeout("Target.setAutoAttach", auto_attach(), t);
+                    let _ = child.send_timeout("Network.enable", json!({}), t);
                 } else {
-                    let _ = child.send("Fetch.enable", json!({"patterns": [{"urlPattern": "*"}]}));
+                    let _ = child.send_timeout(
+                        "Fetch.enable",
+                        json!({"patterns": [{"urlPattern": "*"}]}),
+                        t,
+                    );
                 }
-                let _ = child.send("Runtime.runIfWaitingForDebugger", json!({}));
+                let _ = child.send_timeout("Runtime.runIfWaitingForDebugger", json!({}), t);
             }
             // Blocked requests are not activity: an EventSource that keeps
             // reconnecting to a blocked origin must not hold the shot back.
@@ -677,11 +819,15 @@ impl Shot<'_> {
     fn answer(&self, on: &CdpPage, p: &Value) {
         let id = &p["requestId"];
         let url = p["request"]["url"].as_str().unwrap_or_default();
+        let t = call_limit(self.deadline);
         let _ = match decide(url, self.origin, self.mocks) {
-            Decision::Continue => on.send("Fetch.continueRequest", json!({"requestId": id})),
-            Decision::Block => on.send(
+            Decision::Continue => {
+                on.send_timeout("Fetch.continueRequest", json!({"requestId": id}), t)
+            }
+            Decision::Block => on.send_timeout(
                 "Fetch.failRequest",
                 json!({"requestId": id, "errorReason": "BlockedByClient"}),
+                t,
             ),
             Decision::Fulfill(i) => {
                 let mock = &self.mocks[i];
@@ -708,9 +854,10 @@ impl Shot<'_> {
                     headers.push(json!({"name": "Content-Type", "value": "application/json"}));
                     (mock.status, B64.encode(mock.json.to_string()))
                 };
-                on.send(
+                on.send_timeout(
                     "Fetch.fulfillRequest",
                     json!({"requestId": id, "responseCode": status, "responseHeaders": headers, "body": body}),
+                    t,
                 )
             }
         };
