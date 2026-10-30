@@ -19,10 +19,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - MR Review: reviews are structured and goal-based. Each inline note leads with its severity and area (correctness, security, performance, data & migrations, …) and a short title, then the problem and a suggested fix; the overall note gives a verdict, a "What this MR does" list, a risk table by area and level, and an index of the findings.
 - MR Review → Live → Latest results: each MR shows its title, `group/project!iid`, author, age and a Reviewed/Skipped/Failed pill, plus the verdict and finding counts.
 - The sidebar shows MR Review with a merge-request icon.
+- GitLab → Tasks and MR Review → Merge requests show the last fetched list instantly, with an "Updated 5m ago · refreshing…" note, while fresh data loads in the background; the loading spinner only appears the first time, when nothing is cached yet. A project or account whose fetch fails keeps its last good data in the cache.
 - MR Review → History names each MR by its title and reference (e.g. "Add partial index (web/app!42)") for reviewed, skipped and failed MRs alike, instead of an internal key.
 - MR Review → Merge requests: Run now and Review now highlight clearly on hover and keyboard focus; Review now is accent-tinted like GitLab's per-issue run button.
 
 ### Fixed
+- GitLab loop Slack report: the issue in a single-issue run (Run now) is now a clickable link too; the report builds the link from the project's config when the run recorded none. Only batch runs used to carry each issue's link.
 - Agents: a GitLab loop run started outside the queue (launchd or Run now) now shows under Running with its current step, matching the topbar pill, instead of "Nothing is running". A run whose process has died no longer shows as running in the pill or on the page.
 
 ## [0.14.0] - 2026-10-30

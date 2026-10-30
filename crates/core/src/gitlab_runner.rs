@@ -1960,7 +1960,22 @@ pub fn send_run_report(
             )
         })
         .collect();
-    let lines = gitlab_report::issue_lines(run_id, &events, &unfinished);
+    let mut lines = gitlab_report::issue_lines(run_id, &events, &unfinished);
+    let fakes = ctx.fakes.as_deref();
+    let gitlab_config = fakes.map(|f| f.gitlab_config_path.clone());
+    // Only a batch records each issue's link (`issue.queued`); a single-issue
+    // run's line gets one built from its project, so Slack can still link it.
+    let config = Config::load(&project_config_path(ctx)).ok();
+    for line in lines.iter_mut().filter(|l| l.web_url.is_none()) {
+        let project = config.as_ref().and_then(|c| c.project(&line.alias).ok());
+        if let (Some(project), true) = (project, !line.iid.is_empty()) {
+            if let (_, Some(url)) =
+                project_slack_target(&line.alias, &project, gitlab_config.as_deref())
+            {
+                line.web_url = Some(format!("{url}/-/issues/{}", line.iid));
+            }
+        }
+    }
     let facts = gitlab_report::RunFacts {
         title: title.to_string(),
         run_id: run_id.to_string(),
@@ -1968,8 +1983,6 @@ pub fn send_run_report(
         cost_usd: aggregate_cost_usd(runs),
         wrapup_error,
     };
-    let fakes = ctx.fakes.as_deref();
-    let gitlab_config = fakes.map(|f| f.gitlab_config_path.clone());
     let bundle_of =
         |alias: &str| project_slack_target(alias, &json!({}), gitlab_config.as_deref()).0;
     for (bundle, lines) in gitlab_report::by_bundle(lines, &bundle_of) {
@@ -2886,6 +2899,65 @@ mod tests {
         assert_eq!(sent.len(), 1, "quiet: no second message {sent:?}");
         assert!(
             sent[0].starts_with("*Escalated* <https://g.example/g/p/-/issues/7|web #7>\n"),
+            "{}",
+            sent[0]
+        );
+    }
+
+    #[test]
+    fn a_report_links_an_issue_whose_run_recorded_no_link() {
+        // A single-issue run (Run now) has no `issue.queued` event, so the
+        // report builds the issue's link from the project config.
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"g": {"url": "https://g.example/"}}}"#,
+        )
+        .unwrap();
+        let config = d.path().join("projects.json");
+        std::fs::write(
+            &config,
+            r#"{"gitlab_instance": "g", "projects": {"web": {"project_id": "grp/web", "local_path": "/w"}}}"#,
+        )
+        .unwrap();
+        let sent: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = sent.clone();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.config_path = Some(config);
+        ctx.fakes = Some(Arc::new(RunFakes {
+            gitlab: Box::new(Notes(Default::default())),
+            notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
+            gitlab_config_path: gitlab,
+        }));
+        for (kind, data) in [
+            ("issue.started", json!({})),
+            (
+                "issue.completed",
+                json!({"action": "fix", "mr_url": "https://g.example/grp/web/-/merge_requests/9"}),
+            ),
+        ] {
+            ctx.emit(
+                kind,
+                Some("R"),
+                EventFields {
+                    issue_run_id: Some("R_web_16".into()),
+                    project: Some("web".into()),
+                    issue_iid: Some(16),
+                    data: Some(data),
+                },
+            );
+        }
+        send_run_report(&ctx, "R", "GitLab issue run: web #16", &[], 5.0, None);
+        let sent = sent.lock().unwrap();
+        assert!(
+            sent[0].contains("<https://g.example/grp/web/-/issues/16|#16 (web)>"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains("<https://g.example/grp/web/-/merge_requests/9|!9>"),
             "{}",
             sent[0]
         );
