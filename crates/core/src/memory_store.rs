@@ -8,6 +8,7 @@
 
 use crate::config::home_dir;
 use crate::pyjson;
+use crate::sha256;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::io;
@@ -549,6 +550,64 @@ pub fn read_index(alias: &str, root: Option<&Path>) -> Option<String> {
     std::fs::read_to_string(project_dir(alias, root).join("MEMORY.md")).ok()
 }
 
+/// Where the doctor's per-project setup knowledge lives: `<root>/<alias>/SETUP.md`.
+pub fn setup_knowledge_path(alias: &str, root: Option<&Path>) -> PathBuf {
+    project_dir(alias, root).join("SETUP.md")
+}
+
+/// The raw `SETUP.md`, or `None` when absent.
+pub fn read_setup_knowledge(alias: &str, root: Option<&Path>) -> Option<String> {
+    std::fs::read_to_string(setup_knowledge_path(alias, root)).ok()
+}
+
+/// Save a doctor draft as `SETUP.md`. Returns `Ok(false)` and writes nothing
+/// when the draft is blank or has no `# ` heading, so a botched run can't
+/// clobber good knowledge.
+pub fn save_setup_knowledge(alias: &str, draft: &str, root: Option<&Path>) -> io::Result<bool> {
+    if draft.trim().is_empty() || !draft.lines().any(|l| l.starts_with("# ")) {
+        return Ok(false);
+    }
+    let path = setup_knowledge_path(alias, root);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&path, draft)?;
+    Ok(true)
+}
+
+/// Paths under `## Sources` (lines like ``- `README.md` sha256:<hex>``) whose
+/// file in `work_dir` no longer hashes to the recorded value or is gone.
+pub fn stale_setup_sources(knowledge: &str, work_dir: &Path) -> Vec<String> {
+    let mut stale = Vec::new();
+    let mut in_sources = false;
+    for line in knowledge.lines() {
+        if line.starts_with('#') {
+            in_sources = line.trim_end() == "## Sources";
+            continue;
+        }
+        if !in_sources {
+            continue;
+        }
+        let Some((path, hash)) = parse_source_line(line) else {
+            continue;
+        };
+        let current = std::fs::read(work_dir.join(path))
+            .ok()
+            .map(|bytes| sha256::hex(&sha256::sha256(&bytes)));
+        if current.as_deref() != Some(hash) {
+            stale.push(path.to_string());
+        }
+    }
+    stale
+}
+
+fn parse_source_line(line: &str) -> Option<(&str, &str)> {
+    let rest = line.trim().strip_prefix("- `")?;
+    let (path, rest) = rest.split_once('`')?;
+    let hash = rest.trim().strip_prefix("sha256:")?.trim();
+    (!path.is_empty() && !hash.is_empty()).then_some((path, hash))
+}
+
 /// `json.dumps(entry, indent=2)` of a task memory (or `null`).
 pub fn task_memory_json(entry: Option<&TaskMemory>) -> String {
     pyjson::to_string_pretty(&entry.map_or(Value::Null, TaskMemory::to_value))
@@ -564,6 +623,71 @@ mod tests {
 
     fn task_files(dir: &Path) -> Vec<PathBuf> {
         sorted_md_files(dir)
+    }
+
+    fn hash_of(bytes: &[u8]) -> String {
+        sha256::hex(&sha256::sha256(bytes))
+    }
+
+    #[test]
+    fn setup_knowledge_round_trips() {
+        let root = tempfile::tempdir().unwrap();
+        let text = "# web setup\n\nrun `make test`\n";
+        assert!(save_setup_knowledge("web", text, Some(root.path())).unwrap());
+        assert_eq!(
+            read_setup_knowledge("web", Some(root.path())).as_deref(),
+            Some(text)
+        );
+        assert!(root.path().join("web/SETUP.md").is_file());
+        assert_eq!(read_setup_knowledge("other", Some(root.path())), None);
+    }
+
+    #[test]
+    fn empty_draft_is_not_saved() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(save_setup_knowledge("web", "# keep\n", Some(root.path())).unwrap());
+        for draft in ["", "  \n", "no heading here\n"] {
+            assert!(!save_setup_knowledge("web", draft, Some(root.path())).unwrap());
+        }
+        assert_eq!(
+            read_setup_knowledge("web", Some(root.path())).as_deref(),
+            Some("# keep\n")
+        );
+        assert!(!save_setup_knowledge("new", "", Some(root.path())).unwrap());
+        assert!(!root.path().join("new").exists());
+    }
+
+    #[test]
+    fn changed_source_is_stale() {
+        let work = tempfile::tempdir().unwrap();
+        let readme = work.path().join("README.md");
+        std::fs::write(&readme, "one").unwrap();
+        let knowledge = format!(
+            "# Setup\n\n## Sources\n- `README.md` sha256:{}\n",
+            hash_of(b"one")
+        );
+        assert!(stale_setup_sources(&knowledge, work.path()).is_empty());
+        std::fs::write(&readme, "two").unwrap();
+        assert_eq!(
+            stale_setup_sources(&knowledge, work.path()),
+            vec!["README.md"]
+        );
+        std::fs::remove_file(&readme).unwrap();
+        assert_eq!(
+            stale_setup_sources(&knowledge, work.path()),
+            vec!["README.md"]
+        );
+    }
+
+    #[test]
+    fn sources_missing_is_not_stale() {
+        let work = tempfile::tempdir().unwrap();
+        assert!(stale_setup_sources("# Setup\n\ntext\n", work.path()).is_empty());
+        let garbage = "# Setup\n\n## Sources\nnot a source line\n- `x` sha256:\n- plain\n";
+        assert!(stale_setup_sources(garbage, work.path()).is_empty());
+        // Lines in other sections are not sources.
+        let other = "# Setup\n\n## Notes\n- `gone.md` sha256:abc\n";
+        assert!(stale_setup_sources(other, work.path()).is_empty());
     }
 
     #[test]

@@ -134,7 +134,12 @@ pub fn learning(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-const MEMORY_USAGE: &str = "Usage: memory_store.py add <alias> <issue_iid> <lesson> [tags_comma_separated] [category]\n       memory_store.py get <alias> <issue_iid>\n       memory_store.py list <alias>";
+const MEMORY_USAGE: &str = "Usage: memory_store.py add <alias> <issue_iid> <lesson> [tags_comma_separated] [category]\n       memory_store.py get <alias> <issue_iid>\n       memory_store.py list <alias>\n       memory_store.py setup <alias>";
+
+fn setup_text(alias: &str, root: Option<&std::path::Path>) -> String {
+    memory_store::read_setup_knowledge(alias, root)
+        .unwrap_or_else(|| "(no setup knowledge yet)".to_string())
+}
 
 pub fn memory_store(args: &[String]) -> ExitCode {
     let Some(command) = args.first() else {
@@ -192,7 +197,11 @@ pub fn memory_store(args: &[String]) -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        ("add" | "get" | "list", _) => fail(MEMORY_USAGE),
+        ("setup", [alias, ..]) => {
+            println!("{}", setup_text(alias, None));
+            ExitCode::SUCCESS
+        }
+        ("add" | "get" | "list" | "setup", _) => fail(MEMORY_USAGE),
         (other, _) => fail(&format!("Unknown command: {other}")),
     }
 }
@@ -209,5 +218,21 @@ pub fn notify_loop(args: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_without_a_file_says_so() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            setup_text("web", Some(root.path())),
+            "(no setup knowledge yet)"
+        );
+        memory_store::save_setup_knowledge("web", "# Setup\n", Some(root.path())).unwrap();
+        assert_eq!(setup_text("web", Some(root.path())), "# Setup\n");
     }
 }
