@@ -230,6 +230,26 @@ pub fn new_worktree(
                 .map_err(|e| Failure::new(format!("cannot copy {rel} into {wt}: {e}")))?;
         }
     }
+    // Rails credentials keys (RAILS_MASTER_KEY and the per-environment ones), so
+    // development and test can decrypt the project's own credentials. Never the
+    // production key, and only a key the worktree ignores, so it can't be committed.
+    for rel in [
+        "config/master.key",
+        "config/credentials/development.key",
+        "config/credentials/test.key",
+    ] {
+        let src = Path::new(repo_path).join(rel);
+        if !src.is_file() || !git(&wt, &["check-ignore", "-q", rel])? {
+            continue;
+        }
+        let dst = Path::new(&wt).join(rel);
+        if let Some(dir) = dst.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| Failure::new(format!("cannot create {}: {e}", dir.display())))?;
+        }
+        std::fs::copy(&src, &dst)
+            .map_err(|e| Failure::new(format!("cannot copy {rel} into {wt}: {e}")))?;
+    }
 
     // Submodule checkouts are per-worktree; init them on every run.
     git_ok(&wt, &["submodule", "update", "--init", "--recursive"])?;
@@ -775,6 +795,44 @@ mod tests {
         assert!(!Path::new(&wt3).exists());
         assert!(Path::new(&wt4).exists() && Path::new(&wt5).exists());
         assert_eq!(branches(&repo), "loop/issue-4\nloop/issue-5\nloop/other");
+    }
+
+    #[test]
+    fn rails_keys_are_copied_only_when_gitignored() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let local = Path::new(&repo);
+        sh(local, &["checkout", "-q", "main"]);
+        std::fs::write(
+            local.join(".gitignore"),
+            "/config/master.key\n/config/credentials/development.key\n/config/credentials/production.key\n",
+        )
+        .unwrap();
+        sh(local, &["add", ".gitignore"]);
+        sh(local, &["commit", "-qm", "ignore keys"]);
+        sh(local, &["push", "-q", "origin", "main"]);
+        std::fs::create_dir_all(local.join("config/credentials")).unwrap();
+        for (rel, body) in [
+            ("config/master.key", "m"),
+            ("config/credentials/development.key", "d"),
+            // Not gitignored: never copied, so it can't be committed by accident.
+            ("config/credentials/test.key", "t"),
+            // Gitignored, but production secrets have no place in a worktree.
+            ("config/credentials/production.key", "p"),
+        ] {
+            std::fs::write(local.join(rel), body).unwrap();
+        }
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_worktree(&repo, "main", "7", &root).unwrap();
+        let read = |rel: &str| std::fs::read_to_string(Path::new(&wt).join(rel)).ok();
+        assert_eq!(read("config/master.key").as_deref(), Some("m"));
+        assert_eq!(
+            read("config/credentials/development.key").as_deref(),
+            Some("d")
+        );
+        assert_eq!(read("config/credentials/test.key"), None);
+        assert_eq!(read("config/credentials/production.key"), None);
+        assert_eq!(sh(Path::new(&wt), &["status", "--porcelain"]), "");
     }
 
     #[test]

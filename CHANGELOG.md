@@ -11,6 +11,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+- GitLab loop: issue worktrees of Rails projects now get the checkout's `config/master.key` (and `config/credentials/development.key` / `test.key`) when the project gitignores them, so development and test can read the project's encrypted credentials. The production key is never copied.
+
 ### Changed
 - MR Review: MRs in archived projects, or projects scheduled for deletion, no longer appear on the Merge requests tab and are never reviewed.
 
