@@ -130,8 +130,16 @@ fn url_host(url: &str) -> Option<String> {
 }
 
 /// Only pages served on this machine may be shot: never a staging or
-/// production site.
+/// production site. A backslash, whitespace or control character is refused
+/// outright: browsers and ureq read `\` as `/` and drop tabs and newlines, so
+/// the host they would reach is not the one parsed here.
 fn is_local(url: &str) -> bool {
+    if url
+        .chars()
+        .any(|c| c == '\\' || c.is_whitespace() || c.is_control())
+    {
+        return false;
+    }
     matches!(
         url_host(url).as_deref(),
         Some("localhost" | "127.0.0.1" | "[::1]")
@@ -328,6 +336,13 @@ mod tests {
             "http://127.0.0.1.example.com/",
             "http://10.0.0.5:3000/",
             "http://[::2]/",
+            // A browser (and ureq's URL parser) treats `\` as `/` and drops
+            // tabs and newlines, so the host they reach is not the one seen here.
+            "http://example.com\\@localhost/",
+            "http://example.com\\.localhost/",
+            "http://example.com\t@localhost/",
+            "http://example.com\n@localhost/",
+            "http://localhost /",
         ] {
             let err = args(bad).unwrap_err();
             assert!(err.contains("localhost"), "{bad}: {err}");
