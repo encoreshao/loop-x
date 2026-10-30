@@ -35,6 +35,8 @@ pub mod keychain;
 pub mod launchd;
 pub mod learning;
 pub mod ledger;
+pub mod linkedin_cdp;
+pub mod linkedin_humanize;
 pub mod loop_audit;
 pub mod loop_definition;
 pub mod loop_eval;

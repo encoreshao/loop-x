@@ -162,7 +162,7 @@ impl Humanizer {
         self.rng(|r| {
             let base = r.lognormvariate(12.0f64.ln(), 0.5);
             let read = text_len as f64 / READ_CHARS_PER_S * r.uniform(0.3, 0.7);
-            (base + read).max(DWELL_MIN_S).min(DWELL_MAX_S)
+            (base + read).clamp(DWELL_MIN_S, DWELL_MAX_S)
         })
     }
 
@@ -628,7 +628,9 @@ mod tests {
         let e = events.clone();
         Arc::new(Humanizer::new(
             Rng::seeded(0),
-            Some(Arc::new(move |s| e.lock().unwrap().push(format!("sleep {s}")))),
+            Some(Arc::new(move |s| {
+                e.lock().unwrap().push(format!("sleep {s}"))
+            })),
             Some(Arc::new(|| 50.0)),
         ))
     }

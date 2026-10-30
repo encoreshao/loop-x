@@ -157,6 +157,39 @@ impl Cdp {
             }
         }
     }
+    /// The next event: one queued by an earlier `call`, else one read from the
+    /// socket within `timeout`. Stray command responses are skipped.
+    pub fn next_event(&mut self, timeout: Duration) -> Result<Option<Value>, CdpError> {
+        if let Some(event) = self.events.pop_front() {
+            return Ok(Some(event));
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.ws.read() {
+                Ok(Message::Text(t)) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                        if v.get("method").is_some() {
+                            return Ok(Some(v));
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => return Err(CdpError::Closed),
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
+                    return Err(CdpError::Closed)
+                }
+                Err(e) => return Err(CdpError::Io(e.to_string())),
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+        }
+    }
 }
 
 pub type SharedCdp = Arc<Mutex<Cdp>>;
@@ -178,7 +211,12 @@ pub fn find_chrome() -> Option<PathBuf> {
         return Some(p);
     }
     let path = std::env::var_os("PATH")?;
-    for name in ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] {
+    for name in [
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+    ] {
         if let Some(p) = std::env::split_paths(&path)
             .map(|d| d.join(name))
             .find(|p| p.is_file())
@@ -202,7 +240,11 @@ pub struct Chrome {
 }
 
 impl Chrome {
-    pub fn launch(profile: &Path, headless: bool, opts: &LaunchOptions) -> Result<Self, BrowserError> {
+    pub fn launch(
+        profile: &Path,
+        headless: bool,
+        opts: &LaunchOptions,
+    ) -> Result<Self, BrowserError> {
         let unavailable = |m: &str| BrowserError::Unavailable(m.to_string());
         let exe = opts
             .chrome_path
@@ -379,7 +421,12 @@ impl CdpPage {
         self.send_timeout(method, params, DEFAULT_CALL_TIMEOUT)
     }
 
-    fn send_timeout(&self, method: &str, params: Value, t: Duration) -> Result<Value, BrowserError> {
+    fn send_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        t: Duration,
+    ) -> Result<Value, BrowserError> {
         let mut c = self.cdp.lock().unwrap_or_else(|e| e.into_inner());
         Ok(c.call(Some(&self.session), method, params, t)?)
     }
@@ -417,9 +464,13 @@ impl PageDriver for CdpPage {
         }
         // DOMContentLoaded: the new document exists once navigate returns; wait for it to leave "loading".
         loop {
-            if matches!(self.eval("document.readyState").ok().as_ref().and_then(Value::as_str),
-                Some("interactive" | "complete"))
-            {
+            if matches!(
+                self.eval("document.readyState")
+                    .ok()
+                    .as_ref()
+                    .and_then(Value::as_str),
+                Some("interactive" | "complete")
+            ) {
                 return Ok(());
             }
             if started.elapsed() >= timeout {
@@ -430,7 +481,11 @@ impl PageDriver for CdpPage {
     }
 
     fn url(&mut self) -> Result<String, BrowserError> {
-        Ok(self.eval("location.href")?.as_str().unwrap_or_default().to_string())
+        Ok(self
+            .eval("location.href")?
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
     }
 
     fn content(&mut self) -> Result<String, BrowserError> {
@@ -445,7 +500,11 @@ impl PageDriver for CdpPage {
         self.eval(&format!("({js})()"))
     }
 
-    fn visible_box(&mut self, selector: &Selector, timeout_s: f64) -> Result<Option<BBox>, BrowserError> {
+    fn visible_box(
+        &mut self,
+        selector: &Selector,
+        timeout_s: f64,
+    ) -> Result<Option<BBox>, BrowserError> {
         let script = box_script(selector);
         let started = Instant::now();
         loop {
@@ -468,8 +527,11 @@ impl PageDriver for CdpPage {
 
     fn mouse_move(&mut self, x: f64, y: f64) -> Result<(), BrowserError> {
         self.pos = (x, y);
-        self.send("Input.dispatchMouseEvent", json!({"type": "mouseMoved", "x": x, "y": y}))
-            .map(|_| ())
+        self.send(
+            "Input.dispatchMouseEvent",
+            json!({"type": "mouseMoved", "x": x, "y": y}),
+        )
+        .map(|_| ())
     }
 
     fn mouse_wheel(&mut self, dy: f64) -> Result<(), BrowserError> {
@@ -517,7 +579,10 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("DevToolsActivePort");
         std::fs::write(&p, "9222\n/devtools/browser/abc-123\n").unwrap();
-        assert_eq!(read_port_file(&p), Some((9222, "/devtools/browser/abc-123".into())));
+        assert_eq!(
+            read_port_file(&p),
+            Some((9222, "/devtools/browser/abc-123".into()))
+        );
         std::fs::write(&p, "9222\n").unwrap();
         assert_eq!(read_port_file(&p), None);
         std::fs::write(&p, "x\n/y\n").unwrap();
@@ -533,5 +598,29 @@ mod tests {
             text: "People".into(),
         });
         assert!(t.contains(r#"querySelectorAll("button,a")"#) && t.contains("\"people\""));
+    }
+    #[test]
+    fn next_event_pops_queued_events_then_reads_the_socket() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.send(Message::Text(r#"{"id":99,"result":{}}"#.into()))
+                .unwrap();
+            ws.send(Message::Text(r#"{"method":"B"}"#.into())).unwrap();
+            // Keep the socket open until the client has read and timed out.
+            let _ = ws.read();
+        });
+        let mut cdp = Cdp::connect(port, "/devtools/browser/x").unwrap();
+        cdp.events.push_back(json!({"method": "A"}));
+        let t = Duration::from_secs(5);
+        assert_eq!(cdp.next_event(t).unwrap().unwrap()["method"], "A");
+        assert_eq!(cdp.next_event(t).unwrap().unwrap()["method"], "B");
+        let started = Instant::now();
+        assert_eq!(cdp.next_event(Duration::from_millis(300)).unwrap(), None);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        drop(cdp);
+        server.join().unwrap();
     }
 }
