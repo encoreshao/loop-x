@@ -48,7 +48,7 @@ const USAGE_TOKEN_FIELDS: [&str; 4] = [
 
 /// `loopx` subcommands the agent may run. `mr` (opening the MR) is withheld in
 /// gate mode, where the loop itself opens it after verification.
-const AGENT_SUBCOMMANDS: [&str; 11] = [
+const AGENT_SUBCOMMANDS: [&str; 12] = [
     "config",
     "events",
     "notify",
@@ -60,6 +60,7 @@ const AGENT_SUBCOMMANDS: [&str; 11] = [
     "status",
     "messages",
     "worktree",
+    "screenshot",
 ];
 /// The helpers an offline (golden eval) run keeps.
 const OFFLINE_SUBCOMMANDS: [&str; 5] = ["config", "events", "risk", "memory-store", "memory get"];
@@ -69,6 +70,14 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
 const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}}\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\nA missing or malformed handoff is escalated to a human.";
+
+/// Asset-build commands the agent may run before taking a screenshot.
+const ASSET_BUILD_PATTERNS: [&str; 4] = [
+    "Bash(yarn build*)",
+    "Bash(npm run build*)",
+    "Bash(pnpm build*)",
+    "Bash(RAILS_ENV=test bin/rails assets:precompile*)",
+];
 
 fn tool_patterns(exe: &str, subs: &[&str]) -> Vec<String> {
     subs.iter()
@@ -105,6 +114,8 @@ pub fn allowed_tools(repo_root: &str, exe: &str, gate: bool, offline: bool) -> S
     } else {
         t.extend(crate::verify_commands::claude_patterns());
         t.push("Bash(RAILS_ENV=test bundle exec rake db:test:prepare*)".into());
+        // Asset builds a screenshot may need; the verify allowlist stays closed to them.
+        t.extend(ASSET_BUILD_PATTERNS.iter().map(|s| s.to_string()));
         t.extend(tool_patterns(exe, &AGENT_SUBCOMMANDS));
         if !gate {
             t.extend(tool_patterns(exe, &["mr"]));
@@ -2955,6 +2966,28 @@ mod tests {
         assert!(!t.contains("Bash(bundle exec *)"));
         let offline = allowed_tools("/r", "loopx", true, true);
         assert!(!offline.contains("Bash(pnpm test*)"));
+    }
+
+    #[test]
+    fn allowed_tools_include_screenshot_and_asset_builds() {
+        let want = [
+            "Bash(loopx screenshot*)",
+            "Bash(yarn build*)",
+            "Bash(npm run build*)",
+            "Bash(pnpm build*)",
+            "Bash(RAILS_ENV=test bin/rails assets:precompile*)",
+        ];
+        for gate in [true, false] {
+            let t = allowed_tools("/r", "loopx", gate, false);
+            for w in want {
+                assert!(t.contains(w), "{w}");
+            }
+            let off = allowed_tools("/r", "loopx", gate, true);
+            for w in want {
+                assert!(!off.contains(w), "offline {w}");
+            }
+        }
+        assert!(crate::verify_commands::check_verify_command("yarn build").is_err());
     }
 
     #[test]

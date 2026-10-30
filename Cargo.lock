@@ -833,6 +833,7 @@ dependencies = [
  "clap",
  "loopx-core",
  "loopx-server",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

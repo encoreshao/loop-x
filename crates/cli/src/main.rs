@@ -17,6 +17,7 @@ mod messages_cmd;
 mod metrics_cmd;
 mod notify_cmd;
 mod run_cmds;
+mod screenshot_cmd;
 mod secrets_cmd;
 mod serve_cmd;
 mod status_cmd;
@@ -77,6 +78,12 @@ enum Command {
     /// Which AI CLI the loops use
     AiCli {
         /// `get` or `set <claude|codex|gemini|kimi|cursor>`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Headless screenshot of a page (optionally starting its dev server)
+    Screenshot {
+        /// `--url U --out F.png [--serve CMD] [--cwd DIR] [--selector CSS] [--full-page] [--viewport WxH] [--mock FILE] [--session FILE] [--wait-for CSS] [--timeout-s N]`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -312,6 +319,7 @@ fn main() -> ExitCode {
         Command::Loopkit { args } => loopkit_cmd::run(&args),
         Command::Loops { args } => loops_cmd::loops(&args),
         Command::AiCli { args } => loops_cmd::ai_cli(&args),
+        Command::Screenshot { args } => screenshot_cmd::run(&args),
         Command::Risk { args } => accounting_cmds::risk(&args),
         Command::Cost { args } => accounting_cmds::cost(&args),
         Command::Learning { args } => accounting_cmds::learning(&args),
