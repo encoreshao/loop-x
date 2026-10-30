@@ -190,6 +190,30 @@ mod tests {
     }
 
     #[test]
+    fn topbar_icons_follow_the_theme_accent() {
+        let css = ds("_STYLE");
+        for accent in ["default", "indigo", "blue", "green", "red", "gray"] {
+            let a = css
+                .find(&format!(":root[data-accent=\"{accent}\"] {{"))
+                .unwrap();
+            let block = &css[a..a + css[a..].find('}').unwrap()];
+            assert!(
+                block.contains("--md-nav-accent:"),
+                "{accent} sets the accent colour"
+            );
+        }
+        for selector in [".ai-panel-trigger {", ".topbar-icon {"] {
+            let a = css.find(selector).unwrap();
+            let block = &css[a..a + css[a..].find('}').unwrap()];
+            assert!(
+                block.contains("color: var(--md-nav-accent);"),
+                "{selector} uses the theme accent"
+            );
+        }
+        assert!(css.contains(".topbar #queue-pill.pill-outline { color: var(--md-nav-accent); }"));
+    }
+
+    #[test]
     fn stylesheet_comments_are_current() {
         let css = ds("_STYLE");
         assert!(!css.contains("Material Symbols glyph"));
