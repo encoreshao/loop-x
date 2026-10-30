@@ -252,8 +252,35 @@ pub fn new_worktree(
     }
 
     // Submodule checkouts are per-worktree; init them on every run.
-    git_ok(&wt, &["submodule", "update", "--init", "--recursive"])?;
+    ensure_submodules(&wt)?;
     Ok(wt)
+}
+
+/// Init every submodule of `wt` and fail if any is left empty. An interrupted
+/// `submodule update` can leave a checkout that git status still reports as
+/// clean, so the status (`-` prefix = not initialised) is checked afterwards.
+pub(crate) fn ensure_submodules(wt: &str) -> Result<(), Failure> {
+    let updated = git_ok(wt, &["submodule", "update", "--init", "--recursive"]);
+    let missing = uninitialised_submodules(wt)?;
+    if !missing.is_empty() {
+        return Err(Failure::new(format!(
+            "submodules not initialised: {}",
+            missing.join(", ")
+        )));
+    }
+    updated
+}
+
+/// Paths of the submodules (recursively) that `git submodule status` marks
+/// with a leading `-`, i.e. not checked out.
+fn uninitialised_submodules(wt: &str) -> Result<Vec<String>, Failure> {
+    let out = git_stdout(wt, &["submodule", "status", "--recursive"])?;
+    Ok(out
+        .lines()
+        .filter(|l| l.starts_with('-'))
+        .filter_map(|l| l[1..].split_whitespace().nth(1))
+        .map(str::to_string)
+        .collect())
 }
 
 /// Branch the checkout itself to `loop/issue-<iid>` (projects with
@@ -1002,5 +1029,73 @@ mod tests {
     #[test]
     fn branch_naming() {
         assert_eq!(branch_name("9"), "loop/issue-9");
+    }
+
+    /// A repo with one committed submodule at `sub`, whose source is `<dir>/lib`.
+    fn repo_with_submodule(dir: &Path) -> String {
+        let run = |cwd: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(["-c", "protocol.file.allow=always"])
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        let lib = dir.join("lib");
+        let main = dir.join("main");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::create_dir_all(&main).unwrap();
+        run(&lib, &["init", "-q"]);
+        std::fs::write(lib.join("f"), "x").unwrap();
+        run(&lib, &["add", "f"]);
+        run(&lib, &["commit", "-q", "-m", "lib"]);
+        run(&main, &["init", "-q"]);
+        run(
+            &main,
+            &["submodule", "add", "-q", &lib.display().to_string(), "sub"],
+        );
+        run(&main, &["commit", "-q", "-m", "add sub"]);
+        main.display().to_string()
+    }
+
+    fn deinit(main: &str) {
+        assert!(Command::new("git")
+            .args(["-C", main, "submodule", "deinit", "-f", "sub"])
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+
+    #[test]
+    fn uninitialised_submodules_lists_dash_entries() {
+        let d = tempfile::tempdir().unwrap();
+        let main = repo_with_submodule(d.path());
+        assert_eq!(
+            uninitialised_submodules(&main).unwrap(),
+            Vec::<String>::new()
+        );
+        deinit(&main);
+        assert_eq!(uninitialised_submodules(&main).unwrap(), vec!["sub"]);
+    }
+
+    #[test]
+    fn new_worktree_fails_when_a_submodule_stays_empty() {
+        let d = tempfile::tempdir().unwrap();
+        let main = repo_with_submodule(d.path());
+        deinit(&main);
+        // Neither the source nor the cached clone is left, so the update
+        // cannot populate the submodule.
+        std::fs::remove_dir_all(d.path().join("lib")).unwrap();
+        std::fs::remove_dir_all(d.path().join("main/.git/modules")).unwrap();
+        let err = ensure_submodules(&main).unwrap_err();
+        assert!(
+            err.message.contains("submodules not initialised: sub"),
+            "{}",
+            err.message
+        );
     }
 }

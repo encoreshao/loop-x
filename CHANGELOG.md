@@ -20,6 +20,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ### Changed
 - MR Review: MRs in archived projects, or projects scheduled for deletion, no longer appear on the Merge requests tab and are never reviewed.
 
+### Fixed
+- GitLab loop: a worktree whose submodules could not be fully initialised (an interrupted `submodule update` left `vendor/gems/*` empty) now fails with "submodules not initialised: <paths>" instead of being used silently.
+
 ## [0.15.0] - 2026-10-30
 
 ### Added
