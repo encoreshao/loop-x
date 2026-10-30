@@ -348,6 +348,47 @@ mod tests {
     }
 
     #[test]
+    fn doctor_prompt_confirms_a_worktree_failure_without_rerunning_it() {
+        let p = doctor_prompt(&[], true);
+        assert!(p.contains("starts with `loopx worktree new`"), "{p}");
+        assert!(p.contains("`git submodule status --recursive`"), "{p}");
+        assert!(p.contains("no line starting with `-`"), "{p}");
+        assert!(p.contains("instead of re-running the command"), "{p}");
+        assert!(
+            p.contains("The loop's next pass re-runs `loopx worktree new`"),
+            "{p}"
+        );
+    }
+
+    #[test]
+    fn doctor_prompt_keeps_confirmation_short_and_saves_as_it_goes() {
+        let p = doctor_prompt(&[], true);
+        assert!(
+            p.contains(
+                "plus at most one quick probe (for example `bundle check`, a single spec file)"
+            ),
+            "{p}"
+        );
+        assert!(
+            p.contains("Never run the full suite: the loop re-runs the full checks afterwards."),
+            "{p}"
+        );
+        assert!(!p.contains("full verification commands"), "{p}");
+        assert!(
+            p.contains("Update the SETUP.md draft and the result file after each blocker you fix, not only at the end"),
+            "{p}"
+        );
+    }
+
+    #[test]
+    fn doctor_prompt_allows_only_core_formulae_and_no_copied_keys() {
+        let p = doctor_prompt(&[], true);
+        assert!(p.contains("only core formulae"), "{p}");
+        assert!(p.contains("no `brew tap`"), "{p}");
+        assert!(!p.contains("copied keys"), "{p}");
+    }
+
+    #[test]
     fn doctor_prompt_asks_to_generate_knowledge_when_missing() {
         let p = doctor_prompt(&[], false);
         assert!(p.contains("no SETUP.md yet"));
