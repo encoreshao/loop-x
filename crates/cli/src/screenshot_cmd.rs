@@ -225,7 +225,8 @@ pub fn run(argv: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("loopx screenshot: {}", e.lines().next().unwrap_or("failed"));
+            // In full: a dev-server error ends with its last output lines.
+            eprintln!("loopx screenshot: {e}");
             ExitCode::from(1)
         }
     }

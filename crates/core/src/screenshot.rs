@@ -16,10 +16,12 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Dev-server commands the capture may start: the command must equal one of
@@ -66,6 +68,49 @@ pub fn check_serve_command(cmd: &str) -> Result<ServeCommand, String> {
 /// group, so a `yarn dev` that forked node workers leaves nothing behind.
 pub struct DevServer {
     child: Child,
+    tail: OutputTail,
+}
+
+/// How many of the dev server's last output lines an error quotes.
+const TAIL_LINES: usize = 20;
+
+/// The last [`TAIL_LINES`] lines the dev server wrote to stdout or stderr.
+/// Reader threads drain both pipes as the server writes, so a chatty server
+/// never blocks on a full pipe.
+#[derive(Clone, Default)]
+struct OutputTail(Arc<Mutex<VecDeque<String>>>);
+
+impl OutputTail {
+    fn drain(&self, pipe: impl Read + Send + 'static) {
+        let lines = self.0.clone();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(pipe);
+            let mut line = Vec::new();
+            // Byte lines, so output that is not UTF-8 can't stop the drain.
+            while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+                let text = String::from_utf8_lossy(&line);
+                let text: String = text.trim_end().chars().take(500).collect();
+                let mut q = lines.lock().unwrap_or_else(|e| e.into_inner());
+                if q.len() == TAIL_LINES {
+                    q.pop_front();
+                }
+                q.push_back(text);
+                line.clear();
+            }
+        });
+    }
+
+    /// `msg`, followed by the output lines seen so far (if any).
+    fn quote(&self, msg: String) -> String {
+        // Let the readers catch up with what the server wrote just before.
+        std::thread::sleep(Duration::from_millis(100));
+        let q = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if q.is_empty() {
+            return msg;
+        }
+        let lines: Vec<&str> = q.iter().map(String::as_str).collect();
+        format!("{msg}; its last output:\n{}", lines.join("\n"))
+    }
 }
 
 impl DevServer {
@@ -79,18 +124,25 @@ impl DevServer {
         timeout: Duration,
     ) -> Result<DevServer, String> {
         let (prog, args) = argv.split_first().ok_or("empty command")?;
-        let child = Command::new(prog)
+        let mut child = Command::new(prog)
             .args(args)
             .envs(env.iter().map(|(k, v)| (k, v)))
             .current_dir(cwd)
             .process_group(0)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("could not start {prog}: {e}"))?;
+        let tail = OutputTail::default();
+        if let Some(out) = child.stdout.take() {
+            tail.drain(out);
+        }
+        if let Some(err) = child.stderr.take() {
+            tail.drain(err);
+        }
         // From here Drop owns cleanup, including on the error returns below.
-        let mut server = DevServer { child };
+        let mut server = DevServer { child, tail };
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(5))
             .build();
@@ -98,9 +150,9 @@ impl DevServer {
         loop {
             match server.child.try_wait() {
                 Ok(Some(status)) => {
-                    return Err(format!(
+                    return Err(server.tail.quote(format!(
                         "dev server exited early ({status}) before {url} answered"
-                    ))
+                    )))
                 }
                 Ok(None) => {}
                 Err(e) => return Err(format!("could not poll the dev server: {e}")),
@@ -110,10 +162,10 @@ impl DevServer {
                 Err(ureq::Error::Transport(_)) => {}
             }
             if Instant::now() >= deadline {
-                return Err(format!(
+                return Err(server.tail.quote(format!(
                     "dev server did not answer {url} within {}s",
                     timeout.as_secs()
-                ));
+                )));
             }
             std::thread::sleep(Duration::from_millis(250));
         }
@@ -821,6 +873,52 @@ mod tests {
         assert!(err.contains("did not answer"), "{err}");
         assert_gone(&pids, 2);
     }
+    #[test]
+    fn dev_server_errors_carry_its_last_output_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("http://127.0.0.1:{}/", free_port());
+        let script =
+            "i=1; while [ $i -le 30 ]; do echo \"boom-line-$i\" >&2; i=$((i+1)); done; exit 3";
+        let argv = vec!["sh".to_string(), "-c".into(), script.into()];
+        let err = DevServer::start(&argv, &[], dir.path(), &url, Duration::from_secs(20))
+            .err()
+            .unwrap();
+        assert!(err.contains("exited"), "{err}");
+        assert!(err.contains("boom-line-30"), "{err}");
+        assert!(err.contains("boom-line-11"), "{err}");
+        assert!(!err.contains("boom-line-10\n"), "{err}");
+
+        let script = "echo 'Error: cannot find module next' >&2; sleep 30";
+        let argv = vec!["sh".to_string(), "-c".into(), script.into()];
+        let err = DevServer::start(&argv, &[], dir.path(), &url, Duration::from_secs(1))
+            .err()
+            .unwrap();
+        assert!(err.contains("did not answer"), "{err}");
+        assert!(err.contains("cannot find module next"), "{err}");
+    }
+
+    #[test]
+    fn a_chatty_dev_server_never_blocks_on_a_full_pipe() {
+        // 1 MB of output before it listens: an undrained pipe would stall it.
+        let port = free_port();
+        let dir = tempfile::tempdir().unwrap();
+        let script = format!(
+            "import http.server,sys\n\
+             sys.stderr.write('x'*1000000+'\\n'); sys.stderr.flush()\n\
+             sys.stdout.write('y'*1000000+'\\n'); sys.stdout.flush()\n\
+             http.server.HTTPServer(('127.0.0.1',{port}),http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+        );
+        let argv = vec!["python3".to_string(), "-c".to_string(), script];
+        let server = DevServer::start(
+            &argv,
+            &[],
+            dir.path(),
+            &format!("http://127.0.0.1:{port}/"),
+            Duration::from_secs(20),
+        );
+        assert!(server.is_ok(), "{:?}", server.err());
+    }
+
     fn mock(pattern: &str) -> MockRule {
         MockRule {
             url_pattern: pattern.into(),
