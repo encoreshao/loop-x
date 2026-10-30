@@ -952,6 +952,7 @@ impl MrReview {
             .cloned()
             .unwrap_or(Value::Null);
         let meta = json!({
+            "label": format!("{title} ({reference})"),
             "title": title, "ref": reference,
             "author": author.get("name").map_or(String::new(), py_str),
             "author_username": author.get("username").map_or(String::new(), py_str),
@@ -2137,7 +2138,7 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         let items = plugin_with(conn).discover(&c()).unwrap();
         assert_eq!(
             items[0].meta,
-            json!({"title": "Fix login", "ref": "web/app!7", "author": "Ana Lee",
+            json!({"label": "Fix login (web/app!7)", "title": "Fix login", "ref": "web/app!7", "author": "Ana Lee",
                    "author_username": "ana", "created_at": "2026-10-01T09:00:00Z"})
         );
         assert!(items[0].payload.get("meta").is_none());

@@ -41,7 +41,8 @@ pub struct WorkItem {
     pub force: bool,
     /// A small JSON object describing the item for the dashboard (title,
     /// author, ...); copied into the item's `last-run.json` outcome. Never
-    /// shown to the model.
+    /// shown to the model. Its `label`, if any, names the outcome in History
+    /// when the plugin's outcome has no `data.label`.
     pub meta: Value,
 }
 
@@ -1062,6 +1063,11 @@ pub fn run_plugin(
         if item.meta.is_object() {
             if let Value::Object(data) = &mut outcome.data {
                 data.entry("meta").or_insert_with(|| item.meta.clone());
+                // The item's name for History, even when the plugin set none
+                // (a failed item's outcome is built here, not by the plugin).
+                if let Some(label) = item.meta.get("label").filter(|l| l.is_string()) {
+                    data.entry("label").or_insert_with(|| label.clone());
+                }
             }
         }
         if matches!(outcome.status, Status::Done | Status::Skipped) {
@@ -1461,6 +1467,43 @@ retry: {enabled: true, max_attempts: 2}
         assert_eq!(outcomes[1]["status"], "failed");
         assert_eq!(outcomes[1]["meta"], meta);
         assert!(outcomes[2].get("meta").is_none());
+    }
+
+    #[test]
+    fn a_meta_label_names_the_outcome_in_history_for_every_status() {
+        let w = world();
+        let meta = |l: &str| json!({"label": l});
+        let p = Arc::new(
+            Demo::new(
+                vec![
+                    item("mr:1").with_meta(meta("Fix login (web/app!1)")),
+                    item("mr:2").with_meta(meta("Speed up poll (web/app!2)")),
+                ],
+                &[OK],
+            )
+            .with_answers(vec![Ok(OK.into()), Err("boom".into()), Err("boom".into())]),
+        );
+        run(&w, &p, "run_1");
+        let last = last_run(&w);
+        assert_eq!(last["outcomes"][0]["label"], "Fix login (web/app!1)");
+        assert_eq!(last["outcomes"][1]["status"], "failed");
+        assert_eq!(last["outcomes"][1]["label"], "Speed up poll (web/app!2)");
+        let hist = std::fs::read_dir(w.dir.path().join("history"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let text = std::fs::read_to_string(hist).unwrap();
+        assert!(
+            text.contains("- [done] Fix login (web/app!1): ok"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- [failed] Speed up poll (web/app!2):"),
+            "{text}"
+        );
+        assert!(!text.contains("mr:1") && !text.contains("mr:2"), "{text}");
     }
 
     #[test]

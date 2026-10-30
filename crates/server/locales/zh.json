@@ -1242,5 +1242,6 @@
   "Waiting for next run": "等待下次运行",
   "Skipped by you": "已由你跳过",
   "Draft · not reviewed": "草稿 · 不评审",
-  "Your MR · not reviewed": "你的 MR · 不评审"
+  "Your MR · not reviewed": "你的 MR · 不评审",
+  "Loading your merge requests": "正在加载你的合并请求"
 }

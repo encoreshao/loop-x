@@ -1242,5 +1242,6 @@
   "Waiting for next run": "次回の実行待ち",
   "Skipped by you": "スキップ設定済み",
   "Draft · not reviewed": "ドラフト · レビュー対象外",
-  "Your MR · not reviewed": "自分の MR · レビュー対象外"
+  "Your MR · not reviewed": "自分の MR · レビュー対象外",
+  "Loading your merge requests": "マージリクエストを読み込み中"
 }

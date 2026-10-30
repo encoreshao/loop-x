@@ -1242,5 +1242,6 @@
   "Waiting for next run": "En attente de la prochaine exécution",
   "Skipped by you": "Ignorée par vous",
   "Draft · not reviewed": "Brouillon · non relue",
-  "Your MR · not reviewed": "Votre MR · non relue"
+  "Your MR · not reviewed": "Votre MR · non relue",
+  "Loading your merge requests": "Chargement de vos merge requests"
 }

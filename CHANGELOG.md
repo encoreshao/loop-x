@@ -12,13 +12,15 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Added
-- MR Review: a new Merge requests tab lists your open MRs live from GitLab, split into "Assigned to you" and "Created by you", each with its title, reference, author, age and review state. Per MR you can turn Auto review off (the loop skips it) or press Review now to review it right away, even if its current commit was already reviewed.
+- MR Review: a new Merge requests tab lists your open MRs live from GitLab, split into "Assigned to you" and "Created by you", each with its title, reference, author, age and review state. Per MR you can turn Auto review off (the loop skips it) or press Review now to review it right away, even if its current commit was already reviewed. The tab opens at once with a loading spinner and fills in when GitLab answers, like GitLab → Tasks.
 
 ### Changed
 - MR Review now reviews MRs assigned to you as an assignee as well as a reviewer (never your own), and never reviews a draft, even on GitLab versions that ignore the `draft=no` filter.
 - MR Review: reviews are structured and goal-based. Each inline note leads with its severity and area (correctness, security, performance, data & migrations, …) and a short title, then the problem and a suggested fix; the overall note gives a verdict, a "What this MR does" list, a risk table by area and level, and an index of the findings.
 - MR Review → Live → Latest results: each MR shows its title, `group/project!iid`, author, age and a Reviewed/Skipped/Failed pill, plus the verdict and finding counts.
 - The sidebar shows MR Review with a merge-request icon.
+- MR Review → History names each MR by its title and reference (e.g. "Add partial index (web/app!42)") for reviewed, skipped and failed MRs alike, instead of an internal key.
+- MR Review → Merge requests: Run now and Review now highlight clearly on hover and keyboard focus; Review now is accent-tinted like GitLab's per-issue run button.
 
 ### Fixed
 - Agents: a GitLab loop run started outside the queue (launchd or Run now) now shows under Running with its current step, matching the topbar pill, instead of "Nothing is running". A run whose process has died no longer shows as running in the pill or on the page.

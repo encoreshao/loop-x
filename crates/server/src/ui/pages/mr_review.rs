@@ -20,6 +20,7 @@ pub const LOOP: &str = "mr-review-loop";
 const BACK: &str = "/loops/mr-review-loop?view=mrs";
 
 pub fn register(r: &mut Registry) {
+    r.get("/loops/mr-review-loop/mrs/fragment", mrs_fragment);
     r.post("/loops/mr-review-loop/mrs/auto", set_auto);
     r.post("/loops/mr-review-loop/mrs/review", review_now);
 }
@@ -177,7 +178,7 @@ fn actions_html(ctx: &UiCtx, mr: &MyMr, state: ReviewState) -> String {
     );
     let review = format!(
         "<form method='post' action='/loops/mr-review-loop/mrs/review' class='daemon-action-form'>{csrf}{}\
-<button type='submit' class='btn btn-neutral'>{}{}</button></form>",
+<button type='submit' class='btn btn-tonal'>{}{}</button></form>",
         hidden_mr(mr),
         icon("bolt"),
         h(&ctx.t("Review now"))
@@ -273,7 +274,7 @@ pub fn mrs_html(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>) -> String 
     }
     let run_now = run_now_action_html(ctx, "/loops/mr-review-loop/run-now", &ctx.csrf_input(), None);
     format!(
-        "{errors}<div class='grid'>{}{}</div>",
+        "{errors}<div class='grid mr-view'>{}{}</div>",
         mr_card(
             &ctx.t("Assigned to you"),
             &ctx.t("Open merge requests where you are the assignee or a reviewer. These are the only ones the loop reviews; drafts are always skipped."),
@@ -291,8 +292,21 @@ pub fn mrs_html(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>) -> String 
     )
 }
 
+/// The view paints at once with a spinner; the shell's `data-lazy-load`
+/// handler then fetches the list (a few GitLab calls per account) from
+/// [`mrs_fragment`], as GitLab → Tasks does.
 pub fn mrs_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
-    format!("{}{}", flash_html(flash, ok), mrs_html(ctx, list_mrs(ctx)))
+    format!(
+        "{}<div data-lazy-load='/loops/mr-review-loop/mrs/fragment'>\
+<div class=\"lazy-loading\"><div class=\"md-spinner\"></div><p class=\"loading-text\">{}\
+<span class=\"loading-dots\"><span>.</span><span>.</span><span>.</span></span></p></div></div>",
+        flash_html(flash, ok),
+        h(&ctx.t("Loading your merge requests"))
+    )
+}
+
+fn mrs_fragment(ctx: &UiCtx) -> UiResponse {
+    UiResponse::html(mrs_html(ctx, list_mrs(ctx)))
 }
 
 // ---- POSTs ------------------------------------------------------------------------------------
@@ -421,8 +435,28 @@ mod tests {
         assert!(assigned.contains("class='switch is-off'"), "skipped MR shows Auto review off");
         assert!(!assigned.contains("value='work:9!3'"), "no controls on a draft");
         assert!(assigned.contains("/loops/mr-review-loop/run-now"));
+        assert!(html.contains("<div class='grid mr-view'>"), "hover styles are scoped to this view");
+        assert!(assigned.contains("class='btn btn-tonal'"), "Review now is accent-tinted like GitLab's run button");
         assert!(created.contains("MR &lt;4&gt;") && created.contains("Your MR \u{b7} not reviewed"));
         assert!(!created.contains("Review now"));
+    }
+
+    #[test]
+    fn the_view_paints_a_spinner_and_loads_the_list_lazily() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let req = UiRequest::get("/loops/mr-review-loop?view=mrs");
+        let body = mrs_body(&UiCtx::new(&st, &req), Some("Saved"), true);
+        assert!(body.contains("data-lazy-load='/loops/mr-review-loop/mrs/fragment'"), "{body}");
+        assert!(body.contains("class=\"md-spinner\"") && body.contains("Loading your merge requests"));
+        assert!(body.contains("Saved"), "the flash shows at once");
+        assert!(!body.contains("Assigned to you"), "no GitLab call while painting");
+        let frag = st
+            .registry
+            .dispatch(&st, &UiRequest::get("/loops/mr-review-loop/mrs/fragment"))
+            .unwrap();
+        assert_eq!(frag.status, 200);
+        assert!(!frag.body_text().contains("<html"), "a fragment, not a page");
     }
 
     #[test]
