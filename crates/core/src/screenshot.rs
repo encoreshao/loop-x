@@ -351,6 +351,34 @@ const QUIET_ARGS: &[&str] = &[
     "--password-store=basic",
 ];
 
+/// Runs in every document and dedicated worker before the page's own code.
+/// Fetch interception never sees WebSocket handshakes, service workers,
+/// shared workers or popups, so those ways out are shut here: a WebSocket to
+/// another origin throws, and the other three are refused outright.
+const GUARD_JS: &str = r#"(() => {
+  const g = globalThis, origin = ORIGIN;
+  const refuse = () => { throw new DOMException('blocked by loopx screenshot', 'SecurityError'); };
+  const same = (u) => {
+    try {
+      const x = new URL(String(u), g.location.href);
+      const scheme = ({'ws:': 'http:', 'wss:': 'https:'})[x.protocol] || x.protocol;
+      return scheme + '//' + x.host === origin;
+    } catch (_) { return false; }
+  };
+  if (g.WebSocket) g.WebSocket = new Proxy(g.WebSocket, {
+    construct(t, a, n) { if (!same(a[0])) refuse(); return Reflect.construct(t, a, n); },
+  });
+  if (g.SharedWorker) g.SharedWorker = new Proxy(g.SharedWorker, { construct: refuse });
+  if (g.navigator && g.navigator.serviceWorker) {
+    g.navigator.serviceWorker.register = () => Promise.reject(new DOMException('blocked by loopx screenshot', 'SecurityError'));
+  }
+  if (g.document && typeof g.open === 'function') g.open = () => null;
+})();"#;
+
+fn guard_js(origin: &str) -> String {
+    GUARD_JS.replace("ORIGIN", &json!(origin).to_string())
+}
+
 fn browser_error(e: BrowserError) -> String {
     match e {
         BrowserError::Unavailable(m) => m,
@@ -395,6 +423,10 @@ fn shoot(exe: &Path, profile: &Path, origin: &str, opts: &ShotOptions) -> Result
     let result = shot.run(opts);
     shot.chrome.close();
     result
+}
+
+fn auto_attach() -> Value {
+    json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true})
 }
 
 impl Shot<'_> {
@@ -449,7 +481,14 @@ impl Shot<'_> {
                 json!({"source": source}),
             )?;
         }
+        self.send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({"source": guard_js(self.origin)}),
+        )?;
+        self.send("Network.setBypassServiceWorker", json!({"bypass": true}))?;
         self.send("Fetch.enable", json!({"patterns": [{"urlPattern": "*"}]}))?;
+        // Workers start paused so the guard is in place before their code runs.
+        self.send("Target.setAutoAttach", auto_attach())?;
         self.lock_cdp().events.clear();
         // `Page.navigate` only answers once the paused document request is
         // let through, so navigate from the page and answer requests meanwhile.
@@ -524,17 +563,38 @@ impl Shot<'_> {
         let p = &event["params"];
         let request_id = || p["requestId"].as_str().unwrap_or_default().to_string();
         match event["method"].as_str().unwrap_or_default() {
-            "Fetch.requestPaused" => {
-                self.last_network = Instant::now();
-                self.answer(p);
+            "Fetch.requestPaused" => self.answer(&self.session(event), p),
+            "Target.attachedToTarget" => {
+                let child = CdpPage::new(
+                    self.chrome.cdp.clone(),
+                    p["sessionId"].as_str().unwrap_or_default().to_string(),
+                );
+                // Failures here only mean the target already went away.
+                if p["targetInfo"]["type"] == json!("worker") {
+                    let _ = child.send(
+                        "Runtime.evaluate",
+                        json!({"expression": guard_js(self.origin)}),
+                    );
+                    let _ = child.send("Target.setAutoAttach", auto_attach());
+                    let _ = child.send("Network.enable", json!({}));
+                } else {
+                    let _ = child.send("Fetch.enable", json!({"patterns": [{"urlPattern": "*"}]}));
+                }
+                let _ = child.send("Runtime.runIfWaitingForDebugger", json!({}));
             }
+            // Blocked requests are not activity: an EventSource that keeps
+            // reconnecting to a blocked origin must not hold the shot back.
             "Network.requestWillBeSent" => {
-                self.last_network = Instant::now();
-                self.inflight.insert(request_id());
+                let url = p["request"]["url"].as_str().unwrap_or_default();
+                if decide(url, self.origin, self.mocks) != Decision::Block {
+                    self.last_network = Instant::now();
+                    self.inflight.insert(request_id());
+                }
             }
             "Network.loadingFinished" | "Network.loadingFailed" => {
-                self.last_network = Instant::now();
-                self.inflight.remove(&request_id());
+                if self.inflight.remove(&request_id()) {
+                    self.last_network = Instant::now();
+                }
             }
             "Page.frameNavigated" if p["frame"]["parentId"].is_null() => {
                 if let Some(url) = p["frame"]["unreachableUrl"].as_str() {
@@ -551,14 +611,23 @@ impl Shot<'_> {
         Ok(())
     }
 
-    /// Answers one paused request. A request the page already dropped makes
-    /// Chrome refuse the answer, which is fine to ignore.
-    fn answer(&self, p: &Value) {
+    /// The session an event came from, to answer it on.
+    fn session(&self, event: &Value) -> CdpPage {
+        CdpPage::new(
+            self.chrome.cdp.clone(),
+            event["sessionId"].as_str().unwrap_or_default().to_string(),
+        )
+    }
+
+    /// Answers one paused request on the session that paused it. A request
+    /// the page already dropped makes Chrome refuse the answer, which is fine
+    /// to ignore.
+    fn answer(&self, on: &CdpPage, p: &Value) {
         let id = &p["requestId"];
         let url = p["request"]["url"].as_str().unwrap_or_default();
         let _ = match decide(url, self.origin, self.mocks) {
-            Decision::Continue => self.send("Fetch.continueRequest", json!({"requestId": id})),
-            Decision::Block => self.send(
+            Decision::Continue => on.send("Fetch.continueRequest", json!({"requestId": id})),
+            Decision::Block => on.send(
                 "Fetch.failRequest",
                 json!({"requestId": id, "errorReason": "BlockedByClient"}),
             ),
@@ -587,7 +656,7 @@ impl Shot<'_> {
                     headers.push(json!({"name": "Content-Type", "value": "application/json"}));
                     (mock.status, B64.encode(mock.json.to_string()))
                 };
-                self.send(
+                on.send(
                     "Fetch.fulfillRequest",
                     json!({"requestId": id, "responseCode": status, "responseHeaders": headers, "body": body}),
                 )
@@ -596,7 +665,6 @@ impl Shot<'_> {
     }
 
     fn screenshot(&mut self, opts: &ShotOptions) -> Result<Vec<u8>, String> {
-        let (_, vh) = opts.viewport;
         let params = if let Some(css) = &opts.selector {
             let script = format!(
                 "(() => {{ const b = ({})(); return b && {{x: b.x + scrollX, y: b.y + scrollY, \
@@ -610,7 +678,8 @@ impl Shot<'_> {
             let n = |k: &str| b[k].as_f64().unwrap_or(0.0);
             json!({
                 "format": "png",
-                "captureBeyondViewport": n("height") > vh as f64,
+                // Page coordinates, so an element below the fold is rendered too.
+                "captureBeyondViewport": true,
                 "clip": {"x": n("x"), "y": n("y"), "width": n("width").ceil(),
                          "height": n("height").ceil(), "scale": 1},
             })
@@ -927,9 +996,16 @@ mod tests {
         // origins must never be sent.
         let page = r#"<!doctype html><html><body style="margin:0;font:16px sans-serif">
 <h1>Account</h1><span id="who">loading</span><div style="height:1500px"></div>
+<div id="below" style="width:200px;height:100px;background:linear-gradient(90deg,red,blue)"></div>
+<div id="blank" style="width:200px;height:100px;background:#fff"></div>
 <script>
 fetch('https://www.google-analytics.com/collect').catch(() => {});
 fetch('http://127.0.0.1:OTHER/leak').catch(() => {});
+try { new WebSocket('ws://127.0.0.1:OTHER/ws'); } catch (_) {}
+try { new EventSource('http://127.0.0.1:OTHER/sse'); } catch (_) {}
+try { new Worker('worker.js'); } catch (_) {}
+try { window.open('http://127.0.0.1:OTHER/popup'); } catch (_) {}
+try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (_) {}
 fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localStorage.getItem('token')}})
   .then((r) => r.json())
   .then((j) => {
@@ -944,6 +1020,13 @@ fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localSt
             page.replace("OTHER", &other_port.to_string()),
         )
         .unwrap();
+        for (file, path) in [("worker.js", "worker"), ("sw.js", "sw")] {
+            let js = format!(
+                "fetch('http://127.0.0.1:{other_port}/{path}').catch(() => {{}});\n\
+                 try {{ new WebSocket('ws://127.0.0.1:{other_port}/{path}-ws'); }} catch (_) {{}}"
+            );
+            std::fs::write(site.path().join(file), js).unwrap();
+        }
         let (mut server, port) = http_server(site.path(), &logs.path().join("site.log"));
         let out = tempfile::tempdir().unwrap();
         let profiles = out.path().join("profiles");
@@ -975,6 +1058,13 @@ fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localSt
         let mut full = base("full.png");
         full.full_page = true;
         let r2 = capture(&full);
+        // Below the fold: a gradient must not come out like a blank box.
+        let mut below = base("below.png");
+        below.selector = Some("#below".into());
+        let r4 = capture(&below);
+        let mut blank = base("blank.png");
+        blank.selector = Some("#blank".into());
+        let r5 = capture(&blank);
         // Nothing answers there: navigation fails and the profile still goes.
         let unreachable = ShotOptions {
             url: format!("http://127.0.0.1:{}/", free_port()),
@@ -994,6 +1084,10 @@ fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localSt
         let (w, h) = png_size(&full.out);
         assert!(w == 1280 && h >= 1500, "{w}x{h}");
         assert!(r3.is_err() && !unreachable.out.exists(), "{r3:?}");
+        r4.unwrap();
+        r5.unwrap();
+        assert_eq!(png_size(&below.out), (200, 100));
+        assert_eq!(png_size(&blank.out), (200, 100));
         assert_eq!(std::fs::read_dir(&profiles).unwrap().count(), 0);
         let read = |f: &str| std::fs::read_to_string(logs.path().join(f)).unwrap();
         assert!(
@@ -1001,10 +1095,30 @@ fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localSt
             "{}",
             read("site.log")
         );
-        assert!(
-            !read("other.log").contains("/leak"),
-            "{}",
-            read("other.log")
-        );
+        // Every way out to the unmocked origin, and the below-the-fold shot,
+        // are checked together so one failure doesn't hide another.
+        let mut problems: Vec<String> = [
+            "/leak",
+            "/ws",
+            "/sse",
+            "/worker",
+            "/worker-ws",
+            "/popup",
+            "/sw",
+            "/sw-ws",
+        ]
+        .iter()
+        .filter(|path| read("other.log").contains(&format!("GET {path} ")))
+        .map(|path| format!("{path} reached the unmocked origin"))
+        .collect();
+        let size = |p: &Path| std::fs::metadata(p).unwrap().len();
+        if size(&below.out) <= 2 * size(&blank.out) {
+            problems.push(format!(
+                "below the fold came out blank: {} vs {} bytes",
+                size(&below.out),
+                size(&blank.out)
+            ));
+        }
+        assert!(problems.is_empty(), "{problems:#?}");
     }
 }
