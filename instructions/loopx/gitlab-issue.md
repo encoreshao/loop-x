@@ -290,22 +290,46 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
 
 Only for a fix that visibly changes the UI, in a run where the harness gate is ON (the images travel in the handoff). Skip it for `use_worktree: false` projects (no scratch files may be created in that checkout), and skip it when nothing visible changes. Screenshots are a bonus: they never block or fail a fix. A screenshot step that is denied or fails is never a reason to stop or escalate: say what happened in `screenshots_note` and carry on with the issue (the Failure policy's stop rule does not apply here). Below, `<screens>` is `<loop_dir>/outputs/screens/<alias>-<issue_iid>`.
 
-1. **Plan the shots.** One pair per distinct visual change, at most 6. A whole page (`--full-page` / `full: true`) for a layout or page-level request; just the element (`--selector`, or a shot of that element) for a single control. Start from this project's `screenshot-recipe` lessons in `loopx memory-store list <alias>`.
+1. **Plan the shots.** One pair per distinct visual change, at most 6. A whole page (`--full-page`, or the window resize in path A) for a layout or page-level request; just the element (`--selector`, or a shot of that element) for a single control. Start from this project's `screenshot-recipe` lessons in `loopx memory-store list <alias>`.
 2. **Choose a path.**
-   - **Path A — the project has Capybara and selenium-webdriver, and its `.gitignore` ignores `tmp/`** (read it first; if `tmp/` is not ignored, don't use path A). Write a throwaway spec at `tmp/loopx_screenshots/issue_<issue_iid>_spec.rb` in the worktree. Leave it there afterwards (you cannot delete files; the next run overwrites it) and never stage it. In the spec: pick the installed Chrome as `chrome = ENV["LOOPX_CHROME"].presence || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"` and `skip` unless `File.executable?(chrome)`; register the driver with that binary set explicitly (`driven_by :selenium, using: :headless_chrome do |options| options.binary = chrome end`), so Selenium never fetches a browser of its own; records from the project's factories or fixtures, sign-in through the project's own test sign-in helper, records rolled back or deleted in `after`, and `page.save_screenshot("<screens>/<n>-before.png", full: true)` (or `-after`). Run it with `RAILS_ENV=test bundle exec rspec tmp/loopx_screenshots/issue_<issue_iid>_spec.rb`.
+   - **Path A — the project has Capybara and selenium-webdriver.** Write a throwaway spec at `<screens>/issue_<issue_iid>_spec.rb` (never inside the worktree), `cd <worktree>`, run it with `RAILS_ENV=test bundle exec rspec <screens>/issue_<issue_iid>_spec.rb`, then `cd <loop_dir>`. Shape:
+     ```ruby
+     require "rails_helper"
+     CHROME = ENV["LOOPX_CHROME"].presence || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+     RSpec.describe "loopx screenshots", type: :system do
+       before do
+         skip "no Chrome" unless File.executable?(CHROME)
+         # The binary is set explicitly, so Selenium never fetches a browser.
+         driven_by :selenium, using: :headless_chrome, screen_size: [1280, 800] do |options|
+           options.binary = CHROME
+         end
+       end
+       def take_failed_screenshot; end # no failure screenshots under tmp/
+       it "shoots" do
+         # records from the project's factories or fixtures; sign in with its test sign-in helper
+         visit "/the/page"
+         # whole page: grow the window to the document first
+         page.current_window.resize_to(1280, page.evaluate_script("document.documentElement.scrollHeight"))
+         page.save_screenshot("<screens>/1-before.png")
+         # one element instead:
+         find("<css>").native.save_screenshot("<screens>/2-before.png")
+       end
+     end
+     ```
+     Always pass absolute `<screens>` paths. Records not rolled back by the project's transactional setup are deleted in an `after` block.
    - **Path B — otherwise.** Write a mock file and a session file in `<screens>` and capture with the dev server:
      ```
      loopx screenshot --serve "yarn dev" --cwd <worktree> --url http://localhost:<port>/<page> --out <screens>/<n>-before.png --mock <screens>/mocks.json --session <screens>/session.json [--selector CSS] [--full-page] [--wait-for CSS]
      ```
-     `--serve` takes `yarn dev`, `pnpm dev`, `npm run dev`, `next dev` or `RAILS_ENV=test bin/rails server`, and refuses to start one when the URL already answers. The mock file is a JSON array of `{"url_pattern": "...", "status": 200, "json": {...}}`; mock every backend call the page makes (unmocked cross-origin requests are blocked). The session file is `{"cookies": [<CDP Network.setCookie params>], "local_storage": {"key": "value"}}`; fake sign-in with it, never with a real token.
+     Give the Bash tool `timeout: 300000` for every `loopx screenshot` call: it can use its whole `--timeout-s` budget (default 90 s, shared by the dev server start and the capture) plus teardown. `--url` must be on `localhost`, `127.0.0.1` or `[::1]`. `--serve` takes `yarn dev`, `pnpm dev`, `npm run dev`, `next dev` or `RAILS_ENV=test bin/rails server`, and refuses to start one when the URL already answers. The mock file is a JSON array of `{"url_pattern": "...", "status": 200, "json": {...}}`; mock every backend call the page makes (unmocked cross-origin requests are blocked). The session file is `{"cookies": [<CDP Network.setCookie params>], "local_storage": {"key": "value"}}`; fake sign-in with it, never with a real token.
 3. **Never write to the development database.** Treat it as read-only. Fake data goes only in the test database (path A) or in mocks (path B), and every test record you create is cleaned up.
-4. **Use only the browser already on this Mac.** Never install or download one: no `npx playwright install`, no Chrome for Testing, no `brew install`. For path A, always set the Chrome binary explicitly as above: without it, a missing Chrome makes Selenium download Chrome for Testing. Chrome absent → skip screenshots and say so in `screenshots_note`. Selenium may fetch the matching **chromedriver** once into `~/.cache/selenium`; the user allowed that, because it is a driver, not a browser. No usable browser → skip screenshots and say so in `screenshots_note`.
-5. **"Before" first, before editing any code**, into `<screens>/<n>-before.png`. If that file already exists (a retry, a later run), reuse it. Never reset or check out code to get "before" back: if there is no before image and the branch has already diverged from `<target_branch>`, take the after shot only and leave `before` out of the pair.
-6. **Build assets before each capture** when the project has a build (`yarn build*`, `npm run build*`, `pnpm build*`, `RAILS_ENV=test bin/rails assets:precompile*`).
-7. **"After" last**: after step 8's commit and step 10's bookkeeping, right before writing the handoff, so running out of budget only ever costs the screenshots. Same framing, same file names with `-after`.
+4. **Use only the browser already on this Mac.** Never install or download one: no `npx playwright install`, no Chrome for Testing, no `brew install`. For path A, always set the Chrome binary explicitly as above: without it, a missing Chrome makes Selenium download Chrome for Testing. Selenium may fetch the matching **chromedriver** once into `~/.cache/selenium`; the user allowed that, because it is a driver, not a browser. No usable browser → skip screenshots and say so in `screenshots_note`.
+5. **"Before" first, before editing any code**, into `<screens>/<n>-before.png`. If that file already exists (a retry in the same run), reuse it. Never reset or check out code to get "before" back: if there is no before image and the branch has already diverged from `<target_branch>`, take the after shot only and leave `before` out of the pair.
+6. **Build assets before each capture** when the project has a build (`yarn build*`, `npm run build*`, `pnpm build*`, `RAILS_ENV=test bin/rails assets:precompile*`). Prefer a build that writes to gitignored paths, record its output paths in the recipe, and never commit build output. If the build fails, skip screenshots with a note: never post stale ones.
+7. **"After" last**: after step 8's commit and step 10's bookkeeping, right before writing the handoff, so running out of budget only ever costs the screenshots. Same framing, same file names with `-after`. Step 10 left you in `<loop_dir>`: for path A, `cd <worktree>` to run the spec and `cd <loop_dir>` again afterwards.
 8. **Give up after two failed attempts** to get capture working, and say why in `screenshots_note`. Never escalate over screenshots.
 9. **Look at every image.** Never list one that shows an error page, a stack trace, env values, or anything that looks like real data.
-10. **Keep the checkout clean.** Run `git status` and confirm it shows no screenshot, mock, session or spec files (the spec stays in the ignored `tmp/loopx_screenshots/`); never stage any of them. Images go only to `<screens>` and the handoff directory; never copy them anywhere else (`/tmp`, the worktree, the Desktop). The loop deletes all of them once the merge request is finalized.
+10. **Keep the checkout clean.** Run `git status` in the worktree and confirm it shows no screenshot, mock, session, spec or build-output files; never stage any of them. Images go only to `<screens>` and the handoff directory; never copy them anywhere else (`/tmp`, the worktree, the Desktop). The loop deletes all of them once the merge request is finalized.
 11. **List them in the handoff** as `"screenshots": [{"label": "...", "before": "1-before.png", "after": "1-after.png"}]`, by file name inside `<screens>`, plus an optional `"screenshots_note"`.
 12. **Record the recipe** so the next run starts from it — which path, the build and serve commands, how sign-in is faked, the factories or mock shapes needed, and the gotchas you hit:
     ```

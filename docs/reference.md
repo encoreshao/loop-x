@@ -181,6 +181,7 @@ Expand for the full list
 | `loopx inbox run`, `loopx loopkit` | The Inbox Triage runner; runs a LoopKit plugin |
 | `loopx notify`, `loopx notify-loop` | Posts a message to the configured Slack incoming webhook; routes a loop's notification to its connectors |
 | `loopx worktree new`, `loopx mr open` | Creates (or reuses) an isolated git worktree on a `loop/issue-<iid>` branch; pushes an issue branch and opens its MR — refuses anything not named `loop/issue-*` |
+| `loopx screenshot` | Headless PNG of a page on localhost for an MR's before/after screenshots, using the Chrome already installed on the Mac: optionally starts an allowlisted dev server (`--serve "yarn dev"`), mocks backend calls (`--mock`), fakes a signed-in session (`--session`), and blocks every other origin. One `--timeout-s` budget (default 90 s) covers the server and the capture; a signal stops both and removes the temp Chrome profile |
 | `loopx gitlab`, `loopx secrets`, `loopx auth` | GitLab REST helpers and cache; connector secrets in the Keychain; Google/LinkedIn OAuth sign-ins |
 | `loopx serve`, `loopx chat-tool` | The dashboard backend and the Mac app's API; the one command the dashboard chat assistant may run |
 | `loopx loop`, `loopx events`, `loopx ledger`, `loopx metrics`, `loopx cost`, `loopx risk`, `loopx learning` | Loop definitions (init, validate, audit, eval, ...), the event ledger and the reports built from it |
