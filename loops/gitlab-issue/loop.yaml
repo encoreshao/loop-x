@@ -93,10 +93,10 @@ retry:
 # max_runtime_minutes / max_cost_usd, with at most max_attempts failed repair
 # attempts inside it. Its budget sits on top of stop_conditions, not inside
 # it. Per-issue worst case is therefore about 85 minutes (30 pass 1 + 25
-# doctor + 30 pass 2),
-# still well inside the 12h whole-batch timeout (gitlab-loop's
-# timeout_seconds in config/loops.json.template, which is plain JSON and
-# cannot carry this note itself); raise that timeout if these grow.
+# doctor + 30 pass 2), still well inside the 12h whole-batch timeout
+# (gitlab-loop's timeout_seconds in config/loops.json.template, which is
+# plain JSON and cannot carry this note itself); raise that timeout if these
+# grow.
 setup_doctor:
   enabled: true
   max_attempts: 3

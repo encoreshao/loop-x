@@ -278,8 +278,6 @@ pub fn doctor_allowed_tools(exe: &str, work_dir: &str, handoff: &Path) -> String
             "Bash(nvm install*)",
             "Bash(fnm install*)",
             "Bash(corepack enable*)",
-            "Bash(gem install bundler:*)",
-            "Bash(gem install bundler -v*)",
             "Bash(brew install*)",
             "Bash(brew services start*)",
             "Bash(createuser*)",
@@ -320,6 +318,11 @@ pub fn doctor_disallowed_tools(exe: &str) -> String {
         "createuser --host*",
         "createdb -h*",
         "createdb --host*",
+        "createuser *-h*",
+        "createuser *--host*",
+        "createdb *-h*",
+        "createdb *--host*",
+        "brew install */*",
         "loopx gitlab*",
         "loopx notify*",
         "loopx mr*",
@@ -343,7 +346,9 @@ pub fn doctor_disallowed_tools(exe: &str) -> String {
         "Read(~/.config/gh/**)",
         "Read(~/.docker/config.json)",
         "Read(~/.claude*/**)",
-        "Read(~/.loopx/**)",
+        // Top-level machine config only: worktrees live under ~/.loopx too.
+        "Read(~/.loopx/*.json)",
+        "Read(~/.loopx/*.yaml)",
     ] {
         if pat.contains('(') {
             parts.push(pat.to_string());
@@ -581,9 +586,31 @@ mod tests {
             "Read(~/.config/gh/**)",
             "Read(~/.docker/config.json)",
             "Read(~/.claude*/**)",
-            "Read(~/.loopx/**)",
+            "Read(~/.loopx/*.json)",
+            "Read(~/.loopx/*.yaml)",
         ] {
             assert!(has(&denied, want), "{want} missing");
+        }
+        assert!(!has(&denied, "Read(~/.loopx/**)"), "{denied}");
+    }
+
+    #[test]
+    fn denylist_leaves_worktrees_under_the_loopx_home_readable() {
+        // The default worktree_root is ~/.loopx/worktrees.
+        let file = "~/.loopx/worktrees/web-issue-7/Gemfile";
+        let denied = doctor_disallowed_tools("/bin/loopx");
+        for pat in denied.split(' ') {
+            let Some(glob) = pat.strip_prefix("Read(").and_then(|p| p.strip_suffix(')')) else {
+                continue;
+            };
+            let Some(dir) = glob.strip_suffix("/**") else {
+                continue;
+            };
+            let literal = dir.split('*').next().unwrap_or(dir);
+            assert!(
+                !(literal.starts_with("~/") && file.starts_with(literal)),
+                "{pat} hides the worktree {file}"
+            );
         }
     }
 
@@ -595,18 +622,22 @@ mod tests {
             "Bash(createuser --host*)",
             "Bash(createdb -h*)",
             "Bash(createdb --host*)",
+            "Bash(createdb *-h*)",
+            "Bash(createdb *--host*)",
+            "Bash(createuser *-h*)",
+            "Bash(createuser *--host*)",
             "Bash(brew tap*)",
+            "Bash(brew install */*)",
         ] {
             assert!(has(&denied, want), "{want} missing");
         }
     }
 
     #[test]
-    fn only_bundler_itself_may_be_gem_installed() {
+    fn no_gem_may_be_installed_directly() {
+        // A prefix rule cannot pin one gem; Bundler installs its own version.
         let allowed = doctor_allowed_tools("/bin/loopx", "/wt/x", Path::new("/r/h/x-1.json"));
-        assert!(has(&allowed, "Bash(gem install bundler:*)"), "{allowed}");
-        assert!(has(&allowed, "Bash(gem install bundler -v*)"), "{allowed}");
-        assert!(!has(&allowed, "Bash(gem install bundler*)"), "{allowed}");
+        assert!(!allowed.contains("gem install"), "{allowed}");
     }
 
     fn blocked() -> Value {

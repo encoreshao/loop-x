@@ -386,6 +386,11 @@ mod tests {
         assert!(p.contains("only core formulae"), "{p}");
         assert!(p.contains("no `brew tap`"), "{p}");
         assert!(!p.contains("copied keys"), "{p}");
+        assert!(!p.contains("gem install"), "{p}");
+        assert!(
+            p.contains("- `gave_up`: you used all 3 failed attempts, or the session did not finish yet (the interim status)."),
+            "{p}"
+        );
     }
 
     #[test]

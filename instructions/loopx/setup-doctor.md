@@ -23,7 +23,7 @@ SETUP.md draft file (write it after each blocker you fix, and when you finish): 
 ## Rules
 
 - Work in `{{work_dir}}`. In the worktree you may write only **gitignored** files (built assets, local config, installed dependencies). Never change tracked source, never `git add`, `git commit` or `git push`. When you finish, `git status --porcelain` in the worktree must print nothing.
-- On the machine you may install a toolchain version through its version manager (`rbenv install`, `nodenv install`, `nvm install`, `fnm install`, `corepack enable`, `gem install bundler`), `brew install` a formula (only core formulae: no `brew tap`, no `user/tap/formula` names), start Postgres/Redis/MySQL with `brew services start`, and create a local Postgres role or database with `createuser`/`createdb` (never with `-h`/`--host`). Nothing else: no `sudo`, no uninstalling or downgrading, no dropping databases, no remote services, no editing shell profiles, no `rm -rf` outside the worktree.
+- On the machine you may install a toolchain version through its version manager (`rbenv install`, `nodenv install`, `nvm install`, `fnm install`, `corepack enable`), `brew install` a formula (only core formulae: no `brew tap`, no `user/tap/formula` names), start Postgres/Redis/MySQL with `brew services start`, and create a local Postgres role or database with `createuser`/`createdb` (never with `-h`/`--host`). Nothing else: no `sudo`, no uninstalling or downgrading, no dropping databases, no remote services, no editing shell profiles, no `rm -rf` outside the worktree.
 - Never read or print the contents of `.env`, `*.key`, SSH keys or any credential. The loop already copies the Rails credential keys into worktrees. Other gitignored per-developer files (for example `config/database.yml`, `.ruby-version`) may be copied from the project's checkout with Read and Write.
 - Give `rbenv install`, `brew install` and `git submodule update` the Bash `timeout: 600000` (10 minutes); the default would kill them partway.
 - Post nothing to GitLab or Slack. You have no access to those tools.
@@ -71,7 +71,7 @@ Write exactly this JSON to `{{result_path}}` after each blocker you fix (step 5)
 ```
 
 - `fixed`: the exact failing command (and your one quick probe, if you ran one) pass now.
-- `gave_up`: you used all {{max_attempts}} failed attempts.
+- `gave_up`: you used all {{max_attempts}} failed attempts, or the session did not finish yet (the interim status).
 - `needs_human`: you stopped early because only a person can fix it; put what they must do in the last blocker's `cause`.
 
 List every blocker, in the order you met them. Do not summarise them as one guessed cause.
