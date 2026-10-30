@@ -4,7 +4,7 @@
 
 ## Verification
 
-- [ ] `cargo test --workspace` and `LOOPX_BIN=target/debug/loopx python3 -m pytest tests/ -q` pass
+- [ ] `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass
 - [ ] `CHANGELOG.md` has a line under `[Unreleased]` (user-visible changes only)
 
 ## Golden eval (agent instruction/tool changes only)

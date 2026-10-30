@@ -116,7 +116,7 @@ To update later, re-run the installer with `--upgrade`. To remove it, run `bin/s
 | Look up config files, scheduling, the dashboard, connectors or CLI commands | [`docs/reference.md`](docs/reference.md) |
 | Understand how a loop decides what to do | [`docs/tasks/`](docs/tasks/) and [`TASK.md`](TASK.md) |
 | Understand the architecture | [`docs/architecture.md`](docs/architecture.md) |
-| Build from source or contribute | [`docs/building.md`](docs/building.md) and [`CLAUDE.md`](CLAUDE.md) |
+| Build from source or contribute | [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/building.md`](docs/building.md) |
 | Cut a release | [`docs/RELEASING.md`](docs/RELEASING.md) |
 | Fix a crash-looping background agent | [`docs/troubleshooting/crash-looping-launchd-agent.md`](docs/troubleshooting/crash-looping-launchd-agent.md) |
 
