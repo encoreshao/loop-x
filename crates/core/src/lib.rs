@@ -60,6 +60,7 @@ pub mod memory_store;
 pub mod messages;
 pub mod metrics;
 pub mod mr;
+pub mod mr_screenshots;
 pub mod msg;
 pub mod node_env;
 pub mod oauth;
