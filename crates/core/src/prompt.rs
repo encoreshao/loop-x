@@ -133,6 +133,12 @@ pub fn setup_doctor(
         }
         s
     };
+    let cwd = Some(field("cwd"))
+        .filter(|c| !c.is_empty())
+        .unwrap_or(work_dir)
+        .to_string();
+    // The error sits in a code fence: it must not be able to close it.
+    let error = field("error").replace("```", "~~~");
     let result_path = result_path.display().to_string();
     let draft_path = draft_path.display().to_string();
     let max_attempts = max_attempts.to_string();
@@ -144,8 +150,9 @@ pub fn setup_doctor(
         ("result_path", result_path.as_str()),
         ("draft_path", draft_path.as_str()),
         ("max_attempts", max_attempts.as_str()),
+        ("cwd", cwd.as_str()),
         ("command", field("command")),
-        ("error", field("error")),
+        ("error", error.as_str()),
         ("diagnosis", field("diagnosis")),
     ];
     // One pass, so a `{{name}}` inside a substituted value is never expanded.
@@ -302,7 +309,7 @@ mod tests {
     }
 
     fn doctor_prompt(stale: &[String], has_knowledge: bool) -> String {
-        let blocked = serde_json::json!({"command": "bundle exec rspec", "error": "Could not find gem foo", "diagnosis": "gems missing"});
+        let blocked = serde_json::json!({"command": "bundle exec rspec", "error": "Could not find gem foo", "diagnosis": "gems missing", "cwd": "/wt/orbit-issue-10/app"});
         setup_doctor(
             dir(),
             "orbit",
@@ -329,6 +336,9 @@ mod tests {
         assert!(p.contains("at most 3 failed attempts"));
         assert!(p.contains("`Gemfile`") && p.contains("`bin/setup`"));
         assert!(!p.contains("{{"));
+        assert!(p.contains("/wt/orbit-issue-10/app"));
+        assert!(p.contains("--skip-server"));
+        assert!(!p.contains("memory get"));
     }
 
     #[test]

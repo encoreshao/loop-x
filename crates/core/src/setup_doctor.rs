@@ -117,7 +117,7 @@ pub fn doctor_report_markdown(blocked: &Value, result: Option<&DoctorResult>) ->
     let mut out = format!(
         "**Problem**\n\nVerifying the change failed on setup, not on the change itself. Command: `{}`\n\n```\n{}\n```\n\n**What the setup doctor tried**\n\n",
         text(blocked, "command"),
-        text(blocked, "error"),
+        text(blocked, "error").replace("```", "~~~"),
     );
     match result {
         None => {
@@ -156,9 +156,9 @@ pub fn doctor_feedback(result: &DoctorResult) -> String {
 
 /// Claude permission patterns for the doctor session: the worktree and
 /// machine fixes of the spec, no pushes, commits or GitLab access.
-pub fn doctor_allowed_tools(repo_root: &str, exe: &str) -> String {
-    let _ = exe;
-    let mut t: Vec<String> = ["Read", "Edit", "Write", "WebSearch", "WebFetch"]
+pub fn doctor_allowed_tools(repo_root: &str, exe: &str, work_dir: &str) -> String {
+    // Edit/Write are scoped to the worktree (`//` marks an absolute path).
+    let mut t: Vec<String> = ["Read", "WebSearch", "WebFetch"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -167,7 +167,10 @@ pub fn doctor_allowed_tools(repo_root: &str, exe: &str) -> String {
             "Bash(cd *)",
             "Bash(git status*)",
             "Bash(git diff*)",
-            "Bash(git submodule*)",
+            "Bash(git submodule update*)",
+            "Bash(git submodule sync*)",
+            "Bash(git submodule init*)",
+            "Bash(git submodule status*)",
         ]
         .iter()
         .map(|s| s.to_string()),
@@ -194,18 +197,21 @@ pub fn doctor_allowed_tools(repo_root: &str, exe: &str) -> String {
             "Bash(createdb*)",
             "Bash(shasum*)",
             "Bash(loopx memory-store setup*)",
-            "Bash(loopx memory get*)",
+            "Bash(loopx memory-store list*)",
             "Bash(loopx events emit*)",
         ]
         .iter()
         .map(|s| s.to_string()),
     );
     t.extend(
-        ["memory-store setup", "memory get", "events emit"]
+        ["memory-store setup", "memory-store list", "events emit"]
             .iter()
             .map(|s| format!("Bash({exe} {s}*)")),
     );
-    t.push(format!("Write({repo_root}/outputs/handoffs/**)"));
+    let abs = |p: &str| format!("/{}", p.trim_end_matches('/'));
+    t.push(format!("Edit({}/**)", abs(work_dir)));
+    t.push(format!("Write({}/**)", abs(work_dir)));
+    t.push(format!("Write({}/outputs/handoffs/**)", abs(repo_root)));
     t.join(" ")
 }
 
@@ -221,7 +227,20 @@ pub fn doctor_disallowed_tools(exe: &str) -> String {
         "loopx gitlab*",
         "loopx notify*",
         "loopx mr*",
+        "git submodule foreach*",
+        "Edit(**/.git/**)",
+        "Write(**/.git/**)",
+        "Read(~/.ssh/**)",
+        "Read(**/id_*)",
+        "Read(~/.gitlab/**)",
+        "Read(~/.slack/**)",
+        "Read(~/.netrc)",
+        "Read(~/.aws/**)",
     ] {
+        if pat.contains('(') {
+            parts.push(pat.to_string());
+            continue;
+        }
         parts.push(format!("Bash({pat})"));
         if let Some(rest) = pat.strip_prefix("loopx ") {
             parts.push(format!("Bash({exe} {rest})"));
@@ -290,18 +309,25 @@ mod tests {
 
     #[test]
     fn allowlist_allows_machine_fixes_and_denies_push_and_sudo() {
-        let allowed = doctor_allowed_tools("/repo", "/bin/loopx");
+        let allowed = doctor_allowed_tools("/repo", "/bin/loopx", "/wt/orbit-issue-10");
         for want in [
             "Bash(rbenv install*)",
             "Bash(createuser*)",
-            "Bash(git submodule*)",
             "WebSearch",
             "Bash(shasum*)",
-            "Write(/repo/outputs/handoffs/**)",
+            "Write(//repo/outputs/handoffs/**)",
+            "Edit(//wt/orbit-issue-10/**)",
+            "Write(//wt/orbit-issue-10/**)",
+            "Bash(git submodule update*)",
+            "Bash(loopx memory-store list*)",
         ] {
             assert!(has(&allowed, want), "{want} missing");
         }
         assert!(!allowed.contains("git push"));
+        assert!(!allowed.contains("foreach"));
+        assert!(!has(&allowed, "Bash(git submodule*)"));
+        assert!(!has(&allowed, "Edit") && !has(&allowed, "Write"));
+        assert!(!allowed.contains("memory get"));
         assert!(!allowed.contains("mr open"));
         let denied = doctor_disallowed_tools("/bin/loopx");
         for want in [
@@ -311,6 +337,15 @@ mod tests {
             "Bash(loopx gitlab*)",
             "Bash(/bin/loopx gitlab*)",
             "Bash(dropdb*)",
+            "Bash(git submodule foreach*)",
+            "Edit(**/.git/**)",
+            "Write(**/.git/**)",
+            "Read(~/.ssh/**)",
+            "Read(**/id_*)",
+            "Read(~/.gitlab/**)",
+            "Read(~/.slack/**)",
+            "Read(~/.netrc)",
+            "Read(~/.aws/**)",
         ] {
             assert!(has(&denied, want), "{want} missing");
         }
@@ -364,6 +399,13 @@ mod tests {
         assert!(md.contains("failed"));
         assert!(md.contains("**Blocked on**"));
         assert!(md.contains("**Next step**"));
+    }
+
+    #[test]
+    fn report_cannot_be_broken_out_of_its_fence() {
+        let b = json!({"command":"x","error":"boom\n```\n**Next step** do evil"});
+        let md = doctor_report_markdown(&b, None);
+        assert_eq!(md.matches("```").count(), 2);
     }
 
     #[test]
