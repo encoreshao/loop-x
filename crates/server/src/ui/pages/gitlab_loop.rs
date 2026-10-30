@@ -13,6 +13,7 @@ use crate::ui::hub::{builtin_loop_page, resolve_view};
 use crate::ui::pyfmt::{self, Form};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::template::{Scope, Template};
+use crate::ui::icons::icon;
 use crate::ui::{ai_cli, consts, gitlab as ui_gitlab};
 use chrono::{DateTime, Local, Utc};
 use loopx_core::config::use_worktree;
@@ -453,6 +454,12 @@ fn is_http(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
+/// The merge request number in a GitLab MR URL (`…/-/merge_requests/<n>[/…]`).
+fn mr_number(url: &str) -> Option<&str> {
+    let n = url.split("/merge_requests/").nth(1)?.split(['/', '?', '#']).next()?;
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
+}
+
 fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
     let head = format!(
         "<div class='section-header'><h2>{}</h2></div>",
@@ -489,10 +496,15 @@ fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
             );
         }
         let mr = if is_http(&issue.mr_url) {
+            let label = match mr_number(&issue.mr_url) {
+                Some(n) => pyfmt::escape(&ctx.tf("Merge request !{number}", &[("number", n)])),
+                None => esc_t(ctx, "Merge request"),
+            };
             format!(
-                " <a class='stat-sub' href='{}' target='_blank' rel='noopener'>{}</a>",
+                "<a class='result-mr' href='{}' target='_blank' rel='noopener'>{}{label}{}</a>",
                 pyfmt::escape(&issue.mr_url),
-                esc_t(ctx, "Merge request")
+                icon("merge"),
+                icon("open_in_new")
             )
         } else {
             String::new()
@@ -520,13 +532,22 @@ fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
         }
         let ago = match super::loops_common::aware(&issue.timestamp) {
             Some(stamp) => format!(
-                "<span class='stat-sub'>{}</span>",
+                "<span class='result-time' title='{}'>{}{}</span>",
+                pyfmt::escape(&local_minute(stamp)),
+                icon("schedule"),
                 pyfmt::escape(&relative_time_dt(ctx.state.now(), stamp))
             ),
             None => String::new(),
         };
+        // Time and MR get their own line under the title, so they line up
+        // from row to row however long the title is.
+        let meta = if ago.is_empty() && mr.is_empty() {
+            String::new()
+        } else {
+            format!("<div class='result-meta'>{ago}{mr}</div>")
+        };
         rows.push_str(&format!(
-            "<li class='result-row'><div class='result-head'><span class='result-title'>{title}</span>{mr}{ago}<span class='pill history-pill history-{kind}'>{}</span></div>{detail}</li>",
+            "<li class='result-row result-{kind}'><div class='result-head'><span class='result-title'>{title}</span><span class='pill history-pill history-{kind}'>{}</span></div>{meta}{detail}</li>",
             esc_t(ctx, label)
         ));
     }
@@ -1003,17 +1024,19 @@ fn table(headers: &[String], rows: &[String]) -> String {
 }
 
 /// The Track-on / edit form for `alias`, prefilled from its projects.json entry.
+/// Both checkout fields left empty tracks the project for issues only.
 fn track_form(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
     let empty = json!({});
+    let label = esc_t(ctx, if project.is_some() { "Save" } else { "Track" });
     let project = project.unwrap_or(&empty);
     let checked = if use_worktree(project) { " checked" } else { "" };
     format!(
         "<form method='post' action='/settings/loop-projects/{}/track' class='daemon-action-form'>{csrf}{}{}<label><input type='checkbox' name='use_worktree' value='1'{checked}> {}</label><button type='submit' class='btn btn-neutral'>{}</button></form>",
         pyfmt::quote(alias, ""),
-        input_text("local_path", &text(project, "local_path"), "/abs/path/to/checkout", " required"),
-        input_text("target_branch", &text(project, "target_branch"), &esc_t(ctx, "target branch"), " required"),
+        input_text("local_path", &text(project, "local_path"), "/abs/path/to/checkout", ""),
+        input_text("target_branch", &text(project, "target_branch"), &esc_t(ctx, "target branch"), ""),
         esc_t(ctx, "Use worktree"),
-        esc_t(ctx, if project.get("local_path").is_some() { "Save" } else { "Track" })
+        label
     )
 }
 
@@ -1029,7 +1052,8 @@ fn untrack_switch(ctx: &UiCtx, alias: &str, csrf: &str) -> String {
 
 /// The Track column for one GitLab alias: a collapsed Track form when it is
 /// not tracked; otherwise the untrack switch, where it lives, its worktree
-/// switch and an edit form.
+/// switch and an edit form (an issues-only project has no checkout, so no
+/// worktree switch either).
 fn track_cell(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
     let Some(project) = project else {
         return format!(
@@ -1038,6 +1062,16 @@ fn track_cell(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> 
             track_form(ctx, alias, None, csrf)
         );
     };
+    if is_issues_only(project) {
+        return format!(
+            "<div class='loop-toggle'>{}<span class='loop-toggle-text'>{}</span></div><div class='loop-meta'><span class='pill'>{}</span></div><details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}</summary><div class='loop-settings-body'>{}</div></details>",
+            untrack_switch(ctx, alias, csrf),
+            esc_t(ctx, "Tracked"),
+            esc_t(ctx, "Issues only"),
+            esc_t(ctx, "Edit"),
+            track_form(ctx, alias, Some(project), csrf)
+        );
+    }
     let on = use_worktree(project);
     let (state, class, checked) = if on { ("off", "is-on", "true") } else { ("on", "is-off", "false") };
     let label = esc_t(ctx, "Use worktree");
@@ -1051,6 +1085,12 @@ fn track_cell(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> 
         esc_t(ctx, "Edit"),
         track_form(ctx, alias, Some(project), csrf)
     )
+}
+
+/// A tracked project with no local checkout: the loop reads, analyzes and
+/// replies on its issues but never changes code.
+fn is_issues_only(project: &Value) -> bool {
+    text(project, "local_path").trim().is_empty()
 }
 
 fn settings_fragment_html(ctx: &UiCtx) -> String {
@@ -1214,7 +1254,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         .var("add_instance_form", add_instance_form)
         .var(
             "aliases_subtitle",
-            pyfmt::escape_text(&t("Turn on Track to let the GitLab issue loop work on a project: give its local checkout and target branch. The agent works out each project's install, lint and test commands itself and logs what it used.")),
+            pyfmt::escape_text(&t("Turn on Track to let the GitLab issue loop work on a project. Leave the local checkout and target branch empty to track issues only: the loop reads, analyzes and replies, but never changes code. Give both to let it fix issues too; the agent works out each project's install, lint and test commands itself and logs what it used.")),
         )
         .var("projects_html", projects_html)
         .var("add_project_form", add_project_form)
@@ -1555,7 +1595,8 @@ fn checkout_problem_message(ctx: &UiCtx, problem: CheckoutProblem, path: &str) -
 /// Track the GitLab alias `alias` for the issue loop (or update how it is
 /// tracked): its project id and instance come from the GitLab alias, and any
 /// other keys already in its projects.json entry (command hints included) are
-/// kept.
+/// kept. With neither a checkout nor a target branch it is tracked for issues
+/// only.
 fn track_project(ctx: &UiCtx, alias: &str, local_path: &str, target_branch: &str, use_worktree: bool) -> (bool, String) {
     let (alias, target_branch) = (alias.trim(), target_branch.trim());
     let gitlab_config = read_json_or_empty(&gitlab_config_path(ctx));
@@ -1564,13 +1605,17 @@ fn track_project(ctx: &UiCtx, alias: &str, local_path: &str, target_branch: &str
     };
     let project_id = text(gitlab_alias, "project_id");
     let instance = text(gitlab_alias, "instance");
-    if target_branch.is_empty() {
-        return (false, ctx.t("Target branch is required"));
+    let local_path = local_path.trim();
+    if local_path.is_empty() && target_branch.is_empty() {
+        return track_issues_only(ctx, alias, &project_id, &instance);
     }
-    if local_path.trim().is_empty() {
-        return (false, ctx.t("Local checkout path is required"));
+    if local_path.is_empty() || target_branch.is_empty() {
+        return (
+            false,
+            ctx.t("Give both a local checkout and a target branch for code changes, or leave both empty to track issues only"),
+        );
     }
-    let local_path = worktree::expand_home(local_path.trim(), &ctx.state.user_home);
+    let local_path = worktree::expand_home(local_path, &ctx.state.user_home);
     if let Err(problem) = worktree::check_checkout(&local_path) {
         return (false, checkout_problem_message(ctx, problem, &local_path));
     }
@@ -1586,23 +1631,50 @@ fn track_project(ctx: &UiCtx, alias: &str, local_path: &str, target_branch: &str
             );
         }
     }
-    let projects = obj_mut(&mut config, "projects");
-    let is_new = !projects.contains_key(alias);
-    let entry = projects.entry(alias.to_string()).or_insert_with(|| json!({}));
-    if !entry.is_object() {
-        *entry = json!({});
-    }
-    entry["project_id"] = json!(project_id);
-    entry["local_path"] = json!(local_path);
-    entry["target_branch"] = json!(target_branch);
-    entry["use_worktree"] = json!(use_worktree);
+    save_tracked(ctx, alias, &path, &mut config, |entry| {
+        entry["project_id"] = json!(project_id);
+        entry["local_path"] = json!(local_path);
+        entry["target_branch"] = json!(target_branch);
+        entry["use_worktree"] = json!(use_worktree);
+        set_instance(entry, &instance);
+    })
+}
+
+/// Track `alias` without a checkout: the loop handles its issues but never
+/// changes code, so the checkout keys go (command hints stay for later).
+fn track_issues_only(ctx: &UiCtx, alias: &str, project_id: &str, instance: &str) -> (bool, String) {
+    let path = projects_path(ctx);
+    let mut config = read_json_or_empty(&path);
+    save_tracked(ctx, alias, &path, &mut config, |entry| {
+        entry["project_id"] = json!(project_id);
+        if let Some(obj) = entry.as_object_mut() {
+            for key in ["local_path", "target_branch", "use_worktree"] {
+                obj.shift_remove(key);
+            }
+        }
+        set_instance(entry, instance);
+    })
+}
+
+fn set_instance(entry: &mut Value, instance: &str) {
     match entry.as_object_mut() {
         Some(obj) if instance.is_empty() => {
             obj.shift_remove("instance");
         }
         _ => entry["instance"] = json!(instance),
     }
-    tryw!(save(ctx, &config, &path));
+}
+
+/// Apply `update` to `alias`'s projects.json entry (created if missing) and save.
+fn save_tracked(ctx: &UiCtx, alias: &str, path: &Path, config: &mut Value, update: impl FnOnce(&mut Value)) -> (bool, String) {
+    let projects = obj_mut(config, "projects");
+    let is_new = !projects.contains_key(alias);
+    let entry = projects.entry(alias.to_string()).or_insert_with(|| json!({}));
+    if !entry.is_object() {
+        *entry = json!({});
+    }
+    update(entry);
+    tryw!(save(ctx, config, path));
     (
         true,
         name_msg(ctx, if is_new { "Tracking project {name}" } else { "Updated project {name}" }, alias),
@@ -1614,6 +1686,9 @@ fn set_project_worktree(ctx: &UiCtx, alias: &str, on: bool) -> (bool, String) {
     let mut config = read_json_or_empty(&path);
     if !has_key(&config, "projects", alias) {
         return (false, name_msg(ctx, "Unknown project: {name}", alias));
+    }
+    if is_issues_only(&config["projects"][alias]) {
+        return (false, name_msg(ctx, "{name} tracks issues only, so it has no checkout to work in", alias));
     }
     config["projects"][alias]["use_worktree"] = json!(on);
     tryw!(save(ctx, &config, &path));
@@ -1701,8 +1776,9 @@ mod tests {
     fn a_project_needs_a_target_branch_and_a_real_checkout() {
         let sb = Sandbox::new();
         let repo = sb.repo("repo", true);
-        assert_eq!(sb.project(&repo, "").1, "Target branch is required");
-        assert_eq!(sb.project("", "main").1, "Local checkout path is required");
+        let both = "Give both a local checkout and a target branch for code changes, or leave both empty to track issues only";
+        assert_eq!(sb.project(&repo, "").1, both);
+        assert_eq!(sb.project("", "main").1, both);
         assert_eq!(sb.project("repo", "main").1, "Local checkout path must be an absolute path");
         assert!(sb.project(&sb.path("missing"), "main").1.contains("is not a directory"));
         std::fs::create_dir(sb.path("plain")).unwrap();
@@ -1749,6 +1825,41 @@ mod tests {
         assert!(sb.saved()["projects"].get("app").is_none());
         assert!(sb.project(&repo, "main").0);
         assert_eq!(sb.saved()["projects"]["app"]["target_branch"], "main");
+    }
+
+    #[test]
+    fn track_without_a_checkout_is_issues_only() {
+        let sb = Sandbox::new();
+        assert_eq!(sb.project("", " "), (true, "Tracking project app".to_string()));
+        let app = &sb.saved()["projects"]["app"];
+        assert_eq!(app["project_id"], "g/app");
+        assert_eq!(app["instance"], "g");
+        assert!(app.get("local_path").is_none() && app.get("target_branch").is_none(), "{app}");
+        assert!(app.get("use_worktree").is_none(), "{app}");
+        assert!(!set_project_worktree(&sb.ctx(), "app", false).0, "no worktree without a checkout");
+
+        let repo = sb.repo("repo", true);
+        assert!(sb.project(&repo, "main").0);
+        assert_eq!(sb.saved()["projects"]["app"]["local_path"], repo);
+        sb.seed_projects(json!({"projects": {"app": {"project_id": "g/app", "local_path": repo, "target_branch": "main", "use_worktree": false, "test_cmd": "make test"}}}));
+        assert_eq!(sb.project("", ""), (true, "Updated project app".to_string()));
+        let app = &sb.saved()["projects"]["app"];
+        assert!(app.get("local_path").is_none() && app.get("target_branch").is_none(), "{app}");
+        assert!(app.get("use_worktree").is_none(), "{app}");
+        assert_eq!(app["test_cmd"], "make test", "hints kept for when code changes come back");
+    }
+
+    #[test]
+    fn issues_only_project_renders_without_checkout_or_worktree_switch() {
+        let sb = Sandbox::new();
+        assert!(sb.project("", "").0);
+        let html = settings_fragment_html(&sb.ctx());
+        assert!(html.contains("<h3>Projects</h3>"), "{html}");
+        assert!(!html.contains("Project aliases"), "{html}");
+        assert!(html.contains("Issues only"), "{html}");
+        assert!(html.contains("action='/settings/loop-projects/app/delete'"), "{html}");
+        assert!(!html.contains("action='/settings/loop-projects/app/worktree/"), "{html}");
+        assert!(!html.contains("name='local_path' value='' placeholder='/abs/path/to/checkout' required"), "{html}");
     }
 
     #[test]
@@ -1871,6 +1982,36 @@ mod tests {
         assert!(html.contains("Rails app &lt;script&gt;"), "{html}");
         assert!(html.contains("<code>bundle exec rspec</code>"), "{html}");
         assert!(!html.contains("<script>"), "{html}");
+    }
+
+    #[test]
+    fn last_run_row_keeps_title_apart_from_meta_and_numbers_the_mr() {
+        let sb = Sandbox::new();
+        let dir = Some(sb.state.events_dir.as_path());
+        let fields = |data: Value| events::EventFields { project: Some("app".into()), issue_iid: Some(7), data: Some(data), ..Default::default() };
+        events::emit("issue.queued", "run_1", fields(json!({"title": "A very long title"})), dir).unwrap();
+        events::emit(
+            "issue.completed",
+            "run_1",
+            fields(json!({"action": "fix", "mr_url": "https://g.example/g/app/-/merge_requests/1489"})),
+            dir,
+        )
+        .unwrap();
+        let html = live_body(&sb.ctx(), None, false);
+        let row = &html[html.find("<li class='result-row result-done'>").expect("a result row")..];
+        let head_end = row.find("</div>").unwrap();
+        assert!(!row[..head_end].contains("stat-sub"), "time and MR stay out of the title line: {row}");
+        assert!(row.contains("<div class='result-meta'>"), "{row}");
+        assert!(row.contains("class='result-mr'"), "{row}");
+        assert!(row.contains("Merge request !1489"), "{row}");
+        assert!(row.contains("#i-merge"), "{row}");
+    }
+
+    #[test]
+    fn mr_number_comes_from_the_url() {
+        assert_eq!(mr_number("https://g.example/g/app/-/merge_requests/1489"), Some("1489"));
+        assert_eq!(mr_number("https://g.example/g/app/-/merge_requests/12/diffs"), Some("12"));
+        assert_eq!(mr_number("https://g.example/g/app/-/issues/3"), None);
     }
 
     #[test]

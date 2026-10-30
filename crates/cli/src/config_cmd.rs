@@ -1,5 +1,5 @@
 use loopx_core::command_hints::command_hints;
-use loopx_core::config::{default_config_path, use_worktree, Config, ConfigError};
+use loopx_core::config::{changes_code, default_config_path, use_worktree, Config, ConfigError};
 use loopx_core::pyjson;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -44,7 +44,8 @@ fn dispatch(command: &str, rest: &[String]) -> Result<String, Failure> {
 }
 
 /// A project as the agent sees it: the stored commands under `hints` (they
-/// are starting points, not orders) and `use_worktree` always present.
+/// are starting points, not orders), and `use_worktree` and `code_changes`
+/// (false for an issues-only project, which has no checkout) always present.
 fn agent_view(mut project: Value) -> Value {
     let mut hints = serde_json::Map::new();
     if let Some(obj) = project.as_object_mut() {
@@ -56,6 +57,7 @@ fn agent_view(mut project: Value) -> Value {
         }
     }
     project["use_worktree"] = json!(use_worktree(&project));
+    project["code_changes"] = json!(changes_code(&project));
     project["hints"] = Value::Object(hints);
     project
 }
@@ -115,5 +117,25 @@ mod tests {
         assert_eq!(v["use_worktree"], true);
         assert!(v.get("test_cmd").is_none());
         assert_eq!(v["target_branch"], "main");
+        assert_eq!(v["code_changes"], true);
+    }
+
+    #[test]
+    fn project_without_a_checkout_is_issues_only() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("projects.json");
+        std::fs::write(
+            &p,
+            json!({"gitlab_instance": "g", "projects": {"q": {"project_id": "g/q"}}}).to_string(),
+        )
+        .unwrap();
+        let Ok(out) = dispatch_with(&p, "project", &["q".to_string()]) else {
+            panic!("dispatch failed");
+        };
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["code_changes"], false);
+        assert_eq!(v["local_path"], Value::Null);
+        assert_eq!(v["target_branch"], Value::Null);
+        assert!(matches!(dispatch_with(&p, "local-paths", &[]), Ok(s) if s.is_empty()));
     }
 }

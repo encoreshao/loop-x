@@ -4,7 +4,7 @@ default_form
 html.escape(_t('Instances'))
 instances_html
 add_instance_form
-html.escape(_t('Project aliases'))
+html.escape(_t('Projects'))
 aliases_subtitle
 projects_html
 add_project_form

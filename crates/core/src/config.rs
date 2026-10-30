@@ -12,6 +12,15 @@ pub fn use_worktree(project: &Value) -> bool {
         .unwrap_or(true)
 }
 
+/// Whether the loop may change code in this project: only with a local
+/// checkout. Without one it is tracked for issues only (read, analyze, reply).
+pub fn changes_code(project: &Value) -> bool {
+    project
+        .get("local_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(
@@ -123,18 +132,15 @@ impl Config {
         Ok(self.projects()?.keys().cloned().collect())
     }
 
+    /// The checkouts of the projects that change code (issues-only ones have none).
     pub fn local_paths(&self) -> Result<Vec<String>, ConfigError> {
-        self.projects()?
+        Ok(self
+            .projects()?
             .values()
-            .map(|p| {
-                p.get("local_path")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .ok_or_else(|| {
-                        ConfigError::MissingKey(self.path.clone(), "local_path".to_string())
-                    })
-            })
-            .collect()
+            .filter(|p| changes_code(p))
+            .filter_map(|p| p.get("local_path").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect())
     }
 
     /// A project's own config with `instance` always present: its own override,
@@ -183,6 +189,14 @@ mod tests {
         let c = Config::load(&write(d.path(), SAMPLE)).unwrap();
         assert_eq!(c.aliases().unwrap(), vec!["b", "a"]);
         assert_eq!(c.local_paths().unwrap(), vec!["/b", "/a"]);
+    }
+
+    #[test]
+    fn local_paths_skip_issues_only_projects() {
+        let d = tempfile::tempdir().unwrap();
+        let body = r#"{"projects":{"a":{"local_path":"/a"},"q":{"project_id":"g/q"},"e":{"local_path":""}}}"#;
+        let c = Config::load(&write(d.path(), body)).unwrap();
+        assert_eq!(c.local_paths().unwrap(), vec!["/a"]);
     }
 
     #[test]

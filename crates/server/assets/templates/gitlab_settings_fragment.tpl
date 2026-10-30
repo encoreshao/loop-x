@@ -7,7 +7,7 @@
 <h3>⟦html.escape(_t('Instances'))⟧</h3>
 ⟦instances_html⟧
 ⟦add_instance_form⟧
-<h3>⟦html.escape(_t('Project aliases'))⟧</h3>
+<h3>⟦html.escape(_t('Projects'))⟧</h3>
 <p class="subtitle">⟦aliases_subtitle⟧</p>
 ⟦projects_html⟧
 ⟦add_project_form⟧

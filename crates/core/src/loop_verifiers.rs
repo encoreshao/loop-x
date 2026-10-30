@@ -386,13 +386,10 @@ impl ProjectCommandsVerifier {
             return Ok(vacuous("no fix handoff - nothing to verify"));
         }
         let project = self.project()?;
-        let root = self.worktree_root()?;
-        if project.get("local_path").and_then(Value::as_str).is_none() {
-            return Err(Raised {
-                kind: "KeyError",
-                message: "'local_path'".into(),
-            });
+        if !crate::config::changes_code(&project) {
+            return Ok(vacuous("issues-only project - no code to verify"));
         }
+        let root = self.worktree_root()?;
         let worktree = expected_work_dir(&project, &root, &self.issue_iid);
         if use_worktree(&project) && !worktree.is_dir() {
             return Ok(vacuous("no worktree - nothing to verify"));
@@ -1029,6 +1026,18 @@ mod tests {
             .unwrap()
             .contains("TAIL"));
         assert!(!r.output.contains("TAILTAIL") && r.output.len() < 300);
+    }
+
+    #[test]
+    fn issues_only_project_has_nothing_to_verify() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("wt");
+        let v = ProjectCommandsVerifier::new("pc", "web", 7, 30.0)
+            .with_project_fn(|_| Ok(json!({"project_id": "g/web"})))
+            .with_worktree_root_fn(move || Ok(root.clone()));
+        let r = run(&v);
+        assert!(r.passed, "{}", r.output);
+        assert_eq!(r.evidence, json!({"vacuous": true}));
     }
 
     #[test]

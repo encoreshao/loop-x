@@ -12,6 +12,11 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Added
+- GitLab: a project can be tracked for issues only — turn on Track and leave the local checkout and target branch empty. The issue loop then reads, analyzes and replies on its issues (an issue that needs code gets the analysis and proposed approach as a comment) but never branches, changes code or opens an MR. `loopx config project` reports this as `code_changes: false`.
+
+### Changed
+- GitLab → Projects: the "Project aliases" list is now titled "Projects".
+- GitLab → Live → Last run results: each issue's time and merge request now sit on their own line under the title, so they line up from row to row however long the title is. The merge request link shows its number (e.g. "Merge request !1489") with a merge icon and link styling, and each row's edge is colored by its outcome.
 - `loopx scheduler status [--json]` shows whether the scheduler is actually ticking (every tick now records a heartbeat), what is queued or running (flagging a run whose process is gone), and each loop's schedule, next due time and last run; it exits 1 when the scheduler is not running correctly. `loopx doctor` gets a matching Scheduler section.
 
 ## [0.13.0] - 2026-10-29
