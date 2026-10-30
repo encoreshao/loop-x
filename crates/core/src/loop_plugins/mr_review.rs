@@ -19,7 +19,7 @@ use crate::loopkit::{self, LoopContext, LoopPlugin, Outcome, PluginError, Status
 use crate::loops_config::{py_str, py_truthy};
 use crate::seen_store::SeenStore;
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -698,6 +698,21 @@ pub struct AccountMrs {
 
 const MY_MR_ROLES: [&str; 3] = ["author_id", "assignee_id", "reviewer_id"];
 
+/// Is the MR's project still active, i.e. neither archived nor scheduled for
+/// deletion? `non_archived=true` already filters the lists on GitLab versions
+/// that honour it; this catches the rest. Looked up once per project; a failed
+/// lookup counts as active, so an MR is never hidden by a flaky request.
+fn project_active(conn: &dyn Connector, cache: &mut BTreeMap<String, bool>, row: &Value) -> bool {
+    let pid = row.get("project_id").map_or("None".into(), py_str);
+    *cache.entry(pid).or_insert_with_key(|pid| {
+        conn.api("GET", &format!("/projects/{pid}"), &ApiOpts::default())
+            .map_or(true, |p| {
+                let set = |k: &str| p.get(k).is_some_and(py_truthy);
+                !set("archived") && !set("marked_for_deletion_at") && !set("marked_for_deletion_on")
+            })
+    })
+}
+
 fn my_mrs(conn: &dyn Connector, account_id: &str) -> Result<Vec<MyMr>, ConnectorError> {
     let me = conn.api("GET", "/user", &ApiOpts::default())?;
     let id = me
@@ -708,13 +723,19 @@ fn my_mrs(conn: &dyn Connector, account_id: &str) -> Result<Vec<MyMr>, Connector
             detail: "id".into(),
         })?;
     let mut out: Vec<MyMr> = Vec::new();
+    let mut active = BTreeMap::new();
     for role in MY_MR_ROLES {
         let rows = conn.api(
             "GET",
-            &format!("/merge_requests?{role}={id}&state=opened&scope=all&per_page=100"),
+            &format!(
+                "/merge_requests?{role}={id}&state=opened&scope=all&non_archived=true&per_page=100"
+            ),
             &ApiOpts::default(),
         )?;
         for row in rows.as_array().into_iter().flatten() {
+            if !project_active(conn, &mut active, row) {
+                continue;
+            }
             let s = |k: &str| {
                 row.get(k)
                     .filter(|v| py_truthy(v))
@@ -1027,7 +1048,7 @@ impl LoopPlugin for MrReview {
                     let batch = conn.api(
                         "GET",
                         &format!(
-                            "/merge_requests?{role}={}&state=opened&scope=all&draft=no&per_page=50",
+                            "/merge_requests?{role}={}&state=opened&scope=all&draft=no&non_archived=true&per_page=50",
                             py_str(id)
                         ),
                         &ApiOpts::default(),
@@ -1051,6 +1072,7 @@ impl LoopPlugin for MrReview {
                     continue;
                 }
             };
+            let mut active = BTreeMap::new();
             for row in &rows {
                 // Older GitLab ignores `draft=no`; never review a draft.
                 if is_draft(row) {
@@ -1072,6 +1094,9 @@ impl LoopPlugin for MrReview {
                     if !ctx.force && !wanted && self.already_seen(&key, ctx) {
                         continue;
                     }
+                }
+                if !project_active(conn.as_ref(), &mut active, row) {
+                    continue;
                 }
                 match self.item(conn.as_ref(), &account.id, &me, row) {
                     Ok(Some(item)) if wanted => requested.push(item.with_force()),
@@ -1729,6 +1754,9 @@ mod tests {
                 ])
             }));
         }
+        if path == "/projects/9" {
+            return Ok(json!({"id": 9, "archived": false}));
+        }
         if path.ends_with("/merge_requests/7") {
             return Ok(
                 json!({"sha": "h", "diff_refs": mr()["diff_refs"], "description": "d".repeat(9000)}),
@@ -2193,6 +2221,59 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         let prefs = MrPrefs::load(d.path());
         assert!(prefs.requested.is_empty() && prefs.skip.contains("work:9!6"));
         assert!(plugin.discover(&ctx_in(d.path())).unwrap().is_empty());
+    }
+
+    fn archive_handler(rows: Value) -> Arc<Conn> {
+        Conn::new(move |m, p, _| match p {
+            "/projects/3" => Ok(json!({"id": 3, "archived": true})),
+            "/projects/4" => {
+                Ok(json!({"id": 4, "archived": false, "marked_for_deletion_at": "2026-10-01"}))
+            }
+            "/projects/5" => Err(http_err(Some(500))),
+            _ if p.starts_with("/merge_requests?") => Ok(rows.clone()),
+            _ => d_handler(m, p, None),
+        })
+    }
+
+    #[test]
+    fn discover_skips_mrs_in_archived_or_deleted_projects() {
+        let conn = archive_handler(json!([
+            {"project_id": 3, "iid": 1, "author": {"id": 2}, "title": "archived"},
+            {"project_id": 4, "iid": 2, "author": {"id": 2}, "title": "being deleted"},
+            {"project_id": 9, "iid": 7, "author": {"id": 2}, "title": "T"}
+        ]));
+        let items = plugin_with(conn.clone()).discover(&c()).unwrap();
+        assert_eq!(
+            items.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["mr:work:9!7@h"]
+        );
+        let calls: Vec<String> = conn.calls().into_iter().map(|c| c.1).collect();
+        assert!(!calls
+            .iter()
+            .any(|p| p.contains("/projects/3/") || p.contains("/projects/4/")));
+        // One lookup per project, however many roles listed its MRs.
+        assert_eq!(calls.iter().filter(|p| *p == "/projects/9").count(), 1);
+        assert!(calls
+            .iter()
+            .filter(|p| p.starts_with("/merge_requests?"))
+            .all(|p| p.contains("non_archived=true")));
+    }
+
+    #[test]
+    fn list_my_mrs_hides_archived_projects_and_keeps_unknown_ones() {
+        let conn = archive_handler(json!([
+            {"project_id": 3, "iid": 1, "title": "archived", "author": {"id": 2}},
+            {"project_id": 5, "iid": 2, "title": "lookup failed", "author": {"id": 2}},
+            {"project_id": 9, "iid": 3, "title": "active", "author": {"id": 2}}
+        ]));
+        let out = list_my_mrs(&Source {
+            accounts: vec![Account::new("work", "gitlab")],
+            conn,
+        });
+        assert!(out[0].error.is_none());
+        let mut iids: Vec<&str> = out[0].mrs.iter().map(|m| m.iid.as_str()).collect();
+        iids.sort();
+        assert_eq!(iids, ["2", "3"]);
     }
 
     #[test]
