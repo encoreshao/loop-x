@@ -135,6 +135,49 @@ pub fn screenshot_pairs(
     (pairs, notes)
 }
 
+/// One pair after its images were uploaded; the strings are GitLab upload URLs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadedPair {
+    pub label: String,
+    pub before: Option<String>,
+    pub after: String,
+}
+
+/// Make a label safe inside bold text and a Markdown table.
+fn escape_label(label: &str) -> String {
+    label
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('|', "\\|")
+        .replace(['\n', '\r'], " ")
+}
+
+/// The merge request description's "## Screenshots" section, or `None` when
+/// there is neither a pair nor a note to show.
+pub fn screenshots_section(pairs: &[UploadedPair], note: Option<&str>) -> Option<String> {
+    let note = note.map(str::trim).filter(|n| !n.is_empty());
+    if pairs.is_empty() && note.is_none() {
+        return None;
+    }
+    let mut blocks = vec!["## Screenshots".to_string()];
+    for pair in pairs {
+        let before = match &pair.before {
+            Some(url) => format!("![before]({url})"),
+            None => "New page \u{2014} no before".to_string(),
+        };
+        blocks.push(format!(
+            "**{}**\n\n| Before | After |\n|---|---|\n| {before} | ![after]({}) |",
+            escape_label(&pair.label),
+            pair.after
+        ));
+    }
+    if let Some(note) = note {
+        blocks.push(note.to_string());
+    }
+    Some(blocks.join("\n\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +277,59 @@ mod tests {
             screens_dir(Path::new("/r"), "web", "42"),
             PathBuf::from("/r/outputs/screens/web-42")
         );
+    }
+
+    fn up(label: &str, before: Option<&str>, after: &str) -> UploadedPair {
+        UploadedPair {
+            label: label.into(),
+            before: before.map(String::from),
+            after: after.into(),
+        }
+    }
+
+    #[test]
+    fn section_renders_a_before_after_table_per_pair() {
+        let pairs = [up(
+            "Status select",
+            Some("/uploads/a/b.png"),
+            "/uploads/c/d.png",
+        )];
+        assert_eq!(
+            screenshots_section(&pairs, None).unwrap(),
+            "## Screenshots\n\n**Status select**\n\n| Before | After |\n|---|---|\n| ![before](/uploads/a/b.png) | ![after](/uploads/c/d.png) |"
+        );
+    }
+
+    #[test]
+    fn two_pairs_are_separated_by_a_blank_line_and_a_note_comes_last() {
+        let pairs = [up("a", None, "/u/1.png"), up("b", None, "/u/2.png")];
+        let out = screenshots_section(&pairs, Some("Only 6 shown")).unwrap();
+        assert!(out.contains("|\n\n**b**"), "{out}");
+        assert!(out.ends_with("|\n\nOnly 6 shown"), "{out}");
+    }
+
+    #[test]
+    fn missing_before_cell_says_new_page() {
+        let out = screenshots_section(&[up("x", None, "/u/1.png")], None).unwrap();
+        assert!(out.contains("| New page \u{2014} no before | ![after](/u/1.png) |"));
+    }
+
+    #[test]
+    fn note_only_gives_one_line_section() {
+        assert_eq!(
+            screenshots_section(&[], Some("Capture failed: no Chrome")).unwrap(),
+            "## Screenshots\n\nCapture failed: no Chrome"
+        );
+    }
+
+    #[test]
+    fn nothing_gives_none() {
+        assert_eq!(screenshots_section(&[], None), None);
+    }
+
+    #[test]
+    fn labels_are_markdown_safe() {
+        let out = screenshots_section(&[up("a|b <script>", None, "/u/1.png")], None).unwrap();
+        assert!(out.contains("**a\\|b &lt;script&gt;**"), "{out}");
     }
 }
