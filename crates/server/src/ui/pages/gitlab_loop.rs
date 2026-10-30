@@ -191,8 +191,20 @@ fn render(name: &str, scope: &Scope) -> String {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The last fetched Tasks data ([`crate::ui::live_cache`]), painted while `/gitlab/live` loads.
+const TASKS_CACHE: &str = "gitlab-tasks";
+
+/// Paints the last fetched list at once (under a "refreshing" note) when there
+/// is one, else a spinner; `/gitlab/live` then swaps in the fresh list.
 fn tasks_body(ctx: &UiCtx) -> String {
-    render("gitlab_tasks_body", &Scope::new(ctx.lang))
+    let cached = crate::ui::live_cache::read(ctx.state, TASKS_CACHE)
+        .and_then(|(data, saved)| Some((live_fragment_html(ctx, &tasks_cache_from(&data)?), saved)));
+    let mut scope = Scope::new(ctx.lang);
+    scope.var(
+        "lazy_inner",
+        crate::ui::live_cache::placeholder(ctx, cached, &ctx.t("Loading live GitLab data")),
+    );
+    render("gitlab_tasks_body", &scope)
 }
 
 fn projects_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
@@ -586,6 +598,7 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
 // GET /gitlab/live
 
 /// One project alias's `{issues, mrs, issues_error, mrs_error}`.
+#[derive(Debug, Clone)]
 pub struct AliasState {
     pub issues: Vec<Value>,
     pub mrs: Vec<Value>,
@@ -820,7 +833,68 @@ fn is_mine(item: &Value) -> bool {
 }
 
 fn live_fragment(ctx: &UiCtx) -> UiResponse {
-    UiResponse::html(live_fragment_html(ctx, &live_state(ctx)))
+    let live = live_state(ctx);
+    let previous = crate::ui::live_cache::read(ctx.state, TASKS_CACHE)
+        .and_then(|(d, _)| tasks_cache_from(&d))
+        .unwrap_or_default();
+    crate::ui::live_cache::write(
+        ctx.state,
+        TASKS_CACHE,
+        tasks_cache_json(&merge_tasks_cache(&previous, live.clone())),
+    );
+    UiResponse::html(live_fragment_html(ctx, &live))
+}
+
+fn tasks_cache_json(live: &[(String, AliasState)]) -> Value {
+    Value::Array(
+        live.iter()
+            .map(|(alias, s)| {
+                json!({"alias": alias, "issues": s.issues, "mrs": s.mrs,
+                       "issues_error": s.issues_error, "mrs_error": s.mrs_error})
+            })
+            .collect(),
+    )
+}
+
+fn tasks_cache_from(data: &Value) -> Option<Vec<(String, AliasState)>> {
+    let list = |v: &Value, k: &str| v.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+    data.as_array()?
+        .iter()
+        .map(|v| {
+            Some((
+                text(v, "alias")?,
+                AliasState {
+                    issues: list(v, "issues"),
+                    mrs: list(v, "mrs"),
+                    issues_error: text(v, "issues_error"),
+                    mrs_error: text(v, "mrs_error"),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// What to cache after a fetch: the fresh data, except that a failed half
+/// (issues or MRs) of a project keeps its last good rows (the page itself
+/// still shows the error).
+fn merge_tasks_cache(previous: &[(String, AliasState)], fresh: Vec<(String, AliasState)>) -> Vec<(String, AliasState)> {
+    fresh
+        .into_iter()
+        .map(|(alias, mut s)| {
+            if let Some((_, old)) = previous.iter().find(|(a, _)| *a == alias) {
+                if s.issues_error.is_some() && old.issues_error.is_none() {
+                    s.issues = old.issues.clone();
+                    s.issues_error = None;
+                }
+                if s.mrs_error.is_some() && old.mrs_error.is_none() {
+                    s.mrs = old.mrs.clone();
+                    s.mrs_error = None;
+                }
+            }
+            (alias, s)
+        })
+        .collect()
 }
 
 pub fn live_fragment_html(ctx: &UiCtx, live: &[(String, AliasState)]) -> String {
@@ -2108,5 +2182,33 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(!marker.exists());
     }
-}
 
+    fn state(issues: Vec<Value>, issues_error: Option<&str>) -> AliasState {
+        AliasState { issues, mrs: vec![], issues_error: issues_error.map(str::to_string), mrs_error: None }
+    }
+
+    #[test]
+    fn tasks_paint_the_cached_list_at_once_and_spin_only_without_one() {
+        let sb = Sandbox::new();
+        let body = tasks_body(&sb.ctx());
+        assert!(body.contains("data-lazy-load='/gitlab/live'") && body.contains("Loading live GitLab data"));
+        crate::ui::live_cache::write(&sb.state, TASKS_CACHE, tasks_cache_json(&[("app".into(), state(vec![], None))]));
+        let body = tasks_body(&sb.ctx());
+        assert!(body.contains("data-lazy-load='/gitlab/live'"));
+        assert!(!body.contains("Loading live GitLab data"), "{body}");
+        assert!(body.contains("refreshing") && body.contains("Nothing assigned to you right now."), "{body}");
+    }
+
+    #[test]
+    fn the_tasks_cache_round_trips_and_a_failed_fetch_keeps_the_last_good_data() {
+        let old = vec![("app".to_string(), state(vec![json!({"iid": 1})], None))];
+        let back = tasks_cache_from(&tasks_cache_json(&old)).unwrap();
+        assert_eq!(back[0].0, "app");
+        assert_eq!(back[0].1.issues, vec![json!({"iid": 1})]);
+        let fresh = vec![("app".to_string(), state(vec![], Some("timeout")))];
+        let merged = merge_tasks_cache(&old, fresh);
+        assert_eq!(merged[0].1.issues, vec![json!({"iid": 1})]);
+        assert!(merged[0].1.issues_error.is_none());
+        assert!(tasks_cache_from(&json!({"not": "a list"})).is_none());
+    }
+}

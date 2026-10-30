@@ -1243,5 +1243,6 @@
   "Skipped by you": "Ignorée par vous",
   "Draft · not reviewed": "Brouillon · non relue",
   "Your MR · not reviewed": "Votre MR · non relue",
-  "Loading your merge requests": "Chargement de vos merge requests"
+  "Loading your merge requests": "Chargement de vos merge requests",
+  "Updated {when} · refreshing…": "Mis à jour {when} · actualisation…"
 }

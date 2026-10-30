@@ -17,6 +17,8 @@ use serde_json::{Map, Value};
 use std::path::PathBuf;
 
 pub const LOOP: &str = "mr-review-loop";
+/// The last fetched list ([`crate::ui::live_cache`]), painted while the fresh one loads.
+pub const MRS_CACHE: &str = "mr-review-mrs";
 const BACK: &str = "/loops/mr-review-loop?view=mrs";
 
 pub fn register(r: &mut Registry) {
@@ -292,21 +294,44 @@ pub fn mrs_html(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>) -> String 
     )
 }
 
-/// The view paints at once with a spinner; the shell's `data-lazy-load`
-/// handler then fetches the list (a few GitLab calls per account) from
-/// [`mrs_fragment`], as GitLab → Tasks does.
+/// The view paints at once: the last fetched list when there is one (under a
+/// "refreshing" note), else a spinner. The shell's `data-lazy-load` handler then
+/// swaps in the fresh list from [`mrs_fragment`], as GitLab → Tasks does. Review
+/// states and Auto review always come from the current prefs, not the cache.
 pub fn mrs_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
+    let cached = crate::ui::live_cache::read(ctx.state, MRS_CACHE).and_then(|(data, saved)| {
+        let accounts: Vec<AccountMrs> = serde_json::from_value(data).ok()?;
+        Some((mrs_html(ctx, Ok(accounts)), saved))
+    });
     format!(
-        "{}<div data-lazy-load='/loops/mr-review-loop/mrs/fragment'>\
-<div class=\"lazy-loading\"><div class=\"md-spinner\"></div><p class=\"loading-text\">{}\
-<span class=\"loading-dots\"><span>.</span><span>.</span><span>.</span></span></p></div></div>",
+        "{}<div data-lazy-load='/loops/mr-review-loop/mrs/fragment'>{}</div>",
         flash_html(flash, ok),
-        h(&ctx.t("Loading your merge requests"))
+        crate::ui::live_cache::placeholder(ctx, cached, &ctx.t("Loading your merge requests"))
     )
 }
 
+/// What to cache after a fetch: the fresh list, except that an account whose
+/// fetch failed keeps its last good MRs (the page itself still shows the error).
+fn merge_cache(previous: &Value, fresh: &[AccountMrs]) -> Vec<AccountMrs> {
+    let previous: Vec<AccountMrs> = serde_json::from_value(previous.clone()).unwrap_or_default();
+    fresh
+        .iter()
+        .map(|a| match (&a.error, previous.iter().find(|p| p.account_id == a.account_id)) {
+            (Some(_), Some(p)) => AccountMrs { error: None, ..p.clone() },
+            _ => a.clone(),
+        })
+        .collect()
+}
+
 fn mrs_fragment(ctx: &UiCtx) -> UiResponse {
-    UiResponse::html(mrs_html(ctx, list_mrs(ctx)))
+    let listed = list_mrs(ctx);
+    if let Ok(fresh) = &listed {
+        let previous = crate::ui::live_cache::read(ctx.state, MRS_CACHE).map_or(Value::Null, |(d, _)| d);
+        if let Ok(data) = serde_json::to_value(merge_cache(&previous, fresh)) {
+            crate::ui::live_cache::write(ctx.state, MRS_CACHE, data);
+        }
+    }
+    UiResponse::html(mrs_html(ctx, listed))
 }
 
 // ---- POSTs ------------------------------------------------------------------------------------
@@ -457,6 +482,48 @@ mod tests {
             .unwrap();
         assert_eq!(frag.status, 200);
         assert!(!frag.body_text().contains("<html"), "a fragment, not a page");
+    }
+
+    #[test]
+    fn a_cached_list_paints_at_once_and_the_spinner_only_shows_without_one() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let req = UiRequest::get("/loops/mr-review-loop?view=mrs");
+        let ctx = UiCtx::new(&st, &req);
+        assert!(mrs_body(&ctx, None, true).contains("Loading your merge requests"));
+        crate::ui::live_cache::write(&st, MRS_CACHE, serde_json::to_value(vec![account(vec![mr("1", |_| {})])]).unwrap());
+        // Auto review reflects the current choice, not the one when cached.
+        MrPrefs::update(&d.path().join("outputs/loops"), |p| {
+            p.skip.insert("work:9!1".into());
+        })
+        .unwrap();
+        let body = mrs_body(&ctx, None, true);
+        assert!(body.contains("data-lazy-load='/loops/mr-review-loop/mrs/fragment'"));
+        assert!(body.contains("MR &lt;1&gt;") && body.contains("refreshing"), "{body}");
+        assert!(!body.contains("Loading your merge requests"));
+        assert!(body.contains("class='switch is-off'"));
+    }
+
+    #[test]
+    fn the_fragment_saves_what_it_fetched() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        assert!(crate::ui::live_cache::read(&st, MRS_CACHE).is_none());
+        st.registry.dispatch(&st, &UiRequest::get("/loops/mr-review-loop/mrs/fragment")).unwrap();
+        assert_eq!(crate::ui::live_cache::read(&st, MRS_CACHE).unwrap().0, json!([]));
+    }
+
+    #[test]
+    fn a_failing_account_keeps_its_last_good_list_in_the_cache() {
+        let old = vec![account(vec![mr("1", |_| {})]), AccountMrs { account_id: "gone".into(), ..account(vec![]) }];
+        let mut bad = account(vec![]);
+        bad.error = Some("MailHTTPError".into());
+        let merged = merge_cache(&serde_json::to_value(&old).unwrap(), &[bad]);
+        assert_eq!(merged.len(), 1, "an account no longer configured is dropped");
+        assert_eq!(merged[0].mrs.len(), 1);
+        assert!(merged[0].error.is_none());
+        let fresh = vec![account(vec![mr("2", |_| {})])];
+        assert_eq!(merge_cache(&serde_json::to_value(&old).unwrap(), &fresh), fresh);
     }
 
     #[test]

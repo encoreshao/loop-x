@@ -27,6 +27,7 @@ pub mod glue;
 pub mod hub;
 pub mod i18n;
 pub mod icons;
+pub mod live_cache;
 pub mod logos;
 pub mod markdown;
 pub mod nav;

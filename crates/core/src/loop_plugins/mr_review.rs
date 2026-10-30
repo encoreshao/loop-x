@@ -622,7 +622,8 @@ impl MrPrefs {
 }
 
 /// One open MR the user authored or is assigned to (as assignee or reviewer).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MyMr {
     pub account: String,
     pub project_id: String,
@@ -686,7 +687,8 @@ pub fn review_state(mr: &MyMr, prefs: &MrPrefs, seen: impl Fn(&str) -> bool) -> 
 }
 
 /// The MRs of one GitLab account; `error` is a safe class name only.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AccountMrs {
     pub account_id: String,
     pub account_label: String,
