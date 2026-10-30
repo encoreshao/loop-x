@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-30
+
 ### Added
 - MR Review: a new Merge requests tab lists your open MRs live from GitLab, split into "Assigned to you" and "Created by you", each with its title, reference, author, age and review state. Per MR you can turn Auto review off (the loop skips it) or press Review now to review it right away, even if its current commit was already reviewed. The tab opens at once with a loading spinner and fills in when GitLab answers, like GitLab → Tasks.
 
@@ -525,7 +527,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/encoreshao/loop-x/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/encoreshao/loop-x/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/encoreshao/loop-x/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/encoreshao/loop-x/compare/v0.11.0...v0.12.0
