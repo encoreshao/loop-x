@@ -1115,6 +1115,14 @@ pub fn finalize_gated_issue(
         .handoff
         .clone()
         .unwrap_or_else(|| handoff_path(run_id, alias, issue_iid, &ctx.repo_root));
+    // Cleaned up whatever the outcome, so it reads the handoff itself (valid or not).
+    let _cleanup = ScreenshotCleanup {
+        data: std::fs::read_to_string(&handoff)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok()),
+        handoff_dir: handoff.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        screens_dir: mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid),
+    };
     let issue_run_id = format!("{run_id}_{alias}_{issue_iid}");
     let iid_num: Option<i64> = issue_iid.parse().ok();
     let log = |text: &str| ctx.log(&format!("gate finalize {alias} #{issue_iid}: {text}"));
@@ -1222,11 +1230,6 @@ pub fn finalize_gated_issue(
     let data = read_handoff(&handoff, issue_iid);
     let screens = mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid);
     let handoff_dir = handoff.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let _cleanup = ScreenshotCleanup {
-        data: data.clone(),
-        handoff_dir: handoff_dir.clone(),
-        screens_dir: screens.clone(),
-    };
     if let Some(outcome) = data
         .as_ref()
         .and_then(|d| d.get("action"))
@@ -2449,6 +2452,17 @@ mod tests {
         final_state: LoopState,
         setup: impl Fn(&Path, &Path),
     ) -> Shots {
+        finalize_shots_with(handoff, uploads_ok, final_state, setup, None, None)
+    }
+
+    fn finalize_shots_with(
+        handoff: Value,
+        uploads_ok: bool,
+        final_state: LoopState,
+        setup: impl Fn(&Path, &Path),
+        checkout_problem: Option<String>,
+        project: Option<Value>,
+    ) -> Shots {
         let d = tempfile::tempdir().unwrap();
         let handoff_dir = d.path().join("handoff");
         let screens = crate::mr_screenshots::screens_dir(d.path(), "web", "7");
@@ -2496,7 +2510,10 @@ mod tests {
                 gitlab: Some(&gl),
                 notifier: Some(&notifier),
                 handoff: Some(path),
-                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                project: Some(project.unwrap_or_else(
+                    || json!({"project_id": "g/p", "local_path": "/x", "instance": "g"}),
+                )),
+                checkout_problem,
                 gitlab_config_path: Some(d.path().join("none.json")),
                 require_approval: Some(false),
                 ..Default::default()
@@ -2605,6 +2622,46 @@ mod tests {
             assert!(!screens.exists(), "{}", s.outcome);
             assert!(!handoff_dir.join("1-before.png").exists(), "{}", s.outcome);
             assert!(handoff_dir.join("h.json").exists(), "{}", s.outcome);
+        }
+    }
+
+    #[test]
+    fn screenshot_files_are_deleted_on_early_escalations_too() {
+        let shots = json!({"screenshots":
+            [{"label": "Home", "before": "1-before.png", "after": "1-after.png"}]});
+        // A handoff read_handoff rejects (no title/branch) still names images.
+        let mut invalid =
+            json!({"action": "fix", "branch": "wrong", "screenshots": shots["screenshots"]});
+        invalid["target_branch"] = json!("main");
+        let cases = [
+            (invalid, None, None, "escalated:handoff_invalid"),
+            (
+                fix_with_shots(shots.clone()),
+                Some("dirty".to_string()),
+                None,
+                "escalated:checkout_problem",
+            ),
+            (
+                fix_with_shots(shots.clone()),
+                None,
+                Some(json!({"local_path": "/x"})),
+                "escalated:project_config_error",
+            ),
+        ];
+        for (handoff, problem, project, want) in cases {
+            let s = finalize_shots_with(
+                handoff,
+                true,
+                LoopState::Completed,
+                make_pair_files,
+                problem,
+                project,
+            );
+            assert_eq!(s.outcome, want);
+            let handoff_dir = s.dir.path().join("handoff");
+            let screens = crate::mr_screenshots::screens_dir(s.dir.path(), "web", "7");
+            assert!(!screens.exists(), "{want}");
+            assert!(!handoff_dir.join("1-before.png").exists(), "{want}");
         }
     }
 
