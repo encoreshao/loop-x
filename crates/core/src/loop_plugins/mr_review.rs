@@ -1,8 +1,13 @@
-//! MR Review loop on LoopKit: pre-reviews GitLab merge requests where the user
-//! is a reviewer and leaves the findings as *draft* review notes only (mirrors
+//! MR Review loop on LoopKit: pre-reviews open, non-draft GitLab merge requests
+//! assigned to the user (as assignee or reviewer, never their own) and leaves
+//! the findings as *draft* review notes only (mirrors
 //! `bin/loop_plugins/mr_review.py`). The user publishes them from the MR
 //! (Review -> Submit). This plugin never calls bulk_publish, approve, or the
 //! published `/notes` endpoint.
+//!
+//! The dashboard's Merge requests tab lists the user's MRs ([`list_my_mrs`])
+//! and keeps per-MR choices in [`MrPrefs`]: MRs to skip, and MRs to review on
+//! the next run even when already reviewed.
 #![allow(
     clippy::type_complexity,
     clippy::field_reassign_with_default,
@@ -15,6 +20,7 @@ use crate::loops_config::{py_str, py_truthy};
 use crate::seen_store::SeenStore;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub const DIFF_CAP_BYTES: usize = 150_000;
@@ -24,8 +30,26 @@ pub const MAX_BODY: usize = 2000;
 pub const MAX_SUMMARY: usize = 600;
 const MAX_DIFF_PAGES: u32 = 20;
 const MAX_DRAFT_PAGES: u32 = 20;
+pub const MAX_TITLE: usize = 120;
+pub const MAX_OVERVIEW: usize = 4;
+pub const MAX_RISKS: usize = 8;
+pub const MAX_NOTE: usize = 300;
 const SEVERITIES: [&str; 4] = ["nit", "minor", "major", "blocker"];
+const VERDICTS: [&str; 3] = ["approve", "comment", "request_changes"];
+const LEVELS: [&str; 3] = ["low", "medium", "high"];
+/// `(key, label)`; the model answers with the key.
+const AREAS: [(&str, &str); 8] = [
+    ("correctness", "Correctness"),
+    ("security", "Security"),
+    ("performance", "Performance"),
+    ("data", "Data & migrations"),
+    ("reliability", "Reliability"),
+    ("compatibility", "Compatibility"),
+    ("tests", "Tests"),
+    ("maintainability", "Maintainability"),
+];
 const SIGNATURE: &str = "\n\n_\u{2014} LoopX pre-review_";
+const PREFS_FILE: &str = "mr-prefs.json";
 pub const DENIED_MESSAGE: &str = "token needs the api scope to write draft notes";
 
 /// What a poster can fail with.
@@ -307,11 +331,7 @@ fn post_all(
         .unwrap_or_default()
     {
         let path = py_str(&f["path"]);
-        let note = format!(
-            "**[{}]** {}{SIGNATURE}",
-            py_str(&f["severity"]),
-            defuse(&py_str(&f["body"]))
-        );
+        let note = format!("{}{SIGNATURE}", finding_note(&f));
         let mut position = Map::new();
         position.insert("position_type".into(), json!("text"));
         for k in ["base_sha", "start_sha", "head_sha"] {
@@ -342,25 +362,153 @@ fn post_all(
         }
         *drafts += 1;
     }
-    let summary = defuse(
-        py_str(
-            answer
-                .get("summary")
-                .filter(|v| py_truthy(v))
-                .unwrap_or(&json!("")),
-        )
-        .trim(),
-    );
-    if !summary.is_empty() {
-        post_draft(
-            conn,
-            mr,
-            &format!("**Summary:** {summary}{SIGNATURE}"),
-            None,
-        )?;
+    if let Some(summary) = summary_note(answer) {
+        post_draft(conn, mr, &format!("{summary}{SIGNATURE}"), None)?;
         *drafts += 1;
     }
     Ok(())
+}
+
+fn text_of(v: &Value, key: &str) -> String {
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn severity_badge(sev: &str) -> &'static str {
+    match sev {
+        "blocker" => "\u{1f534} **Blocker**",
+        "major" => "\u{1f7e0} **Major**",
+        "minor" => "\u{1f7e1} **Minor**",
+        _ => "\u{26aa} **Nit**",
+    }
+}
+
+fn area_label(key: &str) -> &'static str {
+    AREAS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map_or("Correctness", |(_, l)| l)
+}
+
+/// One line for a Markdown table cell.
+fn cell(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
+}
+
+/// An inline draft note: severity and area up front, then the problem and
+/// (when given) the fix, so it reads at a glance in the MR.
+pub fn finding_note(f: &Value) -> String {
+    let sev = text_of(f, "severity");
+    let title = text_of(f, "title");
+    let mut head = format!(
+        "{} \u{b7} {}",
+        severity_badge(&sev),
+        area_label(&text_of(f, "category"))
+    );
+    if !title.is_empty() {
+        head.push_str(&format!(" \u{2014} {}", defuse(&title)));
+    }
+    let mut note = format!("{head}\n\n{}", defuse(&text_of(f, "body")));
+    let fix = text_of(f, "suggestion");
+    if !fix.is_empty() {
+        note.push_str(&format!("\n\n**Suggested fix:** {}", defuse(&fix)));
+    }
+    note
+}
+
+/// The overall review note: verdict, what the MR does, a risk table by area
+/// and the findings index. `None` when the answer has nothing to say.
+pub fn summary_note(answer: &Value) -> Option<String> {
+    let summary = text_of(answer, "summary");
+    let overview: Vec<String> = answer
+        .get("overview")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(defuse)
+        .collect();
+    let risks: Vec<&Value> = answer
+        .get("risks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let findings: Vec<&Value> = answer
+        .get("findings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    if summary.is_empty() && overview.is_empty() && risks.is_empty() && findings.is_empty() {
+        return None;
+    }
+    let verdict = match answer.get("verdict").and_then(Value::as_str) {
+        Some("request_changes") => "\u{26d4} Changes requested",
+        Some("approve") => "\u{2705} Looks good to merge",
+        _ => "\u{1f4ac} Mergeable after comments",
+    };
+    let mut out = vec![format!("### LoopX pre-review \u{2014} {verdict}")];
+    if !summary.is_empty() {
+        out.push(defuse(&summary));
+    }
+    if !overview.is_empty() {
+        let bullets: Vec<String> = overview.iter().map(|b| format!("- {b}")).collect();
+        out.push(format!("**What this MR does**\n{}", bullets.join("\n")));
+    }
+    if risks.is_empty() {
+        out.push("**Risk assessment:** no notable risks found.".to_string());
+    } else {
+        let mut table = vec![
+            "**Risk assessment**".to_string(),
+            String::new(),
+            "| Area | Level | Notes |".to_string(),
+            "| --- | --- | --- |".to_string(),
+        ];
+        for r in risks {
+            let level = match text_of(r, "level").as_str() {
+                "high" => "\u{1f534} High",
+                "medium" => "\u{1f7e0} Medium",
+                _ => "\u{1f7e2} Low",
+            };
+            table.push(format!(
+                "| {} | {level} | {} |",
+                area_label(&text_of(r, "area")),
+                cell(&defuse(&text_of(r, "note")))
+            ));
+        }
+        out.push(table.join("\n"));
+    }
+    if findings.is_empty() {
+        out.push("**Findings:** none worth raising.".to_string());
+    } else {
+        let mut lines = vec!["**Findings** (posted as inline notes)".to_string()];
+        for f in findings {
+            let title = text_of(f, "title");
+            let title = if title.is_empty() {
+                text_of(f, "body").chars().take(MAX_TITLE).collect()
+            } else {
+                title
+            };
+            lines.push(format!(
+                "- {} \u{b7} {} \u{2014} `{}:{}` {}",
+                severity_badge(&text_of(f, "severity")),
+                area_label(&text_of(f, "category")),
+                py_str(&f["path"]).replace('`', "'"),
+                py_str(&f["line"]),
+                cell(&defuse(&title))
+            ));
+        }
+        out.push(lines.join("\n"));
+    }
+    Some(out.join("\n\n"))
 }
 
 /// Returns `{"drafts", "fallback_general"}` (+ `"partial": ClassName` when a
@@ -382,6 +530,261 @@ pub fn post_review(conn: &dyn Connector, mr: &Value, answer: &Value) -> Result<V
             Err(PostError::Other(e))
         }
     }
+}
+
+fn verdict_label(verdict: &str) -> &'static str {
+    match verdict {
+        "approve" => "Looks good",
+        "request_changes" => "Changes requested",
+        _ => "Comments",
+    }
+}
+
+/// Is this MR a draft? GitLab's `draft` flag (`work_in_progress` before 13.x),
+/// or a draft title prefix.
+pub fn is_draft(mr: &Value) -> bool {
+    let flag = |k: &str| mr.get(k).and_then(Value::as_bool) == Some(true);
+    let title = mr
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim_start()
+        .to_lowercase();
+    flag("draft")
+        || flag("work_in_progress")
+        || ["draft:", "[draft]", "(draft)", "draft -", "wip:", "[wip]"]
+            .iter()
+            .any(|p| title.starts_with(p))
+}
+
+/// One MR regardless of its head SHA: `account:project_id!iid`.
+pub fn mr_ref(account_id: &str, project_id: &str, iid: &str) -> String {
+    format!("{account_id}:{project_id}!{iid}")
+}
+
+fn row_ref(account_id: &str, row: &Value) -> String {
+    mr_ref(
+        account_id,
+        &row.get("project_id").map_or("None".into(), py_str),
+        &row.get("iid").map_or("None".into(), py_str),
+    )
+}
+
+/// The user's per-MR choices, kept beside the loop's `seen.json`
+/// (`<state root>/mr-review-loop/mr-prefs.json`): MRs never to review, and
+/// MRs to review on the next run even when already reviewed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MrPrefs {
+    pub skip: BTreeSet<String>,
+    pub requested: BTreeSet<String>,
+}
+
+impl MrPrefs {
+    pub fn path(state_root: &Path) -> PathBuf {
+        state_root.join("mr-review-loop").join(PREFS_FILE)
+    }
+
+    /// Missing or malformed reads as empty.
+    pub fn load(state_root: &Path) -> Self {
+        let data: Value = std::fs::read_to_string(Self::path(state_root))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null);
+        let set = |k: &str| {
+            data.get(k)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        };
+        Self {
+            skip: set("skip"),
+            requested: set("requested"),
+        }
+    }
+
+    /// Load, change, and write back atomically.
+    pub fn update(state_root: &Path, change: impl FnOnce(&mut Self)) -> std::io::Result<Self> {
+        let mut prefs = Self::load(state_root);
+        change(&mut prefs);
+        let path = Self::path(state_root);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        let body = json!({"skip": prefs.skip, "requested": prefs.requested});
+        std::fs::write(&tmp, serde_json::to_string_pretty(&body)? + "\n")?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(prefs)
+    }
+}
+
+/// One open MR the user authored or is assigned to (as assignee or reviewer).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MyMr {
+    pub account: String,
+    pub project_id: String,
+    pub iid: String,
+    pub title: String,
+    pub web_url: String,
+    /// `group/project!iid`.
+    pub reference: String,
+    pub author: String,
+    pub author_username: String,
+    pub created_at: String,
+    pub sha: String,
+    pub draft: bool,
+    pub authored: bool,
+    pub assignee: bool,
+    pub reviewer: bool,
+}
+
+impl MyMr {
+    pub fn mr_ref(&self) -> String {
+        mr_ref(&self.account, &self.project_id, &self.iid)
+    }
+
+    /// Is it assigned to the user (and not their own)? Only these are reviewed.
+    pub fn reviewable(&self) -> bool {
+        (self.assignee || self.reviewer) && !self.authored
+    }
+}
+
+/// Where an MR stands with the review loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewState {
+    /// The user's own MR: never reviewed.
+    Own,
+    Draft,
+    /// The user chose to skip it.
+    Skipped,
+    /// "Review now" was pressed; the next run reviews it.
+    Requested,
+    /// Its current head SHA has been reviewed.
+    Reviewed,
+    /// New, or new commits since the last review: the next run reviews it.
+    Pending,
+}
+
+pub fn review_state(mr: &MyMr, prefs: &MrPrefs, seen: impl Fn(&str) -> bool) -> ReviewState {
+    let r = mr.mr_ref();
+    if !mr.reviewable() {
+        ReviewState::Own
+    } else if mr.draft {
+        ReviewState::Draft
+    } else if prefs.requested.contains(&r) {
+        ReviewState::Requested
+    } else if prefs.skip.contains(&r) {
+        ReviewState::Skipped
+    } else if !mr.sha.is_empty() && seen(&item_key(&mr.account, &mr.project_id, &mr.iid, &mr.sha)) {
+        ReviewState::Reviewed
+    } else {
+        ReviewState::Pending
+    }
+}
+
+/// The MRs of one GitLab account; `error` is a safe class name only.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AccountMrs {
+    pub account_id: String,
+    pub account_label: String,
+    pub mrs: Vec<MyMr>,
+    pub error: Option<String>,
+}
+
+const MY_MR_ROLES: [&str; 3] = ["author_id", "assignee_id", "reviewer_id"];
+
+fn my_mrs(conn: &dyn Connector, account_id: &str) -> Result<Vec<MyMr>, ConnectorError> {
+    let me = conn.api("GET", "/user", &ApiOpts::default())?;
+    let id = me
+        .get("id")
+        .map(py_str)
+        .ok_or_else(|| ConnectorError::Other {
+            class: "KeyError".into(),
+            detail: "id".into(),
+        })?;
+    let mut out: Vec<MyMr> = Vec::new();
+    for role in MY_MR_ROLES {
+        let rows = conn.api(
+            "GET",
+            &format!("/merge_requests?{role}={id}&state=opened&scope=all&per_page=100"),
+            &ApiOpts::default(),
+        )?;
+        for row in rows.as_array().into_iter().flatten() {
+            let s = |k: &str| {
+                row.get(k)
+                    .filter(|v| py_truthy(v))
+                    .map_or(String::new(), py_str)
+            };
+            let r = row_ref(account_id, row);
+            let i = match out.iter().position(|m| m.mr_ref() == r) {
+                Some(i) => i,
+                None => {
+                    let author = row.get("author").cloned().unwrap_or(Value::Null);
+                    let iid = s("iid");
+                    out.push(MyMr {
+                        account: account_id.to_string(),
+                        project_id: s("project_id"),
+                        reference: row
+                            .pointer("/references/full")
+                            .filter(|v| py_truthy(v))
+                            .map_or_else(|| format!("!{iid}"), py_str),
+                        iid,
+                        title: s("title"),
+                        web_url: s("web_url"),
+                        author: author.get("name").map_or(String::new(), py_str),
+                        author_username: author.get("username").map_or(String::new(), py_str),
+                        created_at: s("created_at"),
+                        sha: s("sha"),
+                        draft: is_draft(row),
+                        ..MyMr::default()
+                    });
+                    out.len() - 1
+                }
+            };
+            let mr = &mut out[i];
+            match role {
+                "author_id" => mr.authored = true,
+                "assignee_id" => mr.assignee = true,
+                _ => mr.reviewer = true,
+            }
+        }
+    }
+    // Newest first (ISO 8601 timestamps sort as text).
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(out)
+}
+
+/// Every GitLab account's open MRs that the user authored or is assigned to.
+/// An account that fails reports its error and does not stop the others.
+pub fn list_my_mrs(source: &dyn ConnectorSource) -> Vec<AccountMrs> {
+    source
+        .accounts_with_capability(crate::connectors::MERGE_REQUESTS)
+        .into_iter()
+        .filter(|a| a.kind == "gitlab")
+        .map(|account| {
+            let listed = source
+                .load(&account.id)
+                .map_err(|_| "KeyError".to_string())
+                .and_then(|c| my_mrs(c.as_ref(), &account.id).map_err(|e| e.class_name()));
+            let (mrs, error) = match listed {
+                Ok(m) => (m, None),
+                Err(e) => (Vec::new(), Some(e)),
+            };
+            AccountMrs {
+                account_label: if account.label.is_empty() {
+                    account.id.clone()
+                } else {
+                    account.label.clone()
+                },
+                account_id: account.id,
+                mrs,
+                error,
+            }
+        })
+        .collect()
 }
 
 fn sev_rank(name: &str) -> usize {
@@ -459,6 +862,9 @@ impl MrReview {
             &format!("/projects/{pid_s}/merge_requests/{iid_s}"),
             &ApiOpts::default(),
         )?;
+        if is_draft(&detail) {
+            return Ok(None);
+        }
         let empty = json!({});
         let refs = detail
             .get("diff_refs")
@@ -534,6 +940,23 @@ impl MrReview {
             }
         }
         let head_s = py_str(head);
+        let reference = detail
+            .pointer("/references/full")
+            .or_else(|| row.pointer("/references/full"))
+            .filter(|v| py_truthy(v))
+            .map_or_else(|| format!("!{iid_s}"), py_str);
+        let author = detail
+            .get("author")
+            .filter(|v| py_truthy(v))
+            .or_else(|| row.get("author"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let meta = json!({
+            "title": title, "ref": reference,
+            "author": author.get("name").map_or(String::new(), py_str),
+            "author_username": author.get("username").map_or(String::new(), py_str),
+            "created_at": pick("created_at"),
+        });
         Ok(Some(
             WorkItem::new(
                 item_key(account_id, &pid_s, &iid_s, &head_s),
@@ -547,7 +970,8 @@ impl MrReview {
                     "old_paths": old_paths,
                 }),
             )
-            .with_url(url),
+            .with_url(url)
+            .with_meta(meta),
         ))
     }
 }
@@ -563,11 +987,16 @@ impl LoopPlugin for MrReview {
         8
     }
     fn output_keys(&self) -> &[&'static str] {
-        &["summary", "findings"]
+        &["summary", "verdict", "overview", "risks", "findings"]
     }
 
     fn discover(&self, ctx: &LoopContext) -> Result<Vec<WorkItem>, PluginError> {
-        let mut items = Vec::new();
+        let state_root = ctx
+            .state_dir
+            .clone()
+            .unwrap_or_else(crate::seen_store::default_state_root);
+        let prefs = MrPrefs::load(&state_root);
+        let (mut requested, mut items) = (Vec::new(), Vec::new());
         for account in self
             .connectors
             .accounts_with_capability(crate::connectors::MERGE_REQUESTS)
@@ -588,12 +1017,25 @@ impl LoopPlugin for MrReview {
                     class: "KeyError".into(),
                     detail: "id".into(),
                 })?;
-                let rows = conn.api(
-                    "GET",
-                    &format!("/merge_requests?reviewer_id={}&state=opened&scope=all&draft=no&per_page=50", py_str(id)),
-                    &ApiOpts::default(),
-                )?;
-                Ok((conn, me, rows.as_array().cloned().unwrap_or_default()))
+                // Assigned to me: as a reviewer or as an assignee.
+                let mut rows: Vec<Value> = Vec::new();
+                let mut listed: BTreeSet<String> = BTreeSet::new();
+                for role in ["reviewer_id", "assignee_id"] {
+                    let batch = conn.api(
+                        "GET",
+                        &format!(
+                            "/merge_requests?{role}={}&state=opened&scope=all&draft=no&per_page=50",
+                            py_str(id)
+                        ),
+                        &ApiOpts::default(),
+                    )?;
+                    for row in batch.as_array().into_iter().flatten() {
+                        if listed.insert(row_ref(&account.id, row)) {
+                            rows.push(row.clone());
+                        }
+                    }
+                }
+                Ok((conn, me, rows))
             })();
             let (conn, me, rows) = match loaded {
                 Ok(v) => v,
@@ -607,6 +1049,14 @@ impl LoopPlugin for MrReview {
                 }
             };
             for row in &rows {
+                // Older GitLab ignores `draft=no`; never review a draft.
+                if is_draft(row) {
+                    continue;
+                }
+                let wanted = prefs.requested.contains(&row_ref(&account.id, row));
+                if !wanted && prefs.skip.contains(&row_ref(&account.id, row)) {
+                    continue;
+                }
                 // The list already carries the head SHA: skip a reviewed one
                 // before paying for its detail and diff requests.
                 if let Some(sha) = row.get("sha").filter(|v| py_truthy(v)) {
@@ -616,11 +1066,12 @@ impl LoopPlugin for MrReview {
                         &row.get("iid").map_or("None".into(), py_str),
                         &py_str(sha),
                     );
-                    if !ctx.force && self.already_seen(&key, ctx) {
+                    if !ctx.force && !wanted && self.already_seen(&key, ctx) {
                         continue;
                     }
                 }
                 match self.item(conn.as_ref(), &account.id, &me, row) {
+                    Ok(Some(item)) if wanted => requested.push(item.with_force()),
                     Ok(Some(item)) => items.push(item),
                     Ok(None) => {}
                     Err(e) => ctx.log(&format!(
@@ -631,7 +1082,18 @@ impl LoopPlugin for MrReview {
                 }
             }
         }
-        Ok(items)
+        // A request is answered by this run (or the MR is gone): drop it.
+        if !prefs.requested.is_empty() {
+            let taken = prefs.requested.clone();
+            if let Err(e) = MrPrefs::update(&state_root, |p| {
+                p.requested.retain(|r| !taken.contains(r));
+            }) {
+                ctx.log(&format!("mr-review: could not save requests: {e}"));
+            }
+        }
+        // Requested MRs first, so the per-run cap never drops them.
+        requested.extend(items);
+        Ok(requested)
     }
 
     fn after_item(
@@ -677,18 +1139,66 @@ impl LoopPlugin for MrReview {
             {
                 continue;
             }
+            let short = |k: &str, cap: usize| {
+                obj.get(k)
+                    .and_then(Value::as_str)
+                    .map(|t| t.trim().chars().take(cap).collect::<String>())
+                    .unwrap_or_default()
+            };
+            let category = obj
+                .get("category")
+                .and_then(Value::as_str)
+                .filter(|c| AREAS.iter().any(|(k, _)| k == c))
+                .unwrap_or("correctness");
             kept.push(json!({
-                "path": path, "line": line, "severity": sev,
+                "path": path, "line": line, "severity": sev, "category": category,
+                "title": short("title", MAX_TITLE),
                 "body": body.trim().chars().take(MAX_BODY).collect::<String>(),
+                "suggestion": short("suggestion", MAX_BODY),
             }));
         }
+        // Most severe first, so the cap keeps what matters.
+        kept.sort_by_key(|f| std::cmp::Reverse(sev_rank(f["severity"].as_str().unwrap_or(""))));
         kept.truncate(MAX_FINDINGS);
         let summary = answer
             .get("summary")
             .and_then(Value::as_str)
             .map(|s| s.trim().chars().take(MAX_SUMMARY).collect::<String>())
             .unwrap_or_default();
-        let cleaned = json!({"summary": summary, "findings": kept});
+        let verdict = answer
+            .get("verdict")
+            .and_then(Value::as_str)
+            .filter(|v| VERDICTS.contains(v))
+            .unwrap_or("comment");
+        let overview: Vec<String> = answer
+            .get("overview")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|b| b.trim().chars().take(MAX_NOTE).collect::<String>())
+            .filter(|b| !b.is_empty())
+            .take(MAX_OVERVIEW)
+            .collect();
+        let mut risks: Vec<Value> = answer
+            .get("risks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                let area = r.get("area")?.as_str()?;
+                let level = r.get("level")?.as_str()?;
+                let note = r.get("note")?.as_str()?.trim();
+                (AREAS.iter().any(|(k, _)| *k == area) && LEVELS.contains(&level) && !note.is_empty())
+                    .then(|| json!({"area": area, "level": level, "note": note.chars().take(MAX_NOTE).collect::<String>()}))
+            })
+            .collect();
+        risks.sort_by_key(|r| {
+            std::cmp::Reverse(LEVELS.iter().position(|l| r["level"] == *l).unwrap_or(0))
+        });
+        risks.truncate(MAX_RISKS);
+        let cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
+                             "risks": risks, "findings": kept});
         let account = py_str(&payload["account"]);
         let conn = self
             .connectors
@@ -712,11 +1222,19 @@ impl LoopPlugin for MrReview {
         let drafts = result.get("drafts").and_then(Value::as_u64).unwrap_or(0);
         let summary_text = match result.get("partial").filter(|v| py_truthy(v)) {
             Some(p) => format!("{drafts} draft notes (partial: {})", py_str(p)),
-            None => format!("{} findings + summary ({blockers} blocker)", kept.len()),
+            None => format!(
+                "{}: {} findings ({blockers} blocker), {} risks",
+                verdict_label(verdict),
+                kept.len(),
+                risks.len()
+            ),
         };
         Ok(Outcome::new(&item.key, Status::Done, summary_text)
             .with_url(url)
-            .with_data(json!({"title": item.title, "drafts": drafts, "blockers": blockers})))
+            .with_data(
+                json!({"title": item.title, "drafts": drafts, "blockers": blockers,
+                              "verdict": verdict}),
+            ))
     }
 
     fn digest(&self, outcomes: &[Outcome], _ctx: &LoopContext) -> Option<String> {
@@ -865,7 +1383,7 @@ mod tests {
             force,
             call_budget_usd: None,
             model: None,
-            state_dir: None,
+            state_dir: Some(PathBuf::from("/nonexistent")),
         }
     }
 
@@ -940,7 +1458,7 @@ mod tests {
         assert!(first["note"]
             .as_str()
             .unwrap()
-            .starts_with("**[blocker]** eval on params"));
+            .starts_with("\u{1f534} **Blocker** \u{b7} Correctness\n\neval on params"));
     }
 
     #[test]
@@ -1178,7 +1696,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out.status, Status::Done);
-        assert_eq!(out.summary, "1 findings + summary (1 blocker)");
+        assert_eq!(out.summary, "Comments: 1 findings (1 blocker), 0 risks");
+        assert_eq!(out.data["verdict"], "comment");
         assert_eq!(out.url, "https://gl/g/p/-/merge_requests/7");
     }
 
@@ -1307,6 +1826,17 @@ mod tests {
         assert_eq!(e["enabled"], false);
         let prompt = std::fs::read_to_string(repo().join("loops/mr-review/prompt.md")).unwrap();
         assert!(prompt.contains("untrusted") && prompt.contains("{{item_json}}"));
+        for key in MrReview::new(Arc::new(Source {
+            accounts: vec![],
+            conn: ok_conn(),
+        }))
+        .output_keys()
+        {
+            assert!(prompt.contains(&format!("\"{key}\"")), "{key}");
+        }
+        for (area, _) in AREAS {
+            assert!(prompt.contains(area), "{area}");
+        }
     }
 
     #[test]
@@ -1454,5 +1984,313 @@ mod tests {
         let map = diff_line_map("--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n");
         assert_eq!(map["x"].get(&2), Some(&2));
         assert!(!map["x"].contains_key(&1));
+    }
+
+    #[test]
+    fn finding_note_reads_severity_area_title_body_and_fix() {
+        let f = json!({"path": "db/m.rb", "line": 3, "severity": "major", "category": "data",
+                       "title": "No lock_timeout", "body": "ATTACH can stall traffic.",
+                       "suggestion": "Set `lock_timeout` first."});
+        assert_eq!(
+            finding_note(&f),
+            "\u{1f7e0} **Major** \u{b7} Data & migrations \u{2014} No lock_timeout\n\n\
+ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
+        );
+    }
+
+    #[test]
+    fn summary_note_has_verdict_overview_risk_table_and_findings_index() {
+        let answer = json!({
+            "summary": "Sound, but ATTACH needs a lock timeout.",
+            "verdict": "request_changes",
+            "overview": ["Adds a partial index on ml_ratings", "Updates structure.sql"],
+            "risks": [{"area": "data", "level": "high", "note": "ATTACH | no timeout\nstalls"}],
+            "findings": [{"path": "db/m.rb", "line": 3, "severity": "blocker", "category": "data",
+                          "title": "No lock_timeout", "body": "b"}]
+        });
+        let note = summary_note(&answer).unwrap();
+        assert!(
+            note.starts_with("### LoopX pre-review \u{2014} \u{26d4} Changes requested\n\n"),
+            "{note}"
+        );
+        assert!(note.contains(
+            "**What this MR does**\n- Adds a partial index on ml_ratings\n- Updates structure.sql"
+        ));
+        assert!(note.contains("| Area | Level | Notes |\n| --- | --- | --- |\n| Data & migrations | \u{1f534} High | ATTACH \\| no timeout stalls |"), "{note}");
+        assert!(note.contains(
+            "- \u{1f534} **Blocker** \u{b7} Data & migrations \u{2014} `db/m.rb:3` No lock_timeout"
+        ));
+        assert!(summary_note(&json!({"summary": "", "findings": []})).is_none());
+        let quiet = summary_note(
+            &json!({"summary": "Fine.", "verdict": "approve", "risks": [], "findings": []}),
+        )
+        .unwrap();
+        assert!(
+            quiet.contains("\u{2705} Looks good to merge")
+                && quiet.contains("no notable risks found")
+        );
+    }
+
+    #[test]
+    fn after_item_cleans_verdict_overview_risks_and_sorts_findings() {
+        let posted = Arc::new(Mutex::new(vec![]));
+        let answer = json!({
+            "summary": "s", "verdict": "ship it!!",
+            "overview": ["a", "", 5, "b", "c", "d", "e"],
+            "risks": [
+                {"area": "performance", "level": "low", "note": "n1"},
+                {"area": "weather", "level": "high", "note": "bad area"},
+                {"area": "security", "level": "high", "note": "n2"},
+                {"area": "tests", "level": "medium", "note": "  "}
+            ],
+            "findings": [
+                finding("app/a.rb", 2, "minor", "m"),
+                {"path": "app/a.rb", "line": 2, "severity": "blocker", "category": "nonsense", "title": "t", "body": "b"}
+            ]
+        });
+        with_poster(posted.clone())
+            .after_item(&item(), &answer, &c())
+            .unwrap();
+        let p = &posted.lock().unwrap()[0];
+        assert_eq!(p["verdict"], "comment");
+        assert_eq!(p["overview"], json!(["a", "b", "c", "d"]));
+        assert_eq!(
+            p["risks"],
+            json!([{"area": "security", "level": "high", "note": "n2"},
+                   {"area": "performance", "level": "low", "note": "n1"}])
+        );
+        assert_eq!(p["findings"][0]["severity"], "blocker");
+        assert_eq!(p["findings"][0]["category"], "correctness");
+        assert_eq!(p["findings"][1]["suggestion"], "");
+    }
+
+    #[test]
+    fn drafts_are_recognised_by_flag_or_title() {
+        for mr in [
+            json!({"draft": true, "title": "x"}),
+            json!({"work_in_progress": true, "title": "x"}),
+            json!({"title": "Draft: speed up"}),
+            json!({"title": "  [Draft] speed up"}),
+            json!({"title": "WIP: speed up"}),
+        ] {
+            assert!(is_draft(&mr), "{mr}");
+        }
+        assert!(!is_draft(
+            &json!({"draft": false, "title": "Drafting rules for exports"})
+        ));
+    }
+
+    fn rows_handler(rows: Value) -> Arc<Conn> {
+        Conn::new(move |m, p, _| {
+            if p.starts_with("/merge_requests?") {
+                return Ok(rows.clone());
+            }
+            d_handler(m, p, None)
+        })
+    }
+
+    #[test]
+    fn discover_asks_for_reviewer_and_assignee_mrs_once_each_and_skips_drafts() {
+        let conn = rows_handler(json!([
+            {"project_id": 9, "iid": 7, "author": {"id": 2}, "title": "T"},
+            {"project_id": 9, "iid": 8, "author": {"id": 2}, "title": "Draft: later", "draft": true}
+        ]));
+        let items = plugin_with(conn.clone()).discover(&c()).unwrap();
+        assert_eq!(
+            items.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["mr:work:9!7@h"]
+        );
+        let lists: Vec<String> = conn
+            .calls()
+            .into_iter()
+            .map(|c| c.1)
+            .filter(|p| p.starts_with("/merge_requests?"))
+            .collect();
+        assert!(
+            lists[0].contains("reviewer_id=1") && lists[1].contains("assignee_id=1"),
+            "{lists:?}"
+        );
+        assert!(!conn
+            .calls()
+            .iter()
+            .any(|c| c.1.contains("/merge_requests/8")));
+    }
+
+    #[test]
+    fn discover_drops_a_draft_seen_only_in_the_detail() {
+        let conn = Conn::new(|m, p, _| {
+            if p.ends_with("/merge_requests/7") {
+                return Ok(json!({"sha": "h", "diff_refs": mr()["diff_refs"], "draft": true}));
+            }
+            d_handler(m, p, None)
+        });
+        assert!(plugin_with(conn).discover(&c()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn discover_items_carry_meta_for_the_dashboard() {
+        let conn = rows_handler(json!([{
+            "project_id": 9, "iid": 7, "title": "Fix login",
+            "author": {"id": 2, "name": "Ana Lee", "username": "ana"},
+            "created_at": "2026-10-01T09:00:00Z", "references": {"full": "web/app!7"}
+        }]));
+        let items = plugin_with(conn).discover(&c()).unwrap();
+        assert_eq!(
+            items[0].meta,
+            json!({"title": "Fix login", "ref": "web/app!7", "author": "Ana Lee",
+                   "author_username": "ana", "created_at": "2026-10-01T09:00:00Z"})
+        );
+        assert!(items[0].payload.get("meta").is_none());
+    }
+
+    fn ctx_in(dir: &Path) -> LoopContext {
+        let mut ctx = c();
+        ctx.state_dir = Some(dir.to_path_buf());
+        ctx
+    }
+
+    #[test]
+    fn skipped_mrs_are_left_alone_and_requested_ones_jump_the_queue_once() {
+        let d = tempfile::tempdir().unwrap();
+        let rows = json!([
+            {"project_id": 9, "iid": 6, "sha": "h", "author": {"id": 2}, "title": "A"},
+            {"project_id": 9, "iid": 7, "sha": "h", "author": {"id": 2}, "title": "B"}
+        ]);
+        let conn = Conn::new(move |m, p, _| {
+            if p.starts_with("/merge_requests?") {
+                return Ok(rows.clone());
+            }
+            if p.ends_with("/merge_requests/6") {
+                return Ok(json!({"sha": "h", "diff_refs": mr()["diff_refs"]}));
+            }
+            d_handler(m, p, None)
+        });
+        MrPrefs::update(d.path(), |p| {
+            p.skip.insert("work:9!6".into());
+        })
+        .unwrap();
+        // Both already reviewed: nothing to do.
+        let seen = || -> SeenFn { Box::new(|_k| true) };
+        let plugin = plugin_with(conn.clone()).with_seen(seen());
+        assert!(plugin.discover(&ctx_in(d.path())).unwrap().is_empty());
+        // "Review now" on both: the skipped one too, forced, and only once.
+        MrPrefs::update(d.path(), |p| {
+            p.requested.insert("work:9!7".into());
+            p.requested.insert("work:9!6".into());
+        })
+        .unwrap();
+        let items = plugin.discover(&ctx_in(d.path())).unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|i| (i.key.as_str(), i.force))
+                .collect::<Vec<_>>(),
+            [("mr:work:9!6@h", true), ("mr:work:9!7@h", true)]
+        );
+        let prefs = MrPrefs::load(d.path());
+        assert!(prefs.requested.is_empty() && prefs.skip.contains("work:9!6"));
+        assert!(plugin.discover(&ctx_in(d.path())).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prefs_round_trip_and_tolerate_a_broken_file() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(MrPrefs::load(d.path()), MrPrefs::default());
+        MrPrefs::update(d.path(), |p| {
+            p.skip.insert("a:1!2".into());
+        })
+        .unwrap();
+        assert!(MrPrefs::load(d.path()).skip.contains("a:1!2"));
+        std::fs::write(MrPrefs::path(d.path()), "{nope").unwrap();
+        assert_eq!(MrPrefs::load(d.path()), MrPrefs::default());
+    }
+
+    #[test]
+    fn list_my_mrs_merges_roles_and_sorts_newest_first() {
+        let conn = Conn::new(|_, p, _| {
+            if p == "/user" {
+                return Ok(json!({"id": 1}));
+            }
+            let mine = json!({"project_id": 9, "iid": 1, "title": "Mine", "author": {"id": 1, "name": "Me"},
+                              "created_at": "2026-10-03T00:00:00Z", "references": {"full": "g/p!1"}});
+            let theirs = json!({"project_id": 9, "iid": 2, "title": "Draft: theirs", "sha": "s2",
+                                "author": {"id": 2, "name": "Ana", "username": "ana"},
+                                "created_at": "2026-10-05T00:00:00Z", "web_url": "https://gl/2"});
+            Ok(if p.contains("author_id=1") {
+                json!([mine])
+            } else if p.contains("assignee_id=1") {
+                json!([theirs, mine])
+            } else {
+                json!([theirs])
+            })
+        });
+        let out = list_my_mrs(&Source {
+            accounts: vec![Account::new("work", "gitlab")],
+            conn,
+        });
+        assert_eq!(out.len(), 1);
+        assert!(out[0].error.is_none());
+        let mrs = &out[0].mrs;
+        assert_eq!(
+            mrs.iter().map(|m| m.iid.as_str()).collect::<Vec<_>>(),
+            ["2", "1"]
+        );
+        let (theirs, mine) = (&mrs[0], &mrs[1]);
+        assert!(theirs.assignee && theirs.reviewer && !theirs.authored && theirs.draft);
+        assert_eq!(
+            (theirs.reference.as_str(), theirs.author.as_str()),
+            ("!2", "Ana")
+        );
+        assert!(mine.authored && mine.assignee && !mine.reviewable());
+        assert_eq!(mine.reference, "g/p!1");
+    }
+
+    #[test]
+    fn list_my_mrs_reports_a_failing_account_without_secrets() {
+        let conn = Conn::new(|_, _, _| {
+            Err(ConnectorError::Other {
+                class: "RuntimeError".into(),
+                detail: "https://x/token".into(),
+            })
+        });
+        let out = list_my_mrs(&Source {
+            accounts: vec![Account::new("work", "gitlab")],
+            conn,
+        });
+        assert_eq!(out[0].error.as_deref(), Some("RuntimeError"));
+    }
+
+    #[test]
+    fn review_state_covers_each_case() {
+        let mr = MyMr {
+            account: "w".into(),
+            project_id: "9".into(),
+            iid: "7".into(),
+            sha: "h".into(),
+            reviewer: true,
+            ..MyMr::default()
+        };
+        let none = MrPrefs::default();
+        let never = |_: &str| false;
+        assert_eq!(review_state(&mr, &none, never), ReviewState::Pending);
+        assert_eq!(
+            review_state(&mr, &none, |k| k == "mr:w:9!7@h"),
+            ReviewState::Reviewed
+        );
+        let mut prefs = MrPrefs::default();
+        prefs.skip.insert("w:9!7".into());
+        assert_eq!(review_state(&mr, &prefs, never), ReviewState::Skipped);
+        prefs.requested.insert("w:9!7".into());
+        assert_eq!(review_state(&mr, &prefs, never), ReviewState::Requested);
+        let draft = MyMr {
+            draft: true,
+            ..mr.clone()
+        };
+        assert_eq!(review_state(&draft, &prefs, never), ReviewState::Draft);
+        let own = MyMr {
+            authored: true,
+            ..mr.clone()
+        };
+        assert_eq!(review_state(&own, &none, never), ReviewState::Own);
     }
 }

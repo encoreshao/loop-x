@@ -37,6 +37,12 @@ pub struct WorkItem {
     pub title: String,
     pub url: String,
     pub payload: Value,
+    /// Run it even when its key is already seen (a user asked for this item).
+    pub force: bool,
+    /// A small JSON object describing the item for the dashboard (title,
+    /// author, ...); copied into the item's `last-run.json` outcome. Never
+    /// shown to the model.
+    pub meta: Value,
 }
 
 impl WorkItem {
@@ -46,10 +52,20 @@ impl WorkItem {
             title: title.into(),
             url: String::new(),
             payload,
+            force: false,
+            meta: Value::Null,
         }
     }
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
+        self
+    }
+    pub fn with_force(mut self) -> Self {
+        self.force = true;
+        self
+    }
+    pub fn with_meta(mut self, meta: Value) -> Self {
+        self.meta = meta;
         self
     }
 }
@@ -813,8 +829,12 @@ fn write_reports(
         .iter()
         .take(LAST_RUN_OUTCOME_CAP)
         .map(|o| {
-            json!({"item_key": o.item_key, "label": outcome_label(o, Some("")), "status": o.status.as_str(),
-                   "summary": o.summary, "url": o.url})
+            let mut row = json!({"item_key": o.item_key, "label": outcome_label(o, Some("")), "status": o.status.as_str(),
+                   "summary": o.summary, "url": o.url});
+            if let Some(meta) = o.data.get("meta").filter(|m| m.is_object()) {
+                row["meta"] = meta.clone();
+            }
+            row
         })
         .collect();
     let data = json!({
@@ -999,7 +1019,10 @@ pub fn run_plugin(
     let mut items: Vec<WorkItem> = if opts.force {
         items
     } else {
-        items.into_iter().filter(|i| !seen.has(&i.key)).collect()
+        items
+            .into_iter()
+            .filter(|i| i.force || !seen.has(&i.key))
+            .collect()
     };
     items.truncate(plugin.max_items_per_run());
     log(&format!("processing {} item(s)", items.len()));
@@ -1031,11 +1054,16 @@ pub fn run_plugin(
             interrupted = true;
             break;
         }
-        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| run_item(&env, item)))
+        let mut outcome = std::panic::catch_unwind(AssertUnwindSafe(|| run_item(&env, item)))
             .unwrap_or_else(|_| {
                 Outcome::new(&item.key, Status::Failed, "panic: item crashed")
                     .with_url(item.url.clone())
             });
+        if item.meta.is_object() {
+            if let Value::Object(data) = &mut outcome.data {
+                data.entry("meta").or_insert_with(|| item.meta.clone());
+            }
+        }
         if matches!(outcome.status, Status::Done | Status::Skipped) {
             seen.add(&item.key);
             // Persist now: a later crash/SIGTERM must not re-run acted-on items.
@@ -1387,6 +1415,52 @@ retry: {enabled: true, max_attempts: 2}
         forced.force = true;
         let p = Arc::new(Demo::new(vec![item("a")], &[OK]));
         assert_eq!(run_plugin(p, "run_3", forced).unwrap().0.len(), 1);
+    }
+
+    #[test]
+    fn a_forced_item_runs_again_although_seen() {
+        let w = world();
+        run(
+            &w,
+            &Arc::new(Demo::new(vec![item("a"), item("b")], &[OK, OK])),
+            "run_1",
+        );
+        let p = Arc::new(Demo::new(vec![item("a").with_force(), item("b")], &[OK]));
+        let out = run(&w, &p, "run_2");
+        assert_eq!(
+            out.iter().map(|o| o.item_key.as_str()).collect::<Vec<_>>(),
+            ["a"]
+        );
+    }
+
+    #[test]
+    fn item_meta_reaches_last_run_for_every_status() {
+        let w = world();
+        let meta = json!({"title": "Fix login", "author": "Ana"});
+        let p = Arc::new(
+            Demo::new(
+                vec![
+                    item("a").with_meta(meta.clone()),
+                    item("b").with_meta(meta.clone()),
+                    item("c"),
+                ],
+                &[OK],
+            )
+            .with_answers(vec![
+                Ok(OK.into()),
+                Err("boom".into()),
+                Err("boom".into()),
+                Ok(OK.into()),
+            ]),
+        );
+        run(&w, &p, "run_1");
+        let last = last_run(&w);
+        let outcomes = last["outcomes"].as_array().unwrap();
+        assert_eq!(outcomes[0]["status"], "done");
+        assert_eq!(outcomes[0]["meta"], meta);
+        assert_eq!(outcomes[1]["status"], "failed");
+        assert_eq!(outcomes[1]["meta"], meta);
+        assert!(outcomes[2].get("meta").is_none());
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub fn store(state: &UiState) -> Result<Arc<dyn SecretStore>, String> {
     }
 }
 
-fn http(state: &UiState) -> Arc<dyn HttpClient> {
+pub(crate) fn http(state: &UiState) -> Arc<dyn HttpClient> {
     state
         .connector_http
         .clone()

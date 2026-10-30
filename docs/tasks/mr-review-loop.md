@@ -2,10 +2,25 @@
 
 ## Goal
 
-Every two hours, find open, non-draft merge requests where you are a reviewer
-(and not the author), have the model pre-review each diff and leave the
-findings as GitLab **draft** review notes. You open the MR, check the drafts
-under Review, and submit to publish them (or discard them).
+Every two hours, find open, non-draft merge requests assigned to you (as a
+reviewer or an assignee, and not authored by you), have the model pre-review
+each diff and leave the findings as GitLab **draft** review notes. You open
+the MR, check the drafts under Review, and submit to publish them (or discard
+them).
+
+## The review
+
+The model reviews against the MR's goal first, then correctness, security,
+performance, data/migrations, reliability/compatibility and tests. Its answer
+is structured (`summary`, `verdict`, `overview`, `risks`, `findings`), and the
+loop renders it as:
+
+- one inline draft per finding: severity and area up front
+  (`🟠 **Major** · Data & migrations — title`), then the problem and an
+  optional **Suggested fix**;
+- one overall draft: the verdict (looks good / mergeable after comments /
+  changes requested), a "What this MR does" list, a risk table by area and
+  level, and an index of the findings.
 
 ## How it runs
 
@@ -16,6 +31,19 @@ under Review, and submit to publish them (or discard them).
 - One item per MR **and head commit** (`mr:<account>:<project>!<iid>@<sha>`),
   so a new push is reviewed again and an unchanged MR never is. At most 8 MRs
   per run. Setting `min_severity` (default `minor`) drops lower findings.
+- Drafts are never reviewed: the list asks for `draft=no`, and a `draft` /
+  `work_in_progress` flag or a `Draft:`/`WIP:` title prefix is skipped too
+  (older GitLab ignores `draft=no`).
+
+## The Merge requests tab
+
+The loop page lists your open MRs live from GitLab: those assigned to you
+(with their review state) and those you created (never reviewed). Per MR you
+can turn **Auto review** off (skip it) or press **Review now**, which queues
+it and starts a run that reviews it even if its current commit was already
+reviewed. Both choices live in
+`outputs/loops/mr-review-loop/mr-prefs.json` (`skip`, `requested`); a run
+clears the requests it read.
 
 ## Safety boundary
 

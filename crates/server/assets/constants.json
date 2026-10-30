@@ -835,6 +835,7 @@
   "MEETING_PREP_LOOP": "meeting-prep-loop",
   "_HISTORY_ITEMS_SHOWN": 4,
   "_LOOP_NAV_ICONS": {
+   "mr-review-loop": "git_pull_request",
    "meeting-prep-loop": "calendar_month",
    "rss-watch-loop": "rss_feed",
    "linkedin-autopilot-loop": "group",

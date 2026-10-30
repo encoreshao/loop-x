@@ -46,7 +46,7 @@
     "name": "mr-review-loop",
     "label": "MR Review",
     "entry_point": "bin.loop_plugins.mr_review",
-    "description": "Pre-reviews merge requests where you're a reviewer and leaves GitLab draft notes for you to publish.",
+    "description": "Pre-reviews open, non-draft merge requests assigned to you and leaves GitLab draft notes for you to publish.",
     "schedule": {"frequency": "hourly", "interval_hours": 2},
     "enabled": false,
     "timeout_seconds": 3600,

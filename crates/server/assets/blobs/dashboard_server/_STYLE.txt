@@ -1667,6 +1667,10 @@ ul.plain li { font-size: 0.9rem; }
 .result-mr { display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 500; color: var(--md-primary); text-decoration: none; }
 .result-mr:hover { color: var(--md-primary); text-decoration: underline; text-underline-offset: 2px; }
 .result-mr .icon:last-child { width: 0.8rem; height: 0.8rem; opacity: 0.75; }
+.mr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-top: 0.6rem; }
+.mr-auto { display: inline-flex; align-items: center; gap: 0.5rem; }
+.mr-auto-label { font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.mr-count { font-weight: 400; font-size: 0.9rem; color: var(--md-on-surface-variant); }
 .result-summary { margin: 0.35rem 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--md-on-surface-variant); }
 .meeting-list, .history-runs, .history-items { list-style: none; margin: 0; padding: 0; }
 .meeting-row { display: grid; grid-template-columns: 7.5rem 1fr auto auto; gap: 0.75rem; align-items: center;

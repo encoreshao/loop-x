@@ -352,6 +352,8 @@ fn live_body(ctx: &UiCtx, name: &str, flash: Option<&str>, ok: bool) -> String {
     out.push_str(&status_card(ctx, name, &status, last.as_ref()));
     if name == "meeting-prep-loop" {
         out.push_str(&meetings_today_card(ctx, name));
+    } else if name == super::mr_review::LOOP {
+        out.push_str(&super::mr_review::latest_results_card(ctx, last.as_ref()));
     } else {
         out.push_str(&latest_results_card(ctx, last.as_ref()));
     }
@@ -822,6 +824,7 @@ fn loop_page(ctx: &UiCtx) -> UiResponse {
         "content" => content_body(ctx, name, f, ok),
         "history" => history_body(ctx, name, f, ok),
         "people" => people_body(ctx, name, f, ok),
+        "mrs" => super::mr_review::mrs_body(ctx, f, ok),
         "settings" => settings_body(ctx, name, f, ok),
         _ => live_body(ctx, name, f, ok),
     };

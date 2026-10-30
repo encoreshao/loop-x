@@ -667,6 +667,12 @@ fn run_loop(ctx: &UiCtx) -> UiResponse {
     if builtin || !registered {
         return UiResponse::not_found(ctx.lang);
     }
+    let (ok, message) = trigger_plugin_loop(ctx, name);
+    UiResponse::flash_redirect(ok, &message, &format!("/loops/{}", pyfmt::quote(name, "/")))
+}
+
+/// Starts a registered plugin loop as its Run now button does: `(ok, message)`.
+pub(crate) fn trigger_plugin_loop(ctx: &UiCtx, name: &str) -> (bool, String) {
     let fallback = run_script_path(ctx);
     let queue = ctx.state.home_dir.join("run_queue.json");
     let outcome = run_control::trigger_manual_run(
@@ -674,8 +680,7 @@ fn run_loop(ctx: &UiCtx) -> UiResponse {
         name,
         &launcher(ctx, &fallback, &queue),
     );
-    let (ok, message) = trigger_message(ctx, outcome, STARTED);
-    UiResponse::flash_redirect(ok, &message, &format!("/loops/{}", pyfmt::quote(name, "/")))
+    trigger_message(ctx, outcome, STARTED)
 }
 
 fn delete_in(ctx: &UiCtx, prefix: &str, dir: PathBuf) -> UiResponse {

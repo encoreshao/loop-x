@@ -199,6 +199,9 @@ pub fn generic_loop_page(
     if name == "linkedin-autopilot-loop" {
         views.insert(2, v("people", "People"));
     }
+    if name == "mr-review-loop" {
+        views.insert(1, v("mrs", "Merge requests"));
+    }
     if has_settings {
         views.push(v("settings", "Settings"));
     }
@@ -336,5 +339,9 @@ mod tests {
         assert_eq!(li.views[2].key, "people");
         assert!(li.icon.contains("brand-nav-mark"));
         assert_eq!(generic_loop_page("x y", None, false).path, "/loops/x%20y");
+        let mr = generic_loop_page("mr-review-loop", None, false);
+        assert!(mr.icon.contains("#i-git_pull_request"), "{}", mr.icon);
+        let keys: Vec<&str> = mr.views.iter().map(|v| v.key.as_str()).collect();
+        assert_eq!(keys, ["live", "mrs", "content", "history"]);
     }
 }
