@@ -70,6 +70,20 @@ fn command_allowed(cmd: &str) -> bool {
     })
 }
 
+/// `Err` when `cmd` holds a shell operator; these commands run without a
+/// shell, so an operator would be misread rather than honoured.
+pub(crate) fn refuse_shell_operators(cmd: &str) -> Result<(), String> {
+    match ["`", "$(", ">", "<", "\n", "&", "|", ";"]
+        .iter()
+        .find(|b| cmd.contains(**b))
+    {
+        Some(bad) => Err(format!(
+            "contains {bad:?} (one command, no shell operators)"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// `Ok` when `cmd` is one allowed stack command, optionally behind allowed
 /// environment assignments; otherwise a short reason. The verifier runs it
 /// without a shell, so any shell operator is refused rather than misread.
@@ -79,14 +93,7 @@ pub fn check_verify_command(cmd: &str) -> Result<(), String> {
     if cmd.is_empty() {
         return Err("empty command".into());
     }
-    if let Some(bad) = ["`", "$(", ">", "<", "\n", "&", "|", ";"]
-        .iter()
-        .find(|b| cmd.contains(**b))
-    {
-        return Err(format!(
-            "contains {bad:?} (one command, no shell operators)"
-        ));
-    }
+    refuse_shell_operators(cmd)?;
     if !command_allowed(cmd) {
         return Err(format!("{cmd:?} is not an allowed stack command"));
     }
