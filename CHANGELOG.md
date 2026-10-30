@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-30
+
 ### Added
 - GitLab: a project can be tracked for issues only — turn on Track and leave the local checkout and target branch empty. The issue loop then reads, analyzes and replies on its issues (an issue that needs code gets the analysis and proposed approach as a comment) but never branches, changes code or opens an MR. `loopx config project` reports this as `code_changes: false`.
 
@@ -507,7 +509,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/encoreshao/loop-x/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/encoreshao/loop-x/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/encoreshao/loop-x/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/encoreshao/loop-x/compare/v0.10.0...v0.11.0
