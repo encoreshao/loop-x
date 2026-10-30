@@ -1245,5 +1245,21 @@
   "Your MR · not reviewed": "自分の MR · レビュー対象外",
   "Loading your merge requests": "マージリクエストを読み込み中",
   "Updated {when} · refreshing…": "{when} に更新 · 更新中…",
-  "Review failed · skipped until Review now": "レビュー失敗 · 「今すぐレビュー」まで保留"
+  "Review failed · skipped until Review now": "レビュー失敗 · 「今すぐレビュー」まで保留",
+  "Worktrees": "ワークツリー",
+  "Worktree": "ワークツリー",
+  "Issue": "Issue",
+  "Branch": "ブランチ",
+  "State": "状態",
+  "Last commit": "最終コミット",
+  "In the checkout": "チェックアウト内",
+  "No worktree": "ワークツリーなし",
+  "Uncommitted changes": "未コミットの変更",
+  "Clean": "クリーン",
+  "No issue branches in progress.": "進行中の Issue ブランチはありません。",
+  "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch.": "ループが Issue 用に作成したブランチとそのワークツリーです。削除するとワークツリーのフォルダーとローカルブランチが削除されます。",
+  "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "{alias} #{iid} の {branch} とそのワークツリーを削除しますか？未コミットの変更は失われます。GitLab にプッシュ済みのブランチは残ります。",
+  "The GitLab loop is running - wait for it to finish or stop it before removing a worktree": "GitLab ループが実行中です。ワークツリーを削除する前に、終了を待つか停止してください",
+  "Removed {branch} for {alias} #{iid}": "{alias} #{iid} の {branch} を削除しました",
+  "{name} is not a tracked project with a checkout": "{name} はチェックアウトのある追跡中のプロジェクトではありません"
 }

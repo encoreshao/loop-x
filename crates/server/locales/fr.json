@@ -1245,5 +1245,21 @@
   "Your MR · not reviewed": "Votre MR · non relue",
   "Loading your merge requests": "Chargement de vos merge requests",
   "Updated {when} · refreshing…": "Mis à jour {when} · actualisation…",
-  "Review failed · skipped until Review now": "Échec de la relecture · ignorée jusqu’à « Relire maintenant »"
+  "Review failed · skipped until Review now": "Échec de la relecture · ignorée jusqu’à « Relire maintenant »",
+  "Worktrees": "Worktrees",
+  "Worktree": "Worktree",
+  "Issue": "Ticket",
+  "Branch": "Branche",
+  "State": "État",
+  "Last commit": "Dernier commit",
+  "In the checkout": "Dans le dépôt local",
+  "No worktree": "Aucun worktree",
+  "Uncommitted changes": "Modifications non commitées",
+  "Clean": "Propre",
+  "No issue branches in progress.": "Aucune branche de ticket en cours.",
+  "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch.": "Les branches que la boucle a créées pour des tickets, avec leurs worktrees. En supprimer une efface le dossier du worktree et la branche locale.",
+  "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "Supprimer {branch} et son worktree pour {alias} #{iid} ? Les modifications non commitées seront perdues ; une branche déjà poussée sur GitLab est conservée.",
+  "The GitLab loop is running - wait for it to finish or stop it before removing a worktree": "La boucle GitLab est en cours d'exécution - attendez qu'elle se termine ou arrêtez-la avant de supprimer un worktree",
+  "Removed {branch} for {alias} #{iid}": "{branch} supprimée pour {alias} #{iid}",
+  "{name} is not a tracked project with a checkout": "{name} n'est pas un projet suivi avec un dépôt local"
 }

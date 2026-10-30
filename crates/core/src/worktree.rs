@@ -489,6 +489,102 @@ pub fn sweep_finished_issue_branches(
     Ok(sweep)
 }
 
+/// One local `loop/issue-<iid>` branch, as the dashboard's Worktrees view lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssueBranch {
+    pub iid: String,
+    pub branch: String,
+    /// The worktree it is checked out in, if any (never the checkout itself).
+    pub worktree: Option<String>,
+    /// Checked out in the project's own checkout (`use_worktree: false`).
+    pub in_checkout: bool,
+    /// Its worktree (or the checkout) has uncommitted changes.
+    pub dirty: bool,
+    /// The tip commit's date, ISO 8601.
+    pub last_commit: String,
+}
+
+fn is_dirty(dir: &str) -> Result<bool, Failure> {
+    Ok(!git_stdout(dir, &["status", "--porcelain"])?
+        .trim()
+        .is_empty())
+}
+
+/// Every local `loop/issue-<iid>` branch of `repo_path`, by issue number.
+pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure> {
+    // Forget worktrees whose directory was deleted by hand.
+    git(repo_path, &["worktree", "prune"])?;
+    let trees = worktrees(repo_path)?;
+    let refs = git_stdout(
+        repo_path,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short) %(committerdate:iso-strict)",
+            "refs/heads/loop/",
+        ],
+    )?;
+    let mut out = Vec::new();
+    for line in refs.lines() {
+        let (branch, date) = line.split_once(' ').unwrap_or((line, ""));
+        let Some(iid) = branch.strip_prefix("loop/issue-") else {
+            continue;
+        };
+        if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let tree = trees.iter().position(|(_, b)| b == branch);
+        let dirty = match tree {
+            Some(i) => is_dirty(&trees[i].0)?,
+            None => false,
+        };
+        out.push(IssueBranch {
+            iid: iid.to_string(),
+            branch: branch.to_string(),
+            worktree: tree.filter(|&i| i > 0).map(|i| trees[i].0.clone()),
+            in_checkout: tree == Some(0),
+            dirty,
+            last_commit: date.to_string(),
+        });
+    }
+    out.sort_by_key(|b| b.iid.parse::<u64>().unwrap_or(u64::MAX));
+    Ok(out)
+}
+
+/// Delete the local `loop/issue-<iid>` branch and its worktree, uncommitted
+/// changes and all. A branch the checkout itself is on is refused, and the
+/// remote branch (if it was pushed) is left alone.
+pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<(), Failure> {
+    if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) {
+        return Err(Failure::new(format!("not an issue number: {iid}")));
+    }
+    let branch = branch_name(iid);
+    let Some(found) = list_issue_branches(repo_path)?
+        .into_iter()
+        .find(|b| b.branch == branch)
+    else {
+        return Err(Failure::new(format!(
+            "no local branch {branch} in {repo_path}"
+        )));
+    };
+    if found.in_checkout {
+        return Err(Failure::new(format!(
+            "{branch} is checked out in {repo_path}; switch the checkout to another branch first"
+        )));
+    }
+    if let Some(path) = &found.worktree {
+        // Twice: also past a lock, and past uncommitted or untracked files.
+        if !git(
+            repo_path,
+            &["worktree", "remove", "--force", "--force", path],
+        )? {
+            return Err(Failure::new(format!(
+                "could not remove the worktree {path}"
+            )));
+        }
+    }
+    git_ok(repo_path, &["branch", "-D", &branch])
+}
+
 /// `<git-dir>/loopx-restore-branch`: the branch to return an in-place checkout to.
 fn restore_marker(repo_path: &str) -> Result<std::path::PathBuf, Failure> {
     let git_dir = git_stdout(repo_path, &["rev-parse", "--absolute-git-dir"])?;
@@ -847,6 +943,59 @@ mod tests {
             "{:?}",
             sweep.skipped
         );
+        assert_eq!(head(&repo), "loop/issue-7");
+    }
+
+    #[test]
+    fn issue_branches_are_listed_with_their_worktree_and_state() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt3 = new_worktree(&repo, "main", "3", &root).unwrap();
+        let wt4 = new_worktree(&repo, "main", "4", &root).unwrap();
+        std::fs::write(Path::new(&wt4).join("wip.txt"), "x").unwrap();
+        sh(Path::new(&repo), &["branch", "loop/issue-6"]);
+        sh(Path::new(&repo), &["branch", "loop/other"]);
+        let list = list_issue_branches(&repo).unwrap();
+        let iids: Vec<_> = list.iter().map(|b| b.iid.as_str()).collect();
+        assert_eq!(iids, ["3", "4", "6"]);
+        let canon = |p: &str| std::fs::canonicalize(p).unwrap();
+        assert_eq!(list[0].branch, "loop/issue-3");
+        assert_eq!(canon(list[0].worktree.as_deref().unwrap()), canon(&wt3));
+        assert!(!list[0].dirty && !list[0].in_checkout);
+        assert!(list[1].dirty);
+        assert_eq!(list[2].worktree, None);
+        assert!(!list[2].dirty);
+        assert!(list.iter().all(|b| !b.last_commit.is_empty()));
+    }
+
+    #[test]
+    fn removing_an_issue_branch_takes_its_worktree_and_uncommitted_work() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt5 = new_worktree(&repo, "main", "5", &root).unwrap();
+        std::fs::write(Path::new(&wt5).join("wip.txt"), "x").unwrap();
+        sh(Path::new(&repo), &["branch", "loop/issue-6"]);
+        remove_issue_branch(&repo, "5").unwrap();
+        assert!(!Path::new(&wt5).exists());
+        remove_issue_branch(&repo, "6").unwrap();
+        assert_eq!(branches(&repo), "");
+        let err = remove_issue_branch(&repo, "9").unwrap_err();
+        assert!(err.message.contains("loop/issue-9"), "{}", err.message);
+        let err = remove_issue_branch(&repo, "../main").unwrap_err();
+        assert!(err.message.contains("issue number"), "{}", err.message);
+    }
+
+    #[test]
+    fn an_issue_branch_checked_out_in_place_is_listed_but_not_removed() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        prepare_in_place(&repo, "main", "7").unwrap();
+        let list = list_issue_branches(&repo).unwrap();
+        assert!(list[0].in_checkout, "{list:?}");
+        let err = remove_issue_branch(&repo, "7").unwrap_err();
+        assert!(err.message.contains("checked out"), "{}", err.message);
         assert_eq!(head(&repo), "loop/issue-7");
     }
 

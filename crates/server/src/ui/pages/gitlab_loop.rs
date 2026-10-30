@@ -1,6 +1,8 @@
-//! The GitLab loop's page `/loops/gitlab-loop` (views Live, Tasks, Projects), its
-//! lazily loaded fragments `GET /gitlab/live` and `GET /settings/fragment`, the
-//! issue tracking switch (`POST /gitlab/issues/<alias>/<iid>/enable|disable`) and
+//! The GitLab loop's page `/loops/gitlab-loop` (views Live, Tasks, Worktrees,
+//! Projects), its lazily loaded fragments `GET /gitlab/live` and
+//! `GET /settings/fragment`, the issue tracking switch
+//! (`POST /gitlab/issues/<alias>/<iid>/enable|disable`), removing an issue's
+//! branch and worktree (`POST /gitlab/worktrees/<alias>/<iid>/remove`) and
 //! the GitLab configuration POSTs (`/settings/gitlab/*`, `/settings/access-bundles*`,
 //! `/settings/loop-config`, `/settings/loop-projects*`).
 
@@ -31,6 +33,7 @@ pub fn register(r: &mut Registry) {
     r.get("/gitlab/live", live_fragment);
     r.get("/settings/fragment", settings_fragment);
     r.post("/gitlab/issues/*rest", issue_tracking_toggle);
+    r.post("/gitlab/worktrees/:alias/:iid/remove", remove_worktree);
     r.post("/settings/gitlab/default", |c| {
         flash_post(c, |c, f| set_default_instance(c, f.first("instance").unwrap_or("")))
     });
@@ -180,6 +183,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let body = match resolve_view(&hub, view).key.as_str() {
         "live" => live_body(ctx, flash.as_deref(), flash_ok),
         "tasks" => tasks_body(ctx),
+        "worktrees" => worktrees_body(ctx, flash.as_deref(), flash_ok),
         _ => projects_body(ctx, flash.as_deref(), flash_ok),
     };
     UiResponse::html(render_loop_page(ctx, &hub, "gitlab-loop", view, &body, None))
@@ -592,6 +596,172 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         status_card(ctx, &status, &activity, &csrf),
         last_run_card(ctx, &activity)
     )
+}
+
+// ---------------------------------------------------------------------------
+// Worktrees view: every local `loop/issue-<iid>` branch of the tracked checkouts
+
+const WORKTREES_URL: &str = "/loops/gitlab-loop?view=worktrees";
+
+/// `(alias, local_path)` of every tracked project that has a checkout.
+fn tracked_checkouts(ctx: &UiCtx) -> Vec<(String, String)> {
+    read_json_or_empty(&projects_path(ctx))
+        .get("projects")
+        .and_then(Value::as_object)
+        .map(|projects| {
+            projects
+                .iter()
+                .filter_map(|(alias, p)| {
+                    let path = p.get("local_path")?.as_str()?.trim();
+                    (!path.is_empty()).then(|| (alias.clone(), path.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The title (from the cached Tasks list) and link of `alias #iid`; without a
+/// cached row, the link is built from the alias's GitLab instance URL.
+fn issue_ref(cached: &[(String, AliasState)], gitlab_config: &Value, alias: &str, iid: &str) -> (String, String) {
+    let row = cached
+        .iter()
+        .filter(|(a, _)| a == alias)
+        .flat_map(|(_, s)| &s.issues)
+        .find(|i| item_str(i, "iid", "") == iid);
+    let title = row.map(|i| item_str(i, "title", "")).unwrap_or_default();
+    let url = row.map(|i| item_str(i, "web_url", "")).filter(|u| is_http(u));
+    let url = url.unwrap_or_else(|| {
+        let (project_id, instance, _) = gitlab::resolve_project_alias(Some(gitlab_config), alias, None);
+        let instance = instance.unwrap_or_else(|| text(gitlab_config, "default"));
+        let base = gitlab_config
+            .pointer(&format!("/instances/{instance}/url"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim_end_matches('/');
+        // A numeric project id has no web path to build a link from.
+        if is_http(base) && project_id.contains('/') {
+            format!("{base}/{project_id}/-/issues/{iid}")
+        } else {
+            String::new()
+        }
+    });
+    (title, url)
+}
+
+fn worktrees_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
+    let csrf = ctx.csrf_input();
+    let cached = crate::ui::live_cache::read(ctx.state, TASKS_CACHE)
+        .and_then(|(data, _)| tasks_cache_from(&data))
+        .unwrap_or_default();
+    let gitlab_config = read_json_or_empty(&gitlab_config_path(ctx));
+    let mut rows = Vec::new();
+    let mut errors = String::new();
+    for (alias, local_path) in tracked_checkouts(ctx) {
+        let branches = match worktree::list_issue_branches(&local_path) {
+            Ok(b) => b,
+            Err(e) => {
+                errors.push_str(&error_notice(ctx, &Some(format!("{alias}: {}", e.message))));
+                continue;
+            }
+        };
+        let safe_alias = pyfmt::escape(&alias);
+        for b in branches {
+            let (title, url) = issue_ref(&cached, &gitlab_config, &alias, &b.iid);
+            let number = format!("#{}", b.iid);
+            let number = if url.is_empty() {
+                number
+            } else {
+                format!("<a href='{}' target='_blank' rel='noopener'>{number}</a>", pyfmt::escape(&url))
+            };
+            let issue = if title.is_empty() {
+                number
+            } else {
+                format!("{number} {}", pyfmt::escape(&title))
+            };
+            let place = match (&b.worktree, b.in_checkout) {
+                (Some(path), _) => format!("<code>{}</code>", pyfmt::escape(path)),
+                (None, true) => esc_t(ctx, "In the checkout"),
+                (None, false) => esc_t(ctx, "No worktree"),
+            };
+            let state = if b.dirty {
+                format!("<span class='pill pill-red'>{}</span>", esc_t(ctx, "Uncommitted changes"))
+            } else {
+                format!("<span class='pill pill-grey'>{}</span>", esc_t(ctx, "Clean"))
+            };
+            let remove = if b.in_checkout {
+                String::new()
+            } else {
+                let confirm = ctx.tf(
+                    "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.",
+                    &[("branch", &b.branch), ("alias", &alias), ("iid", &b.iid)],
+                );
+                format!(
+                    "<form method='post' action='/gitlab/worktrees/{}/{}/remove' class='daemon-action-form'>{csrf}<button type='submit' class='btn btn-warning' data-confirm=\"{}\"><svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></form>",
+                    pyfmt::quote(&alias, ""),
+                    b.iid,
+                    pyfmt::escape(&confirm),
+                    esc_t(ctx, "Remove")
+                )
+            };
+            rows.push(format!(
+                "<tr><td>{issue}</td><td>{safe_alias}</td><td><code>{}</code></td><td>{place}</td><td>{state}</td><td>{}</td><td>{remove}</td></tr>",
+                pyfmt::escape(&b.branch),
+                pyfmt::escape(&relative_time(ctx.state.now(), &b.last_commit)),
+            ));
+        }
+    }
+    let list = if rows.is_empty() {
+        format!(
+            "<p style='color: var(--md-on-surface-variant);'>{}</p>",
+            esc_t(ctx, "No issue branches in progress.")
+        )
+    } else {
+        let headers = [
+            esc_t(ctx, "Issue"),
+            esc_t(ctx, "Project"),
+            esc_t(ctx, "Branch"),
+            esc_t(ctx, "Worktree"),
+            esc_t(ctx, "State"),
+            esc_t(ctx, "Last commit"),
+            String::new(),
+        ];
+        table(&headers, &rows)
+    };
+    format!(
+        "{}<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{errors}{list}</section>",
+        flash_html(flash, flash_ok),
+        esc_t(ctx, "Worktrees"),
+        esc_t(ctx, "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch."),
+    )
+}
+
+/// Deletes one issue's local branch and worktree, refused while a run is going.
+fn remove_worktree(ctx: &UiCtx) -> UiResponse {
+    let alias = ctx.param("alias");
+    let Some(iid) = py_int(ctx.param("iid")).filter(|n| *n > 0).map(|n| n.to_string()) else {
+        return UiResponse::not_found(ctx.lang);
+    };
+    let (ok, message) = if status::read_status(&ctx.state.status_path())
+        .get("state")
+        .and_then(Value::as_str)
+        == Some("running")
+    {
+        (false, ctx.t("The GitLab loop is running - wait for it to finish or stop it before removing a worktree"))
+    } else if let Some((_, local_path)) = tracked_checkouts(ctx).into_iter().find(|(a, _)| a == alias) {
+        match worktree::remove_issue_branch(&local_path, &iid) {
+            Ok(()) => (
+                true,
+                ctx.tf(
+                    "Removed {branch} for {alias} #{iid}",
+                    &[("branch", &worktree::branch_name(&iid)), ("alias", alias), ("iid", &iid)],
+                ),
+            ),
+            Err(e) => (false, e.message),
+        }
+    } else {
+        (false, name_msg(ctx, "{name} is not a tracked project with a checkout", alias))
+    };
+    UiResponse::flash_redirect(ok, &message, WORKTREES_URL)
 }
 
 // ---------------------------------------------------------------------------
@@ -2181,6 +2351,88 @@ mod tests {
         assert_eq!(post(state, "/gitlab/issues/app/x/run").status, 404);
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert!(!marker.exists());
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-C"])
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// Tracks `app` with a clone of a bare origin and worktrees for issues 7 and 8.
+    fn sandbox_with_worktrees() -> (Sandbox, String) {
+        let sb = Sandbox::new();
+        let origin = sb.dir.path().join("origin.git");
+        std::fs::create_dir(&origin).unwrap();
+        git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+        git(sb.dir.path(), &["clone", "-q", &origin.display().to_string(), "app"]);
+        let local = sb.dir.path().join("app");
+        git(&local, &["checkout", "-q", "-b", "main"]);
+        std::fs::write(local.join("a.txt"), "1").unwrap();
+        git(&local, &["add", "."]);
+        git(&local, &["commit", "-qm", "init"]);
+        git(&local, &["push", "-q", "origin", "main"]);
+        let local = local.display().to_string();
+        let root = sb.path("wt");
+        sb.seed_projects(json!({"gitlab_instance": "g", "assignee_username": "me", "worktree_root": root,
+            "projects": {"app": {"project_id": "g/app", "local_path": local, "target_branch": "main"}}}));
+        let wt7 = worktree::new_worktree(&local, "main", "7", &root).unwrap();
+        worktree::new_worktree(&local, "main", "8", &root).unwrap();
+        std::fs::write(Path::new(&wt7).join("wip.txt"), "x").unwrap();
+        (sb, wt7)
+    }
+
+    #[test]
+    fn the_worktrees_view_lists_each_issue_branch_with_a_remove_button() {
+        let (sb, wt7) = sandbox_with_worktrees();
+        let issue = json!({"iid": 7, "title": "Fix the <login>", "web_url": "https://g.example/g/app/-/issues/7"});
+        crate::ui::live_cache::write(&sb.state, TASKS_CACHE, tasks_cache_json(&[("app".into(), state(vec![issue], None))]));
+        let body = worktrees_body(&sb.ctx(), None, true);
+        assert!(body.contains("Fix the &lt;login&gt;"), "{body}");
+        assert!(body.contains("href='https://g.example/g/app/-/issues/7'"), "{body}");
+        // Not in the cached Tasks list: linked from the instance URL instead.
+        assert!(body.contains("href='https://g.example/g/app/-/issues/8'"), "{body}");
+        assert!(body.contains("<code>loop/issue-7</code>") && body.contains("<code>loop/issue-8</code>"), "{body}");
+        assert!(body.contains(&pyfmt::escape(&wt7)) || body.contains("app-issue-7"), "{body}");
+        assert!(body.contains("Uncommitted changes"), "{body}");
+        assert!(body.contains("<form method='post' action='/gitlab/worktrees/app/7/remove'"), "{body}");
+        assert!(body.contains("name='csrf_token'") && body.contains("data-confirm="), "{body}");
+    }
+
+    #[test]
+    fn the_worktrees_view_says_when_there_is_nothing_in_progress() {
+        let sb = Sandbox::new();
+        let body = worktrees_body(&sb.ctx(), None, true);
+        assert!(body.contains("No issue branches in progress."), "{body}");
+        assert_eq!(builtin_loop_page("gitlab-loop").unwrap().views[2].key, "worktrees");
+    }
+
+    #[test]
+    fn remove_deletes_the_worktree_and_branch_unless_a_run_is_going() {
+        let (sb, wt7) = sandbox_with_worktrees();
+        let state = &sb.state;
+        status::write_status(&state.status_path(), "running", &[]).unwrap();
+        let resp = post(state, "/gitlab/worktrees/app/7/remove");
+        assert!(resp.header("Location").unwrap().ends_with("&ok=0"));
+        assert!(Path::new(&wt7).exists());
+
+        status::write_status(&state.status_path(), "idle", &[]).unwrap();
+        let resp = post(state, "/gitlab/worktrees/app/7/remove");
+        assert_eq!(resp.status, 303);
+        let location = resp.header("Location").unwrap();
+        assert!(location.starts_with("/loops/gitlab-loop?view=worktrees&flash="), "{location}");
+        assert!(location.ends_with("&ok=1"), "{location}");
+        assert!(!Path::new(&wt7).exists());
+        let body = worktrees_body(&sb.ctx(), None, true);
+        assert!(!body.contains("loop/issue-7") && body.contains("loop/issue-8"), "{body}");
+
+        assert!(post(state, "/gitlab/worktrees/nope/8/remove").header("Location").unwrap().ends_with("&ok=0"));
+        assert!(post(state, "/gitlab/worktrees/app/7/remove").header("Location").unwrap().ends_with("&ok=0"));
+        assert_eq!(post(state, "/gitlab/worktrees/app/x/remove").status, 404);
     }
 
     fn state(issues: Vec<Value>, issues_error: Option<&str>) -> AliasState {

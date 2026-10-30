@@ -149,6 +149,7 @@ pub fn builtin_loop_page(name: &str) -> Option<Hub> {
             vec![
                 v("live", "Live").refreshing(),
                 v("tasks", "Tasks").refreshing().lazy(),
+                v("worktrees", "Worktrees"),
                 v("projects", "Projects"),
             ],
         ),
