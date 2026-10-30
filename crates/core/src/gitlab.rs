@@ -3,7 +3,7 @@
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Python's `urllib.parse.quote(s, safe='')` leaves only these unreserved chars.
 const QUOTE: &AsciiSet = &NON_ALPHANUMERIC
@@ -290,6 +290,40 @@ impl Client {
         }
     }
 
+    /// Upload a file to a project (`projects/:id/uploads`); the response
+    /// carries the `url` and `markdown` to embed it with.
+    pub fn upload_file(&self, project_id: &str, path: &Path) -> Result<Value, GitlabError> {
+        let bytes = std::fs::read(path).map_err(|e| GitlabError::Transport(e.to_string()))?;
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("screenshot.png");
+        let boundary = format!("loopx-{}", uuid::Uuid::new_v4().simple());
+        let body = multipart_body(&boundary, filename, &bytes);
+        let url = format!("{}/projects/{}/uploads", self.api_url, quote(project_id));
+        let result = ureq::post(&url)
+            .set("PRIVATE-TOKEN", &self.token)
+            .set(
+                "Content-Type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )
+            .send_bytes(&body);
+        match result {
+            Ok(resp) => {
+                let text = resp
+                    .into_string()
+                    .map_err(|e| GitlabError::Transport(e.to_string()))?;
+                serde_json::from_str(&text).map_err(|e| GitlabError::BadJson(e.to_string()))
+            }
+            Err(ureq::Error::Status(status, resp)) => Err(GitlabError::Http {
+                status,
+                url,
+                body: resp.into_string().unwrap_or_default(),
+            }),
+            Err(e) => Err(GitlabError::Transport(e.to_string())),
+        }
+    }
+
     /// PUT a JSON body (e.g. `{"add_labels": "..."}` on an issue).
     pub fn put_json(&self, endpoint: &str, body: &Value) -> Result<Value, GitlabError> {
         let url = format!("{}/{endpoint}", self.api_url);
@@ -510,6 +544,18 @@ pub fn filter_assigned_to(issues: Vec<Value>, username: &str) -> Vec<Value> {
 }
 
 /// `urllib.parse.quote(s, safe='')`.
+/// A `multipart/form-data` body with one PNG `file` part.
+pub fn multipart_body(boundary: &str, filename: &str, bytes: &[u8]) -> Vec<u8> {
+    let filename = filename.replace(['"', '\r', '\n'], "_");
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: image/png\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
 pub fn quote(s: &str) -> String {
     utf8_percent_encode(s, QUOTE).to_string()
 }
@@ -518,6 +564,19 @@ pub fn quote(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn multipart_body_has_one_png_file_part() {
+        let body = multipart_body("B", "1-after.png", b"PNGDATA");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.starts_with("--B\r\n"), "{text}");
+        assert!(text.contains(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"1-after.png\"\r\n"
+        ));
+        assert!(text.contains("Content-Type: image/png\r\n\r\nPNGDATA"));
+        assert!(text.ends_with("\r\n--B--\r\n"), "{text}");
+        assert_eq!(text.matches("--B").count(), 2);
+    }
 
     #[test]
     fn quote_matches_python_safe_empty() {

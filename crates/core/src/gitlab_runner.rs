@@ -24,7 +24,7 @@ use crate::runner_util::{
 };
 use crate::{
     ai_cli_config, approvals, cost, events, gitlab_report, issue_tracking_config, learning, mr,
-    proc, prompt, slack_report, worktree,
+    mr_screenshots, proc, prompt, slack_report, worktree,
 };
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -972,6 +972,11 @@ fn escape_pointer(token: &str) -> String {
 /// GitLab write calls made while finalizing (injectable for tests).
 pub trait GitlabCalls {
     fn call(&self, method: &str, endpoint: &str, body: &Value) -> Result<(), String>;
+
+    /// Upload an image to the project; returns its project-relative URL.
+    fn upload(&self, _project_id: &str, _path: &Path) -> Result<String, String> {
+        Err("upload unsupported".into())
+    }
 }
 
 struct RealGitlab {
@@ -990,6 +995,36 @@ impl GitlabCalls for RealGitlab {
         }
         .map(|_| ())
         .map_err(|e| e.to_string())
+    }
+
+    fn upload(&self, project_id: &str, path: &Path) -> Result<String, String> {
+        let config = gitlab::load_config();
+        let client = Client::from_config(config.as_ref(), Some(&self.instance), None)
+            .map_err(|e| e.to_string())?;
+        let resp = client
+            .upload_file(project_id, path)
+            .map_err(|e| e.to_string())?;
+        resp.get("url")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "upload response has no url".to_string())
+    }
+}
+
+/// Deletes a run's screenshot artefacts when finalizing ends, on any path.
+struct ScreenshotCleanup {
+    data: Option<Value>,
+    handoff_dir: PathBuf,
+    screens_dir: PathBuf,
+}
+
+impl Drop for ScreenshotCleanup {
+    fn drop(&mut self) {
+        mr_screenshots::remove_screenshots(
+            self.data.as_ref(),
+            &self.handoff_dir,
+            &self.screens_dir,
+        );
     }
 }
 
@@ -1185,6 +1220,13 @@ pub fn finalize_gated_issue(
         return escalate("checkout_problem", problem, None);
     }
     let data = read_handoff(&handoff, issue_iid);
+    let screens = mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid);
+    let handoff_dir = handoff.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let _cleanup = ScreenshotCleanup {
+        data: data.clone(),
+        handoff_dir: handoff_dir.clone(),
+        screens_dir: screens.clone(),
+    };
     if let Some(outcome) = data
         .as_ref()
         .and_then(|d| d.get("action"))
@@ -1321,11 +1363,25 @@ pub fn finalize_gated_issue(
     );
     // A push option can't carry a multi-line description, so set it once the MR exists.
     match mr_url.as_deref().and_then(mr_iid) {
-        Some(mr) => api(
-            "PUT",
-            &format!("projects/{}/merge_requests/{mr}", quote(&project_id)),
-            json!({"description": mr_description(&data, issue_iid, summary, &checks)}),
-        ),
+        Some(mr) => {
+            let mut description = mr_description(&data, issue_iid, summary, &checks);
+            let section = screenshots_description(
+                &data,
+                &handoff_dir,
+                &screens,
+                &project_id,
+                gitlab_calls,
+                &log,
+            );
+            if let Some(section) = section {
+                description = format!("{description}\n\n{section}");
+            }
+            api(
+                "PUT",
+                &format!("projects/{}/merge_requests/{mr}", quote(&project_id)),
+                json!({"description": description}),
+            )
+        }
         None => log("no merge request URL in the push output; its description was not set"),
     }
     emit(
@@ -1342,6 +1398,67 @@ pub fn finalize_gated_issue(
         format!("*Finished* {issue_label}: MR opened \u{2192} {link}"),
     );
     "mr_opened".to_string()
+}
+
+/// The "## Screenshots" section for the handoff's screenshot pairs: uploads
+/// each image, drops a pair whose `after` fails, and folds every problem and
+/// the agent's `screenshots_note` into one note line.
+fn screenshots_description(
+    data: &Value,
+    handoff_dir: &Path,
+    screens: &Path,
+    project_id: &str,
+    gitlab_calls: &dyn GitlabCalls,
+    log: &dyn Fn(&str),
+) -> Option<String> {
+    let (pairs, mut problems) = mr_screenshots::screenshot_pairs(data, handoff_dir, screens);
+    let mut uploaded = Vec::new();
+    for pair in pairs {
+        let after = match gitlab_calls.upload(project_id, &pair.after) {
+            Ok(url) => url,
+            Err(e) => {
+                log(&format!("screenshot upload failed: {e}"));
+                problems.push(format!("\"{}\" dropped: upload failed", pair.label));
+                continue;
+            }
+        };
+        let before = pair.before.as_ref().and_then(|p| {
+            gitlab_calls
+                .upload(project_id, p)
+                .map_err(|e| {
+                    log(&format!("screenshot upload failed: {e}"));
+                    problems.push(format!("\"{}\" before image not uploaded", pair.label));
+                })
+                .ok()
+        });
+        uploaded.push(mr_screenshots::UploadedPair {
+            label: pair.label,
+            before,
+            after,
+        });
+    }
+    for p in &problems {
+        log(&format!("screenshots: {p}"));
+    }
+    let mut note = match problems.is_empty() {
+        true => None,
+        false => Some(format!(
+            "Some screenshots could not be uploaded: {}",
+            problems.join("; ")
+        )),
+    };
+    if let Some(extra) = data
+        .get("screenshots_note")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        note = Some(match note {
+            Some(n) => format!("{n} {extra}"),
+            None => extra.to_string(),
+        });
+    }
+    mr_screenshots::screenshots_section(&uploaded, note.as_deref())
 }
 
 /// The comment posted on the issue: the merge request link, then the agent's goal and
@@ -2286,6 +2403,209 @@ mod tests {
         let body = mr_description(&calls);
         assert!(body.starts_with("Closes #7\n\n## What and why"), "{body}");
         assert!(body.ends_with("- h"), "{body}");
+    }
+
+    /// What a finalize with screenshots produced.
+    struct Shots {
+        dir: tempfile::TempDir,
+        outcome: String,
+        calls: Vec<(String, String, Value)>,
+        uploads: Vec<String>,
+    }
+
+    struct Uploads {
+        ok: bool,
+        seen: std::sync::Mutex<Vec<String>>,
+        notes: Notes,
+    }
+
+    impl GitlabCalls for Uploads {
+        fn call(&self, method: &str, endpoint: &str, body: &Value) -> Result<(), String> {
+            self.notes.call(method, endpoint, body)
+        }
+        fn upload(&self, _project_id: &str, path: &Path) -> Result<String, String> {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            self.seen.lock().unwrap().push(name.clone());
+            if self.ok {
+                Ok(format!("/uploads/h/{name}"))
+            } else {
+                Err("boom".into())
+            }
+        }
+    }
+
+    fn write_png(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        bytes.extend_from_slice(&[1, 2, 3]);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// Finalize `web #7` with `handoff` (written to `<dir>/handoff/h.json`),
+    /// after `setup(handoff_dir, screens_dir)` created the artefact files.
+    fn finalize_shots(
+        handoff: Value,
+        uploads_ok: bool,
+        final_state: LoopState,
+        setup: impl Fn(&Path, &Path),
+    ) -> Shots {
+        let d = tempfile::tempdir().unwrap();
+        let handoff_dir = d.path().join("handoff");
+        let screens = crate::mr_screenshots::screens_dir(d.path(), "web", "7");
+        std::fs::create_dir_all(&handoff_dir).unwrap();
+        setup(&handoff_dir, &screens);
+        let path = handoff_dir.join("h.json");
+        std::fs::write(&path, handoff.to_string()).unwrap();
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            final_state,
+            vec![iteration(vec![v("project_commands", true, "", json!({}))])],
+            "",
+        );
+        let gl = Uploads {
+            ok: uploads_ok,
+            seen: Default::default(),
+            notes: Notes(Default::default()),
+        };
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
+        let ctx = RunCtx {
+            repo_root: d.path().into(),
+            events_dir: Some(d.path().join("events")),
+            results_dir: None,
+            unified_log: d.path().join("log"),
+            exe: "loopx".into(),
+            config_path: None,
+            fakes: None,
+        };
+        let notifier = |_: &str| {};
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&gl),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                ..Default::default()
+            },
+        );
+        Shots {
+            outcome,
+            calls: gl.notes.0.into_inner().unwrap(),
+            uploads: gl.seen.into_inner().unwrap(),
+            dir: d,
+        }
+    }
+
+    fn fix_with_shots(extra: Value) -> Value {
+        let mut h = json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+            "title": "fix: #7 x", "summary": "S."});
+        for (k, v) in extra.as_object().unwrap() {
+            h[k] = v.clone();
+        }
+        h
+    }
+
+    fn make_pair_files(handoff: &Path, screens: &Path) {
+        write_png(&handoff.join("1-before.png"));
+        write_png(&screens.join("1-after.png"));
+        std::fs::write(screens.join("mocks.json"), "{}").unwrap();
+        std::fs::write(handoff.join("session.json"), "{}").unwrap();
+    }
+
+    fn one_pair() -> Value {
+        json!({"screenshots": [{"label": "Home", "before": "1-before.png", "after": "1-after.png"}]})
+    }
+
+    #[test]
+    fn gated_fix_uploads_screenshots_into_the_description() {
+        let s = finalize_shots(
+            fix_with_shots(one_pair()),
+            true,
+            LoopState::Completed,
+            make_pair_files,
+        );
+        assert_eq!(s.outcome, "mr_opened");
+        assert_eq!(s.uploads.len(), 2, "{:?}", s.uploads);
+        let body = mr_description(&s.calls);
+        assert!(body.contains("## Screenshots"), "{body}");
+        assert!(body.contains("/uploads/h/1-before.png"), "{body}");
+        assert!(body.contains("/uploads/h/1-after.png"), "{body}");
+    }
+
+    #[test]
+    fn failed_uploads_leave_a_note_and_still_open() {
+        let s = finalize_shots(
+            fix_with_shots(one_pair()),
+            false,
+            LoopState::Completed,
+            make_pair_files,
+        );
+        assert_eq!(s.outcome, "mr_opened");
+        let body = mr_description(&s.calls);
+        assert!(body.contains("## Screenshots"), "{body}");
+        assert!(body.contains("could not be uploaded"), "{body}");
+    }
+
+    #[test]
+    fn screenshots_note_without_pairs_is_shown() {
+        let s = finalize_shots(
+            fix_with_shots(json!({"screenshots_note": "No browser-test setup"})),
+            true,
+            LoopState::Completed,
+            |_, _| {},
+        );
+        assert_eq!(s.outcome, "mr_opened");
+        let body = mr_description(&s.calls);
+        assert!(body.contains("## Screenshots"), "{body}");
+        assert!(body.contains("No browser-test setup"), "{body}");
+    }
+
+    #[test]
+    fn no_screenshot_fields_leaves_the_description_unchanged() {
+        let s = finalize_shots(
+            fix_with_shots(json!({})),
+            true,
+            LoopState::Completed,
+            |_, _| {},
+        );
+        let body = mr_description(&s.calls);
+        assert!(!body.contains("Screenshots"), "{body}");
+        assert!(body.ends_with("## Verified"), "{body:?}");
+    }
+
+    #[test]
+    fn screenshot_files_are_deleted_after_finalize_whatever_the_outcome() {
+        let cases = [
+            (fix_with_shots(one_pair()), true),
+            (fix_with_shots(one_pair()), false),
+            (
+                json!({"action": "escalate", "reason": "stuck", "screenshots":
+                    [{"label": "Home", "before": "1-before.png", "after": "1-after.png"}]}),
+                true,
+            ),
+        ];
+        for (handoff, ok) in cases {
+            let s = finalize_shots(handoff, ok, LoopState::Completed, make_pair_files);
+            let handoff_dir = s.dir.path().join("handoff");
+            let screens = crate::mr_screenshots::screens_dir(s.dir.path(), "web", "7");
+            assert!(!screens.exists(), "{}", s.outcome);
+            assert!(!handoff_dir.join("1-before.png").exists(), "{}", s.outcome);
+            assert!(handoff_dir.join("h.json").exists(), "{}", s.outcome);
+        }
     }
 
     #[test]

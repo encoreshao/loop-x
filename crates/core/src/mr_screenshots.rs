@@ -178,6 +178,40 @@ pub fn screenshots_section(pairs: &[UploadedPair], note: Option<&str>) -> Option
     Some(blocks.join("\n\n"))
 }
 
+/// Delete every screenshot artefact of a finished run: the whole screens
+/// directory, and each image the handoff names that lies inside the handoff
+/// directory. Best effort; nothing outside those two places is touched.
+pub fn remove_screenshots(data: Option<&Value>, handoff_dir: &Path, screens_dir: &Path) {
+    if let Err(e) = fs::remove_dir_all(screens_dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("could not remove {}: {e}", screens_dir.display());
+        }
+    }
+    let Ok(root) = handoff_dir.canonicalize() else {
+        return;
+    };
+    let entries = data
+        .and_then(|d| d.get("screenshots"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    for entry in entries {
+        for key in ["before", "after"] {
+            let Some(rel) = entry.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            let Ok(path) = handoff_dir.join(rel).canonicalize() else {
+                continue;
+            };
+            if path.starts_with(&root) && path.is_file() {
+                if let Err(e) = fs::remove_file(&path) {
+                    eprintln!("could not remove {}: {e}", path.display());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +365,24 @@ mod tests {
     fn labels_are_markdown_safe() {
         let out = screenshots_section(&[up("a|b <script>", None, "/u/1.png")], None).unwrap();
         assert!(out.contains("**a\\|b &lt;script&gt;**"), "{out}");
+    }
+
+    #[test]
+    fn remove_deletes_named_images_and_the_screens_dir_only() {
+        let root = tempfile::tempdir().unwrap();
+        let handoff = root.path().join("handoff");
+        let screens = root.path().join("screens");
+        png(&handoff.join("shots/a.png"));
+        png(&handoff.join("other.png"));
+        png(&screens.join("b.png"));
+        png(&root.path().join("outside.png"));
+        let data = json!({"screenshots": [
+            {"label": "x", "before": "../outside.png", "after": "shots/a.png"}
+        ]});
+        remove_screenshots(Some(&data), &handoff, &screens);
+        assert!(!handoff.join("shots/a.png").exists());
+        assert!(!screens.exists());
+        assert!(handoff.join("other.png").exists());
+        assert!(root.path().join("outside.png").exists());
     }
 }
