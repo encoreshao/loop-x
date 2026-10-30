@@ -132,6 +132,23 @@ mod tests {
         unsafe { libc::kill(pid, 0) == 0 }
     }
 
+    /// Every pid listed in `file` (written by the child) is dead within 5 s.
+    fn assert_gone(file: &Path, expected: usize) {
+        let pids: Vec<i32> = std::fs::read_to_string(file)
+            .unwrap()
+            .lines()
+            .map(|l| l.trim().parse().unwrap())
+            .collect();
+        assert_eq!(pids.len(), expected, "{pids:?}");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while pids.iter().any(|p| alive(*p)) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for p in pids {
+            assert!(!alive(p), "pid {p} still running");
+        }
+    }
+
     fn free_port() -> u16 {
         std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -203,17 +220,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let url = format!("http://127.0.0.1:{}/", free_port());
         let started = Instant::now();
-        let argv = vec!["sh".to_string(), "-c".into(), "exit 3".into()];
+        // The leader exits but leaves a backgrounded child behind.
+        let pids = dir.path().join("exit.pid");
+        let script = format!("sleep 30 & echo $! > {}; exit 3", pids.display());
+        let argv = vec!["sh".to_string(), "-c".into(), script];
         let err = DevServer::start(&argv, &[], dir.path(), &url, Duration::from_secs(20))
             .err()
             .unwrap();
         assert!(err.contains("exited"), "{err}");
         assert!(started.elapsed() < Duration::from_secs(10));
+        assert_gone(&pids, 1);
 
-        let argv = vec!["sleep".to_string(), "30".into()];
+        // Never answers: the leader and its child are both gone once Err returns.
+        let pids = dir.path().join("hang.pid");
+        let script = format!(
+            "echo $$ > {p}; sleep 30 & echo $! >> {p}; wait",
+            p = pids.display()
+        );
+        let argv = vec!["sh".to_string(), "-c".into(), script];
         let err = DevServer::start(&argv, &[], dir.path(), &url, Duration::from_secs(1))
             .err()
             .unwrap();
         assert!(err.contains("did not answer"), "{err}");
+        assert_gone(&pids, 2);
     }
 }
