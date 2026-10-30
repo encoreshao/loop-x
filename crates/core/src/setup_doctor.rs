@@ -3,7 +3,9 @@
 //! main agent hands off `setup_blocked`. This module holds its permissions,
 //! its result file and the texts built from it.
 
+use crate::agents::{new_cli_args, RunOptions};
 use crate::gitlab_runner::{ASSET_BUILD_PATTERNS, DISALLOWED_TOOLS};
+use crate::runner_util::resolved_program;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -154,6 +156,89 @@ pub fn doctor_feedback(result: &DoctorResult) -> String {
     )
 }
 
+/// The GitLab-comment body for a `setup_blocked` handoff the doctor never
+/// saw; `why` says why it did not run.
+pub fn report_without_doctor(blocked: &Value, why: &str) -> String {
+    let diagnosis = text(blocked, "diagnosis");
+    let diagnosis = if diagnosis.trim().is_empty() {
+        String::new()
+    } else {
+        format!("**Diagnosis**\n\n{diagnosis}\n\n")
+    };
+    format!(
+        "**Problem**\n\nVerifying the change failed on setup, not on the change itself. Command: `{}`\n\n```\n{}\n```\n\n{diagnosis}**Blocked on**\n\nThe environment problem above. The setup doctor did not run: {why}.\n\n**Next step**\n\nFix the setup by hand, then re-run the issue.",
+        text(blocked, "command"),
+        text(blocked, "error").replace("```", "~~~"),
+    )
+}
+
+/// The GitLab-comment body when the main agent is blocked on setup again
+/// after the doctor fixed `first`: the doctor runs once per issue per run.
+pub fn repeat_block_report(first: &DoctorResult, second: &Value) -> String {
+    format!(
+        "The setup doctor fixed the first setup problem, but the checks were then blocked on setup again.\n\n{}\n\n**Fixed earlier in this run by the setup doctor**\n\n{}",
+        report_without_doctor(second, "it already ran once for this issue in this run"),
+        blocker_lines(&first.blockers)
+    )
+}
+
+/// The doctor session's CLI argv, shaped like the main agent's
+/// (`gitlab_runner::cli_command`) but writable only in the issue's worktree
+/// and the handoffs directory. Claude gets no `acceptEdits`: that would
+/// auto-approve edits in every added directory and undo the scoped
+/// Edit/Write rules of [`doctor_allowed_tools`]. The other CLIs have no
+/// allowlist, so there the prompt is the only fence, as for the main agent.
+pub fn doctor_cli_command(
+    ai_cli: &str,
+    prompt: &str,
+    repo_root: &str,
+    work_dir: &str,
+    exe: &str,
+    max_budget_usd: Option<f64>,
+) -> Vec<String> {
+    let s = |v: &str| v.to_string();
+    let handoffs = format!("{}/outputs/handoffs", repo_root.trim_end_matches('/'));
+    let roots = vec![s(work_dir), handoffs];
+    if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
+        let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
+        opts.add_dirs = roots.iter().map(PathBuf::from).collect();
+        let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
+        return std::iter::once(resolved_program(ai_cli))
+            .chain(args)
+            .collect();
+    }
+    if ai_cli == "codex" {
+        // Network access: toolchain installs and web research need it.
+        let roots = serde_json::to_string(&roots).expect("serialisable");
+        return vec![
+            s("codex"),
+            s("exec"),
+            s("--sandbox"),
+            s("workspace-write"),
+            s("-c"),
+            s("approval_policy=never"),
+            s("-c"),
+            format!("sandbox_workspace_write.writable_roots={roots}"),
+            s("-c"),
+            s("sandbox_workspace_write.network_access=true"),
+            s(prompt),
+        ];
+    }
+    let mut cmd = vec![s("claude"), s("-p")];
+    for root in &roots {
+        cmd.extend([s("--add-dir"), root.clone()]);
+    }
+    cmd.extend([
+        s("--allowedTools"),
+        doctor_allowed_tools(repo_root, exe, work_dir),
+        s("--disallowedTools"),
+        doctor_disallowed_tools(exe),
+    ]);
+    cmd.extend(crate::cost::budget_args(max_budget_usd));
+    cmd.extend([s("--output-format"), s("json"), s(prompt)]);
+    cmd
+}
+
 /// Claude permission patterns for the doctor session: the worktree and
 /// machine fixes of the spec, no pushes, commits or GitLab access.
 pub fn doctor_allowed_tools(repo_root: &str, exe: &str, work_dir: &str) -> String {
@@ -253,6 +338,100 @@ pub fn doctor_disallowed_tools(exe: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn doctor_command(cli: &str) -> Vec<String> {
+        doctor_cli_command(
+            cli,
+            "PROMPT",
+            "/r",
+            "/wt/web-issue-7",
+            "/bin/loopx",
+            Some(2.0),
+        )
+    }
+
+    #[test]
+    fn claude_doctor_command_is_scoped_to_the_worktree_and_handoffs() {
+        let c = doctor_command("claude");
+        assert_eq!(&c[..2], ["claude", "-p"]);
+        assert!(
+            !c.iter()
+                .any(|a| a == "--permission-mode" || a == "acceptEdits"),
+            "acceptEdits would auto-approve edits in every added dir: {c:?}"
+        );
+        let dirs: Vec<&str> = c
+            .windows(2)
+            .filter(|w| w[0] == "--add-dir")
+            .map(|w| w[1].as_str())
+            .collect();
+        assert_eq!(dirs, ["/wt/web-issue-7", "/r/outputs/handoffs"]);
+        let flag = |name: &str| {
+            let i = c.iter().position(|a| a == name).unwrap();
+            c[i + 1].clone()
+        };
+        assert_eq!(
+            flag("--allowedTools"),
+            doctor_allowed_tools("/r", "/bin/loopx", "/wt/web-issue-7")
+        );
+        assert_eq!(
+            flag("--disallowedTools"),
+            doctor_disallowed_tools("/bin/loopx")
+        );
+        assert_eq!(flag("--max-budget-usd"), "2.00");
+        assert_eq!(flag("--output-format"), "json");
+        assert_eq!(c.last().unwrap(), "PROMPT");
+    }
+
+    #[test]
+    fn codex_doctor_command_writes_only_the_worktree_and_handoffs() {
+        let c = doctor_command("codex");
+        assert_eq!(&c[..2], ["codex", "exec"]);
+        assert!(c.contains(
+            &r#"sandbox_workspace_write.writable_roots=["/wt/web-issue-7","/r/outputs/handoffs"]"#
+                .to_string()
+        ));
+        assert_eq!(c.last().unwrap(), "PROMPT");
+    }
+
+    #[test]
+    fn report_without_doctor_gives_the_diagnosis_and_why() {
+        let blocked = json!({"command": "make test", "error": "No module named generated",
+                             "diagnosis": "the generated module is missing"});
+        let r = report_without_doctor(&blocked, "it is switched off for this loop");
+        for part in [
+            "`make test`",
+            "No module named generated",
+            "the generated module is missing",
+            "it is switched off for this loop",
+            "**Next step**",
+        ] {
+            assert!(r.contains(part), "{part} missing from {r}");
+        }
+        assert!(!r.contains("did not finish"), "{r}");
+    }
+
+    #[test]
+    fn repeat_block_report_lists_both_blocks() {
+        let first = DoctorResult {
+            status: DoctorStatus::Fixed,
+            blockers: vec![Blocker {
+                error: "No module named generated".into(),
+                cause: "generated module missing".into(),
+                tried: vec!["make generate".into()],
+                fixed: true,
+            }],
+            learning: None,
+        };
+        let second = json!({"command": "make test", "error": "database does not exist"});
+        let r = repeat_block_report(&first, &second);
+        for part in [
+            "generated module missing",
+            "make generate",
+            "database does not exist",
+        ] {
+            assert!(r.contains(part), "{part} missing from {r}");
+        }
+    }
 
     fn write(dir: &Path, text: &str) -> PathBuf {
         let p = dir.join("a-1.doctor.json");

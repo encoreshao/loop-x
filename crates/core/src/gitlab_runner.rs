@@ -23,11 +23,12 @@ use crate::runner_util::{
     STDERR_EXCERPT_CHARS,
 };
 use crate::{
-    ai_cli_config, approvals, cost, events, gitlab_report, issue_tracking_config, learning, mr,
-    mr_screenshots, proc, prompt, slack_report, worktree,
+    ai_cli_config, approvals, cost, events, gitlab_report, issue_tracking_config, learning,
+    memory_store, mr, mr_screenshots, proc, prompt, setup_doctor, slack_report, worktree,
 };
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
+use setup_doctor::{DoctorResult, DoctorStatus};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -224,6 +225,8 @@ pub struct RunCtx {
     /// Tests: GitLab calls and Slack messages made by the gated finalize go
     /// here instead of to the real services.
     pub fakes: Option<Arc<RunFakes>>,
+    /// Where task memory and `SETUP.md` live (default: the per-machine one).
+    pub memory_root: Option<PathBuf>,
 }
 
 pub struct RunFakes {
@@ -252,6 +255,7 @@ impl RunCtx {
             exe,
             config_path: None,
             fakes: None,
+            memory_root: None,
         }
     }
 
@@ -318,6 +322,22 @@ pub struct InvokeRequest {
     pub run_id: Option<String>,
     pub max_budget_usd: Option<f64>,
     pub timeout_seconds: f64,
+    /// `Some` runs the setup doctor for this issue instead of the main agent.
+    pub doctor: Option<DoctorRequest>,
+}
+
+/// What the setup doctor session is told about the blocked issue.
+#[derive(Debug, Clone)]
+pub struct DoctorRequest {
+    /// The issue's worktree, the one place it may edit files.
+    pub work_dir: String,
+    /// The main agent's `setup_blocked` handoff.
+    pub blocked: Value,
+    pub max_attempts: i64,
+    /// `SETUP.md` sources that changed since it was written.
+    pub stale: Vec<String>,
+    /// Whether the project already has a `SETUP.md`.
+    pub has_knowledge: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -352,6 +372,9 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         message: m,
         cost_usd: None,
     };
+    if let Some(doctor) = &req.doctor {
+        return invoke_doctor(ctx, req, doctor);
+    }
     let base = match &req.mode {
         InvokeMode::Single => prompt::single_issue(&ctx.repo_root, &req.alias, &req.issue_iid),
         InvokeMode::Batch => prompt::batch_issue(&ctx.repo_root, &req.alias, &req.issue_iid),
@@ -388,6 +411,55 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         gate,
         req.max_budget_usd,
         offline,
+    )
+}
+
+/// The setup doctor session for a `setup_blocked` issue: its own prompt and
+/// its own, narrower-scoped permissions.
+fn invoke_doctor(
+    ctx: &RunCtx,
+    req: &InvokeRequest,
+    doctor: &DoctorRequest,
+) -> Result<AgentOutput, AgentError> {
+    let run_id = req
+        .run_id
+        .clone()
+        .or_else(|| std::env::var("LOOP_RUN_ID").ok().filter(|v| !v.is_empty()))
+        .ok_or_else(|| AgentError {
+            message: "the setup doctor needs a run_id to locate its result file".into(),
+            cost_usd: None,
+        })?;
+    let handoff = handoff_path(&run_id, &req.alias, &req.issue_iid, &ctx.repo_root);
+    let text = prompt::setup_doctor(
+        &ctx.repo_root,
+        &req.alias,
+        &req.issue_iid,
+        &doctor.work_dir,
+        &doctor.blocked,
+        &setup_doctor::doctor_result_path(&handoff),
+        &setup_doctor::setup_draft_path(&handoff),
+        doctor.max_attempts,
+        &doctor.stale,
+        doctor.has_knowledge,
+    );
+    let text = prompt::with_run_id(text, Some(&run_id));
+    let ai_cli = ai_cli_config::selected_cli();
+    let argv = setup_doctor::doctor_cli_command(
+        &ai_cli,
+        &text,
+        &ctx.repo_root.display().to_string(),
+        &doctor.work_dir,
+        &ctx.exe,
+        req.max_budget_usd,
+    );
+    run_cli(
+        ctx,
+        &ai_cli,
+        &argv,
+        req.timeout_seconds,
+        Some((&req.alias, &req.issue_iid)),
+        &[hold_slack()],
+        req.max_budget_usd,
     )
 }
 
@@ -1673,6 +1745,7 @@ fn run_pass(
 
     let mut issue = IssueContext::new(alias, issue_iid, timeout_seconds);
     issue.handoff_path = handoff.clone();
+    issue.config_path = ctx.config_path.clone();
 
     let max_cost = definition.stop_conditions.max_cost_usd;
     let agent_fn: AgentFn = {
@@ -1709,6 +1782,7 @@ fn run_pass(
                 run_id: Some(run_id.clone()),
                 max_budget_usd: cap,
                 timeout_seconds,
+                doctor: None,
             };
             match invoker(&req) {
                 Ok(out) => {
@@ -1810,8 +1884,8 @@ pub fn run_one_issue(
         alias,
         issue_iid,
         definition,
-        invoker,
-        mode,
+        invoker.clone(),
+        mode.clone(),
         None,
         dirty_before,
     );
@@ -1840,22 +1914,31 @@ pub fn run_one_issue(
             },
         );
     }
-    let (mut result, raw_costs, raw_usages) = match started {
-        Ok(r) => r,
-        Err(e) => {
-            // finalize never runs, so the screenshots go here.
-            let handoff = handoff_path(run_id, alias, issue_iid, &ctx.repo_root);
-            let data = std::fs::read_to_string(&handoff)
-                .ok()
-                .and_then(|t| serde_json::from_str::<Value>(&t).ok());
-            mr_screenshots::remove_screenshots(
-                data.as_ref(),
-                handoff.parent().unwrap_or(Path::new(".")),
-                &mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid),
-            );
-            return Err(e);
-        }
+    // finalize never runs on an error, so the screenshots go here.
+    let failed = |e: String| {
+        remove_issue_screenshots(ctx, run_id, alias, issue_iid);
+        Err(e)
     };
+    let pass = match started {
+        Ok(p) => p,
+        Err(e) => return failed(e),
+    };
+    let (pass, setup) = if gate && checkout_problem.is_none() {
+        let issue = IssueArgs {
+            ctx,
+            run_id,
+            alias,
+            issue_iid,
+            definition,
+        };
+        match after_setup_blocked(&issue, &invoker, &mode, pass) {
+            Ok(p) => p,
+            Err(e) => return failed(e),
+        }
+    } else {
+        (pass, SetupOutcome::default())
+    };
+    let (mut result, raw_costs, raw_usages) = pass;
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
     // un-coerced figure to keep "cost $0" apart from "never got a cost".
@@ -1881,6 +1964,8 @@ pub fn run_one_issue(
                 gitlab_config_path: fakes.map(|f| f.gitlab_config_path.clone()),
                 checkout_problem,
                 quiet,
+                setup_report: setup.report,
+                setup_fixed: setup.fixed,
                 ..FinalizeDeps::default()
             },
         );
@@ -1907,6 +1992,322 @@ pub fn run_one_issue(
         usage,
         gate_outcome,
     })
+}
+
+fn remove_issue_screenshots(ctx: &RunCtx, run_id: &str, alias: &str, issue_iid: &str) {
+    let handoff = handoff_path(run_id, alias, issue_iid, &ctx.repo_root);
+    let data = std::fs::read_to_string(&handoff)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    mr_screenshots::remove_screenshots(
+        data.as_ref(),
+        handoff.parent().unwrap_or(Path::new(".")),
+        &mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid),
+    );
+}
+
+// ---- the setup doctor -------------------------------------------------------
+
+/// The issue a pass and the setup doctor work on.
+struct IssueArgs<'a> {
+    ctx: &'a RunCtx,
+    run_id: &'a str,
+    alias: &'a str,
+    issue_iid: &'a str,
+    definition: &'a LoopDefinition,
+}
+
+impl IssueArgs<'_> {
+    fn emit(&self, event_type: &str, data: Value) {
+        self.ctx.emit(
+            event_type,
+            Some(self.run_id),
+            EventFields {
+                issue_run_id: Some(format!("{}_{}_{}", self.run_id, self.alias, self.issue_iid)),
+                project: Some(self.alias.to_string()),
+                issue_iid: self.issue_iid.parse().ok(),
+                data: Some(data),
+            },
+        );
+    }
+
+    fn handoff(&self) -> PathBuf {
+        handoff_path(self.run_id, self.alias, self.issue_iid, &self.ctx.repo_root)
+    }
+
+    /// The handoff, when it is a valid `setup_blocked` one (announced as
+    /// `setup.blocked`).
+    fn setup_blocked(&self) -> Option<Value> {
+        let blocked = read_handoff(&self.handoff(), self.issue_iid)
+            .filter(|h| h.get("action").and_then(Value::as_str) == Some("setup_blocked"))?;
+        self.emit(
+            "setup.blocked",
+            json!({"command": blocked["command"], "error": blocked["error"]}),
+        );
+        Some(blocked)
+    }
+}
+
+/// What finalize needs to know about the setup doctor.
+#[derive(Default)]
+struct SetupOutcome {
+    report: Option<String>,
+    fixed: Option<usize>,
+}
+
+/// After the first pass: a `setup_blocked` handoff gets one setup doctor
+/// session and, when it fixes the setup, a second pass with a fresh issue
+/// budget. Otherwise (or when the doctor cannot run) the report for the
+/// escalation. The pass returned is the last one, with every earlier
+/// iteration, cost and usage folded in.
+fn after_setup_blocked(
+    issue: &IssueArgs<'_>,
+    invoker: &Invoker,
+    mode: &InvokeMode,
+    pass: PassOutput,
+) -> Result<(PassOutput, SetupOutcome), String> {
+    let Some(blocked) = issue.setup_blocked() else {
+        return Ok((pass, SetupOutcome::default()));
+    };
+    let work_dir = match doctor_work_dir(issue, mode) {
+        Ok(dir) => dir,
+        Err(why) => {
+            let report = setup_doctor::report_without_doctor(&blocked, why);
+            return Ok((
+                pass,
+                SetupOutcome {
+                    report: Some(report),
+                    fixed: None,
+                },
+            ));
+        }
+    };
+    let (first, mut costs, mut usages) = pass;
+    let doctor = run_doctor(issue, invoker, mode, &blocked, &work_dir);
+    costs.push(doctor.cost_usd);
+    usages.push(doctor.usage);
+    let fixed = match doctor.result {
+        Some(r) if r.status == DoctorStatus::Fixed => r,
+        result => {
+            let mut report = setup_doctor::doctor_report_markdown(&blocked, result.as_ref());
+            if !doctor.changes.is_empty() {
+                report = format!(
+                    "After the setup doctor ran, the worktree `{}` has uncommitted changes, so the loop stopped instead of continuing on it: {}. The doctor may only write gitignored files; review these and remove them before re-running the issue.\n\n{report}",
+                    work_dir.display(),
+                    doctor
+                        .changes
+                        .iter()
+                        .map(|f| format!("`{f}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            let outcome = SetupOutcome {
+                report: Some(report),
+                fixed: None,
+            };
+            return Ok(((first, costs, usages), outcome));
+        }
+    };
+    let (second, more_costs, more_usages) = run_pass(
+        issue.ctx,
+        issue.run_id,
+        issue.alias,
+        issue.issue_iid,
+        issue.definition,
+        invoker.clone(),
+        mode.clone(),
+        Some(setup_doctor::doctor_feedback(&fixed)),
+        false,
+    )?;
+    costs.extend(more_costs);
+    usages.extend(more_usages);
+    let outcome = SetupOutcome {
+        // Blocked again: the doctor runs once per issue per run.
+        report: issue
+            .setup_blocked()
+            .map(|again| setup_doctor::repeat_block_report(&fixed, &again)),
+        fixed: Some(fixed.blockers.iter().filter(|b| b.fixed).count()),
+    };
+    Ok(((merge_passes(first, second), costs, usages), outcome))
+}
+
+/// The issue's worktree when the doctor may run there, else why it may not.
+fn doctor_work_dir(issue: &IssueArgs<'_>, mode: &InvokeMode) -> Result<PathBuf, &'static str> {
+    if !issue.definition.setup_doctor.enabled {
+        return Err("it is switched off for this loop");
+    }
+    if matches!(mode, InvokeMode::IssueFile(_)) {
+        return Err("it never runs in an offline eval");
+    }
+    let config = Config::load(&project_config_path(issue.ctx));
+    let (project, root) = config
+        .and_then(|c| Ok((c.project(issue.alias)?, c.worktree_root()?)))
+        .map_err(|_| "the project's configuration could not be read")?;
+    if !crate::config::use_worktree(&project) {
+        return Err("it never touches a project's own checkout (`use_worktree: false`)");
+    }
+    Ok(crate::loop_verifiers::expected_work_dir(
+        &project,
+        Path::new(&root),
+        issue.issue_iid,
+    ))
+}
+
+/// One setup doctor session and what it left behind.
+struct DoctorRun {
+    /// `None` when it crashed, timed out or wrote no valid result.
+    result: Option<DoctorResult>,
+    /// What `git status --porcelain` lists in the worktree afterwards.
+    changes: Vec<String>,
+    cost_usd: Option<f64>,
+    usage: Option<Value>,
+}
+
+/// Runs the doctor on its own clock and budget, then records what it learnt
+/// (its `SETUP.md` draft and its one-line learning). A worktree it left
+/// dirty turns the result into `needs_human`.
+fn run_doctor(
+    issue: &IssueArgs<'_>,
+    invoker: &Invoker,
+    mode: &InvokeMode,
+    blocked: &Value,
+    work_dir: &Path,
+) -> DoctorRun {
+    let ctx = issue.ctx;
+    let config = &issue.definition.setup_doctor;
+    let handoff = issue.handoff();
+    let result_path = setup_doctor::doctor_result_path(&handoff);
+    let draft_path = setup_doctor::setup_draft_path(&handoff);
+    // Only this session's files count.
+    let _ = std::fs::remove_file(&result_path);
+    let _ = std::fs::remove_file(&draft_path);
+    let memory = ctx.memory_root.as_deref();
+    let knowledge = memory_store::read_setup_knowledge(issue.alias, memory);
+    let stale = knowledge
+        .as_deref()
+        .map(|k| memory_store::stale_setup_sources(k, work_dir))
+        .unwrap_or_default();
+    issue.emit(
+        "setup.doctor_started",
+        json!({"work_dir": work_dir.display().to_string(), "stale": stale}),
+    );
+    let req = InvokeRequest {
+        alias: issue.alias.to_string(),
+        issue_iid: issue.issue_iid.to_string(),
+        mode: mode.clone(),
+        feedback: None,
+        gate: true,
+        run_id: Some(issue.run_id.to_string()),
+        max_budget_usd: Some(config.max_cost_usd),
+        timeout_seconds: config.max_runtime_minutes * 60.0,
+        doctor: Some(DoctorRequest {
+            work_dir: work_dir.display().to_string(),
+            blocked: blocked.clone(),
+            max_attempts: config.max_attempts,
+            stale,
+            has_knowledge: knowledge.is_some(),
+        }),
+    };
+    let log = |text: &str| {
+        ctx.log(&format!(
+            "setup doctor {} #{}: {text}",
+            issue.alias, issue.issue_iid
+        ))
+    };
+    let (cost_usd, usage) = match invoker(&req) {
+        Ok(out) => (out.cost_usd, out.usage),
+        Err(e) => {
+            log(&format!("the session failed: {}", e.message));
+            (e.cost_usd, None)
+        }
+    };
+    let mut result = setup_doctor::read_doctor_result(&result_path);
+    let changes = worktree_changes(work_dir);
+    if let Some(r) = result.as_mut().filter(|_| !changes.is_empty()) {
+        r.status = DoctorStatus::NeedsHuman;
+        r.blockers.push(setup_doctor::Blocker {
+            error: format!(
+                "uncommitted changes in the worktree: {}",
+                changes.join(", ")
+            ),
+            cause: "the setup doctor left git-visible changes in the worktree".into(),
+            tried: Vec::new(),
+            fixed: false,
+        });
+    }
+    if let Ok(draft) = std::fs::read_to_string(&draft_path) {
+        match memory_store::save_setup_knowledge(issue.alias, &draft, memory) {
+            Ok(true) => {}
+            Ok(false) => log("its SETUP.md draft has no `# ` heading; kept the old one"),
+            Err(e) => log(&format!("saving SETUP.md failed: {e}")),
+        }
+    }
+    let learning = result.as_ref().and_then(|r| r.learning.as_deref());
+    if let (Some(lesson), Ok(iid)) = (learning, issue.issue_iid.parse::<i64>()) {
+        let tags = ["setup".to_string()];
+        if let Err(e) =
+            memory_store::add_task_memory(issue.alias, iid, lesson, &tags, Some("setup"), memory)
+        {
+            log(&format!("recording its learning failed: {e}"));
+        }
+    }
+    let status = match result.as_ref().map(|r| r.status) {
+        Some(DoctorStatus::Fixed) => "fixed",
+        Some(DoctorStatus::GaveUp) => "gave_up",
+        Some(DoctorStatus::NeedsHuman) => "needs_human",
+        None => "did_not_finish",
+    };
+    let blockers = result.as_ref().map_or(&[][..], |r| &r.blockers[..]);
+    issue.emit(
+        "setup.doctor_finished",
+        json!({"status": status, "blockers": blockers.len(),
+               "fixed": blockers.iter().filter(|b| b.fixed).count(), "cost_usd": cost_usd}),
+    );
+    DoctorRun {
+        result,
+        changes,
+        cost_usd,
+        usage,
+    }
+}
+
+/// The paths `git status --porcelain` lists in `work_dir` (none when the
+/// worktree does not exist).
+fn worktree_changes(work_dir: &Path) -> Vec<String> {
+    if !work_dir.is_dir() {
+        return Vec::new();
+    }
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(work_dir)
+        .args(["status", "--porcelain"])
+        .output();
+    match out {
+        // Not trimmed: each line's two status columns carry meaning.
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.get(3..).unwrap_or(l).to_string())
+            .collect(),
+        _ => vec![format!("(git status failed in {})", work_dir.display())],
+    }
+}
+
+/// The second pass's result, with the first pass's iterations before its own.
+fn merge_passes(first: LoopResult, mut second: LoopResult) -> LoopResult {
+    let offset = first.iterations.len() as i64;
+    for it in &mut second.iterations {
+        it.iteration += offset;
+    }
+    let mut iterations = first.iterations;
+    iterations.append(&mut second.iterations);
+    second.iterations = iterations;
+    second.cost_reported = match (first.cost_reported, second.cost_reported) {
+        (Some(a), Some(b)) => Some(a || b),
+        (a, b) => a.or(b),
+    };
+    second
 }
 
 fn project_config_path(ctx: &RunCtx) -> PathBuf {
@@ -2424,6 +2825,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
+            memory_root: None,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -2480,6 +2882,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
+            memory_root: None,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -2613,6 +3016,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
+            memory_root: None,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -2939,6 +3343,7 @@ mod tests {
                     }),
                     gitlab_config_path: d.path().join("gitlab.json"),
                 })),
+                memory_root: Some(d.path().join("memory")),
             };
             let me = Self {
                 d,
@@ -3092,6 +3497,354 @@ mod tests {
             notes.iter().any(|n| n.contains("loopx worktree new")),
             "{notes:?}"
         );
+    }
+
+    /// A worktree-on `web` (an `InPlace` checkout plus its issue worktree on
+    /// `loop/issue-7`, with a passing `make test`), whose fake invoker plays
+    /// the main agent and the setup doctor from scripts and records each call.
+    struct Doctored {
+        t: InPlace,
+        wt: PathBuf,
+        calls: Arc<Mutex<Vec<InvokeRequest>>>,
+    }
+
+    /// One scripted agent call: what it writes, and the cost it reports.
+    #[derive(Clone)]
+    enum Step {
+        /// The main agent writes this handoff.
+        Main(Value),
+        /// The doctor writes this result (none when `None`), a SETUP.md
+        /// draft, and leaves the listed untracked files in the worktree.
+        Doctor(Option<Value>, Vec<&'static str>),
+        /// The doctor crashes before writing anything.
+        DoctorCrash,
+    }
+
+    const DRAFT: &str = "# web setup\n\n## Worktree prep\n\n- make generate\n";
+
+    fn blocked(error: &str) -> Value {
+        json!({"action": "setup_blocked", "command": "make test", "cwd": "", "error": error,
+               "diagnosis": "the generated module is missing"})
+    }
+
+    impl Doctored {
+        fn new() -> Self {
+            let t = InPlace::new();
+            // The bare origin accepts the MR push options the opener sends.
+            sh(
+                &t.d.path().join("origin.git"),
+                &["config", "receive.advertisePushOptions", "true"],
+            );
+            let wt = t.d.path().join("wt").join("local-issue-7");
+            sh(
+                &t.local,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "loop/issue-7",
+                    &wt.display().to_string(),
+                    "main",
+                ],
+            );
+            std::fs::write(wt.join("Makefile"), "test:\n\t@true\n").unwrap();
+            sh(&wt, &["add", "Makefile"]);
+            sh(&wt, &["commit", "-qm", "WIP #7: x"]);
+            let me = Self {
+                t,
+                wt,
+                calls: Arc::default(),
+            };
+            me.configure(true);
+            me
+        }
+
+        fn configure(&self, use_worktree: bool) {
+            std::fs::write(
+                self.t.ctx.config_path.as_ref().unwrap(),
+                json!({"gitlab_instance": "g", "worktree_root": self.t.d.path().join("wt").display().to_string(),
+                       "projects": {"web": {"project_id": "g/web", "local_path": self.t.path(),
+                                            "target_branch": "main", "use_worktree": use_worktree,
+                                            "require_approval": false}}})
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        fn fix(&self) -> Value {
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+                   "title": "fix: #7 x", "summary": "**Goal:** x",
+                   "verification": {"test": "make test", "cwd": self.wt.display().to_string()}})
+        }
+
+        fn run_with(&self, steps: Vec<Step>, definition: LoopDefinition) -> IssueRun {
+            let root = self.t.d.path().to_path_buf();
+            let handoff = handoff_path("r1", "web", "7", &root);
+            let (wt, calls) = (self.wt.clone(), self.calls.clone());
+            let steps = Arc::new(Mutex::new(std::collections::VecDeque::from(steps)));
+            let invoker: Invoker = Arc::new(move |req| {
+                calls.lock().unwrap().push(req.clone());
+                let step = steps
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("an unscripted call");
+                assert_eq!(
+                    req.doctor.is_some(),
+                    !matches!(step, Step::Main(_)),
+                    "call kind"
+                );
+                std::fs::create_dir_all(handoff.parent().unwrap()).unwrap();
+                let cost = match step {
+                    Step::Main(h) => {
+                        std::fs::write(&handoff, h.to_string()).unwrap();
+                        0.5
+                    }
+                    Step::Doctor(result, junk) => {
+                        if let Some(r) = result {
+                            std::fs::write(
+                                crate::setup_doctor::doctor_result_path(&handoff),
+                                r.to_string(),
+                            )
+                            .unwrap();
+                        }
+                        std::fs::write(crate::setup_doctor::setup_draft_path(&handoff), DRAFT)
+                            .unwrap();
+                        for f in junk {
+                            std::fs::write(wt.join(f), "left behind").unwrap();
+                        }
+                        1.0
+                    }
+                    Step::DoctorCrash => {
+                        return Err(AgentError {
+                            message: "timed out after 1500s".into(),
+                            cost_usd: Some(1.0),
+                        })
+                    }
+                };
+                Ok(AgentOutput {
+                    cost_usd: Some(cost),
+                    usage: None,
+                })
+            });
+            run_one_issue(
+                &self.t.ctx,
+                "r1",
+                "web",
+                "7",
+                &definition,
+                invoker,
+                InvokeMode::Batch,
+            )
+            .unwrap()
+        }
+
+        fn run(&self, steps: Vec<Step>) -> IssueRun {
+            self.run_with(steps, gitlab_definition())
+        }
+
+        /// `m` for a main-agent call, `d` for a doctor call, in order.
+        fn kinds(&self) -> String {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| if r.doctor.is_some() { 'd' } else { 'm' })
+                .collect()
+        }
+
+        fn notes(&self) -> String {
+            self.t.notes.lock().unwrap().join("\n---\n")
+        }
+
+        fn event_types(&self) -> Vec<String> {
+            events::iter_events(self.t.ctx.events_dir.as_deref(), None, None)
+                .iter()
+                .filter_map(|e| e["event_type"].as_str().map(str::to_owned))
+                .collect()
+        }
+
+        fn memory_root(&self) -> PathBuf {
+            self.t.ctx.memory_root.clone().unwrap()
+        }
+    }
+
+    fn gitlab_definition() -> LoopDefinition {
+        LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+        )
+        .unwrap()
+    }
+
+    fn doctor_result(status: &str, blockers: Value) -> Option<Value> {
+        Some(json!({"status": status, "blockers": blockers,
+                    "learning": "run make generate before make test"}))
+    }
+
+    #[test]
+    fn setup_blocked_runs_the_doctor_then_a_second_pass() {
+        let h = Doctored::new();
+        let fixed = json!([{"error": "No module named generated", "cause": "generated module missing",
+                            "tried": ["make generate"], "result": "fixed"}]);
+        let run = h.run(vec![
+            Step::Main(blocked("No module named generated")),
+            Step::Doctor(doctor_result("fixed", fixed), vec![]),
+            Step::Main(h.fix()),
+        ]);
+        assert_eq!(h.kinds(), "mdm");
+        let calls = h.calls.lock().unwrap();
+        let doctor = calls[1].doctor.as_ref().unwrap();
+        assert_eq!(doctor.work_dir, h.wt.display().to_string());
+        assert_eq!(doctor.blocked["error"], "No module named generated");
+        assert_eq!(doctor.max_attempts, 3);
+        assert!(!doctor.has_knowledge);
+        assert_eq!(calls[1].max_budget_usd, Some(2.0));
+        assert_eq!(calls[1].timeout_seconds, 1500.0);
+        let feedback = calls[2].feedback.as_deref().unwrap_or("");
+        assert!(
+            feedback.contains("Setup was fixed by the setup doctor"),
+            "{feedback}"
+        );
+        drop(calls);
+        assert_eq!(
+            crate::memory_store::read_setup_knowledge("web", Some(&h.memory_root())).as_deref(),
+            Some(DRAFT)
+        );
+        let lesson = crate::memory_store::get_task_memory("web", 7, Some(&h.memory_root()))
+            .expect("the doctor's learning is recorded");
+        assert!(lesson.body.contains("make generate"), "{}", lesson.body);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(run.result.final_state, LoopState::Completed);
+        assert_eq!(run.result.iterations.len(), 2, "both passes' iterations");
+        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(2.0));
+        let types = h.event_types();
+        for t in [
+            "setup.blocked",
+            "setup.doctor_started",
+            "setup.doctor_finished",
+        ] {
+            assert!(types.iter().any(|e| e == t), "{t} missing from {types:?}");
+        }
+        let finished = events::iter_events(h.t.ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .find(|e| e["event_type"] == "setup.doctor_finished")
+            .unwrap();
+        assert_eq!(finished["data"]["status"], "fixed");
+        assert_eq!(finished["data"]["blockers"], 1);
+        assert_eq!(finished["data"]["fixed"], 1);
+        assert_eq!(finished["data"]["cost_usd"], 1.0);
+    }
+
+    #[test]
+    fn doctor_without_result_escalates_setup_blocked() {
+        for doctor in [Step::DoctorCrash, Step::Doctor(None, vec![])] {
+            let h = Doctored::new();
+            let run = h.run(vec![
+                Step::Main(blocked("No module named generated")),
+                doctor,
+            ]);
+            assert_eq!(h.kinds(), "md", "no second pass");
+            assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+            let notes = h.notes();
+            assert!(notes.contains("did not finish"), "{notes}");
+            assert!(notes.contains("No module named generated"), "{notes}");
+            assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(1.5));
+        }
+    }
+
+    #[test]
+    fn dirty_worktree_after_doctor_escalates() {
+        let h = Doctored::new();
+        let fixed =
+            json!([{"error": "e", "cause": "c", "tried": ["make generate"], "result": "fixed"}]);
+        let run = h.run(vec![
+            Step::Main(blocked("No module named generated")),
+            Step::Doctor(doctor_result("fixed", fixed), vec!["junk.txt"]),
+        ]);
+        assert_eq!(h.kinds(), "md", "no second pass on a dirty tree");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        let notes = h.notes();
+        assert!(notes.contains("junk.txt"), "{notes}");
+        let finished = events::iter_events(h.t.ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .find(|e| e["event_type"] == "setup.doctor_finished")
+            .unwrap();
+        assert_eq!(finished["data"]["status"], "needs_human");
+    }
+
+    #[test]
+    fn second_setup_blocked_escalates_without_a_second_doctor() {
+        let h = Doctored::new();
+        let fixed = json!([{"error": "No module named generated", "cause": "generated module missing",
+                            "tried": ["make generate"], "result": "fixed"}]);
+        let run = h.run(vec![
+            Step::Main(blocked("No module named generated")),
+            Step::Doctor(doctor_result("fixed", fixed), vec![]),
+            Step::Main(blocked("database does not exist")),
+        ]);
+        assert_eq!(h.kinds(), "mdm", "one doctor session per issue per run");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        let notes = h.notes();
+        assert!(notes.contains("generated module missing"), "{notes}");
+        assert!(notes.contains("database does not exist"), "{notes}");
+    }
+
+    #[test]
+    fn setup_blocked_without_doctor_escalates() {
+        // Worktree off: the user's own checkout is never handed to the doctor.
+        let h = Doctored::new();
+        h.configure(false);
+        let run = h.run(vec![Step::Main(blocked("No module named generated"))]);
+        assert_eq!(h.kinds(), "m");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        assert!(h.notes().contains("No module named generated"));
+        assert_eq!(h.t.head(), "feature-x");
+
+        // The doctor switched off.
+        let h = Doctored::new();
+        let mut definition = gitlab_definition();
+        definition.setup_doctor.enabled = false;
+        let run = h.run_with(
+            vec![Step::Main(blocked("No module named generated"))],
+            definition,
+        );
+        assert_eq!(h.kinds(), "m");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        let notes = h.notes();
+        assert!(notes.contains("No module named generated"), "{notes}");
+        assert!(!notes.contains("did not finish"), "{notes}");
+        assert!(h.event_types().iter().any(|e| e == "setup.blocked"));
+        assert!(!h.event_types().iter().any(|e| e == "setup.doctor_started"));
+    }
+
+    #[test]
+    fn doctor_gave_up_escalates_with_its_blockers() {
+        let h = Doctored::new();
+        let blockers = json!([
+            {"error": "ruby 3.3.1 not installed", "cause": "missing Ruby", "tried": ["rbenv install 3.3.1"], "result": "fixed"},
+            {"error": "FATAL: role web does not exist", "cause": "no test database role", "tried": ["createuser web", "createdb web_test"], "result": "failed"}
+        ]);
+        let run = h.run(vec![
+            Step::Main(blocked("No module named generated")),
+            Step::Doctor(doctor_result("gave_up", blockers), vec![]),
+        ]);
+        assert_eq!(h.kinds(), "md");
+        assert_eq!(run.gate_outcome.as_deref(), Some("escalated:setup_blocked"));
+        let notes = h.notes();
+        for part in [
+            "missing Ruby",
+            "rbenv install 3.3.1",
+            "no test database role",
+            "createdb web_test",
+        ] {
+            assert!(notes.contains(part), "{part} missing from {notes}");
+        }
     }
 
     #[test]
