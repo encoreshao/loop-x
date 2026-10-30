@@ -1643,7 +1643,16 @@ fn sum_usages(usages: &[Option<Value>]) -> Option<Value> {
     Some(Value::Object(out))
 }
 
-pub fn run_one_issue(
+/// What one [`LoopRuntime`] pass over an issue returns: its result and the
+/// raw (un-coerced) cost and usage of each agent call it made.
+type PassOutput = (LoopResult, Vec<Option<f64>>, Vec<Option<Value>>);
+
+/// One runtime pass over an issue: the agent under the loop's budget and
+/// verification. `initial_feedback` goes to the first attempt;
+/// later attempts get the failed verification as feedback. `dirty_before`
+/// refuses every attempt (a worktree-off checkout holding the user's work).
+#[allow(clippy::too_many_arguments)]
+fn run_pass(
     ctx: &RunCtx,
     run_id: &str,
     alias: &str,
@@ -1651,25 +1660,19 @@ pub fn run_one_issue(
     definition: &LoopDefinition,
     invoker: Invoker,
     mode: InvokeMode,
-) -> Result<IssueRun, String> {
+    initial_feedback: Option<String>,
+    dirty_before: bool,
+) -> Result<PassOutput, String> {
     let issue_run_id = format!("{run_id}_{alias}_{issue_iid}");
     let timeout_seconds = definition.stop_conditions.max_runtime_minutes * 60.0;
     let verification_mode = definition.verification.mode.clone();
     let gate = verification_mode == "gate";
-    // The scheduled batch and the dashboard's single-issue run each end with
-    // one Slack report; only the golden eval's offline mode skips it.
-    let quiet = matches!(mode, InvokeMode::Batch | InvokeMode::Single);
     let raw_costs: Arc<Mutex<Vec<Option<f64>>>> = Arc::default();
     let raw_usages: Arc<Mutex<Vec<Option<Value>>>> = Arc::default();
     let handoff = gate.then(|| handoff_path(run_id, alias, issue_iid, &ctx.repo_root));
 
     let mut issue = IssueContext::new(alias, issue_iid, timeout_seconds);
     issue.handoff_path = handoff.clone();
-
-    // Worktree off: never start the agent on a checkout holding the user's
-    // uncommitted work (a leftover restore record is healed by `worktree new`).
-    let guard = checkout_guard(ctx, alias);
-    let dirty_before = guard.as_ref().is_some_and(|g| !g.clean && !g.marked);
 
     let max_cost = definition.stop_conditions.max_cost_usd;
     let agent_fn: AgentFn = {
@@ -1689,10 +1692,12 @@ pub fn run_one_issue(
                 // read an earlier attempt's.
                 let _ = std::fs::remove_file(h);
             }
-            let feedback = context
-                .previous
-                .filter(|p| iteration_failed_verification(p))
-                .map(format_feedback);
+            let feedback = match context.previous {
+                None => initial_feedback.clone(),
+                Some(p) => Some(p)
+                    .filter(|p| iteration_failed_verification(p))
+                    .map(format_feedback),
+            };
             let spent: f64 = raw_costs.lock().unwrap().iter().flatten().sum();
             let cap = cost::remaining_budget(Some(max_cost), Some(spent), 0.05);
             let req = InvokeRequest {
@@ -1771,9 +1776,45 @@ pub fn run_one_issue(
     if let Some(dir) = &ctx.events_dir {
         runtime = runtime.with_events_dir(dir.clone());
     }
-    let started = runtime
+    let result = runtime
         .start(definition, &issue_run_id, None)
-        .map_err(|e| e.to_string());
+        .map_err(|e| e.to_string())?;
+    let costs = raw_costs.lock().unwrap().clone();
+    let usages = raw_usages.lock().unwrap().clone();
+    Ok((result, costs, usages))
+}
+
+pub fn run_one_issue(
+    ctx: &RunCtx,
+    run_id: &str,
+    alias: &str,
+    issue_iid: &str,
+    definition: &LoopDefinition,
+    invoker: Invoker,
+    mode: InvokeMode,
+) -> Result<IssueRun, String> {
+    let issue_run_id = format!("{run_id}_{alias}_{issue_iid}");
+    let gate = definition.verification.mode == "gate";
+    // The scheduled batch and the dashboard's single-issue run each end with
+    // one Slack report; only the golden eval's offline mode skips it.
+    let quiet = matches!(mode, InvokeMode::Batch | InvokeMode::Single);
+
+    // Worktree off: never start the agent on a checkout holding the user's
+    // uncommitted work (a leftover restore record is healed by `worktree new`).
+    let guard = checkout_guard(ctx, alias);
+    let dirty_before = guard.as_ref().is_some_and(|g| !g.clean && !g.marked);
+
+    let started = run_pass(
+        ctx,
+        run_id,
+        alias,
+        issue_iid,
+        definition,
+        invoker,
+        mode,
+        None,
+        dirty_before,
+    );
     // Whatever happened, a checkout branched in place goes back to the
     // user's branch (the push below needs only the branch ref).
     let checkout_problem = if dirty_before {
@@ -1799,7 +1840,7 @@ pub fn run_one_issue(
             },
         );
     }
-    let mut result = match started {
+    let (mut result, raw_costs, raw_usages) = match started {
         Ok(r) => r,
         Err(e) => {
             // finalize never runs, so the screenshots go here.
@@ -1818,11 +1859,11 @@ pub fn run_one_issue(
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
     // un-coerced figure to keep "cost $0" apart from "never got a cost".
-    result.agent_cost_usd = match sum_or_none(&raw_costs.lock().unwrap()) {
+    result.agent_cost_usd = match sum_or_none(&raw_costs) {
         Some(v) => AgentCost::Usd(v),
         None => AgentCost::Unknown,
     };
-    let usage = sum_usages(&raw_usages.lock().unwrap());
+    let usage = sum_usages(&raw_usages);
 
     let mut gate_outcome = None;
     if gate {
