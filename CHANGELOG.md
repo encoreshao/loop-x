@@ -12,6 +12,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 ## [Unreleased]
 
 ### Added
+- GitLab loop: when an issue's checks are blocked by setup (missing Ruby/Node version, gems, submodules, built assets, test database), a setup doctor agent now researches and fixes it — up to 3 failed attempts — and the issue continues in the same run. What it learns is kept per project in `memory/<alias>/SETUP.md` and reused on later issues; if it cannot fix everything, the escalation lists every blocker and what was tried.
 - GitLab loop: merge requests for UI fixes now show before/after screenshots in the description. The agent captures them with the Mac's installed Chrome against test data or mocked backends (never the development database), learns how to shoot each project as a `screenshot-recipe` lesson, and the loop deletes every local image once the issue is finalized.
 - MR Review: an MR whose review fails (or that fails to load) is no longer retried on every run, even after new commits. The Merge requests tab marks it "Review failed", with the error on hover, until you press Review now to try it again.
 - GitLab loop: issue worktrees of Rails projects now get the checkout's `config/master.key` (and `config/credentials/development.key` / `test.key`) when the project gitignores them, so development and test can read the project's encrypted credentials. The production key is never copied.
