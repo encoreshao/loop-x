@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const ACTIONS: [&str; 3] = ["fix", "answer", "escalate"];
+pub const ACTIONS: [&str; 4] = ["fix", "answer", "escalate", "setup_blocked"];
 pub const ISSUE_IID: i64 = 1;
 pub const ALIAS: &str = "golden";
 /// `loops/gitlab-issue/loop.yaml`'s `max_iterations`.
@@ -1069,7 +1069,12 @@ mod tests {
         let bad = ok.replace("fix}", "nope}");
         assert_eq!(
             parse_case(&bad, "p").unwrap_err(),
-            "p: expect.action must be one of fix, answer, escalate, got 'nope'"
+            "p: expect.action must be one of fix, answer, escalate, setup_blocked, got 'nope'"
+        );
+        let blocked = ok.replace("fix}", "setup_blocked}");
+        assert_eq!(
+            parse_case(&blocked, "p").unwrap().expect.action,
+            "setup_blocked"
         );
         let nofiles = "name: n\nissue: {}\nrepo: {files: {}}\nexpect: {action: fix}\n";
         assert_eq!(
@@ -1082,7 +1087,9 @@ mod tests {
     fn real_cases_load_and_unknown_names_are_rejected() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/golden");
         let all = load_cases(&dir, None).unwrap();
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 7);
+        let one = load_cases(&dir, Some(&["setup-blocked-handoff".to_string()])).unwrap();
+        assert_eq!(one[0].expect.action, "setup_blocked");
         let one = load_cases(&dir, Some(&["fix-off-by-one".to_string()])).unwrap();
         assert_eq!(one.len(), 1);
         let err = load_cases(&dir, Some(&["nope".to_string()])).unwrap_err();

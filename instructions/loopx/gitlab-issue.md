@@ -26,6 +26,7 @@ A *scheduled* run no longer happens in a single agent session. `loopx run` does 
 - `issue.completed` with `data.action == "wait_for_review"` — waiting on someone else's review; `data.reminder_sent == true` means this run sent the one weekly Slack reminder, otherwise nothing happened at all this run.
 - `issue.escalated` with `data.reason == "needs_clarification"` — escalated for clarification.
 - `issue.escalated` with `data.reason == "verification_failed"` or `"worktree_creation_failed"` — escalated because verification could not pass.
+- `issue.escalated` with `data.reason == "setup_blocked"` (harness gate runs only) — the agent hit a setup problem (toolchain, dependencies, submodules, built assets, database) and the loop's setup doctor could not fix it, or was not run; the escalation comment lists each blocker and what a human needs to do.
 - `issue.escalated` with `data.reason` in `"handoff_invalid"`, `"mr_open_failed"`, `"project_config_error"` or `"run_incomplete"` (harness gate runs only) — escalated by the loop itself: the agent left no valid handoff, the merge request could not be opened, the project config could not be read, or the agent session crashed/timed out or hit its budget before handing off (`data.stop_reason` says which). In a gated run the loop, not the agent, writes the `issue.completed` `action == "fix"` event after opening the MR (its `data.mr_url` may be null), so a gated issue's agent may have emitted no completed event of its own; that is not a crash.
 
 Build daily-review.md's seven sections from those events using the same judgment you'd apply live. An issue with an `issue.started` for this `run_id` but no `issue.completed`/`issue.escalated` crashed part-way through: it still counts as checked, and belongs under Escalations as needing human follow-up — say so plainly in the Summary rather than silently dropping it. Then do exactly steps 1–4 of "End of run" from that reconstruction. This session runs **unconditionally**, including on a morning with zero assigned issues (no matching events at all) — that is what keeps "a quiet morning is still reported" true.
@@ -172,7 +173,7 @@ loopx events emit --type issue.started --run-id "$LOOP_RUN_ID" --issue-run-id "$
    ```
    loopx worktree new <local_path> <target_branch> <issue_iid> <worktree_root>
    ```
-   `<local_path>` and `<target_branch>` come from `loopx config project <alias>`; `<worktree_root>` from `loopx config worktree-root`. This always pulls the latest `<target_branch>` from `origin` first — for a brand-new issue branch it branches directly off that fresh branch; for an issue that already has a branch/MR from an earlier run, it merges the latest `<target_branch>` into the existing branch before you touch anything. Either way, never start editing before running this — you'd otherwise be building on whatever code happened to be checked out last time, not what's actually on GitLab right now.
+   `<local_path>` and `<target_branch>` come from `loopx config project <alias>`; `<worktree_root>` from `loopx config worktree-root`. Always give this Bash call `timeout: 600000` (10 minutes): initialising submodules on a large project can outlast the default timeout, and a killed command leaves a half-made worktree. This always pulls the latest `<target_branch>` from `origin` first — for a brand-new issue branch it branches directly off that fresh branch; for an issue that already has a branch/MR from an earlier run, it merges the latest `<target_branch>` into the existing branch before you touch anything. Either way, never start editing before running this — you'd otherwise be building on whatever code happened to be checked out last time, not what's actually on GitLab right now.
 
    Once the worktree path is printed, `cd` into it and stay there for steps 6 through 9 of this issue's work, using **bare** `git` commands (`git status`, `git add`, `git commit`, `git push origin loop/issue-<issue_iid>`) — never the `git -C <path> ...` form. The permission allowlist matches on the literal command prefix: `cd` is allowed (`Bash(cd *)`) and so are `git status`/`git diff`/`git add`/`git commit`/`git push origin loop/issue-*`, but a command starting with `git -C` matches none of those prefixes and will be denied at runtime.
 
@@ -182,7 +183,11 @@ loopx events emit --type issue.started --run-id "$LOOP_RUN_ID" --issue-run-id "$
 
    **When `use_worktree` is `false`** for this alias, the same command branches `<local_path>` itself in place instead of creating a worktree: it refuses if the checkout has any uncommitted or untracked changes, switches it to `loop/issue-<issue_iid>`, and prints `<local_path>`. `cd` there and work exactly as above; the printed path is your work directory. The loop switches the checkout back to the user's own branch after the issue, so leave nothing uncommitted behind (a dirty checkout cannot be switched back and is escalated), and never create files there outside your commits — no copied config files, no scratch files.
 
-   If this command fails (e.g. a merge conflict pulling in the latest branch), treat it as a verification failure for this issue — go to "Escalate: verification failed" below rather than trying to resolve the conflict yourself. Use reason `worktree_creation_failed` in that block's emit call, since verification itself never ran.
+   If this command fails with "Merge conflict…" (pulling in the latest branch conflicted), treat it as a verification failure for this issue — go to "Escalate: verification failed" below rather than trying to resolve the conflict yourself. Use reason `worktree_creation_failed` in that block's emit call, since verification itself never ran.
+
+   Any other failure of the command — including one that was killed or timed out — is a setup problem, not a problem with the issue. **When the harness gate is ON**, do not escalate it: write the `setup_blocked` handoff (see "Hand off a setup problem" under step 7) with the `loopx worktree new ...` command you ran, `<loop_dir>` as `cwd`, and its error output, then stop. There is nothing to commit yet. Without the gate, escalate it exactly like a merge conflict.
+
+   When the loop re-runs you after the setup doctor fixed setup, run this same command again first: it reuses the existing worktree and the `loop/issue-<issue_iid>` branch (with your WIP commit on it), and brings it up to date.
 
    Report the phase change:
    ```
@@ -204,7 +209,9 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
 
    Choose this project's install, lint and test commands yourself — there is no fixed list in the config:
 
-   1. Run `loopx config command-hints <alias>`. Start from `stored` (commands a person saved for this project), then `recent` (what you logged on earlier runs of this project), then `other_projects` entries with the same stack. Confirm or adjust them by reading the repo itself: `Gemfile`/`Rakefile`, `package.json` scripts, `pyproject.toml`/`setup.cfg`, `Makefile`, `Cargo.toml`, `go.mod`, and its CI config (`.gitlab-ci.yml`) for what the project really runs. A hint is only a starting point, never a limit: when one is misspelled (e.g. `bundle exec aduit`), names a tool the repo does not have, or is not an allowed command, replace it with the right command from the repo and its CI yourself and say so in the summary. A wrong or missing hint is never a reason to skip verification or escalate.
+   1. First read this project's setup knowledge: `loopx memory-store setup <alias>`. It prints the project's `SETUP.md` (toolchain, services, "Worktree prep", verification commands, known blockers), or `(no setup knowledge yet)`. Use its "Verification commands" and "Known blockers" alongside the hints below. **When the harness gate is ON**, check its "Worktree prep": if it lists steps you are not allowed to run (anything outside the commands in item 2) and they are clearly not done in this worktree (e.g. `app/assets/builds/` is empty, a submodule directory is empty), do not run a check that is bound to fail — hand off `setup_blocked` now (see "Hand off a setup problem" below), with the first check that needs that prep as `command`.
+
+      Then run `loopx config command-hints <alias>`. Start from `stored` (commands a person saved for this project), then `recent` (what you logged on earlier runs of this project), then `other_projects` entries with the same stack. Confirm or adjust them by reading the repo itself: `Gemfile`/`Rakefile`, `package.json` scripts, `pyproject.toml`/`setup.cfg`, `Makefile`, `Cargo.toml`, `go.mod`, and its CI config (`.gitlab-ci.yml`) for what the project really runs. A hint is only a starting point, never a limit: when one is misspelled (e.g. `bundle exec aduit`), names a tool the repo does not have, or is not an allowed command, replace it with the right command from the repo and its CI yourself and say so in the summary. A wrong or missing hint is never a reason to skip verification or escalate.
    2. Every command must start with one of the allowed stack commands — `bundle check`, `bundle install`, `bundle exec rspec`, `bundle exec rubocop`, `bundle exec bundle audit` (or `bundle audit`, `bundle exec bundle-audit`), `bundle exec brakeman`, `bundle exec rake test`/`spec`, `bundle exec rails test`, `bin/rails test`, `bin/rspec`, `rake test`/`spec`, `npm ci`, `npm test`, `npm run test`/`lint`, `pnpm install`/`test`/`lint`, `pnpm run test`/`lint`, `yarn install`/`test`/`lint`, `yarn run test`/`lint`, `pytest`, `python3 -m pytest`, `python -m pytest`, `uv sync`, `uv run pytest`/`ruff`/`mypy`, `make test`/`lint`/`check`, `cargo test`/`clippy`/`fmt`, `go test`, `go vet` (a script name may continue with `:`, e.g. `npm run test:unit`) — optionally behind `RAILS_ENV=test `, `NODE_ENV=test ` or `CI=true `. The lint and test commands you log must each be ONE such command: no `&&`, `||`, `;`, `|`, `&`, `$(...)`, backticks or redirects — the loop runs them without a shell and refuses anything else. Commands outside this list are denied to you as well.
    3. You may fix what blocks verification itself (not the project): inside a worktree, copy a gitignored per-developer file the checks need from `<local_path>` (e.g. `config/database.yml`, `.ruby-version`) with Read/Write; pass RuboCop an explicit path and `--cache false` (`bundle exec rubocop . --cache false`) — a bare `rubocop` under a dot-directory worktree root skips the project's per-file excludes, and its global cache can serve stale results for cops that read `config/database.yml`; for Rails, if the test database schema is out of date, run `RAILS_ENV=test bundle exec rake db:test:prepare` once and retry the test command once (no other `rake db:*` task). With worktree off, only flags and environment prefixes — create no files in the checkout. Never commit a setup change unless the issue is about it.
    4. Record what you chose, before running anything:
@@ -214,7 +221,8 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
       This is what the user reads in the run log, and what later runs start from. If the repo has no linter, leave `lint` empty and say "no linter" in the summary; a test command is always required.
    5. Run the install command once if dependencies look missing, then lint, then test, from the work directory. Also run `git status` and `git diff` and confirm only files relevant to this issue changed. Use the same commands in the handoff's `verification` block — the loop re-runs exactly those before opening the merge request.
 
-   - **Any command fails, or unexpected files changed** →
+   - **Gate ON, and a command fails because of setup rather than your change** — a missing toolchain or language version, missing gems/packages, an uninitialised submodule, built assets or a generated file that is not there, a test database that does not exist or will not connect, missing credentials or per-developer config you cannot copy — do not escalate and do not retry around it: follow "Hand off a setup problem" below. A failure your change caused (a test or lint error in code you touched, or one your change plausibly broke) is not a setup problem: it still goes to "Escalate: verification failed" through the next bullet.
+   - **Any other failure, or unexpected files changed** →
      ```
      loopx events emit --type verification.failed --run-id "$LOOP_RUN_ID" --issue-run-id "${LOOP_RUN_ID}_<alias>_<issue_iid>" --project <alias> --issue-iid <issue_iid>
      ```
@@ -224,6 +232,23 @@ loopx status write running --current-issue "<alias> #<issue_iid>" --current-step
      loopx events emit --type verification.passed --run-id "$LOOP_RUN_ID" --issue-run-id "${LOOP_RUN_ID}_<alias>_<issue_iid>" --project <alias> --issue-iid <issue_iid>
      ```
      then continue to step 8.
+
+   **Hand off a setup problem (harness gate ON only).** The loop then runs a separate setup doctor on this worktree and, if it fixes setup, re-runs you to finish the issue. In order:
+
+   1. **Commit your work in progress first — this is not optional.** The loop refuses to continue on a worktree with uncommitted changes, so skipping this commit throws the work away and escalates the issue. Stage only the files you changed for this issue (never `git add -A` or `git add .`), then commit:
+      ```
+      git add <the specific files you changed>
+      git commit -m "WIP #<issue_iid>: <short title>"
+      ```
+      Run `git status` afterwards: it must show nothing to commit and no untracked files. If you have not changed anything yet, skip the commit.
+   2. If a check actually ran and failed, emit the same `verification.failed` event shown above (skip it when handing off from step 5 or before any check ran).
+   3. Write this JSON to the handoff path from the "Harness gate is ON" section, and stop:
+      ```
+      {"action": "setup_blocked", "command": "<the exact command that failed>", "cwd": "<absolute directory you ran it in>", "error": "<the relevant error output, trimmed>", "diagnosis": "<one or two sentences: why this is setup, not your change>"}
+      ```
+   Post no GitLab comment, send no Slack message, annotate nothing and emit no `issue.escalated`: the loop reports the outcome. Then stop.
+
+   Without the gate (no "Harness gate is ON" section in your prompt) there is no handoff: a setup failure escalates through "Escalate: verification failed" as before.
 
 8. **Commit the fix.** Stage only the files relevant to this issue (never `git add -A`/`git add .`, which would sweep up unrelated stray changes) and commit with a clear message:
    ```
@@ -469,6 +494,7 @@ Note also that the git allowlist matches on the literal command prefix, so `git 
 ## Failure policy
 
 - If the same verification command fails twice for the same issue in one run, stop retrying — escalate.
+- With the harness gate ON, a failure caused by setup rather than your change (step 5's `loopx worktree new` failing for anything but a merge conflict, or a step 7 check failing on a missing toolchain, dependency, submodule, built asset, database or credential) is never escalated by you: commit your work in progress, hand off `setup_blocked` (step 7, "Hand off a setup problem") and stop. Without the gate, escalate it as before.
 - If a tool call is outside the permissions policy above, stop and add a note under "Needs Human Review" in `<loop_dir>/PROGRESS.md` instead of improvising. Exception: a denied or failed screenshot step ("UI changes: before/after screenshots") only drops the screenshots; note it in `screenshots_note` and continue the issue.
 
 ## End of run
@@ -495,4 +521,4 @@ The first three bullets are the "End of run" artifacts, so they apply only to th
 - `<loop_dir>/PROGRESS.md` was updated.
 - No merge request was merged.
 - No file outside an issue's own worktree, `PROGRESS.md`, or `outputs/` was modified.
-- Every issue this session was responsible for was either fixed-and-MR'd, answered directly, escalated for clarification, or escalated for verification failure — none were silently skipped. That means today's whole task list in the whole-run mode, and in `--batch-end-of-run` the whole run as reconstructed from the event log (an `issue.started` with no `issue.completed`/`issue.escalated` is the crashed-part-way case, which belongs under Escalations, not dropped); in `--batch-issue` and the dashboard single-issue mode it means the one issue named in your prompt.
+- Every issue this session was responsible for was either fixed-and-MR'd, answered directly, escalated for clarification, escalated for verification failure, or (harness gate ON) handed off as `setup_blocked` — none were silently skipped. That means today's whole task list in the whole-run mode, and in `--batch-end-of-run` the whole run as reconstructed from the event log (an `issue.started` with no `issue.completed`/`issue.escalated` is the crashed-part-way case, which belongs under Escalations, not dropped); in `--batch-issue` and the dashboard single-issue mode it means the one issue named in your prompt.
