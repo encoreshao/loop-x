@@ -921,7 +921,7 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
         }
         "worktree_creation_failed" => "A worktree for the fix could not be created.".into(),
         "setup_blocked" => {
-            "Setup problems blocked the checks and the setup doctor could not fix them all.".into()
+            "Setup problems blocked the project's checks, so no merge request was opened - the details are on the issue.".into()
         }
         "approval_denied" => "Opening the merge request was not approved.".into(),
         "approval_timeout" => {
@@ -1518,7 +1518,7 @@ pub fn finalize_gated_issue(
         None => branch.clone(),
     };
     let setup_note = match deps.setup_fixed {
-        Some(n) => format!(" (setup fixed automatically: {n} blockers)"),
+        Some(n) => setup_fixed_note(n),
         None => String::new(),
     };
     notify(
@@ -1688,6 +1688,8 @@ pub struct IssueRun {
     pub result: LoopResult,
     pub usage: Option<Value>,
     pub gate_outcome: Option<String>,
+    /// How many setup blockers the setup doctor fixed for this issue.
+    pub setup_fixed: Option<usize>,
 }
 
 fn sum_or_none(values: &[Option<f64>]) -> Option<f64> {
@@ -1734,6 +1736,7 @@ fn run_pass(
     mode: InvokeMode,
     initial_feedback: Option<String>,
     dirty_before: bool,
+    iteration_offset: i64,
 ) -> Result<PassOutput, String> {
     let issue_run_id = format!("{run_id}_{alias}_{issue_iid}");
     let timeout_seconds = definition.stop_conditions.max_runtime_minutes * 60.0;
@@ -1833,6 +1836,9 @@ fn run_pass(
                     return;
                 }
                 done.push(latest.iteration);
+                // Numbered after any earlier pass's iterations of this issue.
+                let mut latest = latest.clone();
+                latest.iteration += iteration_offset;
                 emit_verification_events(
                     &ctx,
                     &run_id,
@@ -1840,7 +1846,7 @@ fn run_pass(
                     &alias,
                     &issue_iid,
                     &mode,
-                    latest,
+                    &latest,
                 );
             },
         )
@@ -1888,6 +1894,7 @@ pub fn run_one_issue(
         mode.clone(),
         None,
         dirty_before,
+        0,
     );
     // Whatever happened, a checkout branched in place goes back to the
     // user's branch (the push below needs only the branch ref).
@@ -1939,6 +1946,7 @@ pub fn run_one_issue(
         (pass, SetupOutcome::default())
     };
     let (mut result, raw_costs, raw_usages) = pass;
+    let setup_fixed_for_report = setup.fixed;
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
     // un-coerced figure to keep "cost $0" apart from "never got a cost".
@@ -1965,7 +1973,7 @@ pub fn run_one_issue(
                 checkout_problem,
                 quiet,
                 setup_report: setup.report,
-                setup_fixed: setup.fixed,
+                setup_fixed: setup_fixed_for_report,
                 ..FinalizeDeps::default()
             },
         );
@@ -1991,6 +1999,7 @@ pub fn run_one_issue(
         result,
         usage,
         gate_outcome,
+        setup_fixed: setup_fixed_for_report,
     })
 }
 
@@ -2119,7 +2128,9 @@ fn after_setup_blocked(
         mode.clone(),
         Some(setup_doctor::doctor_feedback(&fixed)),
         false,
-    )?;
+        first.iterations.len() as i64,
+    )
+    .map_err(|e| second_pass_failed(issue, &costs, e))?;
     costs.extend(more_costs);
     usages.extend(more_usages);
     let outcome = SetupOutcome {
@@ -2292,6 +2303,28 @@ fn worktree_changes(work_dir: &Path) -> Vec<String> {
             .collect(),
         _ => vec![format!("(git status failed in {})", work_dir.display())],
     }
+}
+
+/// The note on an issue's Slack line when the setup doctor fixed its setup.
+fn setup_fixed_note(n: usize) -> String {
+    let noun = if n == 1 { "blocker" } else { "blockers" };
+    format!(" (setup fixed automatically: {n} {noun})")
+}
+
+/// A second pass that errored returns no result, so what pass 1 and the
+/// doctor spent is logged and emitted here before the error goes up.
+fn second_pass_failed(issue: &IssueArgs<'_>, costs: &[Option<f64>], error: String) -> String {
+    let spent = sum_or_none(costs);
+    let shown = spent.map_or("an unknown amount".to_string(), |c| format!("${c:.2}"));
+    issue.ctx.log(&format!(
+        "{} #{}: the pass after the setup doctor failed ({error}); {shown} was already spent on this issue",
+        issue.alias, issue.issue_iid
+    ));
+    issue.emit(
+        "setup.pass2_failed",
+        json!({"error": error, "cost_usd": spent}),
+    );
+    error
 }
 
 /// The second pass's result, with the first pass's iterations before its own.
@@ -2597,6 +2630,16 @@ pub fn send_run_report(
         })
         .collect();
     let mut lines = gitlab_report::issue_lines(run_id, &events, &unfinished);
+    for line in lines.iter_mut() {
+        let issue_run_id = format!("{run_id}_{}_{}", line.alias, line.iid);
+        if let Some(n) = runs
+            .iter()
+            .find(|r| r.result.run_id == issue_run_id)
+            .and_then(|r| r.setup_fixed)
+        {
+            line.title.push_str(&setup_fixed_note(n));
+        }
+    }
     let fakes = ctx.fakes.as_deref();
     let gitlab_config = fakes.map(|f| f.gitlab_config_path.clone());
     // Only a batch records each issue's link (`issue.queued`); a single-issue
@@ -3739,6 +3782,88 @@ mod tests {
         assert_eq!(finished["data"]["blockers"], 1);
         assert_eq!(finished["data"]["fixed"], 1);
         assert_eq!(finished["data"]["cost_usd"], 1.0);
+        assert_eq!(run.setup_fixed, Some(1));
+        // Pass 2's verification events follow pass 1's iterations.
+        let iterations: Vec<i64> = events::iter_events(h.t.ctx.events_dir.as_deref(), None, None)
+            .iter()
+            .filter(|e| e["event_type"] == "verification.external_completed")
+            .filter_map(|e| e["data"]["iteration"].as_i64())
+            .collect();
+        assert_eq!(iterations, [2]);
+    }
+
+    #[test]
+    fn a_failed_second_pass_still_reports_what_was_spent() {
+        let h = Doctored::new();
+        let issue = IssueArgs {
+            ctx: &h.t.ctx,
+            run_id: "r1",
+            alias: "web",
+            issue_iid: "7",
+            definition: &gitlab_definition(),
+        };
+        let e = second_pass_failed(&issue, &[Some(0.5), Some(1.0)], "policy denied".into());
+        assert_eq!(e, "policy denied");
+        let log = std::fs::read_to_string(&h.t.ctx.unified_log).unwrap();
+        assert!(log.contains("$1.50"), "{log}");
+        let ev = events::iter_events(h.t.ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .find(|e| e["event_type"] == "setup.pass2_failed")
+            .expect("a setup.pass2_failed event");
+        assert_eq!(ev["data"]["error"], "policy denied");
+        assert_eq!(ev["data"]["cost_usd"], 1.5);
+    }
+
+    #[test]
+    fn the_run_report_notes_auto_fixed_setup() {
+        let d = tempfile::tempdir().unwrap();
+        let sent: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = sent.clone();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.config_path = Some(d.path().join("projects.json"));
+        ctx.fakes = Some(Arc::new(RunFakes {
+            gitlab: Box::new(Notes(Default::default())),
+            notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
+            gitlab_config_path: d.path().join("gitlab.json"),
+        }));
+        let emit = |kind: &str, data: Value| {
+            ctx.emit(
+                kind,
+                Some("R"),
+                EventFields {
+                    issue_run_id: Some("R_web_7".into()),
+                    project: Some("web".into()),
+                    issue_iid: Some(7),
+                    data: Some(data),
+                },
+            )
+        };
+        emit("issue.queued", json!({"title": "Fix login", "web_url": ""}));
+        emit(
+            "issue.completed",
+            json!({"action": "fix", "mr_url": "https://g/web/-/merge_requests/3"}),
+        );
+        let run = IssueRun {
+            result: LoopResult::new(
+                "l",
+                "R_web_7",
+                "gitlab-issue",
+                LoopState::Completed,
+                vec![],
+                "",
+            ),
+            usage: None,
+            gate_outcome: Some("mr_opened".into()),
+            setup_fixed: Some(1),
+        };
+        send_run_report(&ctx, "R", "Daily GitLab loop", &[run], 5.0, None);
+        let sent = sent.lock().unwrap();
+        assert!(
+            sent[0].contains("Fix login (setup fixed automatically: 1 blocker)"),
+            "{}",
+            sent[0]
+        );
     }
 
     #[test]
@@ -4247,7 +4372,8 @@ mod tests {
             .unwrap_or_else(|| panic!("no escalation event in {events:?}"));
         assert_eq!(ev["data"]["reason"], "setup_blocked");
         assert!(
-            sent.lock().unwrap()[0].contains("could not fix them all"),
+            sent.lock().unwrap()[0]
+                .contains("Setup problems blocked the project's checks, so no merge request was opened - the details are on the issue."),
             "{sent:?}"
         );
 
@@ -4279,6 +4405,14 @@ mod tests {
 
     #[test]
     fn opened_mr_slack_mentions_auto_fixed_setup() {
+        assert_eq!(
+            setup_fixed_note(1),
+            " (setup fixed automatically: 1 blocker)"
+        );
+        assert_eq!(
+            setup_fixed_note(2),
+            " (setup fixed automatically: 2 blockers)"
+        );
         let d = tempfile::tempdir().unwrap();
         let path = d.path().join("h.json");
         std::fs::write(
@@ -4538,6 +4672,7 @@ mod tests {
             ),
             usage: None,
             gate_outcome: None,
+            setup_fixed: None,
         };
         send_run_report(&ctx, "R", "Daily GitLab loop", &[failed], 61.0, None);
         let sent = sent.lock().unwrap();

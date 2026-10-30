@@ -151,7 +151,7 @@ pub fn doctor_report_markdown(blocked: &Value, result: Option<&DoctorResult>) ->
 /// The feedback handed to the main agent when the doctor fixed the setup.
 pub fn doctor_feedback(result: &DoctorResult) -> String {
     format!(
-        "## Setup was fixed by the setup doctor\n\nThe environment blockers you reported were fixed:\n\n{}\n\nContinue from step 7 (Verify) on the existing `loop/issue-<iid>` branch, with the existing WIP commit. Do not recreate the worktree.",
+        "## Setup was fixed by the setup doctor\n\nThe environment blockers you reported were fixed:\n\n{}\n\nRun step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), then continue from step 7 (Verify) on the `loop/issue-<iid>` branch, with the existing WIP commit.",
         blocker_lines(&result.blockers)
     )
 }
@@ -602,5 +602,10 @@ mod tests {
         assert!(f.contains("step 7"));
         assert!(f.contains("loop/issue-"));
         assert!(f.contains("WIP commit"));
+        assert!(
+            f.contains("Run step 5's `loopx worktree new` again first"),
+            "{f}"
+        );
+        assert!(!f.contains("Do not recreate the worktree"), "{f}");
     }
 }
