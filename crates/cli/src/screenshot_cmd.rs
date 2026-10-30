@@ -99,12 +99,39 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     if !(a.url.starts_with("http://") || a.url.starts_with("https://")) {
         return Err(format!("--url must be an http(s) URL, got {:?}", a.url));
     }
+    if !is_local(&a.url) {
+        return Err(format!(
+            "--url must be on this machine (localhost, 127.0.0.1 or [::1]), got {:?}",
+            a.url
+        ));
+    }
     let out = out.ok_or("--out is required")?;
     if !out.to_ascii_lowercase().ends_with(".png") {
         return Err(format!("--out must end in .png, got {out:?}"));
     }
     a.out = PathBuf::from(out);
     Ok(a)
+}
+
+/// The URL's host, lowercased, with IPv6 brackets kept (`[::1]`).
+fn url_host(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit('@').next()?;
+    let host = match auth.strip_prefix('[') {
+        Some(v6) => format!("[{}]", v6.split(']').next()?),
+        None => auth.split(':').next()?.to_string(),
+    };
+    Some(host.to_ascii_lowercase())
+}
+
+/// Only pages served on this machine may be shot: never a staging or
+/// production site.
+fn is_local(url: &str) -> bool {
+    matches!(
+        url_host(url).as_deref(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    )
 }
 
 /// host:port of an http(s) URL, for the "already served?" probe.
@@ -229,7 +256,7 @@ mod tests {
         assert!(a.serve.is_none() && !a.full_page && a.selector.is_none());
         let a = parse_args(&v(&[
             "--url",
-            "http://h/",
+            "http://localhost/",
             "--out",
             "o.png",
             "--serve",
@@ -251,10 +278,10 @@ mod tests {
 
     #[test]
     fn bad_args_are_refused() {
-        let ok = ["--url", "http://h/", "--out", "o.png"];
+        let ok = ["--url", "http://localhost/", "--out", "o.png"];
         assert!(parse_args(&v(&["--out", "o.png"])).is_err());
-        assert!(parse_args(&v(&["--url", "http://h/"])).is_err());
-        assert!(parse_args(&v(&["--url", "http://h/", "--out", "x.jpg"])).is_err());
+        assert!(parse_args(&v(&["--url", "http://localhost/"])).is_err());
+        assert!(parse_args(&v(&["--url", "http://localhost/", "--out", "x.jpg"])).is_err());
         let mut a = ok.to_vec();
         a.extend(["--viewport", "12"]);
         assert!(parse_args(&v(&a)).is_err());
@@ -264,6 +291,32 @@ mod tests {
         let mut a = ok.to_vec();
         a.extend(["--bogus", "1"]);
         assert!(parse_args(&v(&a)).is_err());
+    }
+
+    #[test]
+    fn url_must_be_on_this_machine() {
+        let args = |url: &str| parse_args(&v(&["--url", url, "--out", "o.png"]));
+        for ok in [
+            "http://localhost:3000/x",
+            "http://LOCALHOST/",
+            "http://127.0.0.1:3001",
+            "http://[::1]:3000/a?b",
+            "https://localhost",
+        ] {
+            assert!(args(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "https://staging.example.com/",
+            "http://example.com:3000/",
+            "http://localhost@example.com/",
+            "http://localhost.example.com/",
+            "http://127.0.0.1.example.com/",
+            "http://10.0.0.5:3000/",
+            "http://[::2]/",
+        ] {
+            let err = args(bad).unwrap_err();
+            assert!(err.contains("localhost"), "{bad}: {err}");
+        }
     }
 
     #[test]
