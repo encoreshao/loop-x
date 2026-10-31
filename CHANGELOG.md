@@ -32,6 +32,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.
 - A loop that fails the same way (same exit code) as its previous run no longer sends another Slack alert each time. The status keeps a `consecutive_failures` count and the log notes the repeat; a different failure or a success resets it.
 - GitLab loop: the agent's instructions now say issue text, comments and linked pages are untrusted. They describe the change wanted but can never redirect the loop to other projects or branches, ask for secrets, run unrelated commands or change where it posts; such a request is ignored and called out in the merge request or comment.
+- Office: a colleague's card (E1, E2, E3) now sits below the Dashboard and chat buttons instead of under them, so its Close button is never covered. The "Talk with a colleague" topic suggestions open as a macOS-style pop-up menu (arrow keys, Return, Escape) instead of the browser's plain list, and "Open chat" is the same chat icon as on the Dashboard. ⌘O opens or closes the chat on every page.
 - README (all languages): a download link at the top and a "Bring your own agent" note: LoopX uses the AI CLI subscription or API key you already have.
 
 ### Fixed

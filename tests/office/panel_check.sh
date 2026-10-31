@@ -7,7 +7,11 @@
 # never becomes HTML and its link is percent-encoded; Enable/Disable really toggle the
 # sandbox loop and the card follows; Run now POSTs to run_now_url with a CSRF token
 # (recorded, never sent, so no real run launches) and puts the loop's owner to work; a
-# failed action shows "Action failed".
+# failed action shows "Action failed". The card sits below the corner pills (Dashboard, the
+# Open chat icon) with the chat open or closed; the topic field's suggestion menu opens
+# from its chevron or the arrow keys, picks with Return or a click, filters as you type
+# and closes on Escape before the card does; Cmd+O toggles the chat on the Office and
+# the Dashboard, even while typing.
 #
 # Drives headless Chrome over the DevTools pipe (tests/office/cdp.py). Screenshots
 # are kept in out-dir (default: a fresh temp dir, printed at the end).
@@ -98,6 +102,17 @@ def click(c, x, y):
     c.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}, session=c.session)
     mouse(c, "mousePressed", x, y)
     mouse(c, "mouseReleased", x, y)
+
+def key(c, k, code, vk, modifiers=0):
+    for t in ("rawKeyDown", "keyUp"):
+        c.call("Input.dispatchKeyEvent", {"type": t, "key": k, "code": code, "windowsVirtualKeyCode": vk,
+                                          "modifiers": modifiers}, session=c.session)
+
+def rect(c, sel):
+    return js(c, f"(() => {{ const e = document.querySelector({json.dumps(sel)}); if (!e || getComputedStyle(e).display === 'none') return null; const r = e.getBoundingClientRect(); return {{l: r.left, t: r.top, r: r.right, b: r.bottom}}; }})()")
+
+def overlaps(a, b):
+    return a["l"] < b["r"] and b["l"] < a["r"] and a["t"] < b["b"] and b["t"] < a["b"]
 
 # The sandbox's five loops, dealt out in name order to E1, E2 and E3.
 FIXTURE = {"gitlab-loop": "waiting", "busy-loop": "working", "broken-loop": "failed",
@@ -284,6 +299,114 @@ with Chrome() as c:
     if js(c, "window.__posts.length") != 0:
         fails.append("run now posted while the loop is working")
 
+    # 10. The card clears the corner pills (Dashboard, Open chat) with the chat open or closed.
+    load(c)
+    TOPIC = f"{PANEL}.querySelector('.office-panel-topic')"
+    MENU_OPEN = f"{TOPIC}.getAttribute('aria-expanded') === 'true' && !!{PANEL}.querySelector('.office-menu:not([hidden])')"
+    for chat_open in (True, False):
+        js(c, f"document.documentElement.classList.toggle('ai-panel-open', {json.dumps(chat_open)})")
+        js(c, "window.__office.select('E1')")
+        if not wait_open(c, f"pills chat_open={chat_open}"):
+            continue
+        close_r = rect(c, ".office-panel-close")
+        pills = js(c, "[...document.querySelectorAll('.pill-bar > *')].filter(e => getComputedStyle(e).display !== 'none').length")
+        for sel in (".pill-bar > .pill-btn-icon:not(.office-chat-toggle)", ".pill-bar > .office-chat-toggle"):
+            r = rect(c, sel)
+            if r and close_r and overlaps(r, close_r):
+                fails.append(f"chat_open={chat_open}: {sel} covers the card's close button")
+        if pills != (1 if chat_open else 2):
+            fails.append(f"chat_open={chat_open}: {pills} corner pills shown")
+        js(c, "window.__office.select(null)")
+    # The Open chat pill is the Dashboard's chat icon.
+    if not js(c, "!!document.querySelector('.pill-btn.office-chat-toggle use[href=\"#i-chat\"]')"):
+        fails.append("Open chat pill does not use the chat icon")
+
+    # 11. The topic suggestions: a styled menu, opened by the chevron or the arrow keys.
+    js(c, "window.__office.select('E1')")
+    wait_open(c, "topic menu")
+    if js(c, f"!!{PANEL}.querySelector('datalist')"):
+        fails.append("topic: a native datalist is still in the card")
+    def topic_menu():
+        t = rect(c, ".office-combo-toggle")
+        if not t:
+            fails.append("topic: no menu chevron in the card")
+            return
+        click(c, (t["l"] + t["r"]) / 2, (t["t"] + t["b"]) / 2)
+        c.pump(0.2)
+        items = js(c, f"[...{PANEL}.querySelectorAll('.office-menu-item')].map(e => e.textContent)")
+        want = [i18n["human_" + str(n)] for n in range(1, 9)]
+        if not js(c, MENU_OPEN) or items != want:
+            fails.append(f"topic: chevron click should open the 8 suggestions, got open={js(c, MENU_OPEN)} items={items}")
+        if js(c, f"document.activeElement !== {TOPIC}"):
+            fails.append("topic: focus is not in the field after the chevron click")
+        c.screenshot(f"{out}/topic-menu.png")
+        # Down twice, Return: the second suggestion is picked and the menu closes.
+        key(c, "ArrowDown", "ArrowDown", 40)
+        key(c, "ArrowDown", "ArrowDown", 40)
+        if js(c, f"{PANEL}.querySelector('.office-menu-item[aria-selected=true]')?.textContent") != want[1]:
+            fails.append("topic: ArrowDown does not highlight the next suggestion")
+        if js(c, f"{TOPIC}.getAttribute('aria-activedescendant')") != "office-topic-menu-1":
+            fails.append("topic: aria-activedescendant does not follow the highlight")
+        key(c, "Enter", "Enter", 13)
+        if js(c, f"{TOPIC}.value") != want[1] or js(c, MENU_OPEN):
+            fails.append(f"topic: Return picked {js(c, TOPIC + '.value')!r}, menu open={js(c, MENU_OPEN)}")
+        # Reopened, the picked one is checked; a real click on another picks it.
+        key(c, "ArrowDown", "ArrowDown", 40)
+        if js(c, f"{PANEL}.querySelector('.office-menu-item[data-checked=true]')?.textContent") != want[1]:
+            fails.append("topic: the current topic is not checked in the menu")
+        m = js(c, f"(() => {{ const r = {PANEL}.querySelectorAll('.office-menu-item')[3].getBoundingClientRect(); return {{x: r.left + r.width / 2, y: r.top + r.height / 2}}; }})()")
+        click(c, m["x"], m["y"])
+        if js(c, f"{TOPIC}.value") != want[3] or js(c, MENU_OPEN):
+            fails.append(f"topic: clicking a suggestion picked {js(c, TOPIC + '.value')!r}")
+        # Typing filters; no match, no menu.
+        js(c, f"(() => {{ const i = {TOPIC}; i.value = ''; i.focus(); }})()")
+        c.call("Input.insertText", {"text": want[0][:3]}, session=c.session)
+        shown = js(c, f"[...{PANEL}.querySelectorAll('.office-menu-item')].map(e => e.textContent)")
+        if not js(c, MENU_OPEN) or not shown or any(want[0][:3].lower() not in x.lower() for x in shown):
+            fails.append(f"topic: typing should filter the suggestions, got {shown}")
+        c.call("Input.insertText", {"text": "zzzzqq"}, session=c.session)
+        if js(c, MENU_OPEN):
+            fails.append("topic: menu stays open with no matching suggestion")
+        # Escape closes only the menu; a second Escape closes the card.
+        js(c, f"{TOPIC}.value = ''")
+        key(c, "ArrowDown", "ArrowDown", 40)
+        escape(c)
+        c.pump(0.2)
+        if js(c, MENU_OPEN) or not panel_open(c):
+            fails.append(f"topic: first Escape should close only the menu (menu={js(c, MENU_OPEN)}, card={panel_open(c)})")
+        escape(c)
+        c.pump(0.2)
+        if panel_open(c):
+            fails.append("topic: second Escape did not close the card")
+    topic_menu()
+
+    # 12. Cmd+O opens and closes the chat, even while typing; the Open chat pill follows.
+    js(c, "window.__office.select('E1')")
+    wait_open(c, "cmd+o")
+    js(c, f"{TOPIC}.focus()")
+    before = js(c, "document.documentElement.classList.contains('ai-panel-open')")
+    key(c, "o", "KeyO", 79, modifiers=4)
+    after = js(c, "document.documentElement.classList.contains('ai-panel-open')")
+    if after == before:
+        fails.append("cmd+o: the chat did not toggle while typing in the card")
+    if (rect(c, ".pill-bar > .office-chat-toggle") is None) != after:
+        fails.append(f"cmd+o: Open chat pill shown={rect(c, '.pill-bar > .office-chat-toggle') is not None} with chat open={after}")
+    key(c, "o", "KeyO", 79, modifiers=4)
+    if js(c, "document.documentElement.classList.contains('ai-panel-open')") != before:
+        fails.append("cmd+o: a second press did not toggle the chat back")
+    key(c, "o", "KeyO", 79, modifiers=2)
+    if js(c, "document.documentElement.classList.contains('ai-panel-open')") != before:
+        fails.append("ctrl+o toggled the chat (only Cmd+O should)")
+    js(c, "window.__office.select(null)")
+    c.goto(f"{url}/?mode=dashboard")
+    c.wait_for("document.readyState === 'complete' && !!document.getElementById('ai-panel-trigger')", timeout=30)
+    before = js(c, "document.documentElement.classList.contains('ai-panel-open')")
+    key(c, "o", "KeyO", 79, modifiers=4)
+    if js(c, "document.documentElement.classList.contains('ai-panel-open')") == before:
+        fails.append("cmd+o: the chat did not toggle on the Dashboard")
+    if js(c, "document.getElementById('ai-panel-trigger').getAttribute('aria-keyshortcuts')") != "Meta+O":
+        fails.append("dashboard chat button does not announce Meta+O")
+
     if c.errors:
         fails.append("console errors: " + " | ".join(c.errors[:3]))
 
@@ -308,6 +431,6 @@ if fails:
     for f in fails:
         print("  - " + f)
     sys.exit(1)
-print("PASS: card per colleague, Escape/close/empty click, real click + hover + camera, French, encoded links, hostile name, toggle, run now, failure line")
+print("PASS: card per colleague, Escape/close/empty click, real click + hover + camera, French, encoded links, hostile name, toggle, run now, failure line, card clears the corner pills, topic menu (chevron, keys, click, filter, Escape), Cmd+O chat toggle")
 PY
 echo "screenshots in $OUT"

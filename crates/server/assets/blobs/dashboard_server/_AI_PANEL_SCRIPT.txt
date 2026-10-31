@@ -87,6 +87,12 @@
     }
   }
   trigger.addEventListener('click', function() { setOpen(!isOpen()); });
+  // Cmd+O opens or closes the chat from anywhere, even while typing.
+  document.addEventListener('keydown', function(ev) {
+    if (!(ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === 'o') || ev.repeat) return;
+    ev.preventDefault();
+    setOpen(!isOpen());
+  });
   panel.querySelector('[data-ai-close]').addEventListener('click', function() { setOpen(false); });
   panel.addEventListener('keydown', function(ev) {
     if (ev.key !== 'Escape') return;

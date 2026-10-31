@@ -1,7 +1,7 @@
 //! `GET /office/state`: the JSON the office view polls, one entry per loop.
 
 use crate::ui::assets;
-use crate::ui::components::{pill_bar, pill_button, pill_icon_link, ICON_DASHBOARD, ICON_OFFICE};
+use crate::ui::components::{pill_bar, pill_icon_button, pill_icon_link, ICON_DASHBOARD, ICON_OFFICE};
 use crate::ui::office;
 use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -185,7 +185,7 @@ html.office-mode #office{position:fixed;top:0;left:0;bottom:0;right:0;height:aut
 html.office-mode.ai-panel-open #office{right:var(--ai-panel-width)}\
 .pill-btn.office-chat-toggle{display:none}\
 html.office-mode:not(.ai-panel-open) .pill-btn.office-chat-toggle{display:inline-flex}\
-html.office-mode:not(.ai-panel-open) .office-panel{top:56px}\
+html.office-mode .office-panel{top:56px;max-height:calc(100% - 116px)}\
 #office-list:not([hidden]){position:fixed;top:0;left:0;bottom:0;right:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:1.5rem;text-align:center}\
 html.office-mode.ai-panel-open #office-list:not([hidden]){right:var(--ai-panel-width)}\
 .office-fallback-link{padding:.6rem 1.2rem;border-radius:999px;background:var(--md-primary);color:var(--md-on-primary);text-decoration:none}\
@@ -206,7 +206,12 @@ fn office_page(ctx: &UiCtx) -> UiResponse {
             &crate::ui::icons::icon(ICON_DASHBOARD),
             "onclick=\"try{localStorage.removeItem('loop-ai-panel-open')}catch(e){}\""
         ),
-        pill_button(&ctx.t("Open chat"), "office-chat-toggle", "data-office-chat-toggle")
+        pill_icon_button(
+            &ctx.t("Open chat"),
+            &crate::ui::icons::icon("chat"),
+            "office-chat-toggle",
+            &format!("title=\"{} (⌘O)\" aria-keyshortcuts='Meta+O' data-office-chat-toggle", h(&ctx.t("Open chat")))
+        )
     ));
     let view = office_view_html(ctx).replacen("</section>", &format!("{controls}</section>"), 1);
     // What shows when the scene cannot (no WebGL, a failed load): the way to the Dashboard.
@@ -342,11 +347,24 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-panel h3{{margin:.8rem 0 .3rem;font-size:.8rem;color:#9aa1ad;font-weight:600}}\
 .office-panel ul{{margin:0;padding-left:1.1rem}}.office-panel a{{color:#8ab4f8}}\
 .office-panel-actions{{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem;align-items:center}}\
-.office-panel-assign h3{{margin:.9rem 0 .3rem}}.office-panel-row{{display:flex;flex-wrap:wrap;gap:.5rem;margin:.3rem 0}}.office-panel-topic{{width:100%;box-sizing:border-box;font:inherit;font-size:.85rem;padding:.35rem .6rem;border-radius:.5rem;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:inherit}}.office-panel-assign-msg{{margin:.3rem 0 0;color:#e8b04a;font-size:.8rem}}.office-panel-assign button{{font:inherit;font-size:.8rem;padding:.3rem .8rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}.office-panel-assign button[aria-disabled='true']{{opacity:.45;cursor:not-allowed}}\
+.office-panel-assign h3{{margin:.9rem 0 .3rem}}.office-panel-row{{display:flex;flex-wrap:wrap;gap:.5rem;margin:.3rem 0}}.office-panel-assign-msg{{margin:.3rem 0 0;color:#e8b04a;font-size:.8rem}}.office-panel-assign button{{font:inherit;font-size:.8rem;padding:.3rem .8rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}.office-panel-assign button[aria-disabled='true']{{opacity:.45;cursor:not-allowed}}\
 .office-panel-actions button{{font:inherit;font-size:.8rem;padding:.3rem .8rem;border:0;border-radius:999px;background:var(--primary,#1a73e8);color:#fff;cursor:pointer}}\
 .office-panel-actions button[data-act='toggle']{{background:rgba(255,255,255,.14);color:inherit}}\
 .office-panel-actions button[aria-disabled='true']{{opacity:.45;cursor:not-allowed}}\
 .office-panel button:focus-visible,.office-panel a:focus-visible,#office:focus-visible{{outline:2px solid #8ab4f8;outline-offset:2px}}\
+/* The topic field and its suggestions, drawn like a macOS combo box and menu. */\
+.office-combo{{position:relative}}\
+.office-panel-topic{{width:100%;box-sizing:border-box;font:13px/1.3 -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;padding:.38rem 2rem .38rem .6rem;border-radius:6px;border:.5px solid rgba(255,255,255,.18);background:rgba(255,255,255,.07);color:inherit;box-shadow:inset 0 .5px 0 rgba(255,255,255,.06);outline:none}}\
+.office-panel-topic::placeholder{{color:rgba(235,235,245,.38)}}\
+.office-panel-topic:focus{{box-shadow:0 0 0 3px rgba(10,132,255,.5);border-color:rgba(10,132,255,.9)}}\
+.office-panel-assign .office-combo-toggle{{position:absolute;top:50%;right:4px;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:5px;background:linear-gradient(#3b99fc,#0a84ff);color:#fff;box-shadow:0 .5px 1px rgba(0,0,0,.4),inset 0 .5px 0 rgba(255,255,255,.25);cursor:default}}\
+.office-combo-toggle svg{{width:8px;height:12px}}\
+.office-panel .office-menu{{position:fixed;z-index:40;box-sizing:border-box;max-height:240px;overflow:auto;margin:0;padding:5px;list-style:none;border-radius:10px;background:rgba(36,36,40,.82);-webkit-backdrop-filter:blur(30px) saturate(190%);backdrop-filter:blur(30px) saturate(190%);border:.5px solid rgba(255,255,255,.16);box-shadow:0 0 0 .5px rgba(0,0,0,.7),0 12px 36px rgba(0,0,0,.5);font:13px/1.25 -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;color:rgba(255,255,255,.88);cursor:default;user-select:none;-webkit-user-select:none}}\
+.office-panel .office-menu[hidden]{{display:none}}\
+.office-menu-item{{position:relative;padding:3px 10px 3px 22px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}\
+.office-menu-item[data-checked='true']::before{{content:'\u{2713}';position:absolute;left:7px;font-weight:600}}\
+.office-menu-item[aria-selected='true']{{background:#0a84ff;color:#fff}}\
+@media(prefers-reduced-transparency:reduce){{.office-panel .office-menu{{background:#2a2a2e;-webkit-backdrop-filter:none;backdrop-filter:none}}}}\
 .office-panel-error{{margin:.8rem 0 0;color:#ff8a80}}\
 .office-panel[aria-busy='true']{{cursor:progress}}\
 .office-stale{{position:absolute;left:50%;top:12px;transform:translateX(-50%);margin:0;padding:.25rem .8rem;border-radius:999px;background:rgba(120,70,0,.88);color:#fff;font-size:.8rem}}\
@@ -749,6 +767,36 @@ mod tests {
         assert!(body.contains("href='/?mode=dashboard'"), "the switch lives in the chat header");
         assert!(body.contains("data-office-chat-toggle"));
         assert!(sets_mode_cookie(&resp, "office"));
+    }
+
+    #[test]
+    fn office_open_chat_is_the_dashboards_chat_icon_with_its_shortcut() {
+        let f = fx(four());
+        let body = page(&f, "/office", None, None).body_text();
+        let start = body.find("class='pill-btn pill-btn-icon office-chat-toggle'").expect("icon pill");
+        let pill = &body[start..start + body[start..].find("</button>").unwrap()];
+        assert!(pill.contains(&crate::ui::icons::icon("chat")), "{pill}");
+        assert!(pill.contains("aria-label=\"Open chat\"") && pill.contains("aria-keyshortcuts='Meta+O'"), "{pill}");
+        assert!(pill.contains("title=\"Open chat (⌘O)\""), "{pill}");
+    }
+
+    #[test]
+    fn office_card_always_sits_below_the_corner_pills() {
+        // The Dashboard pill stays top right while the chat is open, so the card must
+        // clear it in both states or it covers the card's close button.
+        assert!(OFFICE_MODE_CSS.contains("html.office-mode .office-panel{top:56px"), "{OFFICE_MODE_CSS}");
+        assert!(!OFFICE_MODE_CSS.contains(":not(.ai-panel-open) .office-panel"));
+    }
+
+    #[test]
+    fn office_topic_suggestions_are_a_styled_menu_not_a_native_datalist() {
+        let f = fx(four());
+        let body = page(&f, "/office", None, None).body_text();
+        assert!(body.contains(".office-panel .office-menu{"), "the Apple-style menu is styled");
+        assert!(body.contains(".office-menu-item[aria-selected='true']"));
+        let panel_js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/office/panel.js")).unwrap();
+        assert!(!panel_js.contains("datalist"), "the native datalist renders unstyled in WKWebView");
+        assert!(panel_js.contains("role\", \"combobox\"") && panel_js.contains("\"listbox\""));
     }
 
     #[test]

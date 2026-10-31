@@ -347,6 +347,27 @@ mod tests {
     }
 
     #[test]
+    fn command_o_toggles_the_chat_and_the_button_announces_it() {
+        let state = UiState::for_tests();
+        let req = UiRequest::get("/");
+        let ctx = UiCtx::new(&state, &req);
+        let html = render_shell(
+            &ctx,
+            "Overview",
+            "overview",
+            "",
+            "<p>body</p>",
+            ShellOpts::default(),
+        );
+        let start = html.find("id='ai-panel-trigger'").expect("chat button");
+        let trigger = &html[start..start + html[start..].find("</button>").unwrap()];
+        assert!(trigger.contains("aria-keyshortcuts='Meta+O'"), "{trigger}");
+        assert!(trigger.contains("title='Ask LoopX (⌘O)'"), "{trigger}");
+        let script = ai_panel_script(Lang::En);
+        assert!(script.contains("ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && ev.key.toLowerCase() === 'o'"), "{script}");
+    }
+
+    #[test]
     fn the_chat_button_uses_the_chat_glyph_and_the_panel_header_the_brand_logo() {
         let state = UiState::for_tests();
         let req = UiRequest::get("/");

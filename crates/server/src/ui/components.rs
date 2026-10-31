@@ -31,6 +31,15 @@ pub fn pill_icon_link(href: &str, label: &str, icon_html: &str, attrs: &str) -> 
     )
 }
 
+/// A round icon-only pill button with an accessible name; `class` adds to the pill
+/// classes, `attrs` is raw extra attributes (already escaped).
+pub fn pill_icon_button(label: &str, icon_html: &str, class: &str, attrs: &str) -> String {
+    format!(
+        "<button type='button' class='pill-btn pill-btn-icon {class}' aria-label=\"{0}\" {attrs}>{icon_html}</button>",
+        h(label)
+    )
+}
+
 /// A row of pill controls anchored to a corner of its positioned parent.
 pub fn pill_bar(children: &str) -> String {
     format!("<div class='pill-bar'>{children}</div>")
@@ -54,6 +63,20 @@ mod tests {
         let s = pill_icon_link("/?a=1&b=2", "Say \"hi\"", "<svg/>", "");
         assert!(
             s.contains("href='/?a=1&amp;b=2'") && s.contains("aria-label=\"Say &quot;hi&quot;\"")
+        );
+    }
+
+    #[test]
+    fn pill_icon_button_is_an_icon_only_button_with_a_name() {
+        let s = pill_icon_button("Say \"hi\"", "<svg/>", "x", "data-x");
+        assert!(
+            s.starts_with("<button type='button' class='pill-btn pill-btn-icon x'"),
+            "{s}"
+        );
+        assert!(
+            s.contains("aria-label=\"Say &quot;hi&quot;\"")
+                && s.contains("data-x")
+                && s.contains("<svg/></button>")
         );
     }
 

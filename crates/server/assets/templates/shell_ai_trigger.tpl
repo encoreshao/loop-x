@@ -1,1 +1,1 @@
-<button type='button' class='ai-panel-trigger' id='ai-panel-trigger' aria-controls='ai-panel' aria-expanded='false' aria-label='⟦ai_label⟧' title='⟦ai_label⟧'>⟦chat_icon⟧</button>
+<button type='button' class='ai-panel-trigger' id='ai-panel-trigger' aria-controls='ai-panel' aria-expanded='false' aria-label='⟦ai_label⟧' aria-keyshortcuts='Meta+O' title='⟦ai_label⟧ (⌘O)'>⟦chat_icon⟧</button>
