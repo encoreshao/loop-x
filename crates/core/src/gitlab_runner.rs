@@ -622,25 +622,26 @@ fn run_cli(
     let mut command = std::process::Command::new(&argv[0]);
     // Claude reports each tool call through hooks, so the dashboard can say what
     // it is doing and a wedged call is stopped long before its timeout.
+    // Issues run in parallel: each one's hooks write its own file, so agents
+    // never overwrite each other's record or mask each other's stall.
+    let activity_file = match issue {
+        Some((a, i)) => crate::agent_activity::for_task(&ctx.activity_file, a, i),
+        None => ctx.activity_file.clone(),
+    };
     let stall = (ai_cli == "claude").then(|| {
         let label = issue.map_or_else(|| "end of run".to_string(), |(a, i)| format!("{a} #{i}"));
-        let settings = crate::agent_activity::hook_settings(&ctx.exe, &ctx.activity_file, &label);
-        if let Err(e) = crate::agent_activity::start(
-            &ctx.activity_file,
-            &label,
-            &crate::agent_activity::now_iso(),
-        ) {
-            ctx.log(&format!(
-                "cannot write {}: {e}",
-                ctx.activity_file.display()
-            ));
+        let settings = crate::agent_activity::hook_settings(&ctx.exe, &activity_file, &label);
+        if let Err(e) =
+            crate::agent_activity::start(&activity_file, &label, &crate::agent_activity::now_iso())
+        {
+            ctx.log(&format!("cannot write {}: {e}", activity_file.display()));
         }
         command
             .args(&argv[1..2])
             .args(["--settings", &settings])
             .args(&argv[2..]);
         proc::Stall {
-            file: ctx.activity_file.clone(),
+            file: activity_file.clone(),
             after: ctx.stall_after,
         }
     });
@@ -670,8 +671,11 @@ fn run_cli(
     }
     command.env("PATH", path);
     let timeout = std::time::Duration::from_secs_f64(timeout_seconds.max(0.0));
-    let (out, stalled) = match proc::run_watched(&mut command, None, Some(timeout), stall.as_ref())
-    {
+    let watched = proc::run_watched(&mut command, None, Some(timeout), stall.as_ref());
+    if stall.is_some() && issue.is_some() {
+        crate::agent_activity::finish(&activity_file);
+    }
+    let (out, stalled) = match watched {
         Ok(out) => out,
         Err(e) => {
             let detail = could_not_start(ai_cli, &argv[0], &e);
@@ -2689,34 +2693,7 @@ pub fn run_all_issues(
             }
         }
     }
-    let mut results = Vec::new();
-    for (alias, issue) in todo {
-        let iid_text = value_text(&issue["iid"]);
-        // Title and link go in the ledger so the dashboard's Live page can show
-        // them without calling GitLab when it renders.
-        ctx.emit(
-            "issue.queued",
-            Some(run_id),
-            EventFields {
-                issue_run_id: Some(format!("{run_id}_{alias}_{iid_text}")),
-                project: Some(alias.clone()),
-                issue_iid: iid_text.parse().ok(),
-                data: Some(json!({
-                    "title": value_text_or_empty(&issue["title"]),
-                    "web_url": value_text_or_empty(&issue["web_url"]),
-                })),
-            },
-        );
-        results.push(run_one_issue(
-            ctx,
-            run_id,
-            &alias,
-            &iid_text,
-            &definition,
-            invoker.clone(),
-            InvokeMode::Batch,
-        )?);
-    }
+    let results = run_issue_batch(ctx, run_id, &cfg, todo, &definition, invoker, 1)?;
 
     // UNCONDITIONAL, and outside LoopRuntime: "End of run" is housekeeping, not
     // a verifiable task. It must run even with zero results: a morning with no
@@ -2761,6 +2738,95 @@ pub fn run_all_issues(
         wrapup_error,
     );
     Ok(results)
+}
+
+/// The batch's issues, at most `max_parallel` at once (see [`crate::parallel`]).
+/// Each issue holds its own lock while it runs, so an issue another run is
+/// already working on is skipped rather than worked twice; issues of a project
+/// worked on in its own checkout (worktree off) never overlap.
+pub fn run_issue_batch(
+    ctx: &RunCtx,
+    run_id: &str,
+    cfg: &Config,
+    todo: Vec<(String, Value)>,
+    definition: &LoopDefinition,
+    invoker: Invoker,
+    max_parallel: usize,
+) -> Result<Vec<IssueRun>, String> {
+    let tasks: Vec<crate::parallel::Task<(String, Value)>> = todo
+        .into_iter()
+        .map(|(alias, issue)| {
+            let iid = value_text(&issue["iid"]);
+            crate::parallel::Task {
+                lock_path: crate::file_lock::issue_lock_path(&ctx.repo_root, &alias, &iid),
+                group: in_place_group(cfg, &alias),
+                item: (alias, issue),
+            }
+        })
+        .collect();
+    let outcomes = crate::parallel::run_tasks(&tasks, max_parallel, |(alias, issue)| {
+        let iid_text = value_text(&issue["iid"]);
+        // Title and link go in the ledger so the dashboard's Live page can show
+        // them without calling GitLab when it renders.
+        ctx.emit(
+            "issue.queued",
+            Some(run_id),
+            EventFields {
+                issue_run_id: Some(format!("{run_id}_{alias}_{iid_text}")),
+                project: Some(alias.clone()),
+                issue_iid: iid_text.parse().ok(),
+                data: Some(json!({
+                    "title": value_text_or_empty(&issue["title"]),
+                    "web_url": value_text_or_empty(&issue["web_url"]),
+                })),
+            },
+        );
+        run_one_issue(
+            ctx,
+            run_id,
+            alias,
+            &iid_text,
+            definition,
+            invoker.clone(),
+            InvokeMode::Batch,
+        )
+    });
+    let mut results = Vec::new();
+    let mut first_error = None;
+    for (task, outcome) in tasks.iter().zip(outcomes) {
+        let (alias, issue) = &task.item;
+        let label = format!("{alias} #{}", value_text(&issue["iid"]));
+        match outcome {
+            crate::parallel::Outcome::Ran(Ok(run)) => results.push(run),
+            crate::parallel::Outcome::Ran(Err(e)) => {
+                first_error.get_or_insert(e);
+            }
+            crate::parallel::Outcome::AlreadyRunning => ctx.log(&format!(
+                "{label} skipped: another run is already working on it"
+            )),
+            crate::parallel::Outcome::LockFailed(e) => {
+                ctx.log(&format!("{label} skipped: cannot take its lock: {e}"))
+            }
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(results),
+    }
+}
+
+/// Issues of a worktree-off project share its checkout, so they share a group
+/// and never run at once; worktree issues each get their own directory.
+fn in_place_group(cfg: &Config, alias: &str) -> Option<String> {
+    let project = cfg.project(alias).ok()?;
+    if crate::config::use_worktree(&project) {
+        return None;
+    }
+    let path = project
+        .get("local_path")
+        .and_then(Value::as_str)
+        .unwrap_or(alias);
+    Some(format!("checkout:{path}"))
 }
 
 /// The batch's one Slack report per bundle, built from this run's events.
@@ -2865,6 +2931,15 @@ pub fn run_single_issue(
 ) -> Result<IssueRun, String> {
     let definition =
         LoopDefinition::from_yaml(&ctx.definition_path()).map_err(|e| e.to_string())?;
+    // Never alongside another run working on the same issue.
+    let lock_path = crate::file_lock::issue_lock_path(&ctx.repo_root, alias, issue_iid);
+    let Some(_lock) = crate::file_lock::FileLock::try_exclusive(&lock_path)
+        .map_err(|e| format!("cannot lock {alias} #{issue_iid}: {e}"))?
+    else {
+        return Err(format!(
+            "{alias} #{issue_iid} is already being worked on by another run"
+        ));
+    };
     // The dashboard's on-demand path keeps the 2-arg prompt with its own full
     // "End of run".
     run_one_issue(
@@ -3750,6 +3825,104 @@ mod tests {
         assert!(r.is_err());
         assert!(!screens.exists());
         assert!(!handoff.with_file_name("1-after.png").exists());
+    }
+
+    /// Runs `iids` of project "web" through the batch, `max` at once; returns
+    /// the peak number of agents that ran at once and which issues the agent
+    /// was started for.
+    fn batch_peak(t: &InPlace, iids: &[i64], max: usize) -> (usize, Vec<String>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let definition = LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+        )
+        .unwrap();
+        let cfg = Config::load(t.ctx.config_path.as_ref().unwrap()).unwrap();
+        let (now, peak) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let started: Log = Default::default();
+        let (n, p, st) = (now.clone(), peak.clone(), started.clone());
+        let invoker: Invoker = Arc::new(move |req| {
+            st.lock().unwrap().push(req.issue_iid.clone());
+            p.fetch_max(n.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            n.fetch_sub(1, Ordering::SeqCst);
+            failing()
+        });
+        let todo = iids
+            .iter()
+            .map(|i| ("web".to_string(), json!({"iid": i, "title": "t"})))
+            .collect();
+        let _ = run_issue_batch(&t.ctx, "r1", &cfg, todo, &definition, invoker, max);
+        let mut started = started.lock().unwrap().clone();
+        started.sort();
+        started.dedup();
+        (peak.load(Ordering::SeqCst), started)
+    }
+
+    #[test]
+    fn a_batch_works_on_several_worktree_issues_at_once() {
+        let t = InPlace::new();
+        t.set_use_worktree(true);
+        let (peak, started) = batch_peak(&t, &[1, 2, 3, 4], 3);
+        assert_eq!(peak, 3);
+        assert_eq!(started, ["1", "2", "3", "4"]);
+    }
+
+    #[test]
+    fn issues_sharing_one_in_place_checkout_never_run_at_once() {
+        let t = InPlace::new();
+        let (peak, started) = batch_peak(&t, &[1, 2, 3], 3);
+        assert_eq!(peak, 1);
+        assert_eq!(started, ["1", "2", "3"]);
+    }
+
+    #[test]
+    fn an_issue_another_run_is_working_on_is_skipped() {
+        let t = InPlace::new();
+        t.set_use_worktree(true);
+        let lock = crate::file_lock::issue_lock_path(&t.ctx.repo_root, "web", "2");
+        let _other = crate::file_lock::FileLock::try_exclusive(&lock)
+            .unwrap()
+            .unwrap();
+        let (_, started) = batch_peak(&t, &[1, 2, 3], 3);
+        assert_eq!(started, ["1", "3"]);
+        let log = std::fs::read_to_string(&t.ctx.unified_log).unwrap();
+        assert!(
+            log.contains("web #2 skipped: another run is already working on it"),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn a_single_issue_run_refuses_an_issue_already_being_worked_on() {
+        let t = InPlace::new();
+        let lock = crate::file_lock::issue_lock_path(&t.ctx.repo_root, "web", "7");
+        let _other = crate::file_lock::FileLock::try_exclusive(&lock)
+            .unwrap()
+            .unwrap();
+        let mut ctx = RunCtx::new(t.ctx.repo_root.clone());
+        ctx.unified_log = t.ctx.unified_log.clone();
+        std::fs::create_dir_all(ctx.definition_path().parent().unwrap()).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+            ctx.definition_path(),
+        )
+        .unwrap();
+        let called = Arc::new(Mutex::new(false));
+        let c = called.clone();
+        let e = run_single_issue(
+            &ctx,
+            "r1",
+            "web",
+            "7",
+            Arc::new(move |_| {
+                *c.lock().unwrap() = true;
+                failing()
+            }),
+        )
+        .err()
+        .expect("refused");
+        assert!(e.contains("already being worked on"), "{e}");
+        assert!(!*called.lock().unwrap());
     }
 
     #[test]
@@ -4804,11 +4977,42 @@ mod tests {
             args[2]
         );
         assert_eq!(args.last().unwrap(), "P");
-        let activity = crate::agent_activity::read(&ctx.activity_file).unwrap();
-        assert_eq!(
-            (activity["event"].as_str(), activity["label"].as_str()),
-            (Some("Start"), Some("web #3"))
+        // Each issue reports to its own file, so parallel agents never
+        // overwrite each other's record or mask each other's stall; it is
+        // dropped once the call is over.
+        let own = crate::agent_activity::for_task(&ctx.activity_file, "web", "3");
+        assert!(args[2].contains(&own.display().to_string()), "{}", args[2]);
+        assert!(!own.exists());
+        assert!(!ctx.activity_file.exists());
+    }
+
+    #[test]
+    fn parallel_claude_calls_each_report_to_their_own_activity_file() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        // Each fake agent copies its activity record before exiting
+        // (`$3` is the --settings JSON naming the hook's file, `$4` the prompt).
+        let cli = script_cli(
+            d.path(),
+            &format!(
+                "f=$(printf '%s' \"$3\" | sed -E \"s/.*_agent-hook '([^']+)'.*/\\1/\")\ncp \"$f\" '{}'/seen-$4.json\necho '{{\"result\":\"ok\"}}'",
+                d.path().display()
+            ),
         );
+        std::thread::scope(|s| {
+            for iid in ["1", "2", "3"] {
+                let (ctx, cli) = (&ctx, &cli);
+                s.spawn(move || {
+                    let argv = vec![cli.clone(), "-p".into(), iid.to_string()];
+                    run_cli(ctx, "claude", &argv, 30.0, Some(("web", iid)), &[], None).unwrap();
+                });
+            }
+        });
+        for iid in ["1", "2", "3"] {
+            let seen = crate::agent_activity::read(&d.path().join(format!("seen-{iid}.json")))
+                .unwrap_or_else(|| panic!("no activity record for #{iid}"));
+            assert_eq!(seen["label"], format!("web #{iid}"));
+        }
     }
 
     #[test]

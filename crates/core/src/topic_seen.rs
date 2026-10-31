@@ -44,10 +44,7 @@ fn load(path: &Path) -> Vec<Value> {
 }
 
 fn save(path: &Path, entries: &[Value]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, pyjson::to_string_pretty(&entries))
+    crate::file_lock::write_atomic(path, pyjson::to_string_pretty(&entries).as_bytes())
 }
 
 /// Python's `datetime.isoformat()` for an aware UTC time: fractional seconds
@@ -75,8 +72,12 @@ fn prune(entries: Vec<Value>, now: DateTime<Utc>) -> Vec<Value> {
 /// Every `{url, title}` still in the window; prunes the file as a side effect.
 pub fn get_seen(state_dir: &Path, topic: &str, now: DateTime<Utc>) -> Result<Vec<Value>, String> {
     let path = state_path(state_dir, topic);
-    let entries = prune(load(&path), now);
-    save(&path, &entries).map_err(|e| e.to_string())?;
+    let entries = crate::file_lock::with_lock(&path, || {
+        let entries = prune(load(&path), now);
+        save(&path, &entries).map(|()| entries)
+    })
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())?;
     entries
         .iter()
         .map(|e| match (e.get("url"), e.get("title")) {
@@ -98,9 +99,13 @@ pub fn add_seen(
     now: DateTime<Utc>,
 ) -> Result<(), String> {
     let path = state_path(state_dir, topic);
-    let mut entries = prune(load(&path), now);
-    entries.push(json!({ "url": url, "title": title, "seen_at": isoformat(now) }));
-    save(&path, &entries).map_err(|e| e.to_string())
+    crate::file_lock::with_lock(&path, || {
+        let mut entries = prune(load(&path), now);
+        entries.push(json!({ "url": url, "title": title, "seen_at": isoformat(now) }));
+        save(&path, &entries)
+    })
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -110,6 +115,23 @@ mod tests {
 
     fn at(day: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, day, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn parallel_adds_to_one_topic_never_lose_an_item() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path();
+        std::thread::scope(|s| {
+            for w in 0..5 {
+                s.spawn(move || {
+                    for i in 0..10 {
+                        let url = format!("https://e.x/{w}/{i}");
+                        add_seen(dir, "news", &url, "t", at(2)).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(get_seen(dir, "news", at(2)).unwrap().len(), 50);
     }
 
     #[test]

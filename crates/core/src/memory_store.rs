@@ -343,8 +343,24 @@ pub fn add_task_memory(
     category: Option<&str>,
     root: Option<&Path>,
 ) -> io::Result<AddResult> {
+    // Parallel issues of one project share its MEMORY.md index (and may share
+    // an issue file's slug), so the whole add runs under the project's lock.
     let dir = project_dir(alias, root);
     std::fs::create_dir_all(&dir)?;
+    crate::file_lock::with_lock(&dir, || {
+        add_task_memory_unlocked(alias, issue_iid, lesson, tags, category, root)
+    })?
+}
+
+fn add_task_memory_unlocked(
+    alias: &str,
+    issue_iid: i64,
+    lesson: &str,
+    tags: &[String],
+    category: Option<&str>,
+    root: Option<&Path>,
+) -> io::Result<AddResult> {
+    let dir = project_dir(alias, root);
     let now = now_utc();
     let today = &now[..10];
     let description = summary(lesson);
@@ -627,6 +643,27 @@ mod tests {
 
     fn hash_of(bytes: &[u8]) -> String {
         sha256::hex(&sha256::sha256(bytes))
+    }
+
+    #[test]
+    fn parallel_issues_of_one_project_all_reach_the_memory_index() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        std::thread::scope(|s| {
+            for iid in 1..=8 {
+                s.spawn(move || {
+                    add_task_memory("web", iid, &format!("lesson {iid}"), &[], None, Some(root))
+                        .unwrap();
+                });
+            }
+        });
+        let index = std::fs::read_to_string(root.join("web/MEMORY.md")).unwrap();
+        for iid in 1..=8 {
+            assert!(
+                index.contains(&format!("#{iid} ")),
+                "#{iid} missing:\n{index}"
+            );
+        }
     }
 
     #[test]

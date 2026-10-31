@@ -118,10 +118,11 @@ pub fn loop_statuses(outputs: &Path) -> Map<String, Value> {
         .get_mut("gitlab-loop")
         .filter(|d| d["state"] == "running")
     {
-        if let Some(activity) =
-            loopx_core::agent_activity::read(&loopx_core::agent_activity::beside(&legacy))
-        {
-            doc["agent_activity"] = activity;
+        let all =
+            loopx_core::agent_activity::read_all(&loopx_core::agent_activity::beside(&legacy));
+        if let Some(newest) = all.first() {
+            doc["agent_activity"] = newest.clone();
+            doc["agent_activities"] = Value::Array(all);
         }
     }
     loops
@@ -387,6 +388,21 @@ mod tests {
         std::fs::write(p.outputs.join("agent-activity.json"), activity.to_string()).unwrap();
         let s = build_snapshot(&p, now());
         assert_eq!(s["loops"]["gitlab-loop"]["agent_activity"], activity);
+        // Parallel issues: every agent is listed, newest first; the single
+        // `agent_activity` stays the newest one for older app builds.
+        let other = json!({"at": "2026-10-31T09:05:00+00:00", "label": "api #2", "event": "Start", "tool": null, "detail": null});
+        std::fs::create_dir_all(p.outputs.join("agent-activity")).unwrap();
+        std::fs::write(
+            p.outputs.join("agent-activity/api-2.json"),
+            other.to_string(),
+        )
+        .unwrap();
+        let s = build_snapshot(&p, now());
+        assert_eq!(s["loops"]["gitlab-loop"]["agent_activity"], other);
+        assert_eq!(
+            s["loops"]["gitlab-loop"]["agent_activities"],
+            json!([other, activity])
+        );
         status::write_status(&p.outputs.join("status.json"), "idle", &[]).unwrap();
         let s = build_snapshot(&p, now());
         assert!(s["loops"]["gitlab-loop"].get("agent_activity").is_none());

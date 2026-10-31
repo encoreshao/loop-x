@@ -1308,5 +1308,6 @@
   "{loop}: {step}": "{loop}: {step}",
   "{loop} finished its run": "{loop} の実行が完了しました",
   "{loop} failed": "{loop} が失敗しました",
-  "{loop} is waiting for your approval": "{loop} があなたの承認を待っています"
+  "{loop} is waiting for your approval": "{loop} があなたの承認を待っています",
+  "{task}: {activity}": "{task}：{activity}"
 }

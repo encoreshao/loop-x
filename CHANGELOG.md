@@ -29,6 +29,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- GitLab loop and Topic Monitor: an issue or topic that another run is already working on (say, a scheduled batch reaching an issue you started by hand) is skipped and logged as "already working on it" instead of being worked twice at once. Agents lists what each running agent is doing, one line per issue, and the Mac app's snapshot adds `agent_activities` (every running agent, newest first) beside `agent_activity`.
 - Mac app: the notch island and task notifications name loops the way the dashboard does ("GitLab", "Inbox Triage", "MR Review") instead of by their ids (`gitlab-loop`, `inbox-triage-loop`). Topics keep the names you gave them.
 - Loop icons: Release Notes, Pipeline Doctor and Stale Sweeper get their own sidebar icons (tag, stethoscope, archive), and Loops itself, plus any loop made from a template, uses a workflow icon instead of the refresh arrows, which now only mean "refresh".
 - A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.
@@ -39,6 +40,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Files that runs share (topic status, topic seen-items, task memory's `MEMORY.md`, the GitLab cache) are now written under a lock and atomically, so two writers at once no longer drop one of the updates and the dashboard never reads a half-written file. Creating or cleaning up worktrees of one checkout is serialised too, so two issues of a project starting at once no longer fail on git's own ref locks.
 - Sign-ins: an expired or revoked connector token (Google Calendar, a 401 from GitLab, GitHub and the like) is reported on the first check instead of after a second one six hours later. The sign-in check, a connector's Test, a reconnect and each Inbox Triage run now share one record, so Needs you, Connectors and Inbox Triage agree: Connectors shows "Needs re-auth" and the newest result instead of a days-old Test, and an inbox shows "Needs re-auth" as soon as the check finds it, or "Connected" once a run succeeds. Needs you also shows how long ago a sign-in broke correctly (it said "just now" outside UTC).
 - Needs you: a broken sign-in disappears as soon as you reconnect it (a Google sign-in for a mailbox or connector finishes, or its Test passes) instead of staying until the next 6-hourly check, and it can now be dismissed by hand; it comes back only if the sign-in breaks again later.
 - LinkedIn connector: Connect LinkedIn (dashboard and Mac app) works again. It ran a Python script that no longer exists, so no window ever opened; it now opens Google Chrome on LinkedIn's login page and marks the connector Connected by itself once you have signed in (also `loopx linkedin-login <connector-id>`). Test and the LinkedIn Autopilot loop now really use Chrome instead of always reporting "install Playwright".

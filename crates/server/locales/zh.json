@@ -1308,5 +1308,6 @@
   "{loop}: {step}": "{loop}：{step}",
   "{loop} finished its run": "{loop} 已完成运行",
   "{loop} failed": "{loop} 运行失败",
-  "{loop} is waiting for your approval": "{loop} 正在等待你的批准"
+  "{loop} is waiting for your approval": "{loop} 正在等待你的批准",
+  "{task}: {activity}": "{task}：{activity}"
 }
