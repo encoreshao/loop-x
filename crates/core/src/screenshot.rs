@@ -958,16 +958,21 @@ mod tests {
         assert_eq!(argv, ["bin/rails", "server", "-p", "3100"]);
     }
 
+    // The fake servers below use `socketserver.TCPServer`, not
+    // `http.server.HTTPServer`: the latter's `server_bind` does a reverse DNS
+    // lookup (`socket.getfqdn`) before it listens, which can hang for tens of
+    // seconds on a CI runner whose resolver never answers.
+
     #[test]
     fn dev_server_waits_for_the_url_then_kills_its_group() {
         let port = free_port();
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("child.pid");
         let script = format!(
-            "import http.server,subprocess,sys\n\
+            "import http.server,socketserver,subprocess,sys\n\
              c=subprocess.Popen(['sleep','60'])\n\
              open({:?},'w').write(str(c.pid))\n\
-             http.server.HTTPServer(('127.0.0.1',{port}),http.server.SimpleHTTPRequestHandler).serve_forever()\n",
+             socketserver.TCPServer(('127.0.0.1',{port}),http.server.SimpleHTTPRequestHandler).serve_forever()\n",
             pidfile.to_str().unwrap()
         );
         let argv = vec!["python3".to_string(), "-c".to_string(), script];
@@ -1050,10 +1055,10 @@ mod tests {
         let port = free_port();
         let dir = tempfile::tempdir().unwrap();
         let script = format!(
-            "import http.server,sys\n\
+            "import http.server,socketserver,sys\n\
              sys.stderr.write('x'*1000000+'\\n'); sys.stderr.flush()\n\
              sys.stdout.write('y'*1000000+'\\n'); sys.stdout.flush()\n\
-             http.server.HTTPServer(('127.0.0.1',{port}),http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+             socketserver.TCPServer(('127.0.0.1',{port}),http.server.SimpleHTTPRequestHandler).serve_forever()\n"
         );
         let argv = vec!["python3".to_string(), "-c".to_string(), script];
         let server = DevServer::start(

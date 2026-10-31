@@ -58,9 +58,20 @@ impl World {
             &bin.join("yarn"),
             &format!(
                 "#!/bin/sh\nsleep 300 &\necho $! >> \"$SERVER_PIDS\"\necho $$ >> \"$SERVER_PIDS\"\n\
-                 sleep {delay_s}\nexec python3 -m http.server \"$FAKE_PORT\" --bind 127.0.0.1\n"
+                 sleep {delay_s}\nexec python3 \"$SERVER_PY\"\n"
             ),
         );
+        // `socketserver.TCPServer`, not `python3 -m http.server`: the latter's
+        // `HTTPServer.server_bind` does a reverse DNS lookup (`socket.getfqdn`)
+        // before it listens, which can hang for tens of seconds on a CI runner
+        // whose resolver never answers.
+        std::fs::write(
+            dir.path().join("server.py"),
+            "import http.server, os, socketserver\n\
+             socketserver.TCPServer(('127.0.0.1', int(os.environ['FAKE_PORT'])), \
+             http.server.SimpleHTTPRequestHandler).serve_forever()\n",
+        )
+        .unwrap();
         script(
             &bin.join("fake-chrome"),
             "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in --user-data-dir=*) d=\"${a#--user-data-dir=}\";; esac; done\n\
@@ -77,7 +88,7 @@ impl World {
         self.dir.path().join(p)
     }
 
-    fn spawn(&self, timeout_s: u32) -> Child {
+    fn spawn(&self, timeout_s: u32) -> Spawned {
         let path = format!(
             "{}:{}",
             self.path("bin").display(),
@@ -96,12 +107,14 @@ impl World {
             .env("HOME", self.path("home"))
             .env("LOOP_ENGINEERING_HOME", self.path("home/.loopx"))
             .env("FAKE_PORT", self.port.to_string())
+            .env("SERVER_PY", self.path("server.py"))
             .env("SERVER_PIDS", self.path("server.pids"))
             .env("CHROME_PID", self.path("chrome.pid"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
+            .map(Spawned)
             .unwrap()
     }
 
@@ -127,6 +140,52 @@ impl World {
             .map(|e| e.file_name())
             .collect();
         assert!(profiles.is_empty(), "left in TMPDIR: {profiles:?}");
+    }
+}
+
+impl Drop for World {
+    /// A failed assertion must not orphan the fake dev server or Chrome: kill
+    /// whatever they recorded, and the dev server's whole group.
+    fn drop(&mut self) {
+        let mut all = pids(&self.path("server.pids"));
+        all.extend(pids(&self.path("chrome.pid")));
+        for p in all {
+            unsafe {
+                libc::kill(-p, libc::SIGKILL);
+                libc::kill(p, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+/// `loopx screenshot` as a child that is stopped (SIGTERM, so it cleans up its
+/// own dev server and Chrome) if a test panics before it exits.
+struct Spawned(Child);
+
+impl std::ops::Deref for Spawned {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Spawned {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Spawned {
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(None)) {
+            unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
+            let until = Instant::now() + Duration::from_secs(10);
+            while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 }
 
