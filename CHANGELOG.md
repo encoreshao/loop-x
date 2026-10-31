@@ -33,6 +33,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- `loopx loop eval --golden` no longer fails a case because the agent added a regression test to one of the fixture's own test files. A protected test file may gain new tests; editing, deleting or redefining the fixture's tests still fails the case.
 - The 6-hourly sign-in check for mailboxes and connectors (GitLab, GitHub, Google Calendar, Jira, Linear, Notion) ran with nothing to check since the move to Rust, so an expired sign-in only showed up when a loop failed. The scheduler now checks them again and alerts once in Slack, with a reminder each day it stays broken and a message when it recovers.
 
 ## [0.16.0] - 2026-10-31
