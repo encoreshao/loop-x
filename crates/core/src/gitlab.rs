@@ -397,6 +397,28 @@ impl Client {
         Ok(!merged.is_empty())
     }
 
+    /// The open merge request from the loop's `loop/issue-<iid>` branch, as
+    /// `{iid, web_url, notes}`, or `None` when there is none.
+    pub fn loop_merge_request(
+        &self,
+        project_id: &str,
+        iid: i64,
+    ) -> Result<Option<Value>, GitlabError> {
+        let base = format!("projects/{}/merge_requests", quote(project_id));
+        let branch = crate::worktree::branch_name(&iid.to_string());
+        let open = self.get_all(&base, &[("source_branch", &branch), ("state", "opened")])?;
+        let Some(mr) = open.into_iter().next() else {
+            return Ok(None);
+        };
+        let mr_iid = mr.get("iid").cloned().unwrap_or(Value::Null);
+        let notes = self.get_all(&format!("{base}/{mr_iid}/notes"), &[("sort", "asc")])?;
+        Ok(Some(serde_json::json!({
+            "iid": mr_iid,
+            "web_url": mr.get("web_url").cloned().unwrap_or(Value::Null),
+            "notes": notes,
+        })))
+    }
+
     /// The merge request plus its `changes` and `notes`.
     pub fn get_merge_request(&self, project_id: &str, iid: i64) -> Result<Value, GitlabError> {
         let base = format!("projects/{}/merge_requests/{iid}", quote(project_id));
@@ -576,6 +598,39 @@ mod tests {
         assert!(text.contains("Content-Type: image/png\r\n\r\nPNGDATA"));
         assert!(text.ends_with("\r\n--B--\r\n"), "{text}");
         assert_eq!(text.matches("--B").count(), 2);
+    }
+
+    #[test]
+    fn the_loops_open_merge_request_comes_with_its_human_notes() {
+        let served = crate::connectors::testutil::serve(vec![
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                json!([{"iid": 5, "web_url": "https://g.test/mr/5", "state": "opened"}])
+                    .to_string(),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                json!([{"id": 201, "body": "Rename this.", "system": false}]).to_string(),
+            ),
+            (200, "Content-Type: application/json\r\n", "[]".to_string()),
+        ]);
+        let cfg = json!({"default": "g", "instances": {"g": {"url": served.url, "token": "t"}}});
+        let client = Client::from_config(Some(&cfg), None, None).unwrap();
+        let mr = client.loop_merge_request("g/web", 7).unwrap().unwrap();
+        assert_eq!(mr["iid"], 5);
+        assert_eq!(mr["web_url"], "https://g.test/mr/5");
+        assert_eq!(mr["notes"][0]["body"], "Rename this.");
+        let requests = served.requests.lock().unwrap();
+        assert!(
+            requests[0].contains("source_branch=loop%2Fissue-7")
+                && requests[0].contains("state=opened"),
+            "{}",
+            requests[0]
+        );
+        drop(requests);
+        assert!(client.loop_merge_request("g/web", 8).unwrap().is_none());
     }
 
     #[test]
