@@ -359,6 +359,51 @@ pub fn collect_probes(sources: &ProbeSources) -> Vec<Probe> {
     probes
 }
 
+/// A mailbox refresh error as a probe failure: a missing or rejected refresh
+/// token (or a 401) is a dead sign-in; anything else may be transient.
+pub fn mail_failure(e: crate::mail_http::MailError) -> ProbeFailure {
+    use crate::mail_http::MailError;
+    match e {
+        MailError::Reauth(m) => ProbeFailure::hard(m),
+        MailError::AuthExpired(m) => ProbeFailure::hard(m.to_string()),
+        MailError::Http(m) => ProbeFailure::other("MailHTTPError", m.to_string()),
+        MailError::Keychain(m) => ProbeFailure::other("KeychainError", m),
+        MailError::Other(m) => ProbeFailure::other("MailError", m),
+    }
+}
+
+/// The real sources: enabled inboxes and connector accounts from `paths`
+/// (connectors.json, ~/.gitlab, ~/.slack, inboxes.json), refreshed and tested
+/// with the Keychain and the network.
+pub fn config_sources(paths: crate::connectors_config::Paths) -> ProbeSources {
+    use crate::connectors_config as cc;
+    let inbox_path = paths.inbox();
+    let account_paths = paths.clone();
+    let connectors = Arc::new(cc::ConfigConnectors::real().with_paths(paths));
+    ProbeSources {
+        inboxes: Box::new(move || {
+            crate::inbox_config::enabled_inboxes(&inbox_path).unwrap_or_default()
+        }),
+        accounts: Box::new(move || {
+            cc::list_accounts(&account_paths)
+                .map(|a| a.iter().map(crate::connectors::Account::to_value).collect())
+                .unwrap_or_default()
+        }),
+        token: Arc::new(|inbox| {
+            crate::mail_auth::get_access_token_default(inbox)
+                .map(|_| ())
+                .map_err(mail_failure)
+        }),
+        connector_test: Arc::new(move |id| {
+            use crate::connectors::ConnectorSource;
+            match connectors.load(id) {
+                Ok(c) => Ok(c.test()),
+                Err(e) => Err(ProbeFailure::other("LoadFailure", format!("{e:?}"))),
+            }
+        }),
+    }
+}
+
 fn registered_probes() -> Option<Vec<Probe>> {
     let sources = REGISTERED.lock().unwrap().clone()?;
     Some(collect_probes(&sources))
@@ -623,6 +668,55 @@ mod tests {
             "{\n  \"checks\": {\n    \"a\": {\n      \"ok\": true,\n      \"message\": \"ok\",\n      \"checked_at\": \"2026-10-16T12:00:00\"\n    }\n  },\n  \"last_run_at\": \"2026-10-16T12:00:00\"\n}"
         );
         assert!(!t.0.join(".auth.json.tmp").exists());
+    }
+
+    #[test]
+    fn config_sources_find_the_real_inboxes_and_auth_connectors() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"work": {"url": "https://gitlab.test", "token": "t"}}}"#,
+        )
+        .unwrap();
+        let inboxes = d.path().join("inboxes.json");
+        std::fs::write(
+            &inboxes,
+            json!({"inboxes": [
+                {"name": "me", "label": "Me", "provider": "gmail", "account": "me@example.com",
+                 "enabled": true, "urgent_brief": "", "vip_senders": [], "exclude_senders": [],
+                 "categories": null, "slack_bundle": null},
+                {"name": "old", "label": "Old", "provider": "outlook", "account": "old@example.com",
+                 "enabled": false, "urgent_brief": "", "vip_senders": [], "exclude_senders": [],
+                 "categories": null, "slack_bundle": null}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let paths = crate::connectors_config::Paths {
+            config_path: Some(d.path().join("connectors.json")),
+            gitlab_config_path: Some(gitlab),
+            slack_config_path: Some(d.path().join("slack.json")),
+            inbox_config_path: Some(inboxes),
+        };
+        let ids: Vec<String> = collect_probes(&config_sources(paths))
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(ids, ["mailbox:me", "connector:work"]);
+    }
+
+    #[test]
+    fn a_rejected_mail_refresh_token_is_a_hard_failure() {
+        use crate::mail_http::MailError;
+        assert_eq!(
+            mail_failure(MailError::Reauth("sign in again".into())),
+            ProbeFailure::hard("sign in again")
+        );
+        assert!(matches!(
+            mail_failure(MailError::Other("x".into())),
+            ProbeFailure::Other { .. }
+        ));
     }
 
     #[test]
