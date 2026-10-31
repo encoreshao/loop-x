@@ -104,6 +104,15 @@ pub fn write_state(state: &SchedulerState, path: &Path) -> std::io::Result<()> {
     std::fs::write(path, pyjson::to_string_pretty(state))
 }
 
+/// Clears `name`'s recorded attempt so it is due again: a run held back by the
+/// usage limit gets its slot back once the pause lifts.
+pub fn forget_attempt(name: &str, path: &Path) {
+    let mut state = read_state(path);
+    if state.remove(name).is_some() {
+        let _ = write_state(&state, path);
+    }
+}
+
 /// First-install seeding: mark every loop as attempted `today`, so the first poll
 /// does not see "never attempted" and fire an unattended run against live
 /// GitLab/Slack. Does nothing when the state file already exists.
@@ -421,6 +430,23 @@ mod tests {
         // A second call leaves the existing file alone.
         seed_state(&[json!({"name": "c"})], &state_path, today);
         assert!(!read_state(&state_path).contains_key("c"));
+    }
+
+    #[test]
+    fn forgetting_an_attempt_makes_the_loop_due_again() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        let mut st = SchedulerState::new();
+        st.insert("l".into(), json!({"last_attempted_date": "2026-10-22"}));
+        st.insert("other".into(), json!({"last_attempted_date": "2026-10-22"}));
+        write_state(&st, &p).unwrap();
+        let l = daily(9, 0);
+        assert!(!is_due(&l, &read_state(&p), at(2026, 10, 22, 12, 0)));
+        forget_attempt("l", &p);
+        assert!(is_due(&l, &read_state(&p), at(2026, 10, 22, 12, 0)));
+        assert!(read_state(&p).contains_key("other"));
+        forget_attempt("missing", &d.path().join("none.json"));
+        assert!(!d.path().join("none.json").exists());
     }
 
     #[test]

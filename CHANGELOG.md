@@ -16,6 +16,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Loop schedules: a "Skip if over N h late" choice (1, 2, 4 or 8 hours). A daily, weekly or monthly slot missed while the Mac slept or LoopX was closed is still caught up when LoopX comes back, unless it is later than that; then it shows as Skipped in Agents → Recent instead of, say, sending a morning briefing in the evening. The default is unchanged: always catch up.
 - Loop schedules: an optional precheck command. It runs before each scheduled run (not "Run now") in a login shell; a non-zero exit, or taking over 60 seconds, skips the run without starting the agent, so empty runs cost nothing. Skips show as Skipped in Agents → Recent and in the unified log with the command's output.
 
+- Settings → AI CLI: "Subscription usage" can pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above 80, 90 or 95%. Before each scheduled run LoopX reads the usage Claude Code itself reports, with Claude Code's own sign-in; above the threshold it pauses scheduled runs until the window resets, and loops due in the meantime run once it does (subject to their missed-run limit). Off by default. "Run now" is never paused.
+- Any AI CLI: a run whose output says the CLI hit its usage or rate limit pauses scheduled runs for an hour, with one Slack message saying when they resume, instead of failing on every tick. The pause, while it lasts, shows on Settings → AI CLI.
+
 ### Changed
 
 - A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.

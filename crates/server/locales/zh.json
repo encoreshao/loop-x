@@ -1269,5 +1269,9 @@
   "Always run missed slots": "错过的时段始终补跑",
   "Skip if over {n}h late": "延迟超过 {n} 小时则跳过",
   "Precheck command (optional)": "预检命令(可选)",
-  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "每次计划运行前执行;退出码非零时跳过本次运行,不启动智能体。"
+  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "每次计划运行前执行;退出码非零时跳过本次运行,不启动智能体。",
+  "Above {n}% used": "已用超过 {n}%",
+  "Subscription usage": "订阅用量",
+  "Pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above this, and resume after it resets, so loops never use up the quota you need. A usage-limit error from any CLI also pauses them for an hour. Run now always runs.": "当 Claude 订阅的 5 小时或每周用量高于此值时暂停计划运行,并在重置后恢复,确保循环不会耗尽你需要的额度。任何 CLI 报出用量上限错误时也会暂停一小时。“立即运行”始终会运行。",
+  "Scheduled runs are paused: {reason}. They resume after {until}.": "计划运行已暂停:{reason}。将在 {until} 之后恢复。"
 }

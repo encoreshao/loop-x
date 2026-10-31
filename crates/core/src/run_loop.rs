@@ -9,7 +9,9 @@ use crate::config::default_config_path as projects_config_path;
 use crate::events::EventFields;
 use crate::gitlab_runner::{self, RunCtx};
 use crate::runner_util::{append_unified_log, emit_best_effort, repo_root, unified_log_path};
-use crate::{ai_cli_config, loop_scheduler, loops_config, slack_report, status, topic_runner};
+use crate::{
+    ai_cli_config, loop_scheduler, loops_config, quota, slack_report, status, topic_runner,
+};
 use chrono::{Local, Utc};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -22,6 +24,8 @@ use std::time::{Duration, Instant};
 pub const TIMEOUT_EXIT_CODE: i32 = 124;
 /// Exit code of a scheduled run its precheck found nothing to do for (`EX_TEMPFAIL`).
 pub const PRECHECK_SKIPPED_EXIT: i32 = 75;
+/// Exit code of a scheduled run held back near the AI subscription's usage limit.
+pub const QUOTA_PAUSED_EXIT: i32 = 76;
 /// How long a loop's `schedule.precheck` command may take.
 const PRECHECK_TIMEOUT_SECONDS: f64 = 60.0;
 
@@ -35,6 +39,9 @@ pub struct RunLoopOpts {
     /// `caffeinate`, run as `-i -s -w <our pid>` so the Mac does not sleep mid-run
     /// even when the app (and its own keep-awake) is closed.
     pub caffeinate: Option<PathBuf>,
+    /// Reads the Claude subscription's usage windows before a scheduled run,
+    /// when the user set a pause threshold.
+    pub usage_probe: Option<quota::UsageProbe>,
 }
 
 impl RunLoopOpts {
@@ -48,6 +55,7 @@ impl RunLoopOpts {
             login_shell: std::env::var_os("LOOPX_NO_LOGIN_SHELL").is_none()
                 && (Path::new("/bin/zsh").exists() || Path::new("/usr/bin/zsh").exists()),
             caffeinate: Some(PathBuf::from("/usr/bin/caffeinate")).filter(|p| p.exists()),
+            usage_probe: Some(quota::live_claude_usage),
         }
     }
 }
@@ -155,6 +163,17 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         std::env::var("LOOPX_RUN_REASON").as_deref(),
         Ok("scheduled" | "catch-up")
     );
+    if scheduled {
+        if let Some(why) = quota_pause(opts) {
+            append_unified_log(
+                &format!("[{}] ---- {loop_name} ---- paused: {why} ----", stamp()),
+                &unified,
+            );
+            // Due again once the pause lifts, instead of losing today's slot.
+            loop_scheduler::forget_attempt(loop_name, &loop_scheduler::default_state_path());
+            return QUOTA_PAUSED_EXIT;
+        }
+    }
     if let Some(command) = entry.precheck.as_deref().filter(|_| scheduled) {
         if let Some(why) = failed_precheck(opts, command) {
             append_unified_log(
@@ -199,10 +218,31 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
 
     let status_path = loop_scheduler::status_path_for_loop(loop_name, Some(&opts.root));
     let previous = status::read_status(&status_path);
+    // Where this run's output starts in the day's (shared) log.
+    let log_start = std::fs::metadata(&log_path).map_or(0, |m| m.len());
     let events_dir = None::<&Path>;
     let fail = |exit: i32| {
         let failures = repeated_failures(&previous, exit) + 1;
-        if failures > 1 {
+        if let Some(until) = limit_pause(&log_path, log_start) {
+            append_unified_log(
+                &format!(
+                    "[{}] ---- {loop_name} ---- run ended (exit {exit}): hit the AI CLI usage limit; scheduled runs paused until {until} ----",
+                    stamp()
+                ),
+                &unified,
+            );
+            slack_report::send(
+                &failed_report(
+                    loop_name,
+                    "Paused: AI CLI usage limit",
+                    &format!("Scheduled runs resume after {until}. \"Run now\" still works."),
+                ),
+                None,
+            );
+            if scheduled {
+                loop_scheduler::forget_attempt(loop_name, &loop_scheduler::default_state_path());
+            }
+        } else if failures > 1 {
             append_unified_log(
                 &format!(
                     "[{}] ---- {loop_name} ---- run FAILED (exit {exit}): failed the same way {failures} runs in a row; Slack alert held back ----",
@@ -333,6 +373,68 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         &unified,
     );
     0
+}
+
+/// "14:30" (local) for a pause's end.
+fn local_hm(t: chrono::DateTime<Utc>) -> String {
+    t.with_timezone(&Local).format("%H:%M").to_string()
+}
+
+/// Why a scheduled run should not start: an active pause for the selected CLI,
+/// or (Claude, opted in) a usage window above the threshold, which starts one.
+/// An unreadable usage check never holds a run back.
+fn quota_pause(opts: &RunLoopOpts) -> Option<String> {
+    let cli = ai_cli_config::selected_cli();
+    let path = quota::pause_path();
+    let now = Utc::now();
+    if let Some(p) = quota::active_pause(&path, &cli, now) {
+        return Some(format!("{}, until {}", p.reason, local_hm(p.until)));
+    }
+    if cli != "claude" {
+        return None;
+    }
+    let threshold = quota::pause_threshold(&ai_cli_config::load_config(
+        &ai_cli_config::default_config_path(),
+    ))?;
+    let windows = match (opts.usage_probe?)() {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("loopx: usage check skipped: {e}");
+            return None;
+        }
+    };
+    let pause = quota::pause_for(
+        &cli,
+        quota::over_threshold(&windows, threshold)?,
+        threshold,
+        now,
+    );
+    let _ = quota::write_pause(&path, &pause);
+    Some(format!("{}, until {}", pause.reason, local_hm(pause.until)))
+}
+
+/// When this run's output (from `start` in the log) says the AI CLI hit its usage
+/// limit: pause scheduled runs for [`quota::DEFAULT_PAUSE_MINUTES`] and return
+/// when they resume.
+fn limit_pause(log_path: &Path, start: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let mut f = std::fs::File::open(log_path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(start.max(len.saturating_sub(TAIL))))
+        .ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    if !quota::limit_hit(&String::from_utf8_lossy(&buf)) {
+        return None;
+    }
+    let pause = quota::Pause {
+        cli: ai_cli_config::selected_cli(),
+        until: Utc::now() + chrono::Duration::minutes(quota::DEFAULT_PAUSE_MINUTES),
+        reason: "the AI CLI reported its usage limit".into(),
+    };
+    let _ = quota::write_pause(&quota::pause_path(), &pause);
+    Some(local_hm(pause.until))
 }
 
 /// How many runs in a row before this one failed with `exit`, from the status
@@ -586,7 +688,149 @@ mod tests {
             exe,
             login_shell: false,
             caffeinate: None,
+            usage_probe: None,
         }
+    }
+
+    fn pause_file(dir: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("quota_pause.json")).unwrap())
+            .unwrap()
+    }
+
+    fn attempted(dir: &Path) -> bool {
+        loop_scheduler::read_state(&dir.join("loop_scheduler_state.json"))
+            .contains_key("gitlab-loop")
+    }
+
+    fn mark_attempted(dir: &Path) {
+        std::fs::write(
+            dir.join("loop_scheduler_state.json"),
+            r#"{"gitlab-loop": {"last_attempted_date": "2026-10-31"}}"#,
+        )
+        .unwrap();
+    }
+
+    fn usage_93() -> Result<Vec<crate::quota::Window>, String> {
+        Ok(vec![crate::quota::Window {
+            label: "5-hour",
+            used_percent: 93.0,
+            resets_at: Some(Utc::now() + chrono::Duration::hours(2)),
+        }])
+    }
+
+    fn usage_40() -> Result<Vec<crate::quota::Window>, String> {
+        Ok(vec![crate::quota::Window {
+            label: "5-hour",
+            used_percent: 40.0,
+            resets_at: None,
+        }])
+    }
+
+    fn usage_unknown() -> Result<Vec<crate::quota::Window>, String> {
+        Err("no Claude Code sign-in found".into())
+    }
+
+    #[test]
+    fn a_scheduled_run_over_the_usage_threshold_pauses_and_waits_for_the_reset() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), true, 30);
+        std::fs::write(
+            d.path().join("ai_cli.json"),
+            r#"{"cli": "claude", "pause_above_percent": 90}"#,
+        )
+        .unwrap();
+        mark_attempted(d.path());
+        let marker = d.path().join("ran");
+        let mut o = opts(
+            d.path(),
+            fake_exe(d.path(), &format!("touch {}", marker.display())),
+        );
+        o.usage_probe = Some(usage_93);
+        let code = with_env(d.path(), || {
+            with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+        });
+        assert_eq!(code, QUOTA_PAUSED_EXIT);
+        assert!(!marker.exists(), "the agent never started");
+        let pause = pause_file(d.path());
+        assert_eq!(pause["cli"], "claude");
+        assert_eq!(pause["reason"], "5-hour usage at 93% (pausing at 90%)");
+        assert!(
+            !attempted(d.path()),
+            "the slot runs again once the limit resets"
+        );
+        let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(
+            unified.contains("paused: 5-hour usage at 93% (pausing at 90%), until"),
+            "{unified}"
+        );
+
+        // The next scheduled run skips on the pause without asking again.
+        o.usage_probe = Some(usage_40);
+        let code = with_env(d.path(), || {
+            with_reason("catch-up", || run_loop_now(&o, "gitlab-loop", &[]))
+        });
+        assert_eq!(code, QUOTA_PAUSED_EXIT);
+        // "Run now" always runs.
+        let code = with_env(d.path(), || {
+            with_reason("manual", || run_loop_now(&o, "gitlab-loop", &[]))
+        });
+        assert_eq!(code, 0);
+        assert!(marker.exists());
+    }
+
+    #[test]
+    fn usage_under_the_threshold_unknown_or_switched_off_runs() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        for (config, probe) in [
+            (
+                r#"{"cli": "claude", "pause_above_percent": 90}"#,
+                usage_40 as quota::UsageProbe,
+            ),
+            (
+                r#"{"cli": "claude", "pause_above_percent": 90}"#,
+                usage_unknown,
+            ),
+            (r#"{"cli": "claude"}"#, usage_93),
+            (r#"{"cli": "codex", "pause_above_percent": 90}"#, usage_93),
+        ] {
+            std::fs::write(d.path().join("ai_cli.json"), config).unwrap();
+            let mut o = opts(d.path(), fake_exe(d.path(), "exit 0"));
+            o.usage_probe = Some(probe);
+            let code = with_env(d.path(), || {
+                with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+            });
+            assert_eq!(code, 0, "{config}");
+            assert!(!d.path().join("quota_pause.json").exists(), "{config}");
+        }
+    }
+
+    #[test]
+    fn a_run_that_hits_the_cli_usage_limit_pauses_scheduled_runs() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "codex"}"#).unwrap();
+        mark_attempted(d.path());
+        let exe = fake_exe(
+            d.path(),
+            "echo \"ERROR: You've hit your usage limit. Try again later.\"; exit 1",
+        );
+        let code = with_env(d.path(), || {
+            with_reason("scheduled", || {
+                run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            })
+        });
+        assert_eq!(code, 1);
+        let pause = pause_file(d.path());
+        assert_eq!(pause["cli"], "codex");
+        assert_eq!(pause["reason"], "the AI CLI reported its usage limit");
+        assert!(!attempted(d.path()));
+        let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(
+            unified.contains("hit the AI CLI usage limit; scheduled runs paused until"),
+            "{unified}"
+        );
+        assert!(!unified.contains("run FAILED"), "{unified}");
     }
 
     fn setup_with_schedule(dir: &Path, schedule: Value) {

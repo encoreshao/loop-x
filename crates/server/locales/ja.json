@@ -1269,5 +1269,9 @@
   "Always run missed slots": "見逃した実行は常に実行",
   "Skip if over {n}h late": "{n}時間以上遅れたらスキップ",
   "Precheck command (optional)": "事前チェックコマンド(任意)",
-  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "スケジュール実行の前に毎回実行されます。終了コードが0以外なら、エージェントを起動せずにその実行をスキップします。"
+  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "スケジュール実行の前に毎回実行されます。終了コードが0以外なら、エージェントを起動せずにその実行をスキップします。",
+  "Above {n}% used": "使用率{n}%超",
+  "Subscription usage": "サブスクリプションの使用量",
+  "Pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above this, and resume after it resets, so loops never use up the quota you need. A usage-limit error from any CLI also pauses them for an hour. Run now always runs.": "Claudeサブスクリプションの5時間または週間の使用量がこの値を超えている間はスケジュール実行を一時停止し、リセット後に再開します。ループがあなたの必要なクォータを使い切ることはありません。どのCLIでも使用量上限のエラーが出た場合も1時間停止します。「今すぐ実行」は常に実行されます。",
+  "Scheduled runs are paused: {reason}. They resume after {until}.": "スケジュール実行は一時停止中です:{reason}。{until} 以降に再開します。"
 }

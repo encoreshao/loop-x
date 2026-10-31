@@ -35,6 +35,7 @@ pub fn register(r: &mut Registry) {
     r.post("/notifications/block-templates/:name/delete", block_template_delete);
     r.post("/notifications/block-templates/:name/test", block_template_test);
     r.post("/ai-cli", ai_cli);
+    r.post("/ai-cli/usage-pause", ai_cli_usage_pause);
     r.post("/instructions", instructions);
     r.post("/topic-monitor/topics", topic_save);
     r.post("/topic-monitor/topics/:name/delete", topic_delete);
@@ -410,6 +411,21 @@ fn ai_cli(ctx: &UiCtx) -> UiResponse {
     )
 }
 
+fn ai_cli_usage_pause(ctx: &UiCtx) -> UiResponse {
+    let raw = ctx.form().first("pause_above_percent").unwrap_or("").trim().to_string();
+    let percent = match raw.as_str() {
+        "" => None,
+        p => match p.parse::<i64>() {
+            Ok(p) => Some(p),
+            Err(_) => return plain(false, format!("Unknown usage threshold: {p}"), "/settings?tab=ai-cli"),
+        },
+    };
+    result(
+        ai_cli_config::set_pause_above_percent(percent, &ctx.state.ai_cli_config_path()),
+        "/settings?tab=ai-cli",
+    )
+}
+
 fn instructions(ctx: &UiCtx) -> UiResponse {
     let text = ctx.form().first("instructions").unwrap_or("").to_string();
     outcome(
@@ -509,5 +525,34 @@ mod tests {
         let body = "csrf_token=tok&time=08%3A00&frequency=Daily&max_late=&precheck=+";
         assert_eq!(post(&st, url, body).status, 303);
         assert_eq!(schedule(d.path()), json!({"frequency": "daily", "hour": 8, "minute": 0}));
+    }
+
+    #[test]
+    fn the_ai_cli_tab_sets_and_shows_the_usage_pause() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
+        let url = "/ai-cli/usage-pause";
+        assert_eq!(post(&st, url, "pause_above_percent=90").status, 403);
+        assert_eq!(post(&st, url, "csrf_token=tok&pause_above_percent=90").status, 303);
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
+        assert_eq!(cfg, json!({"cli": "claude", "pause_above_percent": 90}));
+
+        std::fs::write(
+            d.path().join("quota_pause.json"),
+            json!({"cli": "claude", "until": "2999-01-01T00:00:00+00:00",
+                   "reason": "5-hour usage at 93% (pausing at 90%)"})
+            .to_string(),
+        )
+        .unwrap();
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?tab=ai-cli")).unwrap().body_text();
+        assert!(page.contains("<option value='90' selected>"), "{page}");
+        assert!(page.contains("Scheduled runs are paused: 5-hour usage at 93% (pausing at 90%)"), "{page}");
+
+        assert_eq!(post(&st, url, "csrf_token=tok&pause_above_percent=").status, 303);
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
+        assert_eq!(cfg, json!({"cli": "claude"}));
     }
 }

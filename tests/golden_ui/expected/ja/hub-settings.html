@@ -271,6 +271,7 @@
   });
 })();
 </script>
+<h3>サブスクリプションの使用量</h3><p class='section-subtitle'>Claudeサブスクリプションの5時間または週間の使用量がこの値を超えている間はスケジュール実行を一時停止し、リセット後に再開します。ループがあなたの必要なクォータを使い切ることはありません。どのCLIでも使用量上限のエラーが出た場合も1時間停止します。「今すぐ実行」は常に実行されます。</p><form method='post' action='/ai-cli/usage-pause' class='daemon-action-form single-field'><input type='hidden' name='csrf_token' value="golden-csrf-token"><div class='custom-select'><select name='pause_above_percent' class='custom-select-native'><option value='' selected>オフ</option><option value='80'>使用率80%超</option><option value='90'>使用率90%超</option><option value='95'>使用率95%超</option></select><button type='button' class='custom-select-trigger' aria-haspopup='listbox' aria-expanded='false'><span class='custom-select-value'>オフ</span><svg class='icon' aria-hidden='true'><use href='#i-unfold_more'/></svg></button><div class='custom-select-menu' role='listbox' hidden><div class='custom-select-option is-selected' role='option' tabindex='-1' data-value=''>オフ</div><div class='custom-select-option' role='option' tabindex='-1' data-value='80'>使用率80%超</div><div class='custom-select-option' role='option' tabindex='-1' data-value='90'>使用率90%超</div><div class='custom-select-option' role='option' tabindex='-1' data-value='95'>使用率95%超</div></div></div><button type='submit' class='btn btn-neutral'>保存</button></form>
 </section>
 </div><div data-tab-panel='instructions' hidden>
 <section class="card">

@@ -412,6 +412,10 @@ pub fn drain(
                     Some(crate::run_loop::PRECHECK_SKIPPED_EXIT) => {
                         ("skipped", Some("Its precheck found nothing to do"))
                     }
+                    Some(crate::run_loop::QUOTA_PAUSED_EXIT) => (
+                        "skipped",
+                        Some("Paused near the AI subscription's usage limit; runs again after it resets"),
+                    ),
                     _ => ("failed", None),
                 };
                 let _ = queue.finish(&entry.id, state, code, note, &now());
@@ -561,6 +565,7 @@ mod tests {
         q.enqueue("bad", Reason::Scheduled, "t1").unwrap();
         q.enqueue("missing", Reason::Scheduled, "t2").unwrap();
         q.enqueue("idle", Reason::Scheduled, "t3").unwrap();
+        q.enqueue("full", Reason::Scheduled, "t4").unwrap();
         let mut order = Vec::new();
         let ran = drain(&q, &|| "now".to_string(), 1, &mut |e| {
             order.push(e.loop_name.clone());
@@ -574,11 +579,14 @@ mod tests {
                 "idle" => std::process::Command::new("sh")
                     .args(["-c", "exit 75"])
                     .spawn(),
+                "full" => std::process::Command::new("sh")
+                    .args(["-c", "exit 76"])
+                    .spawn(),
                 _ => std::process::Command::new("/no/such/program").spawn(),
             }
         });
-        assert_eq!(ran, 4);
-        assert_eq!(order, ["ok", "bad", "missing", "idle"]);
+        assert_eq!(ran, 5);
+        assert_eq!(order, ["ok", "bad", "missing", "idle", "full"]);
         let snap = q.snapshot(10);
         let by = |n: &str| {
             snap.recent
@@ -600,6 +608,13 @@ mod tests {
         assert_eq!(
             (by("idle").state.as_str(), by("idle").note.as_deref()),
             ("skipped", Some("Its precheck found nothing to do"))
+        );
+        assert_eq!(
+            (by("full").state.as_str(), by("full").note.as_deref()),
+            (
+                "skipped",
+                Some("Paused near the AI subscription's usage limit; runs again after it resets")
+            )
         );
     }
 

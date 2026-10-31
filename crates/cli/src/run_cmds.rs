@@ -4,7 +4,7 @@
 
 use chrono::Local;
 use loopx_core::run_loop::{self, RunLoopOpts};
-use loopx_core::{ledger, loop_scheduler, loops_config, run_queue, scheduler_health};
+use loopx_core::{ledger, loop_scheduler, loops_config, quota, run_queue, scheduler_health};
 use std::process::{Command, ExitCode};
 
 fn code(c: i32) -> ExitCode {
@@ -73,12 +73,26 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         }
     };
     let queue = run_queue::RunQueue::new(run_queue::default_queue_path());
-    let queued = loop_scheduler::enqueue_due_loops(
-        &loops,
-        &loop_scheduler::default_state_path(),
-        &queue,
-        Local::now().naive_local(),
-    );
+    // Near the AI subscription's usage limit: due loops stay due (and run once
+    // it resets) instead of being queued now. Manual runs already queued still run.
+    let cli = loopx_core::ai_cli_config::selected_cli();
+    let pause = quota::active_pause(&quota::pause_path(), &cli, chrono::Utc::now());
+    let queued = match pause {
+        Some(p) => {
+            println!(
+                "loop_scheduler: {cli} paused until {} ({}); nothing queued",
+                p.until.with_timezone(&Local).format("%H:%M"),
+                p.reason
+            );
+            Vec::new()
+        }
+        None => loop_scheduler::enqueue_due_loops(
+            &loops,
+            &loop_scheduler::default_state_path(),
+            &queue,
+            Local::now().naive_local(),
+        ),
+    };
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));
     }
