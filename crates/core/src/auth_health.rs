@@ -109,6 +109,31 @@ pub struct ProbeSources {
     pub token: TokenFn,
     /// `load_connector(id).test()`.
     pub connector_test: Arc<dyn Fn(&str) -> ProbeResult + Send + Sync>,
+    /// The AI CLI loops run with; `None` leaves it unchecked.
+    pub ai_cli: Option<AiCliSource>,
+}
+
+/// Which AI CLI is selected (read at each check, so a switch is picked up) and
+/// how to check it (`ai_cli_health::check`).
+pub struct AiCliSource {
+    pub selected: Box<dyn Fn() -> String + Send + Sync>,
+    pub check: Arc<dyn Fn(&str) -> ProbeResult + Send + Sync>,
+}
+
+impl ProbeSources {
+    /// Also probe the CLI selected in `ai_cli.json`, found on the login shell's
+    /// `PATH` the way a run finds it.
+    pub fn with_selected_ai_cli(mut self) -> Self {
+        self.ai_cli = Some(AiCliSource {
+            selected: Box::new(crate::ai_cli_config::selected_cli),
+            check: Arc::new(|cli| {
+                let current = std::env::var("PATH").unwrap_or_default();
+                let path = crate::ai_cli_health::login_shell_path("/bin/zsh", &current);
+                crate::ai_cli_health::check(cli, &path)
+            }),
+        });
+        self
+    }
 }
 
 static REGISTERED: Mutex<Option<Arc<ProbeSources>>> = Mutex::new(None);
@@ -356,6 +381,12 @@ pub fn collect_probes(sources: &ProbeSources) -> Vec<Probe> {
             test(&probe_id)
         }));
     }
+    if let Some(source) = &sources.ai_cli {
+        let cli = (source.selected)();
+        let check = source.check.clone();
+        let label = format!("AI CLI ({cli})");
+        probes.push(Probe::new("ai_cli", &label, move || check(&cli)));
+    }
     probes
 }
 
@@ -401,6 +432,7 @@ pub fn config_sources(paths: crate::connectors_config::Paths) -> ProbeSources {
                 Err(e) => Err(ProbeFailure::other("LoadFailure", format!("{e:?}"))),
             }
         }),
+        ai_cli: None,
     }
 }
 
@@ -734,6 +766,7 @@ mod tests {
             }),
             token: Arc::new(|_| Ok(())),
             connector_test: Arc::new(|id| Ok((true, format!("tested {id}")))),
+            ai_cli: None,
         };
         let probes = collect_probes(&sources);
         let ids: Vec<&str> = probes.iter().map(|p| p.id.as_str()).collect();
@@ -743,5 +776,26 @@ mod tests {
         assert_eq!(probes[2].label, "Main GitLab");
         assert_eq!((probes[0].run)(), Ok((true, "Token refreshed".to_string())));
         assert_eq!((probes[2].run)(), Ok((true, "tested gl".to_string())));
+    }
+
+    #[test]
+    fn the_selected_ai_cli_is_probed_too() {
+        let sources = ProbeSources {
+            inboxes: Box::new(Vec::new),
+            accounts: Box::new(Vec::new),
+            token: Arc::new(|_| Ok(())),
+            connector_test: Arc::new(|_| Ok((true, String::new()))),
+            ai_cli: Some(AiCliSource {
+                selected: Box::new(|| "codex".to_string()),
+                check: Arc::new(|cli| Ok((true, format!("{cli} ok")))),
+            }),
+        };
+        let probes = collect_probes(&sources);
+        assert_eq!(probes.len(), 1);
+        assert_eq!(
+            (probes[0].id.as_str(), probes[0].label.as_str()),
+            ("ai_cli", "AI CLI (codex)")
+        );
+        assert_eq!((probes[0].run)(), Ok((true, "codex ok".to_string())));
     }
 }

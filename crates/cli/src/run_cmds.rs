@@ -64,9 +64,10 @@ pub fn scheduler(args: &[String]) -> ExitCode {
     // Best-effort, idempotent: catches runs that predate loop.result events.
     ledger::run_startup_backfill(None, None);
     // Throttled to every few hours; never fails the tick.
-    loopx_core::auth_health::register_sources(loopx_core::auth_health::config_sources(
-        loopx_core::connectors_config::Paths::default(),
-    ));
+    loopx_core::auth_health::register_sources(
+        loopx_core::auth_health::config_sources(loopx_core::connectors_config::Paths::default())
+            .with_selected_ai_cli(),
+    );
     loopx_core::auth_health::run_if_due(None, None, None, None);
     let loops = match loops_config::list_loops(&loops_config::default_config_path(), None) {
         Ok(l) => l,
