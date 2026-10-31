@@ -1283,5 +1283,22 @@
   "{doing} · {time} ago": "{doing} · {time}前",
   "AI account folder (optional)": "AI アカウントのフォルダー（任意）",
   "Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.": "このループを別の Claude Code または Codex アカウントで実行します。そのアカウントの設定フォルダー（CLAUDE_CONFIG_DIR または CODEX_HOME）を指定してください。空欄ならデフォルトのアカウントを使います。",
-  "Save account": "アカウントを保存"
+  "Save account": "アカウントを保存",
+  "Approve the fix for {project} #{iid}: {title}": "{project} #{iid} の修正を承認: {title}",
+  "{project} #{iid} was escalated to you ({reason})": "{project} #{iid} があなたにエスカレーションされました（{reason}）",
+  "Sign-in needs attention: {label} - {message}": "サインインの確認が必要です: {label} - {message}",
+  "{loop} failed its last run": "{loop} の前回の実行が失敗しました",
+  "Open in GitLab tasks": "GitLab のタスクで開く",
+  "Open AI CLI settings": "AI CLI の設定を開く",
+  "See the log": "ログを見る",
+  "What to change (for Request changes)": "変更してほしい点（変更依頼の場合）",
+  "Allow": "許可",
+  "Request changes": "変更を依頼",
+  "Deny": "拒否",
+  "Dismiss": "非表示にする",
+  "Nothing needs you right now.": "今あなたの対応が必要なものはありません。",
+  "What is waiting on you: approvals, escalated issues, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with.": "あなたの対応を待っているもの: 承認、エスカレーションされた issue、切れたサインイン、失敗したループ。通知は一度だけ届き、対応するまでここに残ります。",
+  "Needs you: {n}": "対応待ち: {n}",
+  "Decision recorded; the loop picks it up within seconds.": "判断を記録しました。ループが数秒以内に反映します。",
+  "Dismissed until it happens again.": "再発するまで非表示にしました。"
 }

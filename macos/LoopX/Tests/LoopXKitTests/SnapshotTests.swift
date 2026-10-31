@@ -37,6 +37,16 @@ import Testing
         #expect(s.runningLoop?.name == "gitlab-loop")
     }
 
+    @Test func decodesWhatNeedsYou() throws {
+        let doc = #"{"needs_you":{"count":2,"items":[{"id":"escalated:web#7","kind":"escalated","title":"web #7 was escalated to you (ambiguous)","since":"2026-10-22T10:00:00+00:00","dismissable":true},{"id":"sign_in:ai_cli","kind":"sign_in","title":"Sign-in needs attention: AI CLI (claude) - not signed in","since":null,"dismissable":false}]}}"#
+        let s = try Snapshot.decode(Data(doc.utf8))
+        #expect(s.needsYou.count == 2)
+        #expect(s.needsYou.items.map(\.kind) == ["escalated", "sign_in"])
+        #expect(s.needsYou.items[1].title.hasPrefix("Sign-in needs attention"))
+        // An older backend without the block still decodes.
+        #expect(try Snapshot.decode(Data("{}".utf8)).needsYou.count == 0)
+    }
+
     @Test func decodesTheIdleDocumentTheBackendActuallySends() throws {
         let s = try Snapshot.decode(Data(snapshotJSON().utf8))
         #expect(s == Snapshot())

@@ -1283,5 +1283,22 @@
   "{doing} · {time} ago": "{doing} · {time}前",
   "AI account folder (optional)": "AI 账户文件夹（可选）",
   "Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.": "让此循环使用另一个 Claude Code 或 Codex 账户运行：填写该账户的配置文件夹（CLAUDE_CONFIG_DIR 或 CODEX_HOME）。留空则使用默认账户。",
-  "Save account": "保存账户"
+  "Save account": "保存账户",
+  "Approve the fix for {project} #{iid}: {title}": "批准 {project} #{iid} 的修复：{title}",
+  "{project} #{iid} was escalated to you ({reason})": "{project} #{iid} 已上报给你（{reason}）",
+  "Sign-in needs attention: {label} - {message}": "登录需要处理：{label} - {message}",
+  "{loop} failed its last run": "{loop} 上次运行失败",
+  "Open in GitLab tasks": "在 GitLab 任务中打开",
+  "Open AI CLI settings": "打开 AI CLI 设置",
+  "See the log": "查看日志",
+  "What to change (for Request changes)": "需要修改的内容（用于请求修改）",
+  "Allow": "允许",
+  "Request changes": "请求修改",
+  "Deny": "拒绝",
+  "Dismiss": "忽略",
+  "Nothing needs you right now.": "目前没有需要你处理的事项。",
+  "What is waiting on you: approvals, escalated issues, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with.": "等待你处理的事项：审批、上报的 issue、失效的登录和失败的循环。每项只提醒一次，处理之前会一直显示在这里。",
+  "Needs you: {n}": "待处理：{n}",
+  "Decision recorded; the loop picks it up within seconds.": "已记录决定，循环会在几秒内处理。",
+  "Dismissed until it happens again.": "已忽略，再次发生时会重新显示。"
 }

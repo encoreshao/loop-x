@@ -82,6 +82,15 @@ ends, and treat "no message for 45 s" as dead.
   "detail": "cargo test" | null}`. `detail` is the command, file or pattern of the tool call
   (or a notification's message), clipped to 120 characters. Absent for other CLIs, and when
   the loop isn't running.
+- `needs_you` is everything waiting on the user, oldest first:
+  `{"count": 2, "items": [{"id": "escalated:web#7", "kind": "escalated", "title": "web #7 was
+  escalated to you (ambiguous)", "since": "<ISO>" | null, "dismissable": true, ...}]}`. `kind` is
+  `approval` (a pending approval, also in `approvals.pending`), `escalated` (an issue the GitLab
+  loop escalated in the last 7 days and has not picked up again), `sign_in` (a sign-in check that
+  is confirmed failing) or `loop_failed` (a loop whose last run failed). Items carry the fields
+  of their kind (`project`, `issue_iid`, `reason`, `label`, `message`, `loop`, ...). Escalations
+  and failed loops can be dismissed on the dashboard's `/needs-you` page until they happen again.
+  The menu bar's number is `count`.
 - `attention` is the newest outcome from the last 15 minutes worth showing, or `null`:
   `kind` is `mr_opened`, `escalated` (see `reason`) or `failed`.
 - `recent_events` holds up to 15 events, oldest first, of these types only: `run.started`,

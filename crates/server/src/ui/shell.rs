@@ -224,8 +224,9 @@ pub fn render_shell(
         .var("chat_icon", icons::icon("chat"));
     let office_label = escaped_t(lang, "Switch to Office");
     let ai_trigger_html = format!(
-        "{}<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
+        "{}{}<a class='topbar-icon' href='/office' aria-label='{office_label}' title='{office_label}'>{}</a>{}",
         super::pages::queue::pill_html(ctx),
+        super::pages::needs_you::bell_html(ctx),
         icons::icon(super::components::ICON_OFFICE),
         render("shell_ai_trigger", &scope)
     );

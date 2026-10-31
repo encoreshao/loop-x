@@ -31,6 +31,10 @@ pub struct Paths {
     pub approvals_dir: PathBuf,
     /// The run queue (`~/.loopx/run_queue.json`) behind Agents.
     pub queue_path: PathBuf,
+    /// The sign-in checks' state (`~/.loopx/auth_health.json`).
+    pub auth_state: PathBuf,
+    /// Dismissed "Needs you" items.
+    pub dismissed: PathBuf,
 }
 
 impl Paths {
@@ -40,9 +44,25 @@ impl Paths {
             events_dir: events::default_events_dir(),
             approvals_dir: outputs.join("approvals"),
             queue_path: loopx_core::run_queue::default_queue_path(),
+            auth_state: loopx_core::auth_health::default_state_path(),
+            dismissed: loopx_core::needs_you::default_dismissed_path(),
             outputs,
         }
     }
+}
+
+/// Everything waiting on a person (see `loopx_core::needs_you`).
+pub fn needs_you(paths: &Paths, loops: &Map<String, Value>, now: DateTime<Utc>) -> Vec<Value> {
+    loopx_core::needs_you::collect(
+        &loopx_core::needs_you::Sources {
+            approvals_dir: &paths.approvals_dir,
+            events_dir: &paths.events_dir,
+            auth_state: &paths.auth_state,
+            loops,
+            dismissed: &paths.dismissed,
+        },
+        now,
+    )
 }
 
 #[cfg(unix)]
@@ -68,7 +88,7 @@ pub(crate) fn effective_state(doc: &Value) -> String {
     state
 }
 
-fn loop_statuses(outputs: &Path) -> Map<String, Value> {
+pub fn loop_statuses(outputs: &Path) -> Map<String, Value> {
     let mut loops = Map::new();
     let legacy = outputs.join("status.json");
     if legacy.exists() {
@@ -219,6 +239,7 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         .collect();
     let state = app_state(&loops, pending.len());
     let queue = queue_view(&paths.queue_path, &loops);
+    let waiting = needs_you(paths, &loops, now);
 
     json!({
         "version": 1,
@@ -228,6 +249,7 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         "approvals": {"pending": pending},
         "queue": queue,
         "attention": attention(&recent, now),
+        "needs_you": {"count": waiting.len(), "items": waiting},
         "recent_events": tail,
     })
 }
@@ -247,7 +269,39 @@ mod tests {
             events_dir: root.join("outputs/events"),
             approvals_dir: root.join("outputs/approvals"),
             queue_path: root.join("run_queue.json"),
+            auth_state: root.join("auth_health.json"),
+            dismissed: root.join("needs_you_dismissed.json"),
         }
+    }
+
+    #[test]
+    fn the_snapshot_counts_what_needs_you() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        status::write_status(
+            &p.outputs.join("status/rss-loop.json"),
+            "failed",
+            &[("last_exit_code", json!(1))],
+        )
+        .unwrap();
+        event(
+            d.path(),
+            "issue.escalated",
+            "2026-10-22T11:00:00+00:00",
+            json!({"reason": "ambiguous"}),
+        );
+        let s = build_snapshot(&p, now());
+        assert_eq!(s["needs_you"]["count"], 2);
+        let ids: Vec<&str> = s["needs_you"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&"escalated:web#7") && ids.contains(&"loop_failed:rss-loop"),
+            "{ids:?}"
+        );
     }
 
     fn event(root: &Path, kind: &str, at: &str, data: Value) {

@@ -61,8 +61,17 @@ import Testing
     }
     @Test func capsLargeCounts() { #expect(StatusBadge.text(for: state(approvals: 10)) == "9+") }
     @Test func tooltipSaysWhatTheNumberMeans() {
-        #expect(StatusBadge.tooltip(count: 1) == "1 approval waiting")
-        #expect(StatusBadge.tooltip(count: 3) == "3 approvals waiting")
+        #expect(StatusBadge.tooltip(count: 1) == "1 thing needs you")
+        #expect(StatusBadge.tooltip(count: 3) == "3 things need you")
+    }
+    @Test func countsEverythingThatNeedsYouNotOnlyApprovals() {
+        var s = Snapshot()
+        s.needsYou = NeedsYouBlock(count: 3)
+        let state = NotchState.make(from: s, now: Date())
+        #expect(StatusBadge.count(for: state) == 3)
+        #expect(StatusBadge.text(for: state) == "3")
+        // A backend that predates the block: pending approvals still count.
+        #expect(StatusBadge.text(for: self.state(approvals: 2)) == "2")
     }
 }
 

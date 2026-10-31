@@ -285,7 +285,7 @@ pub fn run_checks(
             }
             checks.insert(
                 probe.id.clone(),
-                json!({"ok": true, "message": message, "checked_at": now_iso}),
+                json!({"ok": true, "message": message, "checked_at": now_iso, "label": probe.label}),
             );
             continue;
         }
@@ -314,6 +314,9 @@ pub fn run_checks(
             new.insert("last_alert_at".into(), entry["last_alert_at"].clone());
         }
         let confirmed = hard || fail_count >= SOFT_FAILURES_BEFORE_ALERT;
+        // What "Needs you" lists (`needs_you`).
+        new.insert("label".into(), json!(probe.label));
+        new.insert("confirmed".into(), json!(confirmed));
         let due = elapsed(entry.get("last_alert_at"), now, REMIND_INTERVAL) >= REMIND_INTERVAL;
         if confirmed
             && due
@@ -555,6 +558,26 @@ mod tests {
     }
 
     #[test]
+    fn checks_keep_their_label_and_whether_the_failure_is_confirmed() {
+        let (t, mut sent) = (Tmp::new(), vec![]);
+        let soft = Probe::new("cal", "Work calendar", || {
+            Err(ProbeFailure::other("OSError", "timeout"))
+        });
+        run(&t, &[soft], &mut sent, now());
+        assert_eq!(checks(&t)["cal"]["label"], "Work calendar");
+        assert_eq!(checks(&t)["cal"]["confirmed"], false);
+        run(&t, &[probe("gmail", reauth("expired"))], &mut sent, now());
+        assert_eq!(checks(&t)["gmail"]["confirmed"], true);
+        run(
+            &t,
+            &[probe("gmail", Ok((true, "ok".into())))],
+            &mut sent,
+            now(),
+        );
+        assert_eq!(checks(&t)["gmail"]["label"], "gmail");
+    }
+
+    #[test]
     fn reauth_required_alerts_immediately_once() {
         let (t, mut sent) = (Tmp::new(), vec![]);
         let probes = [probe(
@@ -691,13 +714,13 @@ mod tests {
     }
 
     #[test]
-    fn state_file_keys_match_the_python_layout() {
+    fn state_file_keys_keep_their_layout() {
         let (t, mut sent) = (Tmp::new(), vec![]);
         run(&t, &[probe("a", Ok((true, "ok".into())))], &mut sent, now());
         let text = std::fs::read_to_string(t.path()).unwrap();
         assert_eq!(
             text,
-            "{\n  \"checks\": {\n    \"a\": {\n      \"ok\": true,\n      \"message\": \"ok\",\n      \"checked_at\": \"2026-10-16T12:00:00\"\n    }\n  },\n  \"last_run_at\": \"2026-10-16T12:00:00\"\n}"
+            "{\n  \"checks\": {\n    \"a\": {\n      \"ok\": true,\n      \"message\": \"ok\",\n      \"checked_at\": \"2026-10-16T12:00:00\",\n      \"label\": \"a\"\n    }\n  },\n  \"last_run_at\": \"2026-10-16T12:00:00\"\n}"
         );
         assert!(!t.0.join(".auth.json.tmp").exists());
     }

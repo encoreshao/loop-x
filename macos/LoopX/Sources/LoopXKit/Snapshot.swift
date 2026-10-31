@@ -155,6 +155,39 @@ public struct ApprovalsBlock: Codable, Equatable, Sendable {
     public init(pending: [Approval] = []) { self.pending = pending }
 }
 
+/// What is waiting on the user (approvals, escalations, broken sign-ins, failed
+/// loops): the backend's `needs_you` block.
+public struct NeedsYouBlock: Codable, Equatable, Sendable {
+    public var count: Int
+    public var items: [NeedsYouItem]
+    public init(count: Int = 0, items: [NeedsYouItem] = []) { self.count = count; self.items = items }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = (try? c.decode([NeedsYouItem].self, forKey: .items)) ?? []
+        count = (try? c.decode(Int.self, forKey: .count)) ?? items.count
+    }
+}
+
+public struct NeedsYouItem: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    /// `approval`, `escalated`, `sign_in` or `loop_failed`.
+    public var kind: String
+    public var title: String
+    public var since: String?
+    public var dismissable: Bool
+    public init(id: String, kind: String, title: String, since: String? = nil, dismissable: Bool = false) {
+        self.id = id; self.kind = kind; self.title = title; self.since = since; self.dismissable = dismissable
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? ""
+        title = (try? c.decode(String.self, forKey: .title)) ?? ""
+        since = try? c.decodeIfPresent(String.self, forKey: .since)
+        dismissable = (try? c.decode(Bool.self, forKey: .dismissable)) ?? false
+    }
+}
+
 /// One run in the backend's run queue (Mission Control).
 public struct QueueEntry: Codable, Equatable, Sendable, Identifiable {
     public var id: String
@@ -202,10 +235,11 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var attention: Attention?
     public var recentEvents: [RecentEvent]
     public var queue: QueueBlock
+    public var needsYou: NeedsYouBlock = .init()
 
     enum CodingKeys: String, CodingKey {
         case version, loops, topics, approvals, attention, queue
-        case appState = "app_state", recentEvents = "recent_events"
+        case appState = "app_state", recentEvents = "recent_events", needsYou = "needs_you"
     }
 
     public init(version: Int = 1, appState: AppState = .idle, loops: [String: LoopStatus] = [:],
@@ -227,6 +261,7 @@ public struct Snapshot: Codable, Equatable, Sendable {
         attention = try? c.decodeIfPresent(Attention.self, forKey: .attention)
         recentEvents = try c.decodeIfPresent([RecentEvent].self, forKey: .recentEvents) ?? []
         queue = (try? c.decodeIfPresent(QueueBlock.self, forKey: .queue)) ?? .init()
+        needsYou = (try? c.decodeIfPresent(NeedsYouBlock.self, forKey: .needsYou)) ?? .init()
     }
 
     public static func decode(_ data: Data) throws -> Snapshot { try JSONDecoder().decode(Snapshot.self, from: data) }

@@ -21,6 +21,7 @@ pub const NAMES: &[&str] = &[
     "arrow_upward",
     "auto_awesome",
     "autorenew",
+    "bell",
     "bolt",
     "calendar_month",
     "cancel",

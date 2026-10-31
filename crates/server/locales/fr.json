@@ -1283,5 +1283,22 @@
   "{doing} · {time} ago": "{doing} · il y a {time}",
   "AI account folder (optional)": "Dossier du compte IA (facultatif)",
   "Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.": "Exécuter cette boucle avec un autre compte Claude Code ou Codex : le dossier de configuration de ce compte (CLAUDE_CONFIG_DIR ou CODEX_HOME). Laissez vide pour utiliser votre compte par défaut.",
-  "Save account": "Enregistrer le compte"
+  "Save account": "Enregistrer le compte",
+  "Approve the fix for {project} #{iid}: {title}": "Approuver le correctif de {project} #{iid} : {title}",
+  "{project} #{iid} was escalated to you ({reason})": "{project} #{iid} vous a été remonté ({reason})",
+  "Sign-in needs attention: {label} - {message}": "Connexion à vérifier : {label} - {message}",
+  "{loop} failed its last run": "{loop} a échoué à sa dernière exécution",
+  "Open in GitLab tasks": "Ouvrir dans les tâches GitLab",
+  "Open AI CLI settings": "Ouvrir les réglages de la CLI IA",
+  "See the log": "Voir le journal",
+  "What to change (for Request changes)": "Ce qu'il faut changer (pour Demander des modifications)",
+  "Allow": "Autoriser",
+  "Request changes": "Demander des modifications",
+  "Deny": "Refuser",
+  "Dismiss": "Ignorer",
+  "Nothing needs you right now.": "Rien ne vous attend pour le moment.",
+  "What is waiting on you: approvals, escalated issues, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with.": "Ce qui vous attend : approbations, tickets remontés, connexions expirées et boucles en échec. Chacun vous a alerté une fois ; il reste ici jusqu'à ce qu'il soit traité.",
+  "Needs you: {n}": "Vous attend : {n}",
+  "Decision recorded; the loop picks it up within seconds.": "Décision enregistrée ; la boucle la prend en compte en quelques secondes.",
+  "Dismissed until it happens again.": "Ignoré jusqu'à ce que cela se reproduise."
 }

@@ -37,12 +37,12 @@ final class StatusItemController: NSObject {
             button.image = img?.withSymbolConfiguration(cfg); img?.isTemplate = false
             button.toolTip = state.title
         }
-        // The number of approvals waiting sits beside the icon; the item is icon-sized when there are none.
+        // The number of things that need the user sits beside the icon; the item is icon-sized when there are none.
         if let badge = StatusBadge.text(for: state) {
             button.title = " " + badge
             button.imagePosition = .imageLeft
             button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-            button.toolTip = StatusBadge.tooltip(count: state.approvals.count)
+            button.toolTip = StatusBadge.tooltip(count: StatusBadge.count(for: state))
         } else {
             button.title = ""
             button.imagePosition = .imageOnly

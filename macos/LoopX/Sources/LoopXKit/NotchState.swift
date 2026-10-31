@@ -43,6 +43,8 @@ public struct NotchState: Equatable, Sendable {
     public var alertKey: String?
     /// Every loop and topic with its status and current message, running first.
     public var tasks: [NotchTask] = []
+    /// How many things wait on the user (the backend's `needs_you.count`).
+    public var needsYou: Int = 0
 
     public static let alertWindow: TimeInterval = 120
 
@@ -55,6 +57,7 @@ public struct NotchState: Equatable, Sendable {
                             alertWindow: TimeInterval = NotchState.alertWindow) -> NotchState {
         var state = headline(from: s, now: now, dismissed: dismissed, alertWindow: alertWindow)
         state.tasks = TaskNotifications.tasks(in: s)
+        state.needsYou = s.needsYou.count
         return state
     }
 
