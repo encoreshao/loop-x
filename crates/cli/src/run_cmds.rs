@@ -165,7 +165,7 @@ fn start_worker_if_idle() {
     }
 }
 
-/// `loopx queue-worker`: drains the run queue, one loop after another, then exits.
+/// `loopx queue-worker`: drains the run queue, several loops at once, then exits.
 /// Only one worker runs at a time (the worker lock).
 pub fn queue_worker(_args: &[String]) -> ExitCode {
     let Some(_lock) = loop_scheduler::try_lock_poll(&run_queue::default_worker_lock_path()) else {
@@ -176,7 +176,11 @@ pub fn queue_worker(_args: &[String]) -> ExitCode {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "loopx".to_string());
     let now = || loop_scheduler::isoformat(Local::now().naive_local());
-    let ran = run_queue::drain(&queue, &now, 1, &mut |entry| spawn_run(&exe, entry));
+    // Different loops run side by side, up to the configured limit.
+    let max_running = loopx_core::concurrency_config::current().loops;
+    let ran = run_queue::drain(&queue, &now, max_running, &mut |entry| {
+        spawn_run(&exe, entry)
+    });
     if ran > 0 {
         println!("queue-worker: ran {ran} loop(s)");
     }

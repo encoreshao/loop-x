@@ -2375,6 +2375,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .daemon-action-form input[type='text'],
 .daemon-action-form input[type='password'],
 .daemon-action-form input[type='time'],
+.daemon-action-form input[type='number'],
 .daemon-action-form select,
 .daemon-action-form textarea {
   font-family: var(--font-family-stack);
@@ -2389,6 +2390,10 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
   transition: border-color 150ms ease;
 }
 .daemon-action-form input[type='time'] { flex: 0 0 auto; min-width: 0; }
+/* Settings → AI CLI → Running at once: three short labelled number fields. */
+.concurrency-form { align-items: flex-end; flex-wrap: wrap; gap: 0.75rem; }
+.concurrency-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: var(--md-on-surface-variant); }
+.daemon-action-form.concurrency-form input[type='number'] { flex: 0 0 auto; width: 5.5rem; min-width: 0; }
 /* "Notify via" is a pull-down menu with checkable items (see
    .custom-multi-select), its label sitting beside it. */
 .custom-multi-select { flex: 0 1 auto; min-width: 200px; }

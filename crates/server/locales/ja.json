@@ -1309,5 +1309,11 @@
   "{loop} finished its run": "{loop} の実行が完了しました",
   "{loop} failed": "{loop} が失敗しました",
   "{loop} is waiting for your approval": "{loop} があなたの承認を待っています",
-  "{task}: {activity}": "{task}：{activity}"
+  "{task}: {activity}": "{task}：{activity}",
+  "Running at once": "同時実行",
+  "How many agents may work side by side. The same issue or topic never runs twice at once, and issues of a project without worktrees always take turns. 1 runs them one by one.": "同時に作業できるエージェントの数です。同じイシューやトピックが同時に二重に実行されることはなく、ワークツリーを使わないプロジェクトのイシューは常に順番に処理されます。1 にすると一つずつ実行します。",
+  "GitLab issues": "GitLab イシュー",
+  "Not a whole number: {value}": "整数ではありません: {value}",
+  "Saved. New runs use these limits.": "保存しました。新しい実行からこの上限が使われます。",
+  "Each limit must be between {min} and {max}.": "各上限は {min} から {max} の間で指定してください。"
 }

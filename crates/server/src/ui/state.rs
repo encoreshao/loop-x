@@ -257,6 +257,10 @@ impl UiState {
     }
 
     /// `quota_pause.json`: scheduled runs held back near the usage limit.
+    pub fn concurrency_config_path(&self) -> PathBuf {
+        self.home_dir.join("concurrency.json")
+    }
+
     pub fn quota_pause_path(&self) -> PathBuf {
         self.home_dir.join("quota_pause.json")
     }
