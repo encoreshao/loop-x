@@ -17,12 +17,15 @@
 
 <p align="center"><strong>Reprenez votre temps sur le quotidien des tickets, des e-mails et des points d'état.</strong></p>
 
+<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ Télécharger Loop X pour macOS</a></b> · ou <code>brew install encoreshao/tap/loopx</code></p>
+
 ---
 
 Loop X est une plateforme d'orchestration d'agents IA, locale d'abord, pour macOS. Elle exécute selon un planning des agents IA spécialisés qui automatisent les flux de travail d'ingénierie et le travail de connaissance de tous les jours, pour que vous ne consacriez votre attention qu'à ce qui demande votre jugement.
 
 - **Boucles.** Des flux de travail indépendants et configurables, chacun avec sa spécification de tâche, son planning et son historique d'exécutions.
 - **Agents IA.** Des agents de code comme Claude Code, Codex, Gemini, Kimi et Cursor réfléchissent à la tâche et font le travail.
+- **Apportez votre propre agent.** Loop X n'embarque aucun modèle et ne vend pas de jetons. Il pilote la CLI d'IA que vous utilisez et payez déjà (abonnement ou clé API Claude Code, Codex, Gemini, Kimi ou Cursor) : pas de facture d'IA supplémentaire, pas de nouveau compte. Changez d'agent à tout moment dans Réglages → CLI d'IA.
 - **Orchestration.** Loop X exécute et gère chaque boucle séparément, de la découverte de la tâche jusqu'à un résultat prêt à relire.
 - **L'humain décide.** Les agents corrigent des tickets et rédigent des merge requests, des réponses et des briefs. Vous gardez la main sur la fusion et sur toute autre action critique.
 - **Local d'abord.** Tout s'exécute sur votre Mac, avec vos outils et vos identifiants existants.

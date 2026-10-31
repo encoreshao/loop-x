@@ -17,12 +17,15 @@
 
 <p align="center"><strong>把你的时间从 issue、邮件和状态检查的日常琐事中夺回来。</strong></p>
 
+<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ 下载 macOS 版 Loop X</a></b> · 或运行 <code>brew install encoreshao/tap/loopx</code></p>
+
 ---
 
 Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划运行各有专长的 AI 智能体，自动完成工程工作流和日常知识工作，让你只把注意力花在需要你判断的事情上。
 
 - **循环（Loop）。** 相互独立、可配置的工作流，各自有任务规范、计划和运行历史。
 - **AI 智能体。** Claude Code、Codex、Gemini、Kimi、Cursor 等编码智能体负责思考任务并完成工作。
+- **自带智能体 / 订阅。** Loop X 不内置模型，也不卖 token。它直接驱动你已在使用并付费的 AI CLI（Claude Code、Codex、Gemini、Kimi、Cursor 的订阅或 API 密钥），因此没有额外的 AI 费用，也无需新账号。随时可在“设置 → AI CLI”中切换。
 - **编排。** Loop X 独立运行并管理每个循环，从发现任务一直推进到可供审阅的结果。
 - **人在回路。** 智能体会修复 issue，并起草合并请求、回复和简报；合并及其他关键操作始终由你掌控。
 - **本地优先。** 一切都在你的 Mac 上运行，使用你现有的工具和凭据。

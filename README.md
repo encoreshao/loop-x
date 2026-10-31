@@ -17,12 +17,15 @@
 
 <p align="center"><strong>Get your time back from the daily grind of issues, email and status checks.</strong></p>
 
+<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ Download LoopX for macOS</a></b> · or <code>brew install encoreshao/tap/loopx</code> · <a href="#get-started">Get started</a></p>
+
 ---
 
 LoopX is a local-first AI agent orchestration platform for macOS. It runs specialized, scheduled AI agents that automate engineering workflows and everyday knowledge work, so you only spend attention on what needs your judgment.
 
 - **Loops.** Independent, configurable workflows, each with its own task spec, schedule and run history.
 - **AI agents.** Coding agents such as Claude Code, Codex, Gemini, Kimi and Cursor reason about the task and do the work.
+- **Bring your own agent.** LoopX ships no model and sells no tokens. It drives the AI CLI you already use and pay for, such as your Claude Code, Codex, Gemini, Kimi or Cursor subscription or API key, so there is no extra AI bill and no new account. Switch agents any time in Settings → AI CLI.
 - **Orchestration.** LoopX runs each loop on its own, manages the run and carries it from finding the task to a reviewable result.
 - **Human in the loop.** Agents fix issues and draft merge requests, replies and briefs. You keep control of merging and every other critical action.
 - **Local first.** Everything runs on your Mac with your existing tools and credentials.

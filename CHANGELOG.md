@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- README (all languages): a download link at the top and a "Bring your own agent" note: LoopX uses the AI CLI subscription or API key you already have.
+
 ## [0.16.0] - 2026-10-31
 
 ### Added
