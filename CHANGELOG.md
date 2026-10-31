@@ -19,6 +19,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Settings → AI CLI: "Subscription usage" can pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above 80, 90 or 95%. Before each scheduled run LoopX reads the usage Claude Code itself reports, with Claude Code's own sign-in; above the threshold it pauses scheduled runs until the window resets, and loops due in the meantime run once it does (subject to their missed-run limit). Off by default. "Run now" is never paused.
 - Any AI CLI: a run whose output says the CLI hit its usage or rate limit pauses scheduled runs for an hour, with one Slack message saying when they resume, instead of failing on every tick. The pause, while it lasts, shows on Settings → AI CLI.
 
+- A run that fails because the AI CLI is not signed in (or its sign-in or API key was rejected) now says so in its Slack alert, with the command to sign in again, instead of a bare exit code.
+
 ### Changed
 
 - A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.

@@ -223,7 +223,8 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
     let events_dir = None::<&Path>;
     let fail = |exit: i32| {
         let failures = repeated_failures(&previous, exit) + 1;
-        if let Some(until) = limit_pause(&log_path, log_start) {
+        let output = run_output(&log_path, log_start);
+        if let Some(until) = limit_pause(&output) {
             append_unified_log(
                 &format!(
                     "[{}] ---- {loop_name} ---- run ended (exit {exit}): hit the AI CLI usage limit; scheduled runs paused until {until} ----",
@@ -251,21 +252,30 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
                 &unified,
             );
         } else {
+            let (why, headline, detail) = if quota::sign_in_lapsed(&output) {
+                let cli = ai_cli_config::selected_cli();
+                (
+                    ": the AI CLI is not signed in",
+                    "Sign-in needed".to_string(),
+                    format!(
+                        "The AI CLI ({cli}) is not signed in or its sign-in expired. Open Terminal, run `{cli}` and sign in again; scheduled runs keep failing until then."
+                    ),
+                )
+            } else {
+                (
+                    "",
+                    format!("Failed (exit {exit})"),
+                    format!("See outputs/history/{log_name} for the run's log."),
+                )
+            };
             append_unified_log(
                 &format!(
-                    "[{}] ---- {loop_name} ---- run FAILED (exit {exit}) ----",
+                    "[{}] ---- {loop_name} ---- run FAILED (exit {exit}){why} ----",
                     stamp()
                 ),
                 &unified,
             );
-            slack_report::send(
-                &failed_report(
-                    loop_name,
-                    &format!("Failed (exit {exit})"),
-                    &format!("See outputs/history/{log_name} for the run's log."),
-                ),
-                None,
-            );
+            slack_report::send(&failed_report(loop_name, &headline, &detail), None);
         }
         let _ = status::write_status(
             &status_path,
@@ -413,19 +423,28 @@ fn quota_pause(opts: &RunLoopOpts) -> Option<String> {
     Some(format!("{}, until {}", pause.reason, local_hm(pause.until)))
 }
 
-/// When this run's output (from `start` in the log) says the AI CLI hit its usage
-/// limit: pause scheduled runs for [`quota::DEFAULT_PAUSE_MINUTES`] and return
-/// when they resume.
-fn limit_pause(log_path: &Path, start: u64) -> Option<String> {
+/// The last 64 KB this run wrote to the day's log, from `start`.
+fn run_output(log_path: &Path, start: u64) -> String {
     use std::io::{Read, Seek, SeekFrom};
     const TAIL: u64 = 64 * 1024;
-    let mut f = std::fs::File::open(log_path).ok()?;
-    let len = f.metadata().ok()?.len();
-    f.seek(SeekFrom::Start(start.max(len.saturating_sub(TAIL))))
-        .ok()?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
-    if !quota::limit_hit(&String::from_utf8_lossy(&buf)) {
+    let read = || -> std::io::Result<Vec<u8>> {
+        let mut f = std::fs::File::open(log_path)?;
+        let len = f.metadata()?.len();
+        f.seek(SeekFrom::Start(start.max(len.saturating_sub(TAIL))))?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        Ok(buf)
+    };
+    read().map_or_else(
+        |_| String::new(),
+        |b| String::from_utf8_lossy(&b).into_owned(),
+    )
+}
+
+/// When this run's output says the AI CLI hit its usage limit: pause scheduled
+/// runs for [`quota::DEFAULT_PAUSE_MINUTES`] and return when they resume.
+fn limit_pause(output: &str) -> Option<String> {
+    if !quota::limit_hit(output) {
         return None;
     }
     let pause = quota::Pause {
@@ -803,6 +822,26 @@ mod tests {
             assert_eq!(code, 0, "{config}");
             assert!(!d.path().join("quota_pause.json").exists(), "{config}");
         }
+    }
+
+    #[test]
+    fn a_run_whose_cli_sign_in_lapsed_says_to_sign_in_again() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        let exe = fake_exe(
+            d.path(),
+            "echo 'Invalid API key · Please run /login'; exit 1",
+        );
+        let code = with_env(d.path(), || {
+            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+        });
+        assert_eq!(code, 1);
+        let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(
+            unified.contains("run FAILED (exit 1): the AI CLI is not signed in"),
+            "{unified}"
+        );
+        assert!(!d.path().join("quota_pause.json").exists());
     }
 
     #[test]

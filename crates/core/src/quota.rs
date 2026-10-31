@@ -228,6 +228,25 @@ pub fn limit_hit(output: &str) -> bool {
     .any(|p| text.contains(p))
 }
 
+/// Whether a run's output says the AI CLI is not signed in, or its sign-in or
+/// API key was rejected.
+pub fn sign_in_lapsed(output: &str) -> bool {
+    let text = output.to_lowercase();
+    [
+        "invalid api key",
+        "please run /login",
+        "oauth token has expired",
+        "not logged in",
+        "401 unauthorized",
+        "authentication_error",
+        "please login",
+        "please log in",
+        "authentication required",
+    ]
+    .iter()
+    .any(|p| text.contains(p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +370,22 @@ mod tests {
         drop(calls);
         let empty = crate::connectors::testutil::FakeHttp::new(|_| Ok(json!({})));
         assert!(fetch_claude_usage(empty.as_ref(), "https://usage.test/x", "tok").is_err());
+    }
+
+    #[test]
+    fn spots_a_lapsed_sign_in_from_each_cli() {
+        for out in [
+            "Invalid API key · Please run /login",
+            "OAuth token has expired. Please obtain a new token or refresh your existing token.",
+            "Error: Not logged in. Run `codex login`.",
+            "error: 401 Unauthorized: token_expired",
+            "Please login with `kimi login`",
+            "Authentication required. Run `cursor-agent login`.",
+        ] {
+            assert!(sign_in_lapsed(out), "{out}");
+        }
+        assert!(!sign_in_lapsed("test_login_page PASSED"));
+        assert!(!sign_in_lapsed("All checks passed"));
     }
 
     #[test]
