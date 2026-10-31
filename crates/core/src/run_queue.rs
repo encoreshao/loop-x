@@ -209,6 +209,32 @@ impl RunQueue {
         })
     }
 
+    /// Records a run that was due but did not start, straight into "Recent".
+    pub fn record_skipped(
+        &self,
+        loop_name: &str,
+        reason: Reason,
+        note: &str,
+        now: &str,
+    ) -> std::io::Result<()> {
+        self.with_file(|f| {
+            f.entries.push(Entry {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                loop_name: loop_name.to_string(),
+                reason: reason.as_str().to_string(),
+                priority: reason.priority(),
+                enqueued_at: now.to_string(),
+                state: "skipped".into(),
+                started_at: None,
+                finished_at: Some(now.to_string()),
+                pid: None,
+                exit_code: None,
+                note: Some(note.to_string()),
+                cancel_requested: false,
+            });
+        })
+    }
+
     /// Starts the next waiting entry unless `max_running` are already running.
     pub fn claim_next(&self, now: &str, max_running: usize) -> std::io::Result<Option<Entry>> {
         self.with_file(|f| {
@@ -381,8 +407,14 @@ pub fn drain(
             Ok(mut child) => {
                 let _ = queue.set_pid(&entry.id, i64::from(child.id()));
                 let code = child.wait().ok().and_then(|s| s.code());
-                let state = if code == Some(0) { "done" } else { "failed" };
-                let _ = queue.finish(&entry.id, state, code, None, &now());
+                let (state, note) = match code {
+                    Some(0) => ("done", None),
+                    Some(crate::run_loop::PRECHECK_SKIPPED_EXIT) => {
+                        ("skipped", Some("Its precheck found nothing to do"))
+                    }
+                    _ => ("failed", None),
+                };
+                let _ = queue.finish(&entry.id, state, code, note, &now());
             }
             Err(e) => {
                 let _ = queue.finish(&entry.id, "failed", None, Some(&e.to_string()), &now());
@@ -528,6 +560,7 @@ mod tests {
         q.enqueue("ok", Reason::Scheduled, "t0").unwrap();
         q.enqueue("bad", Reason::Scheduled, "t1").unwrap();
         q.enqueue("missing", Reason::Scheduled, "t2").unwrap();
+        q.enqueue("idle", Reason::Scheduled, "t3").unwrap();
         let mut order = Vec::new();
         let ran = drain(&q, &|| "now".to_string(), 1, &mut |e| {
             order.push(e.loop_name.clone());
@@ -538,11 +571,14 @@ mod tests {
                 "bad" => std::process::Command::new("sh")
                     .args(["-c", "exit 3"])
                     .spawn(),
+                "idle" => std::process::Command::new("sh")
+                    .args(["-c", "exit 75"])
+                    .spawn(),
                 _ => std::process::Command::new("/no/such/program").spawn(),
             }
         });
-        assert_eq!(ran, 3);
-        assert_eq!(order, ["ok", "bad", "missing"]);
+        assert_eq!(ran, 4);
+        assert_eq!(order, ["ok", "bad", "missing", "idle"]);
         let snap = q.snapshot(10);
         let by = |n: &str| {
             snap.recent
@@ -561,6 +597,10 @@ mod tests {
         );
         assert_eq!(by("missing").state, "failed");
         assert!(by("missing").note.is_some());
+        assert_eq!(
+            (by("idle").state.as_str(), by("idle").note.as_deref()),
+            ("skipped", Some("Its precheck found nothing to do"))
+        );
     }
 
     #[test]

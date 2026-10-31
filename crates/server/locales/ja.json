@@ -1265,5 +1265,9 @@
   "Removed {branch} for {alias} #{iid}": "{alias} #{iid} の {branch} を削除しました",
   "{name} is not a tracked project with a checkout": "{name} はチェックアウトのある追跡中のプロジェクトではありません",
   "Switch to a worktree": "ワークツリーに切り替える",
-  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "この関数を ~/.zshrc または ~/.bashrc に追加してください。その後、プロジェクトのチェックアウト内で wt にイシューブランチを指定して実行すると（例: wt loop/issue-7）、そのワークツリーに移動して変更を確認できます。"
+  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "この関数を ~/.zshrc または ~/.bashrc に追加してください。その後、プロジェクトのチェックアウト内で wt にイシューブランチを指定して実行すると（例: wt loop/issue-7）、そのワークツリーに移動して変更を確認できます。",
+  "Always run missed slots": "見逃した実行は常に実行",
+  "Skip if over {n}h late": "{n}時間以上遅れたらスキップ",
+  "Precheck command (optional)": "事前チェックコマンド(任意)",
+  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "スケジュール実行の前に毎回実行されます。終了コードが0以外なら、エージェントを起動せずにその実行をスキップします。"
 }

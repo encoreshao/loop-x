@@ -158,9 +158,7 @@ pub fn queue_worker(_args: &[String]) -> ExitCode {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "loopx".to_string());
     let now = || loop_scheduler::isoformat(Local::now().naive_local());
-    let ran = run_queue::drain(&queue, &now, 1, &mut |entry| {
-        spawn_run(&exe, &entry.loop_name)
-    });
+    let ran = run_queue::drain(&queue, &now, 1, &mut |entry| spawn_run(&exe, entry));
     if ran > 0 {
         println!("queue-worker: ran {ran} loop(s)");
     }
@@ -168,11 +166,13 @@ pub fn queue_worker(_args: &[String]) -> ExitCode {
 }
 
 /// A child `loopx run <name>` in its own process group (so the dashboard's
-/// Stop button can `killpg` it without hitting the worker).
-fn spawn_run(exe: &str, name: &str) -> std::io::Result<std::process::Child> {
+/// Stop button can `killpg` it without hitting the worker). `LOOPX_RUN_REASON`
+/// tells the run whether the scheduler started it (its precheck applies).
+fn spawn_run(exe: &str, entry: &run_queue::Entry) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
     Command::new(exe)
-        .args(["run", name])
+        .args(["run", &entry.loop_name])
+        .env("LOOPX_RUN_REASON", &entry.reason)
         .process_group(0)
         .spawn()
 }

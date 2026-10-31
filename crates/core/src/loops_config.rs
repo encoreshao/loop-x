@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_SETTING_CHARS: usize = 1000;
 const INTERVAL_MINUTES_CHOICES: [i64; 3] = [15, 30, 45];
+/// How late a missed time-of-day slot may still run (`schedule.max_late_minutes`).
+pub const MAX_LATE_MINUTES_CHOICES: [i64; 4] = [60, 120, 240, 480];
+/// The longest `schedule.precheck` command.
+pub const MAX_PRECHECK_CHARS: usize = 500;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoopsError {
@@ -479,6 +483,22 @@ pub fn set_schedule(
         ));
     };
     let frequency = frequency.as_str().unwrap_or_default();
+    if let Some(late) = sched.get("max_late_minutes") {
+        if !int_value(late).is_some_and(|m| MAX_LATE_MINUTES_CHOICES.contains(&m)) {
+            return Err(format!(
+                "max_late_minutes must be one of 60, 120, 240, 480, got {}",
+                py_repr(late)
+            ));
+        }
+    }
+    if let Some(precheck) = sched.get("precheck") {
+        let ok = precheck
+            .as_str()
+            .is_some_and(|c| !c.contains(['\n', '\r']) && c.chars().count() <= MAX_PRECHECK_CHARS);
+        if !ok {
+            return Err("precheck must be a single-line command of at most 500 characters".into());
+        }
+    }
     if frequency == "hourly" && sched.contains_key("interval_minutes") {
         let minutes = &sched["interval_minutes"];
         if sched.contains_key("interval_hours") {
@@ -733,6 +753,9 @@ mod tests {
             json!({"frequency": "monthly", "day": 31, "hour": 1, "minute": 2}),
             json!({"frequency": "hourly", "interval_hours": 6}),
             json!({"frequency": "hourly", "interval_minutes": 15}),
+            json!({"frequency": "daily", "hour": 8, "minute": 0, "max_late_minutes": 120}),
+            json!({"frequency": "daily", "hour": 8, "minute": 0, "precheck": "test -s todo.txt"}),
+            json!({"frequency": "hourly", "interval_minutes": 15, "precheck": "true"}),
         ] {
             assert_eq!(
                 set_schedule("a", &s, &f.config, Some(&f.none)).unwrap(),
@@ -782,6 +805,22 @@ mod tests {
             (
                 json!({"frequency": "hourly", "interval_minutes": 15, "interval_hours": 1}),
                 "Give either interval_hours or interval_minutes, not both",
+            ),
+            (
+                json!({"frequency": "daily", "hour": 8, "minute": 0, "max_late_minutes": 90}),
+                "max_late_minutes must be one of 60, 120, 240, 480, got 90",
+            ),
+            (
+                json!({"frequency": "daily", "hour": 8, "minute": 0, "precheck": 1}),
+                "precheck must be a single-line command of at most 500 characters",
+            ),
+            (
+                json!({"frequency": "daily", "hour": 8, "minute": 0, "precheck": "a\nb"}),
+                "precheck must be a single-line command of at most 500 characters",
+            ),
+            (
+                json!({"frequency": "hourly", "interval_minutes": 15, "precheck": "x".repeat(501)}),
+                "precheck must be a single-line command of at most 500 characters",
             ),
         ];
         for (s, msg) in cases {

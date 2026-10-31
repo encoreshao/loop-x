@@ -157,6 +157,26 @@ pub fn relative_time_dt(now: DateTime<Utc>, dt: DateTime<FixedOffset>) -> String
 
 /// `_custom_select`. `options` are (value, label) pairs; `empty_label` prepends a
 /// `value=''` option.
+/// The schedule form's "skip a missed run after" select (shown with the time,
+/// so it hides for hourly loops) and its precheck command.
+pub fn schedule_extras(ctx: &UiCtx, schedule: &serde_json::Map<String, serde_json::Value>) -> (String, String) {
+    let max_late = schedule.get("max_late_minutes").and_then(serde_json::Value::as_i64).map(|m| m.to_string());
+    let options: Vec<(String, String)> = loopx_core::loops_config::MAX_LATE_MINUTES_CHOICES
+        .iter()
+        .map(|m| (m.to_string(), ctx.tf("Skip if over {n}h late", &[("n", &(m / 60).to_string())])))
+        .collect();
+    let missed = custom_select("max_late", &options, max_late.as_deref(), Some(&ctx.t("Always run missed slots")));
+    let precheck = schedule.get("precheck").and_then(serde_json::Value::as_str).unwrap_or("");
+    let precheck = format!(
+        "<input type='text' name='precheck' class='precheck-input' value='{}' maxlength='{}' placeholder='{}' title='{}'>",
+        pyfmt::escape(precheck),
+        loopx_core::loops_config::MAX_PRECHECK_CHARS,
+        pyfmt::escape(&ctx.t("Precheck command (optional)")),
+        pyfmt::escape(&ctx.t("Runs before each scheduled run; a non-zero exit skips the run without starting the agent.")),
+    );
+    (missed, precheck)
+}
+
 pub fn custom_select(
     name: &str,
     options: &[(String, String)],

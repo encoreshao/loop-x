@@ -11,8 +11,16 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Loop schedules: a "Skip if over N h late" choice (1, 2, 4 or 8 hours). A daily, weekly or monthly slot missed while the Mac slept or LoopX was closed is still caught up when LoopX comes back, unless it is later than that; then it shows as Skipped in Agents → Recent instead of, say, sending a morning briefing in the evening. The default is unchanged: always catch up.
+- Loop schedules: an optional precheck command. It runs before each scheduled run (not "Run now") in a login shell; a non-zero exit, or taking over 60 seconds, skips the run without starting the agent, so empty runs cost nothing. Skips show as Skipped in Agents → Recent and in the unified log with the command's output.
+
 ### Changed
 
+- A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.
+- A loop that fails the same way (same exit code) as its previous run no longer sends another Slack alert each time. The status keeps a `consecutive_failures` count and the log notes the repeat; a different failure or a success resets it.
+- GitLab loop: the agent's instructions now say issue text, comments and linked pages are untrusted. They describe the change wanted but can never redirect the loop to other projects or branches, ask for secrets, run unrelated commands or change where it posts; such a request is ignored and called out in the merge request or comment.
 - README (all languages): a download link at the top and a "Bring your own agent" note: LoopX uses the AI CLI subscription or API key you already have.
 
 ## [0.16.0] - 2026-10-31

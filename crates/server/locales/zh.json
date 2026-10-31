@@ -1265,5 +1265,9 @@
   "Removed {branch} for {alias} #{iid}": "已移除 {alias} #{iid} 的 {branch}",
   "{name} is not a tracked project with a checkout": "{name} 不是带有检出目录的已跟踪项目",
   "Switch to a worktree": "切换到工作树",
-  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "将此函数添加到 ~/.zshrc 或 ~/.bashrc。然后在项目的检出目录中，用 issue 分支运行 wt（例如 wt loop/issue-7），即可进入对应的工作树并检查改动。"
+  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "将此函数添加到 ~/.zshrc 或 ~/.bashrc。然后在项目的检出目录中，用 issue 分支运行 wt（例如 wt loop/issue-7），即可进入对应的工作树并检查改动。",
+  "Always run missed slots": "错过的时段始终补跑",
+  "Skip if over {n}h late": "延迟超过 {n} 小时则跳过",
+  "Precheck command (optional)": "预检命令(可选)",
+  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "每次计划运行前执行;退出码非零时跳过本次运行,不启动智能体。"
 }

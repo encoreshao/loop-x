@@ -192,14 +192,16 @@ fn loop_schedule_form(ctx: &UiCtx, entry: &Value, csrf: &str) -> String {
     let freq_select = super::super::loops_common::custom_select_plain("frequency", &freqs, Some(&frequency), None);
     let hide = |show: bool| if show { "" } else { " style='display:none'" };
     let name = pyfmt::escape(&entry.get("name").map_or("?".to_string(), loops_config::py_str));
+    let (missed, precheck) = super::super::loops_common::schedule_extras(ctx, schedule);
     format!(
         "<form method='post' action='/daemons/loops/{name}/schedule' class='daemon-action-form schedule-form'>\
 {csrf}{}\
-<span class='time-control'{}><input type='time' name='time' value='{time_value}'></span>\
+<span class='time-control'{}><input type='time' name='time' value='{time_value}'> {missed}</span>\
 {freq_select}\
 <span class='weekday-checks weekly-controls'{}>{checkboxes}</span>\
 <span class='monthly-controls'{}>on day {day_select}</span>\
 <span class='hourly-controls'{}>{} {interval_select}</span>\
+{precheck}\
 <button type='submit' class='btn btn-neutral'>Save schedule</button>\
 </form>",
         return_to_input(None),

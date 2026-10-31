@@ -13,12 +13,17 @@ use crate::{ai_cli_config, loop_scheduler, loops_config, slack_report, status, t
 use chrono::{Local, Utc};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Exit code of a timed-out run, like GNU `timeout`.
 pub const TIMEOUT_EXIT_CODE: i32 = 124;
+/// Exit code of a scheduled run its precheck found nothing to do for (`EX_TEMPFAIL`).
+pub const PRECHECK_SKIPPED_EXIT: i32 = 75;
+/// How long a loop's `schedule.precheck` command may take.
+const PRECHECK_TIMEOUT_SECONDS: f64 = 60.0;
 
 #[derive(Debug, Clone)]
 pub struct RunLoopOpts {
@@ -27,6 +32,9 @@ pub struct RunLoopOpts {
     pub exe: String,
     /// Wrap the entry in `zsh -i -l -c` (the real thing); tests turn it off.
     pub login_shell: bool,
+    /// `caffeinate`, run as `-i -s -w <our pid>` so the Mac does not sleep mid-run
+    /// even when the app (and its own keep-awake) is closed.
+    pub caffeinate: Option<PathBuf>,
 }
 
 impl RunLoopOpts {
@@ -39,6 +47,7 @@ impl RunLoopOpts {
             // `LOOPX_NO_LOGIN_SHELL=1` runs the entry directly (tests, CI).
             login_shell: std::env::var_os("LOOPX_NO_LOGIN_SHELL").is_none()
                 && (Path::new("/bin/zsh").exists() || Path::new("/usr/bin/zsh").exists()),
+            caffeinate: Some(PathBuf::from("/usr/bin/caffeinate")).filter(|p| p.exists()),
         }
     }
 }
@@ -53,6 +62,7 @@ struct Entry {
     timeout_seconds: f64,
     log_suffix: String,
     emit_run_events: bool,
+    precheck: Option<String>,
 }
 
 fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
@@ -79,6 +89,13 @@ fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
         emit_run_events: entry
             .get("emit_run_events")
             .is_some_and(loops_config::py_truthy),
+        precheck: entry
+            .get("schedule")
+            .and_then(|s| s.get("precheck"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(String::from),
     })
 }
 
@@ -133,6 +150,30 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         }
     };
 
+    // Only the scheduler's own runs are gated; "Run now" always runs.
+    let scheduled = matches!(
+        std::env::var("LOOPX_RUN_REASON").as_deref(),
+        Ok("scheduled" | "catch-up")
+    );
+    if let Some(command) = entry.precheck.as_deref().filter(|_| scheduled) {
+        if let Some(why) = failed_precheck(opts, command) {
+            append_unified_log(
+                &format!("[{}] ---- {loop_name} ---- skipped: {why} ----", stamp()),
+                &unified,
+            );
+            return PRECHECK_SKIPPED_EXIT;
+        }
+    }
+    if let Some(caffeinate) = &opts.caffeinate {
+        // Exits on its own when this process does.
+        let _ = Command::new(caffeinate)
+            .args(["-i", "-s", "-w", &std::process::id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+
     let run_id = fresh_run_id();
     std::env::set_var("LOOP_RUN_ID", &run_id);
     let history = opts.root.join("outputs").join("history");
@@ -157,24 +198,43 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
     }
 
     let status_path = loop_scheduler::status_path_for_loop(loop_name, Some(&opts.root));
+    let previous = status::read_status(&status_path);
     let events_dir = None::<&Path>;
     let fail = |exit: i32| {
-        append_unified_log(
-            &format!(
-                "[{}] ---- {loop_name} ---- run FAILED (exit {exit}) ----",
-                stamp()
-            ),
-            &unified,
+        let failures = repeated_failures(&previous, exit) + 1;
+        if failures > 1 {
+            append_unified_log(
+                &format!(
+                    "[{}] ---- {loop_name} ---- run FAILED (exit {exit}): failed the same way {failures} runs in a row; Slack alert held back ----",
+                    stamp()
+                ),
+                &unified,
+            );
+        } else {
+            append_unified_log(
+                &format!(
+                    "[{}] ---- {loop_name} ---- run FAILED (exit {exit}) ----",
+                    stamp()
+                ),
+                &unified,
+            );
+            slack_report::send(
+                &failed_report(
+                    loop_name,
+                    &format!("Failed (exit {exit})"),
+                    &format!("See outputs/history/{log_name} for the run's log."),
+                ),
+                None,
+            );
+        }
+        let _ = status::write_status(
+            &status_path,
+            "failed",
+            &[
+                ("last_exit_code", json!(exit)),
+                ("consecutive_failures", json!(failures)),
+            ],
         );
-        slack_report::send(
-            &failed_report(
-                loop_name,
-                &format!("Failed (exit {exit})"),
-                &format!("See outputs/history/{log_name} for the run's log."),
-            ),
-            None,
-        );
-        let _ = status::write_status(&status_path, "failed", &[("last_exit_code", json!(exit))]);
         if entry.emit_run_events {
             emit_best_effort(
                 "run.failed",
@@ -273,6 +333,91 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         &unified,
     );
     0
+}
+
+/// How many runs in a row before this one failed with `exit`, from the status
+/// the last run left: a repeat is counted rather than alerted again.
+fn repeated_failures(previous: &Value, exit: i32) -> i64 {
+    let same = previous.get("state").and_then(Value::as_str) == Some("failed")
+        && previous.get("last_exit_code").and_then(Value::as_i64) == Some(i64::from(exit));
+    if !same {
+        return 0;
+    }
+    previous
+        .get("consecutive_failures")
+        .and_then(Value::as_i64)
+        .unwrap_or(1)
+}
+
+/// Runs a loop's precheck in the checkout; `Some(reason)` when it says there is
+/// nothing to do (any non-zero exit, a timeout, or a command that cannot start).
+fn failed_precheck(opts: &RunLoopOpts, command: &str) -> Option<String> {
+    let mut c = if opts.login_shell {
+        let mut c = Command::new("zsh");
+        c.args(["-l", "-c", command]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+    let out_path = opts
+        .root
+        .join("outputs")
+        .join(format!(".precheck-{}.out", std::process::id()));
+    let started = (|| {
+        let _ = std::fs::create_dir_all(opts.root.join("outputs"));
+        let out = std::fs::File::create(&out_path)?;
+        c.current_dir(&opts.root)
+            .stdin(Stdio::null())
+            .stdout(out.try_clone()?)
+            .stderr(out)
+            // Its own group, so a timeout kills the precheck and not this run.
+            .process_group(0)
+            .spawn()
+    })();
+    let exit = match started {
+        Ok(child) => wait_or_kill(child, PRECHECK_TIMEOUT_SECONDS),
+        Err(e) => {
+            let _ = std::fs::remove_file(&out_path);
+            return Some(format!("its precheck could not start: {e}"));
+        }
+    };
+    let tail = std::fs::read_to_string(&out_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&out_path);
+    let tail = tail.trim();
+    let tail: String = tail
+        .char_indices()
+        .rev()
+        .nth(399)
+        .map_or(tail, |(i, _)| &tail[i..])
+        .to_string();
+    match exit {
+        Some(0) => None,
+        Some(code) if tail.is_empty() => Some(format!("its precheck exited {code}")),
+        Some(code) => Some(format!("its precheck exited {code}: {tail}")),
+        None => Some(format!(
+            "its precheck took longer than {PRECHECK_TIMEOUT_SECONDS}s"
+        )),
+    }
+}
+
+/// The child's exit code, or `None` after killing its group at the deadline.
+fn wait_or_kill(mut child: std::process::Child, timeout_seconds: f64) -> Option<i32> {
+    let deadline = Instant::now() + Duration::from_secs_f64(timeout_seconds);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(exit_code(status)),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                unsafe {
+                    libc::killpg(child.id() as i32, libc::SIGKILL);
+                }
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// Wait for `command`, killing its whole process group after `timeout_seconds`
@@ -440,7 +585,138 @@ mod tests {
             root: dir.to_path_buf(),
             exe,
             login_shell: false,
+            caffeinate: None,
         }
+    }
+
+    fn setup_with_schedule(dir: &Path, schedule: Value) {
+        std::fs::write(
+            dir.join("loops.json"),
+            json!([{
+                "name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner",
+                "timeout_seconds": 30, "log_suffix": "-x", "emit_run_events": true,
+                "enabled": true, "schedule": schedule
+            }])
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    fn with_reason<R>(reason: &str, f: impl FnOnce() -> R) -> R {
+        std::env::set_var("LOOPX_RUN_REASON", reason);
+        let out = f();
+        std::env::remove_var("LOOPX_RUN_REASON");
+        out
+    }
+
+    #[test]
+    fn a_failing_precheck_skips_a_scheduled_run_without_starting_the_agent() {
+        let d = tempfile::tempdir().unwrap();
+        setup_with_schedule(
+            d.path(),
+            json!({"frequency": "daily", "hour": 1, "minute": 0,
+                   "precheck": "echo nothing to do; exit 1"}),
+        );
+        let marker = d.path().join("ran");
+        let exe = fake_exe(d.path(), &format!("touch {}", marker.display()));
+        let code = with_env(d.path(), || {
+            with_reason("scheduled", || {
+                run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            })
+        });
+        assert_eq!(code, PRECHECK_SKIPPED_EXIT);
+        assert!(!marker.exists(), "the agent never started");
+        let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(
+            unified.contains("skipped: its precheck exited 1: nothing to do"),
+            "{unified}"
+        );
+        assert!(
+            !d.path().join("events").exists(),
+            "no run.started/run.failed"
+        );
+        assert!(
+            !d.path().join("outputs/status.json").exists(),
+            "the last real run's status is left alone"
+        );
+    }
+
+    #[test]
+    fn a_passing_precheck_or_a_manual_run_goes_ahead() {
+        let d = tempfile::tempdir().unwrap();
+        for (precheck, reason) in [("true", "catch-up"), ("exit 1", "manual")] {
+            setup_with_schedule(
+                d.path(),
+                json!({"frequency": "daily", "hour": 1, "minute": 0, "precheck": precheck}),
+            );
+            let marker = d.path().join(format!("ran-{reason}"));
+            let exe = fake_exe(d.path(), &format!("touch {}", marker.display()));
+            let code = with_env(d.path(), || {
+                with_reason(reason, || {
+                    run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+                })
+            });
+            assert_eq!(code, 0, "{reason}");
+            assert!(marker.exists(), "{reason}");
+        }
+    }
+
+    #[test]
+    fn the_run_keeps_the_mac_awake_until_it_exits() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        let args_file = d.path().join("caffeinate-args");
+        let caffeinate = d.path().join("caffeinate");
+        std::fs::write(
+            &caffeinate,
+            format!("#!/bin/sh\necho \"$@\" > {}\n", args_file.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&caffeinate, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut o = opts(d.path(), fake_exe(d.path(), "sleep 0.3"));
+        o.caffeinate = Some(caffeinate);
+        assert_eq!(
+            with_env(d.path(), || run_loop_now(&o, "gitlab-loop", &[])),
+            0
+        );
+        let args = std::fs::read_to_string(&args_file).unwrap();
+        assert_eq!(args.trim(), format!("-i -s -w {}", std::process::id()));
+    }
+
+    #[test]
+    fn a_repeat_of_the_same_failure_is_counted_not_alerted_again() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        let status_path = d.path().join("outputs/status.json");
+        let run = |body: &str| {
+            let exe = fake_exe(d.path(), body);
+            with_env(d.path(), || {
+                run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            })
+        };
+        let log = || std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+
+        assert_eq!(run("exit 3"), 3);
+        assert_eq!(status::read_status(&status_path)["consecutive_failures"], 1);
+        assert!(!log().contains("Slack alert held back"));
+
+        assert_eq!(run("exit 3"), 3);
+        assert_eq!(status::read_status(&status_path)["consecutive_failures"], 2);
+        assert!(
+            log().contains("failed the same way 2 runs in a row; Slack alert held back"),
+            "{}",
+            log()
+        );
+
+        // A different failure is news again.
+        assert_eq!(run("exit 4"), 4);
+        assert_eq!(status::read_status(&status_path)["consecutive_failures"], 1);
+        assert_eq!(log().matches("Slack alert held back").count(), 1);
+
+        // A success resets the count.
+        assert_eq!(run("exit 0"), 0);
+        assert_eq!(run("exit 4"), 4);
+        assert_eq!(status::read_status(&status_path)["consecutive_failures"], 1);
     }
 
     #[test]

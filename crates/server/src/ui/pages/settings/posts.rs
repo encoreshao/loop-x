@@ -235,7 +235,19 @@ fn loop_schedule(ctx: &UiCtx) -> UiResponse {
             _ => json!({"frequency": "daily", "hour": hour, "minute": minute}),
         })
     };
-    match build() {
+    // A missed-run limit only means something for a time-of-day slot.
+    let extras = |mut schedule: Value| -> Result<Value, ()> {
+        let max_late = form.first("max_late").unwrap_or("").trim();
+        if !max_late.is_empty() && frequency != "Hourly" {
+            schedule["max_late_minutes"] = json!(int(max_late)?);
+        }
+        let precheck = form.first("precheck").unwrap_or("").trim();
+        if !precheck.is_empty() {
+            schedule["precheck"] = json!(precheck);
+        }
+        Ok(schedule)
+    };
+    match build().and_then(extras) {
         Err(()) => plain(
             false,
             ctx.tf("Invalid schedule value: {value}", &[("value", &py_repr(time))]),
@@ -450,4 +462,52 @@ fn topic_enable(ctx: &UiCtx) -> UiResponse {
 
 fn topic_disable(ctx: &UiCtx) -> UiResponse {
     topic_msg(ctx, topics::set_enabled(ctx.param("name"), false, &topics_path(ctx)))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ui::routes::UiRequest;
+    use crate::ui::state::UiState;
+    use axum::http::Method;
+    use serde_json::{json, Value};
+
+    fn post(st: &UiState, path: &str, body: &str) -> crate::ui::routes::UiResponse {
+        st.registry
+            .dispatch(st, &UiRequest::new(Method::POST, path).with_body(body.to_string()))
+            .unwrap()
+    }
+
+    fn schedule(dir: &std::path::Path) -> Value {
+        let loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("loops.json")).unwrap()).unwrap();
+        loops[0]["schedule"].clone()
+    }
+
+    #[test]
+    fn the_loop_schedule_form_saves_and_shows_the_missed_run_limit_and_precheck() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(
+            d.path().join("loops.json"),
+            json!([{"name": "a-loop", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}]).to_string(),
+        )
+        .unwrap();
+        let url = "/daemons/loops/a-loop/schedule";
+        let body = "csrf_token=tok&time=08%3A00&frequency=Daily&max_late=120&precheck=test+-s+todo.txt";
+        assert_eq!(post(&st, url, body).status, 303);
+        assert_eq!(
+            schedule(d.path()),
+            json!({"frequency": "daily", "hour": 8, "minute": 0,
+                   "max_late_minutes": 120, "precheck": "test -s todo.txt"})
+        );
+
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?view=daemons")).unwrap().body_text();
+        assert!(page.contains("<option value='120' selected>"), "{page}");
+        assert!(page.contains("name='precheck' class='precheck-input' value='test -s todo.txt'"), "{page}");
+
+        // Blank fields drop the keys again.
+        let body = "csrf_token=tok&time=08%3A00&frequency=Daily&max_late=&precheck=+";
+        assert_eq!(post(&st, url, body).status, 303);
+        assert_eq!(schedule(d.path()), json!({"frequency": "daily", "hour": 8, "minute": 0}));
+    }
 }

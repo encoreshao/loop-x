@@ -1265,5 +1265,9 @@
   "Removed {branch} for {alias} #{iid}": "{branch} supprimée pour {alias} #{iid}",
   "{name} is not a tracked project with a checkout": "{name} n'est pas un projet suivi avec un dépôt local",
   "Switch to a worktree": "Passer à un worktree",
-  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "Ajoutez cette fonction à votre ~/.zshrc ou ~/.bashrc. Ensuite, depuis le checkout du projet, lancez wt avec une branche d'issue (par exemple wt loop/issue-7) pour aller dans son worktree et vérifier la modification."
+  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "Ajoutez cette fonction à votre ~/.zshrc ou ~/.bashrc. Ensuite, depuis le checkout du projet, lancez wt avec une branche d'issue (par exemple wt loop/issue-7) pour aller dans son worktree et vérifier la modification.",
+  "Always run missed slots": "Toujours rattraper les créneaux manqués",
+  "Skip if over {n}h late": "Ignorer si plus de {n} h de retard",
+  "Precheck command (optional)": "Commande de pré-vérification (facultatif)",
+  "Runs before each scheduled run; a non-zero exit skips the run without starting the agent.": "S'exécute avant chaque exécution planifiée ; un code de sortie non nul ignore l'exécution sans démarrer l'agent."
 }
