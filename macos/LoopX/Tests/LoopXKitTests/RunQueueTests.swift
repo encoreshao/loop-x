@@ -37,7 +37,7 @@ import Foundation
         let s = try Snapshot.decode(Data(Self.json.utf8))
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
-        #expect(n.title == "gitlab-loop running")
+        #expect(n.title == "GitLab running")
         #expect(n.subtitle == "analyzing · 2 queued")
     }
 
@@ -46,13 +46,13 @@ import Foundation
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
         #expect(n.title == "1 queued")
-        #expect(n.subtitle == "a")
+        #expect(n.subtitle == "A")
     }
 
     @Test func aRunLeavingTheQueueToRunStartsANotification() {
         let queued = Snapshot(queue: QueueBlock(queued: [QueueEntry(id: "q", loop: "a", reason: "scheduled", state: "queued", enqueuedAt: "t")]))
         let running = Snapshot(appState: .running, loops: ["a": LoopStatus(state: "running")])
         #expect(TaskNotifications.changes(from: nil, to: queued).isEmpty)
-        #expect(TaskNotifications.changes(from: queued, to: running).map(\.title) == ["a started"])
+        #expect(TaskNotifications.changes(from: queued, to: running).map(\.title) == ["A started"])
     }
 }

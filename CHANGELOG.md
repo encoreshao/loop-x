@@ -28,6 +28,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Mac app: the notch island and task notifications name loops the way the dashboard does ("GitLab", "Inbox Triage", "MR Review") instead of by their ids (`gitlab-loop`, `inbox-triage-loop`). Topics keep the names you gave them.
 - Loop icons: Release Notes, Pipeline Doctor and Stale Sweeper get their own sidebar icons (tag, stethoscope, archive), and Loops itself, plus any loop made from a template, uses a workflow icon instead of the refresh arrows, which now only mean "refresh".
 - A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.
 - A loop that fails the same way (same exit code) as its previous run no longer sends another Slack alert each time. The status keeps a `consecutive_failures` count and the log notes the repeat; a different failure or a success resets it.

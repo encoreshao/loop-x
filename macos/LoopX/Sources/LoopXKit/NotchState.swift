@@ -99,7 +99,7 @@ public struct NotchState: Equatable, Sendable {
 
         if s.appState == .failed || s.loops.values.contains(where: \.isFailure) {
             let name = s.loops.filter { $0.value.isFailure }.keys.sorted().first
-            return NotchState(kind: .failed, title: "Loop failed", subtitle: name,
+            return NotchState(kind: .failed, title: "Loop failed", subtitle: name.map(LoopNames.display),
                               style: NotchStyle(accent: .red, symbol: "xmark.octagon.fill", pulses: false,
                                                 autoExpands: false, autoCollapseAfter: nil),
                               actions: [.openDashboard], approvals: [], alertKey: nil)
@@ -112,13 +112,13 @@ public struct NotchState: Equatable, Sendable {
             var title: String, sub: String?
             if running.count > 1 {
                 title = "\(running.count) tasks running"
-                sub = running.map(\.name).joined(separator: ", ")
+                sub = running.map(\.title).joined(separator: ", ")
             } else if let one = running.first {
-                title = "\(one.name) running"
+                title = "\(one.title) running"
                 sub = one.detail
             } else if let next = waiting.first {
                 title = "\(waiting.count) queued"
-                sub = next.name
+                sub = next.title
             } else {
                 title = "Running"
                 sub = nil

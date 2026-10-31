@@ -228,7 +228,7 @@ struct TaskList: View {
         let style = Self.style(t.state)
         return HStack(spacing: 6) {
             StatusGlyph(style: style, size: 10).frame(width: 12)
-            Text(t.name).font(.system(size: 11, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+            Text(t.title).font(.system(size: 11, weight: .medium)).foregroundStyle(.white).lineLimit(1)
             Text(t.detail ?? Self.label(t.state)).font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.55)).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)

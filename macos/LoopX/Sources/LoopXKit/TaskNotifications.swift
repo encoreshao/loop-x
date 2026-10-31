@@ -8,6 +8,9 @@ public struct NotchTask: Equatable, Sendable, Identifiable {
     public var state: State
     /// The message that says what the task is doing (issue, step), nil when it has none.
     public var detail: String?
+
+    /// What to show: a loop's name ("GitLab", not `gitlab-loop`); a topic keeps the name it was given.
+    public var title: String { id.hasPrefix("topic:") ? name : LoopNames.display(name) }
 }
 
 /// A Mac notification worth posting for a task's change of state.
@@ -58,11 +61,11 @@ public enum TaskNotifications {
             guard prev != t.state else { continue }
             switch (prev, t.state) {
             case (_, .running):
-                out.append(TaskNotification(id: "\(t.id)#started", kind: .started, title: "\(t.name) started", body: t.detail))
+                out.append(TaskNotification(id: "\(t.id)#started", kind: .started, title: "\(t.title) started", body: t.detail))
             case (.running, .idle):
-                out.append(TaskNotification(id: "\(t.id)#completed", kind: .completed, title: "\(t.name) completed", body: nil))
+                out.append(TaskNotification(id: "\(t.id)#completed", kind: .completed, title: "\(t.title) completed", body: nil))
             case (_, .failed):
-                out.append(TaskNotification(id: "\(t.id)#failed", kind: .failed, title: "\(t.name) failed", body: t.detail))
+                out.append(TaskNotification(id: "\(t.id)#failed", kind: .failed, title: "\(t.title) failed", body: t.detail))
             default: break
             }
         }

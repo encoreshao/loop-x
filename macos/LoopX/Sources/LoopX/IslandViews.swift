@@ -107,7 +107,7 @@ struct HomeView: View {
         HStack(spacing: 8) {
             StatusGlyph(style: TaskList.style(t.state), size: 13).frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                Text(t.name).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                Text(t.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                 Text(t.detail ?? TaskList.label(t.state)).font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.55)).lineLimit(1)
             }
@@ -128,7 +128,7 @@ struct DetailView: View {
                 HStack(spacing: 8) {
                     StatusGlyph(style: TaskList.style(task.state), size: 14).frame(width: 18)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(task.name).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                        Text(task.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                         Text(task.detail ?? TaskList.label(task.state)).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55))
                     }
                 }

@@ -24,7 +24,7 @@ import Testing
         let s = Snapshot(appState: .running, loops: ["gitlab-loop": LoopStatus(state: "running", pid: 1, currentIssue: "web #7", currentStep: "analyzing")])
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
-        #expect(n.title == "gitlab-loop running")
+        #expect(n.title == "GitLab running")
         #expect(n.subtitle == "web #7 · analyzing")
         #expect(n.style.pulses)
         #expect(n.style.accent == .blue)
@@ -58,7 +58,7 @@ import Testing
         let a = NotchState.make(from: Snapshot(attention: attention(.failed, reason: "boom")), now: now)
         #expect(a.kind == .failed); #expect(a.subtitle == "boom"); #expect(a.style.accent == .red)
         let b = NotchState.make(from: Snapshot(appState: .failed, loops: ["topic-loop": LoopStatus(state: "failed")]), now: now)
-        #expect(b.kind == .failed); #expect(b.subtitle == "topic-loop")
+        #expect(b.kind == .failed); #expect(b.subtitle == "Topic Monitor")
         #expect(!b.style.autoExpands)
         let c = NotchState.make(from: Snapshot(appState: .idle, loops: ["x": LoopStatus(state: "stale")]), now: now)
         #expect(c.kind == .failed)
@@ -143,6 +143,6 @@ import Testing
         let s = Snapshot(loops: ["a": LoopStatus(state: "running")], topics: ["b": TopicStatus(state: "running")])
         let n = NotchState.make(from: s, now: now)
         #expect(n.title == "2 tasks running")
-        #expect(n.subtitle == "a, b")
+        #expect(n.subtitle == "A, b")
     }
 }

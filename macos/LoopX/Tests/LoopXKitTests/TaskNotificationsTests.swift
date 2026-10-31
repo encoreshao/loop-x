@@ -35,16 +35,16 @@ import Testing
                            topics: ["t": TopicStatus(state: "running")])
         let started = TaskNotifications.changes(from: idle, to: running)
         #expect(started.map(\.kind) == [.started, .started])
-        #expect(started.first { $0.title == "a started" }?.body == "web #7")
+        #expect(started.first { $0.title == "A started" }?.body == "web #7")
 
         let done = snap(loops: ["a": LoopStatus(state: "idle")], topics: ["t": TopicStatus(state: "failed")])
         let ended = TaskNotifications.changes(from: running, to: done)
-        #expect(Set(ended.map(\.title)) == ["a completed", "t failed"])
+        #expect(Set(ended.map(\.title)) == ["A completed", "t failed"])
     }
 
     @Test func aTaskNewlyAppearingAsRunningIsStarted() {
         let n = TaskNotifications.changes(from: snap(), to: snap(loops: ["a": LoopStatus(state: "running")]))
-        #expect(n.map(\.title) == ["a started"])
+        #expect(n.map(\.title) == ["A started"])
     }
 
     @Test func unchangedStateIsSilent() {
