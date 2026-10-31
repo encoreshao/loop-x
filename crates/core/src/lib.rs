@@ -14,6 +14,7 @@ pub mod chat;
 pub mod chat_eval;
 pub mod chat_tools;
 pub mod command_hints;
+pub mod concurrency_config;
 pub mod config;
 pub mod connectors;
 pub mod connectors_config;

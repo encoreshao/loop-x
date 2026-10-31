@@ -473,7 +473,8 @@ pub fn run_all_topics(
     };
     let definition =
         LoopDefinition::from_yaml(&ctx.definition_path()).map_err(|e| e.to_string())?;
-    run_topic_batch(ctx, run_id, names, &definition, invoker, 1)
+    let max_parallel = crate::concurrency_config::current().topics;
+    run_topic_batch(ctx, run_id, names, &definition, invoker, max_parallel)
 }
 
 /// The topics, at most `max_parallel` at once (see [`crate::parallel`]); a

@@ -2693,7 +2693,8 @@ pub fn run_all_issues(
             }
         }
     }
-    let results = run_issue_batch(ctx, run_id, &cfg, todo, &definition, invoker, 1)?;
+    let max_parallel = crate::concurrency_config::current().issues;
+    let results = run_issue_batch(ctx, run_id, &cfg, todo, &definition, invoker, max_parallel)?;
 
     // UNCONDITIONAL, and outside LoopRuntime: "End of run" is housekeeping, not
     // a verifiable task. It must run even with zero results: a morning with no
