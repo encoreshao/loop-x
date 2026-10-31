@@ -47,8 +47,14 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(known_urls(&p).contains("https://www.linkedin.com/in/ada"));
         assert_eq!(rows[0]["position"], "CTO");
-        assert!(rows[0]["first_seen"].as_str().unwrap().starts_with("2026-10-22"));
-        assert!(rows[0]["last_seen"].as_str().unwrap().starts_with("2026-10-23"));
+        assert!(rows[0]["first_seen"]
+            .as_str()
+            .unwrap()
+            .starts_with("2026-10-22"));
+        assert!(rows[0]["last_seen"]
+            .as_str()
+            .unwrap()
+            .starts_with("2026-10-23"));
     }
 
     #[test]
@@ -63,7 +69,13 @@ mod tests {
     fn target_is_clamped_to_20_50() {
         let t = |s: Option<&str>| target(s.map(|s| json!(s)).as_ref());
         assert_eq!(
-            (t(None), t(Some("5")), t(Some("99")), t(Some("35")), t(Some("x"))),
+            (
+                t(None),
+                t(Some("5")),
+                t(Some("99")),
+                t(Some("35")),
+                t(Some("x"))
+            ),
             (30, 20, 50, 35, 30)
         );
     }

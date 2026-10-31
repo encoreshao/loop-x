@@ -6,7 +6,7 @@
 //! every such action goes through `HumanPage`, so it is always paced.
 
 use crate::connectors::linkedin::{LinkedInProbe, ProbeFailure};
-use crate::linkedin_cdp::{Chrome, CdpPage, LaunchOptions};
+use crate::linkedin_cdp::{CdpPage, Chrome, LaunchOptions};
 use crate::linkedin_extract;
 use crate::linkedin_humanize::{HumanPage, Humanizer, Selector};
 use crate::linkedin_session;
@@ -195,7 +195,12 @@ fn parse_start_tag(s: &str) -> Option<(String, HashMap<String, String>, bool, us
         }
         self_closing = false;
         let start = i;
-        while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'=' && b[i] != b'>' && b[i] != b'/' {
+        while i < b.len()
+            && !b[i].is_ascii_whitespace()
+            && b[i] != b'='
+            && b[i] != b'>'
+            && b[i] != b'/'
+        {
             i += 1;
         }
         let key = s[start..i].to_ascii_lowercase();
@@ -258,7 +263,8 @@ pub fn extract_nodes(
             rest = rest[4..].find("-->").map_or("", |e| &rest[4 + e + 3..]);
         } else if matches!(next, Some(b'!' | b'?')) {
             rest = rest.find('>').map_or("", |e| &rest[e + 1..]);
-        } else if next == Some(b'/') && rest.as_bytes().get(2).is_some_and(u8::is_ascii_alphabetic) {
+        } else if next == Some(b'/') && rest.as_bytes().get(2).is_some_and(u8::is_ascii_alphabetic)
+        {
             let Some(e) = rest.find('>') else {
                 break;
             };
@@ -329,7 +335,10 @@ fn first_url(hrefs: &[String], needle: &str) -> String {
 }
 
 fn row_id(kind: &str, text: &str, url: &str) -> String {
-    format!("{kind}:{}", &sha1_hex(format!("{url}|{text}").as_bytes())[..12])
+    format!(
+        "{kind}:{}",
+        &sha1_hex(format!("{url}|{text}").as_bytes())[..12]
+    )
 }
 
 fn has_class(attrs: &HashMap<String, String>, name: &str) -> bool {
@@ -342,7 +351,12 @@ fn capped(text: &str) -> String {
     text.chars().take(MAX_TEXT).collect()
 }
 
-fn simple_rows(html: &str, kind: &str, needle: &str, m: &dyn Fn(&str, &HashMap<String, String>) -> bool) -> Vec<Value> {
+fn simple_rows(
+    html: &str,
+    kind: &str,
+    needle: &str,
+    m: &dyn Fn(&str, &HashMap<String, String>) -> bool,
+) -> Vec<Value> {
     extract_nodes(html, m)
         .into_iter()
         .filter_map(|n| {
@@ -370,7 +384,8 @@ pub fn parse_messages(html: &str) -> Vec<Value> {
 
 pub fn parse_feed(html: &str) -> Vec<Value> {
     let nodes = extract_nodes(html, &|_, a| {
-        a.get("data-urn").is_some_and(|u| u.starts_with("urn:li:activity:"))
+        a.get("data-urn")
+            .is_some_and(|u| u.starts_with("urn:li:activity:"))
     });
     let mut seen = BTreeSet::new();
     let mut rows = Vec::new();
@@ -456,7 +471,12 @@ impl SessionOptions {
 
 fn percent_quote(s: &str) -> String {
     use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
-    const SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~').remove(b'/');
+    const SET: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'-')
+        .remove(b'~')
+        .remove(b'/');
     utf8_percent_encode(s, SET).to_string()
 }
 
@@ -472,11 +492,16 @@ pub struct Session {
 
 impl Session {
     /// Open the account's persistent profile (`~/.loopx/linkedin/<id>/profile`).
-    pub fn open(account_id: &str, human: Arc<Humanizer>, opts: &SessionOptions) -> Result<Self, BrowserError> {
-        let profile = linkedin_session::ensure_profile(account_id).map_err(|e| BrowserError::Other {
-            class: "SessionError".into(),
-            detail: e.to_string(),
-        })?;
+    pub fn open(
+        account_id: &str,
+        human: Arc<Humanizer>,
+        opts: &SessionOptions,
+    ) -> Result<Self, BrowserError> {
+        let profile =
+            linkedin_session::ensure_profile(account_id).map_err(|e| BrowserError::Other {
+                class: "SessionError".into(),
+                detail: e.to_string(),
+            })?;
         Self::open_profile(account_id, &profile, human, opts)
     }
 
@@ -555,7 +580,12 @@ impl LinkedInSession for Session {
     }
 
     fn notifications(&mut self) -> Result<Vec<Value>, BrowserError> {
-        self.read("/notifications/", "notifications", parse_notifications, 1200)
+        self.read(
+            "/notifications/",
+            "notifications",
+            parse_notifications,
+            1200,
+        )
     }
 
     fn messages(&mut self) -> Result<Vec<Value>, BrowserError> {
@@ -599,7 +629,10 @@ impl LinkedInSession for Session {
             percent_quote(query)
         );
         let pause = |s: &Self| s.human.sleep(s.human.pause_seconds(2.0, 4.0));
-        if self.hp.type_into(&Selector::Css(SEARCH_BOX.into()), query)? {
+        if self
+            .hp
+            .type_into(&Selector::Css(SEARCH_BOX.into()), query)?
+        {
             pause(self);
             self.hp.wait_rendered_default()?;
             self.check("")?;
@@ -648,6 +681,116 @@ impl LinkedInSession for Session {
         found.truncate(want);
         Ok(found)
     }
+}
+
+// ---- interactive sign-in -------------------------------------------------------------------------
+
+/// How long the Connect LinkedIn window waits for the user to sign in.
+pub const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const SIGN_IN_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+
+fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map_or("", |(_, r)| r);
+    rest.split(['/', '?', '#']).next().unwrap_or("")
+}
+
+/// True when `url` is a page on `base`'s host past the login wall: not the
+/// logged-out landing page (`/`), a login/sign-up page or a checkpoint.
+pub fn signed_in_url(url: &str, base: &str) -> bool {
+    let host = host_of(url);
+    if host.is_empty() || !host.eq_ignore_ascii_case(host_of(base)) {
+        return false;
+    }
+    let path = url_path(url);
+    !path.is_empty() && path != "/" && detect_challenge(url, "").is_none()
+}
+
+/// LinkedIn's sign-in cookie: set only once the user is really signed in.
+const AUTH_COOKIE: &str = "li_at";
+
+/// Poll `(window URL, auth cookie present)` until the URL is
+/// [`signed_in_url`] and the cookie is set, at most `attempts` times
+/// (sleeping between them). The cookie rules out public pages a logged-out
+/// visitor can open. An error reading the window - the user closed it - is
+/// returned as is.
+pub fn poll_sign_in(
+    mut state: impl FnMut() -> Result<(String, bool), BrowserError>,
+    base: &str,
+    attempts: u32,
+    mut sleep: impl FnMut(),
+) -> Result<(), BrowserError> {
+    for _ in 0..attempts {
+        let (url, cookie) = state()?;
+        if cookie && signed_in_url(&url, base) {
+            return Ok(());
+        }
+        sleep();
+    }
+    Err(BrowserError::Other {
+        class: "SignInTimeout".into(),
+        detail: "not signed in before the timeout".into(),
+    })
+}
+
+impl Session {
+    /// Show LinkedIn's login page in this (visible) window and wait until the
+    /// user has signed in, `timeout` passes or the window is closed.
+    pub fn wait_for_sign_in(&mut self, timeout: std::time::Duration) -> Result<(), BrowserError> {
+        let login = format!("{}/login", self.base);
+        // A slow or interrupted first load (the user already clicking around)
+        // is not a failure: the window is still there, so keep polling. A
+        // closed window shows up as an error reading its URL below.
+        let _ = self.hp.goto(&login);
+        let base = self.base.clone();
+        let attempts = (timeout.as_secs() / SIGN_IN_POLL.as_secs()).max(1) as u32;
+        poll_sign_in(
+            || Ok((self.hp.url()?, self.has_auth_cookie()?)),
+            &base,
+            attempts,
+            || std::thread::sleep(SIGN_IN_POLL),
+        )
+    }
+}
+
+impl Session {
+    /// Whether the profile holds LinkedIn's sign-in cookie for `base`'s host.
+    fn has_auth_cookie(&self) -> Result<bool, BrowserError> {
+        // cookie domains carry no port
+        let host = host_of(&self.base).to_lowercase();
+        let host = host.rsplit_once(':').map_or(host.as_str(), |(h, _)| h);
+        let site = host.strip_prefix("www.").unwrap_or(host).to_string();
+        let r = self.chrome.call("Storage.getCookies", json!({}))?;
+        Ok(r["cookies"].as_array().is_some_and(|cs| {
+            cs.iter().any(|c| {
+                let domain = c["domain"].as_str().unwrap_or("").trim_start_matches('.');
+                c["name"] == AUTH_COOKIE
+                    && c["value"].as_str().is_some_and(|v| !v.is_empty())
+                    && (domain == site || domain.ends_with(&format!(".{site}")))
+            })
+        }))
+    }
+}
+
+/// The Connect LinkedIn flow: open the account's profile in a visible Chrome
+/// window on the login page, wait for the user to sign in, then write the
+/// connected marker and close Chrome so the session cookies reach the profile.
+pub fn interactive_login(
+    account_id: &str,
+    timeout: std::time::Duration,
+) -> Result<(), BrowserError> {
+    let mut session = Session::open(
+        account_id,
+        Arc::new(Humanizer::default()),
+        &SessionOptions::new(false),
+    )?;
+    session.wait_for_sign_in(timeout)?;
+    // let LinkedIn finish setting its cookies before Chrome is closed
+    std::thread::sleep(SIGN_IN_POLL);
+    session.close();
+    linkedin_session::mark_connected(account_id).map_err(|e| BrowserError::Other {
+        class: "SessionError".into(),
+        detail: e.to_string(),
+    })
 }
 
 // ---- wiring --------------------------------------------------------------------------------------
@@ -733,11 +876,19 @@ mod tests {
         let rows = parse_notifications(NOTIFICATIONS);
         assert_eq!(
             texts(&rows),
-            ["Ada Lovelace commented on your post: \"Great write-up\"", "Grace Hopper viewed your profile"]
+            [
+                "Ada Lovelace commented on your post: \"Great write-up\"",
+                "Grace Hopper viewed your profile"
+            ]
         );
-        assert_eq!(rows[0]["url"], "https://www.linkedin.com/feed/update/urn:li:activity:111/");
+        assert_eq!(
+            rows[0]["url"],
+            "https://www.linkedin.com/feed/update/urn:li:activity:111/"
+        );
         assert_eq!(rows[1]["url"], "https://www.linkedin.com/in/grace-hopper/");
-        assert!(rows.iter().all(|r| r["id"].as_str().unwrap().starts_with("notification:")));
+        assert!(rows
+            .iter()
+            .all(|r| r["id"].as_str().unwrap().starts_with("notification:")));
         assert_ne!(rows[0]["id"], rows[1]["id"]);
     }
 
@@ -746,9 +897,18 @@ mod tests {
         let rows = parse_feed(FEED);
         let ids: Vec<_> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
         assert_eq!(ids, ["urn:li:activity:7001", "urn:li:activity:7002"]);
-        assert!(rows[0]["text"].as_str().unwrap().starts_with("Ada Lovelace We shipped Rails 9 today."));
-        assert_eq!(rows[0]["url"], "https://www.linkedin.com/feed/update/urn:li:activity:7001/");
-        assert_eq!(rows[0]["profile"], "https://www.linkedin.com/in/ada-lovelace/");
+        assert!(rows[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Ada Lovelace We shipped Rails 9 today."));
+        assert_eq!(
+            rows[0]["url"],
+            "https://www.linkedin.com/feed/update/urn:li:activity:7001/"
+        );
+        assert_eq!(
+            rows[0]["profile"],
+            "https://www.linkedin.com/in/ada-lovelace/"
+        );
         assert_eq!(rows[1]["profile"], "");
     }
 
@@ -756,22 +916,38 @@ mod tests {
     fn parse_messages_rows() {
         let rows = parse_messages(MESSAGES);
         assert_eq!(texts(&rows), ["Linus: are you free Friday?"]);
-        assert_eq!(rows[0]["url"], "https://www.linkedin.com/messaging/thread/2-abc/");
+        assert_eq!(
+            rows[0]["url"],
+            "https://www.linkedin.com/messaging/thread/2-abc/"
+        );
     }
 
     #[test]
     fn ids_match_the_python_form() {
         // sha1("<url>|<text>")[:12] over the same row the Python parser produced.
         let rows = parse_messages(MESSAGES);
-        let want = row_id("message", "Linus: are you free Friday?", "https://www.linkedin.com/messaging/thread/2-abc/");
+        let want = row_id(
+            "message",
+            "Linus: are you free Friday?",
+            "https://www.linkedin.com/messaging/thread/2-abc/",
+        );
         assert_eq!(rows[0]["id"], want);
         assert_eq!(want.len(), "message:".len() + 12);
     }
 
     #[test]
     fn text_is_capped() {
-        let html = format!(r#"<article class="nt-card"><a href="/x">{}</a></article>"#, "z".repeat(5000));
-        assert_eq!(parse_notifications(&html)[0]["text"].as_str().unwrap().len(), MAX_TEXT);
+        let html = format!(
+            r#"<article class="nt-card"><a href="/x">{}</a></article>"#,
+            "z".repeat(5000)
+        );
+        assert_eq!(
+            parse_notifications(&html)[0]["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            MAX_TEXT
+        );
     }
 
     #[test]
@@ -785,14 +961,19 @@ mod tests {
             "<a href=\"unterminated",
             "<!-- never closed",
         ] {
-            let _ = (parse_notifications(html), parse_feed(html), parse_messages(html));
+            let _ = (
+                parse_notifications(html),
+                parse_feed(html),
+                parse_messages(html),
+            );
         }
         assert!(parse_feed("<p>nothing here</p>").is_empty());
     }
 
     #[test]
     fn non_linkedin_links_are_dropped() {
-        let html = r#"<article class="nt-card"><a href="https://evil.example/x">click</a> hi</article>"#;
+        let html =
+            r#"<article class="nt-card"><a href="https://evil.example/x">click</a> hi</article>"#;
         assert_eq!(parse_notifications(html)[0]["url"], "");
         let html = r#"<div data-urn="urn:li:activity:9"><a href="https://evil.example/in/x/">p</a>t</div>"#;
         assert_eq!(parse_feed(html)[0]["profile"], "");
@@ -801,10 +982,22 @@ mod tests {
     #[test]
     fn detect_challenge_by_url() {
         let d = |u| detect_challenge(u, "");
-        assert_eq!(d("https://www.linkedin.com/checkpoint/challenge/abc"), Some(Challenge::Challenge));
-        assert_eq!(d("https://www.linkedin.com/login?session_redirect=x"), Some(Challenge::Login));
-        assert_eq!(d("https://www.linkedin.com/uas/login"), Some(Challenge::Login));
-        assert_eq!(d("https://www.linkedin.com/authwall?trk=x"), Some(Challenge::Login));
+        assert_eq!(
+            d("https://www.linkedin.com/checkpoint/challenge/abc"),
+            Some(Challenge::Challenge)
+        );
+        assert_eq!(
+            d("https://www.linkedin.com/login?session_redirect=x"),
+            Some(Challenge::Login)
+        );
+        assert_eq!(
+            d("https://www.linkedin.com/uas/login"),
+            Some(Challenge::Login)
+        );
+        assert_eq!(
+            d("https://www.linkedin.com/authwall?trk=x"),
+            Some(Challenge::Login)
+        );
         assert_eq!(d("https://www.linkedin.com/feed/"), None);
     }
 
@@ -812,28 +1005,49 @@ mod tests {
     fn detect_challenge_by_headings_only() {
         let url = "https://www.linkedin.com/feed/";
         let d = |h: &str| detect_challenge(url, h);
-        assert_eq!(d("<h1>Let's do a quick security check</h1>"), Some(Challenge::Challenge));
-        assert_eq!(d("<html><title>Security Verification | LinkedIn</title></html>"), Some(Challenge::Challenge));
-        assert_eq!(d("<h2>Please solve this CAPTCHA</h2>"), Some(Challenge::Challenge));
+        assert_eq!(
+            d("<h1>Let's do a quick security check</h1>"),
+            Some(Challenge::Challenge)
+        );
+        assert_eq!(
+            d("<html><title>Security Verification | LinkedIn</title></html>"),
+            Some(Challenge::Challenge)
+        );
+        assert_eq!(
+            d("<h2>Please solve this CAPTCHA</h2>"),
+            Some(Challenge::Challenge)
+        );
         assert_eq!(d("<script>var captcha = 'unusual activity';</script><style>.captcha{}</style><p>ok</p>"), None);
         assert_eq!(
-            d(r#"<div data-urn="urn:li:activity:1"><p>Someone asked me to solve a CAPTCHA, unusual activity indeed</p></div>"#),
+            d(
+                r#"<div data-urn="urn:li:activity:1"><p>Someone asked me to solve a CAPTCHA, unusual activity indeed</p></div>"#
+            ),
             None
         );
-        assert_eq!(detect_challenge("https://www.linkedin.com/company/challenge-corp/", ""), None);
-        assert_eq!(detect_challenge("https://www.linkedin.com/challenge/abc", ""), Some(Challenge::Challenge));
+        assert_eq!(
+            detect_challenge("https://www.linkedin.com/company/challenge-corp/", ""),
+            None
+        );
+        assert_eq!(
+            detect_challenge("https://www.linkedin.com/challenge/abc", ""),
+            Some(Challenge::Challenge)
+        );
     }
 
     #[test]
     fn detect_challenge_is_fast_on_hostile_input() {
         let start = Instant::now();
-        assert_eq!(detect_challenge("https://www.linkedin.com/feed/", &"<script>".repeat(40000)), None);
+        assert_eq!(
+            detect_challenge("https://www.linkedin.com/feed/", &"<script>".repeat(40000)),
+            None
+        );
         assert!(start.elapsed().as_secs_f64() < 2.0);
     }
 
     #[test]
     fn stray_end_tag_does_not_close_a_card_early() {
-        let rows = parse_notifications(r#"<article class="nt-card"><a>one</a></p> tail text</article>"#);
+        let rows =
+            parse_notifications(r#"<article class="nt-card"><a>one</a></p> tail text</article>"#);
         assert_eq!(texts(&rows), ["one tail text"]);
     }
 
@@ -874,6 +1088,142 @@ mod tests {
         let rows = parse_notifications(html);
         assert_eq!(texts(&rows), ["Fish & chips ! <3 &bogus;"]);
         assert_eq!(rows[0]["url"], "https://www.linkedin.com/feed/update/x/");
+    }
+
+    #[test]
+    fn signed_in_url_needs_a_linkedin_page_past_the_login_wall() {
+        let b = LINKEDIN;
+        for url in [
+            "https://www.linkedin.com/feed/",
+            "https://www.linkedin.com/feed/?trk=x",
+            "https://www.linkedin.com/in/me/",
+            "https://www.linkedin.com/mynetwork/",
+        ] {
+            assert!(signed_in_url(url, b), "{url}");
+        }
+        for url in [
+            "",
+            "about:blank",
+            "https://www.linkedin.com/",
+            "https://www.linkedin.com",
+            "https://www.linkedin.com/login",
+            "https://www.linkedin.com/uas/login-submit",
+            "https://www.linkedin.com/checkpoint/challenge/x",
+            "https://www.linkedin.com/authwall?x",
+            "https://www.linkedin.com.evil.test/feed/",
+            "https://accounts.google.com/o/oauth2/feed/",
+        ] {
+            assert!(!signed_in_url(url, b), "{url}");
+        }
+        assert!(signed_in_url(
+            "http://127.0.0.1:9/feed/",
+            "http://127.0.0.1:9/"
+        ));
+    }
+
+    #[test]
+    fn poll_sign_in_waits_through_login_and_checkpoint() {
+        let mut steps = vec![
+            ("https://www.linkedin.com/login", false),
+            ("https://www.linkedin.com/checkpoint/challenge/x", true),
+            // a public page while logged out is not a sign-in
+            ("https://www.linkedin.com/legal/user-agreement", false),
+            ("https://www.linkedin.com/feed/", true),
+        ]
+        .into_iter();
+        let mut slept = 0;
+        let r = poll_sign_in(
+            || {
+                let (u, c) = steps.next().unwrap();
+                Ok((u.to_string(), c))
+            },
+            LINKEDIN,
+            10,
+            || slept += 1,
+        );
+        assert!(r.is_ok());
+        assert_eq!(slept, 3);
+    }
+
+    #[test]
+    fn poll_sign_in_gives_up_after_the_attempts_or_when_the_window_closes() {
+        let mut n = 0;
+        let r = poll_sign_in(
+            || Ok(("https://www.linkedin.com/login".to_string(), false)),
+            LINKEDIN,
+            3,
+            || n += 1,
+        );
+        assert_eq!(r.unwrap_err().class_name(), "SignInTimeout");
+        assert_eq!(n, 3);
+        let closed = poll_sign_in(
+            || {
+                Err(BrowserError::Other {
+                    class: "CdpError".into(),
+                    detail: "closed".into(),
+                })
+            },
+            LINKEDIN,
+            3,
+            || {},
+        );
+        assert_eq!(closed.unwrap_err().class_name(), "CdpError");
+    }
+
+    /// A local stand-in for LinkedIn: `/login` sets the auth cookie (when
+    /// `sets_cookie`) and redirects to `/feed/`, any other path is a page.
+    fn fake_linkedin(sets_cookie: bool) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let reply = if req.starts_with("GET /login") {
+                    let cookie = if sets_cookie {
+                        "Set-Cookie: li_at=tok; Path=/\r\n"
+                    } else {
+                        ""
+                    };
+                    format!("HTTP/1.1 302 Found\r\n{cookie}Location: /feed/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                } else {
+                    let body =
+                        "<html><head><title>Feed</title></head><body><h1>Feed</h1></body></html>";
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                };
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        base
+    }
+
+    fn fake_session(base: String, profile: &std::path::Path) -> Session {
+        let mut opts = SessionOptions::new(true);
+        opts.base_url = base;
+        Session::open_profile("li", profile, Arc::new(Humanizer::default()), &opts).unwrap()
+    }
+
+    #[test]
+    #[ignore = "needs Google Chrome: cargo test -p loopx-core -- --ignored real_chrome"]
+    fn real_chrome_sign_in_completes_once_the_auth_cookie_is_set() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = fake_session(fake_linkedin(true), d.path());
+        s.wait_for_sign_in(std::time::Duration::from_secs(20))
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs Google Chrome: cargo test -p loopx-core -- --ignored real_chrome"]
+    fn real_chrome_sign_in_without_the_auth_cookie_times_out() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = fake_session(fake_linkedin(false), d.path());
+        let err = s
+            .wait_for_sign_in(std::time::Duration::from_secs(4))
+            .unwrap_err();
+        assert_eq!(err.class_name(), "SignInTimeout");
     }
 
     #[test]

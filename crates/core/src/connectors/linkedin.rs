@@ -111,7 +111,7 @@ impl Connector for LinkedInConnector {
             Ok(()) => (true, "Signed in to LinkedIn".to_string()),
             Err(ProbeFailure::BrowserUnavailable) => (
                 false,
-                "Playwright or Google Chrome is not available - install Playwright (python3 -m pip install playwright) and Google Chrome".to_string(),
+                "Google Chrome was not found - install Google Chrome (or set LOOPX_CHROME to a Chrome or Chromium binary)".to_string(),
             ),
             Err(ProbeFailure::SessionExpired) => (false, "LinkedIn session expired - reconnect".to_string()),
             Err(ProbeFailure::Challenge) => (
@@ -184,13 +184,17 @@ mod tests {
             for (failure, needle) in [
                 (ProbeFailure::SessionExpired, "expired"),
                 (ProbeFailure::Challenge, "security check"),
-                (ProbeFailure::BrowserUnavailable, "Playwright"),
+                (
+                    ProbeFailure::BrowserUnavailable,
+                    "Google Chrome was not found",
+                ),
                 (ProbeFailure::Other("RuntimeError".into()), "RuntimeError"),
             ] {
                 let c = LinkedInConnector::new(Account::new("li", "linkedin"))
                     .with_probe(Arc::new(Fake(Err(failure))));
                 let (ok, msg) = c.test();
                 assert!(!ok && msg.contains(needle), "{msg}");
+                assert!(!msg.contains("Playwright"), "{msg}");
             }
         });
     }

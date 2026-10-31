@@ -204,6 +204,9 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Sign in to LinkedIn for connector `<account_id>` in a visible Chrome window (what Connect LinkedIn runs)
+    #[command(name = "linkedin-login")]
+    LinkedinLogin { account_id: String },
     /// Offline stand-in for `chat-tool` used only by the chat eval
     #[command(name = "_chat-eval-stub", hide = true)]
     ChatEvalStub {
@@ -316,7 +319,10 @@ enum IssuesCommand {
 }
 
 fn main() -> ExitCode {
+    // The real Chrome backend for the LinkedIn connector's Test and the LinkedIn Autopilot loop.
+    loopx_core::linkedin_browser::register();
     match Cli::parse().command {
+        Command::LinkedinLogin { account_id } => linkedin_login(&account_id),
         Command::Loop { args } => loop_cmd::run(&args),
         Command::Metrics { args } => metrics_cmd::run(&args),
         Command::Update { args } => update_cmd::run(&args),
@@ -386,5 +392,24 @@ fn main() -> ExitCode {
         Command::Issues {
             command: IssuesCommand::Comments { args },
         } => issues_cmd::comments(&args),
+    }
+}
+
+fn linkedin_login(account_id: &str) -> ExitCode {
+    use loopx_core::linkedin_browser::{interactive_login, SIGN_IN_TIMEOUT};
+    if !loopx_core::connectors_config::is_valid_id(account_id) {
+        eprintln!("invalid connector id: {account_id}");
+        return ExitCode::from(2);
+    }
+    println!("Sign in to LinkedIn in the Chrome window that opened...");
+    match interactive_login(account_id, SIGN_IN_TIMEOUT) {
+        Ok(()) => {
+            println!("LinkedIn connected ({account_id})");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("LinkedIn sign-in did not complete: {}", e.class_name());
+            ExitCode::FAILURE
+        }
     }
 }

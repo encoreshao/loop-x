@@ -101,9 +101,16 @@ pub fn default_call(prompt: &str) -> Result<String, String> {
     let unified = crate::runner_util::unified_log_path(&crate::runner_util::repo_root());
     let mut log = |m: &str| {
         let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-        crate::runner_util::append_unified_log(&format!("[{stamp}] linkedin-extract: {m}"), &unified);
+        crate::runner_util::append_unified_log(
+            &format!("[{stamp}] linkedin-extract: {m}"),
+            &unified,
+        );
     };
-    call_with(prompt, &crate::agents::sealed::SealedHooks::default(), &mut log)
+    call_with(
+        prompt,
+        &crate::agents::sealed::SealedHooks::default(),
+        &mut log,
+    )
 }
 
 fn call_with(
@@ -117,9 +124,15 @@ fn call_with(
         None => crate::ai_cli_config::selected_cli(),
     };
     sealed::warn_if_unrestricted(&cli, crate::ai_cli_safety::CallSite::Plugin, log);
-    sealed::sealed_call(prompt, CALL_TIMEOUT_S, &mut |_| {}, Some(CALL_BUDGET_USD), hooks)
-        .map(|r| r.text)
-        .map_err(|e| crate::agents::sealed::storable_message(&cli, &e))
+    sealed::sealed_call(
+        prompt,
+        CALL_TIMEOUT_S,
+        &mut |_| {},
+        Some(CALL_BUDGET_USD),
+        hooks,
+    )
+    .map(|r| r.text)
+    .map_err(|e| crate::agents::sealed::storable_message(&cli, &e))
 }
 
 fn profile(url: &str) -> String {
@@ -154,7 +167,11 @@ fn s(v: Option<&Value>) -> String {
 /// Rows for `kind` from a page dump, using `call` for the model. `[]` when the
 /// page is empty, the model fails or its answer is unusable - a bad parse must
 /// never crash a run.
-pub fn extract_with(kind: &str, dump: &Value, call: &dyn Fn(&str) -> Result<String, String>) -> Vec<Value> {
+pub fn extract_with(
+    kind: &str,
+    dump: &Value,
+    call: &dyn Fn(&str) -> Result<String, String>,
+) -> Vec<Value> {
     let blank = !matches!(dump.get("text"), Some(Value::String(t)) if !t.trim().is_empty());
     if !dump.is_object() || blank {
         return Vec::new();
@@ -168,9 +185,18 @@ pub fn extract_with(kind: &str, dump: &Value, call: &dyn Fn(&str) -> Result<Stri
     let Ok(answer) = parse_answer(Some(&reply), &["items"]) else {
         return Vec::new();
     };
-    let items = answer.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let items = answer
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut offered: Map<String, Value> = Map::new();
-    for c in dump.get("cards").and_then(Value::as_array).into_iter().flatten() {
+    for c in dump
+        .get("cards")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         if c.is_object() {
             offered.insert(profile(&s(c.get("url"))), c.clone());
         }
@@ -183,7 +209,11 @@ pub fn extract_with(kind: &str, dump: &Value, call: &dyn Fn(&str) -> Result<Stri
         if kind == "people" {
             let url = profile(&s(item.get("url")));
             let name = chat_text(&s(item.get("name")), 80);
-            if url.is_empty() || !offered.contains_key(&url) || name.is_empty() || seen.contains(&url) {
+            if url.is_empty()
+                || !offered.contains_key(&url)
+                || name.is_empty()
+                || seen.contains(&url)
+            {
                 continue;
             }
             seen.insert(url.clone());
@@ -202,7 +232,10 @@ pub fn extract_with(kind: &str, dump: &Value, call: &dyn Fn(&str) -> Result<Stri
             continue;
         }
         let url = linkedin_url(&s(item.get("url")));
-        let id = format!("{kind}:{}", &sha1_hex(format!("{url}|{text}").as_bytes())[..12]);
+        let id = format!(
+            "{kind}:{}",
+            &sha1_hex(format!("{url}|{text}").as_bytes())[..12]
+        );
         let mut row = json!({"id": id, "text": text, "url": url});
         if kind == "feed" {
             row["profile"] = json!(profile(&s(item.get("author_url"))));
@@ -305,10 +338,19 @@ mod tests {
             {"name": "", "url": "https://www.linkedin.com/in/ada"}, "junk"]}));
         let rows = extract_with("people", &dump(), &|_| Ok(r.clone()));
         let urls: Vec<_> = rows.iter().map(|r| r["url"].as_str().unwrap()).collect();
-        assert_eq!(urls, ["https://www.linkedin.com/in/ada", "https://www.linkedin.com/in/grace"]);
+        assert_eq!(
+            urls,
+            [
+                "https://www.linkedin.com/in/ada",
+                "https://www.linkedin.com/in/grace"
+            ]
+        );
         assert!(!rows[0]["name"].as_str().unwrap().contains('<'));
         assert_eq!(rows[0]["avatar"], "https://media.licdn.com/a.jpg");
-        assert_eq!((rows[1]["avatar"].as_str(), rows[1]["position"].as_str()), (Some(""), Some("Admiral")));
+        assert_eq!(
+            (rows[1]["avatar"].as_str(), rows[1]["position"].as_str()),
+            (Some(""), Some("Admiral"))
+        );
     }
 
     #[test]
@@ -332,8 +374,14 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["id"], again[0]["id"]);
         assert_eq!(rows[0]["profile"], "https://www.linkedin.com/in/ada");
-        assert!(rows[0]["url"].as_str().unwrap().ends_with("urn:li:activity:9/"));
-        assert_eq!((rows[1]["profile"].as_str(), rows[1]["url"].as_str()), (Some(""), Some("")));
+        assert!(rows[0]["url"]
+            .as_str()
+            .unwrap()
+            .ends_with("urn:li:activity:9/"));
+        assert_eq!(
+            (rows[1]["profile"].as_str(), rows[1]["url"].as_str()),
+            (Some(""), Some(""))
+        );
     }
 
     #[test]
@@ -359,6 +407,9 @@ mod tests {
         // sha1("|hello")[:12], the same id the Python loop stored in its seen store.
         let r = reply(json!({"items": [{"text": "hello", "url": ""}]}));
         let rows = extract_with("notifications", &dump(), &|_| Ok(r.clone()));
-        assert_eq!(rows[0]["id"], format!("notifications:{}", &sha1_hex(b"|hello")[..12]));
+        assert_eq!(
+            rows[0]["id"],
+            format!("notifications:{}", &sha1_hex(b"|hello")[..12])
+        );
     }
 }

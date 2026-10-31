@@ -1203,11 +1203,16 @@ fn linkedin_action(ctx: &UiCtx, action: &str) -> (bool, String) {
         }
         return (true, ctx.tf("Disconnected {id}", &[("id", &id)]));
     }
+    if loopx_core::linkedin_cdp::find_chrome().is_none() {
+        return (
+            false,
+            ctx.t("Google Chrome was not found - install Google Chrome (or set LOOPX_CHROME to a Chrome or Chromium binary)"),
+        );
+    }
     if ctx.state.spawn_processes {
-        let script = ctx.state.repo_root.join("bin").join("linkedin_login.py");
-        let spawned = std::process::Command::new("python3")
-            .arg(script)
-            .arg(&id)
+        let argv = linkedin_login_argv(&id);
+        let spawned = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1218,8 +1223,16 @@ fn linkedin_action(ctx: &UiCtx, action: &str) -> (bool, String) {
     }
     (
         true,
-        ctx.t("A Chrome window opened - sign in to LinkedIn, then return here and press Test"),
+        ctx.t("A Chrome window opened - sign in to LinkedIn there, then reload this page"),
     )
+}
+
+/// The detached sign-in process: this same `loopx` binary's `linkedin-login`.
+fn linkedin_login_argv(id: &str) -> Vec<String> {
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "loopx".to_string());
+    vec![exe, "linkedin-login".to_string(), id.to_string()]
 }
 
 fn linkedin_connect(ctx: &UiCtx) -> UiResponse {
@@ -1465,4 +1478,17 @@ pub fn google_callback(
         Err(m) => return (false, m),
     };
     cc::set_oauth_secret(&account_id, tokens.refresh_token.as_deref(), &paths, store.as_ref())
+}
+
+#[cfg(test)]
+mod linkedin_login_tests {
+    use super::linkedin_login_argv;
+
+    #[test]
+    fn connect_runs_the_loopx_binary_not_a_python_script() {
+        let argv = linkedin_login_argv("li-main");
+        assert_eq!(argv[1..], ["linkedin-login".to_string(), "li-main".to_string()]);
+        assert!(!argv.iter().any(|a| a.contains("python") || a.ends_with(".py")), "{argv:?}");
+        assert_eq!(std::path::Path::new(&argv[0]), std::env::current_exe().unwrap());
+    }
 }

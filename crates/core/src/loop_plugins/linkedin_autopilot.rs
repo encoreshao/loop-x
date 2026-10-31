@@ -44,7 +44,7 @@ const LOOP_NAME: &str = "linkedin-autopilot-loop";
 pub const PROBLEMS: [(&str, &str); 8] = [
     ("session_expired", "LinkedIn session expired - reconnect it on the Connectors page"),
     ("challenge", "LinkedIn showed a security check - open LinkedIn in a normal browser, then reconnect"),
-    ("browser_unavailable", "Playwright or Chrome is not available - see the Connectors page"),
+    ("browser_unavailable", "Google Chrome was not found - see the Connectors page"),
     ("not_connected", "LinkedIn is not connected - press Connect LinkedIn on the Connectors page"),
     ("page_timeout", "LinkedIn did not respond or render within 10 minutes - the run was stopped, try again later"),
     ("page_changed", "LinkedIn's page layout was not recognised - no feed posts found, the loop may need an update"),
@@ -92,7 +92,7 @@ pub static SETTINGS_FIELDS: [Field; 5] = [
 /// `PageTimeout` from `linkedin_humanize`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum BrowserError {
-    /// Playwright or Chrome missing (`BrowserUnavailable`).
+    /// Chrome missing or could not start (`BrowserUnavailable`).
     Unavailable(String),
     /// The saved session no longer works (`SessionExpired`).
     SessionExpired,

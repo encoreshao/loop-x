@@ -61,11 +61,7 @@ fn private(_dir: &std::path::Path) -> std::io::Result<()> {
 pub fn ensure_profile(account_id: &str) -> Result<PathBuf, SessionError> {
     let profile = profile_dir(account_id)?;
     fs::create_dir_all(&profile)?;
-    for dir in [
-        base_dir(),
-        account_dir(account_id)?,
-        profile.clone(),
-    ] {
+    for dir in [base_dir(), account_dir(account_id)?, profile.clone()] {
         private(&dir)?;
     }
     Ok(profile)

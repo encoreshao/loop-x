@@ -22,7 +22,7 @@ and sending connection requests come in Stage 2.
   (`outputs/loops/linkedin-autopilot-loop-items/seen.json`, gitignored).
 - Answer: `{summary, topics, worth_reading: [{id, why}], people: [{id, why}]}`;
   ids that were not offered are dropped.
-- Problems (expired session, security check, no Playwright/Chrome) become a failed
+- Problems (expired session, security check, no Google Chrome) become a failed
   outcome and a "LinkedIn needs attention" message; the model is not called.
 
 ## Settings
