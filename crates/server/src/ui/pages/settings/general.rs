@@ -262,9 +262,43 @@ fn ai_cli_panel(ctx: &UiCtx, csrf: &str, current: &str) -> String {
     scope
         .var("select_html", select)
         .var("csrf_input", csrf)
-        .var("warnings_html", warnings);
+        .var("warnings_html", warnings)
+        .var("usage_pause_html", usage_pause_form(ctx, csrf, current));
     scope.set("html.escape(cli_labels[current_cli])", pyfmt::escape(&current_label));
     render("settings_ai_cli_panel", &scope)
+}
+
+/// "Pause scheduled runs above N% of the subscription's usage", and the pause in
+/// force, if any (see `loopx_core::quota`).
+fn usage_pause_form(ctx: &UiCtx, csrf: &str, current: &str) -> String {
+    use loopx_core::quota;
+    let config = ai_cli_config::load_config(&ctx.state.ai_cli_config_path());
+    let selected = quota::pause_threshold(&config).map(|p| (p as i64).to_string());
+    let options: Vec<(String, String)> = quota::PAUSE_PERCENT_CHOICES
+        .iter()
+        .map(|p| (p.to_string(), ctx.tf("Above {n}% used", &[("n", &p.to_string())])))
+        .collect();
+    let select = custom_select("pause_above_percent", &options, selected.as_deref(), Some(&ctx.t("Off")));
+    let paused = quota::active_pause(&ctx.state.quota_pause_path(), current, chrono::Utc::now())
+        .map(|p| {
+            let until = p.until.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string();
+            format!(
+                "<div class='flash flash-warning'>{}</div>",
+                pyfmt::escape(&ctx.tf(
+                    "Scheduled runs are paused: {reason}. They resume after {until}.",
+                    &[("reason", &p.reason), ("until", &until)]
+                ))
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "<h3>{}</h3><p class='section-subtitle'>{}</p>{paused}\
+<form method='post' action='/ai-cli/usage-pause' class='daemon-action-form single-field'>{csrf}{select}\
+<button type='submit' class='btn btn-neutral'>{}</button></form>",
+        pyfmt::escape(&ctx.t("Subscription usage")),
+        pyfmt::escape(&ctx.t("Pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above this, and resume after it resets, so loops never use up the quota you need. A usage-limit error from any CLI also pauses them for an hour. Run now always runs.")),
+        pyfmt::escape(&ctx.t("Save")),
+    )
 }
 
 fn scope_label(labels: &[(String, String)], current: &str) -> String {
@@ -473,7 +507,8 @@ mod tests {
     #[test]
     fn the_picker_lists_all_five_and_tags_the_newer_ones_experimental() {
         let html = ai_panel_for("claude", &["claude", "codex", "gemini", "kimi", "agent"]);
-        assert_eq!(html.matches("<option value=").count(), 5, "{html}");
+        let picker = &html[..html.find("/ai-cli/usage-pause").unwrap()];
+        assert_eq!(picker.matches("<option value=").count(), 5, "{html}");
         for (cli, name, experimental) in [
             ("claude", "Claude Code", false),
             ("codex", "Codex CLI", false),

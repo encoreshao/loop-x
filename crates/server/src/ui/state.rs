@@ -256,6 +256,11 @@ impl UiState {
         self.home_dir.join("ai_cli.json")
     }
 
+    /// `quota_pause.json`: scheduled runs held back near the usage limit.
+    pub fn quota_pause_path(&self) -> PathBuf {
+        self.home_dir.join("quota_pause.json")
+    }
+
     /// `status_path_for_loop`: `outputs/status.json` for the GitLab loop,
     /// `outputs/status/<name>.json` for every other.
     pub fn status_path_for_loop(&self, name: &str) -> PathBuf {

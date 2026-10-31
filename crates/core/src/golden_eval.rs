@@ -386,16 +386,42 @@ fn allowed(path: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| fnmatchcase(path, p))
 }
 
+/// Python function names `def`ined in `text`.
+fn defined_names(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter_map(|l| l.trim_start().strip_prefix("def "))
+        .filter_map(|rest| rest.split('(').next())
+        .map(str::trim)
+        .collect()
+}
+
+/// Whether `current` only adds to the fixture's `original`: its text is kept
+/// verbatim at the top, and what follows starts on a new line and redefines
+/// none of its functions (a later `def` would silently replace a test).
+fn only_appends(original: &str, current: &str) -> bool {
+    let kept = original.trim_end();
+    let Some(added) = current.strip_prefix(kept) else {
+        return false;
+    };
+    if !(added.is_empty() || added.starts_with('\n')) {
+        return false;
+    }
+    let ours = defined_names(kept);
+    !defined_names(added).iter().any(|n| ours.contains(n))
+}
+
 /// `(passed, reasons)`. `handoff` is the validated handoff or `None`;
 /// `checks_passed` is the project's checks after the last attempt (`None` when
 /// they were not run, i.e. no fix was handed off); `dirty` is the worktree's
-/// `git status --porcelain` after the run.
+/// `git status --porcelain` after the run. `read` gives a changed file's
+/// content after the run, so a protected file that only gained new tests passes.
 pub fn grade(
     case: &GoldenCase,
     handoff: Option<&Value>,
     changed: &[String],
     checks_passed: Option<bool>,
     dirty: &[String],
+    read: &dyn Fn(&str) -> Option<String>,
 ) -> (bool, Vec<String>) {
     let expect = &case.expect;
     let Some(handoff) = handoff else {
@@ -416,10 +442,11 @@ pub fn grade(
                 "changed {path} outside allowed paths {}",
                 py_repr(&json!(expect.allowed_paths))
             ));
-        } else if case.files.iter().any(|(f, _)| f == path)
-            && allowed(path, &expect.protected_paths)
-        {
-            reasons.push(format!("changed protected fixture file {path}"));
+        } else if let Some((_, original)) = case.files.iter().find(|(f, _)| f == path) {
+            let appended = read(path).is_some_and(|now| only_appends(original, &now));
+            if allowed(path, &expect.protected_paths) && !appended {
+                reasons.push(format!("changed protected fixture file {path}"));
+            }
         }
     }
     if let Some(needle) = &expect.handoff_command_contains {
@@ -919,7 +946,16 @@ pub fn run_case_real(
         }
         let changed = changed_paths(&sandbox.repo, &sandbox.worktree)?;
         let dirty = worktree_status(&sandbox.worktree)?;
-        Ok(grade(case, handoff.as_ref(), &changed, checks, &dirty))
+        let worktree = sandbox.worktree.clone();
+        let read = move |path: &str| std::fs::read_to_string(worktree.join(path)).ok();
+        Ok(grade(
+            case,
+            handoff.as_ref(),
+            &changed,
+            checks,
+            &dirty,
+            &read,
+        ))
     })();
     let (passed, grade_reasons) = match graded {
         Ok(g) => g,
@@ -1055,9 +1091,52 @@ mod tests {
         assert!(!fnmatchcase("lib", "lib/**"));
     }
 
+    fn no_read(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn a_regression_test_appended_to_a_protected_file_is_welcome() {
+        let mut c = case("fix");
+        c.files[1].1 = "def test_a():\n    assert f() == 1\n".into();
+        let fix = json!({"action": "fix"});
+        let changed = vec!["lib/a.py".to_string(), "tests/test_a.py".to_string()];
+        let grade_with = |content: &str| {
+            let content = content.to_string();
+            grade(
+                &c,
+                Some(&fix),
+                &changed,
+                Some(true),
+                &[],
+                &move |p: &str| (p == "tests/test_a.py").then(|| content.clone()),
+            )
+        };
+        assert_eq!(
+            grade_with(
+                "def test_a():\n    assert f() == 1\n\n\ndef test_b():\n    assert f() != 2\n"
+            ),
+            (true, vec![])
+        );
+        let protected = (
+            false,
+            vec!["changed protected fixture file tests/test_a.py".to_string()],
+        );
+        // Weakened in place, rewritten, or overridden by a later def of the same name.
+        assert_eq!(
+            grade_with("def test_a():\n    return\n    assert f() == 1\n"),
+            protected
+        );
+        assert_eq!(grade_with("def test_b():\n    pass\n"), protected);
+        assert_eq!(
+            grade_with("def test_a():\n    assert f() == 1\n\ndef test_a():\n    pass\n"),
+            protected
+        );
+    }
+
     #[test]
     fn grade_requires_a_handoff() {
-        let (ok, why) = grade(&case("fix"), None, &[], None, &[]);
+        let (ok, why) = grade(&case("fix"), None, &[], None, &[], &no_read);
         assert!(!ok);
         assert_eq!(why, ["no handoff (missing or malformed)"]);
     }
@@ -1071,7 +1150,7 @@ mod tests {
             "tests/test_a.py".to_string(),
             "tests/new.py".to_string(),
         ];
-        let (ok, why) = grade(&c, Some(&h), &changed, Some(false), &[]);
+        let (ok, why) = grade(&c, Some(&h), &changed, Some(false), &[], &no_read);
         assert!(!ok);
         assert_eq!(
             why,
@@ -1082,7 +1161,14 @@ mod tests {
                 "project checks did not pass",
             ]
         );
-        let (_, why) = grade(&c, Some(&json!({"action": "fix"})), &[], None, &[]);
+        let (_, why) = grade(
+            &c,
+            Some(&json!({"action": "fix"})),
+            &[],
+            None,
+            &[],
+            &no_read,
+        );
         assert_eq!(why, ["project checks were not run"]);
         let (ok, _) = grade(
             &c,
@@ -1090,6 +1176,7 @@ mod tests {
             &["lib/a.py".into()],
             Some(true),
             &[],
+            &no_read,
         );
         assert!(ok);
     }
@@ -1101,7 +1188,7 @@ mod tests {
         c.expect.handoff_command_contains = Some("pytest".into());
         c.expect.clean_worktree = true;
         let h = json!({"action": "setup_blocked", "command": "loopx worktree new /r main 1 /w"});
-        let (ok, why) = grade(&c, Some(&h), &[], None, &["?? lib/x.py".into()]);
+        let (ok, why) = grade(&c, Some(&h), &[], None, &["?? lib/x.py".into()], &no_read);
         assert!(!ok);
         assert_eq!(
             why,
@@ -1112,7 +1199,7 @@ mod tests {
         );
         let h = json!({"action": "setup_blocked", "command": "python3 -m pytest -q"});
         assert_eq!(
-            grade(&c, Some(&h), &["lib/a.py".into()], None, &[]),
+            grade(&c, Some(&h), &["lib/a.py".into()], None, &[], &no_read),
             (true, vec![])
         );
     }

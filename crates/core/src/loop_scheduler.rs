@@ -104,6 +104,15 @@ pub fn write_state(state: &SchedulerState, path: &Path) -> std::io::Result<()> {
     std::fs::write(path, pyjson::to_string_pretty(state))
 }
 
+/// Clears `name`'s recorded attempt so it is due again: a run held back by the
+/// usage limit gets its slot back once the pause lifts.
+pub fn forget_attempt(name: &str, path: &Path) {
+    let mut state = read_state(path);
+    if state.remove(name).is_some() {
+        let _ = write_state(&state, path);
+    }
+}
+
 /// First-install seeding: mark every loop as attempted `today`, so the first poll
 /// does not see "never attempted" and fire an unattended run against live
 /// GitLab/Slack. Does nothing when the state file already exists.
@@ -220,19 +229,53 @@ pub fn is_due(loop_: &Value, state: &SchedulerState, now: NaiveDateTime) -> bool
 /// How late a daily/weekly/monthly slot may be picked up and still count as on time.
 const ON_TIME_MINUTES: i64 = 5;
 
-/// Whether `loop_`'s time-of-day slot passed more than [`ON_TIME_MINUTES`] ago:
-/// the Mac slept or LoopX was closed at the time. Hourly loops have no slot.
-fn slot_missed(loop_: &Value, now: NaiveDateTime) -> bool {
+/// How long ago `loop_`'s time-of-day slot passed today. Hourly loops have no slot.
+fn slot_lateness(loop_: &Value, now: NaiveDateTime) -> Option<Duration> {
     let schedule = loop_.get("schedule").cloned().unwrap_or(Value::Null);
     if schedule.get("frequency").and_then(Value::as_str) == Some("hourly") {
-        return false;
+        return None;
     }
     let slot = now.date().and_hms_opt(
         int_field(&schedule, "hour").clamp(0, 23) as u32,
         int_field(&schedule, "minute").clamp(0, 59) as u32,
         0,
-    );
-    slot.is_some_and(|slot| now - slot > Duration::minutes(ON_TIME_MINUTES))
+    )?;
+    Some(now - slot)
+}
+
+/// Whether the slot passed more than [`ON_TIME_MINUTES`] ago: the Mac slept or
+/// LoopX was closed at the time.
+fn slot_missed(lateness: Option<Duration>) -> bool {
+    lateness.is_some_and(|late| late > Duration::minutes(ON_TIME_MINUTES))
+}
+
+/// "2h 30m", "2h", "45m".
+fn hours_minutes(d: Duration) -> String {
+    let (h, m) = (d.num_minutes() / 60, d.num_minutes() % 60);
+    match (h, m) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}h"),
+        (h, m) => format!("{h}h {m}m"),
+    }
+}
+
+/// Why a missed slot is too late to run, when the loop's `max_late_minutes`
+/// says so: a morning briefing that would only go out in the evening.
+fn too_late(loop_: &Value, lateness: Option<Duration>) -> Option<String> {
+    let limit = loop_
+        .get("schedule")
+        .and_then(|s| s.get("max_late_minutes"))
+        .and_then(Value::as_i64)
+        .map(Duration::minutes)?;
+    let late = lateness.filter(|late| *late > limit)?;
+    let schedule = &loop_["schedule"];
+    Some(format!(
+        "Missed its {:02}:{:02} slot by {}, over its {} limit",
+        int_field(schedule, "hour"),
+        int_field(schedule, "minute"),
+        hours_minutes(late),
+        hours_minutes(limit)
+    ))
 }
 
 /// Meeting Prep between its calendar refreshes: due on the tick a meeting in the
@@ -295,15 +338,23 @@ pub fn enqueue_due_loops(
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let reason = if slot_missed(loop_, now) {
+        let lateness = slot_lateness(loop_, now);
+        let reason = if slot_missed(lateness) {
             Reason::CatchUp
         } else {
             Reason::Scheduled
         };
-        match queue.enqueue(name, reason, &isoformat(now)) {
-            Ok(Enqueued::Queued { .. }) => queued.push(name.to_string()),
+        let outcome = match too_late(loop_, lateness) {
+            Some(note) => queue
+                .record_skipped(name, reason, &note, &isoformat(now))
+                .map(|()| None),
+            None => queue.enqueue(name, reason, &isoformat(now)).map(Some),
+        };
+        match outcome {
+            Ok(None) => {}
+            Ok(Some(Enqueued::Queued { .. })) => queued.push(name.to_string()),
             // Already waiting or running: leave it for the next slot.
-            Ok(Enqueued::Coalesced { .. }) => continue,
+            Ok(Some(Enqueued::Coalesced { .. })) => continue,
             Err(e) => {
                 eprintln!("loop_scheduler: could not queue {name}: {e}");
                 continue;
@@ -379,6 +430,23 @@ mod tests {
         // A second call leaves the existing file alone.
         seed_state(&[json!({"name": "c"})], &state_path, today);
         assert!(!read_state(&state_path).contains_key("c"));
+    }
+
+    #[test]
+    fn forgetting_an_attempt_makes_the_loop_due_again() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        let mut st = SchedulerState::new();
+        st.insert("l".into(), json!({"last_attempted_date": "2026-10-22"}));
+        st.insert("other".into(), json!({"last_attempted_date": "2026-10-22"}));
+        write_state(&st, &p).unwrap();
+        let l = daily(9, 0);
+        assert!(!is_due(&l, &read_state(&p), at(2026, 10, 22, 12, 0)));
+        forget_attempt("l", &p);
+        assert!(is_due(&l, &read_state(&p), at(2026, 10, 22, 12, 0)));
+        assert!(read_state(&p).contains_key("other"));
+        forget_attempt("missing", &d.path().join("none.json"));
+        assert!(!d.path().join("none.json").exists());
     }
 
     #[test]
@@ -563,6 +631,42 @@ mod tests {
         assert!(!st.contains_key("later") && !st.contains_key("off"));
         // Same day again: nothing is due any more.
         assert!(enqueue_due_loops(&loops, &sp, &queue, now).is_empty());
+    }
+
+    #[test]
+    fn a_slot_missed_by_more_than_max_late_minutes_is_skipped_not_run() {
+        let d = tempfile::tempdir().unwrap();
+        let sp = d.path().join("state.json");
+        let queue = crate::run_queue::RunQueue::new(d.path().join("q.json"));
+        let loops = vec![
+            json!({"name": "brief", "schedule": {"frequency": "daily", "hour": 8, "minute": 0, "max_late_minutes": 120}}),
+            json!({"name": "near", "schedule": {"frequency": "daily", "hour": 9, "minute": 0, "max_late_minutes": 120}}),
+        ];
+        let now = at(2026, 10, 22, 10, 30);
+        assert_eq!(enqueue_due_loops(&loops, &sp, &queue, now), ["near"]);
+        let snap = queue.snapshot(10);
+        assert_eq!(snap.queued.len(), 1);
+        let skipped = &snap.recent[0];
+        assert_eq!(
+            (skipped.loop_name.as_str(), skipped.state.as_str()),
+            ("brief", "skipped")
+        );
+        assert_eq!(skipped.reason, "catch-up");
+        assert_eq!(
+            skipped.note.as_deref(),
+            Some("Missed its 08:00 slot by 2h 30m, over its 2h limit")
+        );
+        // Recorded as attempted, so it waits for tomorrow's slot.
+        assert_eq!(
+            read_state(&sp)["brief"]["last_attempted_date"],
+            "2026-10-22"
+        );
+        assert!(enqueue_due_loops(&loops, &sp, &queue, at(2026, 10, 22, 10, 31)).is_empty());
+        assert_eq!(
+            queue.snapshot(10).recent.len(),
+            1,
+            "skipped once, not every tick"
+        );
     }
 
     #[test]

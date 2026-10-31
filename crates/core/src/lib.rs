@@ -1,8 +1,11 @@
 //! Shared logic for LoopX: config, contracts, and helpers used by the CLI and server.
 
+pub mod agent_activity;
 pub mod agents;
 pub mod ai_cli_config;
+pub mod ai_cli_health;
 pub mod ai_cli_safety;
+pub mod approval_relay;
 pub mod approvals;
 pub mod auth_health;
 pub mod budget;
@@ -64,6 +67,7 @@ pub mod metrics;
 pub mod mr;
 pub mod mr_screenshots;
 pub mod msg;
+pub mod needs_you;
 pub mod node_env;
 pub mod oauth;
 pub mod policy;
@@ -72,6 +76,7 @@ pub mod prompt;
 pub mod pydumps;
 pub mod pyfmt_lite;
 pub mod pyjson;
+pub mod quota;
 pub mod risk;
 pub mod run_control;
 pub mod run_history;

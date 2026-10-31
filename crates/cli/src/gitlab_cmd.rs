@@ -25,7 +25,7 @@ Commands:
   post-mr-comment <project> <mr_iid> <comment>
   get-diff <project> <mr_iid>                      - Get unified diff for MR
   aggregate-issues <project> [days]                - Get issue statistics
-  sync-issue <project> <issue_iid>                 - Fetch issue+notes and merge into the local cache
+  sync-issue <project> <issue_iid>                 - Fetch issue+notes (and the loop's open MR's notes) into the local cache
   sync-project <project>                           - Fetch project+members (and its parent group) into the cache
   sync-group <group_path>                          - Fetch group+members into the cache
   cached-issue <project> <issue_iid>               - Read the cached issue (no network call)
@@ -239,7 +239,13 @@ fn dispatch(argv: &[String]) -> Out {
         }
         "sync-issue" => {
             let (project, iid) = (arg(1)?, int(arg(2)?)?);
-            let fresh = client.get_issue(project, iid).map_err(api_err)?;
+            let mut fresh = client.get_issue(project, iid).map_err(api_err)?;
+            // Review comments on the loop's own MR reach the agent with the
+            // issue's (`loopx issues comments`); a failed lookup never fails the sync.
+            match client.loop_merge_request(project, iid) {
+                Ok(mr) => fresh["loop_mr"] = mr.unwrap_or(Value::Null),
+                Err(e) => eprintln!("sync-issue: merge request lookup failed: {e}"),
+            }
             let merged =
                 gitlab_cache::sync_issue(&instance_key(), project, &iid.to_string(), &fresh)
                     .map_err(|e| e.to_string())?;

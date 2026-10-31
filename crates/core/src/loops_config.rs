@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_SETTING_CHARS: usize = 1000;
 const INTERVAL_MINUTES_CHOICES: [i64; 3] = [15, 30, 45];
+/// How late a missed time-of-day slot may still run (`schedule.max_late_minutes`).
+pub const MAX_LATE_MINUTES_CHOICES: [i64; 4] = [60, 120, 240, 480];
+/// The longest `schedule.precheck` command.
+pub const MAX_PRECHECK_CHARS: usize = 500;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoopsError {
@@ -322,6 +326,36 @@ pub fn set_enabled(
     })
 }
 
+/// The longest `ai_config_dir`.
+pub const MAX_AI_CONFIG_DIR_CHARS: usize = 500;
+
+/// Run the loop on its own AI CLI account: `dir` is that account's config
+/// folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), absolute or under `~/`. Blank
+/// goes back to the default account.
+pub fn set_ai_config_dir(
+    name: &str,
+    dir: &str,
+    config_path: &Path,
+    template_path: Option<&Path>,
+) -> Outcome {
+    let dir = dir.trim();
+    let valid = (dir.starts_with('/') || dir.starts_with("~/"))
+        && !dir.contains(['\n', '\r'])
+        && dir.chars().count() <= MAX_AI_CONFIG_DIR_CHARS;
+    if !dir.is_empty() && !valid {
+        return Err("The account folder must be an absolute path or start with ~/ (one line, at most 500 characters)".into());
+    }
+    with_loop(name, config_path, template_path, |loop_| {
+        if dir.is_empty() {
+            loop_.shift_remove("ai_config_dir");
+            Ok(format!("{name} now uses the default AI CLI account"))
+        } else {
+            loop_.insert("ai_config_dir".into(), json!(dir));
+            Ok(format!("{name} now uses the AI CLI account in {dir}"))
+        }
+    })
+}
+
 /// Set the loop's `notify` connector-id list (empty removes the key).
 pub fn set_notify(
     name: &str,
@@ -479,6 +513,22 @@ pub fn set_schedule(
         ));
     };
     let frequency = frequency.as_str().unwrap_or_default();
+    if let Some(late) = sched.get("max_late_minutes") {
+        if !int_value(late).is_some_and(|m| MAX_LATE_MINUTES_CHOICES.contains(&m)) {
+            return Err(format!(
+                "max_late_minutes must be one of 60, 120, 240, 480, got {}",
+                py_repr(late)
+            ));
+        }
+    }
+    if let Some(precheck) = sched.get("precheck") {
+        let ok = precheck
+            .as_str()
+            .is_some_and(|c| !c.contains(['\n', '\r']) && c.chars().count() <= MAX_PRECHECK_CHARS);
+        if !ok {
+            return Err("precheck must be a single-line command of at most 500 characters".into());
+        }
+    }
     if frequency == "hourly" && sched.contains_key("interval_minutes") {
         let minutes = &sched["interval_minutes"];
         if sched.contains_key("interval_hours") {
@@ -638,6 +688,34 @@ mod tests {
     }
 
     #[test]
+    fn a_loop_can_run_on_its_own_ai_account() {
+        let f = fx(json!([{"name": "a"}]));
+        assert_eq!(
+            set_ai_config_dir("a", " ~/.claude-bot ", &f.config, Some(&f.none)).unwrap(),
+            "a now uses the AI CLI account in ~/.claude-bot"
+        );
+        assert_eq!(read(&f)[0]["ai_config_dir"], "~/.claude-bot");
+        set_ai_config_dir("a", "/Users/me/.codex-bot", &f.config, Some(&f.none)).unwrap();
+        assert_eq!(read(&f)[0]["ai_config_dir"], "/Users/me/.codex-bot");
+        for bad in [
+            "relative/dir",
+            "~other/x",
+            "/a\nb",
+            &format!("/{}", "x".repeat(500)),
+        ] {
+            assert_eq!(
+                set_ai_config_dir("a", bad, &f.config, Some(&f.none)).unwrap_err(),
+                "The account folder must be an absolute path or start with ~/ (one line, at most 500 characters)"
+            );
+        }
+        assert_eq!(
+            set_ai_config_dir("a", "", &f.config, Some(&f.none)).unwrap(),
+            "a now uses the default AI CLI account"
+        );
+        assert!(read(&f)[0].get("ai_config_dir").is_none());
+    }
+
+    #[test]
     fn set_enabled_flips_and_unknown_writes_nothing() {
         let f = fx(json!([{"name": "a"}]));
         assert_eq!(
@@ -733,6 +811,9 @@ mod tests {
             json!({"frequency": "monthly", "day": 31, "hour": 1, "minute": 2}),
             json!({"frequency": "hourly", "interval_hours": 6}),
             json!({"frequency": "hourly", "interval_minutes": 15}),
+            json!({"frequency": "daily", "hour": 8, "minute": 0, "max_late_minutes": 120}),
+            json!({"frequency": "daily", "hour": 8, "minute": 0, "precheck": "test -s todo.txt"}),
+            json!({"frequency": "hourly", "interval_minutes": 15, "precheck": "true"}),
         ] {
             assert_eq!(
                 set_schedule("a", &s, &f.config, Some(&f.none)).unwrap(),
@@ -782,6 +863,22 @@ mod tests {
             (
                 json!({"frequency": "hourly", "interval_minutes": 15, "interval_hours": 1}),
                 "Give either interval_hours or interval_minutes, not both",
+            ),
+            (
+                json!({"frequency": "daily", "hour": 8, "minute": 0, "max_late_minutes": 90}),
+                "max_late_minutes must be one of 60, 120, 240, 480, got 90",
+            ),
+            (
+                json!({"frequency": "daily", "hour": 8, "minute": 0, "precheck": 1}),
+                "precheck must be a single-line command of at most 500 characters",
+            ),
+            (
+                json!({"frequency": "daily", "hour": 8, "minute": 0, "precheck": "a\nb"}),
+                "precheck must be a single-line command of at most 500 characters",
+            ),
+            (
+                json!({"frequency": "hourly", "interval_minutes": 15, "precheck": "x".repeat(501)}),
+                "precheck must be a single-line command of at most 500 characters",
             ),
         ];
         for (s, msg) in cases {

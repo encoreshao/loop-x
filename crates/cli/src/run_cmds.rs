@@ -4,7 +4,7 @@
 
 use chrono::Local;
 use loopx_core::run_loop::{self, RunLoopOpts};
-use loopx_core::{ledger, loop_scheduler, loops_config, run_queue, scheduler_health};
+use loopx_core::{ledger, loop_scheduler, loops_config, quota, run_queue, scheduler_health};
 use std::process::{Command, ExitCode};
 
 fn code(c: i32) -> ExitCode {
@@ -64,6 +64,10 @@ pub fn scheduler(args: &[String]) -> ExitCode {
     // Best-effort, idempotent: catches runs that predate loop.result events.
     ledger::run_startup_backfill(None, None);
     // Throttled to every few hours; never fails the tick.
+    loopx_core::auth_health::register_sources(
+        loopx_core::auth_health::config_sources(loopx_core::connectors_config::Paths::default())
+            .with_selected_ai_cli(),
+    );
     loopx_core::auth_health::run_if_due(None, None, None, None);
     let loops = match loops_config::list_loops(&loops_config::default_config_path(), None) {
         Ok(l) => l,
@@ -73,12 +77,26 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         }
     };
     let queue = run_queue::RunQueue::new(run_queue::default_queue_path());
-    let queued = loop_scheduler::enqueue_due_loops(
-        &loops,
-        &loop_scheduler::default_state_path(),
-        &queue,
-        Local::now().naive_local(),
-    );
+    // Near the AI subscription's usage limit: due loops stay due (and run once
+    // it resets) instead of being queued now. Manual runs already queued still run.
+    let cli = loopx_core::ai_cli_config::selected_cli();
+    let pause = quota::active_pause(&quota::pause_path(), &cli, chrono::Utc::now());
+    let queued = match pause {
+        Some(p) => {
+            println!(
+                "loop_scheduler: {cli} paused until {} ({}); nothing queued",
+                p.until.with_timezone(&Local).format("%H:%M"),
+                p.reason
+            );
+            Vec::new()
+        }
+        None => loop_scheduler::enqueue_due_loops(
+            &loops,
+            &loop_scheduler::default_state_path(),
+            &queue,
+            Local::now().naive_local(),
+        ),
+    };
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));
     }
@@ -158,9 +176,7 @@ pub fn queue_worker(_args: &[String]) -> ExitCode {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "loopx".to_string());
     let now = || loop_scheduler::isoformat(Local::now().naive_local());
-    let ran = run_queue::drain(&queue, &now, 1, &mut |entry| {
-        spawn_run(&exe, &entry.loop_name)
-    });
+    let ran = run_queue::drain(&queue, &now, 1, &mut |entry| spawn_run(&exe, entry));
     if ran > 0 {
         println!("queue-worker: ran {ran} loop(s)");
     }
@@ -168,11 +184,13 @@ pub fn queue_worker(_args: &[String]) -> ExitCode {
 }
 
 /// A child `loopx run <name>` in its own process group (so the dashboard's
-/// Stop button can `killpg` it without hitting the worker).
-fn spawn_run(exe: &str, name: &str) -> std::io::Result<std::process::Child> {
+/// Stop button can `killpg` it without hitting the worker). `LOOPX_RUN_REASON`
+/// tells the run whether the scheduler started it (its precheck applies).
+fn spawn_run(exe: &str, entry: &run_queue::Entry) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
     Command::new(exe)
-        .args(["run", name])
+        .args(["run", &entry.loop_name])
+        .env("LOOPX_RUN_REASON", &entry.reason)
         .process_group(0)
         .spawn()
 }

@@ -227,6 +227,10 @@ pub struct RunCtx {
     pub fakes: Option<Arc<RunFakes>>,
     /// Where task memory and `SETUP.md` live (default: the per-machine one).
     pub memory_root: Option<PathBuf>,
+    /// What a running claude call last did (see `agent_activity`).
+    pub activity_file: PathBuf,
+    /// A claude call with no hook activity for this long is stopped.
+    pub stall_after: std::time::Duration,
 }
 
 pub struct RunFakes {
@@ -247,6 +251,7 @@ impl RunCtx {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "loopx".to_string());
         let unified_log = unified_log_path(&repo_root);
+        let activity_file = crate::agent_activity::path(Some(&repo_root));
         Self {
             repo_root,
             events_dir: None,
@@ -256,6 +261,8 @@ impl RunCtx {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file,
+            stall_after: crate::agent_activity::STALL_AFTER,
         }
     }
 
@@ -613,7 +620,33 @@ fn run_cli(
     };
 
     let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
+    // Claude reports each tool call through hooks, so the dashboard can say what
+    // it is doing and a wedged call is stopped long before its timeout.
+    let stall = (ai_cli == "claude").then(|| {
+        let label = issue.map_or_else(|| "end of run".to_string(), |(a, i)| format!("{a} #{i}"));
+        let settings = crate::agent_activity::hook_settings(&ctx.exe, &ctx.activity_file, &label);
+        if let Err(e) = crate::agent_activity::start(
+            &ctx.activity_file,
+            &label,
+            &crate::agent_activity::now_iso(),
+        ) {
+            ctx.log(&format!(
+                "cannot write {}: {e}",
+                ctx.activity_file.display()
+            ));
+        }
+        command
+            .args(&argv[1..2])
+            .args(["--settings", &settings])
+            .args(&argv[2..]);
+        proc::Stall {
+            file: ctx.activity_file.clone(),
+            after: ctx.stall_after,
+        }
+    });
+    if stall.is_none() {
+        command.args(&argv[1..]);
+    }
     for (k, v) in env {
         command.env(k, v);
     }
@@ -637,7 +670,8 @@ fn run_cli(
     }
     command.env("PATH", path);
     let timeout = std::time::Duration::from_secs_f64(timeout_seconds.max(0.0));
-    let out = match proc::run(&mut command, None, Some(timeout)) {
+    let (out, stalled) = match proc::run_watched(&mut command, None, Some(timeout), stall.as_ref())
+    {
         Ok(out) => out,
         Err(e) => {
             let detail = could_not_start(ai_cli, &argv[0], &e);
@@ -650,7 +684,12 @@ fn run_cli(
     };
 
     if out.timed_out || !out.success() {
-        let reason = if out.timed_out {
+        let reason = if stalled {
+            format!(
+                "stalled: no agent activity for {}s",
+                ctx.stall_after.as_secs_f64().round() as i64
+            )
+        } else if out.timed_out {
             format!("timed out after {}s", timeout_seconds as i64)
         } else {
             format!("exited {}", out.code.unwrap_or(-1))
@@ -944,6 +983,9 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
             "Setup problems blocked the project's checks, so no merge request was opened - the details are on the issue.".into()
         }
         "approval_denied" => "Opening the merge request was not approved.".into(),
+        "approval_changes_requested" => {
+            "The reviewer still asked for changes after the loop's revisions, so no merge request was opened.".into()
+        }
         "approval_timeout" => {
             "Nobody approved opening the merge request before the request expired.".into()
         }
@@ -1004,10 +1046,15 @@ pub fn escalation_comment(
                 None => "The run stopped early (None).".to_string(),
             },
         ),
-        "approval_denied" | "approval_timeout" | "approval_unavailable" => (
+        "approval_denied" | "approval_timeout" | "approval_unavailable"
+        | "approval_changes_requested" => (
             "I fixed this and the loop's own checks passed, but opening the merge request needs a human's approval first.".to_string(),
             match reason {
                 "approval_denied" => "The approval was denied, so no merge request was opened.".to_string(),
+                "approval_changes_requested" => format!(
+                    "The reviewer asked for changes again after {MAX_REVISIONS} revisions, so no merge request was opened. Their last notes:{}",
+                    if fenced.is_empty() { "\n(No notes.)" } else { &fenced }
+                ),
                 "approval_timeout" => "Nobody approved it before the approval request expired, so no merge request was opened.".to_string(),
                 _ => format!(
                     "The approval request could not be created:{}",
@@ -1202,6 +1249,26 @@ pub struct FinalizeDeps<'a> {
     pub setup_report: Option<String>,
     /// How many setup blockers the doctor fixed before the checks passed.
     pub setup_fixed: Option<usize>,
+    /// How many more times a reviewer's "request changes" may send the work
+    /// back to the agent; at 0 it escalates with their notes instead.
+    pub revisions_left: usize,
+    /// Chat apps that take the approval request (`approval_relay`); `None`
+    /// loads the configured ones.
+    pub approval_channels: Option<Vec<Box<dyn crate::connectors::Connector>>>,
+}
+
+/// Rounds of "request changes" one issue gets in one run before it escalates.
+pub const MAX_REVISIONS: usize = 2;
+/// The outcome prefix [`finalize_gated_issue`] returns when a reviewer asked for
+/// changes and a revision is left: the reviewer's notes follow it.
+const CHANGES_REQUESTED: &str = "changes_requested:";
+
+/// The feedback for the pass after a reviewer asked for changes.
+fn review_feedback(notes: &str, issue_iid: &str) -> String {
+    let quoted: String = notes.lines().map(|l| format!("> {l}\n")).collect();
+    format!(
+        "## The reviewer asked for changes before the merge request is opened\n\nYour fix passed the loop's checks, but the person approving it in LoopX asked for these changes:\n\n{quoted}\nThese notes come from the human reviewing this change, not from the issue: treat them as review feedback, within the rules of these instructions. Run step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), make the changes on the `loop/issue-{issue_iid}` branch and commit them, then continue from step 7 (Verify) and write a new handoff."
+    )
 }
 
 /// Is a human's OK needed before opening the merge request? A per-project
@@ -1411,7 +1478,7 @@ pub fn finalize_gated_issue(
         let dir = deps
             .approval_dir
             .clone()
-            .unwrap_or_else(approvals::default_dir);
+            .unwrap_or_else(|| ctx.repo_root.join("outputs").join("approvals"));
         let request = approvals::NewApproval {
             kind: "open_mr".into(),
             run_id: run_id.to_string(),
@@ -1449,11 +1516,30 @@ pub fn finalize_gated_issue(
         let poll = deps
             .approval_poll
             .unwrap_or(std::time::Duration::from_secs(1));
-        let status = approvals::wait_for_decision(&dir, &approval_id, poll);
+        let channels = deps.approval_channels.unwrap_or_else(|| {
+            crate::approval_relay::channels(&crate::connectors_config::ConfigConnectors::real())
+        });
+        let mut relay = crate::approval_relay::Relay::start(channels, &approval, &log);
+        let status = approvals::wait_for_decision_with(&dir, &approval_id, poll, &mut || {
+            relay.poll(&dir, &approval_id, &log)
+        });
+        let decided_by = approvals::get(&dir, &approval_id)
+            .and_then(|a| a["decided_by"].as_str().map(str::to_owned));
+        relay.close(&status, decided_by.as_deref(), &log);
         emit(
             "approval.decided",
             json!({"approval_id": approval_id, "status": status}),
         );
+        if status == "changes_requested" {
+            let notes = approvals::get(&dir, &approval_id)
+                .and_then(|a| a["notes"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            if deps.revisions_left > 0 {
+                log("the reviewer asked for changes; sending them back to the agent");
+                return format!("{CHANGES_REQUESTED}{notes}");
+            }
+            return escalate("approval_changes_requested", &notes, None);
+        }
         if status != "approved" {
             let reason = if status == "timeout" {
                 "approval_timeout"
@@ -1965,19 +2051,16 @@ pub fn run_one_issue(
     } else {
         (pass, SetupOutcome::default())
     };
-    let (mut result, raw_costs, raw_usages) = pass;
+    let (mut result, mut raw_costs, mut raw_usages) = pass;
     let setup_fixed_for_report = setup.fixed;
-
-    // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
-    // un-coerced figure to keep "cost $0" apart from "never got a cost".
-    result.agent_cost_usd = match sum_or_none(&raw_costs) {
-        Some(v) => AgentCost::Usd(v),
-        None => AgentCost::Unknown,
-    };
-    let usage = sum_usages(&raw_usages);
+    let mut setup_report = setup.report;
+    let mut checkout_problem = checkout_problem;
+    let mut revisions = 0;
 
     let mut gate_outcome = None;
-    if gate {
+    // A reviewer's "request changes" sends the work back for another pass and
+    // a fresh approval, up to MAX_REVISIONS times.
+    while gate && gate_outcome.is_none() {
         let fakes = ctx.fakes.as_deref();
         let notifier = fakes.map(|f| &*f.notifier as &dyn Fn(&str));
         let outcome = finalize_gated_issue(
@@ -1990,13 +2073,43 @@ pub fn run_one_issue(
                 gitlab: fakes.map(|f| &*f.gitlab as &dyn GitlabCalls),
                 notifier,
                 gitlab_config_path: fakes.map(|f| f.gitlab_config_path.clone()),
-                checkout_problem,
+                checkout_problem: checkout_problem.take(),
                 quiet,
-                setup_report: setup.report,
+                setup_report: setup_report.take(),
                 setup_fixed: setup_fixed_for_report,
+                revisions_left: MAX_REVISIONS - revisions,
+                // Tests never reach the configured chat apps.
+                approval_channels: fakes.map(|_| Vec::new()),
                 ..FinalizeDeps::default()
             },
         );
+        if let Some(notes) = outcome.strip_prefix(CHANGES_REQUESTED) {
+            revisions += 1;
+            let issue = IssueArgs {
+                ctx,
+                run_id,
+                alias,
+                issue_iid,
+                definition,
+            };
+            issue.emit("approval.revision_started", json!({"round": revisions}));
+            let (next, more_costs, more_usages) = run_pass(
+                ctx,
+                run_id,
+                alias,
+                issue_iid,
+                definition,
+                invoker.clone(),
+                mode.clone(),
+                Some(review_feedback(notes, issue_iid)),
+                false,
+                result.iterations.len() as i64,
+            )?;
+            raw_costs.extend(more_costs);
+            raw_usages.extend(more_usages);
+            result = merge_passes(result, next);
+            continue;
+        }
         if is_loop_escalation(Some(&outcome)) && result.final_state == LoopState::Completed {
             // Visible on Loop Runs as an escalation, not "completed".
             result.final_state = LoopState::Escalated;
@@ -2004,6 +2117,14 @@ pub fn run_one_issue(
         }
         gate_outcome = Some(outcome);
     }
+
+    // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
+    // un-coerced figure to keep "cost $0" apart from "never got a cost".
+    result.agent_cost_usd = match sum_or_none(&raw_costs) {
+        Some(v) => AgentCost::Usd(v),
+        None => AgentCost::Unknown,
+    };
+    let usage = sum_usages(&raw_usages);
 
     if let Err(e) = write_result(
         &result,
@@ -2915,6 +3036,8 @@ mod tests {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -2939,6 +3062,111 @@ mod tests {
         let body = mr_description(&calls);
         assert!(body.contains("`pnpm test`"), "{body}");
         assert!(!body.contains("rspec"), "{body}");
+    }
+
+    /// A chat app (Telegram) where someone presses Allow on the first poll.
+    struct AllowingChat(crate::connectors::Account, Arc<Mutex<Vec<String>>>);
+
+    impl crate::connectors::Connector for AllowingChat {
+        fn info(&self) -> &'static crate::connectors::TypeInfo {
+            &crate::connectors::telegram::INFO
+        }
+        fn account(&self) -> &crate::connectors::Account {
+            &self.0
+        }
+        fn request_approval(&self, a: &Value) -> crate::connectors::ConnResult<Value> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(format!("asked {}", a["project"]));
+            Ok(json!({"message_id": 1}))
+        }
+        fn poll_approval(
+            &self,
+            _h: &Value,
+            offset: i64,
+        ) -> crate::connectors::ConnResult<(i64, Option<crate::connectors::ChatDecision>)> {
+            Ok((
+                offset + 1,
+                Some(crate::connectors::ChatDecision {
+                    decision: "approve".into(),
+                    notes: None,
+                    by: "telegram:@ana".into(),
+                }),
+            ))
+        }
+        fn close_approval(&self, _h: &Value, outcome: &str) -> crate::connectors::ConnResult<()> {
+            self.1.lock().unwrap().push(outcome.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_approval_can_be_answered_from_a_chat_app() {
+        let d = tempfile::tempdir().unwrap();
+        let handoff = d.path().join("h.json");
+        std::fs::write(
+            &handoff,
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main", "title": "Fix #7"}).to_string(),
+        )
+        .unwrap();
+        let result = LoopResult::new("l", "r", "gitlab-issue", LoopState::Completed, vec![], "");
+        let project = json!({"project_id": "g/p", "local_path": "/x", "instance": "g"});
+        let notes = Notes(Default::default());
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
+        let ctx = RunCtx {
+            repo_root: d.path().into(),
+            events_dir: Some(d.path().join("events")),
+            results_dir: None,
+            unified_log: d.path().join("log"),
+            exe: "loopx".into(),
+            config_path: None,
+            fakes: None,
+            memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
+        };
+        let seen: Arc<Mutex<Vec<String>>> = Default::default();
+        let chat: Box<dyn crate::connectors::Connector> = Box::new(AllowingChat(
+            crate::connectors::Account::new("phone", "telegram"),
+            seen.clone(),
+        ));
+        let approvals_dir = d.path().join("approvals");
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&notes),
+                notifier: Some(&|_: &str| {}),
+                handoff: Some(handoff),
+                project: Some(project),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(true),
+                approval_dir: Some(approvals_dir.clone()),
+                approval_poll: Some(std::time::Duration::from_millis(5)),
+                approval_channels: Some(vec![chat]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "mr_opened");
+        let decided = approvals::list(&approvals_dir, None, Utc::now());
+        assert_eq!(decided[0]["decided_by"], "telegram:@ana");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "asked \"web\"",
+                "Approved by telegram:@ana: opening the merge request."
+            ]
+        );
     }
 
     /// Finalize a passed gated fix for `web #7` from `handoff`, with a push whose
@@ -2972,6 +3200,8 @@ mod tests {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -3106,6 +3336,8 @@ mod tests {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -3433,6 +3665,8 @@ mod tests {
                     gitlab_config_path: d.path().join("gitlab.json"),
                 })),
                 memory_root: Some(d.path().join("memory")),
+                activity_file: d.path().join("agent-activity.json"),
+                stall_after: crate::agent_activity::STALL_AFTER,
             };
             let me = Self {
                 d,
@@ -3653,15 +3887,48 @@ mod tests {
         }
 
         fn configure(&self, use_worktree: bool) {
+            self.configure_with(use_worktree, false);
+        }
+
+        fn configure_with(&self, use_worktree: bool, require_approval: bool) {
             std::fs::write(
                 self.t.ctx.config_path.as_ref().unwrap(),
                 json!({"gitlab_instance": "g", "worktree_root": self.t.d.path().join("wt").display().to_string(),
                        "projects": {"web": {"project_id": "g/web", "local_path": self.t.path(),
                                             "target_branch": "main", "use_worktree": use_worktree,
-                                            "require_approval": false}}})
+                                            "require_approval": require_approval}}})
                 .to_string(),
             )
             .unwrap();
+        }
+
+        /// A reviewer in another thread answering each approval request in turn.
+        fn reviewer(
+            &self,
+            answers: Vec<(&'static str, Option<&'static str>)>,
+        ) -> std::thread::JoinHandle<()> {
+            let dir = self.t.d.path().join("outputs").join("approvals");
+            std::thread::spawn(move || {
+                for (decision, notes) in answers {
+                    loop {
+                        let pending = approvals::list(&dir, Some("pending"), Utc::now());
+                        if let Some(a) = pending.first() {
+                            let id = a["id"].as_str().unwrap();
+                            approvals::decide_with_notes(
+                                &dir,
+                                id,
+                                decision,
+                                notes,
+                                "test",
+                                Utc::now(),
+                            )
+                            .unwrap();
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+            })
         }
 
         fn fix(&self) -> Value {
@@ -3779,6 +4046,72 @@ mod tests {
     fn doctor_result(status: &str, blockers: Value) -> Option<Value> {
         Some(json!({"status": status, "blockers": blockers,
                     "learning": "run make generate before make test"}))
+    }
+
+    #[test]
+    fn requested_changes_go_back_to_the_agent_and_the_mr_opens_once_approved() {
+        let h = Doctored::new();
+        h.configure_with(true, true);
+        let reviewer = h.reviewer(vec![
+            ("request_changes", Some("Rename the helper to page_rows.")),
+            ("approve", None),
+        ]);
+        let run = h.run(vec![Step::Main(h.fix()), Step::Main(h.fix())]);
+        reviewer.join().unwrap();
+        assert_eq!(h.kinds(), "mm");
+        let calls = h.calls.lock().unwrap();
+        let feedback = calls[1].feedback.as_deref().unwrap_or("");
+        assert!(feedback.contains("asked for changes"), "{feedback}");
+        assert!(
+            feedback.contains("> Rename the helper to page_rows."),
+            "{feedback}"
+        );
+        assert!(feedback.contains("loop/issue-7"), "{feedback}");
+        drop(calls);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(run.result.iterations.len(), 2, "both passes' iterations");
+        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(1.0));
+        let decided = h
+            .event_types()
+            .iter()
+            .filter(|t| *t == "approval.decided")
+            .count();
+        assert_eq!(decided, 2);
+    }
+
+    #[test]
+    fn changes_requested_again_after_two_revisions_escalate_with_the_notes() {
+        let h = Doctored::new();
+        h.configure_with(true, true);
+        let reviewer = h.reviewer(vec![
+            ("request_changes", Some("First round.")),
+            ("request_changes", Some("Second round.")),
+            (
+                "request_changes",
+                Some("Still not right: keep the old name."),
+            ),
+        ]);
+        let run = h.run(vec![
+            Step::Main(h.fix()),
+            Step::Main(h.fix()),
+            Step::Main(h.fix()),
+        ]);
+        reviewer.join().unwrap();
+        assert_eq!(h.kinds(), "mmm");
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("escalated:approval_changes_requested")
+        );
+        let notes = h.notes();
+        assert!(
+            notes.contains("Still not right: keep the old name."),
+            "{notes}"
+        );
     }
 
     #[test]
@@ -4424,6 +4757,92 @@ mod tests {
             npm.contains("exec '/opt/loopx/bin/loopx' _node-shim"),
             "{npm}"
         );
+    }
+
+    #[test]
+    fn the_activity_file_sits_beside_the_runs_own_status() {
+        let ctx = RunCtx::new(PathBuf::from("/r/root"));
+        assert_eq!(
+            ctx.activity_file,
+            PathBuf::from("/r/root/outputs/agent-activity.json")
+        );
+    }
+
+    fn claude_ctx(dir: &Path) -> RunCtx {
+        let mut ctx = RunCtx::new(dir.to_path_buf());
+        ctx.exe = "/opt/loopx/bin/loopx".into();
+        ctx.activity_file = dir.join("outputs/agent-activity.json");
+        ctx
+    }
+
+    #[test]
+    fn a_claude_call_reports_its_activity_through_hooks() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv_file = d.path().join("argv.txt");
+        let argv = vec![
+            script_cli(
+                d.path(),
+                &format!(
+                    "printf '%s\\n' \"$@\" > '{}'\necho '{{\"result\":\"ok\"}}'",
+                    argv_file.display()
+                ),
+            ),
+            "-p".to_string(),
+            "P".to_string(),
+        ];
+        run_cli(&ctx, "claude", &argv, 30.0, Some(("web", "3")), &[], None).unwrap();
+        let args: Vec<String> = std::fs::read_to_string(&argv_file)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        assert_eq!(args[..2], ["-p", "--settings"]);
+        assert!(
+            args[2].contains("'/opt/loopx/bin/loopx' _agent-hook") && args[2].contains("'web #3'"),
+            "{}",
+            args[2]
+        );
+        assert_eq!(args.last().unwrap(), "P");
+        let activity = crate::agent_activity::read(&ctx.activity_file).unwrap();
+        assert_eq!(
+            (activity["event"].as_str(), activity["label"].as_str()),
+            (Some("Start"), Some("web #3"))
+        );
+    }
+
+    #[test]
+    fn a_claude_call_that_goes_quiet_is_stopped_early() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = claude_ctx(d.path());
+        ctx.stall_after = std::time::Duration::from_millis(400);
+        let argv = vec![
+            script_cli(d.path(), "exec sleep 30"),
+            "-p".into(),
+            "P".into(),
+        ];
+        let start = std::time::Instant::now();
+        let e = run_cli(&ctx, "claude", &argv, 60.0, Some(("web", "3")), &[], None).unwrap_err();
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert!(
+            e.message.starts_with("stalled: no agent activity for"),
+            "{}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn other_clis_get_no_hooks() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv = vec![
+            script_cli(d.path(), r#"echo "{\"response\":\"$*\"}""#),
+            "P".into(),
+        ];
+        run_cli(&ctx, "gemini", &argv, 30.0, Some(("web", "3")), &[], None).unwrap();
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(!log.contains("--settings"), "{log}");
+        assert!(!ctx.activity_file.exists());
     }
 
     #[test]

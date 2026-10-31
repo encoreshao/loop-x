@@ -1111,6 +1111,24 @@
 </script>
 <script>
 (function() {
+  // Needs-you bell in the topbar: how many things wait on the user (see
+  // pages/needs_you.rs). Kept current while the tab is visible.
+  var bell = document.getElementById('needs-you-bell');
+  if (!bell) return;
+  function refresh() {
+    if (document.hidden) return;
+    fetch('/needs-you/count').then(function(r) { return r.json(); }).then(function(d) {
+      var badge = bell.querySelector('.needs-you-count');
+      if (!d.count) { if (badge) badge.remove(); return; }
+      if (!badge) { badge = document.createElement('span'); badge.className = 'needs-you-count'; bell.appendChild(badge); }
+      badge.textContent = d.count > 9 ? '9+' : String(d.count);
+    }).catch(function() {});
+  }
+  setInterval(refresh, 5000);
+})();
+</script>
+<script>
+(function() {
   // Topbar language switcher - see lang_switch_html and .lang-switch.
   var root = document.getElementById('lang-switch');
   if (!root) return;

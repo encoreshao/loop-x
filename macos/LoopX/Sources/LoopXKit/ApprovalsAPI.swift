@@ -36,7 +36,11 @@ public enum ApprovalError: Error, Equatable, Sendable {
     }
 }
 
-public enum ApprovalDecision: String, Sendable { case approve, deny }
+public enum ApprovalDecision: String, Sendable {
+    case approve, deny
+    /// Sends the work back to the agent with the reviewer's notes.
+    case requestChanges = "request_changes"
+}
 
 public struct ApprovalList: Codable, Equatable, Sendable {
     public var pending: [Approval]
@@ -66,9 +70,10 @@ public struct ApprovalsAPI: Sendable {
         return list
     }
 
-    /// POST /api/approvals/{id}; returns the updated approval.
+    /// POST /api/approvals/{id}; returns the updated approval. `notes` say what to
+    /// change, and only `.requestChanges` needs them.
     @discardableResult
-    public func decide(id: String, _ decision: ApprovalDecision) async throws -> Approval {
+    public func decide(id: String, _ decision: ApprovalDecision, notes: String? = nil) async throws -> Approval {
         // The id is a path component: never let it add path segments.
         guard let enc = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "_-.~"))),
               !enc.isEmpty else { throw ApprovalError.badRequest("invalid approval id") }
@@ -79,7 +84,9 @@ public struct ApprovalsAPI: Sendable {
         req.httpMethod = "POST"
         req.setValue(token, forHTTPHeaderField: "X-LoopX-Token")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["decision": decision.rawValue, "by": decidedBy])
+        var body = ["decision": decision.rawValue, "by": decidedBy]
+        if let notes { body["notes"] = notes }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let data = try await perform(req)
         guard let a = try? JSONDecoder().decode(Approval.self, from: data) else { throw ApprovalError.invalidResponse }
         return a

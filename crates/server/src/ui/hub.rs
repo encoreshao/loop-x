@@ -345,4 +345,32 @@ mod tests {
         let keys: Vec<&str> = mr.views.iter().map(|v| v.key.as_str()).collect();
         assert_eq!(keys, ["live", "mrs", "content", "history"]);
     }
+
+    #[test]
+    fn no_loop_shows_the_refresh_icon() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops");
+        let mut names: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| std::fs::read_to_string(e.ok()?.path().join("loop.yaml")).ok())
+            .filter_map(|y| {
+                y.lines()
+                    .find_map(|l| l.strip_prefix("name: ").map(|n| n.trim().to_string()))
+            })
+            .collect();
+        // The run definitions behind the built-in GitLab and Topic Monitor pages.
+        names.retain(|n| n != "gitlab-issue-loop" && n != "topic-monitor-loop");
+        assert!(names.len() >= 8, "{names:?}");
+        names.push("my-custom-loop".into());
+        for name in names {
+            let hub =
+                builtin_loop_page(&name).unwrap_or_else(|| generic_loop_page(&name, None, false));
+            assert!(!hub.icon.contains("#i-autorenew"), "{name}: {}", hub.icon);
+            if builtin_loop_page(&name).is_none() && name != "my-custom-loop" {
+                assert!(
+                    nav_icon_glyph(&name).is_some() || brand_icon_key(&name).is_some(),
+                    "{name} has no icon of its own"
+                );
+            }
+        }
+    }
 }

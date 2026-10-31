@@ -3,9 +3,11 @@
 //! runner, the CLI, the dashboard server and the Mac app all share one store
 //! with no daemon in between.
 //!
-//! A request starts `pending`, and ends exactly once as `approved`, `denied`
-//! or `timeout` (when `expires_at` passes undecided). The runner blocks in
-//! [`wait_for_decision`] and treats anything but `approved` as "do not proceed".
+//! A request starts `pending`, and ends exactly once as `approved`, `denied`,
+//! `changes_requested` (with the reviewer's `notes`) or `timeout` (when
+//! `expires_at` passes undecided). The runner blocks in [`wait_for_decision`]:
+//! only `approved` proceeds, and `changes_requested` sends the notes back to the
+//! agent for another pass.
 
 use crate::events::{fmt_timestamp, new_uuid_hex};
 use crate::pyjson;
@@ -15,6 +17,8 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_TIMEOUT_SECONDS: i64 = 1800;
+/// The longest review notes a "request changes" decision may carry.
+pub const MAX_NOTES_CHARS: usize = 4000;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ApprovalError {
@@ -22,8 +26,12 @@ pub enum ApprovalError {
     Unknown(String),
     #[error("approval {0} is already {1}")]
     AlreadyDecided(String, String),
-    #[error("decision must be 'approve' or 'deny', got {0:?}")]
+    #[error("decision must be 'approve', 'deny' or 'request_changes', got {0:?}")]
     BadDecision(String),
+    #[error("requesting changes needs notes saying what to change")]
+    MissingNotes,
+    #[error("the notes are longer than 4000 characters")]
+    NotesTooLong,
     #[error("{0}")]
     Io(String),
 }
@@ -168,11 +176,34 @@ pub fn decide(
     decided_by: &str,
     now: DateTime<Utc>,
 ) -> Result<Value, ApprovalError> {
+    decide_with_notes(dir, id, decision, None, decided_by, now)
+}
+
+/// [`decide`], plus `request_changes`, which needs `notes` saying what to change.
+pub fn decide_with_notes(
+    dir: &Path,
+    id: &str,
+    decision: &str,
+    notes: Option<&str>,
+    decided_by: &str,
+    now: DateTime<Utc>,
+) -> Result<Value, ApprovalError> {
     let status = match decision {
         "approve" | "approved" => "approved",
         "deny" | "denied" => "denied",
+        "request_changes" | "changes_requested" => "changes_requested",
         other => return Err(ApprovalError::BadDecision(other.to_string())),
     };
+    let notes = notes.map(str::trim).filter(|n| !n.is_empty());
+    if status == "changes_requested" {
+        match notes {
+            None => return Err(ApprovalError::MissingNotes),
+            Some(n) if n.chars().count() > MAX_NOTES_CHARS => {
+                return Err(ApprovalError::NotesTooLong)
+            }
+            Some(_) => {}
+        }
+    }
     expire_overdue(dir, now);
     let mut approval = get(dir, id).ok_or_else(|| ApprovalError::Unknown(id.to_string()))?;
     if approval["status"] != "pending" {
@@ -185,6 +216,9 @@ pub fn decide(
     obj.insert("status".into(), json!(status));
     obj.insert("decided_at".into(), json!(fmt_timestamp(now)));
     obj.insert("decided_by".into(), json!(decided_by));
+    if status == "changes_requested" {
+        obj.insert("notes".into(), json!(notes));
+    }
     write(dir, &approval)?;
     Ok(approval)
 }
@@ -192,7 +226,19 @@ pub fn decide(
 /// Block until `id` is decided or expires; returns the final status
 /// (`approved` | `denied` | `timeout`). A vanished approval counts as `denied`.
 pub fn wait_for_decision(dir: &Path, id: &str, poll: std::time::Duration) -> String {
+    wait_for_decision_with(dir, id, poll, &mut || {})
+}
+
+/// [`wait_for_decision`] that calls `tick` before each look, e.g. to read
+/// answers from a chat app (`approval_relay`).
+pub fn wait_for_decision_with(
+    dir: &Path,
+    id: &str,
+    poll: std::time::Duration,
+    tick: &mut dyn FnMut(),
+) -> String {
     loop {
+        tick();
         expire_overdue(dir, Utc::now());
         match get(dir, id) {
             None => return "denied".to_string(),
@@ -211,6 +257,28 @@ mod tests {
 
     fn t(sec: i64) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 22, 10, 0, 0).unwrap() + Duration::seconds(sec)
+    }
+
+    #[test]
+    fn the_wait_lets_a_tick_decide() {
+        let d = tempfile::tempdir().unwrap();
+        let id = create(d.path(), &req(), Utc::now()).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut ticks = 0;
+        let status = wait_for_decision_with(
+            d.path(),
+            &id,
+            std::time::Duration::from_millis(1),
+            &mut || {
+                ticks += 1;
+                if ticks == 3 {
+                    decide(d.path(), &id, "approve", "telegram:@ana", Utc::now()).unwrap();
+                }
+            },
+        );
+        assert_eq!((status.as_str(), ticks), ("approved", 3));
     }
 
     fn req() -> NewApproval {
@@ -258,6 +326,56 @@ mod tests {
         assert_eq!(
             decide(d.path(), id, "deny", "x", t(6)).unwrap_err(),
             ApprovalError::AlreadyDecided(id.into(), "approved".into())
+        );
+    }
+
+    #[test]
+    fn a_reviewer_can_request_changes_with_notes() {
+        let d = tempfile::tempdir().unwrap();
+        let a = create(d.path(), &req(), t(0)).unwrap();
+        let id = a["id"].as_str().unwrap();
+        assert_eq!(
+            decide_with_notes(d.path(), id, "request_changes", Some("  "), "mac-app", t(1))
+                .unwrap_err(),
+            ApprovalError::MissingNotes
+        );
+        let done = decide_with_notes(
+            d.path(),
+            id,
+            "request_changes",
+            Some(" Rename the helper to page_rows. "),
+            "mac-app",
+            t(2),
+        )
+        .unwrap();
+        assert_eq!(done["status"], "changes_requested");
+        assert_eq!(done["notes"], "Rename the helper to page_rows.");
+        assert_eq!(get(d.path(), id).unwrap(), done);
+        let long = "x".repeat(MAX_NOTES_CHARS + 1);
+        let b = create(d.path(), &req(), t(3)).unwrap();
+        assert_eq!(
+            decide_with_notes(
+                d.path(),
+                b["id"].as_str().unwrap(),
+                "request_changes",
+                Some(&long),
+                "x",
+                t(4)
+            )
+            .unwrap_err(),
+            ApprovalError::NotesTooLong
+        );
+    }
+
+    #[test]
+    fn wait_returns_changes_requested() {
+        let d = tempfile::tempdir().unwrap();
+        let a = create(d.path(), &req(), Utc::now()).unwrap();
+        let id = a["id"].as_str().unwrap();
+        decide_with_notes(d.path(), id, "request_changes", Some("n"), "x", Utc::now()).unwrap();
+        assert_eq!(
+            wait_for_decision(d.path(), id, std::time::Duration::from_millis(10)),
+            "changes_requested"
         );
     }
 

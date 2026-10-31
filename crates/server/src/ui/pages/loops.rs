@@ -1024,12 +1024,14 @@ fn schedule_form_html(ctx: &UiCtx, loop_: &Value, csrf: &str, return_to: &str) -
     let freq_select = custom_select("frequency", &freqs, Some(&frequency), None);
     let style = |show: bool| if show { "" } else { " style='display:none'" };
     let safe_name = h(&loop_.get("name").map_or_else(|| "?".to_string(), py_str));
+    let (missed, precheck) = super::loops_common::schedule_extras(ctx, schedule);
     format!(
         "<form method='post' action='/daemons/loops/{safe_name}/schedule' class='daemon-action-form schedule-form'>\
-{csrf}{}<span class='setting-label'>{}</span><div class='setting-controls'><span class='time-control'{}><input type='time' name='time' value='{time_value}'></span>\
+{csrf}{}<span class='setting-label'>{}</span><div class='setting-controls'><span class='time-control'{}><input type='time' name='time' value='{time_value}'> {missed}</span>\
 {freq_select}<span class='weekday-checks weekly-controls'{}>{checkboxes}</span>\
 <span class='monthly-controls'{}>on day {day_select}</span>\
 <span class='hourly-controls'{}>{} {interval_select}</span>\
+{precheck}\
 <button type='submit' class='btn btn-neutral setting-save' aria-label='{save}' title='{save}'>{}</button></div></form>",
         return_to_input(return_to),
         h(&ctx.t("Schedule")),

@@ -66,6 +66,39 @@ fn short_age(secs: i64) -> String {
     }
 }
 
+/// What the GitLab loop's agent last did, from the hooks' activity file:
+/// "Agent is running Bash: cargo test · 1m ago".
+fn agent_activity(ctx: &UiCtx) -> Option<String> {
+    let file = loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("gitlab-loop"));
+    let a = loopx_core::agent_activity::read(&file)?;
+    let text = |k: &str| a.get(k).and_then(serde_json::Value::as_str).filter(|v| !v.is_empty());
+    let doing = match (text("event")?, text("tool"), text("detail")) {
+        ("PreToolUse", Some(tool), Some(detail)) => {
+            ctx.tf("Agent is running {tool}: {detail}", &[("tool", tool), ("detail", detail)])
+        }
+        ("PreToolUse", Some(tool), None) => ctx.tf("Agent is running {tool}", &[("tool", tool)]),
+        ("Notification", _, Some(message)) => ctx.tf("Agent is waiting: {message}", &[("message", message)]),
+        ("Stop", ..) => ctx.t("Agent finished its turn"),
+        ("Start", ..) => ctx.t("Agent is starting"),
+        _ => ctx.t("Agent is thinking"),
+    };
+    let ago = text("at")
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0));
+    Some(match ago {
+        Some(secs) => ctx.tf("{doing} · {time} ago", &[("doing", &doing), ("time", &short_age(secs))]),
+        None => doing,
+    })
+}
+
+/// `progress` plus, for the GitLab loop, what its agent is doing.
+fn with_agent_activity(ctx: &UiCtx, loop_name: &str, progress: String) -> String {
+    match (loop_name == "gitlab-loop").then(|| agent_activity(ctx)).flatten() {
+        Some(activity) => format!("{progress} · {activity}"),
+        None => progress,
+    }
+}
+
 // ----- the topbar pill -----
 
 /// A loop's status file when it says the loop is running and its process is alive.
@@ -215,12 +248,14 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
             note: None,
             cancel_requested: false,
         };
-        row(ctx, &e, &progress_text(ctx.lang, &status), "")
+        let progress = with_agent_activity(ctx, "gitlab-loop", progress_text(ctx.lang, &status));
+        row(ctx, &e, &progress, "")
     });
     let running = outside
         .into_iter()
         .chain(snap.running.iter().map(|e| {
-            let progress = live_status(ctx, &e.loop_name).map(|s| progress_text(ctx.lang, &s));
+            let progress = live_status(ctx, &e.loop_name)
+                .map(|s| with_agent_activity(ctx, &e.loop_name, progress_text(ctx.lang, &s)));
             let elapsed = ctx.tf(
                 "running for {time}",
                 &[("time", &short_age(age_secs(e.started_at.as_deref())))],
@@ -434,6 +469,42 @@ mod tests {
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
         assert!(!html.contains("Nothing is running"), "{html}");
         assert!(html.contains("gitlab-loop") && html.contains("Processing web #10"), "{html}");
+    }
+
+    #[test]
+    fn a_gitlab_run_says_what_its_agent_is_doing() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        write_status(d.path(), "status.json", r#"{"state": "running", "current_issue": "web #10", "current_step": "analyzing"}"#);
+        let at = (chrono::Utc::now() - chrono::Duration::seconds(75)).to_rfc3339();
+        write_status(
+            d.path(),
+            "agent-activity.json",
+            &serde_json::json!({"at": at, "label": "web #10", "event": "PreToolUse", "tool": "Bash", "detail": "cargo test <x>"}).to_string(),
+        );
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("Agent is running Bash: cargo test &lt;x&gt; · 1m ago"), "{html}");
+        write_status(
+            d.path(),
+            "agent-activity.json",
+            &serde_json::json!({"at": chrono::Utc::now().to_rfc3339(), "label": "web #10", "event": "Notification", "tool": null, "detail": "needs permission"}).to_string(),
+        );
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("Agent is waiting: needs permission"), "{html}");
+    }
+
+    #[test]
+    fn an_idle_gitlab_loop_shows_no_stale_agent_activity() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        write_status(d.path(), "status.json", r#"{"state": "idle"}"#);
+        write_status(
+            d.path(),
+            "agent-activity.json",
+            r#"{"at": "2026-10-31T09:00:00+00:00", "label": "web #10", "event": "Stop", "tool": null, "detail": null}"#,
+        );
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(!html.contains("Agent "), "{html}");
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub fn register(r: &mut Registry) {
     r.post("/daemons/loops/:name/enable", loop_enable);
     r.post("/daemons/loops/:name/disable", loop_disable);
     r.post("/daemons/loops/:name/schedule", loop_schedule);
+    r.post("/daemons/loops/:name/account", loop_account);
     r.post("/daemons/:file/enable", daemon_enable);
     r.post("/daemons/:file/disable", daemon_disable);
     r.post("/daemons/:file/schedule", daemon_schedule);
@@ -35,6 +36,7 @@ pub fn register(r: &mut Registry) {
     r.post("/notifications/block-templates/:name/delete", block_template_delete);
     r.post("/notifications/block-templates/:name/test", block_template_test);
     r.post("/ai-cli", ai_cli);
+    r.post("/ai-cli/usage-pause", ai_cli_usage_pause);
     r.post("/instructions", instructions);
     r.post("/topic-monitor/topics", topic_save);
     r.post("/topic-monitor/topics/:name/delete", topic_delete);
@@ -235,7 +237,19 @@ fn loop_schedule(ctx: &UiCtx) -> UiResponse {
             _ => json!({"frequency": "daily", "hour": hour, "minute": minute}),
         })
     };
-    match build() {
+    // A missed-run limit only means something for a time-of-day slot.
+    let extras = |mut schedule: Value| -> Result<Value, ()> {
+        let max_late = form.first("max_late").unwrap_or("").trim();
+        if !max_late.is_empty() && frequency != "Hourly" {
+            schedule["max_late_minutes"] = json!(int(max_late)?);
+        }
+        let precheck = form.first("precheck").unwrap_or("").trim();
+        if !precheck.is_empty() {
+            schedule["precheck"] = json!(precheck);
+        }
+        Ok(schedule)
+    };
+    match build().and_then(extras) {
         Err(()) => plain(
             false,
             ctx.tf("Invalid schedule value: {value}", &[("value", &py_repr(time))]),
@@ -246,6 +260,15 @@ fn loop_schedule(ctx: &UiCtx) -> UiResponse {
             result(loops_config::set_schedule(&name, &schedule, &cfg, Some(&tpl)), &loc)
         }
     }
+}
+
+fn loop_account(ctx: &UiCtx) -> UiResponse {
+    let name = ctx.param("name").to_string();
+    let form = ctx.form();
+    let loc = return_to(&form);
+    let dir = form.first("ai_config_dir").unwrap_or("");
+    let (cfg, tpl) = loops_paths(ctx);
+    result(loops_config::set_ai_config_dir(&name, dir, &cfg, Some(&tpl)), &loc)
 }
 
 // ---- launchd daemons --------------------------------------------------------------------
@@ -398,6 +421,21 @@ fn ai_cli(ctx: &UiCtx) -> UiResponse {
     )
 }
 
+fn ai_cli_usage_pause(ctx: &UiCtx) -> UiResponse {
+    let raw = ctx.form().first("pause_above_percent").unwrap_or("").trim().to_string();
+    let percent = match raw.as_str() {
+        "" => None,
+        p => match p.parse::<i64>() {
+            Ok(p) => Some(p),
+            Err(_) => return plain(false, format!("Unknown usage threshold: {p}"), "/settings?tab=ai-cli"),
+        },
+    };
+    result(
+        ai_cli_config::set_pause_above_percent(percent, &ctx.state.ai_cli_config_path()),
+        "/settings?tab=ai-cli",
+    )
+}
+
 fn instructions(ctx: &UiCtx) -> UiResponse {
     let text = ctx.form().first("instructions").unwrap_or("").to_string();
     outcome(
@@ -451,3 +489,110 @@ fn topic_enable(ctx: &UiCtx) -> UiResponse {
 fn topic_disable(ctx: &UiCtx) -> UiResponse {
     topic_msg(ctx, topics::set_enabled(ctx.param("name"), false, &topics_path(ctx)))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ui::routes::UiRequest;
+    use crate::ui::state::UiState;
+    use axum::http::Method;
+    use serde_json::{json, Value};
+
+    fn post(st: &UiState, path: &str, body: &str) -> crate::ui::routes::UiResponse {
+        st.registry
+            .dispatch(st, &UiRequest::new(Method::POST, path).with_body(body.to_string()))
+            .unwrap()
+    }
+
+    fn schedule(dir: &std::path::Path) -> Value {
+        let loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("loops.json")).unwrap()).unwrap();
+        loops[0]["schedule"].clone()
+    }
+
+    #[test]
+    fn the_loop_schedule_form_saves_and_shows_the_missed_run_limit_and_precheck() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(
+            d.path().join("loops.json"),
+            json!([{"name": "a-loop", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}]).to_string(),
+        )
+        .unwrap();
+        let url = "/daemons/loops/a-loop/schedule";
+        let body = "csrf_token=tok&time=08%3A00&frequency=Daily&max_late=120&precheck=test+-s+todo.txt";
+        assert_eq!(post(&st, url, body).status, 303);
+        assert_eq!(
+            schedule(d.path()),
+            json!({"frequency": "daily", "hour": 8, "minute": 0,
+                   "max_late_minutes": 120, "precheck": "test -s todo.txt"})
+        );
+
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?view=daemons")).unwrap().body_text();
+        assert!(page.contains("<option value='120' selected>"), "{page}");
+        assert!(page.contains("name='precheck' class='precheck-input' value='test -s todo.txt'"), "{page}");
+
+        // Blank fields drop the keys again.
+        let body = "csrf_token=tok&time=08%3A00&frequency=Daily&max_late=&precheck=+";
+        assert_eq!(post(&st, url, body).status, 303);
+        assert_eq!(schedule(d.path()), json!({"frequency": "daily", "hour": 8, "minute": 0}));
+    }
+
+    #[test]
+    fn the_ai_cli_tab_sets_and_shows_the_usage_pause() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
+        let url = "/ai-cli/usage-pause";
+        assert_eq!(post(&st, url, "pause_above_percent=90").status, 403);
+        assert_eq!(post(&st, url, "csrf_token=tok&pause_above_percent=90").status, 303);
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
+        assert_eq!(cfg, json!({"cli": "claude", "pause_above_percent": 90}));
+
+        std::fs::write(
+            d.path().join("quota_pause.json"),
+            json!({"cli": "claude", "until": "2999-01-01T00:00:00+00:00",
+                   "reason": "5-hour usage at 93% (pausing at 90%)"})
+            .to_string(),
+        )
+        .unwrap();
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?tab=ai-cli")).unwrap().body_text();
+        assert!(page.contains("<option value='90' selected>"), "{page}");
+        assert!(page.contains("Scheduled runs are paused: 5-hour usage at 93% (pausing at 90%)"), "{page}");
+
+        assert_eq!(post(&st, url, "csrf_token=tok&pause_above_percent=").status, 303);
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
+        assert_eq!(cfg, json!({"cli": "claude"}));
+    }
+
+    #[test]
+    fn a_loop_can_be_given_its_own_ai_account_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(
+            d.path().join("loops.json"),
+            json!([{"name": "a-loop", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}]).to_string(),
+        )
+        .unwrap();
+        let url = "/daemons/loops/a-loop/account";
+        assert_eq!(post(&st, url, "ai_config_dir=%2Fsrv%2Fbot").status, 403, "needs CSRF");
+        assert_eq!(post(&st, url, "csrf_token=tok&ai_config_dir=~%2F.claude-bot").status, 303);
+        let loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("loops.json")).unwrap()).unwrap();
+        assert_eq!(loops[0]["ai_config_dir"], "~/.claude-bot");
+
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?view=daemons")).unwrap().body_text();
+        assert!(
+            page.contains("action='/daemons/loops/a-loop/account'")
+                && page.contains("name='ai_config_dir' class='precheck-input' value='~/.claude-bot'"),
+            "{page}"
+        );
+
+        assert_eq!(post(&st, url, "csrf_token=tok&ai_config_dir=").status, 303);
+        let loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("loops.json")).unwrap()).unwrap();
+        assert!(loops[0].get("ai_config_dir").is_none());
+    }
+}
+

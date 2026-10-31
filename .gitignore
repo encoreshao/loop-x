@@ -22,6 +22,8 @@ outputs/learning/
 outputs/handoffs/
 outputs/chat-docs/
 outputs/chat-pending/
+outputs/node-shims/
+outputs/agent-activity.json
 
 # The unified log every `claude` CLI invocation across this project writes
 # to (see crates/core/src/runner_util.rs append_unified_log,

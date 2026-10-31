@@ -76,6 +76,21 @@ ends, and treat "no message for 45 s" as dead.
 - Loop `state` values: `running`, `idle`, `failed`, `stopped`, `never_run` and `unknown` (as in
   `status.json`), plus `stale`, which the backend substitutes for a `running` status whose
   pid has died. Treat `stale` like `failed`.
+- A running `gitlab-loop` also carries `agent_activity`, the last thing its Claude agent did,
+  reported by Claude Code hooks: `{"at": "<UTC ISO>", "label": "web #7", "event":
+  "PreToolUse" | "PostToolUse" | "Notification" | "Stop" | "Start", "tool": "Bash" | null,
+  "detail": "cargo test" | null}`. `detail` is the command, file or pattern of the tool call
+  (or a notification's message), clipped to 120 characters. Absent for other CLIs, and when
+  the loop isn't running.
+- `needs_you` is everything waiting on the user, oldest first:
+  `{"count": 2, "items": [{"id": "escalated:web#7", "kind": "escalated", "title": "web #7 was
+  escalated to you (ambiguous)", "since": "<ISO>" | null, "dismissable": true, ...}]}`. `kind` is
+  `approval` (a pending approval, also in `approvals.pending`), `escalated` (an issue the GitLab
+  loop escalated in the last 7 days and has not picked up again), `sign_in` (a sign-in check that
+  is confirmed failing) or `loop_failed` (a loop whose last run failed). Items carry the fields
+  of their kind (`project`, `issue_iid`, `reason`, `label`, `message`, `loop`, ...). Escalations
+  and failed loops can be dismissed on the dashboard's `/needs-you` page until they happen again.
+  The menu bar's number is `count`.
 - `attention` is the newest outcome from the last 15 minutes worth showing, or `null`:
   `kind` is `mr_opened`, `escalated` (see `reason`) or `failed`.
 - `recent_events` holds up to 15 events, oldest first, of these types only: `run.started`,
@@ -100,8 +115,11 @@ An approval is a human's OK that the loop asks for before it opens a merge reque
  "decided_at": null, "decided_by": null}
 ```
 
-`status` is `pending`, then exactly one of `approved`, `denied`, `timeout`. The loop waits
-until `expires_at`; an undecided approval becomes `timeout` and the issue is escalated.
+`status` is `pending`, then exactly one of `approved`, `denied`, `changes_requested`, `timeout`.
+The loop waits until `expires_at`; an undecided approval becomes `timeout` and the issue is
+escalated. `changes_requested` carries the reviewer's `notes`: the loop sends them back to the
+agent, which revises the fix in the same worktree, re-runs the checks and asks for a new approval
+(a new id). After two rounds of changes a third request escalates the issue with the notes.
 
 ### `GET /api/approvals`
 
@@ -111,19 +129,21 @@ until `expires_at`; an undecided approval becomes `timeout` and the issue is esc
 
 ### `POST /api/approvals/{id}`
 
-Body: `{"decision": "approve" | "deny", "by": "mac-app"}`. Requires the header
+Body: `{"decision": "approve" | "deny" | "request_changes", "by": "mac-app", "notes": "…"}`;
+`notes` (at most 4000 characters) is required for `request_changes` and ignored otherwise. Requires the header
 `X-LoopX-Token: <token from loopx.lock>` (a same-origin browser request, `Origin` equal to the
 server's own origin, is also accepted; a missing or wrong token is `403`).
 
 | Status | Meaning |
 | --- | --- |
 | 200 | The updated approval |
-| 400 | `decision` is not `approve`/`deny` |
+| 400 | `decision` is not `approve`/`deny`/`request_changes`, or `request_changes` without notes |
 | 403 | No token / wrong token / foreign `Host` |
 | 404 | Unknown id |
-| 409 | Already decided (`approved`, `denied`) or timed out |
+| 409 | Already decided (`approved`, `denied`, `changes_requested`) or timed out |
 
-`loopx approvals list|show|approve|deny` does the same from a shell.
+`loopx approvals list|show|approve|deny|request-changes <id> --notes TEXT` does the same from a
+shell.
 
 ## Everything else
 

@@ -193,7 +193,7 @@ struct ExpandedContent: View {
         case .openDashboard: pill("Dashboard", "macwindow") { model.perform(a) }
         case .openMergeRequest: pill("Open MR", "arrow.up.right.square") { model.perform(a) }
         case .dismiss: pill("Dismiss", "xmark") { model.perform(a) }
-        case .approve, .deny: EmptyView()
+        case .approve, .deny, .requestChanges: EmptyView()
         }
     }
 
@@ -276,6 +276,12 @@ struct ApprovalCard: View {
                         .background(Capsule().fill(Color.red.opacity(busy ? 0.3 : 0.75)))
                 }.buttonStyle(.plain).foregroundStyle(.white).disabled(busy)
                     .keyboardShortcut(.escape, modifiers: [])
+                Button { model.perform(.requestChanges(id: approval.id)) } label: {
+                    Label("Changes…", systemImage: "pencil").font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 14).padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(busy ? 0.1 : 0.2)))
+                }.buttonStyle(.plain).foregroundStyle(.white).disabled(busy)
+                    .help("Send the fix back to the agent with what to change")
                 if busy { ProgressView().controlSize(.small) }
                 Spacer(minLength: 0)
                 if let exp = approval.expiry {

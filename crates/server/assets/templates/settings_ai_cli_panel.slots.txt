@@ -7,3 +7,4 @@ warnings_html
 csrf_input
 select_html
 html.escape(_t('Save'))
+usage_pause_html

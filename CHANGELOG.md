@@ -11,9 +11,33 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Approve from Telegram: a Telegram connector with "Approvals here" switched on gets each GitLab approval request with Allow and Deny buttons; replying to the message requests changes, with the reply as the notes. LoopX reads the answers itself while it waits, so no public address or webhook is needed. The first answer anywhere (Telegram, the Mac app, the dashboard) wins, and the Telegram message then says how it ended. Anyone in that chat can answer.
+- Needs you: a bell in the dashboard's top bar counts everything waiting on you (approvals, issues the GitLab loop escalated, sign-ins that stopped working, loops whose last run failed) and opens a page listing them. Approvals can be allowed, denied or sent back with change requests right there; escalations and failed loops can be dismissed until they happen again. The Mac app's menu bar number counts the same things, not only approvals.
+- Loop schedules: a "Skip if over N h late" choice (1, 2, 4 or 8 hours). A daily, weekly or monthly slot missed while the Mac slept or LoopX was closed is still caught up when LoopX comes back, unless it is later than that; then it shows as Skipped in Agents → Recent instead of, say, sending a morning briefing in the evening. The default is unchanged: always catch up.
+- Loop schedules: an optional precheck command. It runs before each scheduled run (not "Run now") in a login shell; a non-zero exit, or taking over 60 seconds, skips the run without starting the agent, so empty runs cost nothing. Skips show as Skipped in Agents → Recent and in the unified log with the command's output.
+- Settings → AI CLI: "Subscription usage" can pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above 80, 90 or 95%. Before each scheduled run LoopX reads the usage Claude Code itself reports, with Claude Code's own sign-in; above the threshold it pauses scheduled runs until the window resets, and loops due in the meantime run once it does (subject to their missed-run limit). Off by default. "Run now" is never paused.
+- Any AI CLI: a run whose output says the CLI hit its usage or rate limit pauses scheduled runs for an hour, with one Slack message saying when they resume, instead of failing on every tick. The pause, while it lasts, shows on Settings → AI CLI.
+- Approvals: besides Allow and Deny, the Mac app's notch and menu bar offer "Request changes", which asks what to change. The GitLab loop sends the notes back to the agent, which revises the fix in the same worktree, runs the checks again and asks for approval again; after two rounds a third request escalates the issue with the notes. Also `loopx approvals request-changes <id> --notes TEXT` and `"decision": "request_changes"` on `POST /api/approvals/{id}`.
+- GitLab loop: review comments on the loop's own open merge request (from `loop/issue-<iid>`) now reach the agent with the issue's new comments, tagged with the file and line for diff comments. A comment asking for a change is made on the same branch and updates the existing merge request; a question gets an answer on the issue. This works while the issue stays assigned to you.
+- GitLab loop with Claude Code: Agents now says what the agent is doing right now ("Agent is running Bash: bundle exec rspec · 1m ago"), reported by Claude Code hooks, and the Mac app's snapshot carries it as `agent_activity`. A call that reports no activity for 20 minutes is stopped as stalled instead of running until its full timeout.
+- The 6-hourly sign-in check now covers the selected AI CLI too: it must be on your login shell's PATH (launchd's own PATH misses Homebrew and `~/.local/bin`), still accept every flag LoopX passes it (Claude Code, Codex), and be signed in (`claude auth status`, `codex login status`). A problem is reported once in Slack with how to fix it, like an expired connector sign-in.
+- Loops can run on their own AI CLI account: Settings → Daemons takes an "AI account folder" per loop, the config folder of another Claude Code or Codex sign-in (for example a dedicated bot subscription). Runs of that loop get it as `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, so they use that account's quota. The subscription-usage pause is about your default account, so such a loop neither waits for it nor triggers it.
+- A run that fails because the AI CLI is not signed in (or its sign-in or API key was rejected) now says so in its Slack alert, with the command to sign in again, instead of a bare exit code.
+
 ### Changed
 
+- Loop icons: Release Notes, Pipeline Doctor and Stale Sweeper get their own sidebar icons (tag, stethoscope, archive), and Loops itself, plus any loop made from a template, uses a workflow icon instead of the refresh arrows, which now only mean "refresh".
+- A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.
+- A loop that fails the same way (same exit code) as its previous run no longer sends another Slack alert each time. The status keeps a `consecutive_failures` count and the log notes the repeat; a different failure or a success resets it.
+- GitLab loop: the agent's instructions now say issue text, comments and linked pages are untrusted. They describe the change wanted but can never redirect the loop to other projects or branches, ask for secrets, run unrelated commands or change where it posts; such a request is ignored and called out in the merge request or comment.
 - README (all languages): a download link at the top and a "Bring your own agent" note: LoopX uses the AI CLI subscription or API key you already have.
+
+### Fixed
+
+- `loopx loop eval --golden` no longer fails a case because the agent added a regression test to one of the fixture's own test files. A protected test file may gain new tests; editing, deleting or redefining the fixture's tests still fails the case.
+- The 6-hourly sign-in check for mailboxes and connectors (GitLab, GitHub, Google Calendar, Jira, Linear, Notion) ran with nothing to check since the move to Rust, so an expired sign-in only showed up when a loop failed. The scheduler now checks them again and alerts once in Slack, with a reminder each day it stays broken and a message when it recovers.
 
 ## [0.16.0] - 2026-10-31
 

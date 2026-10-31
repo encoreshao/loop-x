@@ -109,6 +109,31 @@ pub struct ProbeSources {
     pub token: TokenFn,
     /// `load_connector(id).test()`.
     pub connector_test: Arc<dyn Fn(&str) -> ProbeResult + Send + Sync>,
+    /// The AI CLI loops run with; `None` leaves it unchecked.
+    pub ai_cli: Option<AiCliSource>,
+}
+
+/// Which AI CLI is selected (read at each check, so a switch is picked up) and
+/// how to check it (`ai_cli_health::check`).
+pub struct AiCliSource {
+    pub selected: Box<dyn Fn() -> String + Send + Sync>,
+    pub check: Arc<dyn Fn(&str) -> ProbeResult + Send + Sync>,
+}
+
+impl ProbeSources {
+    /// Also probe the CLI selected in `ai_cli.json`, found on the login shell's
+    /// `PATH` the way a run finds it.
+    pub fn with_selected_ai_cli(mut self) -> Self {
+        self.ai_cli = Some(AiCliSource {
+            selected: Box::new(crate::ai_cli_config::selected_cli),
+            check: Arc::new(|cli| {
+                let current = std::env::var("PATH").unwrap_or_default();
+                let path = crate::ai_cli_health::login_shell_path("/bin/zsh", &current);
+                crate::ai_cli_health::check(cli, &path)
+            }),
+        });
+        self
+    }
 }
 
 static REGISTERED: Mutex<Option<Arc<ProbeSources>>> = Mutex::new(None);
@@ -260,7 +285,7 @@ pub fn run_checks(
             }
             checks.insert(
                 probe.id.clone(),
-                json!({"ok": true, "message": message, "checked_at": now_iso}),
+                json!({"ok": true, "message": message, "checked_at": now_iso, "label": probe.label}),
             );
             continue;
         }
@@ -289,6 +314,9 @@ pub fn run_checks(
             new.insert("last_alert_at".into(), entry["last_alert_at"].clone());
         }
         let confirmed = hard || fail_count >= SOFT_FAILURES_BEFORE_ALERT;
+        // What "Needs you" lists (`needs_you`).
+        new.insert("label".into(), json!(probe.label));
+        new.insert("confirmed".into(), json!(confirmed));
         let due = elapsed(entry.get("last_alert_at"), now, REMIND_INTERVAL) >= REMIND_INTERVAL;
         if confirmed
             && due
@@ -356,7 +384,59 @@ pub fn collect_probes(sources: &ProbeSources) -> Vec<Probe> {
             test(&probe_id)
         }));
     }
+    if let Some(source) = &sources.ai_cli {
+        let cli = (source.selected)();
+        let check = source.check.clone();
+        let label = format!("AI CLI ({cli})");
+        probes.push(Probe::new("ai_cli", &label, move || check(&cli)));
+    }
     probes
+}
+
+/// A mailbox refresh error as a probe failure: a missing or rejected refresh
+/// token (or a 401) is a dead sign-in; anything else may be transient.
+pub fn mail_failure(e: crate::mail_http::MailError) -> ProbeFailure {
+    use crate::mail_http::MailError;
+    match e {
+        MailError::Reauth(m) => ProbeFailure::hard(m),
+        MailError::AuthExpired(m) => ProbeFailure::hard(m.to_string()),
+        MailError::Http(m) => ProbeFailure::other("MailHTTPError", m.to_string()),
+        MailError::Keychain(m) => ProbeFailure::other("KeychainError", m),
+        MailError::Other(m) => ProbeFailure::other("MailError", m),
+    }
+}
+
+/// The real sources: enabled inboxes and connector accounts from `paths`
+/// (connectors.json, ~/.gitlab, ~/.slack, inboxes.json), refreshed and tested
+/// with the Keychain and the network.
+pub fn config_sources(paths: crate::connectors_config::Paths) -> ProbeSources {
+    use crate::connectors_config as cc;
+    let inbox_path = paths.inbox();
+    let account_paths = paths.clone();
+    let connectors = Arc::new(cc::ConfigConnectors::real().with_paths(paths));
+    ProbeSources {
+        inboxes: Box::new(move || {
+            crate::inbox_config::enabled_inboxes(&inbox_path).unwrap_or_default()
+        }),
+        accounts: Box::new(move || {
+            cc::list_accounts(&account_paths)
+                .map(|a| a.iter().map(crate::connectors::Account::to_value).collect())
+                .unwrap_or_default()
+        }),
+        token: Arc::new(|inbox| {
+            crate::mail_auth::get_access_token_default(inbox)
+                .map(|_| ())
+                .map_err(mail_failure)
+        }),
+        connector_test: Arc::new(move |id| {
+            use crate::connectors::ConnectorSource;
+            match connectors.load(id) {
+                Ok(c) => Ok(c.test()),
+                Err(e) => Err(ProbeFailure::other("LoadFailure", format!("{e:?}"))),
+            }
+        }),
+        ai_cli: None,
+    }
 }
 
 fn registered_probes() -> Option<Vec<Probe>> {
@@ -475,6 +555,26 @@ mod tests {
             checks(&t)["gmail"]["checked_at"],
             json!("2026-10-16T12:00:00")
         );
+    }
+
+    #[test]
+    fn checks_keep_their_label_and_whether_the_failure_is_confirmed() {
+        let (t, mut sent) = (Tmp::new(), vec![]);
+        let soft = Probe::new("cal", "Work calendar", || {
+            Err(ProbeFailure::other("OSError", "timeout"))
+        });
+        run(&t, &[soft], &mut sent, now());
+        assert_eq!(checks(&t)["cal"]["label"], "Work calendar");
+        assert_eq!(checks(&t)["cal"]["confirmed"], false);
+        run(&t, &[probe("gmail", reauth("expired"))], &mut sent, now());
+        assert_eq!(checks(&t)["gmail"]["confirmed"], true);
+        run(
+            &t,
+            &[probe("gmail", Ok((true, "ok".into())))],
+            &mut sent,
+            now(),
+        );
+        assert_eq!(checks(&t)["gmail"]["label"], "gmail");
     }
 
     #[test]
@@ -614,15 +714,64 @@ mod tests {
     }
 
     #[test]
-    fn state_file_keys_match_the_python_layout() {
+    fn state_file_keys_keep_their_layout() {
         let (t, mut sent) = (Tmp::new(), vec![]);
         run(&t, &[probe("a", Ok((true, "ok".into())))], &mut sent, now());
         let text = std::fs::read_to_string(t.path()).unwrap();
         assert_eq!(
             text,
-            "{\n  \"checks\": {\n    \"a\": {\n      \"ok\": true,\n      \"message\": \"ok\",\n      \"checked_at\": \"2026-10-16T12:00:00\"\n    }\n  },\n  \"last_run_at\": \"2026-10-16T12:00:00\"\n}"
+            "{\n  \"checks\": {\n    \"a\": {\n      \"ok\": true,\n      \"message\": \"ok\",\n      \"checked_at\": \"2026-10-16T12:00:00\",\n      \"label\": \"a\"\n    }\n  },\n  \"last_run_at\": \"2026-10-16T12:00:00\"\n}"
         );
         assert!(!t.0.join(".auth.json.tmp").exists());
+    }
+
+    #[test]
+    fn config_sources_find_the_real_inboxes_and_auth_connectors() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"work": {"url": "https://gitlab.test", "token": "t"}}}"#,
+        )
+        .unwrap();
+        let inboxes = d.path().join("inboxes.json");
+        std::fs::write(
+            &inboxes,
+            json!({"inboxes": [
+                {"name": "me", "label": "Me", "provider": "gmail", "account": "me@example.com",
+                 "enabled": true, "urgent_brief": "", "vip_senders": [], "exclude_senders": [],
+                 "categories": null, "slack_bundle": null},
+                {"name": "old", "label": "Old", "provider": "outlook", "account": "old@example.com",
+                 "enabled": false, "urgent_brief": "", "vip_senders": [], "exclude_senders": [],
+                 "categories": null, "slack_bundle": null}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let paths = crate::connectors_config::Paths {
+            config_path: Some(d.path().join("connectors.json")),
+            gitlab_config_path: Some(gitlab),
+            slack_config_path: Some(d.path().join("slack.json")),
+            inbox_config_path: Some(inboxes),
+        };
+        let ids: Vec<String> = collect_probes(&config_sources(paths))
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(ids, ["mailbox:me", "connector:work"]);
+    }
+
+    #[test]
+    fn a_rejected_mail_refresh_token_is_a_hard_failure() {
+        use crate::mail_http::MailError;
+        assert_eq!(
+            mail_failure(MailError::Reauth("sign in again".into())),
+            ProbeFailure::hard("sign in again")
+        );
+        assert!(matches!(
+            mail_failure(MailError::Other("x".into())),
+            ProbeFailure::Other { .. }
+        ));
     }
 
     #[test]
@@ -640,6 +789,7 @@ mod tests {
             }),
             token: Arc::new(|_| Ok(())),
             connector_test: Arc::new(|id| Ok((true, format!("tested {id}")))),
+            ai_cli: None,
         };
         let probes = collect_probes(&sources);
         let ids: Vec<&str> = probes.iter().map(|p| p.id.as_str()).collect();
@@ -649,5 +799,26 @@ mod tests {
         assert_eq!(probes[2].label, "Main GitLab");
         assert_eq!((probes[0].run)(), Ok((true, "Token refreshed".to_string())));
         assert_eq!((probes[2].run)(), Ok((true, "tested gl".to_string())));
+    }
+
+    #[test]
+    fn the_selected_ai_cli_is_probed_too() {
+        let sources = ProbeSources {
+            inboxes: Box::new(Vec::new),
+            accounts: Box::new(Vec::new),
+            token: Arc::new(|_| Ok(())),
+            connector_test: Arc::new(|_| Ok((true, String::new()))),
+            ai_cli: Some(AiCliSource {
+                selected: Box::new(|| "codex".to_string()),
+                check: Arc::new(|cli| Ok((true, format!("{cli} ok")))),
+            }),
+        };
+        let probes = collect_probes(&sources);
+        assert_eq!(probes.len(), 1);
+        assert_eq!(
+            (probes[0].id.as_str(), probes[0].label.as_str()),
+            ("ai_cli", "AI CLI (codex)")
+        );
+        assert_eq!((probes[0].run)(), Ok((true, "codex ok".to_string())));
     }
 }

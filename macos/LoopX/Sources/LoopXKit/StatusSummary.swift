@@ -2,12 +2,16 @@ import Foundation
 
 /// The menu bar item's number: how many approvals are waiting for the user.
 public enum StatusBadge {
+    /// Everything that needs the user; never fewer than the approvals waiting,
+    /// so a backend without `needs_you` still shows those.
+    public static func count(for state: NotchState) -> Int { max(state.needsYou, state.approvals.count) }
+
     public static func text(for state: NotchState) -> String? {
-        let n = state.approvals.count
+        let n = count(for: state)
         return n == 0 ? nil : (n > 9 ? "9+" : String(n))
     }
 
-    public static func tooltip(count: Int) -> String { "\(count) approval\(count == 1 ? "" : "s") waiting" }
+    public static func tooltip(count: Int) -> String { count == 1 ? "1 thing needs you" : "\(count) things need you" }
 }
 
 /// One line per loop that is not running, saying how it last ended, for the menu bar menu.

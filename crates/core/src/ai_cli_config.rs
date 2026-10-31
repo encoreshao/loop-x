@@ -61,17 +61,47 @@ pub fn selected_cli() -> String {
     get_selected_cli(&default_config_path())
 }
 
+/// Rewrites one key of the file, keeping the others.
+fn update_config(path: &Path, key: &str, value: Option<Value>) -> Result<(), String> {
+    let mut config = load_config(path);
+    match value {
+        Some(v) => config.insert(key.into(), v),
+        None => config.remove(key),
+    };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, pyjson::to_string_pretty(&Value::Object(config)))
+        .map_err(|e| e.to_string())
+}
+
 /// Persist the choice; the `Ok` text is the message Python prints.
 pub fn set_selected_cli(cli: &str, path: &Path) -> Result<String, String> {
     if !VALID_CLIS.contains(&cli) {
         return Err(format!("Unknown AI CLI: {cli}"));
     }
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(path, pyjson::to_string_pretty(&json!({ "cli": cli })))
-        .map_err(|e| e.to_string())?;
+    update_config(path, "cli", Some(json!(cli)))?;
     Ok(format!("Switched to {cli}"))
+}
+
+/// The usage threshold above which scheduled runs pause (see `quota`); `None`
+/// switches it off.
+pub fn set_pause_above_percent(percent: Option<i64>, path: &Path) -> Result<String, String> {
+    match percent {
+        Some(p) if !crate::quota::PAUSE_PERCENT_CHOICES.contains(&p) => {
+            Err(format!("Unknown usage threshold: {p}"))
+        }
+        Some(p) => {
+            update_config(path, "pause_above_percent", Some(json!(p)))?;
+            Ok(format!(
+                "Scheduled runs pause above {p}% of the subscription's usage"
+            ))
+        }
+        None => {
+            update_config(path, "pause_above_percent", None)?;
+            Ok("Scheduled runs no longer pause on usage".into())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +136,26 @@ mod tests {
             let text = format!(r#"{{"cli": "{cli}"}}"#);
             assert_eq!(get_selected_cli(&write(d.path(), &text)), cli);
         }
+    }
+
+    #[test]
+    fn switching_cli_keeps_the_pause_threshold_and_the_threshold_can_be_cleared() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("ai_cli.json");
+        assert_eq!(
+            set_pause_above_percent(Some(90), &p).unwrap(),
+            "Scheduled runs pause above 90% of the subscription's usage"
+        );
+        set_selected_cli("codex", &p).unwrap();
+        assert_eq!(load_config(&p)["cli"], "codex");
+        assert_eq!(load_config(&p)["pause_above_percent"], 90);
+        assert!(set_pause_above_percent(Some(42), &p).is_err());
+        assert_eq!(
+            set_pause_above_percent(None, &p).unwrap(),
+            "Scheduled runs no longer pause on usage"
+        );
+        assert!(!load_config(&p).contains_key("pause_above_percent"));
+        assert_eq!(get_selected_cli(&p), "codex");
     }
 
     #[test]
