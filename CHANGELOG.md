@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-31
+
 ### Added
 - GitLab loop: when an issue's checks are blocked by setup (missing Ruby/Node version, gems, submodules, built assets, test database), a setup doctor agent now researches and fixes it — up to 3 failed attempts — and the issue continues in the same run. What it learns is kept per project in `memory/<alias>/SETUP.md` and reused on later issues; if it cannot fix everything, the escalation lists every blocker and what was tried.
 - GitLab loop: merge requests for UI fixes now show before/after screenshots in the description. The agent captures them with the Mac's installed Chrome against test data or mocked backends (never the development database), learns how to shoot each project as a `screenshot-recipe` lesson, and the loop deletes every local image once the issue is finalized.
@@ -544,7 +546,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/encoreshao/loop-x/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/encoreshao/loop-x/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/encoreshao/loop-x/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/encoreshao/loop-x/compare/v0.12.0...v0.13.0
