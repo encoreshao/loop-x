@@ -2913,6 +2913,6 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .needs-you-item + .needs-you-item { border-top: 1px solid var(--md-outline-variant); }
 .needs-you-text { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
 .needs-you-actions, .needs-you-approval, .needs-you-dismiss { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-.needs-you-approval input[type='text'] { min-width: 12rem; }
+.needs-you-approval input[type='text'] { min-width: 17rem; }
 .btn-tonal { background: var(--md-primary-container); color: var(--md-on-primary-container); border-color: transparent; }
 .btn-tonal:hover { filter: brightness(0.96); }

@@ -86,7 +86,7 @@ fn link(ctx: &UiCtx, item: &Value) -> String {
         Some("sign_in") if text(item, "probe").starts_with("mailbox:") => {
             ("/loops/inbox-triage-loop?view=setup".to_string(), ctx.t("Reconnect"))
         }
-        Some("sign_in") if text(item, "probe") == "ai_cli" => ("/settings?view=ai-cli".to_string(), ctx.t("Open AI CLI settings")),
+        Some("sign_in") if text(item, "probe") == "ai_cli" => (crate::ui::ai_cli::SETTINGS_HREF.to_string(), ctx.t("Open AI CLI settings")),
         Some("sign_in") => ("/connectors".to_string(), ctx.t("Reconnect")),
         Some("loop_failed") => ("/runs?view=logs".to_string(), ctx.t("See the log")),
         _ => return String::new(),
@@ -98,7 +98,7 @@ fn actions(ctx: &UiCtx, item: &Value) -> String {
     let csrf = ctx.csrf_input();
     if item["kind"] == "approval" {
         return format!(
-            "<form method='post' action='/needs-you/approval' class='needs-you-approval'>{csrf}\
+            "<form method='post' action='/needs-you/approval' class='daemon-action-form needs-you-approval'>{csrf}\
 <input type='hidden' name='id' value='{}'>\
 <input type='text' name='notes' maxlength='2000' placeholder='{}'>\
 <button type='submit' name='decision' value='approve' class='btn btn-primary'>{}</button>\
@@ -113,7 +113,7 @@ fn actions(ctx: &UiCtx, item: &Value) -> String {
     }
     let dismiss = if item["dismissable"] == true {
         format!(
-            "<form method='post' action='/needs-you/dismiss' class='needs-you-dismiss'>{csrf}\
+            "<form method='post' action='/needs-you/dismiss' class='daemon-action-form needs-you-dismiss'>{csrf}\
 <input type='hidden' name='id' value='{}'><button type='submit' class='btn btn-neutral'>{}</button></form>",
             pyfmt::escape(&text(item, "id")),
             pyfmt::escape(&ctx.t("Dismiss")),
@@ -282,6 +282,22 @@ mod tests {
         let a = approvals::get(&d.path().join("outputs/approvals"), &id).unwrap();
         assert_eq!((a["status"].as_str(), a["decided_by"].as_str()), (Some("approved"), Some("dashboard")));
         assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 0}"#);
+    }
+
+    #[test]
+    fn a_signed_out_ai_cli_links_to_its_settings() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        std::fs::write(
+            d.path().join("auth_health.json"),
+            serde_json::json!({"checks": {"ai_cli": {"ok": false, "confirmed": true, "label": "AI CLI (claude)",
+                "message": "claude is not signed in"}}})
+            .to_string(),
+        )
+        .unwrap();
+        let html = get(&st, "/needs-you");
+        let button = format!("<a class='btn btn-neutral' href='{}'>", crate::ui::ai_cli::SETTINGS_HREF);
+        assert!(html.contains(&button), "{html}");
     }
 
     #[test]
