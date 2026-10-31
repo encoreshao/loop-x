@@ -24,6 +24,7 @@ pub fn register(r: &mut Registry) {
     r.post("/daemons/loops/:name/enable", loop_enable);
     r.post("/daemons/loops/:name/disable", loop_disable);
     r.post("/daemons/loops/:name/schedule", loop_schedule);
+    r.post("/daemons/loops/:name/account", loop_account);
     r.post("/daemons/:file/enable", daemon_enable);
     r.post("/daemons/:file/disable", daemon_disable);
     r.post("/daemons/:file/schedule", daemon_schedule);
@@ -259,6 +260,15 @@ fn loop_schedule(ctx: &UiCtx) -> UiResponse {
             result(loops_config::set_schedule(&name, &schedule, &cfg, Some(&tpl)), &loc)
         }
     }
+}
+
+fn loop_account(ctx: &UiCtx) -> UiResponse {
+    let name = ctx.param("name").to_string();
+    let form = ctx.form();
+    let loc = return_to(&form);
+    let dir = form.first("ai_config_dir").unwrap_or("");
+    let (cfg, tpl) = loops_paths(ctx);
+    result(loops_config::set_ai_config_dir(&name, dir, &cfg, Some(&tpl)), &loc)
 }
 
 // ---- launchd daemons --------------------------------------------------------------------
@@ -555,4 +565,34 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
         assert_eq!(cfg, json!({"cli": "claude"}));
     }
+
+    #[test]
+    fn a_loop_can_be_given_its_own_ai_account_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(
+            d.path().join("loops.json"),
+            json!([{"name": "a-loop", "schedule": {"frequency": "daily", "hour": 9, "minute": 0}}]).to_string(),
+        )
+        .unwrap();
+        let url = "/daemons/loops/a-loop/account";
+        assert_eq!(post(&st, url, "ai_config_dir=%2Fsrv%2Fbot").status, 403, "needs CSRF");
+        assert_eq!(post(&st, url, "csrf_token=tok&ai_config_dir=~%2F.claude-bot").status, 303);
+        let loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("loops.json")).unwrap()).unwrap();
+        assert_eq!(loops[0]["ai_config_dir"], "~/.claude-bot");
+
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?view=daemons")).unwrap().body_text();
+        assert!(
+            page.contains("action='/daemons/loops/a-loop/account'")
+                && page.contains("name='ai_config_dir' class='precheck-input' value='~/.claude-bot'"),
+            "{page}"
+        );
+
+        assert_eq!(post(&st, url, "csrf_token=tok&ai_config_dir=").status, 303);
+        let loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("loops.json")).unwrap()).unwrap();
+        assert!(loops[0].get("ai_config_dir").is_none());
+    }
 }
+

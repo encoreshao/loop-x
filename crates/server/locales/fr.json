@@ -1280,5 +1280,8 @@
   "Agent finished its turn": "L'agent a terminé son tour",
   "Agent is starting": "L'agent démarre",
   "Agent is thinking": "L'agent réfléchit",
-  "{doing} · {time} ago": "{doing} · il y a {time}"
+  "{doing} · {time} ago": "{doing} · il y a {time}",
+  "AI account folder (optional)": "Dossier du compte IA (facultatif)",
+  "Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.": "Exécuter cette boucle avec un autre compte Claude Code ou Codex : le dossier de configuration de ce compte (CLAUDE_CONFIG_DIR ou CODEX_HOME). Laissez vide pour utiliser votre compte par défaut.",
+  "Save account": "Enregistrer le compte"
 }

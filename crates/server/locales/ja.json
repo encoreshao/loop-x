@@ -1280,5 +1280,8 @@
   "Agent finished its turn": "エージェントが応答を終えました",
   "Agent is starting": "エージェントを起動中",
   "Agent is thinking": "エージェントが考え中",
-  "{doing} · {time} ago": "{doing} · {time}前"
+  "{doing} · {time} ago": "{doing} · {time}前",
+  "AI account folder (optional)": "AI アカウントのフォルダー（任意）",
+  "Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.": "このループを別の Claude Code または Codex アカウントで実行します。そのアカウントの設定フォルダー（CLAUDE_CONFIG_DIR または CODEX_HOME）を指定してください。空欄ならデフォルトのアカウントを使います。",
+  "Save account": "アカウントを保存"
 }

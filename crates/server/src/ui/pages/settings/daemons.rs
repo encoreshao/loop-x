@@ -214,6 +214,25 @@ fn loop_schedule_form(ctx: &UiCtx, entry: &Value, csrf: &str) -> String {
 }
 
 /// `_loop_action_html`.
+/// The loop's own AI CLI account folder (`ai_config_dir`); blank is the default account.
+fn loop_account_form(ctx: &UiCtx, entry: &Value, csrf: &str) -> String {
+    let name = pyfmt::escape(&entry.get("name").map_or("?".to_string(), loops_config::py_str));
+    let dir = entry.get("ai_config_dir").and_then(Value::as_str).unwrap_or("");
+    format!(
+        "<form method='post' action='/daemons/loops/{name}/account' class='daemon-action-form schedule-form'>\
+{csrf}{}\
+<input type='text' name='ai_config_dir' class='precheck-input' value='{}' maxlength='{}' placeholder='{}' title='{}'>\
+<button type='submit' class='btn btn-neutral'>{}</button>\
+</form>",
+        return_to_input(None),
+        pyfmt::escape(dir),
+        loops_config::MAX_AI_CONFIG_DIR_CHARS,
+        pyfmt::escape(&ctx.t("AI account folder (optional)")),
+        pyfmt::escape(&ctx.t("Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.")),
+        pyfmt::escape(&ctx.t("Save account")),
+    )
+}
+
 fn loop_action(entry: &Value, csrf: &str) -> String {
     let name = pyfmt::escape(&entry.get("name").map_or("?".to_string(), loops_config::py_str));
     let enabled = entry.get("enabled").is_none_or(py_truthy);
@@ -265,9 +284,10 @@ fn registered_loops(ctx: &UiCtx) -> String {
             pyfmt::escape(&relative_time(ctx.state.now(), updated))
         };
         rows.push_str(&format!(
-            "<tr><td><code>{}</code></td><td>{}</td><td>{badge}</td><td>{last_run}</td><td>{}</td></tr>",
+            "<tr><td><code>{}</code></td><td>{}{}</td><td>{badge}</td><td>{last_run}</td><td>{}</td></tr>",
             pyfmt::escape(&name),
             loop_schedule_form(ctx, entry, &csrf),
+            loop_account_form(ctx, entry, &csrf),
             loop_action(entry, &csrf)
         ));
     }

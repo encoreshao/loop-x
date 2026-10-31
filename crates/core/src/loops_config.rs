@@ -326,6 +326,36 @@ pub fn set_enabled(
     })
 }
 
+/// The longest `ai_config_dir`.
+pub const MAX_AI_CONFIG_DIR_CHARS: usize = 500;
+
+/// Run the loop on its own AI CLI account: `dir` is that account's config
+/// folder (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), absolute or under `~/`. Blank
+/// goes back to the default account.
+pub fn set_ai_config_dir(
+    name: &str,
+    dir: &str,
+    config_path: &Path,
+    template_path: Option<&Path>,
+) -> Outcome {
+    let dir = dir.trim();
+    let valid = (dir.starts_with('/') || dir.starts_with("~/"))
+        && !dir.contains(['\n', '\r'])
+        && dir.chars().count() <= MAX_AI_CONFIG_DIR_CHARS;
+    if !dir.is_empty() && !valid {
+        return Err("The account folder must be an absolute path or start with ~/ (one line, at most 500 characters)".into());
+    }
+    with_loop(name, config_path, template_path, |loop_| {
+        if dir.is_empty() {
+            loop_.shift_remove("ai_config_dir");
+            Ok(format!("{name} now uses the default AI CLI account"))
+        } else {
+            loop_.insert("ai_config_dir".into(), json!(dir));
+            Ok(format!("{name} now uses the AI CLI account in {dir}"))
+        }
+    })
+}
+
 /// Set the loop's `notify` connector-id list (empty removes the key).
 pub fn set_notify(
     name: &str,
@@ -655,6 +685,34 @@ mod tests {
         let all = list_loops(&f.config, Some(&f.none)).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0]["name"], "meeting-prep-loop");
+    }
+
+    #[test]
+    fn a_loop_can_run_on_its_own_ai_account() {
+        let f = fx(json!([{"name": "a"}]));
+        assert_eq!(
+            set_ai_config_dir("a", " ~/.claude-bot ", &f.config, Some(&f.none)).unwrap(),
+            "a now uses the AI CLI account in ~/.claude-bot"
+        );
+        assert_eq!(read(&f)[0]["ai_config_dir"], "~/.claude-bot");
+        set_ai_config_dir("a", "/Users/me/.codex-bot", &f.config, Some(&f.none)).unwrap();
+        assert_eq!(read(&f)[0]["ai_config_dir"], "/Users/me/.codex-bot");
+        for bad in [
+            "relative/dir",
+            "~other/x",
+            "/a\nb",
+            &format!("/{}", "x".repeat(500)),
+        ] {
+            assert_eq!(
+                set_ai_config_dir("a", bad, &f.config, Some(&f.none)).unwrap_err(),
+                "The account folder must be an absolute path or start with ~/ (one line, at most 500 characters)"
+            );
+        }
+        assert_eq!(
+            set_ai_config_dir("a", "", &f.config, Some(&f.none)).unwrap(),
+            "a now uses the default AI CLI account"
+        );
+        assert!(read(&f)[0].get("ai_config_dir").is_none());
     }
 
     #[test]

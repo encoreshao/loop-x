@@ -71,6 +71,25 @@ struct Entry {
     log_suffix: String,
     emit_run_events: bool,
     precheck: Option<String>,
+    /// The loop's own AI CLI account folder (`ai_config_dir`), `~` expanded.
+    ai_config_dir: Option<PathBuf>,
+}
+
+/// `~/x` under `$HOME`; anything else as is.
+fn expand_home(dir: &str) -> PathBuf {
+    match (dir.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(dir),
+    }
+}
+
+/// The variable that points `cli` at another account's config folder.
+fn account_var(cli: &str) -> Option<&'static str> {
+    match cli {
+        "claude" => Some("CLAUDE_CONFIG_DIR"),
+        "codex" => Some("CODEX_HOME"),
+        _ => None,
+    }
 }
 
 fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
@@ -104,6 +123,12 @@ fn resolve_entry(loop_name: &str) -> Result<Entry, String> {
             .map(str::trim)
             .filter(|c| !c.is_empty())
             .map(String::from),
+        ai_config_dir: entry
+            .get("ai_config_dir")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(expand_home),
     })
 }
 
@@ -163,7 +188,10 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         std::env::var("LOOPX_RUN_REASON").as_deref(),
         Ok("scheduled" | "catch-up")
     );
-    if scheduled {
+    // A loop on its own account has its own limits: the shared pause and usage
+    // check are about the default account.
+    let own_account = entry.ai_config_dir.is_some();
+    if scheduled && !own_account {
         if let Some(why) = quota_pause(opts) {
             append_unified_log(
                 &format!("[{}] ---- {loop_name} ---- paused: {why} ----", stamp()),
@@ -224,7 +252,7 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
     let fail = |exit: i32| {
         let failures = repeated_failures(&previous, exit) + 1;
         let output = run_output(&log_path, log_start);
-        if let Some(until) = limit_pause(&output) {
+        if let Some(until) = (!own_account).then(|| limit_pause(&output)).flatten() {
             append_unified_log(
                 &format!(
                     "[{}] ---- {loop_name} ---- run ended (exit {exit}): hit the AI CLI usage limit; scheduled runs paused until {until} ----",
@@ -346,14 +374,30 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         run_id.clone(),
     ];
     args.extend(extra_args.iter().cloned());
+    // Set after the login shell's rc files, so a profile can't point the CLI
+    // back at the default account.
+    let cli = ai_cli_config::selected_cli();
+    let account = match (&entry.ai_config_dir, account_var(&cli)) {
+        (Some(dir), Some(var)) => vec![format!("{var}={}", dir.display())],
+        (Some(_), None) => {
+            append_unified_log(
+                &format!("[{}] WARNING: {loop_name} has its own AI CLI account, but {cli} can't switch accounts; using its default one", stamp()),
+                &unified,
+            );
+            Vec::new()
+        }
+        _ => Vec::new(),
+    };
     let mut command = if opts.login_shell {
         let mut c = Command::new("zsh");
-        c.args(["-i", "-l", "-c", "exec \"$@\"", "zsh", &opts.exe])
+        c.args(["-i", "-l", "-c", "exec \"$@\"", "zsh", "/usr/bin/env"])
+            .args(&account)
+            .arg(&opts.exe)
             .args(&args);
         c
     } else {
-        let mut c = Command::new(&opts.exe);
-        c.args(&args);
+        let mut c = Command::new("/usr/bin/env");
+        c.args(&account).arg(&opts.exe).args(&args);
         c
     };
     command.current_dir(&opts.root);
@@ -747,6 +791,76 @@ mod tests {
 
     fn usage_unknown() -> Result<Vec<crate::quota::Window>, String> {
         Err("no Claude Code sign-in found".into())
+    }
+
+    fn use_account(dir: &Path, account: &str) {
+        let mut loops: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("loops.json")).unwrap())
+                .unwrap();
+        loops[0]["ai_config_dir"] = json!(account);
+        std::fs::write(dir.join("loops.json"), loops.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_loop_on_its_own_account_runs_with_that_config_dir_and_skips_the_shared_pause() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        use_account(d.path(), "~/.claude-bot");
+        std::fs::write(
+            d.path().join("ai_cli.json"),
+            r#"{"cli": "claude", "pause_above_percent": 90}"#,
+        )
+        .unwrap();
+        let seen = d.path().join("seen");
+        let mut o = opts(
+            d.path(),
+            fake_exe(
+                d.path(),
+                &format!(
+                    "echo \"$CLAUDE_CONFIG_DIR|$CODEX_HOME\" > {}",
+                    seen.display()
+                ),
+            ),
+        );
+        // The shared usage check is about the default account: not this loop's.
+        o.usage_probe = Some(usage_93);
+        let code = with_env(d.path(), || {
+            with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+        });
+        assert_eq!(code, 0);
+        assert_eq!(
+            std::fs::read_to_string(&seen).unwrap().trim(),
+            format!("{}|", d.path().join(".claude-bot").display())
+        );
+        assert!(!d.path().join("quota_pause.json").exists());
+
+        // Codex reads its account from CODEX_HOME.
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "codex"}"#).unwrap();
+        use_account(d.path(), "/srv/codex-bot");
+        let code = with_env(d.path(), || {
+            with_reason("manual", || run_loop_now(&o, "gitlab-loop", &[]))
+        });
+        assert_eq!(code, 0);
+        // Only CODEX_HOME is ours to set; CLAUDE_CONFIG_DIR is whatever we inherited.
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        assert!(seen.trim().ends_with("|/srv/codex-bot"), "{seen}");
+    }
+
+    #[test]
+    fn a_limit_hit_on_a_loops_own_account_does_not_pause_the_others() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        use_account(d.path(), "/srv/claude-bot");
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
+        let o = opts(
+            d.path(),
+            fake_exe(d.path(), "echo 'Claude AI usage limit reached'; exit 1"),
+        );
+        let code = with_env(d.path(), || {
+            with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+        });
+        assert_eq!(code, 1);
+        assert!(!d.path().join("quota_pause.json").exists());
     }
 
     #[test]

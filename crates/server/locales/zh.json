@@ -1280,5 +1280,8 @@
   "Agent finished its turn": "智能体已完成本轮",
   "Agent is starting": "智能体正在启动",
   "Agent is thinking": "智能体正在思考",
-  "{doing} · {time} ago": "{doing} · {time}前"
+  "{doing} · {time} ago": "{doing} · {time}前",
+  "AI account folder (optional)": "AI 账户文件夹（可选）",
+  "Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.": "让此循环使用另一个 Claude Code 或 Codex 账户运行：填写该账户的配置文件夹（CLAUDE_CONFIG_DIR 或 CODEX_HOME）。留空则使用默认账户。",
+  "Save account": "保存账户"
 }
