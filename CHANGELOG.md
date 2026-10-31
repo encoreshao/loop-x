@@ -20,6 +20,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - GitLab loop: the Worktrees tab opens with a `wt <branch>` shell function, with a Copy button, to add to `~/.zshrc`/`~/.bashrc`; run from a project's checkout, it jumps into the worktree of an issue branch so you can check the change by hand.
 
 ### Changed
+- Office: the office room is much bigger, with a meeting nook and whiteboard, spare workstations, a ping-pong table, a library wall with reading chairs and bean bags, a vending machine, a printer and a fridge. The coffee shop and the bookstore moved far down the street, out of the default view.
+- Office: every idle colleague now gets up on their own and strolls between stops round the office (several at once, never through the furniture), at a pace that changes from leg to leg with the odd pause, and hurries back to the desk when work arrives.
 - MR Review: MRs in archived projects, or projects scheduled for deletion, no longer appear on the Merge requests tab and are never reviewed.
 
 ### Fixed

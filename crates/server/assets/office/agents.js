@@ -7,15 +7,20 @@
 // scene's clock) an idle colleague now and then walks out along the street in front of the office,
 // to the coffee shop (mostly in the morning) or the bookstore (mostly in the evening), stays a
 // while and comes back; at most one is away at a time and anyone who gets work returns at once.
+// With nothing to do each colleague also gets up on their own now and then and strolls round the
+// office (any hour): a few stops among the meeting nook, the pantry, the ping-pong table, the library
+// wall and the lounge (annex.js), at a pace that changes from leg to leg, with the odd pause on
+// the way; work calling them back sends them to their desk at a hurry.
 // Name tags, glyph bubbles and speech are canvas sprites, so a loop name is always text, never
 // markup. Working people get a faint data beam to the AI centre rack.
 
 const V = new URL(import.meta.url).search;
-const [{ rng, freezeStatic }, { buildLayout, furnish, SEATS, DESK }, { appearanceFor, buildPerson }, { SHOPS, PLAZA_Z, DOOR_APPROACH_Z }] = await Promise.all([
+const [{ rng, freezeStatic }, { buildLayout, furnish, SEATS, DESK }, { appearanceFor, buildPerson }, { SHOPS, PLAZA_Z, DOOR_APPROACH_Z }, { STOPS, planPath }] = await Promise.all([
   import("./world.js" + V),
   import("./layout.js" + V),
   import("./people.js" + V),
   import("./shops.js" + V),
+  import("./annex.js" + V),
 ]);
 
 /// The colleagues, in seat order. Names are fixed.
@@ -36,9 +41,11 @@ const POSE_EASE = 9;
 const WALK_SPEED = 2.6;
 const WORK_START = 9, WORK_END = 17;
 const STAY_S = [12, 20], TRIP_GAP_S = [25, 50], FIRST_TRIP_S = 12;
-/// Idle colleagues also stroll round the office (any hour): the gap between strolls, how long one
-/// pauses at each stop, and how far from the desk the stops are (inside the carpet).
-const ROAM_GAP_S = [8, 18], FIRST_ROAM_S = 15, ROAM_PAUSE_S = [3, 7], ROAM_R = [4.8, 5.4];
+/// Idle colleagues also stroll round the office (any hour), each on their own clock: the gap
+/// before a colleague's first and later strolls, how long one pauses at each stop and how many
+/// stops a stroll has. The pace of a leg is drawn from a range, so nobody walks at one speed.
+const ROAM_GAP_S = [9, 22], FIRST_ROAM_S = [14, 26], ROAM_PAUSE_S = [3, 8], ROAM_STOPS = [1, 3];
+const ROAM_SPEED = [1.2, 3.6], TRIP_SPEED = [2.1, 3.3], HURRY_SPEED = 3.6;
 /// Radius of the walk around the desk, clear of the chairs, and the exit point on the office's front edge.
 const RING = DESK.seat + 1.2, EXIT_Z = 13.2;
 /// Lines of an assigned conversation, in order; `{topic}` is what the user picked or typed.
@@ -73,7 +80,7 @@ export function createAgents(ctx) {
   const furniture = furnish(scene, THREE, layout);
   freezeStatic(furniture);
   const people = [];
-  let clock = 0, loops = [], chatter = null, talk = null, nextTalk = FIRST_TALK_S, hour = 13, nextTrip = FIRST_TRIP_S, nextRoam = FIRST_ROAM_S;
+  let clock = 0, loops = [], chatter = null, talk = null, nextTalk = FIRST_TALK_S, hour = 13, nextTrip = FIRST_TRIP_S;
 
   // ---------- sprites ----------
   function sprite(w, h, cw, ch) {
@@ -203,6 +210,7 @@ export function createAgents(ctx) {
     const a = {
       name, title: name, idx: i, seat, state: null, loops: [], ...p, label, bubble, speech, beam,
       said: null, glyph: null, chat: false, pendingUntil: 0, t0: phaseOf(name), sit: 1, wantSit: true, trip: null, roam: null, path: [],
+      speed: 0, goal: WALK_SPEED, gait: 0, hold: 0, strollT: 3, nextRoam: between(FIRST_ROAM_S),
       yaw: 0, yawT: 0, pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
     };
     // Seated at once, facing the plant.
@@ -228,7 +236,7 @@ export function createAgents(ctx) {
   const ownerOf = (loopName) => people.find((a) => a.loops.some((l) => l.name === loopName)) || null;
   const view = (a) => ({
     name: a.name, title: a.title, state: a.state, answering: a.chat, loops: a.loops,
-    free: a.state === "idle" && !a.chat && !a.roam, away: a.trip ? a.trip.place : null,
+    free: a.state === "idle" && !a.chat && !a.roam, canTalk: a.state === "idle" && !a.chat && !a.trip, away: a.trip ? a.trip.place : null,
     note: a.chat ? "answering" : a.trip ? "at_" + a.trip.place : a.roam ? "at_roam" : null,
   });
 
@@ -308,6 +316,7 @@ export function createAgents(ctx) {
     a.trip = { place, phase: "out", spot, done: [], stay: 0 };
     a.path = pts;
     a.wantSit = false;
+    repace(a);
     drawLabel(a);
     setState(a, a.state);
   }
@@ -320,6 +329,7 @@ export function createAgents(ctx) {
     a.path = [...back, [a.seat.x, a.seat.z]];
     trip.phase = "back";
     trip.done = [];
+    repace(a);
   }
   function endTrip(a) {
     a.trip = null;
@@ -359,44 +369,81 @@ export function createAgents(ctx) {
   }
 
   // ---------- strolls round the office ----------
-  /// Slide out past the chair, then a couple of stops on a ring round the desk.
+  const ringAt = (ang, r) => [DESK.x + Math.cos(ang) * r, DESK.z + Math.sin(ang) * r];
+  /// The next walking pace: a hurry when work calls, else drawn from the leg's range.
+  function repace(a) {
+    a.goal = a.state !== "idle" || a.chat ? HURRY_SPEED : a.roam ? between(ROAM_SPEED) : a.trip ? between(TRIP_SPEED) : WALK_SPEED;
+  }
+  /// Up to `n` stops nobody else is heading for, in random order.
+  function pickStops(a, n) {
+    const taken = new Set(people.filter((p) => p !== a && p.roam && p.roam.stop).map((p) => p.roam.stop));
+    const pool = STOPS.filter((s) => !taken.has(s));
+    const out = [];
+    while (out.length < n && pool.length) out.push(pool.splice(Math.floor(R() * pool.length), 1)[0]);
+    return out;
+  }
+  /// Adds the walk to `stop` (round the furniture) to the end of `a`'s path.
+  function headFor(a, stop) {
+    const p = a.group.position, last = a.path.length ? a.path[a.path.length - 1] : [p.x, p.z];
+    a.path.push(...planPath(last, [stop[0], stop[1]]));
+    a.roam.stop = stop;
+    a.roam.phase = "out";
+  }
+  /// Slide out past the chair, then walk to a few stops about the office.
   function startRoam(a) {
-    const at = (ang, r) => [DESK.x + Math.cos(ang) * r, DESK.z + Math.sin(ang) * r];
-    const from = a.seat.angle, dir = R() < 0.5 ? 1 : -1, slide = from + dir * 0.35;
-    const pts = [at(slide, DESK.seat), at(slide, RING)];
-    let ang = slide;
-    for (let i = 0; i < 2; i++) {
-      ang += dir * (0.7 + R() * 0.9);
-      pts.push(at(ang, RING + 0.6), at(ang, lerp(ROAM_R[0], ROAM_R[1], R())));
+    const dir = R() < 0.5 ? 1 : -1, slide = a.seat.angle + dir * 0.35;
+    const n = ROAM_STOPS[0] + Math.floor(R() * (ROAM_STOPS[1] - ROAM_STOPS[0] + 1));
+    a.roam = { phase: "out", done: [], stay: 0, look: 0, pose: "stand", slide, queue: pickStops(a, n), stop: null };
+    a.path = [ringAt(slide, DESK.seat), ringAt(slide, RING)];
+    a.hold = 0;
+    a.strollT = 2 + R() * 4;
+    if (!a.roam.queue.length) {
+      a.roam = null;
+      a.path = [];
+      return;
     }
-    a.roam = { phase: "out", done: [], stay: 0, look: R() * Math.PI * 2, stops: 2 };
-    a.path = pts;
+    headFor(a, a.roam.queue.shift());
     a.wantSit = false;
+    repace(a);
     setState(a, a.state);
+  }
+  /// Home by the shortest way round the furniture, in through the ring and the gap at the chair.
+  function roamBack(a) {
+    const r = a.roam, p = a.group.position;
+    r.phase = "back";
+    r.stop = null;
+    r.queue = [];
+    a.path = [...planPath([p.x, p.z], ringAt(r.slide, RING)), ringAt(r.slide, DESK.seat), [a.seat.x, a.seat.z]];
+    repace(a);
   }
   function endRoam(a) {
     a.roam = null;
-    nextRoam = between(ROAM_GAP_S);
+    a.nextRoam = between(ROAM_GAP_S);
     setState(a, a.state);
   }
   function stepRoams(dt) {
     if (still) return;
-    if (!people.some((a) => a.roam) && (nextRoam -= dt) < 0) {
-      const free = people.filter((a) => a.state === "idle" && !talking(a) && !a.chat && !a.trip && a.pendingUntil <= clock && a.sit > 0.9);
-      if (free.length) startRoam(free[Math.floor(R() * free.length)]);
-      else nextRoam = 4 + R() * 4;
-    }
     for (const a of people) {
       const r = a.roam;
-      if (!r) continue;
+      if (!r) {
+        const ready = a.state === "idle" && !talking(a) && !a.chat && !a.trip && a.pendingUntil <= clock && a.sit > 0.9;
+        if (ready && (a.nextRoam -= dt) < 0) startRoam(a);
+        continue;
+      }
       // Work, a chat or a trip to the shops calls them back at once.
-      if (r.phase !== "back" && (a.state !== "idle" || a.trip || talking(a))) beginBack(a, r);
+      if (r.phase !== "back" && (a.state !== "idle" || a.chat || a.trip || talking(a))) roamBack(a);
       if (r.phase === "out" && !a.path.length) {
+        const [fx, fz] = [r.stop[2], r.stop[3]], p = a.group.position;
         r.phase = "in";
         r.stay = between(ROAM_PAUSE_S);
-        r.look = R() * Math.PI * 2;
+        r.look = Math.atan2(-(fx - p.x), -(fz - p.z));
+        r.pose = r.stop[4];
       } else if (r.phase === "in") {
-        if ((r.stay -= dt) <= 0) beginBack(a, r);
+        if ((r.stay -= dt) <= 0) {
+          if (r.queue.length) headFor(a, r.queue.shift());
+          else roamBack(a);
+          repace(a);
+        }
       } else if (r.phase === "back" && !a.path.length) {
         a.wantSit = true;
         if (a.sit > 0.95) endRoam(a);
@@ -412,19 +459,32 @@ export function createAgents(ctx) {
     let walking = false;
     const p = a.group.position;
     a.sit = still ? (a.wantSit ? 1 : 0) : lerp(a.sit, a.wantSit ? 1 : 0, Math.min(1, dt * 6));
-    if (a.path.length && a.sit < 0.15) {
+    const moving = a.path.length > 0 && a.sit < 0.15;
+    if (!moving) a.speed = 0;
+    else if (!still) {
+      // Pace: re-drawn every few seconds, with the odd pause on a stroll; easing, never a jump.
+      if (a.state !== "idle") a.hold = 0;
+      if ((a.strollT -= dt) <= 0) {
+        a.strollT = 2.5 + R() * 6;
+        if (a.roam && a.roam.phase === "out" && R() < 0.22) a.hold = 0.8 + R() * 2.4;
+        else repace(a);
+      }
+      if (a.hold > 0) a.hold -= dt;
+      a.speed += Math.max(-5 * dt, Math.min(2.2 * dt, (a.hold > 0 ? 0 : a.goal) - a.speed));
+    } else a.speed = a.goal;
+    if (moving) {
       const [tx, tz] = a.path[0];
-      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = WALK_SPEED * dt;
+      const dx = tx - p.x, dz = tz - p.z, d = Math.hypot(dx, dz), step = a.speed * dt;
       if (d <= step) {
         p.x = tx;
         p.z = tz;
         (a.trip || a.roam).done.push(a.path.shift());
-      } else {
+      } else if (step > 0) {
         p.x += (dx / d) * step;
         p.z += (dz / d) * step;
         a.yawT = Math.atan2(-dx, -dz);
-        walking = true;
       }
+      walking = a.speed > 0.15;
     } else if (a.trip && a.trip.phase === "in") {
       a.yawT = Math.atan2(-(a.trip.spot.face[0] - p.x), -(a.trip.spot.face[1] - p.z));
     } else if (a.roam && a.roam.phase === "in") {
@@ -437,7 +497,8 @@ export function createAgents(ctx) {
     }
     a.yaw = still ? a.yawT : a.yaw + angDiff(a.yaw, a.yawT) * Math.min(1, dt * 8);
     a.group.rotation.y = a.yaw;
-    const sit = a.sit, sw = walking ? Math.sin(t * 9) * 0.6 : 0;
+    a.gait += dt * a.speed * 3.4;
+    const sit = a.sit, sw = walking ? Math.sin(a.gait) * Math.min(0.68, 0.2 + a.speed * 0.17) : 0;
     a.body.position.y = lerp(0, -0.37, sit);
     a.legL.hip.rotation.x = lerp(sw, 1.5, sit);
     a.legR.hip.rotation.x = lerp(-sw, 1.5, sit);
@@ -462,6 +523,30 @@ export function createAgents(ctx) {
       lx = 1.2;
       rx = 1.2;
       hx = 0.4 + Math.sin(k * 0.8) * 0.05;
+    } else if (a.roam && a.roam.phase === "in" && a.state === "idle") {
+      // Standing at a stop: reading, sipping, thinking, playing or just looking about.
+      const pose = a.roam.pose, sip = Math.sin(k * 0.9) > 0.75 ? 1 : 0;
+      if (pose === "read") {
+        lx = 1.2;
+        rx = 1.2;
+        hx = 0.4 + Math.sin(k * 0.8) * 0.05;
+      } else if (pose === "sip") {
+        lx = 0.5;
+        rx = lerp(1.1, 2.3, sip);
+        hx = sip * 0.15;
+      } else if (pose === "play") {
+        lx = 0.6;
+        rx = 1.3 + Math.sin(k * 8) * 0.55;
+        hx = 0.12;
+      } else if (pose === "think") {
+        lx = 0.4;
+        rx = 2.2;
+        hx = 0.15 + Math.sin(k * 0.7) * 0.08;
+      } else {
+        lx = 0.15 + Math.sin(k * 0.6) * 0.05;
+        rx = 0.15;
+        hx = Math.sin(k * 0.9) * 0.1;
+      }
     } else if (a.state === "working" && atDesk) {
       lx = 1.1 + Math.sin(k * 13) * 0.1;
       rx = 1.1 + Math.cos(k * 11) * 0.1;
@@ -505,6 +590,9 @@ export function createAgents(ctx) {
     a.head.rotation.x = ps.hx;
     a.body.position.x = ps.bx;
     a.bubble.position.y = 2.6 + Math.sin(k * 3) * 0.05;
+    // The mug stays in hand on a stroll, except where both hands are busy.
+    const handsFull = a.roam && a.roam.phase === "in" && (a.roam.pose === "read" || a.roam.pose === "play");
+    a.mug.visible = a.state === "idle" && (!a.trip || a.trip.place === "coffee") && !handsFull;
 
     // The seat's screen: green while working, flashing red when failed.
     if (atDesk && (a.state === "working" || a.state === "failed")) {
@@ -660,7 +748,8 @@ export function createAgents(ctx) {
     /// topic when empty). False when either is busy or out.
     chatWith(name, otherName, topic) {
       const a = people.find((p) => p.name === name), b = people.find((p) => p.name === otherName);
-      const ok = (x) => x && !x.trip && !x.roam && x.state === "idle" && !x.chat;
+      // Someone out strolling is called back to the desk by the talk (see stepRoams) while they speak.
+      const ok = (x) => x && !x.trip && x.state === "idle" && !x.chat;
       if (still || !ok(a) || !ok(b) || a === b) return false;
       endTalk();
       const text = String(topic || "").trim().slice(0, 60) || strings[HUMAN_TOPICS[Math.floor(R() * HUMAN_TOPICS.length)]] || "";

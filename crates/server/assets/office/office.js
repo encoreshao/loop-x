@@ -144,9 +144,9 @@ async function main() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x20232a);
   const camera = new THREE.PerspectiveCamera(42, w0 / h0, 0.1, 250);
-  camera.position.set(-9, 40, 60);
+  camera.position.set(0, 42, 62);
   const controls = new OrbitControls(camera, canvas);
-  controls.target.set(-9, 1, 6);
+  controls.target.set(0, 1, 5);
   controls.enableDamping = true;
   controls.maxPolarAngle = Math.PI / 2.05;
   // Dragging the view slides it along the street (right-drag or two fingers turns it), within the town.
@@ -158,11 +158,11 @@ async function main() {
   const PAN_LIMIT = { x: 95, zMin: -30, zMax: 60 };
   const hooks = hashHooks();
   if (hooks.camera === "left") {
-    camera.position.set(-26, 12, 36);
-    controls.target.set(-26, 1.5, 8);
+    camera.position.set(-68, 12, 38);
+    controls.target.set(-68, 1.5, 8);
   } else if (hooks.camera === "right") {
-    camera.position.set(40, 9, 1);
-    controls.target.set(15, 3.5, 1);
+    camera.position.set(52, 9, 1);
+    controls.target.set(22, 3.5, 1);
   } else if (hooks.camera === "in") {
     camera.position.set(-8, 7.5, 12);
     controls.target.set(-8, 1.6, 1);

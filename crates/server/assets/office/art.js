@@ -368,15 +368,15 @@ export function signTexture(THREE, text, { width, height, background, color, siz
   return textureOf(THREE, c);
 }
 
-/// Wall paintings: [kind, x, y, z, width, height, rotationY]. The left (x=-14.96)
-/// and right (x=14.96) walls face inward; the rest hang on the back wall between
+/// Wall paintings: [kind, x, y, z, width, height, rotationY]. The left (x=-23.96)
+/// and right (x=23.96) walls face inward; the rest hang on the back wall between
 /// the windows.
-const LEFT = [[2, -7.5, 4, 2.4, 1.7], [5, -4, 3.9, 1.4, 1.8], [0, -0.5, 4, 2.4, 1.7], [1, 8, 4.2, 2, 1.4], [4, 10.8, 4, 1.4, 1.5]];
+const LEFT = [[2, -7.5, 4.5, 2.4, 1.7], [5, -4, 3.9, 1.4, 1.8], [0, -0.5, 4, 2.4, 1.7], [1, 8, 4.2, 2, 1.4], [4, 10.8, 4, 1.4, 1.5]];
 const RIGHT = [[3, -7.5, 4, 2, 1.5], [5, -4, 4, 1.5, 1.9], [2, 4, 4.3, 3, 1.8], [6, 0, 3.9, 1.6, 1.3], [0, 8.5, 4, 2.4, 1.7], [1, 11, 3.9, 1.5, 1.5]];
 export function paintingPlacements(z0) {
   return [
-    ...LEFT.map(([k, z, y, w, h]) => [k, -14.96, y, z, w, h, Math.PI / 2]),
-    ...RIGHT.map(([k, z, y, w, h]) => [k, 14.96, y, z, w, h, -Math.PI / 2]),
+    ...LEFT.map(([k, z, y, w, h]) => [k, -23.96, y, z, w, h, Math.PI / 2]),
+    ...RIGHT.map(([k, z, y, w, h]) => [k, 23.96, y, z, w, h, -Math.PI / 2]),
     ...[[3, -12], [4, -8], [6, -4]].map(([k, x]) => [k, x, 1.3, z0 + 0.04, 1.5, 1.0, 0]),
     [5, -14.2, 4, z0 + 0.04, 1, 1.6, 0],
     [2, -10, 4, z0 + 0.04, 0.8, 1.4, 0],
@@ -386,7 +386,7 @@ export function paintingPlacements(z0) {
 /// The two murals on the outer faces of the side walls: x, rotationY, words, extras.
 export const GRAFFITI = [
   {
-    x: -15.32,
+    x: -24.32,
     rotY: -Math.PI / 2,
     words: [["AI", 80, 470, 400, -0.04, 0], ["LLM", 700, 300, 170, 0.05, 1], ["AGENT", 620, 610, 200, -0.03, 2], ["LOOP", 1180, 330, 230, 0.04, 3],
       ["0101", 1230, 610, 140, -0.05, 1], ["THINK", 1560, 500, 230, -0.03, 0], ["BOT", 1960, 330, 170, 0.06, 2]],
@@ -394,7 +394,7 @@ export const GRAFFITI = [
       ["spark", 1500, 640, 36, "#ff8dba"]],
   },
   {
-    x: 15.32,
+    x: 24.32,
     rotY: Math.PI / 2,
     words: [["NEURAL", 90, 440, 250, -0.03, 1], ["AI", 930, 560, 400, 0.03, 3], ["PROMPT", 1250, 330, 190, -0.04, 2], ["LOOP", 1380, 640, 190, 0.04, 0],
       ["0101", 1850, 330, 150, 0.05, 1], ["TRAIN", 1650, 600, 170, -0.03, 3]],

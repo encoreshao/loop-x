@@ -223,7 +223,7 @@ with Chrome() as c:
     c.screenshot(f"{out}/inside-13h.png")
 
 # 6b. Trips to the shops: only in the workday, one at a time, and back at once for work.
-SHOP = {"coffee": (-33.0, -25.0), "books": (-24.0, -16.0)}
+SHOP = {"coffee": (-78.0, -70.0), "books": (-66.0, -58.0)}
 def idle_loops():
     return [loop("a-loop", "idle"), loop("b-loop", "idle"), loop("c-loop", "idle")]
 
@@ -271,11 +271,11 @@ with Chrome() as c:
     set_loops(c, idle_loops())
     # A bookstore visit ends by itself (stay 12-20 s) and the colleague sits back down.
     try:
-        c.wait_for("window.__office.debug().every(a => a.state === 'idle' && !a.away && a.seated)", timeout=60, interval=0.5)
-        c.evaluate("window.__office.visitNow('books')")
+        # visitNow only sends someone who is free (not out strolling), so retry until it does.
+        c.wait_for("window.__office.visitNow('books')", timeout=60, interval=0.5)
         c.wait_for("window.__office.debug().some(a => a.at === 'books')", timeout=60, interval=0.5)
         c.screenshot(f"{out}/bookstore-10h.png")
-        c.wait_for("window.__office.debug().every(a => !a.away && a.seated && !a.walking)", timeout=90, interval=0.5)
+        c.wait_for("window.__office.debug().every(a => !a.away)", timeout=120, interval=0.5)
     except TimeoutError:
         fails.append(f"trips: a bookstore visit did not start and end: {debug(c)}")
     if c.errors:
@@ -305,7 +305,7 @@ with Chrome() as c:
     if not press("Call back to desk"):
         fails.append("assign: no Call back button while E1 is away")
     try:
-        c.wait_for("window.__office.debug().every(a => !a.away && a.seated && !a.walking)", timeout=90, interval=0.5)
+        c.wait_for("window.__office.debug().some(a => a.name === 'E1' && !a.away && a.seated && !a.walking)", timeout=90, interval=0.5)
     except TimeoutError:
         fails.append(f"assign: E1 did not come back when called: {debug(c)}")
     # A conversation about a typed topic, in both directions' lines.
@@ -354,8 +354,9 @@ with Chrome() as c:
         except TimeoutError:
             fails.append("ctrl+v: did not go from the Dashboard back to the Office")
 
-# 6d. With no work an idle colleague strolls round the office (any hour, never leaving it), and
-# work calls them back to the desk.
+# 6d. With no work the idle colleagues stroll round the office (any hour, never leaving it,
+# never walking through the desk), several of them at once and at varying speeds, and work calls
+# them back to the desk.
 with Chrome() as c:
     load(c, "h=20")
     set_loops(c, idle_loops())
@@ -364,12 +365,26 @@ with Chrome() as c:
     except TimeoutError:
         fails.append(f"roam: nobody strolled round the office with no work: {debug(c)}")
     else:
-        pts = []
-        for _ in range(20):
+        pts, speeds, most, last = [], [], 0, {}
+        for _ in range(240):
             c.pump(0.5)
-            pts += [(a["x"], a["z"]) for a in debug(c) if a["at"] == "roam" or a["walking"]]
-        if any(not (-14.5 < x < -1.5 and -9 < z < 12.4) for x, z in pts):
-            fails.append(f"roam: someone left the office: {[p for p in pts if not (-14.5 < p[0] < -1.5 and -9 < p[1] < 12.4)][:3]}")
+            d = debug(c)
+            most = max(most, sum(1 for a in d if a["at"] == "roam"))
+            for a in d:
+                if a["at"] == "roam" or a["walking"]:
+                    pts.append((a["x"], a["z"]))
+                    if a["name"] in last and a["walking"]:
+                        speeds.append(math.hypot(a["x"] - last[a["name"]][0], a["z"] - last[a["name"]][1]) / 0.5)
+                last[a["name"]] = (a["x"], a["z"])
+        out = [p for p in pts if not (-23.4 < p[0] < 23.4 and -9.2 < p[1] < 12.4)]
+        if out:
+            fails.append(f"roam: someone left the office: {out[:3]}")
+        if any(math.hypot(x - DESK[0], z - DESK[1]) < 3.3 for x, z in pts if abs(math.hypot(x - DESK[0], z - DESK[1]) - DESK[2]) > 0.3 and math.hypot(x - DESK[0], z - DESK[1]) < 4.3):
+            fails.append("roam: someone walked through the desk")
+        if most < 2:
+            fails.append("roam: never more than one colleague strolled at a time")
+        if speeds and max(speeds) - min(s for s in speeds if s > 0.2) < 1.0:
+            fails.append(f"roam: the walking pace never varied: {min(speeds):.2f}..{max(speeds):.2f} m/s")
         who = next((a for a in debug(c) if a["at"] == "roam"), None)
         if who:
             if who["away"]:

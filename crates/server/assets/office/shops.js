@@ -1,5 +1,5 @@
-// The two shops standing in a row with the office: coffee shop, bookstore, then the LoopX
-// office, all with their fronts on the same street. Each is a roofless box with a glass front
+// The two shops standing in a row with the office, far down the street to its west (out of the
+// default view): coffee shop, bookstore, then the LoopX office, all with their fronts on the same street. Each is a roofless box with a glass front
 // towards the viewer and a door in it, so the people inside can be seen. `SHOPS` is plain data
 // (where the door is, where visitors and staff stand); `buildShops` draws them into the scene.
 
@@ -13,13 +13,13 @@ export const STREET = { kerb: Z1 + 0.05, walkZ: 14.4, doorApproachZ: Z1 + 1.1, r
 /// member stands behind the counter.
 export const SHOPS = {
   coffee: {
-    cx: -29,
+    cx: -74,
     spots: [[-1.6, 7.9, -1.6, 6.8], [0, 7.9, 0, 6.8], [1.6, 7.9, 1.6, 6.8]],
     guests: [[-2.6, 7.9, -2.6, 6.8], [2.6, 7.9, 2.6, 6.8]],
     staff: [0.9, 5.95],
   },
   books: {
-    cx: -20,
+    cx: -62,
     spots: [[-2.3, 9, -3.6, 9], [2.3, 9, 3.6, 9], [0, 10.7, 0, 9.4]],
     guests: [[-2.3, 7.4, -3.6, 7.4], [2.3, 7.4, 3.6, 7.4]],
     staff: [0, 5.95],

@@ -105,7 +105,7 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     chats.dataset.row = "chats";
     const others = hooks.people ? hooks.people().filter((p) => p.name !== who.name) : [];
     for (const o of others) {
-      chats.append(btn(t("chat_with").replace("{name}", String(o.title || o.name)), () => hooks.assign(who.name, "talk", { with: o.name, topic: topic.value }), !who.free || !o.free || !!who.away || !!o.away));
+      chats.append(btn(t("chat_with").replace("{name}", String(o.title || o.name)), () => hooks.assign(who.name, "talk", { with: o.name, topic: topic.value }), !who.canTalk || !o.canTalk));
     }
     const msg = document.createElement("p");
     msg.className = "office-panel-assign-msg";

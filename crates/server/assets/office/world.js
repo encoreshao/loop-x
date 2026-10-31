@@ -4,9 +4,9 @@
 // the back wall at z = ROOM.Z0 and the windows looking north (towards -z).
 
 const V = new URL(import.meta.url).search;
-const [art, shops, town] = await Promise.all([import("./art.js" + V), import("./shops.js" + V), import("./town.js" + V)]);
+const [art, shops, town, annex] = await Promise.all([import("./art.js" + V), import("./shops.js" + V), import("./town.js" + V), import("./annex.js" + V)]);
 
-export const ROOM = { W: 30, Z0: -10.5, Z1: 12.5 };
+export const ROOM = { W: 48, Z0: -10.5, Z1: 12.5 };
 const D = ROOM.Z1 - ROOM.Z0, ZC = (ROOM.Z0 + ROOM.Z1) / 2;
 
 /// The blue office carpet the round desk stands on (x0..x1, z0..z1).
@@ -48,13 +48,13 @@ export function buildLights(scene, THREE) {
   const sun = new THREE.DirectionalLight(0xfff1dd, 1.0);
   sun.position.set(8, 26, 16);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -24, right: 24, top: 24, bottom: -24, near: 1, far: 70 });
+  sun.shadow.mapSize.set(3072, 3072);
+  Object.assign(sun.shadow.camera, { left: -32, right: 32, top: 26, bottom: -26, near: 1, far: 80 });
   scene.add(sun);
   const warm = new THREE.PointLight(0xffc27a, 40, 18);
   warm.position.set(9, 4.5, 3);
   scene.add(warm);
-  const tableLights = [[-7.8, 5.5, -3], [-7.8, 5.5, 4], [9, 5.5, 3], [2.2, 5.5, 9]].map((p) => {
+  const tableLights = [[-7.8, 5.5, -3], [-7.8, 5.5, 4], [9, 5.5, 3], [2.2, 5.5, 9], [-19.5, 5.5, 1], [19.5, 5.5, 1]].map((p) => {
     const l = new THREE.PointLight(0xffe2b0, 0, 16);
     l.position.set(...p);
     scene.add(l);
@@ -115,7 +115,7 @@ export function buildWorld(scene, THREE, opts = {}) {
   box(W, 0.3, D, M(0x9a7a56, { roughness: 0.55 }), 0, -0.15, ZC);
   // Back wall with six real window openings: the outdoors shows through them.
   const wallMat = M(0xe9e6df);
-  const WIN_W = 2.8, WIN_Y0 = 2.5, WIN_Y1 = 5.5, WINX = [-12, -8, -4, 6.5, 10, 13.5];
+  const WIN_W = 2.8, WIN_Y0 = 2.5, WIN_Y1 = 5.5, WINX = [-20.5, -16.5, -12, -8, -4, 6.5, 10, 13.5, 17.5, 21.5];
   {
     let cur = -W / 2;
     const frame = M(0xf7f5f0, { roughness: 0.5 });
@@ -257,6 +257,9 @@ export function buildWorld(scene, THREE, opts = {}) {
   // Floor lamp; its shade glows brighter at night.
   cyl(0.03, 0.03, 2.4, M(0x333333), 14, 1.2, 0.8);
   const lampShade = cyl(0.45, 0.3, 0.5, M(0xfff0c8, { emissive: 0xffd88a, emissiveIntensity: 0.8 }), 14, 2.5, 0.8).material;
+
+  // The wings: meeting nook and workstations to the west, ping-pong, library and pantry to the east.
+  annex.buildAnnex(scene, THREE, { M, R });
 
   // ---------- the LoopX logo on the back wall, right of centre ----------
   {
@@ -409,7 +412,7 @@ export function buildWorld(scene, THREE, opts = {}) {
     for (let i = 0; i < 30; i++) tree(types[Math.floor(R() * 6)], (R() - 0.5) * 140, -20 - R() * 14, 0.9 + R() * 0.6);
   }
   // Flowerbed and hedge under the windows.
-  for (let x = -14.5; x <= 14.5; x += 1.6) {
+  for (let x = -23.5; x <= 23.5; x += 1.6) {
     if (R() > 0.2) om(new THREE.SphereGeometry(0.5 + R() * 0.3, 10, 8), M(jitter(0x3a8f4a), { roughness: 1 }), x, 0.1, -11.5);
     if (R() > 0.5) {
       for (let j = 0; j < 4; j++) {
@@ -419,12 +422,12 @@ export function buildWorld(scene, THREE, opts = {}) {
   }
   // Benches and lamp posts on the sidewalk.
   const benchWood = M(0x7a5a3a);
-  for (const bx of [-6, 11]) {
+  for (const bx of [-18, -6, 11, 20]) {
     box(2, 0.1, 0.6, benchWood, bx, 0.25, -13.7).castShadow = false;
     box(2, 0.5, 0.08, benchWood, bx, 0.6, -13.98).castShadow = false;
   }
   const lampM = bm(0xfff3c4);
-  for (const x of [-1, 8, -14]) {
+  for (const x of [-1, 8, -14, 17, -23]) {
     om(new THREE.CylinderGeometry(0.05, 0.07, 3.4, 8), M(0x333333), x, 1.4, -13.3);
     om(new THREE.SphereGeometry(0.22, 10, 8), lampM, x, 3.2, -13.3);
   }
@@ -617,8 +620,8 @@ export function buildWorld(scene, THREE, opts = {}) {
         }
         w.v += Math.max(-4 * dt, Math.min(2 * dt, (w.resting ? 0 : w.top) - w.v));
         w.g.position.x += w.v * w.dir * dt;
-        if (w.g.position.x > 45) w.g.position.x = -45;
-        if (w.g.position.x < -45) w.g.position.x = 45;
+        if (w.g.position.x > 70) w.g.position.x = -70;
+        if (w.g.position.x < -70) w.g.position.x = 70;
         const s = Math.sin(t * 6 * Math.abs(w.v)) * 0.6 * Math.min(1, w.v * 2);
         w.l.rotation.x = s;
         w.r.rotation.x = -s;
