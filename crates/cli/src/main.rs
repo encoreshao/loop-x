@@ -210,6 +210,12 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// What a claude hook runs: `<activity-file> <label>`, the hook's JSON on stdin
+    #[command(name = "_agent-hook", hide = true)]
+    AgentHook {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// What the agent's `node`/`npm`/... shims run: `<shim-dir> <tool> [args]`
     #[command(name = "_node-shim", hide = true)]
     NodeShim {
@@ -332,6 +338,10 @@ fn main() -> ExitCode {
         Command::Messages { args } => messages_cmd::run(&args),
         Command::ChatTool { args } => chat_tool_cmd::run(&args),
         Command::ChatEvalStub { args } => chat_tool_cmd::eval_stub(&args),
+        Command::AgentHook { args } => {
+            loopx_core::agent_activity::hook_main(&args, std::io::stdin());
+            ExitCode::SUCCESS
+        }
         Command::NodeShim { args } => {
             ExitCode::from(loopx_core::node_env::shim_main(&args).clamp(0, 255) as u8)
         }

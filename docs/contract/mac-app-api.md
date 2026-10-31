@@ -76,6 +76,12 @@ ends, and treat "no message for 45 s" as dead.
 - Loop `state` values: `running`, `idle`, `failed`, `stopped`, `never_run` and `unknown` (as in
   `status.json`), plus `stale`, which the backend substitutes for a `running` status whose
   pid has died. Treat `stale` like `failed`.
+- A running `gitlab-loop` also carries `agent_activity`, the last thing its Claude agent did,
+  reported by Claude Code hooks: `{"at": "<UTC ISO>", "label": "web #7", "event":
+  "PreToolUse" | "PostToolUse" | "Notification" | "Stop" | "Start", "tool": "Bash" | null,
+  "detail": "cargo test" | null}`. `detail` is the command, file or pattern of the tool call
+  (or a notification's message), clipped to 120 characters. Absent for other CLIs, and when
+  the loop isn't running.
 - `attention` is the newest outcome from the last 15 minutes worth showing, or `null`:
   `kind` is `mr_opened`, `escalated` (see `reason`) or `failed`.
 - `recent_events` holds up to 15 events, oldest first, of these types only: `run.started`,

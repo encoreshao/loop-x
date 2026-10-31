@@ -1273,5 +1273,12 @@
   "Above {n}% used": "已用超过 {n}%",
   "Subscription usage": "订阅用量",
   "Pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above this, and resume after it resets, so loops never use up the quota you need. A usage-limit error from any CLI also pauses them for an hour. Run now always runs.": "当 Claude 订阅的 5 小时或每周用量高于此值时暂停计划运行,并在重置后恢复,确保循环不会耗尽你需要的额度。任何 CLI 报出用量上限错误时也会暂停一小时。“立即运行”始终会运行。",
-  "Scheduled runs are paused: {reason}. They resume after {until}.": "计划运行已暂停:{reason}。将在 {until} 之后恢复。"
+  "Scheduled runs are paused: {reason}. They resume after {until}.": "计划运行已暂停:{reason}。将在 {until} 之后恢复。",
+  "Agent is running {tool}: {detail}": "智能体正在运行 {tool}：{detail}",
+  "Agent is running {tool}": "智能体正在运行 {tool}",
+  "Agent is waiting: {message}": "智能体正在等待：{message}",
+  "Agent finished its turn": "智能体已完成本轮",
+  "Agent is starting": "智能体正在启动",
+  "Agent is thinking": "智能体正在思考",
+  "{doing} · {time} ago": "{doing} · {time}前"
 }

@@ -93,6 +93,17 @@ fn loop_statuses(outputs: &Path) -> Map<String, Value> {
             doc["state"] = json!(eff);
         }
     }
+    // What the running GitLab agent last did, from its claude hooks.
+    if let Some(doc) = loops
+        .get_mut("gitlab-loop")
+        .filter(|d| d["state"] == "running")
+    {
+        if let Some(activity) =
+            loopx_core::agent_activity::read(&loopx_core::agent_activity::beside(&legacy))
+        {
+            doc["agent_activity"] = activity;
+        }
+    }
     loops
 }
 
@@ -302,6 +313,31 @@ mod tests {
         q.claim_next("t", 1).unwrap();
         let s = build_snapshot(&p, now());
         assert_eq!(s["queue"]["running"][0]["step"], "Fetching feeds");
+    }
+
+    #[test]
+    fn a_running_gitlab_loop_carries_its_agents_last_activity() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        status::write_status(
+            &p.outputs.join("status.json"),
+            "running",
+            &[("pid", json!(child.id()))],
+        )
+        .unwrap();
+        let activity = json!({"at": "2026-10-31T09:00:00+00:00", "label": "web #7", "event": "PreToolUse", "tool": "Bash", "detail": "cargo test"});
+        std::fs::write(p.outputs.join("agent-activity.json"), activity.to_string()).unwrap();
+        let s = build_snapshot(&p, now());
+        assert_eq!(s["loops"]["gitlab-loop"]["agent_activity"], activity);
+        status::write_status(&p.outputs.join("status.json"), "idle", &[]).unwrap();
+        let s = build_snapshot(&p, now());
+        assert!(s["loops"]["gitlab-loop"].get("agent_activity").is_none());
+        let mut child = child;
+        let _ = child.kill();
     }
 
     #[test]

@@ -227,6 +227,10 @@ pub struct RunCtx {
     pub fakes: Option<Arc<RunFakes>>,
     /// Where task memory and `SETUP.md` live (default: the per-machine one).
     pub memory_root: Option<PathBuf>,
+    /// What a running claude call last did (see `agent_activity`).
+    pub activity_file: PathBuf,
+    /// A claude call with no hook activity for this long is stopped.
+    pub stall_after: std::time::Duration,
 }
 
 pub struct RunFakes {
@@ -247,6 +251,7 @@ impl RunCtx {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "loopx".to_string());
         let unified_log = unified_log_path(&repo_root);
+        let activity_file = crate::agent_activity::path(Some(&repo_root));
         Self {
             repo_root,
             events_dir: None,
@@ -256,6 +261,8 @@ impl RunCtx {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file,
+            stall_after: crate::agent_activity::STALL_AFTER,
         }
     }
 
@@ -613,7 +620,33 @@ fn run_cli(
     };
 
     let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
+    // Claude reports each tool call through hooks, so the dashboard can say what
+    // it is doing and a wedged call is stopped long before its timeout.
+    let stall = (ai_cli == "claude").then(|| {
+        let label = issue.map_or_else(|| "end of run".to_string(), |(a, i)| format!("{a} #{i}"));
+        let settings = crate::agent_activity::hook_settings(&ctx.exe, &ctx.activity_file, &label);
+        if let Err(e) = crate::agent_activity::start(
+            &ctx.activity_file,
+            &label,
+            &crate::agent_activity::now_iso(),
+        ) {
+            ctx.log(&format!(
+                "cannot write {}: {e}",
+                ctx.activity_file.display()
+            ));
+        }
+        command
+            .args(&argv[1..2])
+            .args(["--settings", &settings])
+            .args(&argv[2..]);
+        proc::Stall {
+            file: ctx.activity_file.clone(),
+            after: ctx.stall_after,
+        }
+    });
+    if stall.is_none() {
+        command.args(&argv[1..]);
+    }
     for (k, v) in env {
         command.env(k, v);
     }
@@ -637,7 +670,8 @@ fn run_cli(
     }
     command.env("PATH", path);
     let timeout = std::time::Duration::from_secs_f64(timeout_seconds.max(0.0));
-    let out = match proc::run(&mut command, None, Some(timeout)) {
+    let (out, stalled) = match proc::run_watched(&mut command, None, Some(timeout), stall.as_ref())
+    {
         Ok(out) => out,
         Err(e) => {
             let detail = could_not_start(ai_cli, &argv[0], &e);
@@ -650,7 +684,12 @@ fn run_cli(
     };
 
     if out.timed_out || !out.success() {
-        let reason = if out.timed_out {
+        let reason = if stalled {
+            format!(
+                "stalled: no agent activity for {}s",
+                ctx.stall_after.as_secs_f64().round() as i64
+            )
+        } else if out.timed_out {
             format!("timed out after {}s", timeout_seconds as i64)
         } else {
             format!("exited {}", out.code.unwrap_or(-1))
@@ -2983,6 +3022,8 @@ mod tests {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -3040,6 +3081,8 @@ mod tests {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -3174,6 +3217,8 @@ mod tests {
             config_path: None,
             fakes: None,
             memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -3501,6 +3546,8 @@ mod tests {
                     gitlab_config_path: d.path().join("gitlab.json"),
                 })),
                 memory_root: Some(d.path().join("memory")),
+                activity_file: d.path().join("agent-activity.json"),
+                stall_after: crate::agent_activity::STALL_AFTER,
             };
             let me = Self {
                 d,
@@ -4591,6 +4638,92 @@ mod tests {
             npm.contains("exec '/opt/loopx/bin/loopx' _node-shim"),
             "{npm}"
         );
+    }
+
+    #[test]
+    fn the_activity_file_sits_beside_the_runs_own_status() {
+        let ctx = RunCtx::new(PathBuf::from("/r/root"));
+        assert_eq!(
+            ctx.activity_file,
+            PathBuf::from("/r/root/outputs/agent-activity.json")
+        );
+    }
+
+    fn claude_ctx(dir: &Path) -> RunCtx {
+        let mut ctx = RunCtx::new(dir.to_path_buf());
+        ctx.exe = "/opt/loopx/bin/loopx".into();
+        ctx.activity_file = dir.join("outputs/agent-activity.json");
+        ctx
+    }
+
+    #[test]
+    fn a_claude_call_reports_its_activity_through_hooks() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv_file = d.path().join("argv.txt");
+        let argv = vec![
+            script_cli(
+                d.path(),
+                &format!(
+                    "printf '%s\\n' \"$@\" > '{}'\necho '{{\"result\":\"ok\"}}'",
+                    argv_file.display()
+                ),
+            ),
+            "-p".to_string(),
+            "P".to_string(),
+        ];
+        run_cli(&ctx, "claude", &argv, 30.0, Some(("web", "3")), &[], None).unwrap();
+        let args: Vec<String> = std::fs::read_to_string(&argv_file)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        assert_eq!(args[..2], ["-p", "--settings"]);
+        assert!(
+            args[2].contains("'/opt/loopx/bin/loopx' _agent-hook") && args[2].contains("'web #3'"),
+            "{}",
+            args[2]
+        );
+        assert_eq!(args.last().unwrap(), "P");
+        let activity = crate::agent_activity::read(&ctx.activity_file).unwrap();
+        assert_eq!(
+            (activity["event"].as_str(), activity["label"].as_str()),
+            (Some("Start"), Some("web #3"))
+        );
+    }
+
+    #[test]
+    fn a_claude_call_that_goes_quiet_is_stopped_early() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = claude_ctx(d.path());
+        ctx.stall_after = std::time::Duration::from_millis(400);
+        let argv = vec![
+            script_cli(d.path(), "exec sleep 30"),
+            "-p".into(),
+            "P".into(),
+        ];
+        let start = std::time::Instant::now();
+        let e = run_cli(&ctx, "claude", &argv, 60.0, Some(("web", "3")), &[], None).unwrap_err();
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+        assert!(
+            e.message.starts_with("stalled: no agent activity for"),
+            "{}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn other_clis_get_no_hooks() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv = vec![
+            script_cli(d.path(), r#"echo "{\"response\":\"$*\"}""#),
+            "P".into(),
+        ];
+        run_cli(&ctx, "gemini", &argv, 30.0, Some(("web", "3")), &[], None).unwrap();
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(!log.contains("--settings"), "{log}");
+        assert!(!ctx.activity_file.exists());
     }
 
     #[test]

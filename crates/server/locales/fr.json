@@ -1273,5 +1273,12 @@
   "Above {n}% used": "Au-delà de {n} % utilisés",
   "Subscription usage": "Utilisation de l'abonnement",
   "Pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above this, and resume after it resets, so loops never use up the quota you need. A usage-limit error from any CLI also pauses them for an hour. Run now always runs.": "Met en pause les exécutions planifiées tant que l'utilisation sur 5 heures ou hebdomadaire de votre abonnement Claude dépasse ce seuil, puis les reprend après la réinitialisation : les boucles n'épuisent jamais le quota dont vous avez besoin. Une erreur de limite d'utilisation de n'importe quelle CLI les met aussi en pause pendant une heure. « Exécuter maintenant » s'exécute toujours.",
-  "Scheduled runs are paused: {reason}. They resume after {until}.": "Les exécutions planifiées sont en pause : {reason}. Elles reprendront après {until}."
+  "Scheduled runs are paused: {reason}. They resume after {until}.": "Les exécutions planifiées sont en pause : {reason}. Elles reprendront après {until}.",
+  "Agent is running {tool}: {detail}": "L'agent exécute {tool} : {detail}",
+  "Agent is running {tool}": "L'agent exécute {tool}",
+  "Agent is waiting: {message}": "L'agent attend : {message}",
+  "Agent finished its turn": "L'agent a terminé son tour",
+  "Agent is starting": "L'agent démarre",
+  "Agent is thinking": "L'agent réfléchit",
+  "{doing} · {time} ago": "{doing} · il y a {time}"
 }
