@@ -274,6 +274,8 @@ fn base_strings(ctx: &UiCtx) -> Value {
         "disable": ctx.t("Disable"),
         "stale": ctx.t("Showing last known state"),
         "time_of_day": ctx.t("Time of day"),
+        "animate": ctx.t("Animate the office"),
+        "animate_hint": ctx.t("Your system's Reduce Motion setting is on, so the office stays still. Turn this on to animate it anyway."),
         "auto": ctx.t("Auto"),
         "day": ctx.t("Day"),
         "dawn": ctx.t("Dawn"),
@@ -321,6 +323,7 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 #office{{position:relative;height:calc(100vh - 220px);min-height:480px;border-radius:12px;overflow:hidden;background:#20232a}}\
 #office canvas{{display:block;width:100%;height:100%}}\
 .office-tod{{position:absolute;right:12px;bottom:12px;display:flex;gap:2px;padding:2px;border-radius:999px;background:rgba(20,22,28,.72)}}\
+.office-tod.office-motion{{right:auto;left:12px}}\
 .office-tod button{{font:inherit;font-size:.8rem;padding:.2rem .7rem;border:0;border-radius:999px;background:none;color:#e6e8ee;cursor:pointer}}\
 .office-tod button[aria-pressed='true']{{background:rgba(255,255,255,.18);color:#fff}}\
 .office-note{{margin:0 0 1rem}}\

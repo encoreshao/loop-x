@@ -114,7 +114,16 @@ async function main() {
     showList();
     return;
   }
-  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // The system's Reduce Motion setting freezes the office, unless the viewer chose to animate it anyway.
+  const systemStill = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const forceMotion = (() => {
+    try {
+      return localStorage.getItem("loopx_office_motion") === "1";
+    } catch {
+      return false;
+    }
+  })();
+  const reducedMotion = systemStill && !forceMotion;
   const [{ buildWorld, buildLights, freezeStatic }, { createDayNight }, { createAgents }, { createPanel }, { startLive }] = await Promise.all([
     import("./world.js" + V),
     import("./daynight.js" + V),
@@ -437,6 +446,24 @@ async function main() {
   };
   apply();
   const timer = setInterval(apply, 30000);
+  if (systemStill) {
+    const group = document.createElement("div");
+    group.className = "office-tod office-motion";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = strings.animate || "";
+    b.title = strings.animate_hint || "";
+    b.setAttribute("aria-pressed", String(forceMotion));
+    b.addEventListener("click", () => {
+      try {
+        if (forceMotion) localStorage.removeItem("loopx_office_motion");
+        else localStorage.setItem("loopx_office_motion", "1");
+      } catch {}
+      location.reload();
+    });
+    group.append(b);
+    root.append(group);
+  }
   root.append(timeControl((hour) => {
     override = hour;
     apply();

@@ -1113,6 +1113,8 @@
   "Enable": "有効にする",
   "Disable": "無効にする",
   "Showing last known state": "最後に取得した状態を表示中",
+  "Animate the office": "オフィスを動かす",
+  "Your system's Reduce Motion setting is on, so the office stays still. Turn this on to animate it anyway.": "システムの「視差効果を減らす」設定がオンのため、オフィスは静止しています。これをオンにすると動き出します。",
   "Time of day": "時間帯",
   "Dawn": "夜明け前",
   "Dusk": "夕方",

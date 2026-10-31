@@ -119,6 +119,7 @@ To update later, re-run the installer with `--upgrade`. To remove it, run `bin/s
 | Build from source or contribute | [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/building.md`](docs/building.md) |
 | Cut a release | [`docs/RELEASING.md`](docs/RELEASING.md) |
 | Fix a crash-looping background agent | [`docs/troubleshooting/crash-looping-launchd-agent.md`](docs/troubleshooting/crash-looping-launchd-agent.md) |
+| Fix a frozen Office view (nobody walks, traffic stands still) | [`docs/troubleshooting/office-not-moving.md`](docs/troubleshooting/office-not-moving.md) |
 
 ## License
 

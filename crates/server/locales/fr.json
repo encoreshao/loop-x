@@ -1113,6 +1113,8 @@
   "Enable": "Activer",
   "Disable": "Désactiver",
   "Showing last known state": "Dernier état connu affiché",
+  "Animate the office": "Animer le bureau",
+  "Your system's Reduce Motion setting is on, so the office stays still. Turn this on to animate it anyway.": "Le réglage Réduire les animations de votre système est activé, donc le bureau reste immobile. Activez ceci pour l'animer quand même.",
   "Time of day": "Moment de la journée",
   "Dawn": "Aube",
   "Dusk": "Crépuscule",

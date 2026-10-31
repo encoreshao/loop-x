@@ -1113,6 +1113,8 @@
   "Enable": "启用",
   "Disable": "停用",
   "Showing last known state": "显示最近已知状态",
+  "Animate the office": "让办公室动起来",
+  "Your system's Reduce Motion setting is on, so the office stays still. Turn this on to animate it anyway.": "系统的“减弱动态效果”设置已开启，因此办公室保持静止。开启此项即可让它动起来。",
   "Time of day": "时段",
   "Dawn": "黎明前",
   "Dusk": "黄昏",
