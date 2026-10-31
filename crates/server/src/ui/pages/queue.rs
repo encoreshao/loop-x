@@ -66,11 +66,19 @@ fn short_age(secs: i64) -> String {
     }
 }
 
-/// What the GitLab loop's agent last did, from the hooks' activity file:
-/// "Agent is running Bash: cargo test · 1m ago".
+/// What each of the GitLab loop's agents last did, from the hooks' activity
+/// files (one per issue, since issues run in parallel):
+/// "web #7: Agent is running Bash: cargo test · 1m ago".
 fn agent_activity(ctx: &UiCtx) -> Option<String> {
-    let file = loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("gitlab-loop"));
-    let a = loopx_core::agent_activity::read(&file)?;
+    let base = loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("gitlab-loop"));
+    let lines: Vec<String> = loopx_core::agent_activity::read_all(&base)
+        .iter()
+        .filter_map(|a| one_activity(ctx, a))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" · "))
+}
+
+fn one_activity(ctx: &UiCtx, a: &serde_json::Value) -> Option<String> {
     let text = |k: &str| a.get(k).and_then(serde_json::Value::as_str).filter(|v| !v.is_empty());
     let doing = match (text("event")?, text("tool"), text("detail")) {
         ("PreToolUse", Some(tool), Some(detail)) => {
@@ -85,8 +93,12 @@ fn agent_activity(ctx: &UiCtx) -> Option<String> {
     let ago = text("at")
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0));
-    Some(match ago {
+    let doing = match ago {
         Some(secs) => ctx.tf("{doing} · {time} ago", &[("doing", &doing), ("time", &short_age(secs))]),
+        None => doing,
+    };
+    Some(match text("label") {
+        Some(label) => ctx.tf("{task}: {activity}", &[("task", label), ("activity", &doing)]),
         None => doing,
     })
 }
@@ -491,6 +503,27 @@ mod tests {
         );
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
         assert!(html.contains("Agent is waiting: needs permission"), "{html}");
+    }
+
+    #[test]
+    fn parallel_issues_each_say_what_their_agent_is_doing() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        write_status(d.path(), "status.json", r#"{"state": "running", "current_step": "analyzing"}"#);
+        let now = chrono::Utc::now().to_rfc3339();
+        write_status(
+            d.path(),
+            "agent-activity/web-10.json",
+            &serde_json::json!({"at": now, "label": "web #10", "event": "PreToolUse", "tool": "Bash", "detail": "cargo test"}).to_string(),
+        );
+        write_status(
+            d.path(),
+            "agent-activity/api-2.json",
+            &serde_json::json!({"at": now, "label": "api #2", "event": "Start", "tool": null, "detail": null}).to_string(),
+        );
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("web #10: Agent is running Bash: cargo test"), "{html}");
+        assert!(html.contains("api #2: Agent is starting"), "{html}");
     }
 
     #[test]

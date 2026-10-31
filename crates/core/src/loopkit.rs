@@ -462,39 +462,13 @@ impl Verifier for OutputContractVerifier {
 /// An exclusive, non-blocking `flock` on a lock file. The kernel drops it when
 /// the holder exits, however it exits, so a killed run can never leave it stuck.
 pub struct RunLock {
-    file: std::fs::File,
+    _lock: crate::file_lock::FileLock,
 }
 
 impl RunLock {
     /// `Ok(None)` when another run holds the lock.
     pub fn acquire(path: &Path) -> std::io::Result<Option<RunLock>> {
-        use std::os::unix::io::AsRawFd;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        // SAFETY: flock on a valid descriptor we own.
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if rc != 0 {
-            let err = std::io::Error::last_os_error();
-            return if err.kind() == std::io::ErrorKind::WouldBlock {
-                Ok(None)
-            } else {
-                Err(err)
-            };
-        }
-        Ok(Some(RunLock { file }))
-    }
-}
-
-impl Drop for RunLock {
-    fn drop(&mut self) {
-        use std::os::unix::io::AsRawFd;
-        // SAFETY: unlocking the descriptor we locked.
-        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        Ok(crate::file_lock::FileLock::try_exclusive(path)?.map(|l| RunLock { _lock: l }))
     }
 }
 

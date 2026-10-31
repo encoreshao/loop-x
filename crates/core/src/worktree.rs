@@ -166,6 +166,17 @@ fn usable_checkout(repo_path: &str) -> Result<(), Failure> {
     })
 }
 
+/// Held around every change to a checkout's branches and worktrees. Issues run
+/// in parallel, and two `git fetch` / `git worktree add` calls on one checkout at
+/// once fail on git's own ref locks. The lock file lives in the shared git dir,
+/// so every worktree of the checkout (and every process) takes the same one.
+fn checkout_lock(repo_path: &str) -> Result<crate::file_lock::FileLock, Failure> {
+    let common = git_stdout(repo_path, &["rev-parse", "--git-common-dir"])?;
+    let common = Path::new(repo_path).join(common.trim());
+    crate::file_lock::FileLock::exclusive(&common.join("loopx-checkout.lock"))
+        .map_err(|e| Failure::new(format!("cannot lock {repo_path}: {e}")))
+}
+
 /// Create (or bring up to date) the worktree for an issue and return its path.
 pub fn new_worktree(
     repo_path: &str,
@@ -179,6 +190,16 @@ pub fn new_worktree(
         ));
     }
     usable_checkout(repo_path)?;
+    let _lock = checkout_lock(repo_path)?;
+    new_worktree_locked(repo_path, default_branch, issue_iid, worktree_root)
+}
+
+fn new_worktree_locked(
+    repo_path: &str,
+    default_branch: &str,
+    issue_iid: &str,
+    worktree_root: &str,
+) -> Result<String, Failure> {
     if !Path::new(worktree_root).is_absolute() {
         return Err(Failure::new(format!(
             "worktree_root must be an absolute path: {worktree_root}"
@@ -317,6 +338,7 @@ pub fn prepare_in_place(
         ));
     }
     usable_checkout(repo_path)?;
+    let _lock = checkout_lock(repo_path)?;
     let marker = restore_marker(repo_path)?;
     let branch = branch_name(issue_iid);
     let origin_ref = format!("origin/{default_branch}");
@@ -354,7 +376,7 @@ pub fn prepare_in_place(
             )));
         }
         // A run that died before restoring: put the user's branch back first.
-        restore_in_place(repo_path)?;
+        restore_in_place_locked(repo_path)?;
     }
     // Never touch the user's own work: no stash, no clean, just refuse.
     if !is_clean()? {
@@ -420,6 +442,11 @@ pub fn uses_worktree_for(local_path: &str, config_path: &Path) -> bool {
 /// Put an in-place checkout back on the branch `prepare_in_place` recorded.
 /// `None` when there was nothing to restore. A failed switch keeps the record.
 pub fn restore_in_place(repo_path: &str) -> Result<Option<String>, Failure> {
+    let _lock = checkout_lock(repo_path)?;
+    restore_in_place_locked(repo_path)
+}
+
+fn restore_in_place_locked(repo_path: &str) -> Result<Option<String>, Failure> {
     let marker = restore_marker(repo_path)?;
     let Ok(original) = std::fs::read_to_string(&marker) else {
         return Ok(None);
@@ -478,9 +505,6 @@ pub fn sweep_finished_issue_branches(
     repo_path: &str,
     is_finished: &mut dyn FnMut(&str) -> bool,
 ) -> Result<Sweep, Failure> {
-    // Forget worktrees whose directory was deleted by hand.
-    git(repo_path, &["worktree", "prune"])?;
-    let trees = worktrees(repo_path)?;
     let refs = git_stdout(
         repo_path,
         &[
@@ -489,14 +513,26 @@ pub fn sweep_finished_issue_branches(
             "refs/heads/loop/",
         ],
     )?;
+    // Ask GitLab first, outside the checkout lock: those calls can be slow and
+    // must not hold up a parallel issue's `worktree new`.
+    let finished: Vec<(String, String)> = refs
+        .lines()
+        .filter_map(|branch| {
+            let iid = branch.strip_prefix("loop/issue-")?;
+            (!iid.is_empty() && iid.chars().all(|c| c.is_ascii_digit()) && is_finished(iid))
+                .then(|| (branch.to_string(), iid.to_string()))
+        })
+        .collect();
     let mut sweep = Sweep::default();
-    for branch in refs.lines() {
-        let Some(iid) = branch.strip_prefix("loop/issue-") else {
-            continue;
-        };
-        if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) || !is_finished(iid) {
-            continue;
-        }
+    if finished.is_empty() {
+        return Ok(sweep);
+    }
+    let _lock = checkout_lock(repo_path)?;
+    // Forget worktrees whose directory was deleted by hand.
+    git(repo_path, &["worktree", "prune"])?;
+    let trees = worktrees(repo_path)?;
+    for (branch, iid) in &finished {
+        let (branch, iid) = (branch.as_str(), iid.as_str());
         let tree = trees.iter().position(|(_, b)| b == branch);
         if tree == Some(0) {
             sweep.skipped.push((
@@ -604,6 +640,7 @@ pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<(), Failure> {
     if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) {
         return Err(Failure::new(format!("not an issue number: {iid}")));
     }
+    let _lock = checkout_lock(repo_path)?;
     let branch = branch_name(iid);
     let Some(found) = list_issue_branches(repo_path)?
         .into_iter()
@@ -907,6 +944,30 @@ mod tests {
                 "refs/heads/loop/",
             ],
         )
+    }
+
+    #[test]
+    fn parallel_issues_of_one_checkout_all_get_their_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let results: Vec<Result<String, Failure>> = std::thread::scope(|s| {
+            let handles: Vec<_> = (1..=8)
+                .map(|iid| {
+                    let (repo, root) = (&repo, &root);
+                    s.spawn(move || new_worktree(repo, "main", &iid.to_string(), root))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for (i, r) in results.iter().enumerate() {
+            assert!(
+                r.is_ok(),
+                "issue {}: {}",
+                i + 1,
+                r.as_ref().unwrap_err().message
+            );
+        }
     }
 
     #[test]

@@ -21,11 +21,9 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)
 }
 
+/// Atomic, so a dashboard read never catches a half-written file.
 fn write_doc(path: &Path, doc: &Value) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, pyjson::to_string_pretty(doc))
+    crate::file_lock::write_atomic(path, pyjson::to_string_pretty(doc).as_bytes())
 }
 
 /// `{"state": "never_run"}` if missing, `{"state": "unknown"}` if corrupt.
@@ -73,6 +71,18 @@ pub fn write_topic_status(
     state: &str,
     extra: &[(&str, Value)],
 ) -> std::io::Result<Value> {
+    // Topics run in parallel and share this file: read-modify-write under its lock.
+    crate::file_lock::with_lock(path, || {
+        write_topic_status_unlocked(path, topic, state, extra)
+    })?
+}
+
+fn write_topic_status_unlocked(
+    path: &Path,
+    topic: &str,
+    state: &str,
+    extra: &[(&str, Value)],
+) -> std::io::Result<Value> {
     let mut doc = read_topic_status(path);
     let mut entry = Map::new();
     entry.insert("state".into(), json!(state));
@@ -91,6 +101,10 @@ pub fn write_topic_status(
 /// Set (or, for `None`, remove) the topic run's top-level `ai_cli_warning`,
 /// leaving every topic entry untouched.
 pub fn write_topic_run_warning(path: &Path, warning: Option<&str>) -> std::io::Result<Value> {
+    crate::file_lock::with_lock(path, || write_topic_run_warning_unlocked(path, warning))?
+}
+
+fn write_topic_run_warning_unlocked(path: &Path, warning: Option<&str>) -> std::io::Result<Value> {
     let mut doc = read_topic_status(path);
     let obj = doc
         .as_object_mut()
@@ -142,6 +156,29 @@ mod tests {
         assert!(doc["topics"]["a"].get("current_step").is_none());
         assert_eq!(doc["topics"]["b"]["state"], "idle");
         assert_eq!(read_topic_status(&p), doc);
+    }
+
+    #[test]
+    fn parallel_topics_writing_their_status_never_drop_each_other() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("topic-monitor/status.json");
+        std::thread::scope(|s| {
+            for t in 0..6 {
+                let p = &p;
+                s.spawn(move || {
+                    for i in 0..20 {
+                        write_topic_status(p, &format!("t{t}"), "running", &[("i", json!(i))])
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        let doc = read_topic_status(&p);
+        let topics = doc["topics"].as_object().unwrap();
+        assert_eq!(topics.len(), 6, "{doc}");
+        for t in 0..6 {
+            assert_eq!(topics[&format!("t{t}")]["i"], 19);
+        }
     }
 
     #[test]

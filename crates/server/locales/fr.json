@@ -1308,5 +1308,12 @@
   "{loop}: {step}": "{loop} : {step}",
   "{loop} finished its run": "{loop} a terminé son exécution",
   "{loop} failed": "{loop} a échoué",
-  "{loop} is waiting for your approval": "{loop} attend votre approbation"
+  "{loop} is waiting for your approval": "{loop} attend votre approbation",
+  "{task}: {activity}": "{task} : {activity}",
+  "Running at once": "Exécutions simultanées",
+  "How many agents may work side by side. The same issue or topic never runs twice at once, and issues of a project without worktrees always take turns. 1 runs them one by one.": "Combien d'agents peuvent travailler côte à côte. Un même ticket ou sujet ne tourne jamais deux fois en même temps, et les tickets d'un projet sans worktrees passent toujours chacun leur tour. 1 les exécute un par un.",
+  "GitLab issues": "Tickets GitLab",
+  "Not a whole number: {value}": "Pas un nombre entier : {value}",
+  "Saved. New runs use these limits.": "Enregistré. Les nouvelles exécutions utilisent ces limites.",
+  "Each limit must be between {min} and {max}.": "Chaque limite doit être comprise entre {min} et {max}."
 }

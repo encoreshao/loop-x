@@ -37,6 +37,7 @@ pub fn register(r: &mut Registry) {
     r.post("/notifications/block-templates/:name/test", block_template_test);
     r.post("/ai-cli", ai_cli);
     r.post("/ai-cli/usage-pause", ai_cli_usage_pause);
+    r.post("/ai-cli/concurrency", ai_cli_concurrency);
     r.post("/instructions", instructions);
     r.post("/topic-monitor/topics", topic_save);
     r.post("/topic-monitor/topics/:name/delete", topic_delete);
@@ -436,6 +437,29 @@ fn ai_cli_usage_pause(ctx: &UiCtx) -> UiResponse {
     )
 }
 
+fn ai_cli_concurrency(ctx: &UiCtx) -> UiResponse {
+    use loopx_core::concurrency_config::{save, Limits};
+    const BACK: &str = "/settings?tab=ai-cli";
+    let form = ctx.form();
+    let number = |key: &str| -> Result<usize, String> {
+        let raw = form.first(key).unwrap_or("").trim();
+        raw.parse::<usize>()
+            .map_err(|_| ctx.tf("Not a whole number: {value}", &[("value", raw)]))
+    };
+    let limits = match (number("max_parallel_issues"), number("max_parallel_topics"), number("max_parallel_loops")) {
+        (Ok(issues), Ok(topics), Ok(loops)) => Limits { issues, topics, loops },
+        (Err(e), ..) | (_, Err(e), _) | (.., Err(e)) => return plain(false, e, BACK),
+    };
+    match save(limits, &ctx.state.concurrency_config_path()) {
+        Ok(()) => plain(true, ctx.t("Saved. New runs use these limits."), BACK),
+        Err(_) => plain(
+            false,
+            ctx.tf("Each limit must be between {min} and {max}.", &[("min", "1"), ("max", "10")]),
+            BACK,
+        ),
+    }
+}
+
 fn instructions(ctx: &UiCtx) -> UiResponse {
     let text = ctx.form().first("instructions").unwrap_or("").to_string();
     outcome(
@@ -564,6 +588,38 @@ mod tests {
         let cfg: Value =
             serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
         assert_eq!(cfg, json!({"cli": "claude"}));
+    }
+
+    #[test]
+    fn the_ai_cli_tab_sets_how_much_runs_at_once() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?tab=ai-cli")).unwrap().body_text();
+        assert!(page.contains("Running at once"), "{page}");
+        assert!(page.contains("action='/ai-cli/concurrency'"), "{page}");
+        // The defaults are shown before anything is saved.
+        assert!(page.contains("name='max_parallel_issues' value='5'"), "{page}");
+        assert!(page.contains("name='max_parallel_topics' value='2'"), "{page}");
+        assert!(page.contains("name='max_parallel_loops' value='3'"), "{page}");
+
+        let url = "/ai-cli/concurrency";
+        let form = "max_parallel_issues=8&max_parallel_topics=1&max_parallel_loops=4";
+        assert_eq!(post(&st, url, form).status, 403);
+        assert_eq!(post(&st, url, &format!("csrf_token=tok&{form}")).status, 303);
+        let path = d.path().join("concurrency.json");
+        assert_eq!(
+            loopx_core::concurrency_config::load(&path),
+            loopx_core::concurrency_config::Limits { issues: 8, topics: 1, loops: 4 }
+        );
+        let page = st.registry.dispatch(&st, &UiRequest::get("/settings?tab=ai-cli")).unwrap().body_text();
+        assert!(page.contains("name='max_parallel_issues' value='8'"), "{page}");
+
+        // Out of range or not a number: refused, nothing changes.
+        for bad in ["max_parallel_issues=0&max_parallel_topics=1&max_parallel_loops=4",
+                    "max_parallel_issues=x&max_parallel_topics=1&max_parallel_loops=4"] {
+            assert_eq!(post(&st, url, &format!("csrf_token=tok&{bad}")).status, 303);
+        }
+        assert_eq!(loopx_core::concurrency_config::load(&path).issues, 8);
     }
 
     #[test]

@@ -390,42 +390,67 @@ pub fn stop_entry(queue: &RunQueue, id: &str, now: &str) -> std::io::Result<Canc
     Ok(outcome)
 }
 
-/// Drains the queue: starts each waiting entry in turn with `spawn`, waits for it
-/// and records the outcome, until nothing is waiting. `spawn` returns the child
-/// so its pid is recorded (the Stop button kills it). Returns how many ran.
+/// Drains the queue: keeps up to `max_running` entries running at once (each
+/// a different loop: a loop is never queued twice), starting the next waiting
+/// one as soon as a slot frees, and records each outcome, until nothing is
+/// waiting or running. `spawn` returns the child so its pid is recorded (the
+/// Stop button kills it). Returns how many ran.
 pub fn drain(
     queue: &RunQueue,
     now: &dyn Fn() -> String,
     max_running: usize,
     spawn: &mut dyn FnMut(&Entry) -> std::io::Result<std::process::Child>,
 ) -> usize {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+    let max_running = max_running.max(1);
     let _ = queue.recover(&now(), &|pid| crate::run_control::process_alive(pid));
     let mut ran = 0;
-    while let Ok(Some(entry)) = queue.claim_next(&now(), max_running) {
-        ran += 1;
-        match spawn(&entry) {
-            Ok(mut child) => {
-                let _ = queue.set_pid(&entry.id, i64::from(child.id()));
-                let code = child.wait().ok().and_then(|s| s.code());
-                let (state, note) = match code {
-                    Some(0) => ("done", None),
-                    Some(crate::run_loop::PRECHECK_SKIPPED_EXIT) => {
-                        ("skipped", Some("Its precheck found nothing to do"))
-                    }
-                    Some(crate::run_loop::QUOTA_PAUSED_EXIT) => (
-                        "skipped",
-                        Some("Paused near the AI subscription's usage limit; runs again after it resets"),
-                    ),
-                    _ => ("failed", None),
-                };
-                let _ = queue.finish(&entry.id, state, code, note, &now());
-            }
-            Err(e) => {
-                let _ = queue.finish(&entry.id, "failed", None, Some(&e.to_string()), &now());
+    let mut running: Vec<(Entry, std::process::Child)> = Vec::new();
+    loop {
+        while running.len() < max_running {
+            let Ok(Some(entry)) = queue.claim_next(&now(), max_running) else {
+                break;
+            };
+            ran += 1;
+            match spawn(&entry) {
+                Ok(child) => {
+                    let _ = queue.set_pid(&entry.id, i64::from(child.id()));
+                    running.push((entry, child));
+                }
+                Err(e) => {
+                    let _ = queue.finish(&entry.id, "failed", None, Some(&e.to_string()), &now());
+                }
             }
         }
+        if running.is_empty() {
+            return ran;
+        }
+        std::thread::sleep(POLL);
+        let mut still = Vec::with_capacity(running.len());
+        for (entry, mut child) in running {
+            match child.try_wait() {
+                Ok(None) => still.push((entry, child)),
+                Ok(Some(status)) => record_exit(queue, &entry, status.code(), now),
+                Err(_) => record_exit(queue, &entry, None, now),
+            }
+        }
+        running = still;
     }
-    ran
+}
+
+fn record_exit(queue: &RunQueue, entry: &Entry, code: Option<i32>, now: &dyn Fn() -> String) {
+    let (state, note) = match code {
+        Some(0) => ("done", None),
+        Some(crate::run_loop::PRECHECK_SKIPPED_EXIT) => {
+            ("skipped", Some("Its precheck found nothing to do"))
+        }
+        Some(crate::run_loop::QUOTA_PAUSED_EXIT) => (
+            "skipped",
+            Some("Paused near the AI subscription's usage limit; runs again after it resets"),
+        ),
+        _ => ("failed", None),
+    };
+    let _ = queue.finish(&entry.id, state, code, note, &now());
 }
 
 #[cfg(test)]
@@ -436,6 +461,37 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let q = RunQueue::new(d.path().join("run_queue.json"));
         (d, q)
+    }
+
+    fn sleeper(secs: &str) -> std::io::Result<std::process::Child> {
+        std::process::Command::new("sleep").arg(secs).spawn()
+    }
+
+    #[test]
+    fn drain_runs_up_to_the_limit_of_loops_at_once() {
+        let (_d, q) = queue();
+        for name in ["a", "b", "c"] {
+            q.enqueue(name, Reason::Scheduled, "t0").unwrap();
+        }
+        let started = std::time::Instant::now();
+        let ran = drain(&q, &|| "t".to_string(), 3, &mut |_| sleeper("0.5"));
+        let took = started.elapsed();
+        assert_eq!(ran, 3);
+        assert!(took < std::time::Duration::from_millis(1200), "{took:?}");
+        let snap = q.snapshot(10);
+        assert!(snap.running.is_empty() && snap.queued.is_empty());
+        assert_eq!(snap.recent.iter().filter(|e| e.state == "done").count(), 3);
+    }
+
+    #[test]
+    fn drain_with_a_limit_of_one_still_runs_them_one_by_one() {
+        let (_d, q) = queue();
+        for name in ["a", "b", "c"] {
+            q.enqueue(name, Reason::Scheduled, "t0").unwrap();
+        }
+        let started = std::time::Instant::now();
+        drain(&q, &|| "t".to_string(), 1, &mut |_| sleeper("0.3"));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(900));
     }
 
     #[test]

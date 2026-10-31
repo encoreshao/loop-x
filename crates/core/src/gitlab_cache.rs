@@ -3,7 +3,7 @@
 
 use crate::pyjson;
 use serde_json::{Map, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn cache_root() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
@@ -33,18 +33,26 @@ pub fn project_path(instance: &str, project_id: &str) -> PathBuf {
 }
 
 /// Missing or unparseable files read as an empty object, like the Python skill.
-pub fn read_json(path: &PathBuf) -> Value {
+pub fn read_json(path: &Path) -> Value {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_else(|| Value::Object(Map::new()))
 }
 
-pub fn write_json(path: &PathBuf, data: &Value) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, pyjson::to_string_pretty_sorted(data))
+/// Atomic, so a concurrent reader never sees a half-written file.
+pub fn write_json(path: &Path, data: &Value) -> std::io::Result<()> {
+    crate::file_lock::write_atomic(path, pyjson::to_string_pretty_sorted(data).as_bytes())
+}
+
+/// Read-modify-write of one cache file under its lock: parallel issue runs and
+/// the agent's own `loopx` calls share the project, user and group files.
+pub fn update_json(path: &Path, f: impl FnOnce(&mut Value)) -> std::io::Result<Value> {
+    crate::file_lock::with_lock(path, || {
+        let mut cache = read_json(path);
+        f(&mut cache);
+        write_json(path, &cache).map(|()| cache)
+    })?
 }
 
 /// The cached issue, or `None` when it was never synced.
@@ -62,9 +70,7 @@ pub fn annotate_issue(
     value: Value,
 ) -> std::io::Result<()> {
     let path = issue_path(instance, project_id, iid);
-    let mut cache = read_json(&path);
-    set_under(&mut cache, "_notes", key, value);
-    write_json(&path, &cache)
+    update_json(&path, |cache| set_under(cache, "_notes", key, value)).map(drop)
 }
 
 /// Record `key = value` under the project's `_memory`.
@@ -75,9 +81,7 @@ pub fn annotate_project(
     value: Value,
 ) -> std::io::Result<()> {
     let path = project_path(instance, project_id);
-    let mut cache = read_json(&path);
-    set_under(&mut cache, "_memory", key, value);
-    write_json(&path, &cache)
+    update_json(&path, |cache| set_under(cache, "_memory", key, value)).map(drop)
 }
 
 fn set_under(cache: &mut Value, section: &str, key: &str, value: Value) {
@@ -130,9 +134,12 @@ fn instance_dir(instance: &str) -> PathBuf {
 /// Merge a batch of GitLab user objects into the instance's user directory.
 pub fn upsert_users(instance: &str, users: &[Value]) -> std::io::Result<Value> {
     let path = instance_dir(instance).join("users.json");
-    let mut cache = read_json(&path);
+    update_json(&path, |cache| merge_users(cache, users))
+}
+
+fn merge_users(cache: &mut Value, users: &[Value]) {
     if !cache.is_object() {
-        cache = Value::Object(Map::new());
+        *cache = Value::Object(Map::new());
     }
     for user in users {
         let Some(id) = user.get("id").filter(|i| truthy(i)) else {
@@ -152,8 +159,6 @@ pub fn upsert_users(instance: &str, users: &[Value]) -> std::io::Result<Value> {
         );
         cache.as_object_mut().expect("object").insert(uid, merged);
     }
-    write_json(&path, &cache)?;
-    Ok(cache)
 }
 
 pub fn get_users(instance: &str) -> Value {
@@ -169,9 +174,7 @@ fn group_path(instance: &str, group: &str) -> PathBuf {
 
 pub fn upsert_group(instance: &str, group: &str, data: &Value) -> std::io::Result<Value> {
     let path = group_path(instance, group);
-    let merged = deep_merge(&read_json(&path), data);
-    write_json(&path, &merged)?;
-    Ok(merged)
+    update_json(&path, |cache| *cache = deep_merge(cache, data))
 }
 
 pub fn get_group(instance: &str, group: &str) -> Value {
@@ -180,9 +183,7 @@ pub fn get_group(instance: &str, group: &str) -> Value {
 
 pub fn upsert_project(instance: &str, project_id: &str, data: &Value) -> std::io::Result<Value> {
     let path = project_path(instance, project_id);
-    let merged = deep_merge(&read_json(&path), data);
-    write_json(&path, &merged)?;
-    Ok(merged)
+    update_json(&path, |cache| *cache = deep_merge(cache, data))
 }
 
 pub fn get_project(instance: &str, project_id: &str) -> Value {
@@ -207,8 +208,12 @@ pub fn sync_issue(
     fresh: &Value,
 ) -> std::io::Result<Value> {
     let path = issue_path(instance, project_id, iid);
-    let cache = read_json(&path);
+    let merged = update_json(&path, |cache| *cache = merge_issue(cache, fresh))?;
+    sync_issue_users(instance, merged)
+}
 
+/// `cache` with `fresh` merged in (see [`sync_issue`]).
+fn merge_issue(cache: &Value, fresh: &Value) -> Value {
     let mut notes: Vec<(String, Value)> = Vec::new();
     let mut add = |note: &Value| {
         let key = key_of(note);
@@ -234,11 +239,20 @@ pub fn sync_issue(
         add(n);
     }
 
-    let mut merged = deep_merge(&cache, fresh);
+    let mut merged = deep_merge(cache, fresh);
     notes.sort_by(|a, b| created_at(&a.1).cmp(created_at(&b.1)));
     let notes: Vec<Value> = notes.into_iter().map(|(_, n)| n).collect();
-    merged["notes"] = Value::Array(notes.clone());
-    write_json(&path, &merged)?;
+    merged["notes"] = Value::Array(notes);
+    merged
+}
+
+/// Records the authors and assignees of a synced issue in the user directory.
+fn sync_issue_users(instance: &str, merged: Value) -> std::io::Result<Value> {
+    let notes: Vec<Value> = merged
+        .get("notes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
 
     let mut seen: Vec<Value> = vec![
         merged.get("author").cloned().unwrap_or(Value::Null),
@@ -269,6 +283,26 @@ fn created_at(note: &Value) -> &str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parallel_annotations_of_one_file_never_lose_a_key() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("project.json");
+        std::thread::scope(|s| {
+            for w in 0..6 {
+                let path = &path;
+                s.spawn(move || {
+                    for i in 0..10 {
+                        update_json(path, |c| {
+                            set_under(c, "_memory", &format!("k{w}_{i}"), json!(i))
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(read_json(&path)["_memory"].as_object().unwrap().len(), 60);
+    }
 
     #[test]
     fn set_under_creates_and_replaces() {

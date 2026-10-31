@@ -129,6 +129,51 @@ pub fn hook_main(args: &[String], mut stdin: impl std::io::Read) {
     }
 }
 
+/// One task's activity file: issues run in parallel, and each agent's hooks
+/// must not overwrite another's record (or mask another's stall).
+/// `<dir>/agent-activity/<alias>-<iid>.json`, beside the shared `base` file.
+pub fn for_task(base: &Path, alias: &str, iid: &str) -> PathBuf {
+    let safe = |s: &str| -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    base.with_file_name("agent-activity")
+        .join(format!("{}-{}.json", safe(alias), safe(iid)))
+}
+
+/// A task's call is over: its record goes, so the dashboard only lists live work.
+pub fn finish(file: &Path) {
+    let _ = std::fs::remove_file(file);
+}
+
+/// Every activity record: the shared `base` file and each task's, newest first.
+pub fn read_all(base: &Path) -> Vec<Value> {
+    let mut files = vec![base.to_path_buf()];
+    if let Ok(rd) = std::fs::read_dir(base.with_file_name("agent-activity")) {
+        files.extend(
+            rd.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json")),
+        );
+    }
+    let mut all: Vec<Value> = files.iter().filter_map(|f| read(f)).collect();
+    let at = |v: &Value| {
+        v.get("at")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    all.sort_by_key(|v| std::cmp::Reverse(at(v)));
+    all
+}
+
 pub fn read(file: &Path) -> Option<Value> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
     v.is_object().then_some(v)
@@ -254,5 +299,45 @@ mod tests {
             path(Some(d.path())),
             d.path().join("outputs/agent-activity.json")
         );
+    }
+
+    #[test]
+    fn each_task_gets_its_own_file_beside_the_shared_one() {
+        let base = Path::new("/o/agent-activity.json");
+        assert_eq!(
+            for_task(base, "web", "7"),
+            Path::new("/o/agent-activity/web-7.json")
+        );
+        assert_ne!(for_task(base, "web", "7"), for_task(base, "web", "8"));
+        assert_eq!(
+            for_task(base, "../x", "1"),
+            Path::new("/o/agent-activity/.._x-1.json")
+        );
+    }
+
+    #[test]
+    fn read_all_lists_every_running_task_newest_first_and_finish_drops_one() {
+        let d = tempfile::tempdir().unwrap();
+        let base = d.path().join("agent-activity.json");
+        start(
+            &for_task(&base, "web", "7"),
+            "web #7",
+            "2026-10-31T10:00:00+00:00",
+        )
+        .unwrap();
+        start(
+            &for_task(&base, "api", "2"),
+            "api #2",
+            "2026-10-31T10:05:00+00:00",
+        )
+        .unwrap();
+        start(&base, "end of run", "2026-10-31T09:00:00+00:00").unwrap();
+        let labels: Vec<String> = read_all(&base)
+            .iter()
+            .map(|v| v["label"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(labels, ["api #2", "web #7", "end of run"]);
+        finish(&for_task(&base, "api", "2"));
+        assert_eq!(read_all(&base).len(), 2);
     }
 }

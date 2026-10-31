@@ -473,10 +473,56 @@ pub fn run_all_topics(
     };
     let definition =
         LoopDefinition::from_yaml(&ctx.definition_path()).map_err(|e| e.to_string())?;
-    names
-        .iter()
-        .map(|name| run_one_topic(ctx, run_id, name, &definition, invoker.clone()))
-        .collect()
+    let max_parallel = crate::concurrency_config::current().topics;
+    run_topic_batch(ctx, run_id, names, &definition, invoker, max_parallel)
+}
+
+/// The topics, at most `max_parallel` at once (see [`crate::parallel`]); a
+/// topic another run is already working on is skipped, never run twice.
+pub fn run_topic_batch(
+    ctx: &TopicCtx,
+    run_id: &str,
+    names: Vec<String>,
+    definition: &LoopDefinition,
+    invoker: TopicInvoker,
+    max_parallel: usize,
+) -> Result<Vec<LoopResult>, String> {
+    let tasks: Vec<crate::parallel::Task<String>> = names
+        .into_iter()
+        .map(|name| crate::parallel::Task {
+            lock_path: crate::file_lock::topic_lock_path(&ctx.repo_root, &name),
+            group: None,
+            item: name,
+        })
+        .collect();
+    let outcomes = crate::parallel::run_tasks(&tasks, max_parallel, |name| {
+        run_one_topic(ctx, run_id, name, definition, invoker.clone())
+    });
+    let mut results = Vec::new();
+    let mut first_error = None;
+    for (task, outcome) in tasks.iter().zip(outcomes) {
+        match outcome {
+            crate::parallel::Outcome::Ran(Ok(r)) => results.push(r),
+            crate::parallel::Outcome::Ran(Err(e)) => {
+                first_error.get_or_insert(e);
+            }
+            crate::parallel::Outcome::AlreadyRunning => append_unified_log(
+                &format!(
+                    "topic {} skipped: another run is already working on it",
+                    task.item
+                ),
+                &ctx.unified_log,
+            ),
+            crate::parallel::Outcome::LockFailed(e) => append_unified_log(
+                &format!("topic {} skipped: cannot take its lock: {e}", task.item),
+                &ctx.unified_log,
+            ),
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(results),
+    }
 }
 
 /// The topic's one Slack message, to its own bundle. Best-effort.
@@ -739,6 +785,49 @@ mod tests {
                 "\u{2022} *Acme ships X* \u{2014} New. <https://www.example.com/x|example.com>"
             ),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn topics_run_side_by_side_and_one_already_running_is_skipped() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let d = tempfile::tempdir().unwrap();
+        let ctx = topic_ctx(d.path());
+        std::fs::write(
+            &ctx.topics_config,
+            r#"[{"name": "a", "label": "A", "brief": "b", "enabled": true},
+                {"name": "b", "label": "B", "brief": "b", "enabled": true},
+                {"name": "c", "label": "C", "brief": "b", "enabled": true},
+                {"name": "d", "label": "D", "brief": "b", "enabled": true}]"#,
+        )
+        .unwrap();
+        let _other = crate::file_lock::FileLock::try_exclusive(&crate::file_lock::topic_lock_path(
+            &ctx.repo_root,
+            "d",
+        ))
+        .unwrap()
+        .unwrap();
+        let (now, peak) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let started = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (n, p, st) = (now.clone(), peak.clone(), started.clone());
+        let invoker: TopicInvoker = Arc::new(move |name, _, _| {
+            st.lock().unwrap().push(name.to_string());
+            p.fetch_max(n.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            n.fetch_sub(1, Ordering::SeqCst);
+            Ok(TopicOutput::default())
+        });
+        let names = ["a", "b", "c", "d"].map(String::from).to_vec();
+        let results = run_topic_batch(&ctx, "run_1", names, &definition(), invoker, 2).unwrap();
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        let mut started = started.lock().unwrap().clone();
+        started.sort();
+        assert_eq!(started, ["a", "b", "c"]);
+        assert_eq!(results.len(), 3);
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(
+            log.contains("topic d skipped: another run is already working on it"),
+            "{log}"
         );
     }
 

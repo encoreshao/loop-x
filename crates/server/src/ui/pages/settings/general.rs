@@ -263,7 +263,10 @@ fn ai_cli_panel(ctx: &UiCtx, csrf: &str, current: &str) -> String {
         .var("select_html", select)
         .var("csrf_input", csrf)
         .var("warnings_html", warnings)
-        .var("usage_pause_html", usage_pause_form(ctx, csrf, current));
+        .var(
+            "usage_pause_html",
+            format!("{}{}", usage_pause_form(ctx, csrf, current), concurrency_form(ctx, csrf)),
+        );
     scope.set("html.escape(cli_labels[current_cli])", pyfmt::escape(&current_label));
     render("settings_ai_cli_panel", &scope)
 }
@@ -297,6 +300,30 @@ fn usage_pause_form(ctx: &UiCtx, csrf: &str, current: &str) -> String {
 <button type='submit' class='btn btn-neutral'>{}</button></form>",
         pyfmt::escape(&ctx.t("Subscription usage")),
         pyfmt::escape(&ctx.t("Pause scheduled runs while your Claude subscription's 5-hour or weekly usage is above this, and resume after it resets, so loops never use up the quota you need. A usage-limit error from any CLI also pauses them for an hour. Run now always runs.")),
+        pyfmt::escape(&ctx.t("Save")),
+    )
+}
+
+/// "Running at once": how many GitLab issues, topics and loops may run side by
+/// side (see `loopx_core::concurrency_config`).
+fn concurrency_form(ctx: &UiCtx, csrf: &str) -> String {
+    use loopx_core::concurrency_config::{load, MAX, MIN};
+    let limits = load(&ctx.state.concurrency_config_path());
+    let field = |name: &str, label: String, value: usize| {
+        format!(
+            "<label>{}<input type='number' name='{name}' value='{value}' min='{MIN}' max='{MAX}' step='1' required></label>",
+            pyfmt::escape(&label)
+        )
+    };
+    format!(
+        "<h3>{}</h3><p class='section-subtitle'>{}</p>\
+<form method='post' action='/ai-cli/concurrency' class='daemon-action-form concurrency-form'>{csrf}{}{}{}\
+<button type='submit' class='btn btn-neutral'>{}</button></form>",
+        pyfmt::escape(&ctx.t("Running at once")),
+        pyfmt::escape(&ctx.t("How many agents may work side by side. The same issue or topic never runs twice at once, and issues of a project without worktrees always take turns. 1 runs them one by one.")),
+        field("max_parallel_issues", ctx.t("GitLab issues"), limits.issues),
+        field("max_parallel_topics", ctx.t("Topics"), limits.topics),
+        field("max_parallel_loops", ctx.t("Loops"), limits.loops),
         pyfmt::escape(&ctx.t("Save")),
     )
 }

@@ -1308,5 +1308,12 @@
   "{loop}: {step}": "{loop}：{step}",
   "{loop} finished its run": "{loop} 已完成运行",
   "{loop} failed": "{loop} 运行失败",
-  "{loop} is waiting for your approval": "{loop} 正在等待你的批准"
+  "{loop} is waiting for your approval": "{loop} 正在等待你的批准",
+  "{task}: {activity}": "{task}：{activity}",
+  "Running at once": "同时运行",
+  "How many agents may work side by side. The same issue or topic never runs twice at once, and issues of a project without worktrees always take turns. 1 runs them one by one.": "可以同时工作的代理数量。同一个议题或主题绝不会同时运行两次，不使用工作树的项目的议题始终轮流处理。设为 1 则逐个运行。",
+  "GitLab issues": "GitLab 议题",
+  "Not a whole number: {value}": "不是整数：{value}",
+  "Saved. New runs use these limits.": "已保存。新的运行将使用这些上限。",
+  "Each limit must be between {min} and {max}.": "每个上限必须在 {min} 到 {max} 之间。"
 }
