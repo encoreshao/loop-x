@@ -1302,5 +1302,11 @@
   "Decision recorded; the loop picks it up within seconds.": "已记录决定，循环会在几秒内处理。",
   "Dismissed until it happens again.": "已忽略，再次发生时会重新显示。",
   "Approvals here": "在此审批",
-  "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "将审批请求连同“允许”“拒绝”按钮发送到此聊天；回复该消息即可请求修改。聊天中的任何人都可以回应。"
+  "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "将审批请求连同“允许”“拒绝”按钮发送到此聊天；回复该消息即可请求修改。聊天中的任何人都可以回应。",
+  "Loop notifications": "循环通知",
+  "{loop} started a run": "{loop} 开始运行",
+  "{loop}: {step}": "{loop}：{step}",
+  "{loop} finished its run": "{loop} 已完成运行",
+  "{loop} failed": "{loop} 运行失败",
+  "{loop} is waiting for your approval": "{loop} 正在等待你的批准"
 }

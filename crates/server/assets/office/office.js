@@ -65,7 +65,7 @@ function hashHooks() {
   };
   // Floors keep a stray hash from hammering the server.
   const floor = (v, min) => (v === null ? null : Math.max(min, v));
-  return { camera, hour: h ? Number(h[1]) : null, staleMs: floor(num("stale"), 1000), pollMs: floor(num("poll"), 250) };
+  return { camera, hour: h ? Number(h[1]) : null, staleMs: floor(num("stale"), 1000), pollMs: floor(num("poll"), 250), toastMs: floor(num("toast"), 500) };
 }
 
 function timeControl(onPick, initial) {
@@ -124,12 +124,14 @@ async function main() {
     }
   })();
   const reducedMotion = systemStill && !forceMotion;
-  const [{ buildWorld, buildLights, freezeStatic }, { createDayNight }, { createAgents }, { createPanel }, { startLive }] = await Promise.all([
+  const [{ buildWorld, buildLights, freezeStatic }, { createDayNight }, { createAgents }, { createPanel }, { startLive }, { diffLoops }, { createToasts }] = await Promise.all([
     import("./world.js" + V),
     import("./daynight.js" + V),
     import("./agents.js" + V),
     import("./panel.js" + V),
     import("./live.js" + V),
+    import("./notices.js" + V),
+    import("./toasts.js" + V),
   ]);
 
   let renderer;
@@ -211,8 +213,20 @@ async function main() {
       kind === "coffee" || kind === "books" ? agents.sendTo(who, kind) : kind === "back" ? agents.callBack(who) : agents.chatWith(who, arg.with, arg.topic),
     onClose: () => release(),
   });
+  // Runs starting, moving on a step, finishing, failing or waiting: bottom left. A click
+  // opens the colleague who owns the loop.
+  const toasts = createToasts(root, strings, {
+    ttlMs: hooks.toastMs || 12000,
+    onOpen: (loop) => {
+      const who = agents.employees().find((e) => e.loops.some((l) => l.name === loop));
+      if (who) select(who.name);
+    },
+  });
+  let baseline = null;
   function show(loops) {
     latest = Array.isArray(loops) ? loops : [];
+    for (const n of diffLoops(baseline, latest, strings)) toasts.push(n);
+    baseline = latest;
     agents.sync(latest);
     panel.update(agents.employees());
     if (selected && !panel.isOpen) release();
@@ -256,6 +270,7 @@ async function main() {
   // A test override sticks until the server's own state next changes.
   office.setLoops = show;
   office.runRequested = (name) => agents.runRequested(name);
+  office.toasts = () => toasts.items();
   // A question in the chat puts a random colleague to work until the answer is done; a tool
   // call during it keeps someone on it.
   const onChat = (ev) => {
@@ -554,6 +569,7 @@ async function main() {
     clearInterval(timer);
     live.stop();
     panel.close();
+    toasts.dispose();
     seen.disconnect();
     resizer.disconnect();
     document.removeEventListener("visibilitychange", sync);

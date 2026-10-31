@@ -113,6 +113,10 @@ pub fn build_office_state(ctx: &UiCtx) -> Value {
             "state": os.as_str(),
             "reason": reason(ctx, os),
             "last_run": status.get("updated_at").and_then(Value::as_str),
+            // What a working loop is doing now: the office's notifications report its changes.
+            "step": (os == OfficeState::Working)
+                .then(|| status.get("current_step").and_then(Value::as_str).filter(|s| !s.is_empty()))
+                .flatten(),
             "next_run": loops::schedule_summary(ctx, &l),
             "history": history,
             "run_now_url": run_now_url(&name),

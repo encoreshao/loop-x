@@ -1302,5 +1302,11 @@
   "Decision recorded; the loop picks it up within seconds.": "判断を記録しました。ループが数秒以内に反映します。",
   "Dismissed until it happens again.": "再発するまで非表示にしました。",
   "Approvals here": "ここで承認",
-  "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "承認リクエストを「許可」「拒否」ボタン付きでこのチャットに送ります。返信すると変更を依頼できます。チャットの参加者なら誰でも回答できます。"
+  "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "承認リクエストを「許可」「拒否」ボタン付きでこのチャットに送ります。返信すると変更を依頼できます。チャットの参加者なら誰でも回答できます。",
+  "Loop notifications": "ループの通知",
+  "{loop} started a run": "{loop} が実行を開始しました",
+  "{loop}: {step}": "{loop}: {step}",
+  "{loop} finished its run": "{loop} の実行が完了しました",
+  "{loop} failed": "{loop} が失敗しました",
+  "{loop} is waiting for your approval": "{loop} があなたの承認を待っています"
 }
