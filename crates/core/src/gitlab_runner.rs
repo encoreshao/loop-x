@@ -1252,6 +1252,9 @@ pub struct FinalizeDeps<'a> {
     /// How many more times a reviewer's "request changes" may send the work
     /// back to the agent; at 0 it escalates with their notes instead.
     pub revisions_left: usize,
+    /// Chat apps that take the approval request (`approval_relay`); `None`
+    /// loads the configured ones.
+    pub approval_channels: Option<Vec<Box<dyn crate::connectors::Connector>>>,
 }
 
 /// Rounds of "request changes" one issue gets in one run before it escalates.
@@ -1513,7 +1516,16 @@ pub fn finalize_gated_issue(
         let poll = deps
             .approval_poll
             .unwrap_or(std::time::Duration::from_secs(1));
-        let status = approvals::wait_for_decision(&dir, &approval_id, poll);
+        let channels = deps.approval_channels.unwrap_or_else(|| {
+            crate::approval_relay::channels(&crate::connectors_config::ConfigConnectors::real())
+        });
+        let mut relay = crate::approval_relay::Relay::start(channels, &approval, &log);
+        let status = approvals::wait_for_decision_with(&dir, &approval_id, poll, &mut || {
+            relay.poll(&dir, &approval_id, &log)
+        });
+        let decided_by = approvals::get(&dir, &approval_id)
+            .and_then(|a| a["decided_by"].as_str().map(str::to_owned));
+        relay.close(&status, decided_by.as_deref(), &log);
         emit(
             "approval.decided",
             json!({"approval_id": approval_id, "status": status}),
@@ -2066,6 +2078,8 @@ pub fn run_one_issue(
                 setup_report: setup_report.take(),
                 setup_fixed: setup_fixed_for_report,
                 revisions_left: MAX_REVISIONS - revisions,
+                // Tests never reach the configured chat apps.
+                approval_channels: fakes.map(|_| Vec::new()),
                 ..FinalizeDeps::default()
             },
         );
@@ -3048,6 +3062,111 @@ mod tests {
         let body = mr_description(&calls);
         assert!(body.contains("`pnpm test`"), "{body}");
         assert!(!body.contains("rspec"), "{body}");
+    }
+
+    /// A chat app (Telegram) where someone presses Allow on the first poll.
+    struct AllowingChat(crate::connectors::Account, Arc<Mutex<Vec<String>>>);
+
+    impl crate::connectors::Connector for AllowingChat {
+        fn info(&self) -> &'static crate::connectors::TypeInfo {
+            &crate::connectors::telegram::INFO
+        }
+        fn account(&self) -> &crate::connectors::Account {
+            &self.0
+        }
+        fn request_approval(&self, a: &Value) -> crate::connectors::ConnResult<Value> {
+            self.1
+                .lock()
+                .unwrap()
+                .push(format!("asked {}", a["project"]));
+            Ok(json!({"message_id": 1}))
+        }
+        fn poll_approval(
+            &self,
+            _h: &Value,
+            offset: i64,
+        ) -> crate::connectors::ConnResult<(i64, Option<crate::connectors::ChatDecision>)> {
+            Ok((
+                offset + 1,
+                Some(crate::connectors::ChatDecision {
+                    decision: "approve".into(),
+                    notes: None,
+                    by: "telegram:@ana".into(),
+                }),
+            ))
+        }
+        fn close_approval(&self, _h: &Value, outcome: &str) -> crate::connectors::ConnResult<()> {
+            self.1.lock().unwrap().push(outcome.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_approval_can_be_answered_from_a_chat_app() {
+        let d = tempfile::tempdir().unwrap();
+        let handoff = d.path().join("h.json");
+        std::fs::write(
+            &handoff,
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main", "title": "Fix #7"}).to_string(),
+        )
+        .unwrap();
+        let result = LoopResult::new("l", "r", "gitlab-issue", LoopState::Completed, vec![], "");
+        let project = json!({"project_id": "g/p", "local_path": "/x", "instance": "g"});
+        let notes = Notes(Default::default());
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
+        let ctx = RunCtx {
+            repo_root: d.path().into(),
+            events_dir: Some(d.path().join("events")),
+            results_dir: None,
+            unified_log: d.path().join("log"),
+            exe: "loopx".into(),
+            config_path: None,
+            fakes: None,
+            memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
+        };
+        let seen: Arc<Mutex<Vec<String>>> = Default::default();
+        let chat: Box<dyn crate::connectors::Connector> = Box::new(AllowingChat(
+            crate::connectors::Account::new("phone", "telegram"),
+            seen.clone(),
+        ));
+        let approvals_dir = d.path().join("approvals");
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&notes),
+                notifier: Some(&|_: &str| {}),
+                handoff: Some(handoff),
+                project: Some(project),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(true),
+                approval_dir: Some(approvals_dir.clone()),
+                approval_poll: Some(std::time::Duration::from_millis(5)),
+                approval_channels: Some(vec![chat]),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "mr_opened");
+        let decided = approvals::list(&approvals_dir, None, Utc::now());
+        assert_eq!(decided[0]["decided_by"], "telegram:@ana");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "asked \"web\"",
+                "Approved by telegram:@ana: opening the merge request."
+            ]
+        );
     }
 
     /// Finalize a passed gated fix for `web #7` from `handoff`, with a push whose

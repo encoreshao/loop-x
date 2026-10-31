@@ -5,6 +5,7 @@ pub mod agents;
 pub mod ai_cli_config;
 pub mod ai_cli_health;
 pub mod ai_cli_safety;
+pub mod approval_relay;
 pub mod approvals;
 pub mod auth_health;
 pub mod budget;

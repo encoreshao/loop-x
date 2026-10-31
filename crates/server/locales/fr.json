@@ -1300,5 +1300,7 @@
   "What is waiting on you: approvals, escalated issues, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with.": "Ce qui vous attend : approbations, tickets remontés, connexions expirées et boucles en échec. Chacun vous a alerté une fois ; il reste ici jusqu'à ce qu'il soit traité.",
   "Needs you: {n}": "Vous attend : {n}",
   "Decision recorded; the loop picks it up within seconds.": "Décision enregistrée ; la boucle la prend en compte en quelques secondes.",
-  "Dismissed until it happens again.": "Ignoré jusqu'à ce que cela se reproduise."
+  "Dismissed until it happens again.": "Ignoré jusqu'à ce que cela se reproduise.",
+  "Approvals here": "Approbations ici",
+  "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "Envoie les demandes d'approbation dans ce chat avec des boutons Autoriser et Refuser ; répondez à l'une pour demander des modifications. Tout membre du chat peut répondre."
 }

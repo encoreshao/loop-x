@@ -501,6 +501,37 @@ pub trait Connector: Send + Sync {
     ) -> ConnResult<Value> {
         unsupported("send_message")
     }
+
+    /// Approvals from a chat app: post `approval` (an `approvals` record) with
+    /// its answer buttons; returns the handle the other two calls take.
+    fn request_approval(&self, _approval: &Value) -> ConnResult<Value> {
+        unsupported("request_approval")
+    }
+
+    /// The first answer to the request `handle` among the updates after
+    /// `offset`, and the offset to ask from next time.
+    fn poll_approval(
+        &self,
+        _handle: &Value,
+        _offset: i64,
+    ) -> ConnResult<(i64, Option<ChatDecision>)> {
+        unsupported("poll_approval")
+    }
+
+    /// Replace the request's buttons with how it ended.
+    fn close_approval(&self, _handle: &Value, _outcome: &str) -> ConnResult<()> {
+        unsupported("close_approval")
+    }
+}
+
+/// An approval answered in a chat app.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatDecision {
+    /// `approve`, `deny` or `request_changes`.
+    pub decision: String,
+    pub notes: Option<String>,
+    /// Who answered, e.g. `telegram:@ana`.
+    pub by: String,
 }
 
 /// Instantiate the connector for `account`. `None` for an unknown type.

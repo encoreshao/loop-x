@@ -226,7 +226,19 @@ pub fn decide_with_notes(
 /// Block until `id` is decided or expires; returns the final status
 /// (`approved` | `denied` | `timeout`). A vanished approval counts as `denied`.
 pub fn wait_for_decision(dir: &Path, id: &str, poll: std::time::Duration) -> String {
+    wait_for_decision_with(dir, id, poll, &mut || {})
+}
+
+/// [`wait_for_decision`] that calls `tick` before each look, e.g. to read
+/// answers from a chat app (`approval_relay`).
+pub fn wait_for_decision_with(
+    dir: &Path,
+    id: &str,
+    poll: std::time::Duration,
+    tick: &mut dyn FnMut(),
+) -> String {
     loop {
+        tick();
         expire_overdue(dir, Utc::now());
         match get(dir, id) {
             None => return "denied".to_string(),
@@ -245,6 +257,28 @@ mod tests {
 
     fn t(sec: i64) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 22, 10, 0, 0).unwrap() + Duration::seconds(sec)
+    }
+
+    #[test]
+    fn the_wait_lets_a_tick_decide() {
+        let d = tempfile::tempdir().unwrap();
+        let id = create(d.path(), &req(), Utc::now()).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut ticks = 0;
+        let status = wait_for_decision_with(
+            d.path(),
+            &id,
+            std::time::Duration::from_millis(1),
+            &mut || {
+                ticks += 1;
+                if ticks == 3 {
+                    decide(d.path(), &id, "approve", "telegram:@ana", Utc::now()).unwrap();
+                }
+            },
+        );
+        assert_eq!((status.as_str(), ticks), ("approved", 3));
     }
 
     fn req() -> NewApproval {

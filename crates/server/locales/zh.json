@@ -1300,5 +1300,7 @@
   "What is waiting on you: approvals, escalated issues, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with.": "等待你处理的事项：审批、上报的 issue、失效的登录和失败的循环。每项只提醒一次，处理之前会一直显示在这里。",
   "Needs you: {n}": "待处理：{n}",
   "Decision recorded; the loop picks it up within seconds.": "已记录决定，循环会在几秒内处理。",
-  "Dismissed until it happens again.": "已忽略，再次发生时会重新显示。"
+  "Dismissed until it happens again.": "已忽略，再次发生时会重新显示。",
+  "Approvals here": "在此审批",
+  "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "将审批请求连同“允许”“拒绝”按钮发送到此聊天；回复该消息即可请求修改。聊天中的任何人都可以回应。"
 }
