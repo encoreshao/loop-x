@@ -1,7 +1,7 @@
 //! Needs you: `/needs-you` lists everything waiting on a person
 //! (`loopx_core::needs_you`) with what to do about each: Allow / Deny /
 //! Request changes for an approval, a link for the rest, Dismiss for an
-//! escalation or a failed loop. The topbar bell (`bell_html`) counts them and
+//! escalation, a failed loop or a dead sign-in. The topbar bell (`bell_html`) counts them and
 //! polls `/needs-you/count`.
 
 use crate::snapshot::{self, Paths};
@@ -298,6 +298,23 @@ mod tests {
         let html = get(&st, "/needs-you");
         let button = format!("<a class='btn btn-neutral' href='{}'>", crate::ui::ai_cli::SETTINGS_HREF);
         assert!(html.contains(&button), "{html}");
+    }
+
+    #[test]
+    fn a_dead_sign_in_can_be_dismissed() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        std::fs::write(
+            d.path().join("auth_health.json"),
+            serde_json::json!({"checks": {"mailbox:work": {"ok": false, "confirmed": true, "label": "work (gmail)",
+                "message": "Google refresh failed (invalid_grant)", "failing_since": "2026-10-31T06:00:00"}}})
+            .to_string(),
+        )
+        .unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("Sign-in needs attention: work (gmail)") && html.contains("needs-you-dismiss"), "{html}");
+        assert_eq!(post(&st, "/needs-you/dismiss", "csrf_token=tok&id=sign_in%3Amailbox%3Awork").status, 303);
+        assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));
     }
 
     #[test]

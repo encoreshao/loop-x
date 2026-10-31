@@ -1074,7 +1074,7 @@ fn redirect(ok: bool, message: &str) -> UiResponse {
 }
 
 pub fn run_test(ctx: &UiCtx, id: &str) -> (bool, String) {
-    match store(ctx.state) {
+    let (ok, message) = match store(ctx.state) {
         Ok(store) => cc::run_connector_test(
             id,
             store.as_ref(),
@@ -1083,7 +1083,20 @@ pub fn run_test(ctx: &UiCtx, id: &str) -> (bool, String) {
             &results_path(ctx.state),
         ),
         Err(_) => (false, ctx.tf("Request failed ({kind})", &[("kind", "KeychainError")])),
+    };
+    if ok {
+        reconnected(ctx.state, id);
     }
+    (ok, message)
+}
+
+/// A connector that works again leaves "Needs you" now, not at the next sign-in probe.
+fn reconnected(state: &UiState, id: &str) {
+    loopx_core::auth_health::mark_reconnected(
+        Some(&state.home_dir.join("auth_health.json")),
+        &format!("connector:{id}"),
+        None,
+    );
 }
 
 fn renamed_or_deleted(ctx: &UiCtx, old: &str, new: Option<&str>) {
@@ -1477,7 +1490,11 @@ pub fn google_callback(
         Ok(s) => s,
         Err(m) => return (false, m),
     };
-    cc::set_oauth_secret(&account_id, tokens.refresh_token.as_deref(), &paths, store.as_ref())
+    let (ok, message) = cc::set_oauth_secret(&account_id, tokens.refresh_token.as_deref(), &paths, store.as_ref());
+    if ok {
+        reconnected(state, &account_id);
+    }
+    (ok, message)
 }
 
 #[cfg(test)]
@@ -1490,5 +1507,72 @@ mod linkedin_login_tests {
         assert_eq!(argv[1..], ["linkedin-login".to_string(), "li-main".to_string()]);
         assert!(!argv.iter().any(|a| a.contains("python") || a.ends_with(".py")), "{argv:?}");
         assert_eq!(std::path::Path::new(&argv[0]), std::env::current_exe().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use crate::ui::routes::UiRequest;
+    use crate::ui::state::UiState;
+    use axum::http::Method;
+    use loopx_core::connectors::http::{HttpClient, HttpError, HttpRequest};
+    use loopx_core::keychain::MemoryStore;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+
+    struct Answers(Result<Value, ()>);
+    impl HttpClient for Answers {
+        fn request_json(&self, req: &HttpRequest) -> Result<Value, HttpError> {
+            self.0.clone().map_err(|()| HttpError {
+                status: Some(401),
+                body: String::new(),
+                url: req.url.clone(),
+                auth_expired: true,
+            })
+        }
+        fn get_text_tail(&self, _: &str, _: &[(String, String)], _: std::time::Duration, _: usize) -> Result<String, HttpError> {
+            Ok(String::new())
+        }
+    }
+
+    fn sandbox(answer: Result<Value, ()>) -> (tempfile::TempDir, UiState) {
+        let d = tempfile::tempdir().unwrap();
+        let store = Arc::new(MemoryStore::new("t"));
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None)
+            .with_connectors(store.clone(), Arc::new(Answers(answer)));
+        let fields = json!({"id": "gh", "type": "github", "label": "GitHub", "api_url": "https://api.github.com", "username": "u"});
+        let (ok, m) = loopx_core::connectors_config::upsert_account(&fields, Some("tok-1"), "", &super::paths(&st), store.as_ref());
+        assert!(ok, "{m}");
+        std::fs::write(
+            d.path().join("auth_health.json"),
+            json!({"checks": {"connector:gh": {"ok": false, "confirmed": true, "label": "GitHub",
+                "message": "401", "failing_since": "2026-10-31T06:00:00"}}})
+            .to_string(),
+        )
+        .unwrap();
+        (d, st)
+    }
+
+    fn test_and_list(st: &UiState) -> String {
+        let r = st
+            .registry
+            .dispatch(st, &UiRequest::new(Method::POST, "/connectors/test").with_body("csrf_token=tok&id=gh".to_string()))
+            .unwrap();
+        assert_eq!(r.status, 303);
+        st.registry.dispatch(st, &UiRequest::get("/needs-you")).unwrap().body_text()
+    }
+
+    #[test]
+    fn a_passing_test_clears_the_sign_in_from_needs_you() {
+        let (_d, st) = sandbox(Ok(json!({"login": "me"})));
+        let html = test_and_list(&st);
+        assert!(html.contains("Nothing needs you right now."), "{html}");
+    }
+
+    #[test]
+    fn a_failing_test_leaves_it_listed() {
+        let (_d, st) = sandbox(Err(()));
+        let html = test_and_list(&st);
+        assert!(html.contains("Sign-in needs attention: GitHub - 401"), "{html}");
     }
 }

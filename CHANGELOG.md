@@ -37,6 +37,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Needs you: a broken sign-in disappears as soon as you reconnect it (a Google sign-in for a mailbox or connector finishes, or its Test passes) instead of staying until the next 6-hourly check, and it can now be dismissed by hand; it comes back only if the sign-in breaks again later.
 - LinkedIn connector: Connect LinkedIn (dashboard and Mac app) works again. It ran a Python script that no longer exists, so no window ever opened; it now opens Google Chrome on LinkedIn's login page and marks the connector Connected by itself once you have signed in (also `loopx linkedin-login <connector-id>`). Test and the LinkedIn Autopilot loop now really use Chrome instead of always reporting "install Playwright".
 - `loopx loop eval --golden` no longer fails a case because the agent added a regression test to one of the fixture's own test files. A protected test file may gain new tests; editing, deleting or redefining the fixture's tests still fails the case.
 - The 6-hourly sign-in check for mailboxes and connectors (GitLab, GitHub, Google Calendar, Jira, Linear, Notion) ran with nothing to check since the move to Rust, so an expired sign-in only showed up when a loop failed. The scheduler now checks them again and alerts once in Slack, with a reminder each day it stays broken and a message when it recovers.

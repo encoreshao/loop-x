@@ -853,9 +853,19 @@ pub fn google_callback(
         return (false, t("Could not start Google sign-in"));
     };
     match mail_auth::default_store().and_then(|store| store.set(&pending.account, refresh)) {
-        Ok(()) => (true, crate::ui::i18n::t(lang, "Connected {label}", &[("label", &pending.account)])),
+        Ok(()) => {
+            // `oauth_ctx.dir` is `<home>/oauth`; the sign-in checks live next to it.
+            let home = oauth_ctx.dir.parent().unwrap_or(&oauth_ctx.dir);
+            reconnected(home, &pending.account);
+            (true, crate::ui::i18n::t(lang, "Connected {label}", &[("label", &pending.account)]))
+        }
         Err(err) => (false, err.to_string()),
     }
+}
+
+/// A mailbox that works again leaves "Needs you" now, not at the next sign-in probe.
+fn reconnected(home: &std::path::Path, inbox_name: &str) {
+    loopx_core::auth_health::mark_reconnected(Some(&home.join("auth_health.json")), &format!("mailbox:{inbox_name}"), None);
 }
 
 /// `_test_connection`: fetch the signed-in address and compare it to the account.
@@ -874,7 +884,10 @@ fn test_connection(ctx: &UiCtx, inbox: &Value) -> UiResponse {
                 &[("label", &label), ("address", &address), ("account", &s(inbox, "account"))],
             ),
         ),
-        Ok(address) => (true, ctx.tf("{label}: connected as {address}", &[("label", &label), ("address", &address)])),
+        Ok(address) => {
+            reconnected(&ctx.state.home_dir, &s(inbox, "name"));
+            (true, ctx.tf("{label}: connected as {address}", &[("label", &label), ("address", &address)]))
+        }
     };
     UiResponse::flash_redirect(ok, &message, INBOXES_TAB)
 }

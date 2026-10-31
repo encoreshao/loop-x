@@ -342,6 +342,34 @@ pub fn run_checks(
     sent
 }
 
+/// The person just signed `probe_id` back in (a Google sign-in finished, or a
+/// Test passed): record it as healthy now instead of waiting for the next
+/// 6-hourly probe, so "Needs you" drops it at once. No recovery alert follows,
+/// since the person did it. Something never checked is left alone.
+pub fn mark_reconnected(state_path: Option<&Path>, probe_id: &str, now: Option<NaiveDateTime>) {
+    let path = state_path.map_or_else(default_state_path, Path::to_path_buf);
+    let mut state = read_state(Some(&path));
+    let Some(checks) = state.get_mut("checks").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(entry) = checks.get(probe_id) else {
+        return;
+    };
+    if entry.get("ok").is_none_or(crate::loop_serialize::truthy) {
+        return;
+    }
+    let label = entry
+        .get("label")
+        .cloned()
+        .unwrap_or_else(|| json!(probe_id));
+    let now = now.unwrap_or_else(|| Local::now().naive_local());
+    checks.insert(
+        probe_id.to_string(),
+        json!({"ok": true, "message": "Reconnected", "checked_at": isoformat(now), "label": label}),
+    );
+    let _ = write_state(&state, &path);
+}
+
 /// One probe per enabled mailbox and per enabled auth-bearing connector.
 pub fn collect_probes(sources: &ProbeSources) -> Vec<Probe> {
     let mut probes = Vec::new();
@@ -575,6 +603,46 @@ mod tests {
             now(),
         );
         assert_eq!(checks(&t)["gmail"]["label"], "gmail");
+    }
+
+    #[test]
+    fn a_reconnected_sign_in_is_ok_at_once_without_a_second_recovery_alert() {
+        let (t, mut sent) = (Tmp::new(), vec![]);
+        run(
+            &t,
+            &[probe("gmail", reauth("invalid_grant"))],
+            &mut sent,
+            now(),
+        );
+        assert_eq!(checks(&t)["gmail"]["ok"], false);
+        mark_reconnected(Some(&t.path()), "gmail", Some(now() + Duration::minutes(5)));
+        let c = &checks(&t)["gmail"];
+        assert_eq!(c["ok"], true);
+        assert_eq!(c["label"], "gmail");
+        assert!(c.get("last_alert_at").is_none(), "{c}");
+        // The next real probe passes quietly: the person already knows.
+        run(
+            &t,
+            &[probe("gmail", Ok((true, "ok".into())))],
+            &mut sent,
+            now() + Duration::hours(6),
+        );
+        assert_eq!(sent.len(), 1, "{sent:?}");
+    }
+
+    #[test]
+    fn reconnecting_something_never_checked_writes_nothing() {
+        let t = Tmp::new();
+        mark_reconnected(Some(&t.path()), "connector:new", Some(now()));
+        assert!(!t.path().exists());
+        run(
+            &t,
+            &[probe("gmail", Ok((true, "ok".into())))],
+            &mut vec![],
+            now(),
+        );
+        mark_reconnected(Some(&t.path()), "connector:new", Some(now()));
+        assert!(!checks(&t).contains_key("connector:new"));
     }
 
     #[test]

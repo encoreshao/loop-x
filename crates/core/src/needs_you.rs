@@ -4,10 +4,12 @@
 //! app's menu bar count them; each one already alerted once in Slack, so this
 //! is where it stays visible instead of being alerted again.
 //!
-//! Escalations and failing loops can be dismissed (`needs_you_dismissed.json`:
-//! `{<item id>: <UTC ISO>}`); a newer escalation of the same issue or a newer
-//! failure brings them back. Approvals and sign-ins can't: deciding or
-//! reconnecting is what clears them.
+//! Escalations, failing loops and dead sign-ins can be dismissed
+//! (`needs_you_dismissed.json`: `{<item id>: <UTC ISO>}`); a newer escalation
+//! of the same issue, a newer failure, or a sign-in that recovers and breaks
+//! again brings them back. Reconnecting clears a sign-in on its own
+//! (`auth_health::mark_reconnected`). Approvals can't be dismissed: deciding
+//! is what clears them.
 
 use crate::config::home_dir;
 use chrono::{DateTime, Duration, Utc};
@@ -76,7 +78,7 @@ fn item(id: String, kind: &str, title: String, since: Option<&str>, fields: Valu
         "kind": kind,
         "title": title,
         "since": since,
-        "dismissable": matches!(kind, "escalated" | "loop_failed"),
+        "dismissable": matches!(kind, "escalated" | "loop_failed" | "sign_in"),
     });
     if let (Some(v), Value::Object(f)) = (v.as_object_mut(), fields) {
         v.extend(f);
@@ -154,7 +156,7 @@ fn escalations(src: &Sources, dismissed: &Value, now: DateTime<Utc>) -> Vec<Valu
         .collect()
 }
 
-fn sign_ins(src: &Sources) -> Vec<Value> {
+fn sign_ins(src: &Sources, dismissed: &Value) -> Vec<Value> {
     let state = read_json(src.auth_state);
     let Some(checks) = state.get("checks").and_then(Value::as_object) else {
         return Vec::new();
@@ -171,16 +173,21 @@ fn sign_ins(src: &Sources) -> Vec<Value> {
                         >= crate::auth_health::SOFT_FAILURES_BEFORE_ALERT
                 })
         })
-        .map(|(probe, c)| {
+        .filter_map(|(probe, c)| {
+            let id = format!("sign_in:{probe}");
+            let since = c["failing_since"].as_str();
+            if dismissed_since(dismissed, &id, since) {
+                return None;
+            }
             let label = c["label"].as_str().unwrap_or(probe);
             let message = c["message"].as_str().unwrap_or("");
-            item(
-                format!("sign_in:{probe}"),
+            Some(item(
+                id,
                 "sign_in",
                 format!("Sign-in needs attention: {label} - {message}"),
-                c["failing_since"].as_str(),
+                since,
                 json!({"probe": probe, "label": label, "message": message}),
-            )
+            ))
         })
         .collect()
 }
@@ -213,7 +220,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     let dismissed = read_json(src.dismissed);
     let mut items = approvals(src, now);
     items.extend(escalations(src, &dismissed, now));
-    items.extend(sign_ins(src));
+    items.extend(sign_ins(src, &dismissed));
     items.extend(failed_loops(src, &dismissed));
     // Oldest first; an item with no time goes last.
     items.sort_by_key(|i| {
@@ -225,7 +232,10 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
 
 /// Hide a dismissable item until it happens again.
 pub fn dismiss(path: &Path, id: &str, now: DateTime<Utc>) -> Result<(), String> {
-    if !(id.starts_with("escalated:") || id.starts_with("loop_failed:")) {
+    if !["escalated:", "loop_failed:", "sign_in:"]
+        .iter()
+        .any(|p| id.starts_with(p))
+    {
         return Err(format!("{id} can't be dismissed"));
     }
     let mut map = match read_json(path) {
@@ -408,7 +418,7 @@ mod tests {
             items[0]["title"],
             "Sign-in needs attention: Main GitLab - 401"
         );
-        assert_eq!(items[0]["dismissable"], false);
+        assert_eq!(items[0]["dismissable"], true);
     }
 
     #[test]
@@ -432,9 +442,32 @@ mod tests {
     }
 
     #[test]
-    fn approvals_and_sign_ins_cannot_be_dismissed() {
+    fn approvals_cannot_be_dismissed() {
         let f = Fx::new();
         assert!(dismiss(&f.p("d.json"), "approval:apr_1", now()).is_err());
-        assert!(dismiss(&f.p("d.json"), "sign_in:ai_cli", now()).is_err());
+    }
+
+    #[test]
+    fn a_dismissed_sign_in_stays_hidden_until_it_breaks_again() {
+        let f = Fx::new();
+        let write = |since: &str| {
+            std::fs::write(
+                f.p("auth_health.json"),
+                json!({"checks": {"mailbox:work": {"ok": false, "message": "invalid_grant",
+                    "label": "work (gmail)", "confirmed": true, "failing_since": since}}})
+                .to_string(),
+            )
+            .unwrap();
+        };
+        write("2026-10-31T06:00:00+00:00");
+        assert_eq!(f.collect()[0]["dismissable"], true);
+        dismiss(&f.p("dismissed.json"), "sign_in:mailbox:work", now()).unwrap();
+        assert!(f.collect().is_empty());
+        // Still the same failure on the next probe: still hidden.
+        write("2026-10-31T06:00:00+00:00");
+        assert!(f.collect().is_empty());
+        // It recovered and then broke again later: back in the list.
+        write("2026-10-31T13:00:00+00:00");
+        assert_eq!(f.ids(), ["sign_in:mailbox:work"]);
     }
 }
