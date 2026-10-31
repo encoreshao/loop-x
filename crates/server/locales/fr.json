@@ -1261,5 +1261,7 @@
   "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "Supprimer {branch} et son worktree pour {alias} #{iid} ? Les modifications non commitées seront perdues ; une branche déjà poussée sur GitLab est conservée.",
   "The GitLab loop is running - wait for it to finish or stop it before removing a worktree": "La boucle GitLab est en cours d'exécution - attendez qu'elle se termine ou arrêtez-la avant de supprimer un worktree",
   "Removed {branch} for {alias} #{iid}": "{branch} supprimée pour {alias} #{iid}",
-  "{name} is not a tracked project with a checkout": "{name} n'est pas un projet suivi avec un dépôt local"
+  "{name} is not a tracked project with a checkout": "{name} n'est pas un projet suivi avec un dépôt local",
+  "Switch to a worktree": "Passer à un worktree",
+  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "Ajoutez cette fonction à votre ~/.zshrc ou ~/.bashrc. Ensuite, depuis le checkout du projet, lancez wt avec une branche d'issue (par exemple wt loop/issue-7) pour aller dans son worktree et vérifier la modification."
 }

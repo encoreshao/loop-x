@@ -941,6 +941,44 @@
   });
 })();
 (function() {
+  // Generic copy button: a [data-copy-target] button copies the text of the
+  // element with that id, then shows its data-copied-label (translated by the
+  // page) and a check for a moment. navigator.clipboard needs a secure
+  // context, so plain http falls back to execCommand('copy'), as the doc
+  // panel's Copy does.
+  document.addEventListener('click', function(ev) {
+    var button = ev.target.closest('[data-copy-target]');
+    if (!button) return;
+    var source = document.getElementById(button.getAttribute('data-copy-target'));
+    if (!source) return;
+    var text = source.textContent;
+    var icon = button.querySelector('use');
+    var label = button.querySelector('[data-copy-label]');
+    var done = function() {
+      if (!button.hasAttribute('data-copy-text')) button.setAttribute('data-copy-text', label.textContent);
+      icon.setAttribute('href', '#i-check');
+      label.textContent = button.getAttribute('data-copied-label');
+      clearTimeout(button.copyTimer);
+      button.copyTimer = setTimeout(function() {
+        icon.setAttribute('href', '#i-content_copy');
+        label.textContent = button.getAttribute('data-copy-text');
+      }, 1800);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, function() {});
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { if (document.execCommand('copy')) done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  });
+})();
+(function() {
   // Every .daemon-action-form is a plain `method='post'` form (no fetch/JS
   // submit interception), so saving one is a full POST-redirect-GET - a
   // fresh page load that the browser scrolls to the top of by default.

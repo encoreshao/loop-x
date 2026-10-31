@@ -1261,5 +1261,7 @@
   "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "移除 {alias} #{iid} 的 {branch} 及其工作树？其中未提交的更改将丢失；已推送到 GitLab 的分支会保留。",
   "The GitLab loop is running - wait for it to finish or stop it before removing a worktree": "GitLab 循环正在运行 - 请等待其完成或先停止它，再移除工作树",
   "Removed {branch} for {alias} #{iid}": "已移除 {alias} #{iid} 的 {branch}",
-  "{name} is not a tracked project with a checkout": "{name} 不是带有检出目录的已跟踪项目"
+  "{name} is not a tracked project with a checkout": "{name} 不是带有检出目录的已跟踪项目",
+  "Switch to a worktree": "切换到工作树",
+  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "将此函数添加到 ~/.zshrc 或 ~/.bashrc。然后在项目的检出目录中，用 issue 分支运行 wt（例如 wt loop/issue-7），即可进入对应的工作树并检查改动。"
 }

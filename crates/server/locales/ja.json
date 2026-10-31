@@ -1261,5 +1261,7 @@
   "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "{alias} #{iid} の {branch} とそのワークツリーを削除しますか？未コミットの変更は失われます。GitLab にプッシュ済みのブランチは残ります。",
   "The GitLab loop is running - wait for it to finish or stop it before removing a worktree": "GitLab ループが実行中です。ワークツリーを削除する前に、終了を待つか停止してください",
   "Removed {branch} for {alias} #{iid}": "{alias} #{iid} の {branch} を削除しました",
-  "{name} is not a tracked project with a checkout": "{name} はチェックアウトのある追跡中のプロジェクトではありません"
+  "{name} is not a tracked project with a checkout": "{name} はチェックアウトのある追跡中のプロジェクトではありません",
+  "Switch to a worktree": "ワークツリーに切り替える",
+  "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change.": "この関数を ~/.zshrc または ~/.bashrc に追加してください。その後、プロジェクトのチェックアウト内で wt にイシューブランチを指定して実行すると（例: wt loop/issue-7）、そのワークツリーに移動して変更を確認できます。"
 }

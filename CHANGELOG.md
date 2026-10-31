@@ -17,6 +17,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - MR Review: an MR whose review fails (or that fails to load) is no longer retried on every run, even after new commits. The Merge requests tab marks it "Review failed", with the error on hover, until you press Review now to try it again.
 - GitLab loop: issue worktrees of Rails projects now get the checkout's `config/master.key` (and `config/credentials/development.key` / `test.key`) when the project gitignores them, so development and test can read the project's encrypted credentials. The production key is never copied.
 - GitLab loop: a new Worktrees tab lists every in-progress `loop/issue-<iid>` branch across tracked projects, with its issue (title and link), project, worktree folder, uncommitted-changes state and last commit. A Remove button deletes the worktree folder and the local branch, uncommitted work included, after a confirmation. It is refused while the loop is running, and a branch already pushed to GitLab is kept.
+- GitLab loop: the Worktrees tab opens with a `wt <branch>` shell function, with a Copy button, to add to `~/.zshrc`/`~/.bashrc`; run from a project's checkout, it jumps into the worktree of an issue branch so you can check the change by hand.
 
 ### Changed
 - MR Review: MRs in archived projects, or projects scheduled for deletion, no longer appear on the Merge requests tab and are never reviewed.

@@ -314,6 +314,10 @@ mod tests {
         );
         assert!(!html.contains('\u{27e6}'));
         assert!(html.contains("name='csrf_token' value=\"test-csrf-token\""));
+        assert!(
+            html.contains("ev.target.closest('[data-copy-target]')"),
+            "every page can opt in to a copy button"
+        );
     }
 
     fn panel_for(cli: &str) -> String {

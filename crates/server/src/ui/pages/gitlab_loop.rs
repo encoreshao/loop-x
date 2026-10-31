@@ -648,6 +648,28 @@ fn issue_ref(cached: &[(String, AliasState)], gitlab_config: &Value, alias: &str
     (title, url)
 }
 
+/// A bash/zsh helper that cds into the worktree checked out on a branch, run
+/// from inside the project's checkout.
+const WT_SNIPPET: &str = r#"wt() {
+  local dir
+  [[ -n $1 ]] || { echo "usage: wt <branch>" >&2; return 2; }
+  dir=$(git worktree list --porcelain | awk -v b="refs/heads/$1" '
+    /^worktree /{p=substr($0,10)} $0=="branch "b{print p; exit}')
+  [[ -n $dir ]] || { echo "no worktree for branch: $1" >&2; return 1; }
+  cd "$dir"
+}"#;
+
+fn wt_snippet_card(ctx: &UiCtx) -> String {
+    format!(
+        "<section class='card'><div class='section-header'><h2>{}</h2><button type='button' class='btn btn-neutral' style='margin-left: auto;' data-copy-target='wt-snippet' data-copied-label='{}'><svg class='icon' aria-hidden='true'><use href='#i-content_copy'/></svg> <span data-copy-label>{}</span></button></div><p class='section-subtitle'>{}</p><pre class='log' id='wt-snippet'>{}</pre></section>",
+        esc_t(ctx, "Switch to a worktree"),
+        esc_t(ctx, "Copied"),
+        esc_t(ctx, "Copy"),
+        esc_t(ctx, "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change."),
+        pyfmt::escape(WT_SNIPPET),
+    )
+}
+
 fn worktrees_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     let csrf = ctx.csrf_input();
     let cached = crate::ui::live_cache::read(ctx.state, TASKS_CACHE)
@@ -728,8 +750,9 @@ fn worktrees_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         table(&headers, &rows)
     };
     format!(
-        "{}<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{errors}{list}</section>",
+        "{}{}<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{errors}{list}</section>",
         flash_html(flash, flash_ok),
+        wt_snippet_card(ctx),
         esc_t(ctx, "Worktrees"),
         esc_t(ctx, "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch."),
     )
@@ -2404,6 +2427,19 @@ mod tests {
     }
 
     #[test]
+    fn the_worktrees_view_opens_with_the_wt_shell_snippet() {
+        let sb = Sandbox::new();
+        let body = worktrees_body(&sb.ctx(), None, true);
+        let snippet = body.find("wt() {").expect(&body);
+        assert!(snippet < body.find("No issue branches in progress.").unwrap(), "{body}");
+        assert!(body.contains("$0==&quot;branch &quot;b"), "{body}");
+        assert!(body.contains("return 1"), "{body}");
+        assert!(body.contains("<pre class='log' id='wt-snippet'>"), "{body}");
+        assert!(body.contains("data-copy-target='wt-snippet' data-copied-label='Copied'"), "{body}");
+        assert!(body.contains("href='#i-content_copy'"), "{body}");
+    }
+
+    #[test]
     fn the_worktrees_view_says_when_there_is_nothing_in_progress() {
         let sb = Sandbox::new();
         let body = worktrees_body(&sb.ctx(), None, true);
@@ -2428,7 +2464,7 @@ mod tests {
         assert!(location.ends_with("&ok=1"), "{location}");
         assert!(!Path::new(&wt7).exists());
         let body = worktrees_body(&sb.ctx(), None, true);
-        assert!(!body.contains("loop/issue-7") && body.contains("loop/issue-8"), "{body}");
+        assert!(!body.contains("<code>loop/issue-7</code>") && body.contains("<code>loop/issue-8</code>"), "{body}");
 
         assert!(post(state, "/gitlab/worktrees/nope/8/remove").header("Location").unwrap().ends_with("&ok=0"));
         assert!(post(state, "/gitlab/worktrees/app/7/remove").header("Location").unwrap().ends_with("&ok=0"));
