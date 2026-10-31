@@ -87,9 +87,11 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
     public var expiresAt: String?
     public var decidedAt: String?
     public var decidedBy: String?
+    /// What the reviewer asked to change (`changes_requested` only).
+    public var notes: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, project, title, branch, summary, status
+        case id, kind, project, title, branch, summary, status, notes
         case runId = "run_id", issueIid = "issue_iid", targetBranch = "target_branch"
         case createdAt = "created_at", expiresAt = "expires_at"
         case decidedAt = "decided_at", decidedBy = "decided_by"
@@ -98,11 +100,12 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
     public init(id: String, kind: String = "open_mr", runId: String? = nil, project: String? = nil,
                 issueIid: Int? = nil, title: String? = nil, branch: String? = nil, targetBranch: String? = nil,
                 summary: String? = nil, status: String = "pending", createdAt: String? = nil,
-                expiresAt: String? = nil, decidedAt: String? = nil, decidedBy: String? = nil) {
+                expiresAt: String? = nil, decidedAt: String? = nil, decidedBy: String? = nil,
+                notes: String? = nil) {
         self.id = id; self.kind = kind; self.runId = runId; self.project = project; self.issueIid = issueIid
         self.title = title; self.branch = branch; self.targetBranch = targetBranch; self.summary = summary
         self.status = status; self.createdAt = createdAt; self.expiresAt = expiresAt
-        self.decidedAt = decidedAt; self.decidedBy = decidedBy
+        self.decidedAt = decidedAt; self.decidedBy = decidedBy; self.notes = notes
     }
 
     public var isPending: Bool { status == "pending" }

@@ -100,8 +100,11 @@ An approval is a human's OK that the loop asks for before it opens a merge reque
  "decided_at": null, "decided_by": null}
 ```
 
-`status` is `pending`, then exactly one of `approved`, `denied`, `timeout`. The loop waits
-until `expires_at`; an undecided approval becomes `timeout` and the issue is escalated.
+`status` is `pending`, then exactly one of `approved`, `denied`, `changes_requested`, `timeout`.
+The loop waits until `expires_at`; an undecided approval becomes `timeout` and the issue is
+escalated. `changes_requested` carries the reviewer's `notes`: the loop sends them back to the
+agent, which revises the fix in the same worktree, re-runs the checks and asks for a new approval
+(a new id). After two rounds of changes a third request escalates the issue with the notes.
 
 ### `GET /api/approvals`
 
@@ -111,19 +114,21 @@ until `expires_at`; an undecided approval becomes `timeout` and the issue is esc
 
 ### `POST /api/approvals/{id}`
 
-Body: `{"decision": "approve" | "deny", "by": "mac-app"}`. Requires the header
+Body: `{"decision": "approve" | "deny" | "request_changes", "by": "mac-app", "notes": "…"}`;
+`notes` (at most 4000 characters) is required for `request_changes` and ignored otherwise. Requires the header
 `X-LoopX-Token: <token from loopx.lock>` (a same-origin browser request, `Origin` equal to the
 server's own origin, is also accepted; a missing or wrong token is `403`).
 
 | Status | Meaning |
 | --- | --- |
 | 200 | The updated approval |
-| 400 | `decision` is not `approve`/`deny` |
+| 400 | `decision` is not `approve`/`deny`/`request_changes`, or `request_changes` without notes |
 | 403 | No token / wrong token / foreign `Host` |
 | 404 | Unknown id |
-| 409 | Already decided (`approved`, `denied`) or timed out |
+| 409 | Already decided (`approved`, `denied`, `changes_requested`) or timed out |
 
-`loopx approvals list|show|approve|deny` does the same from a shell.
+`loopx approvals list|show|approve|deny|request-changes <id> --notes TEXT` does the same from a
+shell.
 
 ## Everything else
 

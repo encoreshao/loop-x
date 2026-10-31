@@ -43,6 +43,17 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
         #expect(body?["decision"] == "deny")
     }
 
+    @Test func requestChangesSendsTheNotes() async throws {
+        let back = #"{"id":"apr_1","kind":"open_mr","status":"changes_requested","notes":"Keep the old name."}"#
+        let t = FakeTransport { _ in (200, back) }
+        let a = try await api(t).decide(id: "apr_1", .requestChanges, notes: "Keep the old name.")
+        #expect(a.status == "changes_requested")
+        #expect(a.notes == "Keep the old name.")
+        let raw = try #require(t.requests.first?.httpBody)
+        let body = try JSONSerialization.jsonObject(with: raw) as? [String: String]
+        #expect(body == ["decision": "request_changes", "by": "mac-app", "notes": "Keep the old name."])
+    }
+
     @Test(arguments: [
         (400, #"{"error":"bad decision"}"#, ApprovalError.badRequest("bad decision")),
         (403, "", ApprovalError.forbidden),

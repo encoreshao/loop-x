@@ -217,15 +217,19 @@ async fn decide(
     let body = body.map(|b| b.0).unwrap_or(Value::Null);
     let decision = body["decision"].as_str().unwrap_or("");
     let by = body["by"].as_str().unwrap_or("api");
-    match approvals::decide(&s.paths.approvals_dir, &id, decision, by, Utc::now()) {
+    let notes = body["notes"].as_str();
+    match approvals::decide_with_notes(&s.paths.approvals_dir, &id, decision, notes, by, Utc::now())
+    {
         Ok(a) => Json(a).into_response(),
         Err(e @ ApprovalError::Unknown(_)) => json_error(StatusCode::NOT_FOUND, &e.to_string()),
         Err(e @ ApprovalError::AlreadyDecided(..)) => {
             json_error(StatusCode::CONFLICT, &e.to_string())
         }
-        Err(e @ ApprovalError::BadDecision(_)) => {
-            json_error(StatusCode::BAD_REQUEST, &e.to_string())
-        }
+        Err(
+            e @ (ApprovalError::BadDecision(_)
+            | ApprovalError::MissingNotes
+            | ApprovalError::NotesTooLong),
+        ) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
@@ -512,6 +516,33 @@ mod tests {
         .await;
         assert_eq!(c, 409);
         assert!(v["error"].as_str().unwrap().contains("already denied"));
+    }
+
+    #[tokio::test]
+    async fn requesting_changes_needs_notes_and_records_them() {
+        let d = tempfile::tempdir().unwrap();
+        let s = state(d.path());
+        let id = pending(&s);
+        let tok = [("x-loopx-token", "secret-token")];
+        let (c, v, _) = call(
+            router(s.clone()),
+            decide_req(&id, json!({"decision": "request_changes"}), &tok),
+        )
+        .await;
+        assert_eq!(c, 400);
+        assert!(v["error"].as_str().unwrap().contains("needs notes"), "{v}");
+        let (c, v, _) = call(
+            router(s),
+            decide_req(
+                &id,
+                json!({"decision": "request_changes", "notes": "Keep the old name."}),
+                &tok,
+            ),
+        )
+        .await;
+        assert_eq!(c, 200);
+        assert_eq!(v["status"], "changes_requested");
+        assert_eq!(v["notes"], "Keep the old name.");
     }
 
     #[tokio::test]

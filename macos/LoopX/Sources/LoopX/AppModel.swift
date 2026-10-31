@@ -172,13 +172,37 @@ final class AppModel: ObservableObject {
         switch action {
         case .approve(let id): decide(id, .approve)
         case .deny(let id): decide(id, .deny)
+        case .requestChanges(let id): requestChanges(id)
         case .openMergeRequest(let url): NSWorkspace.shared.open(url)
         case .openDashboard: openDashboard()
         case .dismiss(let key): dismissed.insert(key); recompute()
         }
     }
 
-    func decide(_ id: String, _ decision: ApprovalDecision) {
+    /// Asks what to change, then sends it with the decision. Cancel or empty notes do nothing.
+    func requestChanges(_ id: String) {
+        let title = snapshot.approvals.pending.first { $0.id == id }?.title ?? id
+        let alert = NSAlert()
+        alert.messageText = "Request changes"
+        alert.informativeText = "What should the agent change in \"\(title)\"? It revises the fix in the same worktree, runs the checks again and asks for your approval again."
+        let scroll = NSTextView.scrollableTextView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 360, height: 110)
+        scroll.borderType = .bezelBorder
+        let text = scroll.documentView as! NSTextView
+        text.isRichText = false
+        text.font = .systemFont(ofSize: 13)
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "Send")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = text
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let notes = text.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !notes.isEmpty else { return }
+        decide(id, .requestChanges, notes: notes)
+    }
+
+    func decide(_ id: String, _ decision: ApprovalDecision, notes: String? = nil) {
         guard !busyApprovals.contains(id) else { return }
         guard let live = LockFile.readLive(at: backendConfig.discovery.lockURL) ?? lock else {
             actionError = ApprovalError.unreachable("no backend").message; return
@@ -186,7 +210,7 @@ final class AppModel: ObservableObject {
         busyApprovals.insert(id); actionError = nil
         let api = ApprovalsAPI(lock: live)
         Task {
-            do { _ = try await api.decide(id: id, decision) }
+            do { _ = try await api.decide(id: id, decision, notes: notes) }
             catch let e as ApprovalError {
                 // 409/404 mean someone else decided it first: the next snapshot clears the card.
                 actionError = e.message

@@ -91,6 +91,8 @@ extension StatusItemController: NSMenuDelegate {
             let deny = NSMenuItem(title: "Deny: \(t)", action: #selector(deny(_:)), keyEquivalent: "")
             deny.representedObject = a.id; deny.target = self; menu.addItem(deny)
             if a.id == st.approvals.first?.id { deny.setShortcut(.init("n")) }
+            let changes = NSMenuItem(title: "Request Changes: \(t)…", action: #selector(requestChanges(_:)), keyEquivalent: "")
+            changes.representedObject = a.id; changes.target = self; menu.addItem(changes)
         }
         if !st.approvals.isEmpty { menu.addItem(.separator()) }
         add("Open Dashboard", #selector(openDashboard), "d")
@@ -151,4 +153,5 @@ extension StatusItemController: NSMenuDelegate {
     @objc private func runLoop(_ s: NSMenuItem) { if let l = s.representedObject as? String { onRunLoop(l) } }
     @objc private func approve(_ s: NSMenuItem) { if let id = s.representedObject as? String { model.perform(.approve(id: id)) } }
     @objc private func deny(_ s: NSMenuItem) { if let id = s.representedObject as? String { model.perform(.deny(id: id)) } }
+    @objc private func requestChanges(_ s: NSMenuItem) { if let id = s.representedObject as? String { model.perform(.requestChanges(id: id)) } }
 }

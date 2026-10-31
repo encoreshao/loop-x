@@ -25,6 +25,8 @@ public struct NotchStyle: Equatable, Sendable {
 public enum NotchAction: Equatable, Sendable {
     case approve(id: String)
     case deny(id: String)
+    /// Asks for review notes, then sends the work back to the agent.
+    case requestChanges(id: String)
     case openMergeRequest(URL)
     case openDashboard
     case dismiss(alertKey: String)

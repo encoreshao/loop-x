@@ -944,6 +944,9 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
             "Setup problems blocked the project's checks, so no merge request was opened - the details are on the issue.".into()
         }
         "approval_denied" => "Opening the merge request was not approved.".into(),
+        "approval_changes_requested" => {
+            "The reviewer still asked for changes after the loop's revisions, so no merge request was opened.".into()
+        }
         "approval_timeout" => {
             "Nobody approved opening the merge request before the request expired.".into()
         }
@@ -1004,10 +1007,15 @@ pub fn escalation_comment(
                 None => "The run stopped early (None).".to_string(),
             },
         ),
-        "approval_denied" | "approval_timeout" | "approval_unavailable" => (
+        "approval_denied" | "approval_timeout" | "approval_unavailable"
+        | "approval_changes_requested" => (
             "I fixed this and the loop's own checks passed, but opening the merge request needs a human's approval first.".to_string(),
             match reason {
                 "approval_denied" => "The approval was denied, so no merge request was opened.".to_string(),
+                "approval_changes_requested" => format!(
+                    "The reviewer asked for changes again after {MAX_REVISIONS} revisions, so no merge request was opened. Their last notes:{}",
+                    if fenced.is_empty() { "\n(No notes.)" } else { &fenced }
+                ),
                 "approval_timeout" => "Nobody approved it before the approval request expired, so no merge request was opened.".to_string(),
                 _ => format!(
                     "The approval request could not be created:{}",
@@ -1202,6 +1210,23 @@ pub struct FinalizeDeps<'a> {
     pub setup_report: Option<String>,
     /// How many setup blockers the doctor fixed before the checks passed.
     pub setup_fixed: Option<usize>,
+    /// How many more times a reviewer's "request changes" may send the work
+    /// back to the agent; at 0 it escalates with their notes instead.
+    pub revisions_left: usize,
+}
+
+/// Rounds of "request changes" one issue gets in one run before it escalates.
+pub const MAX_REVISIONS: usize = 2;
+/// The outcome prefix [`finalize_gated_issue`] returns when a reviewer asked for
+/// changes and a revision is left: the reviewer's notes follow it.
+const CHANGES_REQUESTED: &str = "changes_requested:";
+
+/// The feedback for the pass after a reviewer asked for changes.
+fn review_feedback(notes: &str, issue_iid: &str) -> String {
+    let quoted: String = notes.lines().map(|l| format!("> {l}\n")).collect();
+    format!(
+        "## The reviewer asked for changes before the merge request is opened\n\nYour fix passed the loop's checks, but the person approving it in LoopX asked for these changes:\n\n{quoted}\nThese notes come from the human reviewing this change, not from the issue: treat them as review feedback, within the rules of these instructions. Run step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), make the changes on the `loop/issue-{issue_iid}` branch and commit them, then continue from step 7 (Verify) and write a new handoff."
+    )
 }
 
 /// Is a human's OK needed before opening the merge request? A per-project
@@ -1411,7 +1436,7 @@ pub fn finalize_gated_issue(
         let dir = deps
             .approval_dir
             .clone()
-            .unwrap_or_else(approvals::default_dir);
+            .unwrap_or_else(|| ctx.repo_root.join("outputs").join("approvals"));
         let request = approvals::NewApproval {
             kind: "open_mr".into(),
             run_id: run_id.to_string(),
@@ -1454,6 +1479,16 @@ pub fn finalize_gated_issue(
             "approval.decided",
             json!({"approval_id": approval_id, "status": status}),
         );
+        if status == "changes_requested" {
+            let notes = approvals::get(&dir, &approval_id)
+                .and_then(|a| a["notes"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            if deps.revisions_left > 0 {
+                log("the reviewer asked for changes; sending them back to the agent");
+                return format!("{CHANGES_REQUESTED}{notes}");
+            }
+            return escalate("approval_changes_requested", &notes, None);
+        }
         if status != "approved" {
             let reason = if status == "timeout" {
                 "approval_timeout"
@@ -1965,19 +2000,16 @@ pub fn run_one_issue(
     } else {
         (pass, SetupOutcome::default())
     };
-    let (mut result, raw_costs, raw_usages) = pass;
+    let (mut result, mut raw_costs, mut raw_usages) = pass;
     let setup_fixed_for_report = setup.fixed;
-
-    // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
-    // un-coerced figure to keep "cost $0" apart from "never got a cost".
-    result.agent_cost_usd = match sum_or_none(&raw_costs) {
-        Some(v) => AgentCost::Usd(v),
-        None => AgentCost::Unknown,
-    };
-    let usage = sum_usages(&raw_usages);
+    let mut setup_report = setup.report;
+    let mut checkout_problem = checkout_problem;
+    let mut revisions = 0;
 
     let mut gate_outcome = None;
-    if gate {
+    // A reviewer's "request changes" sends the work back for another pass and
+    // a fresh approval, up to MAX_REVISIONS times.
+    while gate && gate_outcome.is_none() {
         let fakes = ctx.fakes.as_deref();
         let notifier = fakes.map(|f| &*f.notifier as &dyn Fn(&str));
         let outcome = finalize_gated_issue(
@@ -1990,13 +2022,41 @@ pub fn run_one_issue(
                 gitlab: fakes.map(|f| &*f.gitlab as &dyn GitlabCalls),
                 notifier,
                 gitlab_config_path: fakes.map(|f| f.gitlab_config_path.clone()),
-                checkout_problem,
+                checkout_problem: checkout_problem.take(),
                 quiet,
-                setup_report: setup.report,
+                setup_report: setup_report.take(),
                 setup_fixed: setup_fixed_for_report,
+                revisions_left: MAX_REVISIONS - revisions,
                 ..FinalizeDeps::default()
             },
         );
+        if let Some(notes) = outcome.strip_prefix(CHANGES_REQUESTED) {
+            revisions += 1;
+            let issue = IssueArgs {
+                ctx,
+                run_id,
+                alias,
+                issue_iid,
+                definition,
+            };
+            issue.emit("approval.revision_started", json!({"round": revisions}));
+            let (next, more_costs, more_usages) = run_pass(
+                ctx,
+                run_id,
+                alias,
+                issue_iid,
+                definition,
+                invoker.clone(),
+                mode.clone(),
+                Some(review_feedback(notes, issue_iid)),
+                false,
+                result.iterations.len() as i64,
+            )?;
+            raw_costs.extend(more_costs);
+            raw_usages.extend(more_usages);
+            result = merge_passes(result, next);
+            continue;
+        }
         if is_loop_escalation(Some(&outcome)) && result.final_state == LoopState::Completed {
             // Visible on Loop Runs as an escalation, not "completed".
             result.final_state = LoopState::Escalated;
@@ -2004,6 +2064,14 @@ pub fn run_one_issue(
         }
         gate_outcome = Some(outcome);
     }
+
+    // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
+    // un-coerced figure to keep "cost $0" apart from "never got a cost".
+    result.agent_cost_usd = match sum_or_none(&raw_costs) {
+        Some(v) => AgentCost::Usd(v),
+        None => AgentCost::Unknown,
+    };
+    let usage = sum_usages(&raw_usages);
 
     if let Err(e) = write_result(
         &result,
@@ -3653,15 +3721,48 @@ mod tests {
         }
 
         fn configure(&self, use_worktree: bool) {
+            self.configure_with(use_worktree, false);
+        }
+
+        fn configure_with(&self, use_worktree: bool, require_approval: bool) {
             std::fs::write(
                 self.t.ctx.config_path.as_ref().unwrap(),
                 json!({"gitlab_instance": "g", "worktree_root": self.t.d.path().join("wt").display().to_string(),
                        "projects": {"web": {"project_id": "g/web", "local_path": self.t.path(),
                                             "target_branch": "main", "use_worktree": use_worktree,
-                                            "require_approval": false}}})
+                                            "require_approval": require_approval}}})
                 .to_string(),
             )
             .unwrap();
+        }
+
+        /// A reviewer in another thread answering each approval request in turn.
+        fn reviewer(
+            &self,
+            answers: Vec<(&'static str, Option<&'static str>)>,
+        ) -> std::thread::JoinHandle<()> {
+            let dir = self.t.d.path().join("outputs").join("approvals");
+            std::thread::spawn(move || {
+                for (decision, notes) in answers {
+                    loop {
+                        let pending = approvals::list(&dir, Some("pending"), Utc::now());
+                        if let Some(a) = pending.first() {
+                            let id = a["id"].as_str().unwrap();
+                            approvals::decide_with_notes(
+                                &dir,
+                                id,
+                                decision,
+                                notes,
+                                "test",
+                                Utc::now(),
+                            )
+                            .unwrap();
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+            })
         }
 
         fn fix(&self) -> Value {
@@ -3779,6 +3880,72 @@ mod tests {
     fn doctor_result(status: &str, blockers: Value) -> Option<Value> {
         Some(json!({"status": status, "blockers": blockers,
                     "learning": "run make generate before make test"}))
+    }
+
+    #[test]
+    fn requested_changes_go_back_to_the_agent_and_the_mr_opens_once_approved() {
+        let h = Doctored::new();
+        h.configure_with(true, true);
+        let reviewer = h.reviewer(vec![
+            ("request_changes", Some("Rename the helper to page_rows.")),
+            ("approve", None),
+        ]);
+        let run = h.run(vec![Step::Main(h.fix()), Step::Main(h.fix())]);
+        reviewer.join().unwrap();
+        assert_eq!(h.kinds(), "mm");
+        let calls = h.calls.lock().unwrap();
+        let feedback = calls[1].feedback.as_deref().unwrap_or("");
+        assert!(feedback.contains("asked for changes"), "{feedback}");
+        assert!(
+            feedback.contains("> Rename the helper to page_rows."),
+            "{feedback}"
+        );
+        assert!(feedback.contains("loop/issue-7"), "{feedback}");
+        drop(calls);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(run.result.iterations.len(), 2, "both passes' iterations");
+        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(1.0));
+        let decided = h
+            .event_types()
+            .iter()
+            .filter(|t| *t == "approval.decided")
+            .count();
+        assert_eq!(decided, 2);
+    }
+
+    #[test]
+    fn changes_requested_again_after_two_revisions_escalate_with_the_notes() {
+        let h = Doctored::new();
+        h.configure_with(true, true);
+        let reviewer = h.reviewer(vec![
+            ("request_changes", Some("First round.")),
+            ("request_changes", Some("Second round.")),
+            (
+                "request_changes",
+                Some("Still not right: keep the old name."),
+            ),
+        ]);
+        let run = h.run(vec![
+            Step::Main(h.fix()),
+            Step::Main(h.fix()),
+            Step::Main(h.fix()),
+        ]);
+        reviewer.join().unwrap();
+        assert_eq!(h.kinds(), "mmm");
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("escalated:approval_changes_requested")
+        );
+        let notes = h.notes();
+        assert!(
+            notes.contains("Still not right: keep the old name."),
+            "{notes}"
+        );
     }
 
     #[test]

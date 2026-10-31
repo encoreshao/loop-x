@@ -6,7 +6,7 @@ use loopx_core::{approvals, pyjson};
 use serde_json::Value;
 use std::process::ExitCode;
 
-const USAGE: &str = "Usage: loopx approvals list [--all]\n       loopx approvals show <id>\n       loopx approvals approve <id> [--by NAME]\n       loopx approvals deny <id> [--by NAME]";
+const USAGE: &str = "Usage: loopx approvals list [--all]\n       loopx approvals show <id>\n       loopx approvals approve <id> [--by NAME]\n       loopx approvals deny <id> [--by NAME]\n       loopx approvals request-changes <id> --notes TEXT [--by NAME]";
 
 pub fn run(args: &[String]) -> ExitCode {
     match dispatch(args) {
@@ -23,12 +23,15 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
-fn by(args: &[String]) -> String {
+fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
-        .position(|a| a == "--by")
+        .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
         .cloned()
-        .unwrap_or_else(|| "cli".to_string())
+}
+
+fn by(args: &[String]) -> String {
+    flag(args, "--by").unwrap_or_else(|| "cli".to_string())
 }
 
 fn dispatch(args: &[String]) -> Result<String, String> {
@@ -58,6 +61,20 @@ fn dispatch(args: &[String]) -> Result<String, String> {
                 .map(|a| pyjson::to_string_pretty(&a))
                 .map_err(|e| e.to_string())
         }
+        Some("request-changes") => {
+            let id = args.get(1).ok_or(USAGE)?;
+            let notes = flag(args, "--notes");
+            approvals::decide_with_notes(
+                &dir,
+                id,
+                "request_changes",
+                notes.as_deref(),
+                &by(args),
+                now,
+            )
+            .map(|a| pyjson::to_string_pretty(&a))
+            .map_err(|e| e.to_string())
+        }
         _ => Err(USAGE.to_string()),
     }
 }
@@ -80,6 +97,9 @@ mod tests {
             .unwrap_err()
             .starts_with("Usage:"));
         assert!(dispatch(&["approve".into()])
+            .unwrap_err()
+            .starts_with("Usage:"));
+        assert!(dispatch(&["request-changes".into()])
             .unwrap_err()
             .starts_with("Usage:"));
     }
