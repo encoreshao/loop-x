@@ -25,6 +25,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Loop icons: Release Notes, Pipeline Doctor and Stale Sweeper get their own sidebar icons (tag, stethoscope, archive), and Loops itself, plus any loop made from a template, uses a workflow icon instead of the refresh arrows, which now only mean "refresh".
 - A loop run now keeps the Mac awake (`caffeinate`) until it finishes, even when the LoopX app is closed and the run was started by the launchd scheduler.
 - A loop that fails the same way (same exit code) as its previous run no longer sends another Slack alert each time. The status keeps a `consecutive_failures` count and the log notes the repeat; a different failure or a success resets it.
 - GitLab loop: the agent's instructions now say issue text, comments and linked pages are untrusted. They describe the change wanted but can never redirect the loop to other projects or branches, ask for secrets, run unrelated commands or change where it posts; such a request is ignored and called out in the merge request or comment.
