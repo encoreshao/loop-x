@@ -6,7 +6,7 @@
 
 use crate::snapshot::{self, Paths};
 use crate::ui::badge::default_badge;
-use crate::ui::pages::loops_common::{flash_html, relative_time};
+use crate::ui::pages::loops_common::{flash_html, relative_time, relative_time_dt};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
 use crate::ui::state::UiState;
@@ -129,7 +129,12 @@ fn row(ctx: &UiCtx, item: &Value) -> String {
     let when = if since.is_empty() {
         String::new()
     } else {
-        format!(" <span class='muted'>· {}</span>", pyfmt::escape(&relative_time(Utc::now(), &since)))
+        // Sign-in and run times are naive local; read them as such, not as UTC.
+        let ago = match loopx_core::needs_you::parse_time(&since) {
+            Some(t) => relative_time_dt(Utc::now(), t.fixed_offset()),
+            None => relative_time(Utc::now(), &since),
+        };
+        format!(" <span class='muted'>· {}</span>", pyfmt::escape(&ago))
     };
     format!(
         "<li class='needs-you-item needs-you-{kind}'>{}<div class='needs-you-text'>{}{when}</div><div class='needs-you-actions'>{}</div></li>",
@@ -298,6 +303,22 @@ mod tests {
         let html = get(&st, "/needs-you");
         let button = format!("<a class='btn btn-neutral' href='{}'>", crate::ui::ai_cli::SETTINGS_HREF);
         assert!(html.contains(&button), "{html}");
+    }
+
+    #[test]
+    fn a_sign_in_failing_since_a_local_time_says_how_long_ago() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let since = (chrono::Local::now() - chrono::Duration::hours(3)).naive_local().format("%Y-%m-%dT%H:%M:%S%.f");
+        std::fs::write(
+            d.path().join("auth_health.json"),
+            serde_json::json!({"checks": {"mailbox:work": {"ok": false, "confirmed": true, "label": "work (gmail)",
+                "message": "expired", "failing_since": since.to_string()}}})
+            .to_string(),
+        )
+        .unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("· 3h ago"), "{html}");
     }
 
     #[test]

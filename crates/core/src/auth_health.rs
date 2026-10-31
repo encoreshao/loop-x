@@ -370,6 +370,103 @@ pub fn mark_reconnected(state_path: Option<&Path>, probe_id: &str, now: Option<N
     let _ = write_state(&state, &path);
 }
 
+/// A connector `test()` as a probe result: a rejected or revoked token is a
+/// dead sign-in (alert at once), any other failure may be transient.
+pub fn connector_result((ok, message): (bool, String)) -> ProbeResult {
+    if !ok && crate::connectors::is_dead_sign_in(&message) {
+        return Err(ProbeFailure::hard(message));
+    }
+    Ok((ok, message))
+}
+
+/// Something other than the 6-hourly check (a Test, a loop run) found
+/// `probe_id`'s sign-in dead: list it in "Needs you" now. The check itself
+/// still sends the Slack alert, so the person hears about it once.
+pub fn mark_dead(
+    state_path: Option<&Path>,
+    probe_id: &str,
+    label: &str,
+    message: &str,
+    now: Option<NaiveDateTime>,
+) {
+    let path = state_path.map_or_else(default_state_path, Path::to_path_buf);
+    let mut state = read_state(Some(&path));
+    let now_iso = isoformat(now.unwrap_or_else(|| Local::now().naive_local()));
+    let Some(checks) = state.get_mut("checks").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let old = checks
+        .get(probe_id)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let was_failing = !old.get("ok").is_none_or(crate::loop_serialize::truthy);
+    let mut new = Map::new();
+    new.insert("ok".into(), json!(false));
+    new.insert("message".into(), json!(message));
+    new.insert("checked_at".into(), json!(now_iso));
+    let (count, since) = if was_failing {
+        (
+            old.get("fail_count").and_then(Value::as_i64).unwrap_or(0) + 1,
+            old.get("failing_since")
+                .filter(|v| truthy(Some(v)))
+                .cloned()
+                .unwrap_or_else(|| json!(now_iso)),
+        )
+    } else {
+        (1, json!(now_iso))
+    };
+    new.insert("fail_count".into(), json!(count));
+    new.insert("failing_since".into(), since);
+    if was_failing && truthy(old.get("last_alert_at")) {
+        new.insert("last_alert_at".into(), old["last_alert_at"].clone());
+    }
+    new.insert("label".into(), json!(label));
+    new.insert("confirmed".into(), json!(true));
+    checks.insert(probe_id.to_string(), Value::Object(new));
+    let _ = write_state(&state, &path);
+}
+
+/// A sign-in check's verdict as other pages show it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckView {
+    pub ok: bool,
+    pub message: String,
+    /// When it was checked (naive local, as stored).
+    pub at: String,
+}
+
+/// `check` (one entry of `checks`) when it is newer than `than`, the time the
+/// page's own record was made (a Test, a run; RFC 3339 or naive local; `None`
+/// when there is none). A failure counts only once confirmed: a single soft
+/// miss is not news. `None` means the page's own record stands.
+pub fn newer_check(check: Option<&Value>, than: Option<&str>) -> Option<CheckView> {
+    let check = check?;
+    let ok = check.get("ok").is_some_and(crate::loop_serialize::truthy);
+    if !ok
+        && !check
+            .get("confirmed")
+            .is_some_and(crate::loop_serialize::truthy)
+    {
+        return None;
+    }
+    let at = check.get("checked_at").and_then(Value::as_str)?;
+    if let Some(than) = than.and_then(crate::needs_you::parse_time) {
+        if crate::needs_you::parse_time(at)? <= than {
+            return None;
+        }
+    }
+    Some(CheckView {
+        ok,
+        message: check
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        at: at.to_string(),
+    })
+}
+
 /// One probe per enabled mailbox and per enabled auth-bearing connector.
 pub fn collect_probes(sources: &ProbeSources) -> Vec<Probe> {
     let mut probes = Vec::new();
@@ -459,7 +556,7 @@ pub fn config_sources(paths: crate::connectors_config::Paths) -> ProbeSources {
         connector_test: Arc::new(move |id| {
             use crate::connectors::ConnectorSource;
             match connectors.load(id) {
-                Ok(c) => Ok(c.test()),
+                Ok(c) => connector_result(c.test()),
                 Err(e) => Err(ProbeFailure::other("LoadFailure", format!("{e:?}"))),
             }
         }),
@@ -643,6 +740,90 @@ mod tests {
         );
         mark_reconnected(Some(&t.path()), "connector:new", Some(now()));
         assert!(!checks(&t).contains_key("connector:new"));
+    }
+
+    #[test]
+    fn a_connector_whose_token_is_dead_is_a_hard_failure() {
+        use crate::connectors::google_auth::REAUTH_MESSAGE;
+        assert_eq!(
+            connector_result((false, REAUTH_MESSAGE.into())),
+            Err(ProbeFailure::Hard(REAUTH_MESSAGE.into()))
+        );
+        let rejected = crate::connectors::describe_http_error(
+            &crate::connectors::ConnectorError::Http(crate::connectors::http::HttpError {
+                status: Some(401),
+                body: String::new(),
+                url: String::new(),
+                auth_expired: true,
+            }),
+        );
+        assert!(matches!(
+            connector_result((false, rejected)),
+            Err(ProbeFailure::Hard(_))
+        ));
+        assert_eq!(
+            connector_result((false, "Network error: timed out".into())),
+            Ok((false, "Network error: timed out".into()))
+        );
+        assert_eq!(
+            connector_result((true, "Connected".into())),
+            Ok((true, "Connected".into()))
+        );
+    }
+
+    #[test]
+    fn a_dead_sign_in_seen_outside_the_check_is_listed_at_once() {
+        let t = Tmp::new();
+        mark_dead(
+            Some(&t.path()),
+            "connector:cal",
+            "Work calendar",
+            "expired",
+            Some(now()),
+        );
+        let c = &checks(&t)["connector:cal"];
+        assert_eq!(
+            (c["ok"].clone(), c["confirmed"].clone()),
+            (json!(false), json!(true))
+        );
+        assert_eq!(c["label"], "Work calendar");
+        mark_dead(
+            Some(&t.path()),
+            "connector:cal",
+            "Work calendar",
+            "expired",
+            Some(now() + Duration::hours(1)),
+        );
+        let c = &checks(&t)["connector:cal"];
+        assert_eq!(c["failing_since"], json!(isoformat(now())), "{c}");
+        assert_eq!(c["fail_count"], 2);
+        // Only the 6-hourly check alerts Slack: it still sends the one alert.
+        let mut sent = vec![];
+        run(
+            &t,
+            &[Probe::new("connector:cal", "Work calendar", || {
+                reauth("expired")
+            })],
+            &mut sent,
+            now() + Duration::hours(2),
+        );
+        assert_eq!(sent.len(), 1, "{sent:?}");
+    }
+
+    #[test]
+    fn a_check_counts_on_other_pages_only_when_it_is_newer_and_settled() {
+        let dead = json!({"ok": false, "confirmed": true, "message": "expired", "checked_at": "2026-10-31T18:50:03.617752"});
+        let one_miss = json!({"ok": false, "confirmed": false, "message": "timeout", "checked_at": "2026-10-31T18:50:03"});
+        let fine = json!({"ok": true, "message": "Connected", "checked_at": "2026-10-31T18:50:03"});
+        // A Test from a week ago loses to tonight's check, in any time format.
+        let v = newer_check(Some(&dead), Some("2026-10-25T04:14:45Z")).unwrap();
+        assert_eq!((v.ok, v.message.as_str()), (false, "expired"));
+        assert!(newer_check(Some(&fine), None).unwrap().ok);
+        // A run after the check wins; a single soft miss is not news.
+        let later = (Local::now() + Duration::days(3650)).to_rfc3339();
+        assert!(newer_check(Some(&dead), Some(&later)).is_none());
+        assert!(newer_check(Some(&one_miss), None).is_none());
+        assert!(newer_check(None, None).is_none());
     }
 
     #[test]

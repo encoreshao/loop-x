@@ -44,6 +44,10 @@ pub struct Sources<'a> {
 }
 
 /// An RFC 3339 time, or a naive one in local time (`auth_health`, run status).
+pub fn parse_time(t: &str) -> Option<DateTime<Utc>> {
+    parse(t)
+}
+
 fn parse(t: &str) -> Option<DateTime<Utc>> {
     if let Ok(t) = DateTime::parse_from_rfc3339(t) {
         return Some(t.with_timezone(&Utc));

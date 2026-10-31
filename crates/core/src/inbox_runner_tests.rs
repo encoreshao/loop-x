@@ -1447,3 +1447,29 @@ fn a_failed_cli_call_persists_its_exit_code_but_never_its_output() {
     assert!(status.contains(&want), "{status}");
     assert!(history.contains("gemini exited 2"), "{history}");
 }
+
+#[test]
+fn a_run_tells_the_sign_in_check_whether_the_mailbox_works() {
+    let w = world(json!([inbox(), inbox_named("h", "Home")]));
+    let auth = w.ctx.home.join("auth_health.json");
+    std::fs::create_dir_all(&w.ctx.home).unwrap();
+    std::fs::write(
+        &auth,
+        json!({"checks": {"mailbox:w": {"ok": false, "confirmed": true, "message": "invalid_grant",
+            "label": "w (gmail)", "failing_since": "2026-09-27T01:00:00"}}})
+        .to_string(),
+    )
+    .unwrap();
+    let deps = stub_triage(|inbox| {
+        if inbox["name"] == "h" {
+            named(inbox, "needs_reauth")
+        } else {
+            named(inbox, "ok")
+        }
+    });
+    run_all_inboxes(&w.ctx, "run_1", now(), &deps).unwrap();
+    let checks = crate::auth_health::read_state(Some(&auth))["checks"].clone();
+    assert_eq!(checks["mailbox:w"]["ok"], true, "{checks}");
+    assert_eq!(checks["mailbox:h"]["ok"], false, "{checks}");
+    assert_eq!(checks["mailbox:h"]["confirmed"], true, "{checks}");
+}

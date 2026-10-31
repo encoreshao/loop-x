@@ -95,7 +95,39 @@ fn status_entry(status: &Value, name: &str) -> Value {
 }
 
 fn read_status(ctx: &UiCtx) -> Value {
-    inbox_status::read(&inbox_seen::output_dir_for(&ctx.state.repo_root).join("status.json"))
+    let status = inbox_status::read(&inbox_seen::output_dir_for(&ctx.state.repo_root).join("status.json"));
+    let state = loopx_core::auth_health::read_state(Some(&ctx.state.home_dir.join("auth_health.json")));
+    let checks = state.get("checks").and_then(Value::as_object).cloned().unwrap_or_default();
+    with_sign_in_checks(status, &checks)
+}
+
+/// The sign-in check (`auth_health`) knows about a mailbox between runs: when
+/// it is newer than the last run, its verdict is what the inbox shows.
+fn with_sign_in_checks(mut status: Value, checks: &serde_json::Map<String, Value>) -> Value {
+    for (probe, check) in checks {
+        let Some(name) = probe.strip_prefix("mailbox:") else { continue };
+        let last_run = status["inboxes"][name]["last_run_at"].as_str().map(str::to_string);
+        let Some(view) = loopx_core::auth_health::newer_check(Some(check), last_run.as_deref()) else { continue };
+        let was_reauth = status["inboxes"][name]["state"] == "needs_reauth";
+        if view.ok && !was_reauth {
+            continue;
+        }
+        if !status["inboxes"].is_object() {
+            status["inboxes"] = json!({});
+        }
+        let entry = &mut status["inboxes"][name];
+        if !entry.is_object() {
+            *entry = json!({});
+        }
+        if view.ok {
+            entry["state"] = json!("idle");
+            entry["error"] = Value::Null;
+        } else {
+            entry["state"] = json!("needs_reauth");
+            entry["error"] = json!(view.message);
+        }
+    }
+    status
 }
 
 /// `_STATE_LABELS` lookup: (label, pill class).
@@ -872,7 +904,14 @@ fn reconnected(home: &std::path::Path, inbox_name: &str) {
 fn test_connection(ctx: &UiCtx, inbox: &Value) -> UiResponse {
     let label = s(inbox, "label");
     let address = mail_auth::get_access_token_default(inbox)
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            if let loopx_core::auth_health::ProbeFailure::Hard(m) = loopx_core::auth_health::mail_failure(e.clone()) {
+                let probe = format!("mailbox:{}", s(inbox, "name"));
+                let label = format!("{} ({})", s(inbox, "name"), s(inbox, "provider"));
+                loopx_core::auth_health::mark_dead(Some(&ctx.state.home_dir.join("auth_health.json")), &probe, &label, &m, None);
+            }
+            e.to_string()
+        })
         .and_then(|token| mail_provider::get_provider(inbox, &token, None, None))
         .and_then(|mut provider| provider.profile_address().map_err(|e| e.to_string()));
     let (ok, message) = match address {
@@ -907,6 +946,30 @@ mod tests {
         .unwrap();
         let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
         (dir, state)
+    }
+
+    #[test]
+    fn a_sign_in_check_newer_than_the_last_run_shows_on_the_inbox() {
+        let run = |at: &str| json!({"inboxes": {"work": {"state": "idle", "last_run_at": at, "error": null}}});
+        let checks = json!({"mailbox:work": {"ok": false, "confirmed": true, "label": "work (gmail)",
+            "message": "Google refresh failed (invalid_grant)", "checked_at": "2026-10-31T18:50:00+08:00"}});
+        let checks = checks.as_object().unwrap();
+        let st = with_sign_in_checks(run("2026-10-31T01:00:00+00:00"), checks);
+        let entry = status_entry(&st, "work");
+        assert_eq!(entry["state"], "needs_reauth");
+        assert_eq!(entry["error"], "Google refresh failed (invalid_grant)");
+        assert_eq!(entry["last_run_at"], "2026-10-31T01:00:00+00:00");
+        // A later successful run wins.
+        let st = with_sign_in_checks(run("2026-10-31T15:05:00+00:00"), checks);
+        assert_eq!(status_entry(&st, "work")["state"], "idle");
+        // Never run, but the check found it dead.
+        let st = with_sign_in_checks(json!({"inboxes": {}}), checks);
+        assert_eq!(status_entry(&st, "work")["state"], "needs_reauth");
+        // A newer good check clears a run's needs_reauth.
+        let fine = json!({"mailbox:work": {"ok": true, "checked_at": "2026-10-31T18:50:00+08:00", "message": "Token refreshed"}});
+        let st = json!({"inboxes": {"work": {"state": "needs_reauth", "last_run_at": "2026-10-31T01:00:00+00:00", "error": "x"}}});
+        let entry = status_entry(&with_sign_in_checks(st, fine.as_object().unwrap()), "work");
+        assert_eq!((entry["state"].as_str(), entry["error"].is_null()), (Some("idle"), true));
     }
 
     #[test]

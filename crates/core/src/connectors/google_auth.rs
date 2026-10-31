@@ -8,6 +8,10 @@ use super::{describe_http_error, ConnectorError};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+/// What a connector's Test says when Google rejected its refresh token: the
+/// sign-in is dead until the person reconnects (`auth_health` alerts at once).
+pub const REAUTH_MESSAGE: &str = "Google sign-in expired or was revoked - click Reconnect";
+
 pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 /// Why a refresh failed.
@@ -137,9 +141,7 @@ impl GoogleAuth {
             );
         }
         match (self.refresh_fn)(secret, &client) {
-            Err(RefreshError::Reauth) => {
-                Err("Google sign-in expired or was revoked - click Reconnect".to_string())
-            }
+            Err(RefreshError::Reauth) => Err(REAUTH_MESSAGE.to_string()),
             Err(RefreshError::Http(e)) => Err(self.describe(&ConnectorError::Http(e), None)),
             Err(RefreshError::Other(class)) => Err(self.describe(
                 &ConnectorError::Other {

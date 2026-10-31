@@ -1108,6 +1108,26 @@ pub enum RunError {
     Interrupted,
 }
 
+/// What this run learned about the mailbox's sign-in goes to the sign-in check
+/// (`auth_health`), so "Needs you" agrees with this page without waiting for it.
+fn record_sign_in(ctx: &InboxCtx, inbox: &Value, outcome: &Outcome) {
+    let state = ctx.home.join("auth_health.json");
+    let name = inbox["name"].as_str().unwrap_or_default();
+    let probe = format!("mailbox:{name}");
+    match outcome.status.as_str() {
+        "ok" | "quiet" => crate::auth_health::mark_reconnected(Some(&state), &probe, None),
+        "needs_reauth" => {
+            let label = format!(
+                "{name} ({})",
+                inbox["provider"].as_str().unwrap_or_default()
+            );
+            let message = outcome.error.as_deref().unwrap_or("Sign-in expired");
+            crate::auth_health::mark_dead(Some(&state), &probe, &label, message, None);
+        }
+        _ => {}
+    }
+}
+
 /// One lock for the whole run: the scheduler and the dashboard's run-now can both
 /// launch a run, and two overlapping runs would each draft replies to the same
 /// not-yet-recorded messages. A second run exits at once (`Ok` with no outcomes).
@@ -1179,6 +1199,7 @@ pub fn run_all_inboxes(
                 &ctx.status_path,
             );
         }
+        record_sign_in(ctx, inbox, &outcome);
         outcomes.push(outcome);
     }
     send_digests(&outcomes, now, &ctx.slack_config, &deps.slack_post);

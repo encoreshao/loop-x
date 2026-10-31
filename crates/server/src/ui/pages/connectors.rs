@@ -15,7 +15,7 @@ use loopx_core::connectors::secrets::{open_connector_store, SecretStore};
 use loopx_core::connectors::{self, Account, Auth, HttpClient, TypeInfo, UreqClient};
 use loopx_core::connectors_config::{self as cc, Paths};
 use loopx_core::oauth;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -180,7 +180,7 @@ pub fn google_oauth_client(state: &UiState) -> Option<(String, String)> {
 
 // ---- accounts view ------------------------------------------------------------------
 
-fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&Value>) -> String {
+fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&Value>, dead: bool) -> String {
     let safe_id = h(&account.id);
     let quoted_id = pyfmt::quote(&account.id, "");
     let cls = type_or_none(&account.kind);
@@ -216,6 +216,9 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
     let mut oauth_html = String::new();
     let mut connect_html = String::new();
     let connected_pill = |connected: bool| {
+        if connected && dead {
+            return format!("<span class='pill pill-red'>{}</span>", h(&ctx.t("Needs re-auth")));
+        }
         format!(
             "<span class='pill {}'>{}</span>",
             if connected { "pill-green" } else { "pill-grey" },
@@ -334,6 +337,8 @@ fn accounts_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         Err(e) => (Vec::new(), flash_html(Some(&e.0), false)),
     };
     let results = cc::read_test_results(&results_path(ctx.state));
+    let auth = loopx_core::auth_health::read_state(Some(&auth_state(ctx.state)));
+    let checks = auth.get("checks").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut order: Vec<String> = Vec::new();
     for a in &accounts {
         if !order.contains(&a.kind) {
@@ -348,7 +353,10 @@ fn accounts_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         let rows: String = accounts
             .iter()
             .filter(|a| &a.kind == type_name)
-            .map(|a| account_row_html(ctx, a, &csrf, results.get(&a.id)))
+            .map(|a| {
+                let (result, dead) = effective_result(a, results.get(&a.id), &checks);
+                account_row_html(ctx, a, &csrf, result.as_ref(), dead)
+            })
             .collect();
         cards.push(format!(
             "<div class='card'><div class='section-header'>\
@@ -1086,8 +1094,39 @@ pub fn run_test(ctx: &UiCtx, id: &str) -> (bool, String) {
     };
     if ok {
         reconnected(ctx.state, id);
+    } else if loopx_core::connectors::is_dead_sign_in(&message) {
+        let label = cc::get_account(id, &paths(ctx.state)).ok().flatten().map_or_else(|| id.to_string(), |a| a.label);
+        loopx_core::auth_health::mark_dead(Some(&auth_state(ctx.state)), &format!("connector:{id}"), &label, &message, None);
     }
     (ok, message)
+}
+
+fn auth_state(state: &UiState) -> PathBuf {
+    state.home_dir.join("auth_health.json")
+}
+
+/// The sign-in check's id for an account: inboxes are probed as mailboxes.
+fn probe_id(account: &Account) -> String {
+    if account.kind == "mailbox" {
+        format!("mailbox:{}", account.id)
+    } else {
+        format!("connector:{}", account.id)
+    }
+}
+
+/// The account's last Test, unless the sign-in check has a newer verdict, and
+/// whether the sign-in is known to be dead.
+fn effective_result(account: &Account, test: Option<&Value>, checks: &Map<String, Value>) -> (Option<Value>, bool) {
+    let check = checks.get(&probe_id(account));
+    let dead = check.is_some_and(|c| {
+        !c.get("ok").is_some_and(loopx_core::loops_config::py_truthy)
+            && c.get("confirmed").is_some_and(loopx_core::loops_config::py_truthy)
+    });
+    let at = test.and_then(|t| t.get("at")).and_then(Value::as_str);
+    match loopx_core::auth_health::newer_check(check, at) {
+        Some(v) => (Some(json!({"ok": v.ok, "message": v.message, "at": v.at})), dead),
+        None => (test.cloned(), dead),
+    }
 }
 
 /// A connector that works again leaves "Needs you" now, not at the next sign-in probe.
@@ -1570,9 +1609,38 @@ mod reconnect_tests {
     }
 
     #[test]
+    fn a_dead_token_found_by_a_test_reaches_needs_you_at_once() {
+        let (d, st) = sandbox(Err(()));
+        std::fs::remove_file(d.path().join("auth_health.json")).unwrap();
+        let html = test_and_list(&st);
+        assert!(html.contains("Sign-in needs attention: GitHub - Token rejected (401)"), "{html}");
+    }
+
+    #[test]
+    fn a_newer_sign_in_check_replaces_an_old_test_result() {
+        let (d, st) = sandbox(Ok(json!({"login": "me"})));
+        loopx_core::connectors_config::record_test_result("gh", true, "Connected as me", &super::results_path(&st)).unwrap();
+        let page = || st.registry.dispatch(&st, &UiRequest::get("/connectors")).unwrap().body_text();
+        // The seeded check is from 2026-10-31 06:00 local; the Test was just now.
+        assert!(page().contains("Connected as me"));
+        std::fs::write(
+            d.path().join("auth_health.json"),
+            json!({"checks": {"connector:gh": {"ok": false, "confirmed": true, "label": "GitHub",
+                "message": "Token rejected (401) - check it hasn't expired", "checked_at": "2099-01-01T00:00:00"}}})
+            .to_string(),
+        )
+        .unwrap();
+        let html = page();
+        assert!(!html.contains("Connected as me") && html.contains("Token rejected (401)"), "{html}");
+    }
+
+    #[test]
     fn a_failing_test_leaves_it_listed() {
         let (_d, st) = sandbox(Err(()));
         let html = test_and_list(&st);
-        assert!(html.contains("Sign-in needs attention: GitHub - 401"), "{html}");
+        assert!(html.contains("Sign-in needs attention: GitHub - Token rejected (401)"), "{html}");
+        // Still the same failure: it started when the check first saw it.
+        let auth = loopx_core::auth_health::read_state(Some(&_d.path().join("auth_health.json")));
+        assert_eq!(auth["checks"]["connector:gh"]["failing_since"], "2026-10-31T06:00:00");
     }
 }

@@ -563,11 +563,18 @@ pub fn build(
 }
 
 /// One-line description of a failed probe request (`describe_http_error`).
+/// A Test's message for a 401: the token is dead, not the network.
+pub const TOKEN_REJECTED: &str = "Token rejected (401) - check it hasn't expired";
+
+/// Whether a failed Test's message means the sign-in itself is dead (as opposed
+/// to a timeout or an outage), so it needs the person, not another try.
+pub fn is_dead_sign_in(message: &str) -> bool {
+    message == google_auth::REAUTH_MESSAGE || message == TOKEN_REJECTED
+}
+
 pub fn describe_http_error(err: &ConnectorError) -> String {
     match err {
-        ConnectorError::Http(e) if e.auth_expired => {
-            "Token rejected (401) - check it hasn't expired".to_string()
-        }
+        ConnectorError::Http(e) if e.auth_expired => TOKEN_REJECTED.to_string(),
         ConnectorError::Http(e) => match e.status {
             None => format!("Network error: {}", e.body),
             Some(s) => format!("HTTP {s}: {}", e.body.chars().take(200).collect::<String>()),
