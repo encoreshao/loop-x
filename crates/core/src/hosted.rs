@@ -56,6 +56,23 @@ pub fn alias_for(cfg: &Config, account: &str, repo: &str) -> Option<String> {
     })
 }
 
+/// The key a hosted project's local data (issue cache, notes watermarks,
+/// project memory) is stored under: `<provider>/<account>`, which
+/// `gitlab_cache` keeps in `<LOOP_ENGINEERING_HOME>/data/<provider>/<account>`.
+/// An account that no longer exists keeps its plain id.
+pub fn data_instance(project: &Value, paths: &crate::connectors_config::Paths) -> String {
+    let account = project["code_host"]["account"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    crate::connectors_config::get_account(&account, paths)
+        .ok()
+        .flatten()
+        .and_then(|a| Provider::from_kind(&a.kind))
+        .filter(|p| p.connected())
+        .map_or(account.clone(), |p| format!("{}/{account}", p.kind()))
+}
+
 /// Whose issues the loop works: the project's own `assignee_username`, else
 /// the account the token belongs to. A GitHub login rarely matches the
 /// GitLab username the top-level `assignee_username` names.
@@ -806,6 +823,27 @@ mod tests {
         assert_eq!(issues[0]["iid"], 4);
         assert_eq!(issues[0]["_assigned_to_me"], true);
         assert_eq!(mrs.unwrap()[0]["web_url"], "https://github.com/o/r/pull/5");
+    }
+
+    #[test]
+    fn a_hosted_projects_data_is_keyed_by_provider_and_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("connectors.json");
+        std::fs::write(
+            &config,
+            r#"[{"id": "gh-work", "type": "github", "settings": {}}]"#,
+        )
+        .unwrap();
+        let paths = crate::connectors_config::Paths {
+            config_path: Some(config),
+            gitlab_config_path: Some(dir.path().join("none")),
+            slack_config_path: Some(dir.path().join("none")),
+            inbox_config_path: Some(dir.path().join("none")),
+        };
+        let p = |account: &str| json!({"code_host": {"account": account, "repo": "o/r"}});
+        assert_eq!(data_instance(&p("gh-work"), &paths), "github/gh-work");
+        // An account that is gone keeps its plain id (nothing to route).
+        assert_eq!(data_instance(&p("gone"), &paths), "gone");
     }
 
     #[test]

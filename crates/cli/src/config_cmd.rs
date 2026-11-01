@@ -46,7 +46,7 @@ fn dispatch(command: &str, rest: &[String]) -> Result<String, Failure> {
 /// A project as the agent sees it: the stored commands under `hints` (they
 /// are starting points, not orders), and `use_worktree` and `code_changes`
 /// (false for an issues-only project, which has no checkout) always present.
-fn agent_view(mut project: Value) -> Value {
+fn agent_view(mut project: Value, connectors: &loopx_core::connectors_config::Paths) -> Value {
     let mut hints = serde_json::Map::new();
     if let Some(obj) = project.as_object_mut() {
         for kind in ["install", "lint", "test"] {
@@ -59,7 +59,7 @@ fn agent_view(mut project: Value) -> Value {
     // A connector-bound project (GitHub, ...): its account and repository are
     // the `<instance> <project_id>` the cache and memory helpers key on.
     if loopx_core::hosted::is_hosted(&project) {
-        project["instance"] = project["code_host"]["account"].clone();
+        project["instance"] = json!(loopx_core::hosted::data_instance(&project, connectors));
         project["project_id"] = project["code_host"]["repo"].clone();
     }
     project["use_worktree"] = json!(use_worktree(&project));
@@ -83,7 +83,12 @@ fn dispatch_with(path: &Path, command: &str, rest: &[String]) -> Result<String, 
         "instance" => load()?.instance()?,
         "project" => {
             let alias = alias("project")?;
-            pyjson::to_string_pretty(&agent_view(load()?.project(&alias)?))
+            // connectors.json sits beside projects.json.
+            let connectors = loopx_core::connectors_config::Paths {
+                config_path: path.parent().map(|d| d.join("connectors.json")),
+                ..Default::default()
+            };
+            pyjson::to_string_pretty(&agent_view(load()?.project(&alias)?, &connectors))
         }
         "command-hints" => {
             let alias = alias("command-hints")?;
@@ -138,12 +143,18 @@ mod tests {
             .to_string(),
         )
         .unwrap();
+        std::fs::write(
+            d.path().join("connectors.json"),
+            r#"[{"id": "gh-work", "type": "github", "settings": {}}]"#,
+        )
+        .unwrap();
         let Ok(out) = dispatch_with(&p, "project", &["hub".to_string()]) else {
             panic!("dispatch failed");
         };
         let v: Value = serde_json::from_str(&out).unwrap();
-        // The cache and memory helpers key on these two.
-        assert_eq!(v["instance"], "gh-work");
+        // The cache and memory helpers key on these two: `github/<account>`
+        // keeps the account's data in its own folder (data/github/gh-work).
+        assert_eq!(v["instance"], "github/gh-work");
         assert_eq!(v["project_id"], "o/r");
     }
 

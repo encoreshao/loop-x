@@ -300,7 +300,9 @@ fn dispatch(argv: &[String]) -> Out {
 /// A `code_host` project's command; `sync-issue` and `cached-issue` use the
 /// same local cache, keyed on the connector account and repository.
 fn hosted(project: &Value, command: &str, rest: &[String]) -> Out {
-    let account = project["code_host"]["account"].as_str().unwrap_or_default();
+    // `<provider>/<account>`: the account's data lives in its own folder.
+    let data_key = loopx_core::hosted::data_instance(project, &Default::default());
+    let account = data_key.as_str();
     let repo = project["code_host"]["repo"].as_str().unwrap_or_default();
     if command == "cached-issue" {
         let iid = rest

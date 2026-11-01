@@ -16,8 +16,7 @@ fn sanitize(project_id: &str) -> String {
 }
 
 fn project_dir(instance: &str, project_id: &str) -> PathBuf {
-    cache_root()
-        .join(instance)
+    instance_dir(instance)
         .join("projects")
         .join(sanitize(project_id))
 }
@@ -128,7 +127,32 @@ fn truthy(v: &Value) -> bool {
 const USER_FIELDS: [&str; 6] = ["id", "username", "name", "public_email", "web_url", "state"];
 
 fn instance_dir(instance: &str) -> PathBuf {
-    cache_root().join(instance)
+    instance_dir_in(instance, &cache_root(), &data_root())
+}
+
+/// `<LOOP_ENGINEERING_HOME>/data`: one folder per connected provider and
+/// account (`data/github/<account>`), so an account's cached issues, notes
+/// and memory go away with that one folder.
+pub fn data_root() -> PathBuf {
+    crate::config::home_dir().join("data")
+}
+
+/// Where an instance key's cache lives. A GitLab instance (`work`) stays in
+/// `~/.gitlab/cache/<instance>`, shared with the gitlab-config skill; a
+/// connected account, keyed `<provider>/<account>` (see
+/// `hosted::data_instance`), gets `data/<provider>/<account>`.
+fn instance_dir_in(instance: &str, gitlab_root: &Path, data_root: &Path) -> PathBuf {
+    let connected = instance.split_once('/').filter(|(kind, account)| {
+        crate::providers::Provider::from_kind(kind).is_some_and(|p| p.connected())
+            && !account.is_empty()
+            && *account != "."
+            && *account != ".."
+            && !account.contains(['/', '\\'])
+    });
+    match connected {
+        Some((kind, account)) => data_root.join(kind).join(account),
+        None => gitlab_root.join(instance),
+    }
 }
 
 /// Merge a batch of GitLab user objects into the instance's user directory.
@@ -283,6 +307,24 @@ fn created_at(note: &Value) -> &str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_connected_accounts_data_has_its_own_folder_per_provider() {
+        let (gl, data) = (Path::new("/home/.gitlab/cache"), Path::new("/lx/data"));
+        assert_eq!(
+            instance_dir_in("github/gh-work", gl, data),
+            Path::new("/lx/data/github/gh-work")
+        );
+        // A GitLab instance stays in the cache the gitlab-config skill shares.
+        assert_eq!(
+            instance_dir_in("work", gl, data),
+            Path::new("/home/.gitlab/cache/work")
+        );
+        // Never outside its folder, and never for a provider that is not connected.
+        for odd in ["github/..", "github/", "github/a/b", "gitlab/x", "nope/x"] {
+            assert!(!instance_dir_in(odd, gl, data).starts_with(data), "{odd}");
+        }
+    }
 
     #[test]
     fn parallel_annotations_of_one_file_never_lose_a_key() {
