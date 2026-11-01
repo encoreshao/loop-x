@@ -202,10 +202,18 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
     }
 }
 
-fn action_button(action: &str, style: &str, id: &str, label: &str, icon: &str) -> String {
+fn action_button(ctx: &UiCtx, action: &str, style: &str, id: &str, label: &str, icon: &str) -> String {
+    // What the toast says once the action has gone through (or failed).
+    let done = match (action, style) {
+        ("front", _) => ctx.t("Moved to the front of the queue"),
+        (_, "btn-danger") => ctx.t("Stopping the run"),
+        _ => ctx.t("Removed from the queue"),
+    };
     format!(
-        "<button type='button' class='btn {style}' data-queue-action='{action}' data-id='{}'>{}{}</button>",
+        "<button type='button' class='btn {style}' data-queue-action='{action}' data-id='{}' data-toast-ok='{}' data-toast-fail='{}'>{}{}</button>",
         pyfmt::escape(id),
+        pyfmt::escape(&done),
+        pyfmt::escape(&ctx.t("Something went wrong - try again.")),
         icons::icon(icon),
         pyfmt::escape(label),
     )
@@ -276,7 +284,7 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
                 Some(p) => format!("{p} · {elapsed}"),
                 None => elapsed,
             };
-            row(ctx, e, &detail, &action_button("stop", "btn-danger", &e.id, &ctx.t("Stop"), "close"))
+            row(ctx, e, &detail, &action_button(ctx, "stop", "btn-danger", &e.id, &ctx.t("Stop"), "close"))
         }))
         .collect();
     let queued = snap
@@ -293,9 +301,9 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
             );
             let mut actions = String::new();
             if i > 0 {
-                actions.push_str(&action_button("front", "btn-tonal", &e.id, &ctx.t("Move to front"), "arrow_upward"));
+                actions.push_str(&action_button(ctx, "front", "btn-tonal", &e.id, &ctx.t("Move to front"), "arrow_upward"));
             }
-            actions.push_str(&action_button("stop", "btn-warning", &e.id, &ctx.t("Remove"), "close"));
+            actions.push_str(&action_button(ctx, "stop", "btn-warning", &e.id, &ctx.t("Remove"), "close"));
             row(ctx, e, &detail, &actions)
         })
         .collect();
@@ -347,7 +355,8 @@ var b=ev.target.closest('[data-queue-action]');if(!b)return;\
 var token=document.querySelector(\"input[name='csrf_token']\");\
 var p=new URLSearchParams();p.set('id',b.getAttribute('data-id'));p.set('csrf_token',token?token.value:'');\
 busy=true;b.disabled=true;\
-fetch('/queue/'+b.getAttribute('data-queue-action'),{method:'POST',body:p}).catch(function(){}).then(function(){busy=false;refresh()});\
+var okMsg=b.getAttribute('data-toast-ok'),failMsg=b.getAttribute('data-toast-fail');\
+fetch('/queue/'+b.getAttribute('data-queue-action'),{method:'POST',body:p}).then(function(r){return r.json()}).then(function(d){if(window.loopxToast)window.loopxToast(d.ok?okMsg:failMsg,!!d.ok)}).catch(function(){if(window.loopxToast)window.loopxToast(failMsg,false)}).then(function(){busy=false;refresh()});\
 });})();</script>";
 
 fn page(ctx: &UiCtx) -> UiResponse {
@@ -436,6 +445,10 @@ mod tests {
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
         assert!(html.contains("issue-loop") && html.contains("topic-loop") && html.contains("inbox-triage-loop"));
         assert!(html.contains("#2 in line"), "{html}");
+        assert!(html.contains("data-toast-ok='Stopping the run'"), "{html}");
+        assert!(html.contains("data-toast-ok='Moved to the front of the queue'"), "{html}");
+        assert!(html.contains("data-toast-ok='Removed from the queue'"), "{html}");
+        assert!(html.contains("data-toast-fail='Something went wrong - try again.'"), "{html}");
         let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
         assert!(pill.contains("1 running") && pill.contains("2 queued"), "{pill}");
         let shell = st.registry.dispatch(&st, &UiRequest::get("/queue")).unwrap().body_text();

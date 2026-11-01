@@ -83,11 +83,11 @@ with Chrome() as c:
     write_status("quiet-loop", "running", "analyzing")
     wait_toast(c, "t.loop === 'quiet-loop' && t.kind === 'step' && t.text.includes('analyzing')", "(a) no step card for quiet-loop")
     # (b) It fades in: the first keyframe is transparent.
-    first = c.evaluate("(() => { const a = document.querySelector('.office-toast[data-loop=\"quiet-loop\"]').getAnimations()[0];"
+    first = c.evaluate("(() => { const a = document.querySelector('.app-toast[data-key=\"quiet-loop\"]').getAnimations()[0];"
                        " return a ? {name: a.animationName, from: a.effect.getKeyframes()[0].opacity} : null })()")
-    if not first or first["name"] != "office-toast-in" or str(first["from"]) != "0":
+    if not first or first["name"] != "app-toast-in" or str(first["from"]) != "0":
         fails.append(f"(b) the card does not fade in: {first}")
-    box = c.evaluate("(() => { const r = document.querySelector('.office-toast').getBoundingClientRect();"
+    box = c.evaluate("(() => { const r = document.querySelector('.app-toast').getBoundingClientRect();"
                      " return {left: r.left, bottom: innerHeight - r.bottom} })()")
     if not (0 <= box["left"] <= 24 and 0 <= box["bottom"] <= 24):
         fails.append(f"(a) the card is not in the bottom-left corner: {box}")
@@ -102,7 +102,7 @@ with Chrome() as c:
     c.screenshot(f"{out}/dark.png")
 
     # (d) Theme: light and dark surfaces differ; the accent tints a run's card.
-    bg = "getComputedStyle(document.querySelector('.office-toast')).backgroundColor"
+    bg = "getComputedStyle(document.querySelector('.app-toast')).backgroundColor"
     c.evaluate("document.documentElement.setAttribute('data-color-mode', 'dark')")
     dark = c.evaluate(bg)
     c.evaluate("document.documentElement.setAttribute('data-color-mode', 'light')")
@@ -112,7 +112,7 @@ with Chrome() as c:
     c.screenshot(f"{out}/light.png")
     write_status("quiet-loop", "running")
     wait_toast(c, "t.loop === 'quiet-loop' && t.kind === 'started'", "(d) no started card")
-    tint = "getComputedStyle(document.querySelector('.office-toast[data-kind=\"started\"]')).borderLeftColor"
+    tint = "getComputedStyle(document.querySelector('.app-toast[data-kind=\"started\"]')).borderLeftColor"
     c.evaluate("document.documentElement.setAttribute('data-accent', 'indigo')")
     indigo = c.evaluate(tint)
     c.evaluate("document.documentElement.setAttribute('data-accent', 'green')")
@@ -121,7 +121,7 @@ with Chrome() as c:
         fails.append(f"(d) the accent does not colour the card: {indigo}")
 
     # (f) A click opens the loop's owner; the close button dismisses.
-    c.evaluate("document.querySelector('.office-toast[data-loop=\"quiet-loop\"]').click()")
+    c.evaluate("document.querySelector('.app-toast[data-key=\"quiet-loop\"]').click()")
     c.pump(0.5)
     owner = c.evaluate("window.__office.debug().find(a => a.loops.includes('quiet-loop'))?.name")
     if not c.evaluate("window.__office.panelOpen()") or c.evaluate("window.__office.selected()") != owner:
@@ -129,9 +129,9 @@ with Chrome() as c:
     c.evaluate("window.__office.select(null)")
     if len(mine(c, "quiet-loop")) != 1:
         fails.append(f"(d) the new run's card did not replace the finished one: {mine(c, 'quiet-loop')}")
-    c.evaluate("document.querySelector('.office-toast[data-loop=\"quiet-loop\"] .office-toast-close').click()")
+    c.evaluate("document.querySelector('.app-toast[data-key=\"quiet-loop\"] .app-toast-close').click()")
     c.pump(0.6)
-    if mine(c, "quiet-loop") or c.evaluate("!!document.querySelector('.office-toast[data-loop=\"quiet-loop\"]')"):
+    if mine(c, "quiet-loop") or c.evaluate("!!document.querySelector('.app-toast[data-key=\"quiet-loop\"]')"):
         fails.append("(f) the close button did not dismiss the card")
 
     # (c) Fourteen runs start at once: ten cards, the newest ones.
@@ -139,7 +139,7 @@ with Chrome() as c:
     c.evaluate(f"(() => {{ let S = 'working'; window.__office.setLoops({MANY}); }})()")
     c.pump(0.6)
     shown = toasts(c)
-    in_dom = c.evaluate("document.querySelectorAll('.office-toast').length")
+    in_dom = c.evaluate("document.querySelectorAll('.app-toast').length")
     if len(shown) != 10 or in_dom != 10:
         fails.append(f"(c) expected 10 cards, got {len(shown)} ({in_dom} in the page)")
     elif shown[0]["loop"] != "m4" or shown[-1]["loop"] != "m13":
@@ -172,7 +172,7 @@ with Chrome() as c:
     t = toasts(c)
     if not t or t[0]["text"] != "Loop 0 attend votre approbation":
         fails.append(f"(g) French text expected: {t}")
-    label = c.evaluate("document.querySelector('.office-toast-close')?.getAttribute('aria-label')")
+    label = c.evaluate("document.querySelector('.app-toast-close')?.getAttribute('aria-label')")
     if label != "Ignorer":
         fails.append(f"(g) the dismiss label is {label!r}")
 

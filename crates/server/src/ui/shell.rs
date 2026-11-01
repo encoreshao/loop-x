@@ -98,6 +98,126 @@ fn ai_panel_script(lang: Lang) -> String {
         )
 }
 
+/// The toast every action result shows (bottom left, the Office view's card style). A POST
+/// redirects back with `flash=<message>&ok=1|0`; this reads those once, shows the message,
+/// hides the matching banner and cleans the address bar. Failures stay until dismissed.
+fn flash_toast_script(lang: Lang) -> String {
+    r#"(function() {
+  var stack = null;
+  var timers = new Map();
+  var STICKY = { failed: 1, waiting: 1 };
+  function live() { return stack ? Array.prototype.filter.call(stack.children, function(li) { return !li.classList.contains('leaving'); }) : []; }
+  function leave(li) {
+    if (li.classList.contains('leaving')) return;
+    clearTimeout(timers.get(li));
+    timers.delete(li);
+    li.classList.add('leaving');
+    var gone = function() { li.remove(); };
+    li.addEventListener('animationend', gone, { once: true });
+    setTimeout(gone, 400);
+  }
+  // `window.loopxToast(message, ok)` or `(message, {kind, key, onOpen, ttlMs, max})`: a card at
+  // the bottom left, newest at the bottom. `kind` is done, failed, waiting, started or step;
+  // failed and waiting stay until dismissed, the rest fade after `ttlMs`. A card with a `key`
+  // replaces the earlier card of that key, except that an unread failure stays up when a
+  // started or step card follows it. A card with `onOpen` is clickable.
+  function toast(message, opts) {
+    if (!message) return;
+    if (typeof opts !== 'object' || !opts) opts = { kind: opts === false ? 'failed' : 'done' };
+    var kind = opts.kind || 'done';
+    var ttl = opts.ttlMs || 12000;
+    var max = opts.max || 5;
+    var onOpen = opts.onOpen;
+    if (!stack || !stack.isConnected) {
+      stack = document.createElement('ol');
+      stack.className = 'app-toasts';
+      stack.setAttribute('role', 'log');
+      stack.setAttribute('aria-live', 'polite');
+      document.body.append(stack);
+    }
+    if (opts.key) {
+      live().forEach(function(li) {
+        if (li.dataset.key === opts.key && !(li.dataset.kind === 'failed' && (kind === 'started' || kind === 'step'))) {
+          clearTimeout(timers.get(li));
+          timers.delete(li);
+          li.remove();
+        }
+      });
+    }
+    var card = document.createElement('li');
+    card.className = 'app-toast';
+    card.dataset.kind = kind;
+    if (opts.key) card.dataset.key = opts.key;
+    card.tabIndex = 0;
+    if (onOpen) card.classList.add('is-link');
+    var dot = document.createElement('span');
+    dot.className = 'app-toast-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    var body = document.createElement('span');
+    body.className = 'app-toast-body';
+    var title = document.createElement('span');
+    title.className = 'app-toast-title';
+    title.textContent = message;
+    var time = document.createElement('time');
+    time.className = 'app-toast-time';
+    var now = new Date();
+    time.dateTime = now.toISOString();
+    time.textContent = now.toLocaleTimeString(document.documentElement.lang || undefined, { hour: '2-digit', minute: '2-digit' });
+    body.append(title, time);
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'app-toast-close';
+    close.setAttribute('aria-label', __DISMISS__);
+    close.title = __DISMISS__;
+    close.textContent = '\u00d7';
+    card.append(dot, body, close);
+    function arm() {
+      clearTimeout(timers.get(card));
+      if (STICKY[kind]) return;
+      timers.set(card, setTimeout(function() { leave(card); }, ttl));
+    }
+    close.addEventListener('click', function(e) { e.stopPropagation(); leave(card); });
+    if (onOpen) card.addEventListener('click', function() { onOpen(opts.key); });
+    card.addEventListener('keydown', function(e) {
+      if (e.target !== card) return;
+      if (onOpen && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(opts.key); }
+      else if (e.key === 'Escape' || e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); leave(card); }
+    });
+    // Hovering or focusing a card holds it; leaving it starts its full time again.
+    card.addEventListener('pointerenter', function() { clearTimeout(timers.get(card)); });
+    card.addEventListener('pointerleave', arm);
+    card.addEventListener('focusin', function() { clearTimeout(timers.get(card)); });
+    card.addEventListener('focusout', function(e) { if (!card.contains(e.relatedTarget)) arm(); });
+    stack.append(card);
+    arm();
+    var shown = live();
+    for (var i = 0; i < shown.length - max; i++) leave(shown[i]);
+  }
+  /// What is on screen, oldest first: `[{key, kind, text}]`.
+  toast.items = function() {
+    return live().map(function(li) { return { key: li.dataset.key || '', kind: li.dataset.kind, text: li.querySelector('.app-toast-title').textContent }; });
+  };
+  /// Removes the cards of `key` (all cards without one).
+  toast.clear = function(key) {
+    live().forEach(function(li) { if (key === undefined || li.dataset.key === key) { clearTimeout(timers.get(li)); timers.delete(li); li.remove(); } });
+  };
+  window.loopxToast = toast;
+  // A POST redirects back with ?flash=<message>&ok=1|0: show it once and tidy the address bar.
+  var params = new URLSearchParams(location.search);
+  var message = params.get('flash');
+  if (!message) return;
+  var ok = params.get('ok') !== '0';
+  ['flash', 'ok'].forEach(function(k) { params.delete(k); });
+  var qs = params.toString();
+  try { history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash); } catch (e) {}
+  document.querySelectorAll('.flash').forEach(function(b) {
+    if (b.textContent.trim() === message) b.hidden = true;
+  });
+  toast(message, ok);
+})();"#
+    .replace("__DISMISS__", &json_t(lang, "Dismiss"))
+}
+
 /// `_ai_panel_html(active_page)`.
 pub fn ai_panel_html(ctx: &UiCtx, active_page: &str) -> String {
     let lang = ctx.lang;
@@ -272,6 +392,7 @@ pub fn render_shell(
         .var("refresh_schedule_script", refresh_schedule_script)
         .var("refresh_note_script", refresh_note_script)
         .var("ai_panel_script", ai_panel_script(lang))
+        .var("flash_toast_script", flash_toast_script(lang))
         .var("icon_sprite", icons::SPRITE)
         .set("_favicon_version()", assets::favicon_version())
         .set("_chat_tool_chips_js()", chat_tool_chips_js(lang))
@@ -344,6 +465,41 @@ mod tests {
         );
         assert!(footer.contains("href='/settings?tab=ai-cli'"), "{footer}");
         assert!(!panel_for("claude").contains("flash-warning"));
+    }
+
+    #[test]
+    fn the_shell_turns_a_flash_redirect_into_a_bottom_left_toast() {
+        let state = UiState::for_tests();
+        let req = UiRequest::get("/");
+        let ctx = UiCtx::new(&state, &req);
+        let html = render_shell(
+            &ctx,
+            "Overview",
+            "overview",
+            "",
+            "<p>body</p>",
+            ShellOpts::default(),
+        );
+        assert!(
+            html.contains("params.get('flash')"),
+            "reads the flash message"
+        );
+        assert!(
+            html.contains("opts === false ? 'failed' : 'done'"),
+            "failures get their own card"
+        );
+        assert!(
+            html.contains("history.replaceState"),
+            "clears the one-shot params"
+        );
+        assert!(html.contains("app-toast"), "builds the toast card");
+        let css = consts::ds("_STYLE");
+        let at = css.find(".app-toasts{").expect("toast stack styled");
+        assert!(
+            css[at..].contains("left:calc(var(--shell-left,0px) + 12px)")
+                && css[at..].contains("bottom:12px")
+        );
+        assert!(css.contains(".app-toast[data-kind='done']"));
     }
 
     #[test]

@@ -1027,8 +1027,11 @@ fn tracking_toggle_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
         ("enable", "is-off", "false", ctx.tf("Track #{iid} again", &[("iid", &iid)]))
     };
     let safe_label = pyfmt::escape(&label);
+    let on_msg = pyfmt::escape(&ctx.tf("Tracking #{iid} again", &[("iid", &iid)]));
+    let off_msg = pyfmt::escape(&ctx.tf("Stopped tracking #{iid}", &[("iid", &iid)]));
+    let fail_msg = pyfmt::escape(&ctx.t("Something went wrong - try again."));
     format!(
-        "<form method='post' action='/gitlab/issues/{safe_alias}/{iid}/{action}' data-issue-iid='{iid}' class='daemon-action-form issue-tracking-toggle'>{}<button type='submit' class='switch {class}' role='switch' aria-checked='{checked}' aria-label='{safe_label}' title='{safe_label}'><span class='switch-thumb'></span></button></form>",
+        "<form method='post' action='/gitlab/issues/{safe_alias}/{iid}/{action}' data-issue-iid='{iid}' data-toast-on='{on_msg}' data-toast-off='{off_msg}' data-toast-fail='{fail_msg}' class='daemon-action-form issue-tracking-toggle'>{}<button type='submit' class='switch {class}' role='switch' aria-checked='{checked}' aria-label='{safe_label}' title='{safe_label}'><span class='switch-thumb'></span></button></form>",
         ctx.csrf_input()
     )
 }

@@ -39,4 +39,5 @@ update_banner_html
 body_html
 _ai_panel_html(active_page)
 ai_panel_script
+flash_toast_script
 i18n.COOKIE_NAME

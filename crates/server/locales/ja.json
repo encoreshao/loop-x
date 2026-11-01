@@ -1284,7 +1284,6 @@
   "Dismissed until it happens again.": "再発するまで非表示にしました。",
   "Approvals here": "ここで承認",
   "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "承認リクエストを「許可」「拒否」ボタン付きでこのチャットに送ります。返信すると変更を依頼できます。チャットの参加者なら誰でも回答できます。",
-  "Loop notifications": "ループの通知",
   "{loop} started a run": "{loop} が実行を開始しました",
   "{loop}: {step}": "{loop}: {step}",
   "{loop} finished its run": "{loop} の実行が完了しました",
@@ -1353,5 +1352,10 @@
   "All {count} people": "全{count}人",
   "Export JSON": "JSONをエクスポート",
   "Export CSV": "CSVをエクスポート",
-  "Select {name}": "{name}を選択"
+  "Select {name}": "{name}を選択",
+  "Moved to the front of the queue": "キューの先頭に移動しました",
+  "Stopping the run": "実行を停止しています",
+  "Removed from the queue": "キューから削除しました",
+  "Tracking #{iid} again": "#{iid} の追跡を再開しました",
+  "Stopped tracking #{iid}": "#{iid} の追跡を停止しました"
 }

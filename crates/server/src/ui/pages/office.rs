@@ -248,13 +248,11 @@ fn client_strings(ctx: &UiCtx) -> Value {
 /// The bottom-left notifications: a run starting, its step, its outcome.
 fn toast_strings(ctx: &UiCtx) -> Value {
     json!({
-        "toast_region": ctx.t("Loop notifications"),
         "toast_started": ctx.t("{loop} started a run"),
         "toast_step": ctx.t("{loop}: {step}"),
         "toast_done": ctx.t("{loop} finished its run"),
         "toast_failed": ctx.t("{loop} failed"),
         "toast_waiting": ctx.t("{loop} is waiting for your approval"),
-        "toast_dismiss": ctx.t("Dismiss"),
     })
 }
 
@@ -384,27 +382,6 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-panel[aria-busy='true']{{cursor:progress}}\
 .office-stale{{position:absolute;left:50%;top:12px;transform:translateX(-50%);margin:0;padding:.25rem .8rem;border-radius:999px;background:rgba(120,70,0,.88);color:#fff;font-size:.8rem}}\
 .office-stale[hidden]{{display:none}}\
-/* Loop notifications, bottom left: newest at the bottom, at most ten, in the theme's colours. */\
-.office-toasts{{position:absolute;left:12px;bottom:12px;z-index:30;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;width:min(340px,calc(100% - 24px));max-height:calc(100% - 80px);margin:0;padding:0;list-style:none;overflow:hidden;pointer-events:none}}\
-#office:has(.office-motion) .office-toasts{{bottom:52px}}\
-.office-toast{{position:relative;display:flex;align-items:flex-start;gap:.6rem;box-sizing:border-box;padding:.6rem .6rem .6rem .75rem;border-radius:14px;border:1px solid color-mix(in srgb,var(--md-outline-variant,#888) 70%,transparent);border-left:3px solid var(--toast-tint);\
-background:color-mix(in srgb,var(--md-surface-container-high,#2a2d34) 90%,transparent);color:var(--md-on-surface,#e6e8ee);-webkit-backdrop-filter:saturate(160%) blur(18px);backdrop-filter:saturate(160%) blur(18px);\
-box-shadow:0 1px 2px rgba(0,0,0,.12),0 8px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.35;pointer-events:auto;cursor:pointer;--toast-tint:var(--md-nav-accent,var(--md-primary,#8ab4f8));animation:office-toast-in .32s ease-out both}}\
-.office-toast[data-kind='done']{{--toast-tint:var(--md-success,#3ddc84)}}\
-.office-toast[data-kind='failed']{{--toast-tint:var(--md-error,#ff5252)}}\
-.office-toast[data-kind='waiting']{{--toast-tint:var(--md-warning,#ffb020)}}\
-.office-toast-dot{{flex:none;width:.55rem;height:.55rem;margin-top:.4rem;border-radius:50%;background:var(--toast-tint)}}\
-.office-toast-body{{flex:1;min-width:0;overflow-wrap:anywhere}}\
-.office-toast-title{{display:block;font-weight:600}}\
-.office-toast-time{{display:block;margin-top:.1rem;font-size:.75rem;color:var(--md-on-surface-variant,#9aa1ad)}}\
-.office-toast-close{{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:none;color:var(--md-on-surface-variant,#9aa1ad);font:inherit;font-size:1rem;line-height:1;cursor:pointer}}\
-.office-toast-close:hover{{background:color-mix(in srgb,var(--md-on-surface,#fff) 10%,transparent)}}\
-.office-toast:focus-visible,.office-toast-close:focus-visible{{outline:2px solid var(--toast-tint);outline-offset:2px}}\
-.office-toast.leaving{{animation:office-toast-out .24s ease-in both}}\
-@keyframes office-toast-in{{from{{opacity:0}}to{{opacity:1}}}}\
-@keyframes office-toast-out{{to{{opacity:0}}}}\
-@media(prefers-reduced-motion:no-preference){{@keyframes office-toast-in{{from{{opacity:0;transform:translateY(8px)}}to{{opacity:1;transform:none}}}}}}\
-@media(prefers-reduced-transparency:reduce){{.office-toast{{background:var(--md-surface-container-high,#2a2d34);-webkit-backdrop-filter:none;backdrop-filter:none}}}}\
 </style>\
 <noscript><style>#office{{display:none}}#office-list[hidden]{{display:block}}</style></noscript>\
 <section id='office' aria-label=\"{label}\">\
@@ -541,20 +518,14 @@ mod tests {
     }
 
     #[test]
-    fn office_page_has_the_bottom_left_notifications_in_the_theme_colours() {
+    fn office_page_notifications_use_the_shared_toast_and_carry_their_text() {
         let f = fx(four());
         let body = page(&f, "/office", None, None).body_text();
-        let at = body.find(".office-toasts{").expect("toast stack styled");
-        let rule = &body[at..at + body[at..].find('}').unwrap()];
-        assert!(rule.contains("left:12px") && rule.contains("bottom:12px"), "{rule}");
-        // Theme tokens, never fixed colours, so the accent and light/dark mode carry over.
-        let toast = &body[body.find(".office-toast{").expect("toast styled")..];
-        let toast = &toast[..toast.find('}').unwrap()];
-        assert!(toast.contains("var(--md-surface-container-high") && toast.contains("var(--md-on-surface"), "{toast}");
-        assert!(toast.contains("--toast-tint:var(--md-nav-accent"), "a run's card wears the chosen accent: {toast}");
-        assert!(body.contains("@keyframes office-toast-in"));
+        // The cards come from the shell's shared toast, so the page itself styles none.
+        assert!(!body.contains(".office-toast"), "no Office-only toast styles");
+        assert!(body.contains("window.loopxToast = toast") && body.contains(".app-toasts{"));
         let i18n_at = body.find("id='office-i18n'>").unwrap();
-        for key in ["toast_started", "toast_step", "toast_done", "toast_failed", "toast_waiting", "toast_dismiss", "toast_region"] {
+        for key in ["toast_started", "toast_step", "toast_done", "toast_failed", "toast_waiting"] {
             assert!(body[i18n_at..].contains(&format!("\"{key}\":")), "{key}");
         }
     }

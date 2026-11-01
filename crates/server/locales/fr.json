@@ -1284,7 +1284,6 @@
   "Dismissed until it happens again.": "Ignoré jusqu'à ce que cela se reproduise.",
   "Approvals here": "Approbations ici",
   "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "Envoie les demandes d'approbation dans ce chat avec des boutons Autoriser et Refuser ; répondez à l'une pour demander des modifications. Tout membre du chat peut répondre.",
-  "Loop notifications": "Notifications des boucles",
   "{loop} started a run": "{loop} a lancé une exécution",
   "{loop}: {step}": "{loop} : {step}",
   "{loop} finished its run": "{loop} a terminé son exécution",
@@ -1353,5 +1352,10 @@
   "All {count} people": "Les {count} personnes",
   "Export JSON": "Exporter en JSON",
   "Export CSV": "Exporter en CSV",
-  "Select {name}": "Sélectionner {name}"
+  "Select {name}": "Sélectionner {name}",
+  "Moved to the front of the queue": "Placé en tête de la file",
+  "Stopping the run": "Arrêt de l'exécution",
+  "Removed from the queue": "Retiré de la file",
+  "Tracking #{iid} again": "Suivi de #{iid} repris",
+  "Stopped tracking #{iid}": "Suivi de #{iid} arrêté"
 }

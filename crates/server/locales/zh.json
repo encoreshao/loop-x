@@ -1284,7 +1284,6 @@
   "Dismissed until it happens again.": "已忽略，再次发生时会重新显示。",
   "Approvals here": "在此审批",
   "Send approval requests to this chat with Allow and Deny buttons; reply to one to request changes. Anyone in the chat can answer.": "将审批请求连同“允许”“拒绝”按钮发送到此聊天；回复该消息即可请求修改。聊天中的任何人都可以回应。",
-  "Loop notifications": "循环通知",
   "{loop} started a run": "{loop} 开始运行",
   "{loop}: {step}": "{loop}：{step}",
   "{loop} finished its run": "{loop} 已完成运行",
@@ -1353,5 +1352,10 @@
   "All {count} people": "全部 {count} 人",
   "Export JSON": "导出 JSON",
   "Export CSV": "导出 CSV",
-  "Select {name}": "选择 {name}"
+  "Select {name}": "选择 {name}",
+  "Moved to the front of the queue": "已移到队列最前",
+  "Stopping the run": "正在停止运行",
+  "Removed from the queue": "已从队列中移除",
+  "Tracking #{iid} again": "已重新跟踪 #{iid}",
+  "Stopped tracking #{iid}": "已停止跟踪 #{iid}"
 }

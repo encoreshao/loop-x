@@ -2988,3 +2988,26 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .needs-you-approval input[type='text'] { min-width: 17rem; }
 .btn-tonal { background: var(--md-primary-container); color: var(--md-on-primary-container); border-color: transparent; }
 .btn-tonal:hover { filter: brightness(0.96); }
+
+/* Notification cards, bottom left: action results (saved, added, deleted, failed) and the Office
+   view's run updates. One stack, in the theme's colours; see flash_toast_script in shell.rs. */
+.app-toasts{position:fixed;left:calc(var(--shell-left,0px) + 12px);bottom:12px;z-index:1000;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;width:min(340px,calc(100vw - 24px));max-height:calc(100vh - 80px);margin:0;padding:0;list-style:none;overflow:hidden;pointer-events:none}
+html.office-mode .app-toasts{left:12px}
+body:has(#office .office-motion) .app-toasts{bottom:52px}
+.app-toast{position:relative;display:flex;align-items:flex-start;gap:.6rem;box-sizing:border-box;padding:.6rem .6rem .6rem .75rem;border-radius:14px;border:1px solid color-mix(in srgb,var(--md-outline-variant,#888) 70%,transparent);border-left:3px solid var(--toast-tint);background:color-mix(in srgb,var(--md-surface-container-high,#2a2d34) 90%,transparent);color:var(--md-on-surface,#e6e8ee);-webkit-backdrop-filter:saturate(160%) blur(18px);backdrop-filter:saturate(160%) blur(18px);box-shadow:0 1px 2px rgba(0,0,0,.12),0 8px 24px rgba(0,0,0,.18);font-size:.85rem;line-height:1.35;pointer-events:auto;--toast-tint:var(--md-nav-accent,var(--md-primary,#8ab4f8));animation:app-toast-in .32s ease-out both}
+.app-toast.is-link{cursor:pointer}
+.app-toast[data-kind='done']{--toast-tint:var(--md-success,#3ddc84)}
+.app-toast[data-kind='failed']{--toast-tint:var(--md-error,#ff5252)}
+.app-toast[data-kind='waiting']{--toast-tint:var(--md-warning,#ffb020)}
+.app-toast-dot{flex:none;width:.55rem;height:.55rem;margin-top:.4rem;border-radius:50%;background:var(--toast-tint)}
+.app-toast-body{flex:1;min-width:0;overflow-wrap:anywhere}
+.app-toast-title{display:block;font-weight:600}
+.app-toast-time{display:block;margin-top:.1rem;font-size:.75rem;color:var(--md-on-surface-variant,#9aa1ad)}
+.app-toast-close{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:50%;background:none;color:var(--md-on-surface-variant,#9aa1ad);font:inherit;font-size:1rem;line-height:1;cursor:pointer}
+.app-toast-close:hover{background:color-mix(in srgb,var(--md-on-surface,#fff) 10%,transparent)}
+.app-toast:focus-visible,.app-toast-close:focus-visible{outline:2px solid var(--toast-tint);outline-offset:2px}
+.app-toast.leaving{animation:app-toast-out .24s ease-in both}
+@keyframes app-toast-in{from{opacity:0}to{opacity:1}}
+@keyframes app-toast-out{to{opacity:0}}
+@media(prefers-reduced-motion:no-preference){@keyframes app-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}}
+@media(prefers-reduced-transparency:reduce){.app-toast{background:var(--md-surface-container-high,#2a2d34);-webkit-backdrop-filter:none;backdrop-filter:none}}

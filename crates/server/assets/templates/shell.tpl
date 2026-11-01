@@ -292,6 +292,7 @@
         var done = function() {
           docCopyIcon.setAttribute('href', '#i-check');
           docCopyLabel.textContent = docCopiedText;
+          if (window.loopxToast) window.loopxToast(docCopiedText, true);
           clearTimeout(docCopyTimer);
           docCopyTimer = setTimeout(resetCopy, 1800);
         };
@@ -558,7 +559,7 @@
       var copyBtn = ev.target.closest('[data-copy-message]');
       if (copyBtn) {
         var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
-        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); }, function() { flashIcon(copyBtn, 'error'); });
+        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast(⟦json.dumps(_t('Copied'))⟧, true); }, function() { flashIcon(copyBtn, 'error'); });
         return;
       }
       var editBtn = ev.target.closest('[data-edit-message]');
@@ -986,6 +987,7 @@
       if (!button.hasAttribute('data-copy-text')) button.setAttribute('data-copy-text', label.textContent);
       icon.setAttribute('href', '#i-check');
       label.textContent = button.getAttribute('data-copied-label');
+      if (window.loopxToast) window.loopxToast(button.getAttribute('data-copied-label'), true);
       clearTimeout(button.copyTimer);
       button.copyTimer = setTimeout(function() {
         icon.setAttribute('href', '#i-content_copy');
@@ -1056,6 +1058,7 @@
       .then(function(result) {
         if (!result.ok) throw new Error('toggle failed');
         var enabled = result.enabled;
+        if (window.loopxToast) window.loopxToast(form.getAttribute(enabled ? 'data-toast-on' : 'data-toast-off'), true);
         var otherAction = enabled ? 'disable' : 'enable';
         form.setAttribute('action', form.getAttribute('action').replace(/\/(enable|disable)$/, '/' + otherAction));
         if (button) {
@@ -1066,7 +1069,7 @@
           button.setAttribute('title', label);
         }
       })
-      .catch(function() {})
+      .catch(function() { if (window.loopxToast) window.loopxToast(form.getAttribute('data-toast-fail'), false); })
       .then(function() { if (button) button.disabled = false; });
   });
 })();
@@ -1117,6 +1120,7 @@
 
 ⟦_ai_panel_html(active_page)⟧
 <script>⟦ai_panel_script⟧</script>
+<script>⟦flash_toast_script⟧</script>
 
 <div class="nav-tooltip" id="nav-tooltip" role="tooltip" hidden></div>
 <script>
