@@ -1,6 +1,9 @@
 //! GitHub connector (github.com or GitHub Enterprise).
 
 use super::http::TEST_TIMEOUT_SECONDS;
+
+/// Job logs are cut to their last 2 MB (failures sit at the end).
+const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
 use super::*;
 
 const FIELDS: [Field; 2] = [
@@ -71,6 +74,34 @@ impl Connector for GitHubConnector {
         Ok(self.http.request_json(&req)?)
     }
 
+    /// GET a plain-text endpoint (an Actions job log) and return its last
+    /// 2 MB. Errors carry only the status, never the URL or token.
+    fn api_text(&self, path: &str) -> ConnResult<String> {
+        let base = self
+            .account
+            .setting("api_url")
+            .trim_end_matches('/')
+            .to_string();
+        let mut headers = vec![
+            (
+                "Accept".to_string(),
+                "application/vnd.github+json".to_string(),
+            ),
+            ("X-GitHub-Api-Version".to_string(), "2022-11-28".to_string()),
+        ];
+        if let Some(t) = &self.secret {
+            headers.push(("Authorization".to_string(), format!("Bearer {t}")));
+        }
+        self.http
+            .get_text_tail(
+                &format!("{base}{path}"),
+                &headers,
+                std::time::Duration::from_secs(30),
+                MAX_TEXT_BYTES,
+            )
+            .map_err(ConnectorError::Http)
+    }
+
     fn test(&self) -> (bool, String) {
         match self.api(
             "GET",
@@ -126,5 +157,21 @@ mod tests {
         let http = FakeHttp::new(|r| Err(HttpError::new(Some(500), "boom", &r.url)));
         let (ok, msg) = make(http).test();
         assert!(!ok && msg.contains("500"));
+    }
+    #[test]
+    fn api_text_sends_the_token_to_the_api_host() {
+        let served = crate::connectors::testutil::serve(vec![(200, "", "line1\nboom".into())]);
+        let c = GitHubConnector::new(
+            Account::new("x", "github").with_setting("api_url", &served.url),
+            Some("s".into()),
+            Arc::new(crate::connectors::http::UreqClient::default()),
+        );
+        assert_eq!(
+            c.api_text("/repos/o/r/actions/jobs/5/logs").unwrap(),
+            "line1\nboom"
+        );
+        let raw = served.requests.lock().unwrap()[0].to_lowercase();
+        assert!(raw.starts_with("get /repos/o/r/actions/jobs/5/logs "));
+        assert!(raw.contains("authorization: bearer s"));
     }
 }

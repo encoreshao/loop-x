@@ -80,6 +80,7 @@ pub mod parallel;
 pub mod policy;
 pub mod proc;
 pub mod prompt;
+pub mod providers;
 pub mod pydumps;
 pub mod pyfmt_lite;
 pub mod pyjson;
