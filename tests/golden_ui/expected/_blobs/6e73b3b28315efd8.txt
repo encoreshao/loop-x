@@ -1730,6 +1730,11 @@ ul.plain li { font-size: 0.9rem; }
 .person-body { min-width: 0; display: flex; flex-direction: column; gap: 0.125rem; }
 .person-body a { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .person-meta { font-size: 0.85rem; color: var(--md-on-surface-variant); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people-bar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 0; padding: 0.5rem 0.75rem; border: 1px solid var(--md-outline-variant); border-radius: 12px; }
+.people-bar-all { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+.people-bar-count { color: var(--md-on-surface-variant); font-size: 0.85rem; }
+.people-bar-actions { margin-left: auto; display: flex; gap: 0.5rem; }
+.person-pick { flex: 0 0 auto; width: 1.1rem; height: 1.1rem; cursor: pointer; }
 .content-heading { margin: 0.75rem 0 0; font-size: 0.95rem; }
 .meeting-summary { grid-column: 2 / -1; margin: 0; font-size: 0.9rem; line-height: 1.4; }
 .meeting-brief-ready { background: var(--md-primary-container); color: var(--md-on-primary-container); }

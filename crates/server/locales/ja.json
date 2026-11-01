@@ -1347,5 +1347,11 @@
   "See what the loop is doing": "ループの動作状況を確認",
   "Summarize the last issue run": "直近の実行を要約",
   "Paste a GitLab or GitHub link": "GitLab/GitHub のリンクを貼り付け",
-  "Check for anything urgent": "緊急の件がないか確認"
+  "Check for anything urgent": "緊急の件がないか確認",
+  "Select all": "すべて選択",
+  "{count} selected": "{count}人を選択中",
+  "All {count} people": "全{count}人",
+  "Export JSON": "JSONをエクスポート",
+  "Export CSV": "CSVをエクスポート",
+  "Select {name}": "{name}を選択"
 }

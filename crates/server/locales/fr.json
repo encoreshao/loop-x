@@ -1347,5 +1347,11 @@
   "See what the loop is doing": "Voir ce que fait la boucle",
   "Summarize the last issue run": "Résumer la dernière exécution",
   "Paste a GitLab or GitHub link": "Collez un lien GitLab ou GitHub",
-  "Check for anything urgent": "Repérer ce qui est urgent"
+  "Check for anything urgent": "Repérer ce qui est urgent",
+  "Select all": "Tout sélectionner",
+  "{count} selected": "{count} sélectionnée(s)",
+  "All {count} people": "Les {count} personnes",
+  "Export JSON": "Exporter en JSON",
+  "Export CSV": "Exporter en CSV",
+  "Select {name}": "Sélectionner {name}"
 }

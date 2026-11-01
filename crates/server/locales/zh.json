@@ -1347,5 +1347,11 @@
   "See what the loop is doing": "查看循环正在做什么",
   "Summarize the last issue run": "总结最近一次运行",
   "Paste a GitLab or GitHub link": "粘贴 GitLab 或 GitHub 链接",
-  "Check for anything urgent": "检查是否有紧急事项"
+  "Check for anything urgent": "检查是否有紧急事项",
+  "Select all": "全选",
+  "{count} selected": "已选择 {count} 人",
+  "All {count} people": "全部 {count} 人",
+  "Export JSON": "导出 JSON",
+  "Export CSV": "导出 CSV",
+  "Select {name}": "选择 {name}"
 }

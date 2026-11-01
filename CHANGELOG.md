@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- LinkedIn Autopilot → People: a checkbox on each person, a Select all box and an action bar that exports the selected people (everyone when none are ticked) as JSON or CSV.
 - GitHub in the issue loop: a project bound to a GitHub connector account (`code_host` in `projects.json`, or the new Connected trackers card under Issues → Projects) has its assigned issues worked like GitLab ones. The agent reads, comments and syncs them through the same `loopx gitlab`/`loopx issues` helpers; a verified fix is pushed and opened as a pull request (`Closes #<n>`), escalations comment and add `loop:needs-human` on the issue, and finished branches are cleaned up when the issue closes or its pull request merges. Whose issues are worked defaults to the token's own GitHub login (or the project's `assignee_username`). Screenshots are not attached on GitHub, which has no image upload API.
 - MR Review reviews GitHub pull requests too: those you are assigned to or asked to review, in any repository of a connected GitHub account, get one pending review with line comments that you submit yourself (never approved or submitted by LoopX). The Merge requests tab lists your GitHub pull requests with Auto review and Review now, and Issues → Tasks shows each GitHub project's issues and pull requests (`#n`, with a GitHub tag).
 - Settings → Appearance → Theme: a Dark theme, a near-black sidebar, top bar and cards with light text and the white wordmark, in light or dark color mode alike. The Mac app picks it up too.
@@ -54,6 +55,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Creating a calendar event with guests from chat now adds you to it as a guest, accepted, besides the people you invite, so you appear on the guest list as well as the organizer.
 - Issues → Projects → GitLab → Connections: the instance, bundle and project selects and the Set default button no longer stretch to a tall block, and the GitHub tab's "Manage GitHub accounts under Connectors" link now sits with the intro text at the top.
 - Settings → Daemons → Registered Loops: the AI account folder row no longer touches the schedule row above it.
 - Files that runs share (topic status, topic seen-items, task memory's `MEMORY.md`, the GitLab cache) are now written under a lock and atomically, so two writers at once no longer drop one of the updates and the dashboard never reads a half-written file. Creating or cleaning up worktrees of one checkout is serialised too, so two issues of a project starting at once no longer fail on git's own ref locks.

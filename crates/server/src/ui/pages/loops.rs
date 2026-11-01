@@ -523,7 +523,7 @@ fn people_body(ctx: &UiCtx, name: &str, flash: Option<&str>, ok: bool) -> String
         )
     } else {
         let mut cards = String::new();
-        for p in &people {
+        for (idx, p) in people.iter().enumerate() {
             let person = if truthy_key(p, "name") { field_str(p, "name") } else { String::new() };
             let url = if truthy_key(p, "url") { field_str(p, "url") } else { String::new() };
             let avatar = if truthy_key(p, "avatar") { field_str(p, "avatar") } else { String::new() };
@@ -550,19 +550,69 @@ fn people_body(ctx: &UiCtx, name: &str, flash: Option<&str>, ok: bool) -> String
                 .join(" · ");
             let seen = if truthy_key(p, "first_seen") { field_str(p, "first_seen") } else { String::new() };
             let seen: String = seen.chars().take(10).collect();
+            let pick_label = ctx.tf("Select {name}", &[("name", &person)]);
             cards.push_str(&format!(
-                "<li class='person'>{pic}<div class='person-body'>{label}<span class='person-meta'>{meta}</span>\
+                "<li class='person'><input type='checkbox' class='person-pick' data-i='{idx}' aria-label='{}'>{pic}<div class='person-body'>{label}<span class='person-meta'>{meta}</span>\
 <span class='person-meta'>{}</span></div></li>",
+                h(&pick_label),
                 h(&seen)
             ));
         }
         format!(
-            "<p class='section-subtitle'>{}</p><ul class='people-list'>{cards}</ul>",
-            h(&ctx.tf("{count} people", &[("count", &people.len().to_string())]))
+            "<p class='section-subtitle'>{}</p>{}<ul class='people-list'>{cards}</ul>",
+            h(&ctx.tf("{count} people", &[("count", &people.len().to_string())])),
+            people_action_bar(ctx, &people)
         )
     };
     format!("{}<section class='card'>{head}{inner}</section>", flash_html(flash, ok))
 }
+
+/// The People tab's action bar: select-all, a selection counter and JSON/CSV export. The
+/// export is built in the browser from the same records the cards render, so it needs no
+/// route; with nothing ticked it exports everyone.
+fn people_action_bar(ctx: &UiCtx, people: &[Value]) -> String {
+    let data = serde_json::to_string(people)
+        .unwrap_or_else(|_| "[]".into())
+        .replace('<', "\\u003c");
+    let labels = json!({
+        "all": ctx.tf("All {count} people", &[("count", &people.len().to_string())]),
+        "selected": ctx.tf("{count} selected", &[("count", "{n}")]),
+    });
+    let labels = serde_json::to_string(&labels).unwrap_or_default().replace('<', "\\u003c");
+    format!(
+        "<div class='people-bar'><label class='people-bar-all'><input type='checkbox' id='people-all'> <span>{}</span></label>\
+<span class='people-bar-count' id='people-count' aria-live='polite'></span>\
+<span class='people-bar-actions'><button type='button' class='btn btn-neutral' data-export='json'>{}</button>\
+<button type='button' class='btn btn-neutral' data-export='csv'>{}</button></span></div>\
+<script type='application/json' id='people-data'>{data}</script>\
+<script type='application/json' id='people-labels'>{labels}</script>\
+<script>{PEOPLE_EXPORT_JS}</script>",
+        h(&ctx.t("Select all")),
+        h(&ctx.t("Export JSON")),
+        h(&ctx.t("Export CSV")),
+    )
+}
+
+const PEOPLE_EXPORT_JS: &str = "(function(){var D=JSON.parse(document.getElementById('people-data').textContent),\
+L=JSON.parse(document.getElementById('people-labels').textContent),\
+picks=[].slice.call(document.querySelectorAll('.person-pick')),all=document.getElementById('people-all'),\
+cnt=document.getElementById('people-count');\
+function chosen(){var r=[];picks.forEach(function(c){if(c.checked)r.push(D[+c.dataset.i])});return r}\
+function sync(){var n=chosen().length;cnt.textContent=n?L.selected.replace('{n}',n):L.all;\
+all.checked=n>0&&n===picks.length;all.indeterminate=n>0&&n<picks.length}\
+all.addEventListener('change',function(){picks.forEach(function(c){c.checked=all.checked});sync()});\
+picks.forEach(function(c){c.addEventListener('change',sync)});\
+function cell(v){if(v==null)return '';if(typeof v==='object')v=JSON.stringify(v);v=String(v);\
+if(/^[=+\\-@\\t\\r]/.test(v))v=\"'\"+v;return /[\",\\n\\r]/.test(v)?'\"'+v.replace(/\"/g,'\"\"')+'\"':v}\
+function csv(rows){var first=['name','position','company','url','first_seen'],keys=first.filter(function(k){return rows.some(function(r){return k in r})});\
+rows.forEach(function(r){Object.keys(r).forEach(function(k){if(keys.indexOf(k)<0)keys.push(k)})});\
+return [keys.join(',')].concat(rows.map(function(r){return keys.map(function(k){return cell(r[k])}).join(',')})).join('\\r\\n')+'\\r\\n'}\
+function save(text,type,name){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:type}));a.download=name;\
+document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}\
+[].forEach.call(document.querySelectorAll('[data-export]'),function(b){b.addEventListener('click',function(){\
+var rows=chosen();if(!rows.length)rows=D;var day=new Date().toISOString().slice(0,10);\
+if(b.dataset.export==='json')save(JSON.stringify(rows,null,2),'application/json','linkedin-people-'+day+'.json');\
+else save(csv(rows),'text/csv;charset=utf-8','linkedin-people-'+day+'.csv')})});sync()})();";
 
 // ---- History -----------------------------------------------------------------------------------
 
@@ -1455,4 +1505,34 @@ fn _lang(_: Lang) {}
 #[allow(dead_code)]
 fn _wd(d: NaiveDate) -> u32 {
     d.day()
+}
+
+#[cfg(test)]
+mod people_tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+
+    #[test]
+    fn people_tab_has_selection_and_export_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", None);
+        let out = output_dir(&state, "linkedin-autopilot");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(
+            out.join("people.json"),
+            r#"[{"name":"Ada </script>","url":"https://www.linkedin.com/in/ada","company":"X"},
+                {"name":"Bob","url":"https://www.linkedin.com/in/bob"}]"#,
+        )
+        .unwrap();
+        let req = UiRequest::get("/");
+        let html = people_body(&UiCtx::new(&state, &req), "linkedin-autopilot", None, false);
+        assert_eq!(html.matches("class='person-pick'").count(), 2, "{html}");
+        assert!(html.contains("data-i='1'"), "{html}");
+        assert!(html.contains("id='people-all'"), "{html}");
+        assert!(html.contains("data-export='json'") && html.contains("data-export='csv'"), "{html}");
+        assert!(html.contains("id='people-data'"), "{html}");
+        // The embedded JSON must not be able to close its own <script> element.
+        assert!(!html.contains("Ada </script>"), "{html}");
+        assert!(html.contains("Ada \\u003c/script>"), "{html}");
+    }
 }

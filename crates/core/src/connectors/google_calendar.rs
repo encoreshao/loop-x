@@ -73,6 +73,15 @@ impl GoogleCalendarConnector {
         format!("/calendars/{}", quote(&id))
     }
 
+    /// The calendar's own address (its id), when Google reports one.
+    fn calendar_owner(&self, token: &str) -> Option<String> {
+        let cal = self
+            .get(&self.calendar_path(), token, TEST_TIMEOUT_SECONDS, 1)
+            .ok()?;
+        let id = cal.get("id").and_then(Value::as_str)?.trim().to_string();
+        id.contains('@').then_some(id)
+    }
+
     fn scrub(&self, text: &str, access_token: Option<&str>) -> String {
         self.auth.scrub(text, access_token)
     }
@@ -286,8 +295,19 @@ impl Connector for GoogleCalendarConnector {
             .cloned()
             .unwrap_or_default();
         if !attendees.is_empty() {
-            body["attendees"] =
-                Value::Array(attendees.iter().map(|a| json!({"email": a})).collect());
+            let mut guests: Vec<Value> = attendees.iter().map(|a| json!({"email": a})).collect();
+            // The calendar's owner organizes the event but only shows up as a
+            // guest when listed, so add them (already accepted) alongside the invitees.
+            if let Some(owner) = self.calendar_owner(&token) {
+                let listed = attendees
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|a| a.eq_ignore_ascii_case(&owner));
+                if !listed {
+                    guests.insert(0, json!({"email": owner, "responseStatus": "accepted"}));
+                }
+            }
+            body["attendees"] = Value::Array(guests);
         }
         let notify = if attendees.is_empty() { "none" } else { "all" };
         let req = HttpRequest::new(
@@ -546,7 +566,13 @@ mod tests {
 
     #[test]
     fn create_event_posts_to_the_events_endpoint() {
-        let http = FakeHttp::ok(json!({"id": "ev1", "htmlLink": "https://cal.example/ev1"}));
+        let http = FakeHttp::new(|req| {
+            if req.method == "GET" {
+                Ok(json!({"id": "me@x.com"}))
+            } else {
+                Ok(json!({"id": "ev1", "htmlLink": "https://cal.example/ev1"}))
+            }
+        });
         let c = gcal(Some("RT"), http.clone(), at("AT"));
         let made = c
             .create_event(
@@ -559,7 +585,7 @@ mod tests {
             made,
             json!({"id": "ev1", "html_link": "https://cal.example/ev1"})
         );
-        let call = http.calls.lock().unwrap()[0].clone();
+        let call = http.calls.lock().unwrap().last().unwrap().clone();
         assert_eq!(
             (call.method.as_str(), call.token.as_deref()),
             ("POST", Some("AT"))
@@ -572,7 +598,29 @@ mod tests {
             call.json_body.unwrap(),
             json!({"summary": "Sync", "start": {"dateTime": "2026-10-12T15:00:00+08:00"},
                    "end": {"dateTime": "2026-10-12T15:30:00+08:00"}, "description": "d",
-                   "location": "Room", "attendees": [{"email": "a@x.com"}]})
+                   "location": "Room",
+                   "attendees": [{"email": "me@x.com", "responseStatus": "accepted"},
+                                 {"email": "a@x.com"}]})
+        );
+    }
+
+    #[test]
+    fn create_event_does_not_duplicate_the_owner_when_already_invited() {
+        let http = FakeHttp::new(|req| {
+            if req.method == "GET" {
+                Ok(json!({"id": "me@x.com"}))
+            } else {
+                Ok(json!({"id": "ev1"}))
+            }
+        });
+        gcal(Some("RT"), http.clone(), at("AT"))
+            .create_event(&json!({"summary": "S", "start": "2026-10-12T15:00:00Z",
+                                  "end": "2026-10-12T16:00:00Z", "attendees": ["ME@x.com"]}))
+            .unwrap();
+        let call = http.calls.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            call.json_body.unwrap()["attendees"],
+            json!([{"email": "ME@x.com"}])
         );
     }
 
