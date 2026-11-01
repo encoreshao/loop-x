@@ -165,10 +165,11 @@ struct ExpandedContent: View {
             } else {
                 if case .reconnecting = model.connection { Text(model.connection.text).font(.system(size: 10)).foregroundStyle(.orange) }
                 if case .failed(let m) = model.connection { Text(m).font(.system(size: 10)).foregroundStyle(.red).lineLimit(3) }
-                TaskList(tasks: n.tasks)
+                LoopGrid(model: model, island: island, tasks: n.tasks)
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
-                    pill("Tasks", "list.bullet") { island.pin() }
+                    let hidden = max(0, n.tasks.count - LoopGrid.maxTiles)
+                    pill(hidden > 0 ? "Tasks +\(hidden)" : "Tasks", "list.bullet") { island.pin() }
                     ForEach(Array(n.actions.enumerated()), id: \.offset) { _, action in
                         actionButton(action)
                     }
@@ -206,35 +207,145 @@ struct ExpandedContent: View {
     }
 }
 
-/// Every loop and topic with its status and what it is doing, running first; extras fold into "+N more".
-struct TaskList: View {
+/// Every loop and topic as a two-column grid of tiles, running first: an icon badge tinted by state,
+/// the name, what it is doing, and a one-click Run button on any loop that is idle or failed.
+/// Clicking the tile itself opens its detail. Extras beyond `maxTiles` are counted on the Tasks pill.
+struct LoopGrid: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var island: IslandModel
     let tasks: [NotchTask]
-    static let maxRows = 4
+    static let maxTiles = 10
+    private let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
     var body: some View {
         if tasks.isEmpty {
-            EmptyView()
+            Text("No loops or topics yet.").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
         } else {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(tasks.prefix(Self.maxRows)) { row($0) }
-                if tasks.count > Self.maxRows {
-                    Text("+\(tasks.count - Self.maxRows) more").font(.system(size: 10)).foregroundStyle(.white.opacity(0.45))
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+                ForEach(tasks.prefix(Self.maxTiles)) { t in
+                    LoopTile(task: t, starting: IslandStarts.runnableLoop(for: t).map { model.startingLoops.contains($0) } ?? false,
+                             run: IslandStarts.runnableLoop(for: t).map { loop in { model.runLoop(loop) } },
+                             open: { island.pin(); island.open(t.id) })
                 }
             }
         }
     }
+}
 
-    func row(_ t: NotchTask) -> some View {
-        let style = Self.style(t.state)
-        return HStack(spacing: 6) {
-            StatusGlyph(style: style, size: 10).frame(width: 12)
-            Text(t.title).font(.system(size: 11, weight: .medium)).foregroundStyle(.white).lineLimit(1)
-            Text(t.detail ?? Self.label(t.state)).font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55)).lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: 0)
+struct LoopTile: View {
+    let task: NotchTask
+    let starting: Bool
+    let run: (() -> Void)?
+    let open: () -> Void
+    @StateObject private var hover = HoverFlag()
+
+    private var tint: Color {
+        switch task.state {
+        case .running: return .cyan
+        case .queued: return .orange
+        case .failed: return .red
+        case .idle: return .white
         }
     }
 
+    private var symbol: String {
+        task.id.hasPrefix("topic:") ? "text.magnifyingglass" : LoopNames.symbol(task.name)
+    }
+
+    private var status: String {
+        if starting { return "Starting…" }
+        if let d = task.detail, !d.isEmpty { return d }
+        return TaskList.label(task.state).capitalized
+    }
+
+    var body: some View {
+        let live = task.state != .idle || starting
+        HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tint.opacity(task.state == .idle ? 0.08 : 0.2))
+                Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(tint.opacity(task.state == .idle ? 0.75 : 1))
+            }
+            .frame(width: 26, height: 26)
+            .overlay(alignment: .topTrailing) {
+                if task.state == .running { PulseDot(color: tint).offset(x: 2, y: -2) }
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(task.title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                Text(status).font(.system(size: 9.5, weight: live ? .medium : .regular))
+                    .foregroundStyle(live ? tint.opacity(task.state == .idle ? 0.6 : 0.9) : .white.opacity(0.42))
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+            trailing
+        }
+        .padding(.leading, 6).padding(.trailing, 5).padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Color.white.opacity(hover.on ? 0.11 : 0.06))
+                .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(tint.opacity(task.state == .idle ? 0 : 0.45), lineWidth: 1))
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 11))
+        .onTapGesture(perform: open)
+        .onHover { hover.on = $0 }
+        .help(task.detail ?? "\(task.title) · \(TaskList.label(task.state))")
+        .animation(.easeOut(duration: 0.15), value: hover.on)
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if starting {
+            ProgressView().controlSize(.mini).frame(width: 24, height: 24)
+        } else if let run {
+            RunButton(retry: task.state == .failed, action: run)
+        } else if task.state == .running {
+            Image(systemName: "waveform").font(.system(size: 10, weight: .semibold)).foregroundStyle(tint)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .frame(width: 24, height: 24)
+        }
+    }
+}
+
+/// The one-click start: a play disc that lights up green under the pointer.
+struct RunButton: View {
+    let retry: Bool
+    let action: () -> Void
+    @StateObject private var hover = HoverFlag()
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: retry ? "arrow.clockwise" : "play.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(hover.on ? Color.black : Color.white.opacity(0.85))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(hover.on ? Color.green : Color.white.opacity(0.14)))
+                .scaleEffect(hover.on ? 1.08 : 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.on = $0 }
+        .help(retry ? "Run again now" : "Run now")
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hover.on)
+    }
+}
+
+/// Hover state for a tile or button (the Command Line Tools have no SwiftUI macros, so no @State).
+@MainActor final class HoverFlag: ObservableObject { @Published var on = false }
+
+/// A small breathing dot on a running tile's badge.
+struct PulseDot: View {
+    let color: Color
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20)) { ctx in
+            let phase = (sin(ctx.date.timeIntervalSinceReferenceDate * 2 * .pi / 1.6) + 1) / 2
+            Circle().fill(color).frame(width: 6, height: 6)
+                .overlay(Circle().stroke(color.opacity(0.5 * (1 - phase)), lineWidth: 3 * phase + 1))
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// State labels and glyph styles shared by the island's tiles and the pinned task views.
+enum TaskList {
     static func label(_ s: NotchTask.State) -> String {
         switch s { case .running: return "running"; case .queued: return "queued"; case .failed: return "failed"; case .idle: return "idle" }
     }

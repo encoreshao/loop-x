@@ -20,11 +20,26 @@ import Testing
         let s = Snapshot(appState: .running, loops: ["gitlab-loop": LoopStatus(state: "running", currentIssue: "web #7")],
                          topics: ["ai-agents": TopicStatus(state: "idle")])
         let tasks = TaskNotifications.tasks(in: s)
-        #expect(tasks.map(\.title) == ["GitLab", "ai-agents"], "a topic keeps the name you gave it")
+        #expect(tasks.map(\.title) == ["GitLab", "AI Agents"], "a slug-like topic name reads title-cased")
         #expect(tasks.map(\.name) == ["gitlab-loop", "ai-agents"])
         #expect(NotchState.make(from: s, now: Date()).title == "GitLab running")
         let failed = Snapshot(appState: .failed, loops: ["inbox-triage-loop": LoopStatus(state: "failed")])
         #expect(NotchState.make(from: failed, now: Date()).subtitle == "Inbox Triage")
+    }
+
+    @Test func topicsTitleCaseOnlyWhenTheyLookLikeSlugs() {
+        let title = { (name: String) in NotchTask(id: "topic:\(name)", name: name, state: .idle, detail: nil).title }
+        #expect(title("ai-agents") == "AI Agents")
+        #expect(title("rust_news") == "Rust News")
+        #expect(title("My Startup Radar") == "My Startup Radar", "a name typed with spaces is kept as given")
+        #expect(title("t") == "t")
+        #expect(title("topic-loop-ideas") == "Topic Loop Ideas", "a topic never loses a word to the -loop rule")
+    }
+
+    @Test func everyLoopHasASymbol() {
+        #expect(LoopNames.symbol("gitlab-loop") == "arrow.triangle.branch")
+        #expect(LoopNames.symbol("inbox-triage-loop") == "tray.full")
+        #expect(LoopNames.symbol("some-new-loop") == "repeat")
     }
 
     @Test func notificationsUseTheName() {
