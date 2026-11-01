@@ -15,6 +15,17 @@ import Testing
 
     @Test func confirmTextNamesTheRealSideEffects() {
         #expect(IslandStarts.confirmText(loop: "gitlab-loop").contains("GitLab"))
-        #expect(IslandStarts.confirmText(loop: "unknown") == "Run unknown now?")
+        #expect(IslandStarts.confirmText(loop: "daily-digest-loop") == "Run Daily Digest now?")
+    }
+
+    @Test func everyIdleOrFailedLoopRowStartsWithOneClick() {
+        let row = { (id: String, name: String, state: NotchTask.State) in
+            IslandStarts.runnableLoop(for: NotchTask(id: id, name: name, state: state, detail: nil))
+        }
+        #expect(row("loop:daily-digest-loop", "daily-digest-loop", .idle) == "daily-digest-loop")
+        #expect(row("loop:gitlab-loop", "gitlab-loop", .failed) == "gitlab-loop")
+        #expect(row("loop:gitlab-loop", "gitlab-loop", .running) == nil, "already running")
+        #expect(row("queue:q1", "gitlab-loop", .queued) == nil, "already waiting its turn")
+        #expect(row("topic:ai-agents", "ai-agents", .idle) == nil, "topics run together, from Topic Monitor")
     }
 }

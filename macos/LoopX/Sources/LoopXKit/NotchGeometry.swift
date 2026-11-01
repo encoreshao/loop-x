@@ -45,13 +45,14 @@ public enum Placement: Equatable, Sendable {
 public struct NotchLayout: Equatable, Sendable {
     /// Width added to each side of the notch while collapsed (room for the status glyph).
     public var wing: CGFloat = 36
-    public var expandedWidth: CGFloat = 400
-    public var expandedContentHeight: CGFloat = 200
+    /// Room for the hover island's two-column grid of loop tiles (up to five rows) and its pills.
+    public var expandedWidth: CGFloat = 460
+    public var expandedContentHeight: CGFloat = 300
     /// Content height once the user pins the island open (task detail and the input bar).
     public var pinnedContentHeight: CGFloat = 360
     public var hudPinned = CGSize(width: 420, height: 400)
     public var hudCollapsed = CGSize(width: 230, height: 34)
-    public var hudExpanded = CGSize(width: 380, height: 220)
+    public var hudExpanded = CGSize(width: 460, height: 320)
     public var hudTopMargin: CGFloat = 8
     public var snapThreshold: CGFloat = 28
     public var edgeMargin: CGFloat = 8

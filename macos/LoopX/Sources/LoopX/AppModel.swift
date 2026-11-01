@@ -34,6 +34,8 @@ final class AppModel: ObservableObject {
     @Published var takeoverOffer: TakeoverOffer?
     @Published var actionError: String?
     @Published private(set) var busyApprovals: Set<String> = []
+    /// Loops a Run button was just clicked for, while the request is in flight.
+    @Published private(set) var startingLoops: Set<String> = []
 
     let settings: SettingsStore
     let backendConfig: BackendConfig
@@ -200,6 +202,23 @@ final class AppModel: ObservableObject {
         let notes = text.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !notes.isEmpty else { return }
         decide(id, .requestChanges, notes: notes)
+    }
+
+    /// One click from the island: start a loop now (the backend queues it when the run limit is
+    /// reached). The tile shows "Starting…" until the next snapshot reports it running or queued.
+    func runLoop(_ name: String) {
+        guard !startingLoops.contains(name) else { return }
+        guard let live = LockFile.readLive(at: backendConfig.discovery.lockURL) ?? lock else {
+            actionError = IslandAPIError.unreachable("no backend").message; return
+        }
+        startingLoops.insert(name); actionError = nil
+        Task {
+            do { try await IslandAPI(lock: live).runLoop(name) }
+            catch let e as IslandAPIError { actionError = e.message }
+            catch { actionError = error.localizedDescription }
+            try? await Task.sleep(for: .seconds(3))
+            startingLoops.remove(name)
+        }
     }
 
     func decide(_ id: String, _ decision: ApprovalDecision, notes: String? = nil) {

@@ -135,7 +135,7 @@ import Testing
         let s = Snapshot(topics: ["ai-news": TopicStatus(state: "running", currentStep: "fetching")])
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
-        #expect(n.title == "ai-news running")
+        #expect(n.title == "AI News running")
         #expect(n.subtitle == "fetching")
     }
 

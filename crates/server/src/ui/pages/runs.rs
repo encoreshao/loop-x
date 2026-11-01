@@ -584,6 +584,12 @@ pub(crate) fn trigger_named(state: &UiState, name: &str) -> Option<TriggerOutcom
             &launcher,
         ),
         "inbox-triage-loop" => run_control::trigger_inbox_triage_run(&state.status_path_for_loop(name), name, &launcher),
+        // Any other registered (plugin) loop starts as its own Run now button does.
+        _ if crate::ui::hub::builtin_loop_page(name).is_none()
+            && loops_config::get_loop(name, &state.loops_config_path(), Some(&state.loops_template_path())).is_ok() =>
+        {
+            run_control::trigger_manual_run(&state.status_path_for_loop(name), name, &launcher)
+        }
         _ => return None,
     })
 }
@@ -730,5 +736,45 @@ mod return_path_tests {
         assert_eq!(from("http://127.0.0.1:18420/"), "/");
         assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop-evil"), "/");
         assert_eq!(gitlab_return_path(None), "/");
+    }
+}
+
+#[cfg(test)]
+mod trigger_named_tests {
+    use super::trigger_named;
+    use crate::ui::UiState;
+    use loopx_core::run_control::TriggerOutcome;
+
+    fn state_with_plugin(dir: &std::path::Path) -> UiState {
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("loops.json"),
+            r#"[{"name": "demo-digest-loop", "entry_point": "loops/demo-digest-loop", "enabled": true}]"#,
+        )
+        .unwrap();
+        UiState::explicit(dir, &home, dir, dir, "tok", None)
+    }
+
+    #[test]
+    fn a_registered_plugin_loop_can_be_started_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_with_plugin(dir.path());
+        let status = state.status_path_for_loop("demo-digest-loop");
+        std::fs::create_dir_all(status.parent().unwrap()).unwrap();
+        std::fs::write(&status, r#"{"state": "running"}"#).unwrap();
+        // Running already: the trigger is found and refused, so nothing is launched.
+        assert!(matches!(
+            trigger_named(&state, "demo-digest-loop"),
+            Some(TriggerOutcome::AlreadyRunning)
+        ));
+    }
+
+    #[test]
+    fn an_unregistered_name_is_not_a_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_with_plugin(dir.path());
+        assert!(trigger_named(&state, "nope-loop").is_none());
+        assert!(trigger_named(&state, "../etc").is_none());
     }
 }

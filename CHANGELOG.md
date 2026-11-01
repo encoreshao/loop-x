@@ -30,6 +30,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Mac app: the island's hover view shows every loop and topic as a tile with its own icon, a readable status and a one-click Run button (Retry after a failure); clicking a tile opens its detail. Any registered loop (Daily Digest, MR Review, RSS Watch, ...) can now be started from the island, not only GitLab, Topic Monitor and Inbox Triage, and a topic named like `ai-agents` reads "AI Agents".
 - GitLab loop and Topic Monitor: an issue or topic that another run is already working on (say, a scheduled batch reaching an issue you started by hand) is skipped and logged as "already working on it" instead of being worked twice at once. Agents lists what each running agent is doing, one line per issue, and the Mac app's snapshot adds `agent_activities` (every running agent, newest first) beside `agent_activity`.
 - Mac app: the notch island and task notifications name loops the way the dashboard does ("GitLab", "Inbox Triage", "MR Review") instead of by their ids (`gitlab-loop`, `inbox-triage-loop`). Topics keep the names you gave them.
 - Loop icons: Release Notes, Pipeline Doctor and Stale Sweeper get their own sidebar icons (tag, stethoscope, archive), and Loops itself, plus any loop made from a template, uses a workflow icon instead of the refresh arrows, which now only mean "refresh".
