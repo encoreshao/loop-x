@@ -153,7 +153,9 @@ impl Config {
             .cloned()
             .ok_or_else(|| ConfigError::UnknownAlias(alias.to_string()))?;
         if !project.contains_key("instance") {
-            project.insert("instance".into(), self.key("gitlab_instance")?.clone());
+            if let Some(default) = self.root.get("gitlab_instance") {
+                project.insert("instance".into(), default.clone());
+            }
         }
         Ok(Value::Object(project))
     }
@@ -182,6 +184,16 @@ mod tests {
     const SAMPLE: &str = r#"{"gitlab_instance":"g.example.com","assignee_username":"dev",
         "worktree_root":"/wt","projects":{"b":{"local_path":"/b"},
         "a":{"local_path":"/a","instance":"o.example.com"}}}"#;
+
+    #[test]
+    fn project_loads_without_a_gitlab_instance() {
+        let d = tempfile::tempdir().unwrap();
+        let body = r#"{"projects":{"gh":{"code_host":{"account":"github-work","repo":"o/r"}}}}"#;
+        let c = Config::load(&write(d.path(), body)).unwrap();
+        let p = c.project("gh").unwrap();
+        assert_eq!(p["code_host"]["repo"], "o/r");
+        assert!(p.get("instance").is_none());
+    }
 
     #[test]
     fn aliases_keep_file_order() {

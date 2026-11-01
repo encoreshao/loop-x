@@ -90,7 +90,7 @@ Top level: JSON **object**.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `gitlab_instance` | string | yes (loop side) | Default instance key; must be a key of `instances` in `~/.gitlab/config.json` (the dashboard enforces this when saving; `loop_config` does not). |
+| `gitlab_instance` | string | optional | Default GitLab instance key for projects without `code_host` or `instance`; must be a key of `instances` in `~/.gitlab/config.json` (the dashboard enforces this when saving; `loop_config` does not). A project with `code_host` does not need it, and `Config::project` no longer fails when it is absent. |
 | `assignee_username` | string | yes | GitLab username whose assigned issues are tracked. Non-empty on dashboard save. |
 | `worktree_root` | string | yes | Absolute path; per-issue worktrees at `<worktree_root>/<repo>-issue-<iid>`. Non-empty on dashboard save. |
 | `projects` | object alias -> project | yes (loop side) | Alias is the identity key (history, dedup, worktree names); treat as fixed. May be `{}`. |
@@ -107,6 +107,8 @@ Project object:
 | `lint_cmd` | string | optional | Hint, as above. In gate mode it is also the verifier's fallback when the agent logged no lint command. See `CLAUDE.md` on pass-an-explicit-path (`rubocop .`) and `--cache false`. |
 | `test_cmd` | string | optional | Hint, as above; the verifier's fallback when the agent logged no test command. |
 | `instance` | string | optional | Per-project GitLab instance override. **Omitted entirely** (never `""`) when unset. |
+| `code_host` | object | optional | `{"account": "<connector account id>", "repo": "<group/project or owner/name>"}`. The connector account's kind (`gitlab`, `github`) picks the provider. When absent, the project is read as a GitLab code host from `instance` (or the top-level `gitlab_instance`) and `project_id`; when both shapes are present, `code_host` wins. Read by `loopx_core::providers::binding::binding_of`; nothing is rewritten on read. |
+| `tracker` | object | optional | `{"account": "...", "project": "..."}`: where the project's issues come from. Each missing field defaults to the `code_host` one. Only `gitlab` and `github` accounts can be trackers today. |
 
 ### Semantics and quirks
 
