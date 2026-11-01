@@ -150,7 +150,7 @@ fn fresh_run_id() -> String {
 /// The one Slack message for a loop run that failed outright.
 pub fn failed_report(loop_name: &str, status: &str, detail: &str) -> slack_report::Report {
     slack_report::alert(
-        &format!("{loop_name} loop"),
+        &crate::loops_config::display_name(loop_name),
         slack_report::State::Failed,
         status,
         detail,
@@ -682,12 +682,17 @@ pub fn selected_cli_summary() -> Value {
 mod tests {
 
     #[test]
+    fn a_failed_gitlab_run_is_titled_gitlab() {
+        assert_eq!(failed_report("gitlab-loop", "Failed", "x").title, "GitLab");
+    }
+
+    #[test]
     fn a_failed_run_is_a_failed_report() {
         let text =
             slack_report::plain_text(&failed_report("topic-loop", "Failed (exit 3)", "See log."));
         assert_eq!(
             text,
-            "*topic-loop loop* :x: Failed (exit 3)\nSee log.\n\n_LoopX_"
+            "*Topic Monitor* :x: Failed (exit 3)\nSee log.\n\n_LoopX_"
         );
     }
 

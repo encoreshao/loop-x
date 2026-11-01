@@ -32,6 +32,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Slack: loop messages name loops the way the dashboard does ("GitLab", "Topic Monitor", "RSS Watch", "LinkedIn Autopilot", or the loop's own label) instead of their ids ("gitlab-loop loop") or "Rss watch". LinkedIn Autopilot's message now uses the same brief layout as RSS Watch: a timestamped header, one block per account between separators, numbered reads with their links, and the run timestamp at the end.
 - Mac app: the island's hover view shows every loop and topic as a tile with its own icon, a readable status and a one-click Run button (Retry after a failure); clicking a tile opens its detail. Any registered loop (Daily Digest, MR Review, RSS Watch, ...) can now be started from the island, not only GitLab, Topic Monitor and Inbox Triage, and a topic named like `ai-agents` reads "AI Agents".
 - GitLab loop and Topic Monitor: an issue or topic that another run is already working on (say, a scheduled batch reaching an issue you started by hand) is skipped and logged as "already working on it" instead of being worked twice at once. Agents lists what each running agent is doing, one line per issue, and the Mac app's snapshot adds `agent_activities` (every running agent, newest first) beside `agent_activity`.
 - Mac app: the notch island and task notifications name loops the way the dashboard does ("GitLab", "Inbox Triage", "MR Review") instead of by their ids (`gitlab-loop`, `inbox-triage-loop`). Topics keep the names you gave them.

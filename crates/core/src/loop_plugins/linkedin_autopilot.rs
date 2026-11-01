@@ -18,6 +18,7 @@
 )]
 
 use crate::connectors::{ConnectorSource, Field};
+use crate::loop_plugins::rss_watch::{local_zone_name, NUMBER_EMOJI, SEPARATOR};
 use crate::loopkit::{
     self, default_build_prompt, LoopContext, LoopPlugin, ModelAnswer, ModelError, Outcome,
     PluginError, Status, WorkItem,
@@ -898,6 +899,8 @@ impl LoopPlugin for LinkedInAutopilot {
             "topics": topics, "worth_reading": worth, "people": people_out, "counts": counts})))
     }
 
+    /// The same brief layout as RSS Watch: a timestamped header, one block
+    /// per account between separators, numbered reads, the run timestamp last.
     fn digest(&self, outcomes: &[Outcome], ctx: &LoopContext) -> Option<String> {
         let mut lines: Vec<String> = Vec::new();
         for o in outcomes {
@@ -909,46 +912,58 @@ impl LoopPlugin for LinkedInAutopilot {
                     } else {
                         "the run failed - check the loop log"
                     };
-                    lines.push(String::new());
-                    lines.push(format!("LinkedIn needs attention: {text}"));
+                    lines.extend([String::new(), SEPARATOR.to_string()]);
+                    lines.push(format!(":warning: LinkedIn needs attention: {text}"));
                 }
                 Status::Done => {
                     let d = &o.data;
                     let c = &d["counts"];
-                    lines.push(String::new());
-                    lines.push(loopkit::chat_text(
-                        &d.get("account").map_or(String::new(), py_str),
-                        60,
-                    ));
-                    if let Some(s) = d.get("summary").filter(|v| py_truthy(v)) {
-                        lines.push(py_str(s));
-                    }
+                    lines.extend([String::new(), SEPARATOR.to_string()]);
                     lines.push(format!(
-                        "{} notifications, {} messages, {} feed posts",
+                        ":bust_in_silhouette: {}",
+                        loopkit::chat_text(&d.get("account").map_or(String::new(), py_str), 60)
+                    ));
+                    lines.push(format!(
+                        "{} notifications \u{b7} {} messages \u{b7} {} feed posts",
                         py_str(&c["notifications"]),
                         py_str(&c["messages"]),
                         py_str(&c["feed"])
                     ));
+                    if let Some(s) = d.get("summary").filter(|v| py_truthy(v)) {
+                        lines.extend([String::new(), py_str(s)]);
+                    }
                     let worth = as_list(d.get("worth_reading"));
                     if !worth.is_empty() {
-                        lines.push("Worth reading:".into());
-                        for w in &worth {
+                        lines.extend([String::new(), "*Worth reading*".into()]);
+                        for (n, w) in worth.iter().enumerate() {
+                            let emoji =
+                                NUMBER_EMOJI.get(n).copied().unwrap_or("small_blue_diamond");
                             lines.push(format!(
-                                "- {} - {}",
-                                loopkit::chat_link(&py_str(&w["title"]), &py_str(&w["url"])),
-                                py_str(&w["why"])
+                                ":{emoji}: {}",
+                                loopkit::chat_text(&py_str(&w["title"]), 200)
                             ));
+                            let why = loopkit::chat_text(&py_str(&w["why"]), 300);
+                            if !why.is_empty() {
+                                lines.push(why);
+                            }
+                            let url = loopkit::chat_url(&py_str(&w["url"]));
+                            if !url.is_empty() {
+                                lines.push(format!("\u{2022} {url}"));
+                            }
                         }
                     }
                     let ppl = as_list(d.get("people"));
                     if !ppl.is_empty() {
-                        lines.push("People to know:".into());
+                        lines.extend([String::new(), "*People to know*".into()]);
                         for p in &ppl {
-                            lines.push(format!(
-                                "- {} - {}",
-                                loopkit::chat_link(&py_str(&p["title"]), &py_str(&p["profile"])),
-                                py_str(&p["why"])
-                            ));
+                            let who =
+                                loopkit::slack_link(&py_str(&p["profile"]), &py_str(&p["title"]));
+                            let why = loopkit::chat_text(&py_str(&p["why"]), 300);
+                            lines.push(if why.is_empty() {
+                                format!("\u{2022} {who}")
+                            } else {
+                                format!("\u{2022} {who} \u{b7} {why}")
+                            });
                         }
                     }
                 }
@@ -958,14 +973,19 @@ impl LoopPlugin for LinkedInAutopilot {
         if lines.is_empty() {
             return None;
         }
-        let local = (self.local)(ctx.now);
-        let mut out = vec![format!(
-            "LinkedIn Autopilot - {:04}-{:02}-{:02}",
-            local.year(),
-            local.month(),
-            local.day()
-        )];
+        let stamp = format!(
+            "{} {}",
+            (self.local)(ctx.now).format("%Y-%m-%d %H:%M"),
+            local_zone_name(ctx.now)
+        );
+        let stamp = stamp.trim_end().to_string();
+        let mut out = vec![format!("LinkedIn Brief \u{b7} {stamp}")];
         out.extend(lines);
+        out.extend([
+            String::new(),
+            SEPARATOR.to_string(),
+            format!("Run timestamp {stamp}"),
+        ]);
         Some(out.join("\n"))
     }
 }
@@ -1581,6 +1601,7 @@ mod tests {
 
     #[test]
     fn digest_lists_summary_links_and_problems() {
+        use crate::loop_plugins::rss_watch::SEPARATOR;
         let d = tempfile::tempdir().unwrap();
         let (p, _) = plugin(d.path(), &world());
         let item = p.discover(&ctx()).unwrap().remove(0);
@@ -1589,19 +1610,39 @@ mod tests {
             "people": [{"id": "urn:li:activity:2", "why": "ships Rails"}]});
         let out = p.after_item(&item, &answer, &ctx()).unwrap();
         let text = p.digest(&[out], &ctx()).unwrap();
-        assert!(text.contains("LinkedIn Autopilot - 2026-10-06") && text.contains("Quiet day"));
-        assert!(text.contains("30 notifications, 20 messages, 30 feed posts"));
+        let lines: Vec<&str> = text.lines().collect();
+        // The same brief layout as RSS Watch: a timestamped header, sections
+        // between separators, numbered items, and the run timestamp last.
         assert!(
-            text.contains("https://www.linkedin.com/feed/update/urn:li:activity:2/")
-                && text.contains("useful")
+            lines[0].starts_with("LinkedIn Brief \u{b7} 2026-10-06 "),
+            "{text}"
         );
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], SEPARATOR);
+        assert!(lines.contains(&"Quiet day"));
+        assert!(lines.contains(&"30 notifications \u{b7} 20 messages \u{b7} 30 feed posts"));
+        assert!(lines.contains(&"*Worth reading*") && lines.contains(&"*People to know*"));
+        assert!(lines.iter().any(|l| l.starts_with(":one: ")), "{text}");
+        assert!(lines.contains(&"useful"));
+        assert!(lines.contains(&"\u{2022} https://www.linkedin.com/feed/update/urn:li:activity:2/"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("\u{2022} <https://www.linkedin.com/")
+                    && l.ends_with("> \u{b7} ships Rails")),
+            "{text}"
+        );
+        assert_eq!(lines[lines.len() - 2], SEPARATOR);
+        assert!(lines
+            .last()
+            .unwrap()
+            .starts_with("Run timestamp 2026-10-06 "));
         let failed = Outcome::new("k", Status::Failed, PROBLEMS[0].1)
             .with_data(json!({"problem": "session_expired"}));
         assert!(p
             .digest(&[failed], &ctx())
             .unwrap()
-            .to_lowercase()
-            .contains("needs attention"));
+            .contains(":warning: LinkedIn needs attention: "));
         assert!(p.digest(&[], &ctx()).is_none());
     }
 
