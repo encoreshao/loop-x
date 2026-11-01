@@ -6,7 +6,7 @@
 /// How Slack names the issue loop (it works GitLab, GitHub and other trackers).
 pub const ISSUE_LOOP_TITLE: &str = "Issue Loop";
 
-use crate::gitlab_runner::{escalation_reason_text, mr_iid};
+use crate::issue_runner::{escalation_reason_text, mr_iid};
 use crate::slack_report::{fmt_duration, Item, Link, Report, Section, State, Status};
 use serde_json::Value;
 

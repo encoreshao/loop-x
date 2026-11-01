@@ -54,3 +54,35 @@ pub fn issue_url_prefixes(state: &UiState) -> GitlabPrefixes {
     }
     out
 }
+
+/// `{alias: "https://github.com/owner/name"}` for every project tracked
+/// through a connector account (`code_host`) whose provider gives its
+/// repository a web page. Pasted issue links are matched against these.
+pub fn hosted_issue_prefixes(state: &UiState) -> GitlabPrefixes {
+    let mut out = GitlabPrefixes::new();
+    let Some(loop_cfg) = read_json(&state.home_dir.join("projects.json")) else {
+        return out;
+    };
+    let paths = super::pages::connectors::paths(state);
+    let accounts = loopx_core::connectors_config::list_accounts(&paths).unwrap_or_default();
+    for (alias, project) in loop_cfg
+        .get("projects")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        if !loopx_core::hosted::is_hosted(project) {
+            continue;
+        }
+        let account_id = project["code_host"]["account"].as_str().unwrap_or_default();
+        let repo = project["code_host"]["repo"].as_str().unwrap_or_default();
+        let base = accounts.iter().find(|a| a.id == account_id).and_then(|a| {
+            loopx_core::providers::Provider::from_kind(&a.kind)?
+                .repo_web_url(a.setting("api_url"), repo)
+        });
+        if let Some(base) = base {
+            out.insert(alias.clone(), base);
+        }
+    }
+    out
+}

@@ -347,7 +347,7 @@
   "_AI_PROMPT_LATEST": [
    "history",
    "Latest run",
-   "Summarize the latest GitLab run review.",
+   "Summarize the latest issue loop run.",
    true
   ],
   "_AI_PROMPT_ERRORS": [
@@ -359,7 +359,7 @@
   "_AI_PROMPT_RUN_ISSUE": [
    "bolt",
    "Run an issue",
-   "Run this GitLab issue now: ",
+   "Run this issue now (GitLab or GitHub link): ",
    false
   ],
   "_AI_PROMPT_INBOX": [
@@ -448,13 +448,13 @@
     [
      "history",
      "Latest run",
-     "Summarize the latest GitLab run review.",
+     "Summarize the latest issue loop run.",
      true
     ],
     [
      "bolt",
      "Run an issue",
-     "Run this GitLab issue now: ",
+     "Run this issue now (GitLab or GitHub link): ",
      false
     ],
     [
@@ -474,7 +474,7 @@
     [
      "bolt",
      "Run an issue",
-     "Run this GitLab issue now: ",
+     "Run this issue now (GitLab or GitHub link): ",
      false
     ],
     [
@@ -500,7 +500,7 @@
     [
      "history",
      "Latest run",
-     "Summarize the latest GitLab run review.",
+     "Summarize the latest issue loop run.",
      true
     ],
     [
@@ -538,7 +538,7 @@
     [
      "history",
      "Latest run",
-     "Summarize the latest GitLab run review.",
+     "Summarize the latest issue loop run.",
      true
     ]
    ],
@@ -613,12 +613,12 @@
    [
     "history",
     "Latest run",
-    "Summarize the latest GitLab run review."
+    "Summarize the latest issue loop run."
    ],
    [
     "bolt",
     "Run an issue",
-    "Run this GitLab issue now: "
+    "Run this issue now (GitLab or GitHub link): "
    ],
    [
     "email",

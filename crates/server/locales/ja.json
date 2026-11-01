@@ -75,8 +75,6 @@
   "Appearance": "外観",
   "Appearance settings for this browser - saved locally, not shared across devices.": "このブラウザの表示設定です。ローカルに保存され、デバイス間では共有されません。",
   "Ask LoopX": "LoopX に質問",
-  "Ask about this page, or paste a GitLab issue link": "このページについて質問、または GitLab Issue のリンクを貼り付け",
-  "Ask the loop anything, or paste a GitLab issue link": "ループに何でも質問するか、GitLab Issue のリンクを貼り付けてください",
   "Audit": "監査",
   "Auto": "自動",
   "Auto-refresh": "自動更新",
@@ -464,7 +462,6 @@
   "Run started - check back here for progress": "実行を開始しました - 進捗はここで確認できます",
   "Run stopped": "実行を停止しました",
   "Run the topic monitor now.": "トピックモニターを今すぐ実行してください。",
-  "Run this GitLab issue now: ": "この GitLab Issue を今すぐ実行してください: ",
   "Run topic monitor": "トピックモニターを実行",
   "Running": "実行中",
   "Running verification": "検証を実行中",
@@ -522,7 +519,6 @@
   "Success rate": "成功率",
   "Suggestions for {page}": "{page} 向けの提案",
   "Summarize my latest inbox triage - anything urgent?": "最新の受信トレイ仕分けを要約してください。緊急のものはありますか？",
-  "Summarize the latest GitLab run review.": "最新の GitLab 実行レビューを要約してください。",
   "Summarize the latest topic monitor run.": "最新のトピックモニター実行を要約してください。",
   "Supported account types: {types}. Leave the redirect URI empty.": "サポートされるアカウントの種類: {types}。リダイレクト URI は空のままにします。",
   "System": "システム",
@@ -1342,5 +1338,9 @@
   "Where the loop makes a worktree for each issue it works on.": "ループが取り組む課題ごとにワークツリーを作成する場所です。",
   "Whose assigned GitLab issues the loop works. Projects on other sources use the account's own login.": "ループが取り組む GitLab の課題の担当者です。他のソースのプロジェクトはそのアカウント自身のログイン名を使います。",
   "Default GitLab instance": "デフォルトの GitLab インスタンス",
-  "Used by GitLab projects that do not name their own.": "独自のインスタンスを指定していない GitLab プロジェクトで使われます。"
+  "Used by GitLab projects that do not name their own.": "独自のインスタンスを指定していない GitLab プロジェクトで使われます。",
+  "Summarize the latest issue loop run.": "最新の課題ループの実行を要約してください。",
+  "Run this issue now (GitLab or GitHub link): ": "この Issue を今すぐ実行してください (GitLab または GitHub のリンク): ",
+  "Ask the loop anything, or paste a GitLab or GitHub issue link": "ループに何でも質問するか、GitLab または GitHub の Issue のリンクを貼り付けてください",
+  "Ask about this page, or paste a GitLab or GitHub issue link": "このページについて質問、または GitLab / GitHub の Issue のリンクを貼り付け"
 }

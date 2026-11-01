@@ -16,7 +16,7 @@ html.escape(announce_text)
 hero_title_html
 messages_html
 session_input
-html.escape(_t('Ask the loop anything, or paste a GitLab issue link'))
+html.escape(_t('Ask the loop anything, or paste a GitLab or GitHub issue link'))
 html.escape(_t('Message the loop'))
 suggestions_html
 html.escape(_t('Send'))

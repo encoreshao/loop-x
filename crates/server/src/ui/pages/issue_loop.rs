@@ -225,7 +225,7 @@ fn tasks_body(ctx: &UiCtx) -> String {
         "lazy_inner",
         crate::ui::live_cache::placeholder(ctx, cached, &ctx.t("Loading live issues and merge requests")),
     );
-    render("gitlab_tasks_body", &scope)
+    render("issue_tasks_body", &scope)
 }
 
 fn projects_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
@@ -235,7 +235,7 @@ fn projects_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     let source = active_source(ctx);
     let query = if source == ALL_SOURCES { String::new() } else { format!("?source={}", pyfmt::quote(&source, "")) };
     scope.var("source_query", pyfmt::escape(&query));
-    render("gitlab_projects_body", &scope)
+    render("issue_projects_body", &scope)
 }
 
 // ---------------------------------------------------------------------------
@@ -1730,7 +1730,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
             esc_t(ctx, "Project sources")
         ),
     );
-    render("gitlab_settings_fragment", &scope)
+    render("issue_projects_fragment", &scope)
 }
 
 /// The "all" tab of the Projects view.

@@ -7,7 +7,7 @@
 use crate::ai_cli_safety::{self, CallSite};
 use crate::config::default_config_path as projects_config_path;
 use crate::events::EventFields;
-use crate::gitlab_runner::{self, RunCtx};
+use crate::issue_runner::{self, RunCtx};
 use crate::runner_util::{append_unified_log, emit_best_effort, repo_root, unified_log_path};
 use crate::{
     ai_cli_config, loop_scheduler, loops_config, quota, slack_report, status, topic_runner,
@@ -653,7 +653,7 @@ pub fn run_entry(entry_point: &str, argv: &[String]) -> i32 {
     match entry_point {
         "bin.gitlab_loop_runner" | "issue-loop" => {
             let ctx = RunCtx::new(root);
-            gitlab_runner::main(&ctx.clone(), argv, gitlab_runner::cli_invoker(ctx))
+            issue_runner::main(&ctx.clone(), argv, issue_runner::cli_invoker(ctx))
         }
         "bin.topic_monitor_runner" | "topic-loop" => {
             let ctx = topic_runner::TopicCtx::new(root);

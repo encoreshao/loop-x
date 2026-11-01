@@ -343,7 +343,7 @@ pub fn sample() -> Report {
                 url: None,
             },
             Link {
-                text: crate::gitlab_report::ISSUE_LOOP_TITLE.into(),
+                text: crate::issue_report::ISSUE_LOOP_TITLE.into(),
                 url: None,
             },
         ],

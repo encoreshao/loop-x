@@ -75,8 +75,6 @@
   "Appearance": "外观",
   "Appearance settings for this browser - saved locally, not shared across devices.": "此浏览器的外观设置——保存在本地,不会在设备间共享。",
   "Ask LoopX": "询问 LoopX",
-  "Ask about this page, or paste a GitLab issue link": "询问此页面，或粘贴 GitLab Issue 链接",
-  "Ask the loop anything, or paste a GitLab issue link": "向循环提问，或粘贴 GitLab Issue 链接",
   "Audit": "审计",
   "Auto": "自动",
   "Auto-refresh": "自动刷新",
@@ -464,7 +462,6 @@
   "Run started - check back here for progress": "已开始运行 - 请回到此处查看进度",
   "Run stopped": "已停止运行",
   "Run the topic monitor now.": "立即运行主题监控。",
-  "Run this GitLab issue now: ": "立即运行这个 GitLab Issue：",
   "Run topic monitor": "运行主题监控",
   "Running": "运行中",
   "Running verification": "正在运行验证",
@@ -522,7 +519,6 @@
   "Success rate": "成功率",
   "Suggestions for {page}": "适用于 {page} 的建议",
   "Summarize my latest inbox triage - anything urgent?": "总结我最近的收件箱分拣——有紧急的吗？",
-  "Summarize the latest GitLab run review.": "总结最近一次 GitLab 运行回顾。",
   "Summarize the latest topic monitor run.": "总结最近一次主题监控运行。",
   "Supported account types: {types}. Leave the redirect URI empty.": "支持的账户类型：{types}。将重定向 URI 留空。",
   "System": "系统",
@@ -1342,5 +1338,9 @@
   "Where the loop makes a worktree for each issue it works on.": "循环为其处理的每个议题创建工作树的位置。",
   "Whose assigned GitLab issues the loop works. Projects on other sources use the account's own login.": "循环处理分配给谁的 GitLab 议题。其他来源的项目使用该账户本身的登录名。",
   "Default GitLab instance": "默认 GitLab 实例",
-  "Used by GitLab projects that do not name their own.": "供未指定实例的 GitLab 项目使用。"
+  "Used by GitLab projects that do not name their own.": "供未指定实例的 GitLab 项目使用。",
+  "Summarize the latest issue loop run.": "总结最近一次议题循环的运行。",
+  "Run this issue now (GitLab or GitHub link): ": "立即运行这个 Issue（GitLab 或 GitHub 链接）：",
+  "Ask the loop anything, or paste a GitLab or GitHub issue link": "向循环提问，或粘贴 GitLab 或 GitHub Issue 链接",
+  "Ask about this page, or paste a GitLab or GitHub issue link": "询问此页面，或粘贴 GitLab 或 GitHub Issue 链接"
 }

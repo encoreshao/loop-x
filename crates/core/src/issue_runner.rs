@@ -23,7 +23,7 @@ use crate::runner_util::{
     STDERR_EXCERPT_CHARS,
 };
 use crate::{
-    ai_cli_config, approvals, cost, events, gitlab_report, issue_tracking_config, learning,
+    ai_cli_config, approvals, cost, events, issue_report, issue_tracking_config, learning,
     memory_store, mr, mr_screenshots, proc, prompt, setup_doctor, slack_report, worktree,
 };
 use chrono::{Duration, Utc};
@@ -2952,7 +2952,7 @@ pub fn run_all_issues(
     send_run_report(
         ctx,
         run_id,
-        &format!("Daily {}", crate::gitlab_report::ISSUE_LOOP_TITLE),
+        &format!("Daily {}", crate::issue_report::ISSUE_LOOP_TITLE),
         &results,
         started.elapsed().as_secs_f64(),
         wrapup_error,
@@ -3078,7 +3078,7 @@ pub fn send_run_report(
             )
         })
         .collect();
-    let mut lines = gitlab_report::issue_lines(run_id, &events, &unfinished);
+    let mut lines = issue_report::issue_lines(run_id, &events, &unfinished);
     for line in lines.iter_mut() {
         let issue_run_id = format!("{run_id}_{}_{}", line.alias, line.iid);
         if let Some(n) = runs
@@ -3087,7 +3087,7 @@ pub fn send_run_report(
             .and_then(|r| r.setup_fixed)
             .filter(|&n| n > 0)
         {
-            if matches!(line.outcome, gitlab_report::Outcome::Escalated(_)) {
+            if matches!(line.outcome, issue_report::Outcome::Escalated(_)) {
                 continue;
             }
             line.title.push_str(&setup_fixed_note(n));
@@ -3118,7 +3118,7 @@ pub fn send_run_report(
             }
         }
     }
-    let facts = gitlab_report::RunFacts {
+    let facts = issue_report::RunFacts {
         title: title.to_string(),
         run_id: run_id.to_string(),
         elapsed_seconds,
@@ -3134,8 +3134,8 @@ pub fn send_run_report(
             .unwrap_or_else(|| json!({}));
         project_slack_target(alias, &project, gitlab_config.as_deref()).0
     };
-    for (bundle, lines) in gitlab_report::by_bundle(lines, &bundle_of) {
-        let report = gitlab_report::build(&lines, &facts);
+    for (bundle, lines) in issue_report::by_bundle(lines, &bundle_of) {
+        let report = issue_report::build(&lines, &facts);
         match fakes {
             Some(f) => (f.notifier)(&slack_report::plain_text(&report)),
             None => {

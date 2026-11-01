@@ -128,7 +128,7 @@ subdirectories — see §9. Bare file names in the table below are in
 | `crates/core/src/agents/mod.rs`, `crates/core/src/agents/claude.rs`, `crates/core/src/agents/codex.rs`, `gemini.rs`, `kimi.rs`, `cursor.rs`, `grok.rs` | `Agent` trait + `AgentResult` + provider adapters |
 | `events.rs` | Append-only JSONL event log (read through the ledger, §2) |
 | `metrics.rs`, `cost.rs`, `health.rs`, `learning.rs` | Pure report builders over the event log (read through the ledger, §2) |
-| `gitlab_runner.rs` | Wires the real GitLab issue loop through `LoopRuntime`, one issue at a time |
+| `issue_runner.rs` | Wires the real GitLab issue loop through `LoopRuntime`, one issue at a time |
 | `topic_runner.rs` | Wires the real Topic Monitor loop through `LoopRuntime`, one topic at a time |
 | `loop_scheduler.rs` | The single launchd-scheduled poll loop: reads `loops_config.list_loops()` and runs whichever registered loop(s) are due, via `loopx run` |
 | `loops_config.rs` | Loads the loops registry (`~/.loopx/loops.json`) — name, schedule, entry point, and per-loop knobs for `loopx run`/`loop_scheduler.rs` |
@@ -305,7 +305,7 @@ loop_scheduler.rs (launchd, StartInterval poll)     dashboard "Run now" / chat t
                                   │
                   ┌───────────────┴───────────────┐
                   ↓                                ↓
-        gitlab_runner.rs              topic_runner.rs
+        issue_runner.rs              topic_runner.rs
          (one issue at a time)               (one topic at a time)
                   │                                ↓
                   └───────────────┬────────────────┘

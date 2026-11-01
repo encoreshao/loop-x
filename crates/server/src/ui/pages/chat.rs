@@ -413,8 +413,8 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
 
 const SUGGESTIONS: [(&str, &str, &str); 4] = [
     ("monitoring", "Loop status", "What is the loop doing right now?"),
-    ("history", "Latest run", "Summarize the latest GitLab run review."),
-    ("bolt", "Run an issue", "Run this GitLab issue now: "),
+    ("history", "Latest run", "Summarize the latest issue loop run."),
+    ("bolt", "Run an issue", "Run this issue now (GitLab or GitHub link): "),
     (
         "email",
         "Inbox triage",

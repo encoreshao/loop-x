@@ -156,7 +156,7 @@
 <div class='flash flash-warning'><p>Codex 会为模型提供 shell，并将提示（包括邮件正文）记录在 ~/.codex/sessions 下。在聊天中，它的沙箱还会阻止直接更改 loopx 设置的操作（启用或停用循环、保存项目）：请改用设置页面，或切换 CLI。</p><p>Codex CLI 会一次性返回完整回复：撰写过程中不会实时显示文字。</p><p><a href='/settings?tab=ai-cli'>在设置中切换 AI CLI</a></p></div><div class='ai-panel-prompts'><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="这个页面显示了什么？我应该先看哪里？" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-circle'/></svg>解释此页面</button><button type='button' class='btn btn-neutral ai-panel-chip' data-ai-prompt="最近有运行失败吗？总结一下出了什么问题。" data-ai-send='1'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg>最近的错误</button></div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
-<textarea name='text' rows='1' placeholder='询问此页面，或粘贴 GitLab Issue 链接' aria-label='给助手发消息'></textarea>
+<textarea name='text' rows='1' placeholder='询问此页面，或粘贴 GitLab 或 GitHub Issue 链接' aria-label='给助手发消息'></textarea>
 <div class='ai-panel-composer-toolbar'>
 <button type='submit' class='ai-panel-send' aria-label='发送' title='发送' disabled><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>

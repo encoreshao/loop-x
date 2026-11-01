@@ -8,7 +8,7 @@
 //! money, so the suite has a hard budget and stops launching cases once it is
 //! spent.
 
-use crate::gitlab_runner;
+use crate::issue_runner;
 use crate::loop_definition::LoopDefinition;
 use crate::loop_result::IterationResult;
 use crate::loop_runtime::LoopContext;
@@ -885,7 +885,7 @@ pub fn run_case_real(
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     );
     let handoff_file =
-        gitlab_runner::handoff_path(&run_id, ALIAS, &ISSUE_IID.to_string(), repo_root);
+        issue_runner::handoff_path(&run_id, ALIAS, &ISSUE_IID.to_string(), repo_root);
     let tmp = std::env::temp_dir().join(format!(
         "golden-eval-{}",
         &uuid::Uuid::new_v4().simple().to_string()[..12]
@@ -921,7 +921,7 @@ pub fn run_case_real(
             if let Some(err) = &outcome.error {
                 reasons.push(format!("agent call failed: {err}"));
             }
-            handoff = gitlab_runner::read_handoff(&handoff_file, &ISSUE_IID.to_string());
+            handoff = issue_runner::read_handoff(&handoff_file, &ISSUE_IID.to_string());
             let is_fix = handoff
                 .as_ref()
                 .and_then(|h| h.get("action"))
@@ -936,7 +936,7 @@ pub fn run_case_real(
             if verification.passed {
                 break;
             }
-            feedback = Some(gitlab_runner::format_feedback(&IterationResult {
+            feedback = Some(issue_runner::format_feedback(&IterationResult {
                 iteration: 1,
                 state: LoopState::Evaluating,
                 verification_results: vec![verification],
@@ -1023,15 +1023,15 @@ pub fn agent_child_main(argv: &[String]) -> i32 {
         .unwrap_or(900.0);
     let max_budget = flag("--max-budget-usd").and_then(|t| t.parse::<f64>().ok());
     let feedback = flag("--feedback-file").and_then(|p| std::fs::read_to_string(p).ok());
-    let mut ctx = gitlab_runner::RunCtx::new(PathBuf::from(repo_root));
+    let mut ctx = issue_runner::RunCtx::new(PathBuf::from(repo_root));
     if let Some(log) = flag("--log") {
         ctx.unified_log = PathBuf::from(log);
     }
-    let invoker = gitlab_runner::cli_invoker(ctx);
-    let result = invoker(&gitlab_runner::InvokeRequest {
+    let invoker = issue_runner::cli_invoker(ctx);
+    let result = invoker(&issue_runner::InvokeRequest {
         alias: ALIAS.to_string(),
         issue_iid: ISSUE_IID.to_string(),
-        mode: gitlab_runner::InvokeMode::IssueFile(PathBuf::from(issue_file)),
+        mode: issue_runner::InvokeMode::IssueFile(PathBuf::from(issue_file)),
         feedback,
         gate: true,
         run_id: Some(run_id.to_string()),
@@ -1404,7 +1404,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("gr-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&root).unwrap();
         let runner = |req: &AttemptRequest| {
-            let h = gitlab_runner::handoff_path(req.run_id, ALIAS, "1", req.repo_root);
+            let h = issue_runner::handoff_path(req.run_id, ALIAS, "1", req.repo_root);
             std::fs::create_dir_all(h.parent().unwrap()).unwrap();
             std::fs::write(&h, r#"{"action": "answer"}"#).unwrap();
             AgentAttempt {

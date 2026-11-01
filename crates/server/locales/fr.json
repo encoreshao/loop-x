@@ -75,8 +75,6 @@
   "Appearance": "Apparence",
   "Appearance settings for this browser - saved locally, not shared across devices.": "Paramètres d'apparence de ce navigateur : enregistrés localement, non partagés entre appareils.",
   "Ask LoopX": "Demander à LoopX",
-  "Ask about this page, or paste a GitLab issue link": "Posez une question sur cette page ou collez un lien d'issue GitLab",
-  "Ask the loop anything, or paste a GitLab issue link": "Posez une question à la boucle ou collez un lien d'issue GitLab",
   "Audit": "Audit",
   "Auto": "Auto",
   "Auto-refresh": "Actualisation auto",
@@ -464,7 +462,6 @@
   "Run started - check back here for progress": "Exécution lancée - revenez ici pour suivre la progression",
   "Run stopped": "Exécution arrêtée",
   "Run the topic monitor now.": "Lance le moniteur de sujets maintenant.",
-  "Run this GitLab issue now: ": "Lance cette issue GitLab maintenant : ",
   "Run topic monitor": "Lancer le moniteur de sujets",
   "Running": "En cours",
   "Running verification": "Vérification en cours",
@@ -522,7 +519,6 @@
   "Success rate": "Taux de réussite",
   "Suggestions for {page}": "Suggestions pour {page}",
   "Summarize my latest inbox triage - anything urgent?": "Résume mon dernier tri de boîte de réception : quelque chose d'urgent ?",
-  "Summarize the latest GitLab run review.": "Résume la dernière revue d'exécution GitLab.",
   "Summarize the latest topic monitor run.": "Résume la dernière exécution du moniteur de sujets.",
   "Supported account types: {types}. Leave the redirect URI empty.": "Types de comptes pris en charge : {types}. Laissez l'URI de redirection vide.",
   "System": "Système",
@@ -1342,5 +1338,9 @@
   "Where the loop makes a worktree for each issue it works on.": "L'endroit où la boucle crée un worktree pour chaque ticket qu'elle traite.",
   "Whose assigned GitLab issues the loop works. Projects on other sources use the account's own login.": "À qui sont assignés les tickets GitLab que traite la boucle. Les projets des autres sources utilisent l'identifiant du compte.",
   "Default GitLab instance": "Instance GitLab par défaut",
-  "Used by GitLab projects that do not name their own.": "Utilisée par les projets GitLab qui n'en indiquent pas une."
+  "Used by GitLab projects that do not name their own.": "Utilisée par les projets GitLab qui n'en indiquent pas une.",
+  "Summarize the latest issue loop run.": "Résume la dernière exécution de la boucle de tickets.",
+  "Run this issue now (GitLab or GitHub link): ": "Lance cette issue maintenant (lien GitLab ou GitHub) : ",
+  "Ask the loop anything, or paste a GitLab or GitHub issue link": "Posez une question à la boucle ou collez un lien d'issue GitLab ou GitHub",
+  "Ask about this page, or paste a GitLab or GitHub issue link": "Posez une question sur cette page ou collez un lien d'issue GitLab ou GitHub"
 }
