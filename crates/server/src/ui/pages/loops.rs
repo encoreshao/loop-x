@@ -595,19 +595,20 @@ fn people_action_bar(ctx: &UiCtx, people: &[Value]) -> String {
 
 const PEOPLE_EXPORT_JS: &str = "(function(){var D=JSON.parse(document.getElementById('people-data').textContent),\
 L=JSON.parse(document.getElementById('people-labels').textContent),\
-picks=[].slice.call(document.querySelectorAll('.person-pick')),all=document.getElementById('people-all'),\
-cnt=document.getElementById('people-count');\
-function chosen(){var r=[];picks.forEach(function(c){if(c.checked)r.push(D[+c.dataset.i])});return r}\
-function sync(){var n=chosen().length;cnt.textContent=n?L.selected.replace('{n}',n):L.all;\
-all.checked=n>0&&n===picks.length;all.indeterminate=n>0&&n<picks.length}\
-all.addEventListener('change',function(){picks.forEach(function(c){c.checked=all.checked});sync()});\
-picks.forEach(function(c){c.addEventListener('change',sync)});\
+all=document.getElementById('people-all'),cnt=document.getElementById('people-count');\
+function picks(){return [].slice.call(document.querySelectorAll('.person-pick'))}\
+function chosen(){var r=[];picks().forEach(function(c){if(c.checked)r.push(D[+c.dataset.i])});return r}\
+function sync(){var n=chosen().length,t=picks().length;cnt.textContent=n?L.selected.replace('{n}',n):L.all;\
+all.checked=n>0&&n===t;all.indeterminate=n>0&&n<t}\
+all.addEventListener('change',function(){picks().forEach(function(c){c.checked=all.checked});sync()});\
+document.addEventListener('change',function(e){if(e.target.classList&&e.target.classList.contains('person-pick'))sync()});\
 function cell(v){if(v==null)return '';if(typeof v==='object')v=JSON.stringify(v);v=String(v);\
 if(/^[=+\\-@\\t\\r]/.test(v))v=\"'\"+v;return /[\",\\n\\r]/.test(v)?'\"'+v.replace(/\"/g,'\"\"')+'\"':v}\
 function csv(rows){var first=['name','position','company','url','first_seen'],keys=first.filter(function(k){return rows.some(function(r){return k in r})});\
 rows.forEach(function(r){Object.keys(r).forEach(function(k){if(keys.indexOf(k)<0)keys.push(k)})});\
 return [keys.join(',')].concat(rows.map(function(r){return keys.map(function(k){return cell(r[k])}).join(',')})).join('\\r\\n')+'\\r\\n'}\
-function save(text,type,name){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:type}));a.download=name;\
+function save(text,type,name){var m=window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.loopxSave;\
+if(m){m.postMessage({name:name,text:text});return}var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:type}));a.download=name;\
 document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(a.href)},1000)}\
 [].forEach.call(document.querySelectorAll('[data-export]'),function(b){b.addEventListener('click',function(){\
 var rows=chosen();if(!rows.length)rows=D;var day=new Date().toISOString().slice(0,10);\

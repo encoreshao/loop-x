@@ -123,6 +123,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         cfg.userContentController.addUserScript(WKUserScript(source: TitlebarChrome.script,
                                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
         cfg.userContentController.add(self, name: TitlebarChrome.messageName)
+        cfg.userContentController.add(self, name: "loopxSave")
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         wv.uiDelegate = self
@@ -145,12 +146,29 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     /// The page's empty topbar/sidebar header stands in for the title bar: drag moves, double-click zooms.
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "loopxSave" {
+            // WKWebView ignores blob downloads, so pages hand the file over (People export).
+            if let body = message.body as? [String: Any], let name = body["name"] as? String,
+               let text = body["text"] as? String { saveExport(name: name, text: text) }
+            return
+        }
         guard let w = window, let kind = message.body as? String else { return }
         switch kind {
         case "drag": if let e = NSApp.currentEvent { w.performDrag(with: e) }
         case "zoom": w.performZoom(nil)
         default: break
         }
+    }
+
+    private func saveExport(name: String, text: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = (name as NSString).lastPathComponent
+        panel.canCreateDirectories = true
+        let write: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        if let w = window { panel.beginSheetModal(for: w, completionHandler: write) } else { panel.begin(completionHandler: write) }
     }
 
     /// Reload after the backend moved to another port.
