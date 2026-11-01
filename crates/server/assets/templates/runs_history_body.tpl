@@ -6,7 +6,7 @@
 
 <div class="grid">
 <section class="card">
-<div class="section-header">⟦_SECTION_ICON_HISTORY⟧<h2>⟦html.escape(_t('GitLab Loop'))⟧</h2></div>
+<div class="section-header">⟦_SECTION_ICON_HISTORY⟧<h2>⟦html.escape(_t('Issue Loop'))⟧</h2></div>
 ⟦gitlab_items⟧
 </section>
 </div>

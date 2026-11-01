@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn a_failed_gitlab_run_is_titled_gitlab() {
-        assert_eq!(failed_report("gitlab-loop", "Failed", "x").title, "GitLab");
+        assert_eq!(failed_report("gitlab-loop", "Failed", "x").title, "Issues");
     }
 
     #[test]

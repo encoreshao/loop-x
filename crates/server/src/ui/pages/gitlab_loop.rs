@@ -22,6 +22,7 @@ use loopx_core::config::use_worktree;
 use loopx_core::loops_config::py_truthy;
 use loopx_core::run_control::{self, Launcher, TriggerOutcome};
 use loopx_core::worktree::{self, CheckoutProblem, RootProblem};
+use loopx_core::providers::Provider;
 use loopx_core::{events, gitlab, issue_tracking_config, pydumps, pyjson, status};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
@@ -102,11 +103,11 @@ pub fn register(r: &mut Registry) {
             )
         })
     });
-    r.post("/settings/loop-projects/github", |c| {
+    r.post("/settings/loop-projects/connected", |c| {
         flash_post(c, |c, f| {
-            add_github_project(
+            add_connected_project(
                 c,
-                &GithubProjectForm {
+                &ConnectedProjectForm {
                     alias: f.first("alias").unwrap_or(""),
                     account: f.first("account").unwrap_or(""),
                     repo: f.first("repo").unwrap_or(""),
@@ -222,7 +223,7 @@ fn tasks_body(ctx: &UiCtx) -> String {
     let mut scope = Scope::new(ctx.lang);
     scope.var(
         "lazy_inner",
-        crate::ui::live_cache::placeholder(ctx, cached, &ctx.t("Loading live GitLab data")),
+        crate::ui::live_cache::placeholder(ctx, cached, &ctx.t("Loading live issues and merge requests")),
     );
     render("gitlab_tasks_body", &scope)
 }
@@ -398,7 +399,7 @@ fn status_card(ctx: &UiCtx, status: &Value, activity: &Option<Activity>, csrf: &
         stop_action_html(
             ctx,
             "/gitlab/stop",
-            &ctx.t("Stop the running GitLab loop? The in-progress issue's work will be abandoned."),
+            &ctx.t("Stop the running issue loop? The in-progress issue's work will be abandoned."),
             csrf,
         )
     } else if !read_json_or_empty(&projects_path(ctx))
@@ -494,23 +495,25 @@ fn mr_number(url: &str) -> Option<&str> {
     (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then_some(n)
 }
 
-/// `Some("GitHub")` when the project's items came from GitHub.
+fn item_provider(item: &Value) -> Option<Provider> {
+    item.get("provider").and_then(Value::as_str).and_then(Provider::from_kind)
+}
+
+/// The tag a project's heading carries when its items came from a connected
+/// provider (`GitHub`); GitLab projects carry none.
 fn provider_label(entry: &AliasState) -> Option<&'static str> {
     entry
         .issues
         .iter()
         .chain(&entry.mrs)
-        .any(|i| i.get("provider").and_then(Value::as_str) == Some("github"))
-        .then_some("GitHub")
+        .find_map(item_provider)
+        .filter(|p| p.connected())
+        .map(Provider::label)
 }
 
-/// GitLab numbers merge requests `!n`; GitHub numbers pull requests `#n`.
+/// How the item's provider numbers change requests (GitLab `!n`, GitHub `#n`).
 fn mr_prefix(item: &Value) -> &'static str {
-    if item.get("provider").and_then(Value::as_str) == Some("github") {
-        "#"
-    } else {
-        "!"
-    }
+    item_provider(item).unwrap_or(Provider::Gitlab).change_request_prefix()
 }
 
 fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
@@ -809,7 +812,7 @@ fn remove_worktree(ctx: &UiCtx) -> UiResponse {
         .and_then(Value::as_str)
         == Some("running")
     {
-        (false, ctx.t("The GitLab loop is running - wait for it to finish or stop it before removing a worktree"))
+        (false, ctx.t("The issue loop is running - wait for it to finish or stop it before removing a worktree"))
     } else if let Some((_, local_path)) = tracked_checkouts(ctx).into_iter().find(|(a, _)| a == alias) {
         match worktree::remove_issue_branch(&local_path, &iid) {
             Ok(()) => (
@@ -1031,7 +1034,7 @@ fn tracking_toggle_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
 fn issue_run_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
     let safe_alias = pyfmt::quote(alias, "");
     let iid = pydumps::py_str(issue_iid);
-    let label = pyfmt::escape(&ctx.tf("Run the GitLab loop on #{iid} now", &[("iid", &iid)]));
+    let label = pyfmt::escape(&ctx.tf("Run the issue loop on #{iid} now", &[("iid", &iid)]));
     format!(
         "<form method='post' action='/gitlab/issues/{safe_alias}/{iid}/run' class='daemon-action-form issue-run-now'>{}<button type='submit' class='btn btn-tonal' aria-label='{label}' title='{label}'><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg> {}</button></form>",
         ctx.csrf_input(),
@@ -1619,7 +1622,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         .var("add_instance_form", add_instance_form)
         .var(
             "aliases_subtitle",
-            pyfmt::escape_text(&t("Turn on Track to let the GitLab issue loop work on a project. Leave the local checkout and target branch empty to track issues only: the loop reads, analyzes and replies, but never changes code. Give both to let it fix issues too; the agent works out each project's install, lint and test commands itself and logs what it used.")),
+            pyfmt::escape_text(&t("Turn on Track to let the issue loop work on a project. Leave the local checkout and target branch empty to track issues only: the loop reads, analyzes and replies, but never changes code. Give both to let it fix issues too; the agent works out each project's install, lint and test commands itself and logs what it used.")),
         )
         .var("projects_html", projects_html)
         .var("add_project_form", add_project_form)
@@ -1630,7 +1633,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         .var("bundles_html", bundles_html)
         .var("add_bundle_form", add_bundle_form)
         .var("loop_settings_form", loop_settings_form)
-        .var("github_html", github_section(ctx, tracked, &csrf));
+        .var("connected_html", connected_section(ctx, tracked, &csrf));
     let _ = consts::ds("_SECTION_ICON_SETTINGS");
     render("gitlab_settings_fragment", &scope)
 }
@@ -2031,23 +2034,37 @@ fn set_instance(entry: &mut Value, instance: &str) {
     }
 }
 
-/// Apply `update` to `alias`'s projects.json entry (created if missing) and save.
-/// The GitHub connector accounts a project can be bound to: `(id, label)`.
-fn github_accounts(ctx: &UiCtx) -> Vec<(String, String)> {
+/// A connector account a project can be bound to (`code_host`).
+struct ConnectedAccount {
+    id: String,
+    /// `Work GitHub (gh-work) · GitHub`
+    label: String,
+    provider: Provider,
+    api_url: String,
+}
+
+/// Every enabled account of a connected provider (GitHub today; any provider
+/// added to `Provider::ALL` with `connected()` shows up here on its own).
+fn connected_accounts(ctx: &UiCtx) -> Vec<ConnectedAccount> {
     let paths = super::connectors::paths(ctx.state);
     loopx_core::connectors_config::accounts_with_capability(loopx_core::connectors::ISSUES, &paths)
         .unwrap_or_default()
         .into_iter()
-        .filter(|a| a.kind == "github")
-        .map(|a| {
-            let label = if a.label.is_empty() { a.id.clone() } else { format!("{} ({})", a.label, a.id) };
-            (a.id, label)
+        .filter_map(|a| {
+            let provider = Provider::from_kind(&a.kind).filter(|p| p.connected())?;
+            let name = if a.label.is_empty() { a.id.clone() } else { format!("{} ({})", a.label, a.id) };
+            Some(ConnectedAccount {
+                label: format!("{name} \u{b7} {}", provider.label()),
+                api_url: a.setting("api_url").to_string(),
+                id: a.id,
+                provider,
+            })
         })
         .collect()
 }
 
-/// The "Add GitHub project" form's fields.
-struct GithubProjectForm<'a> {
+/// The "Add project" form's fields (connected trackers card).
+struct ConnectedProjectForm<'a> {
     alias: &'a str,
     account: &'a str,
     repo: &'a str,
@@ -2061,18 +2078,26 @@ fn name_ok(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// Track a GitHub repository in projects.json as `code_host` {account, repo}:
-/// the issue loop works its assigned issues and opens pull requests. Both
-/// checkout fields empty tracks it for issues only, as for GitLab.
-fn add_github_project(ctx: &UiCtx, f: &GithubProjectForm<'_>) -> (bool, String) {
+/// Is `repo` a valid project path on `provider`?
+fn repo_ok(provider: Provider, repo: &str) -> bool {
+    match provider {
+        Provider::Github => repo.split_once('/').is_some_and(|(o, n)| name_ok(o) && name_ok(n)),
+        Provider::Gitlab => !repo.is_empty() && repo.split('/').all(name_ok),
+    }
+}
+
+/// Track a project of a connected account in projects.json as `code_host`
+/// {account, repo}: the issue loop works its assigned issues and opens pull
+/// requests. Both checkout fields empty tracks it for issues only, as for GitLab.
+fn add_connected_project(ctx: &UiCtx, f: &ConnectedProjectForm<'_>) -> (bool, String) {
     let (alias, account, repo) = (f.alias.trim(), f.account.trim(), f.repo.trim());
     if !name_ok(alias) {
         return (false, ctx.t("A project alias may only use letters, digits, '.', '_' and '-'"));
     }
-    if !github_accounts(ctx).iter().any(|(id, _)| id == account) {
-        return (false, name_msg(ctx, "Unknown GitHub account: {name}", account));
-    }
-    if !repo.split_once('/').is_some_and(|(o, n)| name_ok(o) && name_ok(n)) {
+    let Some(provider) = connected_accounts(ctx).into_iter().find(|a| a.id == account).map(|a| a.provider) else {
+        return (false, name_msg(ctx, "Unknown account: {name}", account));
+    };
+    if !repo_ok(provider, repo) {
         return (false, ctx.t("The repository must be owner/name"));
     }
     let path = projects_path(ctx);
@@ -2121,15 +2146,25 @@ fn add_github_project(ctx: &UiCtx, f: &GithubProjectForm<'_>) -> (bool, String) 
     })
 }
 
-/// The GitHub card on the Projects view: the GitHub projects tracked in
-/// projects.json and the form that adds one.
-fn github_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str) -> String {
+/// The connected trackers card on the Projects view: the projects tracked
+/// through a connector account and the form that adds one.
+fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str) -> String {
     let et = |s: &str| esc_t(ctx, s);
-    let accounts = github_accounts(ctx);
+    let accounts = connected_accounts(ctx);
     let mut rows = Vec::new();
     for (alias, project) in tracked.iter().filter(|(_, p)| loopx_core::hosted::is_hosted(p)) {
         let repo = text(&project["code_host"], "repo");
-        let account = text(&project["code_host"], "account");
+        let account_id = text(&project["code_host"], "account");
+        let account = accounts.iter().find(|a| a.id == account_id);
+        let repo_html = match account.and_then(|a| a.provider.repo_web_url(&a.api_url, &repo)) {
+            Some(url) => format!(
+                "<a href='{}' target='_blank' rel='noopener'>{}</a>",
+                pyfmt::escape(&url),
+                pyfmt::escape(&repo)
+            ),
+            None => pyfmt::escape(&repo),
+        };
+        let tag = account.map_or_else(|| account_id.clone(), |a| format!("{} \u{b7} {}", a.id, a.provider.label()));
         let checkout = if is_issues_only(project) {
             format!("<span class='pill'>{}</span>", et("Issues only"))
         } else {
@@ -2140,42 +2175,42 @@ fn github_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str) -> Stri
             )
         };
         rows.push(format!(
-            "<tr><td>{}</td><td><a href='https://github.com/{}' target='_blank' rel='noopener'>{}</a> <span class='pill pill-grey'>{}</span></td><td>{checkout}</td><td>{}</td></tr>",
+            "<tr><td>{}</td><td>{repo_html} <span class='pill pill-grey'>{}</span></td><td>{checkout}</td><td>{}</td></tr>",
             pyfmt::escape(alias),
-            pyfmt::escape(&repo),
-            pyfmt::escape(&repo),
-            pyfmt::escape(&account),
+            pyfmt::escape(&tag),
             untrack_switch(ctx, alias, csrf)
         ));
     }
     let list = if rows.is_empty() {
-        format!("<p>{}</p>", et("(no GitHub projects yet)"))
+        format!("<p>{}</p>", et("(no connected projects yet)"))
     } else {
         table(&[et("Alias"), et("Repository"), et("Checkout"), et("Tracked")], &rows)
     };
+    let options: Vec<(String, String)> = accounts.iter().map(|a| (a.id.clone(), a.label.clone())).collect();
     let form = if accounts.is_empty() {
         format!(
             "<p>{} <a href='/connectors'>{}</a></p>",
-            et("Add a GitHub account first to track GitHub projects."),
+            et("Add a GitHub account to track its projects here."),
             et("Connectors")
         )
     } else {
         format!(
-            "\n<form method='post' action='/settings/loop-projects/github' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n{}\n<input type='text' name='repo' placeholder='owner/name' required>\n<input type='text' name='local_path' placeholder='/abs/path/to/checkout'>\n<input type='text' name='target_branch' placeholder='{}'>\n<input type='text' name='assignee_username' placeholder='{}'>\n<label><input type='checkbox' name='use_worktree' value='1' checked> {}</label>\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
+            "\n<form method='post' action='/settings/loop-projects/connected' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n{}\n<input type='text' name='repo' placeholder='owner/name' required>\n<input type='text' name='local_path' placeholder='/abs/path/to/checkout'>\n<input type='text' name='target_branch' placeholder='{}'>\n<input type='text' name='assignee_username' placeholder='{}'>\n<label><input type='checkbox' name='use_worktree' value='1' checked> {}</label>\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
             et("project alias"),
-            super::loops_common::custom_select("account", &accounts, None, None),
+            super::loops_common::custom_select("account", &options, None, None),
             et("target branch"),
-            et("GitHub login (optional)"),
+            et("Login there (optional)"),
             et("Use worktree"),
-            et("Add GitHub project")
+            et("Add project")
         )
     };
     format!(
         "<p class='subtitle'>{}</p>{list}{form}",
-        pyfmt::escape_text(&ctx.t("Repositories on GitHub. The loop works the issues assigned to you there and opens pull requests, the same way it works GitLab issues. The GitHub login defaults to the account's own; leave the checkout and target branch empty to track issues only."))
+        pyfmt::escape_text(&ctx.t("Projects on a connected account, such as GitHub. The loop works the issues assigned to you there and opens pull requests, the same way it works GitLab issues. The login defaults to the account's own; leave the checkout and target branch empty to track issues only."))
     )
 }
 
+/// Apply `update` to `alias`'s projects.json entry (created if missing) and save.
 fn save_tracked(ctx: &UiCtx, alias: &str, path: &Path, config: &mut Value, update: impl FnOnce(&mut Value)) -> (bool, String) {
     let projects = obj_mut(config, "projects");
     let is_new = !projects.contains_key(alias);
@@ -2521,16 +2556,16 @@ mod tests {
         std::fs::create_dir_all(&sb.state.home_dir).unwrap();
         std::fs::write(
             sb.state.home_dir.join("connectors.json"),
-            r#"[{"id": "gh-work", "type": "github", "label": "Work GitHub", "api_url": "https://api.github.com", "username": "u"}]"#,
+            r#"[{"id": "gh-work", "type": "github", "label": "Work GitHub", "settings": {"api_url": "https://ghe.example/api/v3", "username": "u"}}]"#,
         )
         .unwrap();
     }
 
     fn add_github(sb: &Sandbox, fields: &[(&str, &str)]) -> (bool, String) {
         let get = |k: &str| fields.iter().find(|(n, _)| *n == k).map_or("", |(_, v)| *v);
-        add_github_project(
+        add_connected_project(
             &sb.ctx(),
-            &GithubProjectForm {
+            &ConnectedProjectForm {
                 alias: get("alias"),
                 account: get("account"),
                 repo: get("repo"),
@@ -2567,7 +2602,7 @@ mod tests {
     }
 
     #[test]
-    fn a_github_project_needs_a_github_account_a_repo_and_a_free_alias() {
+    fn a_connected_project_needs_a_connected_account_a_repo_and_a_free_alias() {
         let sb = Sandbox::new();
         github_account(&sb);
         sb.seed_projects(json!({"projects": {"app": {"project_id": "g/app", "local_path": "/x"}}}));
@@ -2587,16 +2622,18 @@ mod tests {
     }
 
     #[test]
-    fn the_settings_list_github_projects_under_github_not_as_missing_gitlab_aliases() {
+    fn the_settings_list_connected_projects_under_connected_trackers_not_as_missing_gitlab_aliases() {
         let sb = Sandbox::new();
         github_account(&sb);
         sb.seed_projects(json!({"projects": {"hub": {"code_host": {"account": "gh-work", "repo": "octo/web"},
                                                       "local_path": "/h", "target_branch": "main"}}}));
         let html = settings_fragment_html(&sb.ctx());
         assert!(!html.contains("hub: no matching GitLab alias"), "{html}");
-        assert!(html.contains("https://github.com/octo/web"), "{html}");
-        assert!(html.contains("action='/settings/loop-projects/github'"), "{html}");
-        assert!(html.contains("<option value='gh-work'"), "{html}");
+        assert!(html.contains("<a href='https://ghe.example/octo/web'"), "{html}");
+        assert!(html.contains("gh-work \u{b7} GitHub"), "{html}");
+        assert!(html.contains("action='/settings/loop-projects/connected'"), "{html}");
+        assert!(html.contains("<option value='gh-work'>Work GitHub (gh-work) \u{b7} GitHub</option>"), "{html}");
+        assert!(html.contains("Connected trackers"), "{html}");
     }
 
     #[test]
@@ -2850,11 +2887,11 @@ mod tests {
     fn tasks_paint_the_cached_list_at_once_and_spin_only_without_one() {
         let sb = Sandbox::new();
         let body = tasks_body(&sb.ctx());
-        assert!(body.contains("data-lazy-load='/gitlab/live'") && body.contains("Loading live GitLab data"));
+        assert!(body.contains("data-lazy-load='/gitlab/live'") && body.contains("Loading live issues and merge requests"));
         crate::ui::live_cache::write(&sb.state, TASKS_CACHE, tasks_cache_json(&[("app".into(), state(vec![], None))]));
         let body = tasks_body(&sb.ctx());
         assert!(body.contains("data-lazy-load='/gitlab/live'"));
-        assert!(!body.contains("Loading live GitLab data"), "{body}");
+        assert!(!body.contains("Loading live issues and merge requests"), "{body}");
         assert!(body.contains("refreshing") && body.contains("Nothing assigned to you right now."), "{body}");
     }
 

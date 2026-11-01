@@ -33,7 +33,7 @@ pub struct IssueLine {
 /// The run-level facts the events don't carry.
 #[derive(Debug, Clone, Default)]
 pub struct RunFacts {
-    /// "Daily GitLab loop" for the scheduled batch, else the run's own name.
+    /// "Daily Issue Loop" for the scheduled batch, else the run's own name.
     pub title: String,
     pub run_id: String,
     pub elapsed_seconds: f64,
@@ -325,7 +325,7 @@ pub fn build(lines: &[IssueLine], facts: &RunFacts) -> Report {
     }
     Report {
         title: if facts.title.is_empty() {
-            "Daily GitLab loop".into()
+            "Daily Issue Loop".into()
         } else {
             facts.title.clone()
         },

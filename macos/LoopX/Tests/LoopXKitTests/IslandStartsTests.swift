@@ -4,7 +4,7 @@ import Testing
 @Suite struct IslandStartsTests {
     @Test func offersTheThreeBuiltInLoops() {
         #expect(IslandStarts.all.map(\.loop) == ["topic-loop", "gitlab-loop", "inbox-triage-loop"])
-        #expect(IslandStarts.all.map(\.title) == ["Run Topic Monitor", "Run GitLab loop", "Triage inbox"])
+        #expect(IslandStarts.all.map(\.title) == ["Run Topic Monitor", "Run issue loop", "Triage inbox"])
     }
 
     @Test func runningLoopsAreNotOffered() {
@@ -15,6 +15,7 @@ import Testing
 
     @Test func confirmTextNamesTheRealSideEffects() {
         #expect(IslandStarts.confirmText(loop: "gitlab-loop").contains("GitLab"))
+        #expect(IslandStarts.confirmText(loop: "gitlab-loop").contains("GitHub"))
         #expect(IslandStarts.confirmText(loop: "daily-digest-loop") == "Run Daily Digest now?")
     }
 

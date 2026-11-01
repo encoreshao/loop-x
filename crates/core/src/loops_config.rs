@@ -40,12 +40,17 @@ pub fn default_config_path() -> PathBuf {
     home_dir().join("loops.json")
 }
 
+/// What a person calls the issue loop (`gitlab-loop`, an id kept for
+/// existing configs): it works issues from GitLab, GitHub and any tracker
+/// the provider layer adds, so the name is not tied to one of them.
+pub const ISSUE_LOOP_NAME: &str = "Issues";
+
 /// The name a person sees for a loop (Slack titles, alerts): its `label` in
 /// `loops.json` when set, else this. The built-in loops have no label, and a
 /// plugin loop's id title-cases into the same words as its default label.
 pub fn display_name(loop_name: &str) -> String {
     let fixed = match loop_name {
-        "gitlab-loop" | "gitlab-issue-loop" => Some("GitLab"),
+        "gitlab-loop" | "gitlab-issue-loop" => Some(ISSUE_LOOP_NAME),
         "topic-loop" | "topic-monitor-loop" => Some("Topic Monitor"),
         "stale-sweeper-loop" => Some("Stale Work Sweeper"),
         _ => None,
@@ -633,7 +638,7 @@ mod tests {
     #[test]
     fn loops_have_human_names_for_slack() {
         for (id, want) in [
-            ("gitlab-loop", "GitLab"),
+            ("gitlab-loop", "Issues"),
             ("topic-loop", "Topic Monitor"),
             ("inbox-triage-loop", "Inbox Triage"),
             ("rss-watch-loop", "RSS Watch"),

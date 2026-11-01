@@ -144,8 +144,8 @@ pub fn builtin_loop_page(name: &str) -> Option<Hub> {
         "gitlab-loop" => hub(
             "loops",
             "/loops/gitlab-loop",
-            "GitLab",
-            "_SECTION_ICON_GITLAB",
+            "Issues",
+            "_SECTION_ICON_ISSUES",
             vec![
                 v("live", "Live").refreshing(),
                 v("tasks", "Tasks").refreshing().lazy(),

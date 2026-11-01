@@ -37,7 +37,7 @@ import Foundation
         let s = try Snapshot.decode(Data(Self.json.utf8))
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
-        #expect(n.title == "GitLab running")
+        #expect(n.title == "Issues running")
         #expect(n.subtitle == "analyzing · 2 queued")
     }
 

@@ -36,7 +36,7 @@ public enum DashboardMenu {
     public static let sections: [Section] = [
         Section(title: "Loops", entries: [
             Entry("All Loops", "/loops", Shortcut("1", [.command])),
-            Entry("GitLab Issues", "/loops/gitlab-loop", Shortcut("2", [.command])),
+            Entry("Issues", "/loops/gitlab-loop", Shortcut("2", [.command])),
             Entry("Topic Monitor", "/loops/topic-loop", Shortcut("3", [.command])),
             Entry("Inbox Triage", "/loops/inbox-triage-loop", Shortcut("4", [.command])),
         ]),

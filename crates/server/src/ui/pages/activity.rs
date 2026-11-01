@@ -80,7 +80,7 @@ fn gitlab_status(ctx: &UiCtx, csrf: &str) -> LoopStatus {
             stop_action_html(
                 ctx,
                 "/gitlab/stop",
-                &ctx.t("Stop the running GitLab loop? The in-progress issue's work will be abandoned."),
+                &ctx.t("Stop the running issue loop? The in-progress issue's work will be abandoned."),
                 csrf,
             ),
         )

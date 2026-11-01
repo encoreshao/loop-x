@@ -488,7 +488,7 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
 
     let mut announce = i18n::t(
         lang,
-        "GitLab loop: {state}",
+        "Issue loop: {state}",
         &[("state", &badge::state_label(lang, &status))],
     );
     if let Some(updated) = status.get("updated_at").filter(|v| loopx_core::loops_config::py_truthy(v)) {

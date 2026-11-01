@@ -24,7 +24,7 @@ import Testing
         let s = Snapshot(appState: .running, loops: ["gitlab-loop": LoopStatus(state: "running", pid: 1, currentIssue: "web #7", currentStep: "analyzing")])
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
-        #expect(n.title == "GitLab running")
+        #expect(n.title == "Issues running")
         #expect(n.subtitle == "web #7 · analyzing")
         #expect(n.style.pulses)
         #expect(n.style.accent == .blue)

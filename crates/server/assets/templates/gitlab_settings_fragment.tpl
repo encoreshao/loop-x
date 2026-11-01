@@ -18,8 +18,8 @@
 
 <div class="grid">
 <section class="card">
-<div class="section-header">⟦_SECTION_ICON_SETTINGS⟧<h2>GitHub</h2></div>
-⟦github_html⟧
+<div class="section-header">⟦_SECTION_ICON_SETTINGS⟧<h2>⟦html.escape(_t('Connected trackers'))⟧</h2></div>
+⟦connected_html⟧
 </section>
 </div>
 

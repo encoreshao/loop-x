@@ -2950,7 +2950,7 @@ pub fn run_all_issues(
     send_run_report(
         ctx,
         run_id,
-        "Daily GitLab loop",
+        "Daily Issue Loop",
         &results,
         started.elapsed().as_secs_f64(),
         wrapup_error,
@@ -4845,7 +4845,7 @@ mod tests {
             gate_outcome: Some("mr_opened".into()),
             setup_fixed: Some(1),
         };
-        send_run_report(&ctx, "R", "Daily GitLab loop", &[run], 5.0, None);
+        send_run_report(&ctx, "R", "Daily Issue Loop", &[run], 5.0, None);
         let sent = sent.lock().unwrap();
         assert!(
             sent[0].contains("Fix login (setup fixed automatically: 1 blocker)"),
@@ -4908,7 +4908,7 @@ mod tests {
                 gate_outcome: Some(outcome.to_string()),
                 setup_fixed: fixed,
             };
-            send_run_report(&ctx, "R", "Daily GitLab loop", &[run], 5.0, None);
+            send_run_report(&ctx, "R", "Daily Issue Loop", &[run], 5.0, None);
             let sent = sent.lock().unwrap();
             assert!(sent[0].contains("Fix login"), "{}", sent[0]);
             assert!(
@@ -5910,7 +5910,7 @@ mod tests {
             gate_outcome: None,
             setup_fixed: None,
         };
-        send_run_report(&ctx, "R", "Daily GitLab loop", &[failed], 61.0, None);
+        send_run_report(&ctx, "R", "Daily Issue Loop", &[failed], 61.0, None);
         let sent = sent.lock().unwrap();
         assert_eq!(sent.len(), 2, "{sent:?}");
         assert!(

@@ -1,7 +1,7 @@
 
 <div class="page-title">
 <h1>⟦html.escape(_t('Logs'))⟧</h1>
-<p class="subtitle">⟦html.escape(_t('The most recent output from every {cli} invocation - the GitLab loop, the topic monitor loop, and the chat assistant.', cli=ai_cli_name))⟧</p>
+<p class="subtitle">⟦html.escape(_t('The most recent output from every {cli} invocation - the issue loop, the topic monitor loop, and the chat assistant.', cli=ai_cli_name))⟧</p>
 </div>
 
 <div class="grid">

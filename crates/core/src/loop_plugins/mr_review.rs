@@ -800,9 +800,9 @@ fn my_mrs(conn: &dyn Connector, account_id: &str) -> Result<Vec<MyMr>, Connector
 // ---- GitHub (through the provider layer) --------------------------------------
 
 /// Is this account's kind reviewed through `crate::providers` rather than
-/// GitLab's own API (draft notes)?
+/// GitLab's own API (draft notes)? Every connected provider is.
 fn via_provider(kind: &str) -> bool {
-    kind == "github"
+    crate::providers::Provider::from_kind(kind).is_some_and(|p| p.connected())
 }
 
 fn provider_err(e: ProviderError) -> ConnectorError {
