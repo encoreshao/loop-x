@@ -177,7 +177,7 @@ mod tests {
     fn segmented_selection_follows_the_theme_accent() {
         let css = ds("_STYLE");
         assert!(css.contains("background: var(--seg-thumb); color: #fff;"));
-        for accent in ["default", "indigo", "blue", "green", "red", "gray"] {
+        for accent in ["default", "indigo", "blue", "green", "red", "gray", "dark"] {
             let a = css
                 .find(&format!(":root[data-accent=\"{accent}\"] {{"))
                 .unwrap();
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn topbar_icons_follow_the_theme_accent() {
         let css = ds("_STYLE");
-        for accent in ["default", "indigo", "blue", "green", "red", "gray"] {
+        for accent in ["default", "indigo", "blue", "green", "red", "gray", "dark"] {
             let a = css
                 .find(&format!(":root[data-accent=\"{accent}\"] {{"))
                 .unwrap();
@@ -211,6 +211,50 @@ mod tests {
             );
         }
         assert!(css.contains(".topbar #queue-pill.pill-outline { color: var(--md-nav-accent); }"));
+    }
+
+    #[test]
+    fn dark_theme_is_a_dark_wash_with_light_text_and_the_white_wordmark() {
+        let css = ds("_STYLE");
+        let a = css.find(":root[data-accent=\"dark\"] {").unwrap();
+        let block = &css[a..a + css[a..].find('}').unwrap()];
+        assert!(block.contains("--md-nav-surface: #1C1C1F;"), "{block}");
+        assert!(block.contains("--md-nav-on-surface: #E4E4E8;"), "{block}");
+        assert!(
+            css.contains(":root[data-accent=\"dark\"] .card {"),
+            "cards take the wash"
+        );
+        assert!(css.contains(
+            ":root[data-accent=\"dark\"] .brand .brand-name-img.on-dark { display: block; }"
+        ));
+        assert!(css.contains(":root:not([data-accent=\"default\"]):not([data-accent=\"dark\"]) .brand .brand-name-img.on-light"));
+        let choices = list("dashboard_server", "_ACCENT_CHOICES");
+        assert!(choices
+            .iter()
+            .any(|c| c[0] == "dark" && c[1] == "Dark" && c[2] == "#1C1C1F"));
+    }
+
+    #[test]
+    fn dark_theme_keeps_the_connector_gallery_dark_in_light_mode() {
+        // The light-mode gallery tokens mix the theme wash with white, which only
+        // works for a light wash; Dark resets them after those rules (same specificity).
+        let css = ds("_STYLE");
+        let light = css
+            .rfind(":root[data-color-mode=\"light\"] .connector-gallery,")
+            .unwrap();
+        let a = css
+            .find(":root[data-accent=\"dark\"] .connector-gallery,")
+            .expect("dark theme gallery override");
+        assert!(a > light, "the override comes after the light-mode rules");
+        let block = &css[a..a + css[a..].find('}').unwrap()];
+        assert!(
+            block.contains("--cg-card: var(--md-surface-container-low);"),
+            "{block}"
+        );
+        assert!(
+            block.contains("--cg-chip-fg: var(--md-on-surface-variant);"),
+            "{block}"
+        );
     }
 
     #[test]
