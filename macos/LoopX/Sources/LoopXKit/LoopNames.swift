@@ -11,6 +11,7 @@ public enum LoopNames {
         "topic-loop": "Topic Monitor",
         "inbox-triage-loop": "Inbox Triage",
         "stale-sweeper-loop": "Stale Work Sweeper",
+        "linkedin-autopilot-loop": "LinkedIn",
     ]
 
     private static let words: [String: String] = [

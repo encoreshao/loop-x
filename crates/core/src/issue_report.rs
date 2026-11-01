@@ -340,6 +340,20 @@ pub fn build(lines: &[IssueLine], facts: &RunFacts) -> Report {
     }
 }
 
+/// A report with nothing new in it: every issue was checked with nothing to
+/// act on, or is still waiting on a reviewer with no reminder due.
+pub fn is_quiet(lines: &[IssueLine]) -> bool {
+    lines.iter().all(|l| {
+        matches!(
+            l.outcome,
+            Outcome::Checked
+                | Outcome::Waiting {
+                    reminder_sent: false
+                }
+        )
+    })
+}
+
 /// `lines` split by Slack bundle, in first-seen order; a run with no issues
 /// is one empty group for the default webhook.
 pub fn by_bundle(

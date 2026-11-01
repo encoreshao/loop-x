@@ -53,6 +53,7 @@ pub fn display_name(loop_name: &str) -> String {
         "issue-loop" | "gitlab-loop" | "gitlab-issue-loop" => Some(ISSUE_LOOP_NAME),
         "topic-loop" | "topic-monitor-loop" => Some("Topic Monitor"),
         "stale-sweeper-loop" => Some("Stale Work Sweeper"),
+        "linkedin-autopilot-loop" => Some("LinkedIn"),
         _ => None,
     };
     if let Some(name) = fixed {
@@ -278,6 +279,13 @@ fn migrate_renamed(loops: Vec<Value>) -> Vec<Value> {
                     obj.insert("log_suffix".into(), json!(suffix.replace(old, new)));
                 }
             }
+        }
+        // The LinkedIn loop's default label shortened to "LinkedIn"; a label
+        // the user wrote themselves is kept.
+        if name_of(&entry) == Some("linkedin-autopilot-loop")
+            && entry.get("label").and_then(Value::as_str) == Some("LinkedIn Autopilot")
+        {
+            entry["label"] = json!("LinkedIn");
         }
         out.push(entry);
     }
@@ -661,7 +669,7 @@ mod tests {
             ("topic-loop", "Topic Monitor"),
             ("inbox-triage-loop", "Inbox Triage"),
             ("rss-watch-loop", "RSS Watch"),
-            ("linkedin-autopilot-loop", "LinkedIn Autopilot"),
+            ("linkedin-autopilot-loop", "LinkedIn"),
             ("mr-review-loop", "MR Review"),
             ("daily-digest-loop", "Daily Digest"),
             ("meeting-prep-loop", "Meeting Prep"),
@@ -782,6 +790,16 @@ mod tests {
         let all = list_loops(&f.config, Some(&f.none)).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0]["name"], "meeting-prep-loop");
+    }
+
+    #[test]
+    fn the_linkedin_default_label_is_shortened_but_custom_ones_are_kept() {
+        let f = fx(json!([{"name": "linkedin-autopilot-loop", "label": "LinkedIn Autopilot"}]));
+        let l = &list_loops(&f.config, Some(&f.none)).unwrap()[0];
+        assert_eq!(l["label"], "LinkedIn");
+        let f = fx(json!([{"name": "linkedin-autopilot-loop", "label": "My Network"}]));
+        let l = &list_loops(&f.config, Some(&f.none)).unwrap()[0];
+        assert_eq!(l["label"], "My Network");
     }
 
     #[test]

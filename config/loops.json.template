@@ -83,7 +83,7 @@
   },
   {
     "name": "linkedin-autopilot-loop",
-    "label": "LinkedIn Autopilot",
+    "label": "LinkedIn",
     "entry_point": "bin.loop_plugins.linkedin_autopilot",
     "description": "Browses your LinkedIn feed, notifications and messages through your own signed-in browser at a human pace and summarizes what is worth your attention.",
     "schedule": {"frequency": "daily", "hour": 9, "minute": 0},

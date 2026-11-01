@@ -3134,17 +3134,68 @@ pub fn send_run_report(
             .unwrap_or_else(|| json!({}));
         project_slack_target(alias, &project, gitlab_config.as_deref()).0
     };
+    let scheduled = title == format!("Daily {}", issue_report::ISSUE_LOOP_TITLE);
+    let state_path = report_state_path(ctx);
     for (bundle, lines) in issue_report::by_bundle(lines, &bundle_of) {
+        let key = bundle.clone().unwrap_or_default();
+        if scheduled
+            && facts.wrapup_error.is_none()
+            && issue_report::is_quiet(&lines)
+            && reported_within(&state_path, &key, QUIET_REPEAT_DAYS)
+        {
+            ctx.log("the run's Slack report was skipped: nothing new since the last one");
+            continue;
+        }
         let report = issue_report::build(&lines, &facts);
-        match fakes {
-            Some(f) => (f.notifier)(&slack_report::plain_text(&report)),
+        let sent = match fakes {
+            Some(f) => {
+                (f.notifier)(&slack_report::plain_text(&report));
+                true
+            }
             None => {
-                if !slack_report::send(&report, bundle.as_deref()) {
+                let ok = slack_report::send(&report, bundle.as_deref());
+                if !ok {
                     ctx.log("the run's Slack report was not sent (see the loop's stderr)");
                 }
+                ok
             }
+        };
+        if sent {
+            record_report_sent(&state_path, &key);
         }
     }
+}
+
+/// A scheduled run with nothing new to say repeats the last Slack report, so
+/// it stays quiet until this many days have passed since that report.
+const QUIET_REPEAT_DAYS: i64 = 2;
+
+fn report_state_path(ctx: &RunCtx) -> PathBuf {
+    ctx.repo_root.join("outputs").join("slack_last_report.json")
+}
+
+fn reported_within(path: &Path, bundle: &str, days: i64) -> bool {
+    let Some(text) = std::fs::read_to_string(path).ok() else {
+        return false;
+    };
+    let last = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| v.get(bundle).and_then(Value::as_str).map(str::to_owned))
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok());
+    last.is_some_and(|t| Utc::now().signed_duration_since(t) < Duration::days(days))
+}
+
+fn record_report_sent(path: &Path, bundle: &str) {
+    let mut state = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    state[bundle] = json!(Utc::now().to_rfc3339());
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, state.to_string());
 }
 
 fn value_text(v: &Value) -> String {
@@ -5856,6 +5907,41 @@ mod tests {
             "{}",
             sent[0]
         );
+    }
+
+    #[test]
+    fn a_quiet_scheduled_report_is_skipped_for_two_days_after_the_last_one() {
+        let d = tempfile::tempdir().unwrap();
+        let sent: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = sent.clone();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.config_path = Some(d.path().join("projects.json"));
+        ctx.fakes = Some(Arc::new(RunFakes {
+            gitlab: Box::new(Notes(Default::default())),
+            notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
+            gitlab_config_path: d.path().join("gitlab.json"),
+        }));
+        let count = || sent.lock().unwrap().len();
+        send_run_report(&ctx, "R1", "Daily Issue Loop", &[], 1.0, None);
+        assert_eq!(count(), 1, "the first report goes out");
+        send_run_report(&ctx, "R2", "Daily Issue Loop", &[], 1.0, None);
+        assert_eq!(count(), 1, "nothing new within two days: skipped");
+        send_run_report(&ctx, "R3", "GitLab issue run: web #1", &[], 1.0, None);
+        assert_eq!(count(), 2, "an on-demand run always reports");
+        send_run_report(
+            &ctx,
+            "R4",
+            "Daily Issue Loop",
+            &[],
+            1.0,
+            Some("boom".into()),
+        );
+        assert_eq!(count(), 3, "a failed wrap-up is never quiet");
+        let old = (Utc::now() - Duration::days(3)).to_rfc3339();
+        std::fs::write(report_state_path(&ctx), json!({ "": old }).to_string()).unwrap();
+        send_run_report(&ctx, "R5", "Daily Issue Loop", &[], 1.0, None);
+        assert_eq!(count(), 4, "after two days it reports again");
     }
 
     #[test]

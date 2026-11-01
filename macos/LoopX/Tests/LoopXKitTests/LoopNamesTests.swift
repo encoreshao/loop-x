@@ -11,7 +11,7 @@ import Testing
         #expect(LoopNames.display("daily-digest-loop") == "Daily Digest")
         #expect(LoopNames.display("mr-review-loop") == "MR Review")
         #expect(LoopNames.display("rss-watch-loop") == "RSS Watch")
-        #expect(LoopNames.display("linkedin-autopilot-loop") == "LinkedIn Autopilot")
+        #expect(LoopNames.display("linkedin-autopilot-loop") == "LinkedIn")
         #expect(LoopNames.display("meeting-prep-loop") == "Meeting Prep")
         #expect(LoopNames.display("stale-sweeper-loop") == "Stale Work Sweeper")
         #expect(LoopNames.display("my_custom-thing") == "My Custom Thing")

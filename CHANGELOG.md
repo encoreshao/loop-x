@@ -35,6 +35,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- The LinkedIn Autopilot loop is now just "LinkedIn" in the menu, the Loops page, Slack and the Mac app (a label you set yourself is kept).
+- The Issues loop's scheduled Slack report is skipped when it has nothing new (every issue checked with nothing to act on, or still waiting on review) and the last report went out less than two days ago, to avoid repeated messages.
 - The chat composer's suggestion chips are now a "+" menu that lists each action with a short hint.
 
 - The GitLab loop is now called **Issues** wherever it is shown (dashboard sidebar and pages, Slack run reports as "Daily Issue Loop", notifications, the Mac app's island and menus), since it also works GitHub issues and is built to take other trackers. Its id stays `gitlab-loop`, so `loops.json`, schedules, launchd agents and dashboard URLs are unchanged. Projects from connector accounts are added under Issues → Projects → Connected trackers, which lists every account of a supported tracker.
