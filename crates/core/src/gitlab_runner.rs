@@ -2878,14 +2878,16 @@ pub fn run_all_issues(
         Some(a) => a,
         None => cfg.aliases().map_err(|e| e.to_string())?,
     };
-    let username = match username {
-        Some(u) => u,
-        None => cfg.assignee_username().map_err(|e| e.to_string())?,
-    };
+    // Only GitLab projects need the GitLab username; connected (GitHub, ...)
+    // projects use their own `assignee_username` or the token's account.
+    let username = username.or_else(|| cfg.assignee_username().ok());
     let definition =
         LoopDefinition::from_yaml(&ctx.definition_path()).map_err(|e| e.to_string())?;
     let legacy = |aliases: &[String]| {
-        gitlab::list_assigned_issues(gitlab::load_config().as_ref(), aliases, &username)
+        let username = username
+            .as_deref()
+            .ok_or("No GitLab username: set assignee_username in projects.json")?;
+        gitlab::list_assigned_issues(gitlab::load_config().as_ref(), aliases, username)
             .map_err(|e| e.to_string())
     };
     let assigned = assigned_by_alias(&cfg, &aliases, &legacy, &hosted_assigned, &|m: &str| {
@@ -2950,7 +2952,7 @@ pub fn run_all_issues(
     send_run_report(
         ctx,
         run_id,
-        "Daily Issue Loop",
+        &format!("Daily {}", crate::gitlab_report::ISSUE_LOOP_TITLE),
         &results,
         started.elapsed().as_secs_f64(),
         wrapup_error,

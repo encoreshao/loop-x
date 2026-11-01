@@ -343,7 +343,7 @@ pub fn sample() -> Report {
                 url: None,
             },
             Link {
-                text: "GitLab loop".into(),
+                text: crate::gitlab_report::ISSUE_LOOP_TITLE.into(),
                 url: None,
             },
         ],
@@ -817,7 +817,7 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with(":zap: *Needs you*"));
-        assert_eq!(b[11]["elements"][0]["text"], "LoopX \u{2022} GitLab loop");
+        assert_eq!(b[11]["elements"][0]["text"], "LoopX \u{2022} Issue Loop");
     }
 
     #[test]

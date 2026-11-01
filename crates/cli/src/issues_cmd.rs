@@ -25,7 +25,8 @@ fn run_list(args: &[String]) -> Result<String, String> {
         0 => {
             let cfg = Config::load(&default_config_path()).map_err(|e| e.to_string())?;
             (
-                cfg.assignee_username().map_err(|e| e.to_string())?,
+                // Only GitLab projects need it (checked below).
+                cfg.assignee_username().unwrap_or_default(),
                 cfg.aliases().map_err(|e| e.to_string())?,
             )
         }
@@ -45,6 +46,11 @@ fn run_list(args: &[String]) -> Result<String, String> {
                 .map_err(|e| format!("{alias}: {e}"))?;
             result.insert(alias, issues);
             continue;
+        }
+        if username.is_empty() {
+            return Err(format!(
+                "{alias}: no GitLab username - set assignee_username in projects.json"
+            ));
         }
         let (project_id, instance, bundle) =
             gitlab::resolve_project_alias(config.as_ref(), &alias, None);

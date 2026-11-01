@@ -1,3 +1,5 @@
-html.escape(_t('View and manage the projects this loop works on: GitLab instances and aliases, and projects on connected trackers such as GitHub.'))
+html.escape(_t('Projects'))
+html.escape(_t('Every project the issue loop works on. Each source has its own tab with its projects and its connection settings.'))
 flash_html
+source_query
 html.escape(_t('Loading settings'))
