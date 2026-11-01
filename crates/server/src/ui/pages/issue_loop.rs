@@ -2476,7 +2476,7 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
     };
     let options: Vec<(String, String)> = accounts.iter().map(|a| (a.id.clone(), a.label.clone())).collect();
     let manage = format!(
-        "<p class='subtitle'><a href='/connectors'>{}</a></p>",
+        " <a href='/connectors'>{}</a>",
         pyfmt::escape(&ctx.tf("Manage {provider} accounts under Connectors", &[("provider", provider.label())]))
     );
     let form = if accounts.is_empty() {
@@ -2497,7 +2497,7 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
         )
     };
     format!(
-        "<p class='subtitle'>{}</p>{list}{form}{manage}",
+        "<p class='subtitle'>{}{manage}</p>{list}{form}",
         pyfmt::escape_text(&ctx.t("Projects on a connected account, such as GitHub. The loop works the issues assigned to you there and opens pull requests, the same way it works GitLab issues. The login defaults to the account's own; leave the checkout and target branch empty to track issues only."))
     )
 }
