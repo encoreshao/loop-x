@@ -24,8 +24,8 @@
 LoopX is a local-first AI agent orchestration platform for macOS. It runs specialized, scheduled AI agents that automate engineering workflows and everyday knowledge work, so you only spend attention on what needs your judgment.
 
 - **Loops.** Independent, configurable workflows, each with its own task spec, schedule and run history.
-- **AI agents.** Coding agents such as Claude Code, Codex, Gemini, Kimi and Cursor reason about the task and do the work.
-- **Bring your own agent.** LoopX ships no model and sells no tokens. It drives the AI CLI you already use and pay for, such as your Claude Code, Codex, Gemini, Kimi or Cursor subscription or API key, so there is no extra AI bill and no new account. Switch agents any time in Settings → AI CLI.
+- **AI agents.** Coding agents such as Claude Code, Codex, Gemini, Kimi, Cursor and Grok reason about the task and do the work.
+- **Bring your own agent.** LoopX ships no model and sells no tokens. It drives the AI CLI you already use and pay for, such as your Claude Code, Codex, Gemini, Kimi, Cursor or Grok subscription or API key, so there is no extra AI bill and no new account. Switch agents any time in Settings → AI CLI.
 - **Orchestration.** LoopX runs each loop on its own, manages the run and carries it from finding the task to a reviewable result.
 - **Human in the loop.** Agents fix issues and draft merge requests, replies and briefs. You keep control of merging and every other critical action.
 - **Local first.** Everything runs on your Mac with your existing tools and credentials.
@@ -70,7 +70,7 @@ The full list is in [Safety boundaries](docs/reference.md#safety-boundaries).
 
 ## Get started
 
-You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access token, and one AI CLI: Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), Kimi (`kimi`) or Cursor (`agent`/`cursor-agent`). Claude is the default; the others are chosen in Settings → AI CLI. A Slack webhook is optional, for notifications.
+You need a Mac, `git` 2.42 or newer, a GitLab account with a personal access token, and one AI CLI: Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), Kimi (`kimi`), Cursor (`agent`/`cursor-agent`) or Grok (`grok`, xAI's Grok Build CLI). Claude is the default; the others are chosen in Settings → AI CLI. A Slack webhook is optional, for notifications.
 
 **1. Install**
 

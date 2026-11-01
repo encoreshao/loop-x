@@ -201,7 +201,7 @@ pub fn doctor_cli_command(
     let s = |v: &str| v.to_string();
     let handoffs = format!("{}/outputs/handoffs", repo_root.trim_end_matches('/'));
     let roots = vec![s(work_dir), handoffs];
-    if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
+    if crate::agents::is_new_cli(ai_cli) {
         let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
         opts.add_dirs = roots.iter().map(PathBuf::from).collect();
         let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");

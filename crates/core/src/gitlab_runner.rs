@@ -164,7 +164,7 @@ pub fn cli_command(
     let s = |v: &str| v.to_string();
     let mut roots = vec![s(repo_root), s(worktree_root)];
     roots.extend(extra_dirs.iter().cloned());
-    if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
+    if crate::agents::is_new_cli(ai_cli) {
         // No tool allowlist exists for these; cursor's workspace is the repo root.
         let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
         opts.add_dirs = roots.iter().map(PathBuf::from).collect();
@@ -4835,6 +4835,7 @@ mod tests {
             ("gemini", "--yolo"),
             ("kimi", "--yolo"),
             ("cursor", "--force"),
+            ("grok", "--yolo"),
         ] {
             let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false, &[]);
             assert!(

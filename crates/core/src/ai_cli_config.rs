@@ -1,4 +1,4 @@
-//! Which AI CLI (claude, codex, gemini, kimi or cursor) the loops use, from
+//! Which AI CLI (claude, codex, gemini, kimi, cursor or grok) the loops use, from
 //! `<LOOP_ENGINEERING_HOME>/ai_cli.json`. Mirrors `bin/ai_cli_config.py`: a
 //! missing, corrupt or unrecognised file always falls back to `claude`.
 
@@ -7,7 +7,7 @@ use crate::pyjson;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-pub const VALID_CLIS: [&str; 5] = ["claude", "codex", "gemini", "kimi", "cursor"];
+pub const VALID_CLIS: [&str; 6] = ["claude", "codex", "gemini", "kimi", "cursor", "grok"];
 
 /// Executable names a CLI may be installed under, in lookup order. Cursor's
 /// agent ships as `cursor-agent` and, on newer installs, also as `agent`; the
@@ -18,6 +18,7 @@ pub fn binary_candidates(cli: &str) -> &'static [&'static str] {
         "codex" => &["codex"],
         "gemini" => &["gemini"],
         "kimi" => &["kimi"],
+        "grok" => &["grok"],
         "cursor" => &["cursor-agent", "agent"],
         _ => &[],
     }
@@ -132,7 +133,7 @@ mod tests {
     #[test]
     fn reads_the_newer_clis() {
         let d = tempfile::tempdir().unwrap();
-        for cli in ["gemini", "kimi", "cursor"] {
+        for cli in ["gemini", "kimi", "cursor", "grok"] {
             let text = format!(r#"{{"cli": "{cli}"}}"#);
             assert_eq!(get_selected_cli(&write(d.path(), &text)), cli);
         }

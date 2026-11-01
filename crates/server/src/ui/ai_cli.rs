@@ -48,6 +48,7 @@ pub fn warning_text(lang: Lang, english: &str) -> String {
         "Gemini CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access." => t(lang, "Gemini CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access.", &[]),
         "Kimi CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access." => t(lang, "Kimi CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access.", &[]),
         "Cursor Agent cannot be limited to a fixed set of tools here, so the model runs with its full tool access." => t(lang, "Cursor Agent cannot be limited to a fixed set of tools here, so the model runs with its full tool access.", &[]),
+        "Grok CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access." => t(lang, "Grok CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access.", &[]),
         "This AI CLI cannot be limited to a fixed set of tools here." => t(lang, "This AI CLI cannot be limited to a fixed set of tools here.", &[]),
         other => other.to_string(),
     }

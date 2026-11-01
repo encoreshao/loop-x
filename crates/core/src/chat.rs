@@ -57,6 +57,7 @@ pub fn chat_cli_name(cli: &str) -> &'static str {
         "gemini" => "Gemini CLI",
         "kimi" => "Kimi CLI",
         "cursor" => "Cursor CLI",
+        "grok" => "Grok CLI",
         _ => "Claude Code",
     }
 }
@@ -88,11 +89,11 @@ impl ChatMode {
     }
 }
 
-/// Claude, Cursor and Kimi stream JSON lines; Gemini's JSON is one object and
-/// `codex exec` prints its last message at the end.
+/// Claude, Cursor and Kimi stream JSON lines; Gemini's and Grok's JSON is one
+/// object and `codex exec` prints its last message at the end.
 pub fn chat_mode(cli: &str) -> ChatMode {
     match cli {
-        "gemini" | "codex" => ChatMode::SingleReply,
+        "gemini" | "codex" | "grok" => ChatMode::SingleReply,
         _ => ChatMode::Streaming,
     }
 }
@@ -259,7 +260,7 @@ impl ChatCommand {
     }
 
     fn is_claude(&self) -> bool {
-        !matches!(self.cli.as_str(), "codex" | "gemini" | "kimi" | "cursor")
+        !(self.cli == "codex" || crate::agents::is_new_cli(&self.cli))
     }
 
     /// `<wrapper> 'timeout N <program> <args>'`. Cursor's program is looked up
@@ -282,9 +283,25 @@ impl ChatCommand {
 
     /// The chat turn's argv after the program, for a CLI other than Claude.
     fn chat_args(&self, prompt: &str) -> Vec<String> {
-        use crate::agents::{cursor, gemini, kimi, sealed};
+        use crate::agents::{cursor, gemini, grok, kimi, sealed};
         let strs = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         match self.cli.as_str() {
+            // `dontAsk`: only pre-approved calls run (plus Grok's read-only
+            // handling), and the one approved shell call is the chat tool.
+            "grok" => {
+                let allowed = format!("Bash({} *)", self.chat_tool);
+                strs(&[
+                    grok::GROK_NO_UPDATE_FLAG,
+                    grok::GROK_OUTPUT_FORMAT_FLAG,
+                    grok::GROK_OUTPUT_FORMAT,
+                    grok::GROK_PERMISSION_MODE_FLAG,
+                    grok::GROK_PERMISSION_MODE_DONT_ASK,
+                    grok::GROK_ALLOW_FLAG,
+                    &allowed,
+                    grok::GROK_PROMPT_FLAG,
+                    prompt,
+                ])
+            }
             "gemini" => {
                 let allowed = format!("run_shell_command({})", self.chat_tool);
                 strs(&[
@@ -344,9 +361,21 @@ impl ChatCommand {
 
     /// The title call's argv after the program: each CLI's read-only one-shot.
     fn title_args(&self, prompt: &str) -> Vec<String> {
-        use crate::agents::{cursor, gemini, kimi, sealed};
+        use crate::agents::{cursor, gemini, grok, kimi, sealed};
         let strs = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         match self.cli.as_str() {
+            "grok" => {
+                let mut args = strs(&[
+                    grok::GROK_NO_UPDATE_FLAG,
+                    grok::GROK_OUTPUT_FORMAT_FLAG,
+                    grok::GROK_OUTPUT_FORMAT,
+                    grok::GROK_PERMISSION_MODE_FLAG,
+                    grok::GROK_PERMISSION_MODE_DONT_ASK,
+                ]);
+                args.extend(grok::grok_deny_all_tools());
+                args.extend(strs(&[grok::GROK_PROMPT_FLAG, prompt]));
+                args
+            }
             "gemini" => strs(&[
                 gemini::GEMINI_OUTPUT_FORMAT_FLAG,
                 gemini::GEMINI_OUTPUT_FORMAT,
@@ -386,6 +415,7 @@ impl ChatCommand {
     fn title_text(&self, stdout: &str) -> Option<String> {
         match self.cli.as_str() {
             "gemini" => crate::agents::gemini::gemini_text(stdout),
+            "grok" => crate::agents::grok::grok_text(stdout),
             "cursor" => crate::agents::cursor::cursor_text(stdout),
             _ => Some(stdout.to_string()),
         }
@@ -1602,6 +1632,7 @@ fn turn_pending_events(
 fn single_reply(cli: &str, stdout: &str) -> Result<String, String> {
     let reply = match cli {
         "gemini" => crate::agents::gemini::gemini_reply(stdout),
+        "grok" => crate::agents::grok::grok_reply(stdout),
         _ => crate::agents::non_empty_reply(cli, stdout.trim().to_string()),
     };
     reply.map_err(|e| {
@@ -1968,6 +1999,7 @@ mod tests {
         assert_eq!(chat_cli_name("gemini"), "Gemini CLI");
         assert_eq!(chat_cli_name("kimi"), "Kimi CLI");
         assert_eq!(chat_cli_name("cursor"), "Cursor CLI");
+        assert_eq!(chat_cli_name("grok"), "Grok CLI");
         let constants: Value =
             serde_json::from_str(include_str!("../../server/assets/constants.json")).unwrap();
         let names = constants["dashboard_server"]["_AI_CLI_DISPLAY_NAMES"]
@@ -1987,6 +2019,7 @@ mod tests {
             ("kimi", ChatMode::Streaming),
             ("gemini", ChatMode::SingleReply),
             ("codex", ChatMode::SingleReply),
+            ("grok", ChatMode::SingleReply),
         ] {
             assert_eq!(chat_mode(cli), mode, "{cli}");
         }
@@ -2002,7 +2035,7 @@ mod tests {
     #[test]
     fn every_cli_gets_the_system_prompt_and_no_approval_bypass() {
         use crate::ai_cli_safety::{restriction, CallSite, Restriction};
-        for cli in ["codex", "gemini", "kimi", "cursor"] {
+        for cli in ["codex", "gemini", "kimi", "cursor", "grok"] {
             let mut c = ChatCommand::new("loopx chat-tool");
             c.cli = cli.into();
             let argv = c.build_command("it's me", "T");
@@ -2048,6 +2081,22 @@ mod tests {
             ]
         );
         assert_eq!(g[7], "-p");
+        // Grok: only pre-approved calls run, and the one approved call is the chat tool.
+        let x = cmd("grok");
+        assert_eq!(
+            &x[..9],
+            [
+                "grok",
+                "--no-auto-update",
+                "--output-format",
+                "json",
+                "--permission-mode",
+                "dontAsk",
+                "--allow",
+                "Bash(loopx chat-tool *)",
+                "-p"
+            ]
+        );
         let k = cmd("kimi");
         assert_eq!(
             &k[..5],
@@ -2101,7 +2150,7 @@ mod tests {
 
     #[test]
     fn title_commands_are_tool_less_one_shots_for_every_cli() {
-        for cli in ["codex", "gemini", "kimi", "cursor"] {
+        for cli in ["codex", "gemini", "kimi", "cursor", "grok"] {
             let mut c = ChatCommand::new("loopx chat-tool");
             c.cli = cli.into();
             let argv = c.build_title_command("user asks", "assistant says");

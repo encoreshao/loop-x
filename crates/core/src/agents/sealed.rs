@@ -5,7 +5,7 @@
 //! be locked down that far, so [`crate::ai_cli_safety`] classes them
 //! `Unrestricted` and callers surface its warning instead of refusing.
 
-use super::{cursor, gemini, kimi};
+use super::{cursor, gemini, grok, kimi};
 use crate::ai_cli_config;
 use crate::ai_cli_safety::{self, CallSite};
 use crate::cost;
@@ -71,10 +71,11 @@ pub(crate) const CURSOR_MODE_FLAG: &str = "--mode";
 pub(crate) const CURSOR_MODE_ASK: &str = "ask";
 
 /// Whether the prompt has to ride in argv (visible in `ps`) because the CLI has
-/// no way to read it from stdin. Only Cursor Agent: `agent --print` takes the
-/// prompt as a positional argument and documents no stdin or prompt-file input.
+/// no way to read it from stdin. Cursor Agent: `agent --print` takes the prompt
+/// as a positional argument and documents no stdin or prompt-file input. Grok:
+/// `-p <PROMPT>` is its documented headless input (it reads no stdin).
 pub fn prompt_in_argv(cli: &str) -> bool {
-    cli == "cursor"
+    matches!(cli, "cursor" | "grok")
 }
 
 /// The sealed command (program first) for `cli`. The Claude arm is the original
@@ -112,6 +113,22 @@ pub fn sealed_command_for(cli: &str, max_budget_usd: Option<f64>) -> Vec<String>
                 cursor::CURSOR_OUTPUT_FORMAT_FLAG,
                 cursor::CURSOR_OUTPUT_FORMAT,
             ]));
+            cmd
+        }
+        // Nothing runs without approval (`dontAsk`), and every built-in tool is
+        // denied outright, since deny rules win even over Grok's read-only
+        // handling. The prompt is appended after `-p` (see `prompt_in_argv`).
+        "grok" => {
+            let mut cmd = strs(&[
+                "grok",
+                grok::GROK_NO_UPDATE_FLAG,
+                grok::GROK_OUTPUT_FORMAT_FLAG,
+                grok::GROK_OUTPUT_FORMAT,
+                grok::GROK_PERMISSION_MODE_FLAG,
+                grok::GROK_PERMISSION_MODE_DONT_ASK,
+            ]);
+            cmd.extend(grok::grok_deny_all_tools());
+            cmd.push(grok::GROK_PROMPT_FLAG.into());
             cmd
         }
         // `-` makes `codex exec` read the prompt from stdin; the scratch dir is
@@ -550,6 +567,7 @@ mod tests {
             ("kimi", "--print"),
             ("cursor", "--print"),
             ("codex", "exec"),
+            ("grok", "-p"),
         ] {
             let cmd = sealed_command_for(cli, Some(1.0));
             assert!(cmd.contains(&flag.to_string()), "{cli}: {cmd:?}");
@@ -567,6 +585,16 @@ mod tests {
         );
         let c = sealed_command_for("cursor", None);
         assert_eq!(c[c.iter().position(|a| a == "--mode").unwrap() + 1], "ask");
+        // Grok: nothing runs without approval, and every built-in tool is denied outright.
+        let k = sealed_command_for("grok", None);
+        assert_eq!(
+            k[k.iter().position(|a| a == "--permission-mode").unwrap() + 1],
+            "dontAsk"
+        );
+        for tool in ["Bash", "Read", "Edit", "WebFetch"] {
+            assert!(k.windows(2).any(|w| w == ["--deny", tool]), "{tool}: {k:?}");
+        }
+        assert_eq!(k.last().unwrap(), "-p", "the prompt follows -p in argv");
         let x = sealed_command_for("codex", None);
         assert!(x.contains(&"read-only".to_string()));
         assert!(!x.contains(&"--ephemeral".to_string()));
@@ -596,6 +624,7 @@ mod tests {
             assert!(!prompt_in_argv(cli), "{cli}");
         }
         assert!(prompt_in_argv("cursor"));
+        assert!(prompt_in_argv("grok"));
     }
 
     fn call_with_fake(cli: &str, body: &str) -> Result<SealedResult, SealedCallFailed> {

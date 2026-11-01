@@ -228,7 +228,7 @@ fn loop_account_form(ctx: &UiCtx, entry: &Value, csrf: &str) -> String {
         pyfmt::escape(dir),
         loops_config::MAX_AI_CONFIG_DIR_CHARS,
         pyfmt::escape(&ctx.t("AI account folder (optional)")),
-        pyfmt::escape(&ctx.t("Run this loop on another Claude Code or Codex account: that account's config folder (CLAUDE_CONFIG_DIR or CODEX_HOME). Blank uses your default account.")),
+        pyfmt::escape(&ctx.t("Run this loop on another Claude Code, Codex or Grok account: that account's config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME). Blank uses your default account.")),
         pyfmt::escape(&ctx.t("Save account")),
     )
 }
