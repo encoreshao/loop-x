@@ -2342,6 +2342,9 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
    gap of its own - give it some breathing room from the last table row
    above it. */
 .daemon-action-form.add-row-form { margin-top: 0.85rem; }
+/* Registered Loops: the account form stacks under the schedule form in the
+   same cell - keep the two rows of inputs from touching. */
+.schedule-form + .schedule-form { margin-top: 0.4rem; }
 /* Topic Settings row (render_topic_settings_page): the enable/disable
    switch leads the row (its own single-button <form>), then the editable
    fields span two lines - label input + read-only name chip + Slack

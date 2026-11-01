@@ -41,6 +41,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Settings → Daemons → Registered Loops: the AI account folder row no longer touches the schedule row above it.
 - Files that runs share (topic status, topic seen-items, task memory's `MEMORY.md`, the GitLab cache) are now written under a lock and atomically, so two writers at once no longer drop one of the updates and the dashboard never reads a half-written file. Creating or cleaning up worktrees of one checkout is serialised too, so two issues of a project starting at once no longer fail on git's own ref locks.
 - Sign-ins: an expired or revoked connector token (Google Calendar, a 401 from GitLab, GitHub and the like) is reported on the first check instead of after a second one six hours later. The sign-in check, a connector's Test, a reconnect and each Inbox Triage run now share one record, so Needs you, Connectors and Inbox Triage agree: Connectors shows "Needs re-auth" and the newest result instead of a days-old Test, and an inbox shows "Needs re-auth" as soon as the check finds it, or "Connected" once a run succeeds. Needs you also shows how long ago a sign-in broke correctly (it said "just now" outside UTC).
 - Needs you: a broken sign-in disappears as soon as you reconnect it (a Google sign-in for a mailbox or connector finishes, or its Test passes) instead of staying until the next 6-hourly check, and it can now be dismissed by hand; it comes back only if the sign-in breaks again later.
