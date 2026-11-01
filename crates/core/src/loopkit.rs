@@ -932,7 +932,6 @@ pub fn run_plugin(
         })
     });
     let started = std::time::Instant::now();
-    let title = display_name(&loop_name);
     let lookup = opts.loop_lookup.clone().unwrap_or_else(default_loop_lookup);
     let log = make_logger(&repo_root, &loop_name);
     let io_err = |e: std::io::Error| PluginError::new("OSError", e.to_string());
@@ -947,11 +946,9 @@ pub fn run_plugin(
         .join("loop.yaml");
     let definition = LoopDefinition::from_yaml(&def_path)
         .map_err(|e| PluginError::new("ValueError", e.to_string()))?;
-    let settings = lookup(&loop_name)
-        .map_err(|e| PluginError::new("KeyError", e))?
-        .get("settings")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let entry = lookup(&loop_name).map_err(|e| PluginError::new("KeyError", e))?;
+    let title = loops_config::label_or_display_name(&loop_name, Some(&entry));
+    let settings = entry.get("settings").cloned().unwrap_or_else(|| json!({}));
     let ctx = LoopContext {
         loop_name: loop_name.clone(),
         run_id: run_id.to_string(),
@@ -1101,17 +1098,6 @@ pub fn run_plugin(
         notify_failed: text.is_some() && !sends.iter().any(|r| r.1),
     };
     Ok((outcomes, report))
-}
-
-/// `daily-digest-loop` -> `Daily digest`.
-fn display_name(loop_name: &str) -> String {
-    let base = loop_name.strip_suffix("-loop").unwrap_or(loop_name);
-    let words = base.replace(['-', '_'], " ");
-    let mut chars = words.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().chain(chars).collect(),
-        None => words,
-    }
 }
 
 /// A plugin run as a Slack report: its digest text, then the items that failed.
@@ -1383,6 +1369,18 @@ retry: {enabled: true, max_attempts: 2}
             "{}",
             sent[0]
         );
+    }
+
+    #[test]
+    fn the_report_is_titled_with_the_loops_label() {
+        let mut w = world();
+        w.opts.loop_lookup = Some(Arc::new(|n: &str| {
+            Ok(json!({"name": n, "label": "My Demo", "settings": {}}))
+        }));
+        let p = Arc::new(Demo::new(vec![item("a")], &[OK]));
+        run(&w, &p, "run_1");
+        let sent = w.sent.lock().unwrap();
+        assert!(sent[0].starts_with("*My Demo* "), "{}", sent[0]);
     }
 
     #[test]

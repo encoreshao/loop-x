@@ -95,7 +95,7 @@ fn strip_tags(text: &str) -> String {
 
 /// Python `strftime("%Z")` of the local zone at `dt` (an abbreviation like
 /// `CST`/`UTC`, not an offset).
-fn local_zone_name(dt: DateTime<Utc>) -> String {
+pub(crate) fn local_zone_name(dt: DateTime<Utc>) -> String {
     let t = dt.timestamp() as libc::time_t;
     // SAFETY: localtime_r fills the zeroed `tm` we own; tm_zone is a static C string.
     unsafe {

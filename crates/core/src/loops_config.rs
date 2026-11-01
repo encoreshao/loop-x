@@ -40,6 +40,51 @@ pub fn default_config_path() -> PathBuf {
     home_dir().join("loops.json")
 }
 
+/// The name a person sees for a loop (Slack titles, alerts): its `label` in
+/// `loops.json` when set, else this. The built-in loops have no label, and a
+/// plugin loop's id title-cases into the same words as its default label.
+pub fn display_name(loop_name: &str) -> String {
+    let fixed = match loop_name {
+        "gitlab-loop" | "gitlab-issue-loop" => Some("GitLab"),
+        "topic-loop" | "topic-monitor-loop" => Some("Topic Monitor"),
+        "stale-sweeper-loop" => Some("Stale Work Sweeper"),
+        _ => None,
+    };
+    if let Some(name) = fixed {
+        return name.to_string();
+    }
+    let base = loop_name.strip_suffix("-loop").unwrap_or(loop_name);
+    base.split(['-', '_'])
+        .filter(|w| !w.is_empty())
+        .map(|w| match w {
+            "rss" => "RSS".to_string(),
+            "mr" => "MR".to_string(),
+            "ai" => "AI".to_string(),
+            "ci" => "CI".to_string(),
+            "gitlab" => "GitLab".to_string(),
+            "github" => "GitHub".to_string(),
+            "linkedin" => "LinkedIn".to_string(),
+            _ => {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().chain(c).collect())
+                    .unwrap_or_default()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `display_name`, preferring a `label` from the loop's `loops.json` entry.
+pub fn label_or_display_name(loop_name: &str, entry: Option<&Value>) -> String {
+    entry
+        .and_then(|e| e.get("label"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map_or_else(|| display_name(loop_name), str::to_string)
+}
+
 /// `config/loops.json.template` of this checkout: `LOOP_LOOPS_TEMPLATE` if set,
 /// else found by walking up from the running binary (`target/debug/loopx` and
 /// an installed `<repo>/bin/loopx` both resolve), else a path that doesn't
@@ -585,6 +630,34 @@ pub fn set_schedule(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loops_have_human_names_for_slack() {
+        for (id, want) in [
+            ("gitlab-loop", "GitLab"),
+            ("topic-loop", "Topic Monitor"),
+            ("inbox-triage-loop", "Inbox Triage"),
+            ("rss-watch-loop", "RSS Watch"),
+            ("linkedin-autopilot-loop", "LinkedIn Autopilot"),
+            ("mr-review-loop", "MR Review"),
+            ("daily-digest-loop", "Daily Digest"),
+            ("meeting-prep-loop", "Meeting Prep"),
+            ("stale-sweeper-loop", "Stale Work Sweeper"),
+            ("my_custom-loop", "My Custom"),
+        ] {
+            assert_eq!(super::display_name(id), want, "{id}");
+        }
+        let entry = serde_json::json!({"label": "Feeds"});
+        assert_eq!(
+            super::label_or_display_name("rss-watch-loop", Some(&entry)),
+            "Feeds"
+        );
+        let blank = serde_json::json!({"label": " "});
+        assert_eq!(
+            super::label_or_display_name("rss-watch-loop", Some(&blank)),
+            "RSS Watch"
+        );
+    }
+
     use super::*;
 
     struct Fx {

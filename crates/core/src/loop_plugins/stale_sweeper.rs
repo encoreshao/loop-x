@@ -597,7 +597,7 @@ mod tests {
         );
         let sent = sent.lock().unwrap();
         assert!(
-            sent[0].starts_with("*Stale sweeper* :white_check_mark: Completed ("),
+            sent[0].starts_with("*Stale Work Sweeper* :white_check_mark: Completed ("),
             "{}",
             sent[0]
         );
