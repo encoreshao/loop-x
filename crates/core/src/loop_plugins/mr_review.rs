@@ -17,6 +17,8 @@
 use crate::connectors::{ApiOpts, Connector, ConnectorError, ConnectorSource};
 use crate::loopkit::{self, LoopContext, LoopPlugin, Outcome, PluginError, Status, WorkItem};
 use crate::loops_config::{py_str, py_truthy};
+use crate::providers::binding::{Binding, Endpoint};
+use crate::providers::{ChangeRequest, CrFilter, DiffPosition, DraftNote, ProviderError};
 use crate::seen_store::SeenStore;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -795,18 +797,183 @@ fn my_mrs(conn: &dyn Connector, account_id: &str) -> Result<Vec<MyMr>, Connector
     Ok(out)
 }
 
-/// Every GitLab account's open MRs that the user authored or is assigned to.
-/// An account that fails reports its error and does not stop the others.
+// ---- GitHub (through the provider layer) --------------------------------------
+
+/// Is this account's kind reviewed through `crate::providers` rather than
+/// GitLab's own API (draft notes)?
+fn via_provider(kind: &str) -> bool {
+    kind == "github"
+}
+
+fn provider_err(e: ProviderError) -> ConnectorError {
+    match e {
+        ProviderError::Connector(c) => c,
+        other => ConnectorError::Other {
+            class: other.class_name(),
+            detail: String::new(),
+        },
+    }
+}
+
+fn repo_binding(account: &str, repo: &str) -> Binding {
+    let ep = Endpoint {
+        account: account.to_string(),
+        path: repo.to_string(),
+    };
+    Binding {
+        code: ep.clone(),
+        tracker: ep,
+    }
+}
+
+/// `(changed new paths, {new_path: old_path} of renamed files)`.
+fn changed_paths(changes: &[Value]) -> (BTreeSet<String>, Map<String, Value>) {
+    let changed: BTreeSet<String> = changes
+        .iter()
+        .filter_map(|c| c.get("new_path").filter(|v| py_truthy(v)).map(py_str))
+        .collect();
+    let mut old_paths = Map::new();
+    for c in changes {
+        let (old, new) = (c.get("old_path"), c.get("new_path"));
+        if let (Some(o), Some(n)) = (old.filter(|v| py_truthy(v)), new.filter(|v| py_truthy(v))) {
+            if o != n {
+                old_paths.insert(py_str(n), json!(py_str(o)));
+            }
+        }
+    }
+    (changed, old_paths)
+}
+
+/// The user's open pull requests on a GitHub account, in any repository.
+fn hosted_my_mrs(
+    source: &dyn ConnectorSource,
+    account_id: &str,
+) -> Result<Vec<MyMr>, ConnectorError> {
+    let host = crate::providers::account_host(source, account_id).map_err(provider_err)?;
+    let me = host.me().map_err(provider_err)?;
+    let mut out: Vec<MyMr> = Vec::new();
+    for filter in [
+        CrFilter::Mine,
+        CrFilter::Assigned,
+        CrFilter::ReviewRequested,
+    ] {
+        for cr in host
+            .change_requests_anywhere(filter, &me, None, 100)
+            .map_err(provider_err)?
+        {
+            let iid = cr.number.to_string();
+            let r = mr_ref(account_id, &cr.repo, &iid);
+            let i = match out.iter().position(|m| m.mr_ref() == r) {
+                Some(i) => i,
+                None => {
+                    out.push(MyMr {
+                        account: account_id.to_string(),
+                        project_id: cr.repo.clone(),
+                        reference: format!("{}#{}", cr.repo, cr.number),
+                        iid,
+                        title: cr.title.clone(),
+                        web_url: cr.web_url.clone(),
+                        author: cr.author.clone(),
+                        author_username: cr.author.clone(),
+                        created_at: cr.raw.get("created_at").map_or(String::new(), py_str),
+                        sha: cr.head_sha.clone(),
+                        draft: cr.draft || is_draft(&json!({"title": cr.title})),
+                        ..MyMr::default()
+                    });
+                    out.len() - 1
+                }
+            };
+            let mr = &mut out[i];
+            match filter {
+                CrFilter::Mine => mr.authored = true,
+                CrFilter::Assigned => mr.assignee = true,
+                CrFilter::ReviewRequested => mr.reviewer = true,
+            }
+        }
+    }
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(out)
+}
+
+/// The pending review for a provider-hosted pull request: the summary and
+/// every finding the provider can place as a line comment, in one review
+/// the user submits themselves. Never approves or submits.
+pub fn post_review_hosted(
+    src: &dyn ConnectorSource,
+    mr: &Value,
+    answer: &Value,
+) -> Result<Value, PostError> {
+    let other = |e: ProviderError| PostError::Other(provider_err(e));
+    let n = mr["iid"]
+        .as_u64()
+        .or_else(|| py_str(&mr["iid"]).parse().ok())
+        .ok_or_else(|| PostError::Other(ConnectorError::msg("no pull request number")))?;
+    let r = crate::providers::resolve(
+        src,
+        &repo_binding(&py_str(&mr["account"]), &py_str(&mr["project_id"])),
+    )
+    .map_err(other)?;
+    let cr = r.code.change_request(n).map_err(other)?;
+    let old_paths = mr.get("old_paths").cloned().unwrap_or(Value::Null);
+    let mut notes: Vec<DraftNote> = Vec::new();
+    if let Some(summary) = summary_note(answer) {
+        notes.push(DraftNote {
+            position: None,
+            body: summary,
+        });
+    }
+    for f in answer
+        .get("findings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let path = py_str(&f["path"]);
+        notes.push(DraftNote {
+            position: Some(DiffPosition {
+                old_path: old_paths.get(&path).map(py_str),
+                line: f["line"].as_u64(),
+                head_sha: Some(cr.head_sha.clone()),
+                path,
+                ..DiffPosition::default()
+            }),
+            body: finding_note(f),
+        });
+    }
+    match r.code.draft_review(&cr, &notes, SIGNATURE) {
+        Ok(o) => Ok(json!({"drafts": o.posted, "fallback_general": o.fallback})),
+        Err(ProviderError::PendingReviewExists) => Err(PostError::Denied(
+            "you already have a pending review on this pull request".into(),
+        )),
+        Err(e) => {
+            let e = provider_err(e);
+            if matches!(e.status(), Some(401) | Some(403)) {
+                return Err(PostError::Denied(
+                    "token needs write access to pull requests to leave a pending review".into(),
+                ));
+            }
+            Err(PostError::Other(e))
+        }
+    }
+}
+
+/// Every GitLab and GitHub account's open MRs that the user authored or is
+/// assigned to. An account that fails reports its error and does not stop
+/// the others.
 pub fn list_my_mrs(source: &dyn ConnectorSource) -> Vec<AccountMrs> {
     source
         .accounts_with_capability(crate::connectors::MERGE_REQUESTS)
         .into_iter()
-        .filter(|a| a.kind == "gitlab")
+        .filter(|a| a.kind == "gitlab" || via_provider(&a.kind))
         .map(|account| {
-            let listed = source
-                .load(&account.id)
-                .map_err(|_| "KeyError".to_string())
-                .and_then(|c| my_mrs(c.as_ref(), &account.id).map_err(|e| e.class_name()));
+            let listed = if via_provider(&account.kind) {
+                hosted_my_mrs(source, &account.id).map_err(|e| e.class_name())
+            } else {
+                source
+                    .load(&account.id)
+                    .map_err(|_| "KeyError".to_string())
+                    .and_then(|c| my_mrs(c.as_ref(), &account.id).map_err(|e| e.class_name()))
+            };
             let (mrs, error) = match listed {
                 Ok(m) => (m, None),
                 Err(e) => (Vec::new(), Some(e)),
@@ -1046,6 +1213,131 @@ impl MrReview {
     }
 }
 
+impl MrReview {
+    /// The pull requests a provider-hosted (GitHub) account asks the user to
+    /// review, as an assignee or a requested reviewer; never their own or a
+    /// draft. Same choices (skip, failed, "Review now") as GitLab's.
+    fn discover_hosted(
+        &self,
+        ctx: &LoopContext,
+        account_id: &str,
+        prefs: &MrPrefs,
+        requested: &mut Vec<WorkItem>,
+        items: &mut Vec<WorkItem>,
+        load_failures: &mut Vec<(String, String)>,
+    ) {
+        let listed = (|| -> Result<(String, Vec<ChangeRequest>), ProviderError> {
+            let host = crate::providers::account_host(self.connectors.as_ref(), account_id)?;
+            let me = host.me()?;
+            let mut rows: Vec<ChangeRequest> = Vec::new();
+            for filter in [CrFilter::ReviewRequested, CrFilter::Assigned] {
+                for cr in host.change_requests_anywhere(filter, &me, None, 50)? {
+                    if !rows
+                        .iter()
+                        .any(|r| r.repo == cr.repo && r.number == cr.number)
+                    {
+                        rows.push(cr);
+                    }
+                }
+            }
+            Ok((me, rows))
+        })();
+        let (me, rows) = match listed {
+            Ok(v) => v,
+            Err(e) => {
+                ctx.log(&format!(
+                    "mr-review: account {account_id} failed: {}",
+                    e.class_name()
+                ));
+                return;
+            }
+        };
+        for cr in rows {
+            if cr.author == me || cr.draft || is_draft(&json!({"title": cr.title})) {
+                continue;
+            }
+            let r = mr_ref(account_id, &cr.repo, &cr.number.to_string());
+            let wanted = prefs.requested.contains(&r);
+            if !wanted && (prefs.skip.contains(&r) || prefs.failed.contains_key(&r)) {
+                continue;
+            }
+            match self.hosted_item(ctx, account_id, &cr, wanted) {
+                Ok(Some(item)) if wanted => requested.push(item.with_force()),
+                Ok(Some(item)) => items.push(item),
+                Ok(None) => {}
+                Err(e) => {
+                    ctx.log(&format!(
+                        "mr-review: {} failed to load: {}",
+                        r,
+                        e.class_name()
+                    ));
+                    load_failures.push((r, format!("could not load: {}", e.class_name())));
+                }
+            }
+        }
+    }
+
+    fn hosted_item(
+        &self,
+        ctx: &LoopContext,
+        account_id: &str,
+        listed: &ChangeRequest,
+        wanted: bool,
+    ) -> Result<Option<WorkItem>, ProviderError> {
+        let res = crate::providers::resolve(
+            self.connectors.as_ref(),
+            &repo_binding(account_id, &listed.repo),
+        )?;
+        // A search hit carries no head SHA: the detail does.
+        let cr = res.code.change_request(listed.number)?;
+        if cr.draft || cr.head_sha.is_empty() {
+            return Ok(None);
+        }
+        let iid = cr.number.to_string();
+        let key = item_key(account_id, &listed.repo, &iid, &cr.head_sha);
+        if !ctx.force && !wanted && self.already_seen(&key, ctx) {
+            return Ok(None);
+        }
+        let changes: Vec<Value> = res
+            .code
+            .diff(cr.number)?
+            .iter()
+            .map(|f| {
+                json!({"old_path": f.old_path, "new_path": f.new_path, "diff": f.diff,
+                       "new_file": f.new_file, "deleted_file": f.deleted_file,
+                       "renamed_file": f.renamed_file})
+            })
+            .collect();
+        let (diff, truncated) = build_diff_text(&changes, DIFF_CAP_BYTES);
+        let (changed, old_paths) = changed_paths(&changes);
+        let description: String = cr.description.chars().take(MAX_DESCRIPTION).collect();
+        let reference = format!("{}#{}", listed.repo, cr.number);
+        let meta = json!({
+            "label": format!("{} ({reference})", cr.title),
+            "title": cr.title, "ref": reference,
+            "author": cr.author, "author_username": cr.author,
+            "created_at": listed.raw.get("created_at").map_or(String::new(), py_str),
+        });
+        Ok(Some(
+            WorkItem::new(
+                key,
+                cr.title.clone(),
+                json!({
+                    "provider": res.code.provider().kind(),
+                    "account": account_id, "project_id": listed.repo, "iid": cr.number,
+                    "title": cr.title, "description": description, "web_url": cr.web_url,
+                    "diff_refs": {"head_sha": cr.head_sha},
+                    "diff": diff, "truncated": truncated,
+                    "changed_paths": changed.into_iter().collect::<Vec<_>>(),
+                    "old_paths": old_paths,
+                }),
+            )
+            .with_url(cr.web_url.clone())
+            .with_meta(meta),
+        ))
+    }
+}
+
 impl LoopPlugin for MrReview {
     fn loop_name(&self) -> &str {
         "mr-review-loop"
@@ -1072,6 +1364,17 @@ impl LoopPlugin for MrReview {
             .connectors
             .accounts_with_capability(crate::connectors::MERGE_REQUESTS)
         {
+            if via_provider(&account.kind) {
+                self.discover_hosted(
+                    ctx,
+                    &account.id,
+                    &prefs,
+                    &mut requested,
+                    &mut items,
+                    &mut load_failures,
+                );
+                continue;
+            }
             if account.kind != "gitlab" {
                 continue;
             }
@@ -1288,6 +1591,13 @@ impl LoopPlugin for MrReview {
         let url = payload.get("web_url").map_or(String::new(), py_str);
         let posted = match &self.poster {
             Some(p) => p(conn.as_ref(), payload, &cleaned),
+            None if payload
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(via_provider) =>
+            {
+                post_review_hosted(self.connectors.as_ref(), payload, &cleaned)
+            }
             None => post_review(conn.as_ref(), payload, &cleaned),
         };
         let result = match posted {
@@ -1855,15 +2165,15 @@ mod tests {
                 ]
             }
             fn load(&self, id: &str) -> Result<Box<dyn Connector>, LoadFailure> {
-                let conn = if id == "bad" {
-                    Conn::new(|_, _, _| {
+                let conn = match id {
+                    "bad" => Conn::new(|_, _, _| {
                         Err(ConnectorError::Other {
                             class: "RuntimeError".into(),
                             detail: "secret https://x/token".into(),
                         })
-                    })
-                } else {
-                    Conn::new(|m, p, _| d_handler(m, p, None))
+                    }),
+                    "gh" => gh_conn(),
+                    _ => Conn::new(|m, p, _| d_handler(m, p, None)),
                 };
                 Ok(Box::new(Shared(conn)))
             }
@@ -1873,7 +2183,7 @@ mod tests {
         let items = MrReview::new(Arc::new(Multi)).discover(&ctx).unwrap();
         assert_eq!(
             items.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
-            ["mr:work:9!7@h"]
+            ["mr:gh:o/r!1@h1", "mr:work:9!7@h"]
         );
         let logs = logs.lock().unwrap();
         assert!(
@@ -1882,6 +2192,129 @@ mod tests {
                     .iter()
                     .all(|l| !l.contains("secret") && !l.contains("token"))
         );
+    }
+
+    // ---- GitHub accounts ------------------------------------------------------
+
+    fn gh_hit(n: u64, author: &str, draft: bool) -> Value {
+        json!({"number": n, "title": format!("PR {n}"), "user": {"login": author},
+               "html_url": format!("https://github.com/o/r/pull/{n}"), "draft": draft,
+               "repository_url": "https://api.github.com/repos/o/r", "state": "open",
+               "pull_request": {}, "created_at": format!("2026-10-0{n}T00:00:00Z")})
+    }
+
+    fn gh_pr(n: u64, author: &str) -> Value {
+        json!({"number": n, "title": format!("PR {n}"), "body": "why", "user": {"login": author},
+               "html_url": format!("https://github.com/o/r/pull/{n}"), "draft": false, "state": "open",
+               "head": {"ref": "feat", "sha": format!("h{n}")},
+               "base": {"ref": "main", "repo": {"full_name": "o/r"}}})
+    }
+
+    /// A fake GitHub API: #1 by `x` assigned to and review-requested from
+    /// `me`, #2 by `me`, #3 a draft by `x`.
+    fn gh_handler(m: &str, p: &str, _b: Option<&Value>) -> Result<Value, ConnectorError> {
+        let search = p.starts_with("/search/issues");
+        match (m, p) {
+            ("GET", "/user") => Ok(json!({"login": "me"})),
+            ("GET", p) if search && p.contains("author%3Ame") => {
+                Ok(json!({"items": [gh_hit(2, "me", false)]}))
+            }
+            ("GET", p) if search && p.contains("assignee%3Ame") => {
+                Ok(json!({"items": [gh_hit(1, "x", false), gh_hit(3, "x", true)]}))
+            }
+            ("GET", _) if search => Ok(json!({"items": [gh_hit(1, "x", false)]})),
+            ("GET", "/repos/o/r/pulls/1") => Ok(gh_pr(1, "x")),
+            ("GET", p) if p.starts_with("/repos/o/r/pulls/1/files") => Ok(json!([
+                {"filename": "app/a.rb", "status": "modified",
+                 "patch": "@@ -1,2 +1,3 @@\n a\n+b = eval(params[:x])\n c\n"},
+                {"filename": "app/new.rb", "previous_filename": "app/old.rb", "status": "renamed", "patch": ""}
+            ])),
+            ("GET", p) if p.starts_with("/repos/o/r/pulls/1/reviews") => Ok(json!([])),
+            ("POST", "/repos/o/r/pulls/1/reviews") => Ok(json!({"id": 5})),
+            _ => Err(ConnectorError::Other {
+                class: "NotFound".into(),
+                detail: p.into(),
+            }),
+        }
+    }
+
+    fn gh_conn() -> Arc<Conn> {
+        Arc::new(Conn {
+            account: Account::new("gh", "github").with_setting("api_url", "https://api.github.com"),
+            calls: Mutex::new(vec![]),
+            handler: Box::new(gh_handler),
+        })
+    }
+
+    fn gh_plugin(conn: Arc<Conn>) -> MrReview {
+        MrReview::new(Arc::new(Source {
+            accounts: vec![Account::new("gh", "github")],
+            conn,
+        }))
+    }
+
+    #[test]
+    fn github_pull_requests_are_listed_with_their_roles() {
+        let accounts = list_my_mrs(&Source {
+            accounts: vec![Account::new("gh", "github")],
+            conn: gh_conn(),
+        });
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].error, None);
+        let mrs = &accounts[0].mrs;
+        let by_iid = |n: &str| mrs.iter().find(|m| m.iid == n).unwrap();
+        let one = by_iid("1");
+        assert_eq!(
+            (one.assignee, one.reviewer, one.authored),
+            (true, true, false)
+        );
+        assert_eq!(one.reference, "o/r#1");
+        assert_eq!(one.project_id, "o/r");
+        assert_eq!(one.web_url, "https://github.com/o/r/pull/1");
+        assert!(one.reviewable());
+        assert!(by_iid("2").authored);
+        assert!(by_iid("3").draft);
+    }
+
+    #[test]
+    fn discover_reviews_assigned_github_pull_requests_but_not_own_or_drafts() {
+        let items = gh_plugin(gh_conn()).discover(&c()).unwrap();
+        assert_eq!(
+            items.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["mr:gh:o/r!1@h1"]
+        );
+        let p = &items[0].payload;
+        assert_eq!(p["provider"], "github");
+        assert_eq!(p["diff_refs"]["head_sha"], "h1");
+        assert_eq!(p["changed_paths"], json!(["app/a.rb", "app/new.rb"]));
+        assert_eq!(p["old_paths"], json!({"app/new.rb": "app/old.rb"}));
+        assert!(p["diff"].as_str().unwrap().contains("eval(params[:x])"));
+        assert_eq!(p["web_url"], "https://github.com/o/r/pull/1");
+    }
+
+    #[test]
+    fn a_github_review_is_one_pending_review_with_line_comments() {
+        let conn = gh_conn();
+        let plugin = gh_plugin(conn.clone());
+        let item = plugin.discover(&c()).unwrap().remove(0);
+        let answer = json!({"summary": "Risky.", "verdict": "request_changes",
+                            "findings": [finding("app/a.rb", 2, "major", "eval of user input")]});
+        let out = plugin.after_item(&item, &answer, &c()).unwrap();
+        assert_eq!(out.status, Status::Done);
+        let posts = conn.posts();
+        assert_eq!(posts.len(), 1, "{posts:?}");
+        let review = &posts[0];
+        assert_eq!(review["commit_id"], "h1");
+        assert!(review.get("event").is_none(), "never submitted: {review}");
+        assert_eq!(review["comments"][0]["path"], "app/a.rb");
+        assert_eq!(review["comments"][0]["line"], 2);
+        assert!(review["comments"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("eval of user input"));
+        let body = review["body"].as_str().unwrap();
+        assert!(body.contains("Risky."), "{body}");
+        assert!(body.trim_end().ends_with(SIGNATURE.trim()), "{body}");
     }
 
     #[test]

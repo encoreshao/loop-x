@@ -1225,7 +1225,6 @@
   "Reviewer": "Relecteur",
   "Assignee": "Assigné",
   "You: {roles}": "Vous : {roles}",
-  "Connect a GitLab account to see your merge requests.": "Connectez un compte GitLab pour voir vos merge requests.",
   "Open Connectors": "Ouvrir les connecteurs",
   "Could not load merge requests from {account} ({error})": "Impossible de charger les merge requests de {account} ({error})",
   "Assigned to you": "Qui vous sont assignées",
@@ -1316,5 +1315,18 @@
   "GitLab issues": "Tickets GitLab",
   "Not a whole number: {value}": "Pas un nombre entier : {value}",
   "Saved. New runs use these limits.": "Enregistré. Les nouvelles exécutions utilisent ces limites.",
-  "Each limit must be between {min} and {max}.": "Chaque limite doit être comprise entre {min} et {max}."
+  "Each limit must be between {min} and {max}.": "Chaque limite doit être comprise entre {min} et {max}.",
+  "Pull request #{number}": "Pull request #{number}",
+  "A project alias may only use letters, digits, '.', '_' and '-'": "Un alias de projet ne peut contenir que des lettres, des chiffres, '.', '_' et '-'",
+  "Unknown GitHub account: {name}": "Compte GitHub inconnu : {name}",
+  "The repository must be owner/name": "Le dépôt doit être au format owner/name",
+  "{name} is already a GitLab project": "{name} est déjà un projet GitLab",
+  "Repository": "Dépôt",
+  "Checkout": "Copie locale",
+  "(no GitHub projects yet)": "(aucun projet GitHub pour l'instant)",
+  "Add a GitHub account first to track GitHub projects.": "Ajoutez d'abord un compte GitHub pour suivre des projets GitHub.",
+  "GitHub login (optional)": "Identifiant GitHub (facultatif)",
+  "Add GitHub project": "Ajouter un projet GitHub",
+  "Repositories on GitHub. The loop works the issues assigned to you there and opens pull requests, the same way it works GitLab issues. The GitHub login defaults to the account's own; leave the checkout and target branch empty to track issues only.": "Dépôts sur GitHub. La boucle traite les tickets qui vous y sont assignés et ouvre des pull requests, comme pour les tickets GitLab. L'identifiant GitHub est par défaut celui du compte ; laissez la copie locale et la branche cible vides pour ne suivre que les tickets.",
+  "Connect a GitLab or GitHub account to see your merge requests.": "Connectez un compte GitLab ou GitHub pour voir vos merge requests."
 }

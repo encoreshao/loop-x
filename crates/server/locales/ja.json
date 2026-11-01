@@ -1225,7 +1225,6 @@
   "Reviewer": "レビュアー",
   "Assignee": "担当者",
   "You: {roles}": "あなた: {roles}",
-  "Connect a GitLab account to see your merge requests.": "マージリクエストを表示するには GitLab アカウントを接続してください。",
   "Open Connectors": "コネクタを開く",
   "Could not load merge requests from {account} ({error})": "{account} からマージリクエストを読み込めませんでした ({error})",
   "Assigned to you": "あなたに割り当て",
@@ -1316,5 +1315,18 @@
   "GitLab issues": "GitLab イシュー",
   "Not a whole number: {value}": "整数ではありません: {value}",
   "Saved. New runs use these limits.": "保存しました。新しい実行からこの上限が使われます。",
-  "Each limit must be between {min} and {max}.": "各上限は {min} から {max} の間で指定してください。"
+  "Each limit must be between {min} and {max}.": "各上限は {min} から {max} の間で指定してください。",
+  "Pull request #{number}": "プルリクエスト #{number}",
+  "A project alias may only use letters, digits, '.', '_' and '-'": "プロジェクトのエイリアスに使えるのは英数字、'.'、'_'、'-' のみです",
+  "Unknown GitHub account: {name}": "不明な GitHub アカウント: {name}",
+  "The repository must be owner/name": "リポジトリは owner/name の形式で指定してください",
+  "{name} is already a GitLab project": "{name} はすでに GitLab プロジェクトです",
+  "Repository": "リポジトリ",
+  "Checkout": "チェックアウト",
+  "(no GitHub projects yet)": "(GitHub プロジェクトはまだありません)",
+  "Add a GitHub account first to track GitHub projects.": "GitHub プロジェクトを追跡するには、まず GitHub アカウントを追加してください。",
+  "GitHub login (optional)": "GitHub ログイン名 (任意)",
+  "Add GitHub project": "GitHub プロジェクトを追加",
+  "Repositories on GitHub. The loop works the issues assigned to you there and opens pull requests, the same way it works GitLab issues. The GitHub login defaults to the account's own; leave the checkout and target branch empty to track issues only.": "GitHub 上のリポジトリです。ループは GitLab の課題と同じように、あなたに割り当てられた課題に取り組み、プルリクエストを作成します。GitHub ログイン名は省略するとアカウント自身のものになります。チェックアウトとターゲットブランチを空にすると、課題のみを追跡します。",
+  "Connect a GitLab or GitHub account to see your merge requests.": "マージリクエストを表示するには、GitLab または GitHub アカウントを接続してください。"
 }

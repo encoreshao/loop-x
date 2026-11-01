@@ -30,6 +30,7 @@ pub mod gitlab_report;
 pub mod gitlab_runner;
 pub mod golden_eval;
 pub mod health;
+pub mod hosted;
 pub mod inbox_config;
 pub mod inbox_runner;
 pub mod inbox_seen;

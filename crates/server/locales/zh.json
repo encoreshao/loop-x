@@ -1225,7 +1225,6 @@
   "Reviewer": "评审人",
   "Assignee": "指派人",
   "You: {roles}": "你：{roles}",
-  "Connect a GitLab account to see your merge requests.": "连接 GitLab 账户以查看你的合并请求。",
   "Open Connectors": "打开连接器",
   "Could not load merge requests from {account} ({error})": "无法从 {account} 加载合并请求（{error}）",
   "Assigned to you": "分配给你",
@@ -1316,5 +1315,18 @@
   "GitLab issues": "GitLab 议题",
   "Not a whole number: {value}": "不是整数：{value}",
   "Saved. New runs use these limits.": "已保存。新的运行将使用这些上限。",
-  "Each limit must be between {min} and {max}.": "每个上限必须在 {min} 到 {max} 之间。"
+  "Each limit must be between {min} and {max}.": "每个上限必须在 {min} 到 {max} 之间。",
+  "Pull request #{number}": "拉取请求 #{number}",
+  "A project alias may only use letters, digits, '.', '_' and '-'": "项目别名只能包含字母、数字、'.'、'_' 和 '-'",
+  "Unknown GitHub account: {name}": "未知的 GitHub 账户：{name}",
+  "The repository must be owner/name": "仓库必须是 owner/name 格式",
+  "{name} is already a GitLab project": "{name} 已经是 GitLab 项目",
+  "Repository": "仓库",
+  "Checkout": "检出目录",
+  "(no GitHub projects yet)": "(还没有 GitHub 项目)",
+  "Add a GitHub account first to track GitHub projects.": "要跟踪 GitHub 项目，请先添加 GitHub 账户。",
+  "GitHub login (optional)": "GitHub 登录名（可选）",
+  "Add GitHub project": "添加 GitHub 项目",
+  "Repositories on GitHub. The loop works the issues assigned to you there and opens pull requests, the same way it works GitLab issues. The GitHub login defaults to the account's own; leave the checkout and target branch empty to track issues only.": "GitHub 上的仓库。循环会像处理 GitLab 议题一样处理分配给你的议题，并创建拉取请求。GitHub 登录名默认使用该账户本身的登录名；检出目录和目标分支都留空则只跟踪议题。",
+  "Connect a GitLab or GitHub account to see your merge requests.": "连接 GitLab 或 GitHub 账户以查看你的合并请求。"
 }

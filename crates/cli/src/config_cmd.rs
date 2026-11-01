@@ -56,6 +56,12 @@ fn agent_view(mut project: Value) -> Value {
             hints.insert(kind.into(), cmd);
         }
     }
+    // A connector-bound project (GitHub, ...): its account and repository are
+    // the `<instance> <project_id>` the cache and memory helpers key on.
+    if loopx_core::hosted::is_hosted(&project) {
+        project["instance"] = project["code_host"]["account"].clone();
+        project["project_id"] = project["code_host"]["repo"].clone();
+    }
     project["use_worktree"] = json!(use_worktree(&project));
     project["code_changes"] = json!(changes_code(&project));
     project["hints"] = Value::Object(hints);
@@ -118,6 +124,27 @@ mod tests {
         assert!(v.get("test_cmd").is_none());
         assert_eq!(v["target_branch"], "main");
         assert_eq!(v["code_changes"], true);
+    }
+
+    #[test]
+    fn a_code_host_project_reads_its_account_and_repo_as_instance_and_project_id() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("projects.json");
+        std::fs::write(
+            &p,
+            json!({"gitlab_instance": "g", "projects": {"hub": {
+                "local_path": "/h", "code_host": {"account": "gh-work", "repo": "o/r"}
+            }}})
+            .to_string(),
+        )
+        .unwrap();
+        let Ok(out) = dispatch_with(&p, "project", &["hub".to_string()]) else {
+            panic!("dispatch failed");
+        };
+        let v: Value = serde_json::from_str(&out).unwrap();
+        // The cache and memory helpers key on these two.
+        assert_eq!(v["instance"], "gh-work");
+        assert_eq!(v["project_id"], "o/r");
     }
 
     #[test]

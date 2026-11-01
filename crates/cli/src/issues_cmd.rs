@@ -35,6 +35,17 @@ fn run_list(args: &[String]) -> Result<String, String> {
     let config = gitlab::load_config();
     let mut result = Map::new();
     for alias in aliases {
+        // A `code_host` project (GitHub, ...): its own assignee, else the
+        // token's account; see `loopx_core::hosted::assignee`.
+        if let Some(project) = loopx_core::hosted::hosted_project(&alias) {
+            let src = loopx_core::connectors_config::ConfigConnectors::real();
+            let r = loopx_core::hosted::resolve_project(&src, &project)
+                .map_err(|e| format!("{alias}: {e}"))?;
+            let issues = loopx_core::hosted::helper(&r, &project, "list-issues", &[])
+                .map_err(|e| format!("{alias}: {e}"))?;
+            result.insert(alias, issues);
+            continue;
+        }
         let (project_id, instance, bundle) =
             gitlab::resolve_project_alias(config.as_ref(), &alias, None);
         let client = Client::from_config(config.as_ref(), instance.as_deref(), bundle.as_deref())

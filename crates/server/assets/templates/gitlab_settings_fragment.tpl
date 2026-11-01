@@ -18,6 +18,13 @@
 
 <div class="grid">
 <section class="card">
+<div class="section-header">⟦_SECTION_ICON_SETTINGS⟧<h2>GitHub</h2></div>
+⟦github_html⟧
+</section>
+</div>
+
+<div class="grid">
+<section class="card">
 <div class="section-header">⟦_SECTION_ICON_SETTINGS⟧<h2>⟦html.escape(_t('Access bundles'))⟧</h2></div>
 <p class="subtitle">⟦bundles_subtitle⟧</p>
 ⟦bundles_html⟧

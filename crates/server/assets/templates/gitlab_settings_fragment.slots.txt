@@ -10,6 +10,7 @@ projects_html
 add_project_form
 html.escape(_t('Loop settings'))
 loop_settings_form
+github_html
 html.escape(_t('Access bundles'))
 bundles_subtitle
 bundles_html

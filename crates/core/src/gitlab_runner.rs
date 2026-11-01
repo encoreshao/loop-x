@@ -1123,6 +1123,12 @@ pub fn project_slack_target(
     let bundle = config
         .pointer(&format!("/projects/{}/bundle", escape_pointer(alias)))
         .and_then(Value::as_str)
+        .or_else(|| {
+            // A `code_host` project is not in the GitLab config: its own `bundle`.
+            crate::hosted::is_hosted(project)
+                .then(|| project.get("bundle").and_then(Value::as_str))
+                .flatten()
+        })
         .filter(|b| !b.is_empty())
         .map(str::to_owned);
     let base = project
@@ -1229,6 +1235,42 @@ fn real_opener(local_path: &str, branch: &str, target: &str, title: &str) -> (bo
     }
 }
 
+/// `(ok, detail)` of pushing `branch` with no push options: a `code_host`
+/// project's pull request is opened through the API afterwards.
+fn real_pusher(local_path: &str, branch: &str) -> (bool, String) {
+    if let Err(msg) = mr::check_branch(branch) {
+        return (false, msg);
+    }
+    let argv = mr::branch_push_command(local_path, branch);
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    match proc::run(
+        &mut cmd,
+        None,
+        Some(std::time::Duration::from_secs(OPENER_TIMEOUT_SECONDS)),
+    ) {
+        Ok(out) if out.timed_out => (false, "TimeoutExpired: push timed out".into()),
+        Ok(out) => (
+            out.success(),
+            format!("{}{}", out.stdout, out.stderr).trim().to_string(),
+        ),
+        Err(e) => (false, format!("OSError: {e}")),
+    }
+}
+
+/// Screenshot uploads for a host with no image upload API (GitHub): every
+/// pair is dropped with a note in the description.
+struct NoUploads;
+
+impl GitlabCalls for NoUploads {
+    fn call(&self, _: &str, _: &str, _: &Value) -> Result<(), String> {
+        Err("not a GitLab project".into())
+    }
+    fn upload(&self, _: &str, _: &Path) -> Result<String, String> {
+        Err("this host has no API to upload images".into())
+    }
+}
+
 /// Dependencies of [`finalize_gated_issue`]; `None` uses the real thing.
 #[derive(Default)]
 pub struct FinalizeDeps<'a> {
@@ -1238,6 +1280,9 @@ pub struct FinalizeDeps<'a> {
     pub handoff: Option<PathBuf>,
     pub project: Option<Value>,
     pub gitlab_config_path: Option<PathBuf>,
+    /// A `code_host` project's tracker and code host (tests); `None`
+    /// resolves them from the connector accounts. Unused for legacy GitLab.
+    pub hosted: Option<&'a crate::providers::Resolved>,
     /// Overrides `require_approval` from projects.json.
     pub require_approval: Option<bool>,
     /// Where approvals live (default `outputs/approvals`).
@@ -1362,8 +1407,14 @@ pub fn finalize_gated_issue(
     };
     let setup = project.and_then(|project| {
         let (b, url) = project_slack_target(alias, &project, deps.gitlab_config_path.as_deref());
+        // A `code_host` project names its repository and connector account there.
+        let (id_key, instance_key) = if crate::hosted::is_hosted(&project) {
+            ("/code_host/repo", "/code_host/account")
+        } else {
+            ("/project_id", "/instance")
+        };
         let id = project
-            .get("project_id")
+            .pointer(id_key)
             .and_then(Value::as_str)
             .ok_or("KeyError: 'project_id'")?
             .to_string();
@@ -1373,7 +1424,7 @@ pub fn finalize_gated_issue(
             .ok_or("KeyError: 'local_path'")?
             .to_string();
         let instance = project
-            .get("instance")
+            .pointer(instance_key)
             .and_then(Value::as_str)
             .ok_or("KeyError: 'instance'")?
             .to_string();
@@ -1399,6 +1450,41 @@ pub fn finalize_gated_issue(
     if let Some(url) = url {
         issue_label = slack_issue_link(alias, issue_iid, Some(&url));
     }
+    // A `code_host` project (GitHub, ...) goes through its connector account.
+    let resolved_host;
+    let host: Option<&crate::providers::Resolved> = if crate::hosted::is_hosted(&project) {
+        match deps.hosted {
+            Some(r) => Some(r),
+            None => match crate::hosted::resolve_project(
+                &crate::connectors_config::ConfigConnectors::real(),
+                &project,
+            ) {
+                Ok(r) => {
+                    resolved_host = r;
+                    Some(&resolved_host)
+                }
+                Err(e) => {
+                    log(&format!("project host error: {e}"));
+                    emit(
+                        "issue.escalated",
+                        json!({"reason": "project_config_error", "gated": true}),
+                    );
+                    notify(
+                        &bundle,
+                        escalation_slack(&issue_label, "project_config_error", None),
+                    );
+                    return "escalated:project_config_error".to_string();
+                }
+            },
+        }
+    } else {
+        None
+    };
+    let issue_n: u64 = issue_iid.parse().unwrap_or(0);
+    if let Some(h) = host {
+        let url = h.tracker.issue_url(issue_n);
+        issue_label = format!("<{url}|{alias} #{issue_iid}>");
+    }
     let notes_path = format!("projects/{}/issues/{issue_iid}", quote(&project_id));
     let real_gitlab = RealGitlab { instance };
     let gitlab_calls: &dyn GitlabCalls = deps.gitlab.unwrap_or(&real_gitlab);
@@ -1407,15 +1493,30 @@ pub fn finalize_gated_issue(
             log(&format!("GitLab {method} {endpoint} failed: {e}"));
         }
     };
+    let post_issue_note = |body: String| match host {
+        Some(h) => {
+            if let Err(e) = h.tracker.post_comment(issue_n, &body) {
+                log(&format!("issue comment failed: {e}"));
+            }
+        }
+        None => api(
+            "POST",
+            &format!("{notes_path}/notes"),
+            json!({"body": body}),
+        ),
+    };
 
     let escalate = |reason: &str, failure_text: &str, stop_reason: Option<&str>| -> String {
         let comment = escalation_comment(issue_iid, reason, failure_text, stop_reason);
-        api(
-            "POST",
-            &format!("{notes_path}/notes"),
-            json!({"body": comment}),
-        );
-        api("PUT", &notes_path, json!({"add_labels": NEEDS_HUMAN_LABEL}));
+        post_issue_note(comment);
+        match host {
+            Some(h) => {
+                if let Err(e) = h.tracker.add_label(issue_n, NEEDS_HUMAN_LABEL) {
+                    log(&format!("issue label failed: {e}"));
+                }
+            }
+            None => api("PUT", &notes_path, json!({"add_labels": NEEDS_HUMAN_LABEL})),
+        }
         let mut data = json!({"reason": reason, "gated": true});
         if let Some(s) = stop_reason.filter(|s| !s.is_empty()) {
             data["stop_reason"] = json!(s);
@@ -1553,8 +1654,11 @@ pub fn finalize_gated_issue(
             return escalate(reason, "", None);
         }
     }
+    // GitLab opens the MR from push options; any other host only gets the
+    // branch pushed here, and the pull request opened through its API below.
     let (ok, detail) = match deps.opener {
         Some(open) => open(&local_path, &branch, &target, &title),
+        None if host.is_some() => real_pusher(&local_path, &branch),
         None => real_opener(&local_path, &branch, &target, &title),
     };
     if !ok {
@@ -1589,14 +1693,45 @@ pub fn finalize_gated_issue(
     let checks: Vec<String> = ran.iter().map(|c| format!("- `{c}` \u{2705}")).collect();
     let summary = data.get("summary").and_then(Value::as_str).unwrap_or("");
     // Same shape the batch wrap-up reads from an agent-emitted fix event.
-    let mr_url = find_mr_url(&detail);
-    api(
-        "POST",
-        &format!("{notes_path}/notes"),
-        json!({"body": issue_comment(mr_url.as_deref(), &branch, &target, summary, checks.len())}),
-    );
+    let mr_url = match host {
+        Some(h) => {
+            let mut description = mr_description(&data, issue_iid, summary, &checks);
+            if let Some(section) = screenshots_description(
+                &data,
+                &handoff_dir,
+                &screens,
+                &project_id,
+                &NoUploads,
+                &log,
+            ) {
+                description = format!("{description}\n\n{section}");
+            }
+            match h
+                .code
+                .open_change_request(&branch, &target, &title, &description)
+            {
+                Ok(cr) => Some(cr.web_url),
+                Err(e) => {
+                    return escalate(
+                        "mr_open_failed",
+                        &tail(&e.to_string(), FAILURE_TAIL_CHARS),
+                        None,
+                    )
+                }
+            }
+        }
+        None => find_mr_url(&detail),
+    };
+    post_issue_note(issue_comment(
+        mr_url.as_deref(),
+        &branch,
+        &target,
+        summary,
+        checks.len(),
+    ));
     // A push option can't carry a multi-line description, so set it once the MR exists.
     match mr_url.as_deref().and_then(mr_iid) {
+        _ if host.is_some() => {}
         Some(mr) => {
             let mut description = mr_description(&data, issue_iid, summary, &checks);
             let section = screenshots_description(
@@ -1715,9 +1850,11 @@ fn issue_comment(
     summary: &str,
     checks: usize,
 ) -> String {
-    let mr = match mr_url.and_then(mr_iid) {
-        Some(iid) => format!("!{iid}"),
-        None => format!("`{branch}`"),
+    // GitLab autolinks `!iid`; another host's pull request is linked by URL.
+    let (noun, short, mr) = match (mr_url, mr_url.and_then(mr_iid)) {
+        (_, Some(iid)) => ("Merge request", "MR", format!("!{iid}")),
+        (Some(url), None) => ("Pull request", "PR", url.to_string()),
+        (None, None) => ("Merge request", "MR", format!("`{branch}`")),
     };
     let summary = summary.trim();
     // Continue the agent's bullet list when it ends in one, else start a new one.
@@ -1727,7 +1864,7 @@ fn issue_comment(
         Some(_) => "\n\n",
     };
     format!(
-        "**Merge request ready for review:** {mr} \u{2192} `{target}`\n\n{summary}{sep}- Checks: {checks}/{checks} passed \u{2705} (commands in the MR)"
+        "**{noun} ready for review:** {mr} \u{2192} `{target}`\n\n{summary}{sep}- Checks: {checks}/{checks} passed \u{2705} (commands in the {short})"
     )
 }
 
@@ -2595,6 +2732,12 @@ fn restore_in_place_checkout(
 /// Deletes each tracked checkout's `loop/issue-<iid>` branch (and worktree) once
 /// GitLab says the issue is done. Best-effort: anything it cannot check or
 /// remove is logged and kept for the next run.
+/// "Is the loop done with issue `iid` for good?" for one project.
+type FinishedCheck = Box<dyn Fn(&str) -> Result<bool, String>>;
+
+/// Each GitLab alias's open assigned issues, in alias order.
+type LegacyLister<'a> = dyn Fn(&[String]) -> Result<Vec<(String, Vec<Value>)>, String> + 'a;
+
 fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
     let gitlab_config = gitlab::load_config();
     for alias in aliases {
@@ -2605,30 +2748,53 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
         }) else {
             continue;
         };
-        let (project_id, instance, bundle) =
-            gitlab::resolve_project_alias(gitlab_config.as_ref(), alias, None);
-        let client = match Client::from_config(
-            gitlab_config.as_ref(),
-            instance.as_deref(),
-            bundle.as_deref(),
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                ctx.log(&format!("branch cleanup skipped for {alias}: {e}"));
-                continue;
+        let hosted = cfg.project(alias).ok().filter(crate::hosted::is_hosted);
+        let check: FinishedCheck = match hosted {
+            Some(project) => {
+                let src = crate::connectors_config::ConfigConnectors::real();
+                match crate::hosted::resolve_project(&src, &project) {
+                    Ok(r) => Box::new(move |iid: &str| {
+                        let n = iid.parse().map_err(|_| "not a number".to_string())?;
+                        crate::hosted::issue_finished(&r, n).map_err(|e| e.to_string())
+                    }),
+                    Err(e) => {
+                        ctx.log(&format!("branch cleanup skipped for {alias}: {e}"));
+                        continue;
+                    }
+                }
+            }
+            None => {
+                let (project_id, instance, bundle) =
+                    gitlab::resolve_project_alias(gitlab_config.as_ref(), alias, None);
+                let client = match Client::from_config(
+                    gitlab_config.as_ref(),
+                    instance.as_deref(),
+                    bundle.as_deref(),
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        ctx.log(&format!("branch cleanup skipped for {alias}: {e}"));
+                        continue;
+                    }
+                };
+                Box::new(move |iid: &str| {
+                    let n = iid.parse().map_err(|_| "not a number".to_string())?;
+                    client
+                        .issue_finished(&project_id, n)
+                        .map_err(|e| e.to_string())
+                })
             }
         };
-        let mut is_finished =
-            |iid: &str| match iid.parse().map(|n| client.issue_finished(&project_id, n)) {
-                Ok(Ok(done)) => done,
-                Ok(Err(e)) => {
-                    ctx.log(&format!(
-                        "branch cleanup: could not check {alias} #{iid}: {e}"
-                    ));
-                    false
-                }
-                Err(_) => false,
-            };
+        let mut is_finished = |iid: &str| match check(iid) {
+            Ok(done) => done,
+            Err(e) if e == "not a number" => false,
+            Err(e) => {
+                ctx.log(&format!(
+                    "branch cleanup: could not check {alias} #{iid}: {e}"
+                ));
+                false
+            }
+        };
         match worktree::sweep_finished_issue_branches(&local_path, &mut is_finished) {
             Ok(sweep) => {
                 for iid in &sweep.removed {
@@ -2652,6 +2818,53 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
     }
 }
 
+/// Each alias's open assigned issues, in config order: `code_host` projects
+/// through their connector account (`hosted`), the rest from GitLab in one
+/// `legacy` call. A hosted project that fails is logged and left out, so one
+/// broken GitHub token never stops the GitLab projects' work.
+fn assigned_by_alias(
+    cfg: &Config,
+    aliases: &[String],
+    legacy: &LegacyLister<'_>,
+    hosted: &dyn Fn(&Value) -> Result<Vec<Value>, String>,
+    log: &dyn Fn(&str),
+) -> Result<Vec<(String, Vec<Value>)>, String> {
+    let project_of = |a: &String| cfg.project(a).ok().filter(crate::hosted::is_hosted);
+    let gitlab_aliases: Vec<String> = aliases
+        .iter()
+        .filter(|a| project_of(a).is_none())
+        .cloned()
+        .collect();
+    let mut gitlab = if gitlab_aliases.is_empty() {
+        Vec::new()
+    } else {
+        legacy(&gitlab_aliases)?
+    };
+    let mut out = Vec::new();
+    for alias in aliases {
+        match project_of(alias) {
+            Some(project) => match hosted(&project) {
+                Ok(issues) => out.push((alias.clone(), issues)),
+                Err(e) => log(&format!("{alias}: could not list its issues: {e}")),
+            },
+            None => {
+                if let Some(i) = gitlab.iter().position(|(a, _)| a == alias) {
+                    out.push(gitlab.remove(i));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A `code_host` project's open issues assigned to its assignee.
+fn hosted_assigned(project: &Value) -> Result<Vec<Value>, String> {
+    let src = crate::connectors_config::ConfigConnectors::real();
+    let r = crate::hosted::resolve_project(&src, project).map_err(|e| e.to_string())?;
+    let user = crate::hosted::assignee(project, r.tracker.as_ref()).map_err(|e| e.to_string())?;
+    crate::hosted::assigned_issues(r.tracker.as_ref(), &user).map_err(|e| e.to_string())
+}
+
 pub fn run_all_issues(
     ctx: &RunCtx,
     run_id: &str,
@@ -2671,9 +2884,13 @@ pub fn run_all_issues(
     };
     let definition =
         LoopDefinition::from_yaml(&ctx.definition_path()).map_err(|e| e.to_string())?;
-    let assigned =
-        gitlab::list_assigned_issues(gitlab::load_config().as_ref(), &aliases, &username)
-            .map_err(|e| e.to_string())?;
+    let legacy = |aliases: &[String]| {
+        gitlab::list_assigned_issues(gitlab::load_config().as_ref(), aliases, &username)
+            .map_err(|e| e.to_string())
+    };
+    let assigned = assigned_by_alias(&cfg, &aliases, &legacy, &hosted_assigned, &|m: &str| {
+        ctx.log(m)
+    })?;
     let timeout_seconds = definition.stop_conditions.max_runtime_minutes * 60.0;
     sweep_finished_branches(ctx, &cfg, &aliases);
 
@@ -2882,6 +3099,16 @@ pub fn send_run_report(
     for line in lines.iter_mut().filter(|l| l.web_url.is_none()) {
         let project = config.as_ref().and_then(|c| c.project(&line.alias).ok());
         if let (Some(project), true) = (project, !line.iid.is_empty()) {
+            if crate::hosted::is_hosted(&project) {
+                let src = crate::connectors_config::ConfigConnectors::real();
+                if let (Ok(r), Ok(n)) = (
+                    crate::hosted::resolve_project(&src, &project),
+                    line.iid.parse::<u64>(),
+                ) {
+                    line.web_url = Some(r.tracker.issue_url(n));
+                }
+                continue;
+            }
             if let (_, Some(url)) =
                 project_slack_target(&line.alias, &project, gitlab_config.as_deref())
             {
@@ -2896,8 +3123,15 @@ pub fn send_run_report(
         cost_usd: aggregate_cost_usd(runs),
         wrapup_error,
     };
-    let bundle_of =
-        |alias: &str| project_slack_target(alias, &json!({}), gitlab_config.as_deref()).0;
+    let bundle_of = |alias: &str| {
+        // Only a `code_host` project's own fields matter here (its `bundle`).
+        let project = config
+            .as_ref()
+            .and_then(|c| c.project(alias).ok())
+            .filter(crate::hosted::is_hosted)
+            .unwrap_or_else(|| json!({}));
+        project_slack_target(alias, &project, gitlab_config.as_deref()).0
+    };
     for (bundle, lines) in gitlab_report::by_bundle(lines, &bundle_of) {
         let report = gitlab_report::build(&lines, &facts);
         match fakes {
@@ -3299,6 +3533,197 @@ mod tests {
         );
         assert_eq!(outcome, "mr_opened");
         notes.0.into_inner().unwrap()
+    }
+
+    /// Finalize on a `code_host` (GitHub) project: `(outcome, host writes,
+    /// slack messages, pushes)`.
+    fn finalize_hosted(
+        handoff: Value,
+        state: LoopState,
+        fail_open: bool,
+    ) -> (String, Vec<String>, Vec<String>, Vec<String>) {
+        use crate::hosted::fake::{resolved, Host};
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(&path, handoff.to_string()).unwrap();
+        let evidence = json!({"commands": [{"kind": "test", "command": "cargo test", "passed": state == LoopState::Completed, "source": "handoff"}]});
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            state,
+            vec![iteration(vec![v(
+                "project_commands",
+                state == LoopState::Completed,
+                "boom",
+                evidence,
+            )])],
+            "",
+        );
+        let host = std::sync::Arc::new(Host {
+            fail_open,
+            ..Default::default()
+        });
+        let r = resolved(host.clone());
+        let pushes = std::sync::Mutex::new(Vec::new());
+        let opener = |path: &str, branch: &str, target: &str, title: &str| {
+            pushes
+                .lock()
+                .unwrap()
+                .push(format!("{path} {branch} {target} {title}"));
+            (true, "pushed".to_string())
+        };
+        let ctx = RunCtx {
+            repo_root: d.path().into(),
+            events_dir: Some(d.path().join("events")),
+            results_dir: None,
+            unified_log: d.path().join("log"),
+            exe: "loopx".into(),
+            config_path: None,
+            fakes: None,
+            memory_root: None,
+            activity_file: d.path().join("agent-activity.json"),
+            stall_after: crate::agent_activity::STALL_AFTER,
+        };
+        let slack = std::sync::Mutex::new(Vec::new());
+        let notifier = |m: &str| slack.lock().unwrap().push(m.to_string());
+        let outcome = finalize_gated_issue(
+            &result,
+            "hub",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                hosted: Some(&r),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(
+                    json!({"code_host": {"account": "gh", "repo": "o/r"}, "local_path": "/x"}),
+                ),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                ..Default::default()
+            },
+        );
+        (
+            outcome,
+            host.writes(),
+            slack.into_inner().unwrap(),
+            pushes.into_inner().unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_github_fix_is_pushed_then_opened_as_a_pull_request_closing_the_issue() {
+        let (outcome, writes, slack, pushes) = finalize_hosted(
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+                   "title": "fix: #7 x", "summary": "S.", "description": "## What and why\n\n- Fix: f"}),
+            LoopState::Completed,
+            false,
+        );
+        assert_eq!(outcome, "mr_opened");
+        assert_eq!(pushes, ["/x loop/issue-7 main fix: #7 x"]);
+        let open = writes.iter().find(|w| w.starts_with("open ")).unwrap();
+        assert!(
+            open.starts_with("open loop/issue-7->main fix: #7 x | Closes #7\n\n## What and why"),
+            "{open}"
+        );
+        let comment = writes
+            .iter()
+            .find(|w| w.starts_with("comment #7 "))
+            .unwrap();
+        assert!(
+            comment.starts_with(
+                "comment #7 **Pull request ready for review:** https://github.com/o/r/pull/7 \u{2192} `main`"
+            ),
+            "{comment}"
+        );
+        assert!(comment.contains("(commands in the PR)"), "{comment}");
+        let finished = slack.iter().find(|m| m.starts_with("*Finished*")).unwrap();
+        assert!(
+            finished.contains("<https://github.com/o/r/issues/7|hub #7>"),
+            "{finished}"
+        );
+        assert!(
+            finished.contains("<https://github.com/o/r/pull/7|view MR>"),
+            "{finished}"
+        );
+    }
+
+    #[test]
+    fn a_github_verification_failure_is_escalated_on_the_issue() {
+        let (outcome, writes, slack, pushes) = finalize_hosted(
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main", "title": "t"}),
+            LoopState::Failed,
+            false,
+        );
+        assert_eq!(outcome, "escalated:verification_failed");
+        assert!(pushes.is_empty());
+        assert!(writes
+            .iter()
+            .any(|w| w.starts_with("comment #7 **What I tried**")));
+        assert!(writes.contains(&format!("label #7 {NEEDS_HUMAN_LABEL}")));
+        assert!(slack[0].contains("<https://github.com/o/r/issues/7|hub #7>"));
+    }
+
+    #[test]
+    fn a_github_pull_request_that_cannot_open_escalates() {
+        let (outcome, writes, _, _) = finalize_hosted(
+            json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main", "title": "t"}),
+            LoopState::Completed,
+            true,
+        );
+        assert_eq!(outcome, "escalated:mr_open_failed");
+        assert!(writes.iter().all(|w| !w.starts_with("open ")), "{writes:?}");
+    }
+
+    #[test]
+    fn assigned_issues_mix_gitlab_and_hosted_aliases_in_config_order() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("projects.json");
+        std::fs::write(
+            &path,
+            r#"{"gitlab_instance":"g","assignee_username":"dev","worktree_root":"/w","projects":{
+                "web":{"local_path":"/w","project_id":"1"},
+                "hub":{"local_path":"/h","code_host":{"account":"gh","repo":"o/r"}},
+                "api":{"local_path":"/a","project_id":"2"},
+                "bad":{"local_path":"/b","code_host":{"account":"nope","repo":"o/b"}}}}"#,
+        )
+        .unwrap();
+        let cfg = Config::load(&path).unwrap();
+        let aliases = cfg.aliases().unwrap();
+        let legacy = |aliases: &[String]| -> Result<Vec<(String, Vec<Value>)>, String> {
+            Ok(aliases
+                .iter()
+                .map(|a| (a.clone(), vec![json!({"iid": 1, "from": "gitlab"})]))
+                .collect())
+        };
+        let hosted = |project: &Value| -> Result<Vec<Value>, String> {
+            match project["code_host"]["account"].as_str() {
+                Some("gh") => Ok(vec![json!({"iid": 9, "from": "github"})]),
+                _ => Err("unknown connector account nope".into()),
+            }
+        };
+        let logged = std::sync::Mutex::new(Vec::new());
+        let got = assigned_by_alias(&cfg, &aliases, &legacy, &hosted, &|m: &str| {
+            logged.lock().unwrap().push(m.to_string())
+        })
+        .unwrap();
+        let order: Vec<(&str, &str)> = got
+            .iter()
+            .map(|(a, i)| (a.as_str(), i[0]["from"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            order,
+            [("web", "gitlab"), ("hub", "github"), ("api", "gitlab")]
+        );
+        let logged = logged.into_inner().unwrap();
+        assert_eq!(logged.len(), 1);
+        assert!(
+            logged[0].contains("bad") && logged[0].contains("nope"),
+            "{logged:?}"
+        );
     }
 
     fn mr_description(calls: &[(String, String, Value)]) -> String {
@@ -5548,6 +5973,16 @@ mod tests {
         assert_eq!(project_slack_target("web", &numeric, Some(&cfg)).1, None);
         let (b, u) = project_slack_target("web", &project, Some(&d.path().join("none.json")));
         assert_eq!((b, u), (None, None));
+    }
+
+    #[test]
+    fn a_code_host_project_names_its_own_bundle() {
+        let d = tempfile::tempdir().unwrap();
+        let project = json!({"code_host": {"account": "gh", "repo": "o/r"}, "bundle": "oss"});
+        let (bundle, url) =
+            project_slack_target("hub", &project, Some(&d.path().join("none.json")));
+        assert_eq!(bundle.as_deref(), Some("oss"));
+        assert_eq!(url, None);
     }
 
     #[test]
