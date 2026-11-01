@@ -1342,5 +1342,10 @@
   "Summarize the latest issue loop run.": "最新の課題ループの実行を要約してください。",
   "Run this issue now (GitLab or GitHub link): ": "この Issue を今すぐ実行してください (GitLab または GitHub のリンク): ",
   "Ask the loop anything, or paste a GitLab or GitHub issue link": "ループに何でも質問するか、GitLab または GitHub の Issue のリンクを貼り付けてください",
-  "Ask about this page, or paste a GitLab or GitHub issue link": "このページについて質問、または GitLab / GitHub の Issue のリンクを貼り付け"
+  "Ask about this page, or paste a GitLab or GitHub issue link": "このページについて質問、または GitLab / GitHub の Issue のリンクを貼り付け",
+  "More actions": "その他の操作",
+  "See what the loop is doing": "ループの動作状況を確認",
+  "Summarize the last issue run": "直近の実行を要約",
+  "Paste a GitLab or GitHub link": "GitLab/GitHub のリンクを貼り付け",
+  "Check for anything urgent": "緊急の件がないか確認"
 }

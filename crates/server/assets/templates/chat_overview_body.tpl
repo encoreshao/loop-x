@@ -40,7 +40,10 @@
 ⟦session_input⟧
 <textarea name='text' class='activity-composer-input' rows='2' placeholder='⟦html.escape(_t('Ask the loop anything, or paste a GitLab or GitHub issue link'))⟧' aria-label='⟦html.escape(_t('Message the loop'))⟧' required></textarea>
 <div class='chat-composer-toolbar'>
-<div class='chat-chips'>⟦suggestions_html⟧</div>
+<div class='chat-menu-wrap'>
+<button type='button' class='chat-plus-btn' data-chat-menu-toggle aria-haspopup='menu' aria-expanded='false' aria-controls='chat-menu' aria-label='⟦menu_label⟧'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg></button>
+<div class='chat-menu' id='chat-menu' role='menu' hidden>⟦suggestions_html⟧</div>
+</div>
 <button type='submit' class='chat-send-btn' aria-label='⟦html.escape(_t('Send'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>
 </form>

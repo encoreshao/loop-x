@@ -1095,8 +1095,32 @@ html .chat-page.is-empty .activity-composer {
 .chat-page.is-empty .activity-composer-form textarea.activity-composer-input { min-height: calc(1.5em * 3); }
 .activity-composer-form textarea.activity-composer-input::placeholder { color: var(--md-on-surface-variant); opacity: 0.8; }
 .chat-composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
-.chat-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; min-width: 0; }
-.btn.chat-chip { white-space: nowrap; }
+.chat-menu-wrap { position: relative; }
+.chat-plus-btn {
+  width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--md-surface-container-high); color: var(--md-on-surface);
+  transition: background 150ms ease;
+}
+.chat-plus-btn:hover, .chat-plus-btn[aria-expanded='true'] { background: var(--md-surface-container-highest, var(--md-surface-container-high)); }
+.chat-plus-btn .icon { font-size: 22px; }
+.chat-menu {
+  position: absolute; bottom: calc(100% + 0.6rem); left: -0.5rem; z-index: 90;
+  width: min(26rem, calc(100vw - 3rem)); padding: 0.4rem;
+  border-radius: 20px; border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface-container-lowest);
+  box-shadow: 0 12px 36px color-mix(in srgb, var(--md-on-surface) 16%, transparent);
+}
+.chat-menu[hidden] { display: none; }
+.chat-menu-item {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%; box-sizing: border-box;
+  padding: 0.6rem 0.75rem; border: none; border-radius: 12px; background: transparent;
+  color: var(--md-on-surface); font: inherit; text-align: left; cursor: pointer;
+}
+.chat-menu-item:hover, .chat-menu-item:focus-visible { background: var(--md-surface-container-high); outline: none; }
+.chat-menu-item .icon { flex: 0 0 auto; font-size: 20px; color: var(--md-on-surface-variant); }
+.chat-menu-label { white-space: nowrap; }
+.chat-menu-hint { color: var(--md-on-surface-variant); font-size: 0.9em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-send-btn {
   flex: 0 0 auto;
   width: 40px;
@@ -1120,7 +1144,6 @@ html .chat-page.is-empty .activity-composer {
      after the shared mobile block and would otherwise win at 220px. */
   .activity-composer { padding-left: 0.75rem; padding-right: 0.75rem; }
   .chat-hero-title { font-size: 2.2rem; }
-  .chat-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 }
 
 .page-title { margin: 0.25rem 0 1.5rem; }

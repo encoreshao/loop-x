@@ -346,8 +346,36 @@
       composerTextarea.style.height = composerTextarea.scrollHeight + 'px';
     }
     if (composerTextarea) composerTextarea.addEventListener('input', autoGrow);
+    var menuToggle = form.querySelector('[data-chat-menu-toggle]');
+    var menu = form.querySelector('#chat-menu');
+    function setMenu(open) {
+      if (!menu || !menuToggle) return;
+      menu.hidden = !open;
+      menuToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (menuToggle && menu) {
+      menuToggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        setMenu(menu.hidden);
+        if (!menu.hidden) { var first = menu.querySelector('.chat-menu-item'); if (first) first.focus(); }
+      });
+      document.addEventListener('click', function(e) {
+        if (!menu.hidden && !menu.contains(e.target)) setMenu(false);
+      });
+      form.addEventListener('keydown', function(e) {
+        if (menu.hidden) return;
+        if (e.key === 'Escape') { setMenu(false); menuToggle.focus(); return; }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        var items = Array.prototype.slice.call(menu.querySelectorAll('.chat-menu-item'));
+        var i = items.indexOf(document.activeElement);
+        i = e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+        items[i].focus();
+        e.preventDefault();
+      });
+    }
     form.querySelectorAll('[data-chat-suggestion]').forEach(function(chip) {
       chip.addEventListener('click', function() {
+        setMenu(false);
         if (!composerTextarea) return;
         composerTextarea.value = chip.getAttribute('data-chat-suggestion');
         autoGrow();

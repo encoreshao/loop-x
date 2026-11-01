@@ -1342,5 +1342,10 @@
   "Summarize the latest issue loop run.": "总结最近一次议题循环的运行。",
   "Run this issue now (GitLab or GitHub link): ": "立即运行这个 Issue（GitLab 或 GitHub 链接）：",
   "Ask the loop anything, or paste a GitLab or GitHub issue link": "向循环提问，或粘贴 GitLab 或 GitHub Issue 链接",
-  "Ask about this page, or paste a GitLab or GitHub issue link": "询问此页面，或粘贴 GitLab 或 GitHub Issue 链接"
+  "Ask about this page, or paste a GitLab or GitHub issue link": "询问此页面，或粘贴 GitLab 或 GitHub Issue 链接",
+  "More actions": "更多操作",
+  "See what the loop is doing": "查看循环正在做什么",
+  "Summarize the last issue run": "总结最近一次运行",
+  "Paste a GitLab or GitHub link": "粘贴 GitLab 或 GitHub 链接",
+  "Check for anything urgent": "检查是否有紧急事项"
 }

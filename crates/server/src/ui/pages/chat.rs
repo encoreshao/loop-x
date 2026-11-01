@@ -411,13 +411,15 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
 
 // ----- the overview (chat) body -----
 
-const SUGGESTIONS: [(&str, &str, &str); 4] = [
-    ("monitoring", "Loop status", "What is the loop doing right now?"),
-    ("history", "Latest run", "Summarize the latest issue loop run."),
-    ("bolt", "Run an issue", "Run this issue now (GitLab or GitHub link): "),
+/// (icon, label, hint, prompt) - the rows of the composer's "+" menu.
+const SUGGESTIONS: [(&str, &str, &str, &str); 4] = [
+    ("monitoring", "Loop status", "See what the loop is doing", "What is the loop doing right now?"),
+    ("history", "Latest run", "Summarize the last issue run", "Summarize the latest issue loop run."),
+    ("bolt", "Run an issue", "Paste a GitLab or GitHub link", "Run this issue now (GitLab or GitHub link): "),
     (
         "email",
         "Inbox triage",
+        "Check for anything urgent",
         "Summarize my latest inbox triage - anything urgent?",
     ),
 ];
@@ -501,13 +503,14 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
     }
     let suggestions: String = SUGGESTIONS
         .iter()
-        .map(|(icon, label, prompt)| {
+        .map(|(icon, label, hint, prompt)| {
             format!(
-                "<button type='button' class='btn btn-neutral chat-chip' data-chat-suggestion=\"{}\">\
-                 {}{}</button>",
+                "<button type='button' class='chat-menu-item' role='menuitem' data-chat-suggestion=\"{}\">\
+                 {}<span class='chat-menu-label'>{}</span><span class='chat-menu-hint'>{}</span></button>",
                 pyfmt::escape(prompt),
                 icons::icon(icon),
-                pyfmt::escape(&t(lang, label))
+                pyfmt::escape(&t(lang, label)),
+                pyfmt::escape(&t(lang, hint))
             )
         })
         .collect();
@@ -529,6 +532,7 @@ fn overview_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, session: Opti
         .var("messages_html", messages_html)
         .var("session_input", session_input)
         .var("suggestions_html", suggestions)
+        .var("menu_label", pyfmt::escape(&t(lang, "More actions")))
         .set("_overview_live_links_html()", live_links_html(state, lang));
     Template::named("chat_overview_body")
         .render(&scope)

@@ -1342,5 +1342,10 @@
   "Summarize the latest issue loop run.": "Résume la dernière exécution de la boucle de tickets.",
   "Run this issue now (GitLab or GitHub link): ": "Lance cette issue maintenant (lien GitLab ou GitHub) : ",
   "Ask the loop anything, or paste a GitLab or GitHub issue link": "Posez une question à la boucle ou collez un lien d'issue GitLab ou GitHub",
-  "Ask about this page, or paste a GitLab or GitHub issue link": "Posez une question sur cette page ou collez un lien d'issue GitLab ou GitHub"
+  "Ask about this page, or paste a GitLab or GitHub issue link": "Posez une question sur cette page ou collez un lien d'issue GitLab ou GitHub",
+  "More actions": "Plus d'actions",
+  "See what the loop is doing": "Voir ce que fait la boucle",
+  "Summarize the last issue run": "Résumer la dernière exécution",
+  "Paste a GitLab or GitHub link": "Collez un lien GitLab ou GitHub",
+  "Check for anything urgent": "Repérer ce qui est urgent"
 }

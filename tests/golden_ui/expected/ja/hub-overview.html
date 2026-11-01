@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:6bf72bdd3fda9c34--></style>
-<script><!--@blob:42788ba206481013--></script>
+<style><!--@blob:cd469225afa7e21a--></style>
+<script><!--@blob:146048379b440f0c--></script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><symbol id="i-account_balance_wallet" viewBox="0 0 24 24"><path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" /><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" /></symbol>
@@ -168,7 +168,10 @@
 <input type='hidden' name='session' value=''>
 <textarea name='text' class='activity-composer-input' rows='2' placeholder='ループに何でも質問するか、GitLab または GitHub の Issue のリンクを貼り付けてください' aria-label='ループにメッセージ' required></textarea>
 <div class='chat-composer-toolbar'>
-<div class='chat-chips'><button type='button' class='btn btn-neutral chat-chip' data-chat-suggestion="What is the loop doing right now?"><svg class='icon' aria-hidden='true'><use href='#i-monitoring'/></svg>ループの状態</button><button type='button' class='btn btn-neutral chat-chip' data-chat-suggestion="Summarize the latest issue loop run."><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg>最新の実行</button><button type='button' class='btn btn-neutral chat-chip' data-chat-suggestion="Run this issue now (GitLab or GitHub link): "><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg>Issue を実行</button><button type='button' class='btn btn-neutral chat-chip' data-chat-suggestion="Summarize my latest inbox triage - anything urgent?"><svg class='icon' aria-hidden='true'><use href='#i-email'/></svg>受信トレイの仕分け</button></div>
+<div class='chat-menu-wrap'>
+<button type='button' class='chat-plus-btn' data-chat-menu-toggle aria-haspopup='menu' aria-expanded='false' aria-controls='chat-menu' aria-label='その他の操作'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg></button>
+<div class='chat-menu' id='chat-menu' role='menu' hidden><button type='button' class='chat-menu-item' role='menuitem' data-chat-suggestion="What is the loop doing right now?"><svg class='icon' aria-hidden='true'><use href='#i-monitoring'/></svg><span class='chat-menu-label'>ループの状態</span><span class='chat-menu-hint'>ループの動作状況を確認</span></button><button type='button' class='chat-menu-item' role='menuitem' data-chat-suggestion="Summarize the latest issue loop run."><svg class='icon' aria-hidden='true'><use href='#i-history'/></svg><span class='chat-menu-label'>最新の実行</span><span class='chat-menu-hint'>直近の実行を要約</span></button><button type='button' class='chat-menu-item' role='menuitem' data-chat-suggestion="Run this issue now (GitLab or GitHub link): "><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg><span class='chat-menu-label'>Issue を実行</span><span class='chat-menu-hint'>GitLab/GitHub のリンクを貼り付け</span></button><button type='button' class='chat-menu-item' role='menuitem' data-chat-suggestion="Summarize my latest inbox triage - anything urgent?"><svg class='icon' aria-hidden='true'><use href='#i-email'/></svg><span class='chat-menu-label'>受信トレイの仕分け</span><span class='chat-menu-hint'>緊急の件がないか確認</span></button></div>
+</div>
 <button type='submit' class='chat-send-btn' aria-label='送信'><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>
 </form>

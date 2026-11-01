@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document", "web.search": "Searching the web"};
-window.__loopToolStatusText = "Analyzing results\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "Lecture du ticket", "gitlab.list_issues": "Liste des tickets", "gitlab.comment": "Commentaire sur le ticket", "github.read_issue": "Lecture du ticket", "github.read_pr": "Lecture de la pull request", "github.comment": "Commentaire en cours", "rss.read_feed": "Lecture du flux", "calendar.list_events": "Lecture de l'agenda", "mail.search": "Recherche de courriels", "mail.read": "Lecture du courriel", "mail.send": "Envoi du courriel", "calendar.create_event": "Cr\u00e9ation de l'\u00e9v\u00e9nement", "docs.save": "Enregistrement du document", "web.search": "Recherche sur le web"};
+window.__loopToolStatusText = "Analyse des r\u00e9sultats\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -122,7 +122,7 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "Waiting for your approval"));
+  head.appendChild(el('span', '', "En attente de votre approbation"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
@@ -132,12 +132,12 @@ window.__loopPendingCard = function(ev, session) {
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("Approve"));
+  approve.appendChild(document.createTextNode("Approuver"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("Reject"));
+  reject.appendChild(document.createTextNode("Rejeter"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -168,14 +168,14 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "Approved." : "Rejected.") : ((data && data.error) || "Something went wrong - try again.");
+        if (status) status.textContent = ok ? (approving ? "Approuv\u00e9." : "Rejet\u00e9.") : ((data && data.error) || "Une erreur s'est produite - r\u00e9essayez.");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "Something went wrong - try again.";
+        if (status) status.textContent = "Une erreur s'est produite - r\u00e9essayez.";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -227,7 +227,7 @@ if (!window.__loopPendingCardClicks) {
     var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
     var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
     var el = document.getElementById('refresh-note-text');
-    if (el) el.textContent = "auto-refreshes every {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
+    if (el) el.textContent = "actualisation auto toutes les {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
   });
 })();
 (function() {
@@ -459,12 +459,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "Could not load the document.";
+      var docFailed = "Impossible de charger le document.";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "Copied";
+      var docCopiedText = "Copi\u00e9";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -532,8 +532,36 @@ if (!window.__loopPendingCardClicks) {
       composerTextarea.style.height = composerTextarea.scrollHeight + 'px';
     }
     if (composerTextarea) composerTextarea.addEventListener('input', autoGrow);
+    var menuToggle = form.querySelector('[data-chat-menu-toggle]');
+    var menu = form.querySelector('#chat-menu');
+    function setMenu(open) {
+      if (!menu || !menuToggle) return;
+      menu.hidden = !open;
+      menuToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (menuToggle && menu) {
+      menuToggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        setMenu(menu.hidden);
+        if (!menu.hidden) { var first = menu.querySelector('.chat-menu-item'); if (first) first.focus(); }
+      });
+      document.addEventListener('click', function(e) {
+        if (!menu.hidden && !menu.contains(e.target)) setMenu(false);
+      });
+      form.addEventListener('keydown', function(e) {
+        if (menu.hidden) return;
+        if (e.key === 'Escape') { setMenu(false); menuToggle.focus(); return; }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        var items = Array.prototype.slice.call(menu.querySelectorAll('.chat-menu-item'));
+        var i = items.indexOf(document.activeElement);
+        i = e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+        items[i].focus();
+        e.preventDefault();
+      });
+    }
     form.querySelectorAll('[data-chat-suggestion]').forEach(function(chip) {
       chip.addEventListener('click', function() {
+        setMenu(false);
         if (!composerTextarea) return;
         composerTextarea.value = chip.getAttribute('data-chat-suggestion');
         autoGrow();
@@ -576,7 +604,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "just now" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u00e0 l&#x27;instant" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -676,10 +704,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "Edit message" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "Modifier le message" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Cancel" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "Send" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Annuler" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "Envoyer" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -740,7 +768,7 @@ if (!window.__loopPendingCardClicks) {
     // While a reply is being written the send button is the stop button.
     var activeStop = null;
     function setSendMode(button, stop) {
-      var label = stop ? "Stop" : "Send";
+      var label = stop ? "Arr\u00eater" : "Envoyer";
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       var use = button.querySelector('svg.icon use');
@@ -759,7 +787,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "You" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "Vous" + "</span>", text);
       input.value = '';
       autoGrow();
       setSendMode(button, true);
@@ -778,7 +806,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "R\u00e9flexion\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -853,7 +881,7 @@ if (!window.__loopPendingCardClicks) {
         if (source) source.close();
         if (activeKey) postStop(activeKey);
         reveal.stop();
-        var stopped = "(reply stopped)";
+        var stopped = "(r\u00e9ponse arr\u00eat\u00e9e)";
         pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
         resetSendButton();
         stopStreamingFlag();
@@ -890,7 +918,7 @@ if (!window.__loopPendingCardClicks) {
         });
         source.addEventListener('error', function(ev) {
           if (aborted) return;
-          var message = "Something went wrong - try again.";
+          var message = "Une erreur s'est produite - r\u00e9essayez.";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -901,7 +929,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "(reply interrupted)", false);
+            pending.show(accumulated + ' ' + "(r\u00e9ponse interrompue)", false);
           }
           resetSendButton();
           stopStreamingFlag();
@@ -918,7 +946,7 @@ if (!window.__loopPendingCardClicks) {
             return;
           }
           if (!result.ok) {
-            pending.show(result.data.error || "Something went wrong.", false);
+            pending.show(result.data.error || "Une erreur s'est produite.", false);
             resetSendButton();
             stopStreamingFlag();
             return;
@@ -945,7 +973,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("Something went wrong - try again.", false);
+          pending.show("Une erreur s'est produite - r\u00e9essayez.", false);
           if (aborted) return;
           resetSendButton();
           stopStreamingFlag();
@@ -996,7 +1024,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "Please fill out this field.";
+    if (text) text.textContent = field.validationMessage || "Veuillez remplir ce champ.";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -1074,7 +1102,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Couldn't load this section." + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Impossible de charger cette section." + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1219,7 +1247,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "Stop tracking #{iid}" : "Track #{iid} again").replace('{iid}', issueIid);
+          var label = (enabled ? "Arr\u00eater le suivi de #{iid}" : "Suivre \u00e0 nouveau #{iid}").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }
