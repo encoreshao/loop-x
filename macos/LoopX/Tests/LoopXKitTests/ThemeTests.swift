@@ -16,6 +16,10 @@ import Testing
         #expect(Accent.indigo.navActiveOnSurface == 0x4B3FA8)
         #expect(Accent.green.navSurface == 0xECF4EE)
         #expect(Accent.red.navActiveOnSurface == 0xB3261E)
+        #expect(Accent.dark.navSurface == 0x1C1C1F)
+        #expect(Accent.dark.navOnSurface == 0xE4E4E8)
+        #expect(Accent.dark.navActiveSurface == 0x2E2E33)
+        #expect(Accent.dark.navActiveOnSurface == 0xFFFFFF)
         #expect(Accent.default.navSurface == nil)   // "Default" is the neutral surface, not a tint
     }
 

@@ -3,7 +3,7 @@ import Foundation
 /// The dashboard's sidebar/card wash (`data-accent` in `_STYLE.txt`). Hex values are the CSS `--md-nav-*` tokens;
 /// `default` has none because it uses the plain neutral surface.
 public enum Accent: String, CaseIterable, Sendable {
-    case `default`, indigo, blue, green, red, gray
+    case `default`, indigo, blue, green, red, gray, dark
 
     /// What the dashboard falls back to when nothing was chosen (`accent || 'indigo'` in the shell script).
     public init(stored: String?) { self = stored.flatMap(Accent.init(rawValue:)) ?? .indigo }
@@ -21,6 +21,7 @@ public enum Accent: String, CaseIterable, Sendable {
         case .green: return (0xECF4EE, 0x2A3B2D, 0xD2E8D6, 0x2E7D3C)
         case .red: return (0xFCF1EF, 0x4A2F2B, 0xF7D9D3, 0xB3261E)
         case .gray: return (0xECECEF, 0x3A3A3D, 0xD6D6DB, 0x3A3A3D)
+        case .dark: return (0x1C1C1F, 0xE4E4E8, 0x2E2E33, 0xFFFFFF)
         }
     }
 }

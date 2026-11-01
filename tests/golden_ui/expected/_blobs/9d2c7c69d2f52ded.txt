@@ -114,6 +114,17 @@
   --md-nav-accent: #3A3A3D;
   --seg-thumb: var(--md-nav-accent);
 }
+:root[data-accent="dark"] {
+  /* The one dark wash: light text on a near-black surface, still mode-independent.
+     The thumb stays a mid gray so its white label reads; the accent (topbar icons)
+     is light so it shows on the dark bar. */
+  --md-nav-surface: #1C1C1F;
+  --md-nav-on-surface: #E4E4E8;
+  --md-nav-active-surface: #2E2E33;
+  --md-nav-active-on-surface: #FFFFFF;
+  --md-nav-accent: #C7C7CE;
+  --seg-thumb: #55555E;
+}
 
 /* Font (Preferences page): one rule per non-default choice, generated from
    _FONT_CHOICES - "System" needs no rule of its own since it's already the
@@ -325,7 +336,7 @@ button:focus-visible,
 .brand-mark { display: inline-flex; width: 45px; height: 45px; color: var(--md-nav-on-surface); flex-shrink: 0; }
 /* The brand name is an image: white lettering (on-dark) for the dark scheme, ink lettering
    (on-light) for the light one. The sidebar's accent washes stay light in either scheme, so
-   any non-default accent always takes the ink version there. */
+   any non-default accent takes the ink version there - except Dark, whose wash is dark. */
 .brand-name-img { display: block; height: 30px; width: auto; }
 .brand-name-img.on-light { display: none; }
 @media (prefers-color-scheme: light) {
@@ -334,8 +345,10 @@ button:focus-visible,
 }
 :root[data-color-mode="light"] .brand-name-img.on-light { display: block; }
 :root[data-color-mode="light"] .brand-name-img.on-dark { display: none; }
-:root:not([data-accent="default"]) .brand .brand-name-img.on-light { display: block; }
-:root:not([data-accent="default"]) .brand .brand-name-img.on-dark { display: none; }
+:root:not([data-accent="default"]):not([data-accent="dark"]) .brand .brand-name-img.on-light { display: block; }
+:root:not([data-accent="default"]):not([data-accent="dark"]) .brand .brand-name-img.on-dark { display: none; }
+:root[data-accent="dark"] .brand .brand-name-img.on-light { display: none; }
+:root[data-accent="dark"] .brand .brand-name-img.on-dark { display: block; }
 .brand-x { color: var(--brand-x); font-weight: 800; background: var(--brand-x-gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 @media (forced-colors: active) { .brand-x { -webkit-text-fill-color: currentColor; } }
 .pill-bar { position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 8px; z-index: 5; }
@@ -1237,7 +1250,8 @@ html .chat-page.is-empty .activity-composer {
 :root[data-accent="blue"] .card,
 :root[data-accent="green"] .card,
 :root[data-accent="red"] .card,
-:root[data-accent="gray"] .card {
+:root[data-accent="gray"] .card,
+:root[data-accent="dark"] .card {
   --md-surface-dim: var(--md-nav-active-surface);
   --md-surface: var(--md-nav-active-surface);
   --md-surface-container-lowest: var(--md-nav-surface);
@@ -2067,6 +2081,24 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
     --cg-glow-mix: 26%;
     --cg-shadow-base: rgba(30, 30, 40, 0.14);
   }
+}
+/* The Dark theme's wash is dark, so the light-mode mixes above (wash + white)
+   would put the tiles' text on a muddy gray. Dark falls back to the plain
+   mode-aware surfaces instead, which pair with --md-on-surface in either mode
+   (and inside a .card, whose remap points those same tokens at the dark wash).
+   Same specificity as the light rules, so it must come after them. */
+:root[data-accent="dark"] .connector-gallery,
+:root[data-accent="dark"] .connector-hero {
+  --cg-card: var(--md-surface-container-low);
+  --cg-card-hover: var(--md-surface-container);
+  --cg-panel: var(--md-surface-container-lowest);
+  --cg-border: var(--md-outline-variant);
+  --cg-accent: var(--md-primary);
+  --cg-chip-bg: var(--md-surface-container-highest);
+  --cg-chip-fg: var(--md-on-surface-variant);
+  --cg-badge-bg: var(--md-surface-container-highest);
+  --cg-badge-fg: var(--md-on-surface-variant);
+  --cg-rule: var(--md-primary);
 }
 /* --brand is set on each tile/hero, so the brand-derived tokens must be
    computed there too (a custom property resolves var() where it's declared). */
