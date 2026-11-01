@@ -297,4 +297,24 @@ mod tests {
         assert_eq!(code, 409);
         assert_eq!(v["error"], "A run is already in progress");
     }
+
+    #[tokio::test]
+    async fn the_issue_loops_old_id_still_runs_it() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        std::fs::write(
+            d.path().join("outputs/status.json"),
+            r#"{"state":"running"}"#,
+        )
+        .unwrap();
+        // Known (not 404) and treated as the issue loop: its status says running.
+        let (code, v) = post(
+            state(d.path()),
+            "/api/loops/gitlab-loop/run",
+            json!({}),
+            &TOKEN,
+        )
+        .await;
+        assert_eq!(code, 409, "{v}");
+    }
 }

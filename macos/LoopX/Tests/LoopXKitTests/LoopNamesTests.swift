@@ -4,7 +4,8 @@ import Testing
 
 @Suite struct LoopNamesTests {
     @Test func loopIdsReadAsTheirNames() {
-        #expect(LoopNames.display("gitlab-loop") == "Issues")
+        #expect(LoopNames.display("issue-loop") == "Issues")
+        #expect(LoopNames.display("gitlab-loop") == "Issues", "the issue loop's old id, in older events")
         #expect(LoopNames.display("inbox-triage-loop") == "Inbox Triage")
         #expect(LoopNames.display("topic-loop") == "Topic Monitor")
         #expect(LoopNames.display("daily-digest-loop") == "Daily Digest")
@@ -17,11 +18,11 @@ import Testing
     }
 
     @Test func theIslandShowsNamesButKeepsIdsForActions() {
-        let s = Snapshot(appState: .running, loops: ["gitlab-loop": LoopStatus(state: "running", currentIssue: "web #7")],
+        let s = Snapshot(appState: .running, loops: ["issue-loop": LoopStatus(state: "running", currentIssue: "web #7")],
                          topics: ["ai-agents": TopicStatus(state: "idle")])
         let tasks = TaskNotifications.tasks(in: s)
         #expect(tasks.map(\.title) == ["Issues", "AI Agents"], "a slug-like topic name reads title-cased")
-        #expect(tasks.map(\.name) == ["gitlab-loop", "ai-agents"])
+        #expect(tasks.map(\.name) == ["issue-loop", "ai-agents"])
         #expect(NotchState.make(from: s, now: Date()).title == "Issues running")
         let failed = Snapshot(appState: .failed, loops: ["inbox-triage-loop": LoopStatus(state: "failed")])
         #expect(NotchState.make(from: failed, now: Date()).subtitle == "Inbox Triage")
@@ -37,7 +38,7 @@ import Testing
     }
 
     @Test func everyLoopHasASymbol() {
-        #expect(LoopNames.symbol("gitlab-loop") == "arrow.triangle.branch")
+        #expect(LoopNames.symbol("issue-loop") == "arrow.triangle.branch")
         #expect(LoopNames.symbol("inbox-triage-loop") == "tray.full")
         #expect(LoopNames.symbol("some-new-loop") == "repeat")
     }

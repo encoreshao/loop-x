@@ -370,7 +370,7 @@
   "No log entries yet.": "ログエントリはまだありません。",
   "No loop definitions found under loops/.": "loops/ 配下にループ定義が見つかりません。",
   "No loops here.": "ループはありません。",
-  "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.": "まだプロジェクトが設定されていません — <a href='/loops/gitlab-loop?view=projects'>GitLab ページで追加してください</a>。",
+  "No projects configured yet - <a href='/loops/issue-loop?view=projects'>add one on the GitLab page</a>.": "まだプロジェクトが設定されていません — <a href='/loops/issue-loop?view=projects'>GitLab ページで追加してください</a>。",
   "No projects configured yet, so there is no memory recorded.": "プロジェクトがまだ設定されていないため、記録されたメモリはありません。",
   "No projects configured yet, so there's nothing to check for issues or MRs.": "プロジェクトがまだ設定されていないため、確認する Issue や MR はありません。",
   "No run is currently in progress": "現在実行中の処理はありません",

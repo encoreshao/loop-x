@@ -267,7 +267,8 @@ Top level object; the only key consumed is:
 - **Path:** `<repo_root>/outputs/status.json` (`STATUS_PATH`). Not affected by
   `LOOP_ENGINEERING_HOME`. **Other loops** use
   `<repo_root>/outputs/status/<loop_name>.json` (same schema;
-  `status_path_for_loop`), so `gitlab-loop` is the only loop with the legacy
+  `status_path_for_loop`), so `issue-loop` (formerly `gitlab-loop`; the old id is still
+  accepted everywhere a loop id is read, see `loops_config::canonical_loop_name`) is the only loop with the legacy
   top-level path.
 - **Readers:** dashboard (`read_status`, Run/Stop/Overview pages, run-now
   refusal logic, `_process_alive` pid check), `run-loop-now.sh`.

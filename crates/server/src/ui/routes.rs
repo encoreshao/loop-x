@@ -416,7 +416,7 @@ mod tests {
     fn registry() -> Registry {
         let mut r = Registry::default();
         r.get("/loops/:name", named);
-        r.get("/loops/gitlab-loop", ok);
+        r.get("/loops/issue-loop", ok);
         r.get("/files/*rest", rest);
         r.post("/p", ok);
         r
@@ -432,7 +432,7 @@ mod tests {
         let st = UiState::for_tests();
         let r = registry();
         assert_eq!(
-            body(&r, Method::GET, "/loops/gitlab-loop", &st).unwrap(),
+            body(&r, Method::GET, "/loops/issue-loop", &st).unwrap(),
             "ok"
         );
         assert_eq!(

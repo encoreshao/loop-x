@@ -370,7 +370,7 @@
   "No log entries yet.": "暂无日志条目。",
   "No loop definitions found under loops/.": "loops/ 下未找到循环定义。",
   "No loops here.": "这里没有循环。",
-  "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.": "尚未配置任何项目 —— <a href='/loops/gitlab-loop?view=projects'>请在 GitLab 页面添加</a>。",
+  "No projects configured yet - <a href='/loops/issue-loop?view=projects'>add one on the GitLab page</a>.": "尚未配置任何项目 —— <a href='/loops/issue-loop?view=projects'>请在 GitLab 页面添加</a>。",
   "No projects configured yet, so there is no memory recorded.": "尚未配置任何项目，因此没有记录的记忆。",
   "No projects configured yet, so there's nothing to check for issues or MRs.": "尚未配置项目,因此没有可检查的 Issue 或 MR。",
   "No run is currently in progress": "当前没有正在进行的运行",

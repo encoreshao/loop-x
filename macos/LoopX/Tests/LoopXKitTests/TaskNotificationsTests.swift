@@ -9,13 +9,13 @@ import Testing
     }
 
     @Test func tasksListEveryLoopAndTopicRunningFirstWithTheirMessage() {
-        let s = snap(loops: ["gitlab-loop": LoopStatus(state: "running", currentIssue: "web #7", currentStep: "analyzing"),
+        let s = snap(loops: ["issue-loop": LoopStatus(state: "running", currentIssue: "web #7", currentStep: "analyzing"),
                              "inbox": LoopStatus(state: "idle")],
                      topics: ["ai-news": TopicStatus(state: "running", currentStep: "fetching sources"),
                               "broken": TopicStatus(state: "failed")])
         let t = TaskNotifications.tasks(in: s)
-        #expect(t.map(\.name) == ["ai-news", "gitlab-loop", "broken", "inbox"])
-        #expect(t.first { $0.name == "gitlab-loop" }?.detail == "web #7 · analyzing")
+        #expect(t.map(\.name) == ["ai-news", "issue-loop", "broken", "inbox"])
+        #expect(t.first { $0.name == "issue-loop" }?.detail == "web #7 · analyzing")
         #expect(t.first { $0.name == "ai-news" }?.detail == "fetching sources")
         #expect(t.first { $0.name == "broken" }?.state == .failed)
     }

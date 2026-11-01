@@ -73,8 +73,13 @@ mod tests {
     fn legacy_paths_redirect_and_keep_the_query() {
         let st = UiState::for_tests();
         let go = |p: &str| st.registry.dispatch(&st, &UiRequest::get(p)).unwrap();
-        assert_eq!(go("/gitlab").header("Location"), Some("/loops/gitlab-loop"));
-        assert_eq!(go("/gitlab?x=1").header("Location"), Some("/loops/gitlab-loop?x=1"));
+        assert_eq!(go("/gitlab").header("Location"), Some("/loops/issue-loop"));
+        assert_eq!(go("/gitlab?x=1").header("Location"), Some("/loops/issue-loop?x=1"));
+        // The issue loop's page under its old id.
+        assert_eq!(
+            go("/loops/gitlab-loop?view=tasks").header("Location"),
+            Some("/loops/issue-loop?view=tasks")
+        );
         assert_eq!(go("/logs?x=1").header("Location"), Some("/runs?view=logs&x=1"));
         assert_eq!(go("/learnings?x=1").header("Location"), Some("/insights?view=memory"));
         assert_eq!(go("/learnings").status, 301);

@@ -444,7 +444,7 @@ fn run_now(state: &UiState, kind: &str) -> Value {
     };
     match kind {
         "gitlab" => trigger_message(
-            run_control::trigger_manual_run(&state.status_path(), "gitlab-loop", &launcher),
+            run_control::trigger_manual_run(&state.status_path(), "issue-loop", &launcher),
             STARTED,
         ),
         "topic-monitor" => trigger_message(

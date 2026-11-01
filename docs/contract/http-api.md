@@ -53,7 +53,7 @@ Query params (all optional) on every hub path (`/`, `/runs`, `/insights`, `/harn
 | `/connectors` | `accounts`, `add` |
 | `/settings` | `general`, `daemons`, `skills`, `chat` (Chat tools). Inner `?tab=`: `notifications`, `ai-cli`, `instructions` and others in General |
 
-Per-loop pages `/loops/<name>`: `gitlab-loop` (views `live`, `tasks`, `projects`), `topic-loop` (`live`, `topics`), `inbox-triage-loop` (`live`, `drafts`, `setup`; setup inner `?tab=` such as `inboxes`, `add`), and every other registered loop via the generic page (`live`, `content`, `history`, optionally `people` and `settings`).
+Per-loop pages `/loops/<name>`: `issue-loop` (views `live`, `tasks`, `projects`), `topic-loop` (`live`, `topics`), `inbox-triage-loop` (`live`, `drafts`, `setup`; setup inner `?tab=` such as `inboxes`, `add`), and every other registered loop via the generic page (`live`, `content`, `history`, optionally `people` and `settings`).
 
 Views with `refresh=True` embed a `<meta http-equiv="refresh">` 30s auto-reload (and some use `lazy_refresh`). That is behavior of the HTML, not an API.
 
@@ -64,7 +64,7 @@ Views with `refresh=True` embed a `<meta http-equiv="refresh">` 30s auto-reload 
 | Path | Target |
 |---|---|
 | `/activity` | `/?view=activity` |
-| `/gitlab` | `/loops/gitlab-loop` |
+| `/gitlab` | `/loops/issue-loop` |
 | `/topic-monitor` | `/loops/topic-loop` |
 | `/topic-monitor/settings` | `/loops/topic-loop?view=topics` |
 | `/inbox` | `/loops/inbox-triage-loop` |
@@ -93,7 +93,7 @@ If the original request has a query, it is appended with `?` or `&` depending on
 | `/loops/<name>` | `view`, `tab`, `flash`, `ok` | HTML 200; 404 if no such loop |
 | `/loops/<name>/history/<YYYY-MM-DD_HHMMSS.md>` | none | HTML 200 rendered markdown report; 404 if `<name>` is a built-in hub loop (gitlab/topic/inbox), unknown, filename fails `^\d{4}-\d{2}-\d{2}_\d{6}\.md$`, path escapes the loop's `history/` dir, or file missing |
 | `/loop-runs/<run_id>` | none | HTML 200 run detail; 404 if unknown |
-| `/history/<name>` | none | HTML 200 rendered gitlab-loop history markdown from `outputs/history/`; 404 via `read_history_file` (traversal-safe) |
+| `/history/<name>` | none | HTML 200 rendered issue-loop history markdown from `outputs/history/`; 404 via `read_history_file` (traversal-safe) |
 | `/topic-monitor/history/<name>` | none | same, from the topic-monitor history dir |
 | `/inbox/history` and `/inbox/history/<name>` | none | HTML 200 inbox triage history page; 404 if none/unknown |
 | `/update` | none | HTML 200 self-update page (progress screen; the Mac app lands here after an upgrade relaunch) |
@@ -165,7 +165,7 @@ All require `csrf_token` in the form body (section 2); missing/invalid returns 4
 
 | Route | Form | Result / side effects |
 |---|---|---|
-| `POST /run-now` | none | `trigger_manual_run()`: spawns detached `bash run-loop-now.sh gitlab-loop` (`start_new_session=True`); refuses ("A run is already in progress") if status `running`. Redirect `/`. |
+| `POST /run-now` | none | `trigger_manual_run()`: spawns detached `bash run-loop-now.sh issue-loop` (`start_new_session=True`); refuses ("A run is already in progress") if status `running`. Redirect `/`. |
 | `POST /gitlab/stop` | none | `stop_gitlab_loop()`; redirect `/?view=activity`. |
 | `POST /topic-monitor/stop` | none | `stop_topic_loop()`; redirect `/?view=activity`. |
 | `POST /history/<name>/delete` | none | `delete_history_file(name, HISTORY_DIR)`; redirect `/runs?view=history`. |
@@ -204,7 +204,7 @@ All require `csrf_token` in the form body (section 2); missing/invalid returns 4
 | Route | Form | Redirect |
 |---|---|---|
 | `POST /settings/chat-tools` | `auto_approve` (repeatable tool names) | `/settings?view=chat`; `chat_tools.settings.save` |
-| `POST /settings/gitlab/default` | `instance` | `/loops/gitlab-loop?view=projects` |
+| `POST /settings/gitlab/default` | `instance` | `/loops/issue-loop?view=projects` |
 | `POST /settings/gitlab/instances` | `alias`, `url`, `token` | same (writes `~/.gitlab/config.json`) |
 | `POST /settings/gitlab/instances/<alias>/delete` | none | same |
 | `POST /settings/gitlab/projects` | `alias`, `project_id`, `instance`, `bundle` | same |

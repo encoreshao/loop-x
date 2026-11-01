@@ -48,7 +48,7 @@
 </div>
 <div class='chat-hero-links'>
 <a class='btn btn-neutral chat-link-pill' href='/?view=activity'><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg>⟦html.escape(_t('Loop activity'))⟧</a>
-<a class='btn btn-neutral chat-link-pill' href='/loops/gitlab-loop'><svg class='icon' aria-hidden='true'><use href='#i-merge'/></svg>⟦html.escape(_t('Live GitLab'))⟧</a>
+<a class='btn btn-neutral chat-link-pill' href='/loops/issue-loop'><svg class='icon' aria-hidden='true'><use href='#i-merge'/></svg>⟦html.escape(_t('Live GitLab'))⟧</a>
 ⟦_overview_live_links_html()⟧
 </div>
 </div>

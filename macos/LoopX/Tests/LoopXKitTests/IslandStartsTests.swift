@@ -3,7 +3,7 @@ import Testing
 
 @Suite struct IslandStartsTests {
     @Test func offersTheThreeBuiltInLoops() {
-        #expect(IslandStarts.all.map(\.loop) == ["topic-loop", "gitlab-loop", "inbox-triage-loop"])
+        #expect(IslandStarts.all.map(\.loop) == ["topic-loop", "issue-loop", "inbox-triage-loop"])
         #expect(IslandStarts.all.map(\.title) == ["Run Topic Monitor", "Run issue loop", "Triage inbox"])
     }
 
@@ -14,8 +14,8 @@ import Testing
     }
 
     @Test func confirmTextNamesTheRealSideEffects() {
-        #expect(IslandStarts.confirmText(loop: "gitlab-loop").contains("GitLab"))
-        #expect(IslandStarts.confirmText(loop: "gitlab-loop").contains("GitHub"))
+        #expect(IslandStarts.confirmText(loop: "issue-loop").contains("GitLab"))
+        #expect(IslandStarts.confirmText(loop: "issue-loop").contains("GitHub"))
         #expect(IslandStarts.confirmText(loop: "daily-digest-loop") == "Run Daily Digest now?")
     }
 
@@ -24,9 +24,9 @@ import Testing
             IslandStarts.runnableLoop(for: NotchTask(id: id, name: name, state: state, detail: nil))
         }
         #expect(row("loop:daily-digest-loop", "daily-digest-loop", .idle) == "daily-digest-loop")
-        #expect(row("loop:gitlab-loop", "gitlab-loop", .failed) == "gitlab-loop")
-        #expect(row("loop:gitlab-loop", "gitlab-loop", .running) == nil, "already running")
-        #expect(row("queue:q1", "gitlab-loop", .queued) == nil, "already waiting its turn")
+        #expect(row("loop:issue-loop", "issue-loop", .failed) == "issue-loop")
+        #expect(row("loop:issue-loop", "issue-loop", .running) == nil, "already running")
+        #expect(row("queue:q1", "issue-loop", .queued) == nil, "already waiting its turn")
         #expect(row("topic:ai-agents", "ai-agents", .idle) == nil, "topics run together, from Topic Monitor")
     }
 }

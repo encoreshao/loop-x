@@ -52,7 +52,7 @@ The Harness -> Gates view (`/harness?view=gates`) shows the observe-mode agreeme
 1. Ship with `mode: observe`.
 2. After at least 5 weekday runs, open Harness -> Gates. If agreement is 90% or higher and no project shows a systematic false failure (flaky suite, lint baseline - see CLAUDE.md's rubocop notes), set `mode: gate` and raise CI `--min-score` to 80 in the same commit.
 3. If a project is systematically red for reasons unrelated to the fix, look at the commands the agent logged (Live view, `verification.commands`) and correct its stored hints in `projects.json` rather than weakening the gate.
-4. Gate mode multiplies the per-issue worst case to `max_iterations x (agent + test + lint)`, up to 6x `max_runtime_minutes`. `config/loops.json.template` now sets `gitlab-loop`'s `timeout_seconds` to 43200, but that only applies to new installs/backfill: an existing `~/.loopx/loops.json` keeps its old 21600. The dashboard does not expose this field, so raise it by hand in that file before flipping to gate.
+4. Gate mode multiplies the per-issue worst case to `max_iterations x (agent + test + lint)`, up to 6x `max_runtime_minutes`. `config/loops.json.template` now sets `issue-loop`'s `timeout_seconds` to 43200, but that only applies to new installs/backfill: an existing `~/.loopx/loops.json` keeps its old 21600. The dashboard does not expose this field, so raise it by hand in that file before flipping to gate.
 
 ### Limitations
 

@@ -46,7 +46,7 @@ fn int_flag(args: &[String], flag: &str) -> Result<Option<Value>, String> {
 
 fn write(args: &[String]) -> Result<(), String> {
     let state = args.first().ok_or(WRITE_USAGE)?;
-    let loop_name = flag_value(args, "--loop")?.unwrap_or("gitlab-loop");
+    let loop_name = flag_value(args, "--loop")?.unwrap_or("issue-loop");
     let mut extra: Vec<(&str, Value)> = Vec::new();
     if let Some(pid) = int_flag(args, "--pid")? {
         extra.push(("pid", pid));

@@ -3,7 +3,7 @@
 # which stays a generic loop-init/audit reference (its pytest/git_diff
 # verifiers don't match any real project's actual test_cmd/lint_cmd from
 # projects.json). See
-# docs/superpowers/specs/2026-09-07-gitlab-loop-runtime-wiring-design.md.
+# docs/superpowers/specs/2026-09-07-issue-loop-runtime-wiring-design.md.
 name: gitlab-issue-loop
 version: 1
 
@@ -52,7 +52,7 @@ verifiers:
 stop_conditions:
   max_iterations: 2
   # Bounds each issue independently, nested inside the scheduler's outer
-  # 43200s (12h) whole-batch sanity timeout (gitlab-loop's timeout_seconds in
+  # 43200s (12h) whole-batch sanity timeout (issue-loop's timeout_seconds in
   # config/loops.json.template) - which is sized to leave room
   # for a double-digit issue count at this budget plus the end-of-run
   # wrap-up call, and must be raised alongside this value if this ever

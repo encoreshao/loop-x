@@ -493,7 +493,7 @@ mod tests {
 
     fn four() -> Value {
         json!([
-            {"name": "gitlab-loop", "enabled": true},
+            {"name": "issue-loop", "enabled": true},
             {"name": "off-loop", "enabled": false},
             {"name": "busy-loop", "enabled": true},
             {"name": "never-loop", "enabled": true},
@@ -513,17 +513,17 @@ mod tests {
         let f = fx(four());
         f.status("off-loop", r#"{"state":"running","pid":999999999}"#);
         f.status("busy-loop", &running_now());
-        f.status("gitlab-loop", r#"{"state":"failed","updated_at":"2026-01-02T00:00:00Z"}"#);
+        f.status("issue-loop", r#"{"state":"failed","updated_at":"2026-01-02T00:00:00Z"}"#);
         let doc = f.get(None);
         let names: Vec<&str> = doc["loops"].as_array().unwrap().iter().map(|l| l["name"].as_str().unwrap()).collect();
         assert_eq!(names.len(), 4, "{names:?}");
         assert_eq!(by(&doc, "busy-loop")["state"], "working");
-        assert_eq!(by(&doc, "gitlab-loop")["state"], "failed");
-        assert_eq!(by(&doc, "gitlab-loop")["last_run"], "2026-01-02T00:00:00Z");
+        assert_eq!(by(&doc, "issue-loop")["state"], "failed");
+        assert_eq!(by(&doc, "issue-loop")["last_run"], "2026-01-02T00:00:00Z");
         assert_eq!(by(&doc, "never-loop")["state"], "idle");
         assert!(by(&doc, "never-loop")["last_run"].is_null());
         assert_eq!(by(&doc, "busy-loop")["run_now_url"], "/loops/busy-loop/run-now");
-        assert_eq!(by(&doc, "gitlab-loop")["run_now_url"], "/run-now");
+        assert_eq!(by(&doc, "issue-loop")["run_now_url"], "/run-now");
         assert_eq!(by(&doc, "busy-loop")["toggle_url"], "/daemons/loops/busy-loop/disable");
         assert_eq!(by(&doc, "off-loop")["toggle_url"], "/daemons/loops/off-loop/enable");
         assert!(doc["generated_at"].is_string());
@@ -533,10 +533,10 @@ mod tests {
     fn state_json_carries_the_running_step_for_the_notifications() {
         let f = fx(four());
         f.status("busy-loop", &format!(r#"{{"state":"running","pid":{},"current_step":"analyzing"}}"#, std::process::id()));
-        f.status("gitlab-loop", r#"{"state":"failed","current_step":"left over"}"#);
+        f.status("issue-loop", r#"{"state":"failed","current_step":"left over"}"#);
         let doc = f.get(None);
         assert_eq!(by(&doc, "busy-loop")["step"], "analyzing");
-        assert!(by(&doc, "gitlab-loop")["step"].is_null(), "only a working loop has a step");
+        assert!(by(&doc, "issue-loop")["step"].is_null(), "only a working loop has a step");
         assert!(by(&doc, "never-loop")["step"].is_null());
     }
 
@@ -573,8 +573,8 @@ mod tests {
         let f = fx(four());
         f.approval();
         let doc = f.get(None);
-        assert_eq!(by(&doc, "gitlab-loop")["state"], "waiting");
-        assert_eq!(by(&doc, "gitlab-loop")["pending_approvals"], 1);
+        assert_eq!(by(&doc, "issue-loop")["state"], "waiting");
+        assert_eq!(by(&doc, "issue-loop")["pending_approvals"], 1);
         assert_eq!(by(&doc, "never-loop")["state"], "idle");
         assert_eq!(doc["pending_approvals"], 1);
     }

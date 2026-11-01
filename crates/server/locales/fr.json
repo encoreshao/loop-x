@@ -370,7 +370,7 @@
   "No log entries yet.": "Aucune entrée de journal pour l'instant.",
   "No loop definitions found under loops/.": "Aucune définition de boucle trouvée sous loops/.",
   "No loops here.": "Aucune boucle ici.",
-  "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.": "Aucun projet configuré pour l'instant — <a href='/loops/gitlab-loop?view=projects'>ajoutez-en un sur la page GitLab</a>.",
+  "No projects configured yet - <a href='/loops/issue-loop?view=projects'>add one on the GitLab page</a>.": "Aucun projet configuré pour l'instant — <a href='/loops/issue-loop?view=projects'>ajoutez-en un sur la page GitLab</a>.",
   "No projects configured yet, so there is no memory recorded.": "Aucun projet configuré pour l'instant, il n'y a donc aucune mémoire enregistrée.",
   "No projects configured yet, so there's nothing to check for issues or MRs.": "Aucun projet configuré pour l'instant, il n'y a donc aucune issue ni MR à vérifier.",
   "No run is currently in progress": "Aucune exécution en cours",

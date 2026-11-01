@@ -762,7 +762,7 @@
    "CRITICAL"
   ],
   "_CONNECTOR_OWNER_PAGES": {
-   "gitlab-config": "/loops/gitlab-loop?view=projects",
+   "gitlab-config": "/loops/issue-loop?view=projects",
    "slack-config": "/settings?tab=notifications",
    "inboxes": "/loops/inbox-triage-loop?view=setup"
   },
@@ -870,7 +870,8 @@
   "_LOOP_NEED_ICON": "<svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>",
   "_LEGACY_REDIRECTS": {
    "/activity": "/?view=activity",
-   "/gitlab": "/loops/gitlab-loop",
+   "/gitlab": "/loops/issue-loop",
+   "/loops/gitlab-loop": "/loops/issue-loop",
    "/topic-monitor": "/loops/topic-loop",
    "/topic-monitor/settings": "/loops/topic-loop?view=topics",
    "/inbox": "/loops/inbox-triage-loop",

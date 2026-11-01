@@ -1,12 +1,13 @@
 import Foundation
 
-/// How a loop id reads on the island and in notifications: `gitlab-loop` is "Issues" (it works GitLab, GitHub and other trackers' issues),
+/// How a loop id reads on the island and in notifications: `issue-loop` is "Issues" (it works GitLab, GitHub and other trackers' issues),
 /// `inbox-triage-loop` is "Inbox Triage". The built-ins use the dashboard's names; any other
 /// id drops `-loop` and is title-cased, keeping brand spellings. The id itself stays the key
 /// for actions (Run again, queue).
 public enum LoopNames {
     private static let named: [String: String] = [
-        "gitlab-loop": "Issues",
+        "issue-loop": "Issues",
+        "gitlab-loop": "Issues", // the issue loop's id before it took GitHub too
         "topic-loop": "Topic Monitor",
         "inbox-triage-loop": "Inbox Triage",
         "stale-sweeper-loop": "Stale Work Sweeper",
@@ -39,6 +40,7 @@ public enum LoopNames {
     }
 
     private static let symbols: [String: String] = [
+        "issue-loop": "arrow.triangle.branch",
         "gitlab-loop": "arrow.triangle.branch",
         "topic-loop": "dot.radiowaves.left.and.right",
         "inbox-triage-loop": "tray.full",

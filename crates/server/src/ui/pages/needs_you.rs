@@ -82,7 +82,7 @@ fn icon_for(kind: &str) -> &'static str {
 /// Where to go to deal with an item that has no button of its own.
 fn link(ctx: &UiCtx, item: &Value) -> String {
     let (href, label) = match item["kind"].as_str() {
-        Some("escalated") => ("/loops/gitlab-loop?view=tasks".to_string(), ctx.t("Open in the issue loop's tasks")),
+        Some("escalated") => ("/loops/issue-loop?view=tasks".to_string(), ctx.t("Open in the issue loop's tasks")),
         Some("sign_in") if text(item, "probe").starts_with("mailbox:") => {
             ("/loops/inbox-triage-loop?view=setup".to_string(), ctx.t("Reconnect"))
         }

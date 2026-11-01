@@ -81,7 +81,7 @@ Bundles live in `~/.gitlab/config.json`'s `bundles` key and, if a webhook overri
 **Manually**, once, to see it work before trusting it with a schedule:
 
 ```bash
-loopx run gitlab-loop   # the daily GitLab issue loop
+loopx run issue-loop   # the daily GitLab issue loop
 loopx run topic-loop    # the topic monitor loop
 ```
 
@@ -113,7 +113,7 @@ A localhost-only web UI (server-rendered pages, no JS framework) served by `loop
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Dashboard** (`/`) | Views: Overview — Current/last run status, a live progress indicator, and the Run now button; Activity — A message thread with the loop, plus its own live progress indicator. Paste a GitLab issue link here to have the loop work on that one issue immediately, regardless of who it's assigned to. |
 | **Loops** (`/loops`) | A catalog splitting active loops from available ones; each loop that's visible also appears as a child link under **Loops** in the sidebar (Inbox Triage stays hidden there while it's disabled and has never run) |
-| — **GitLab Issues** (`/loops/gitlab-loop`) | Views: Live — Your currently assigned issues and open MRs, fetched live; Projects — Manage `~/.gitlab/config.json` (instances, project aliases, access bundles) and `~/.loopx/projects.json` (tracked projects, loop settings) without hand-editing JSON |
+| — **GitLab Issues** (`/loops/issue-loop`) | Views: Live — Your currently assigned issues and open MRs, fetched live; Projects — Manage `~/.gitlab/config.json` (instances, project aliases, access bundles) and `~/.loopx/projects.json` (tracked projects, loop settings) without hand-editing JSON |
 | — **Topic Monitor** (`/loops/topic-loop`) | Views: Live — Status and saved briefings for every configured topic; Topics — Add, edit, and delete monitored topics — a separate view on the same page, so configuration doesn't clutter the Live status view |
 | — **Inbox Triage** (`/loops/inbox-triage-loop`) | Views: Inbox Triage's own live status (**Live**) plus mailbox connection and categories (**Setup**: connect Gmail/Outlook, categories, VIP/excluded senders, Slack bundle) |
 | **Runs** (`/runs`) | Views: Loop Runs — Every run recorded under `outputs/loop-runs/` (one per issue or topic processed), most recent first — read-only; an overview strip shows total runs, success/escalation rate, average cost, and the experimental Loop Efficiency Score; History — Every past run's review report, newest first; Logs — The tail of `logs/loop-engineering.log` - every AI CLI invocation's output, across the GitLab loop, the topic monitor loop, and this dashboard's own chat assistant |
@@ -171,7 +171,7 @@ Expand for the full list
 
 | Command / script | Purpose                                                                                                                                                                                                                              |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `loopx run <loop>` | Runs one registered loop now (looked up from `~/.loopx/loops.json`) — logs to `outputs/history/`, records events, notifies Slack on failure; `loopx run gitlab-loop <alias> <issue_iid>` works a single issue. Invoked by `loopx scheduler` (on schedule) or the dashboard (on demand) |
+| `loopx run <loop>` | Runs one registered loop now (looked up from `~/.loopx/loops.json`) — logs to `outputs/history/`, records events, notifies Slack on failure; `loopx run issue-loop <alias> <issue_iid>` works a single issue. Invoked by `loopx scheduler` (on schedule) or the dashboard (on demand) |
 | `loopx scheduler` | The tick launchd (or the app) runs every minute: reads `~/.loopx/loops.json`, adds whichever registered loop(s) are due to the run queue (`~/.loopx/run_queue.json`) and starts the queue worker, which runs them one at a time |
 | `loopx loops`, `loopx ai-cli` | The loops registry (`loops.json`: name, schedule, entry point) and which AI CLI (`claude`, `codex`, `gemini`, `kimi` or `cursor`) every loop invokes (`ai_cli.json`) |
 | `loopx config` | Reads `~/.loopx/projects.json` (aliases, assignee, worktree root, per-project config) |

@@ -1,4 +1,4 @@
-//! The GitLab loop's page `/loops/gitlab-loop` (views Live, Tasks, Worktrees,
+//! The GitLab loop's page `/loops/issue-loop` (views Live, Tasks, Worktrees,
 //! Projects), its lazily loaded fragments `GET /gitlab/live` and
 //! `GET /settings/fragment`, the issue tracking switch
 //! (`POST /gitlab/issues/<alias>/<iid>/enable|disable`), removing an issue's
@@ -27,10 +27,10 @@ use loopx_core::{events, gitlab, issue_tracking_config, pydumps, pyjson, status}
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
-const PROJECTS_URL: &str = "/loops/gitlab-loop?view=projects";
+const PROJECTS_URL: &str = "/loops/issue-loop?view=projects";
 
 pub fn register(r: &mut Registry) {
-    r.get("/loops/gitlab-loop", page);
+    r.get("/loops/issue-loop", page);
     r.get("/gitlab/live", live_fragment);
     r.get("/settings/fragment", settings_fragment);
     r.post("/gitlab/issues/*rest", issue_tracking_toggle);
@@ -194,7 +194,7 @@ fn keys_of(v: &Value, key: &str) -> Vec<String> {
 
 fn page(ctx: &UiCtx) -> UiResponse {
     let (flash, flash_ok) = ctx.flash();
-    let hub = builtin_loop_page("gitlab-loop").expect("gitlab hub");
+    let hub = builtin_loop_page("issue-loop").expect("gitlab hub");
     let q = ctx.query();
     let view = q.first("view");
     let body = match resolve_view(&hub, view).key.as_str() {
@@ -203,7 +203,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
         "worktrees" => worktrees_body(ctx, flash.as_deref(), flash_ok),
         _ => projects_body(ctx, flash.as_deref(), flash_ok),
     };
-    UiResponse::html(render_loop_page(ctx, &hub, "gitlab-loop", view, &body, None))
+    UiResponse::html(render_loop_page(ctx, &hub, "issue-loop", view, &body, None))
 }
 
 fn render(name: &str, scope: &Scope) -> String {
@@ -411,7 +411,7 @@ fn status_card(ctx: &UiCtx, status: &Value, activity: &Option<Activity>, csrf: &
             "/run-now",
             csrf,
             Some(&ctx.t(
-                "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.",
+                "No projects configured yet - <a href='/loops/issue-loop?view=projects'>add one on the GitLab page</a>.",
             )),
         )
     } else {
@@ -644,7 +644,7 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
 // ---------------------------------------------------------------------------
 // Worktrees view: every local `loop/issue-<iid>` branch of the tracked checkouts
 
-const WORKTREES_URL: &str = "/loops/gitlab-loop?view=worktrees";
+const WORKTREES_URL: &str = "/loops/issue-loop?view=worktrees";
 
 /// `(alias, local_path)` of every tracked project that has a checkout.
 fn tracked_checkouts(ctx: &UiCtx) -> Vec<(String, String)> {
@@ -1317,7 +1317,7 @@ fn issue_run(ctx: &UiCtx, middle: &str) -> UiResponse {
     let Some(iid) = py_int(iid_part) else {
         return UiResponse::not_found(ctx.lang);
     };
-    let back = "/loops/gitlab-loop?view=live";
+    let back = "/loops/issue-loop?view=live";
     let path = ctx.state.home_dir.join("issue_tracking.json");
     if !issue_tracking_config::is_issue_enabled(alias, iid, &path).unwrap_or(true) {
         let message = ctx.tf("#{iid} is not tracked - turn its switch on first", &[("iid", &iid.to_string())]);
@@ -2762,9 +2762,9 @@ mod tests {
         let resp = post(state, "/gitlab/issues/app/7/run");
         assert_eq!(resp.status, 303);
         let location = resp.header("Location").unwrap();
-        assert!(location.starts_with("/loops/gitlab-loop?view=live&flash="), "{location}");
+        assert!(location.starts_with("/loops/issue-loop?view=live&flash="), "{location}");
         assert!(location.ends_with("&ok=1"), "{location}");
-        assert_eq!(wait_for(&marker).trim(), "gitlab-loop app 7");
+        assert_eq!(wait_for(&marker).trim(), "issue-loop app 7");
     }
 
     #[test]
@@ -2852,7 +2852,7 @@ mod tests {
         let sb = Sandbox::new();
         let body = worktrees_body(&sb.ctx(), None, true);
         assert!(body.contains("No issue branches in progress."), "{body}");
-        assert_eq!(builtin_loop_page("gitlab-loop").unwrap().views[2].key, "worktrees");
+        assert_eq!(builtin_loop_page("issue-loop").unwrap().views[2].key, "worktrees");
     }
 
     #[test]
@@ -2868,7 +2868,7 @@ mod tests {
         let resp = post(state, "/gitlab/worktrees/app/7/remove");
         assert_eq!(resp.status, 303);
         let location = resp.header("Location").unwrap();
-        assert!(location.starts_with("/loops/gitlab-loop?view=worktrees&flash="), "{location}");
+        assert!(location.starts_with("/loops/issue-loop?view=worktrees&flash="), "{location}");
         assert!(location.ends_with("&ok=1"), "{location}");
         assert!(!Path::new(&wt7).exists());
         let body = worktrees_body(&sb.ctx(), None, true);

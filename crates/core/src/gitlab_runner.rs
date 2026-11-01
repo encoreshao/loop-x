@@ -3238,7 +3238,7 @@ fn emit_run_completed(ctx: &RunCtx, run_id: &str, runs: &[IssueRun]) {
 /// and process every assigned issue across every project.
 pub fn main(ctx: &RunCtx, argv: &[String], invoker: Invoker) -> i32 {
     if argv.len() != 1 && argv.len() != 3 {
-        eprintln!("Usage: loopx run gitlab-loop: <run_id> [alias issue_iid]");
+        eprintln!("Usage: loopx run issue-loop: <run_id> [alias issue_iid]");
         return 2;
     }
     let run_id = &argv[0];

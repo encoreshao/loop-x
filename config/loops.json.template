@@ -1,8 +1,8 @@
 [
   {
-    "name": "gitlab-loop",
+    "name": "issue-loop",
     "entry_point": "bin.gitlab_loop_runner",
-    "description": "Works your assigned GitLab issues: fixes, answers or escalates each one.",
+    "description": "Works your assigned issues (GitLab, GitHub): fixes, answers or escalates each one.",
     "schedule": {"frequency": "weekly", "weekdays": [1, 2, 3, 4, 5], "hour": 10, "minute": 0},
     "enabled": true,
     "timeout_seconds": 43200,

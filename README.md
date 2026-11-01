@@ -92,7 +92,7 @@ loopx doctor
 **4. Try one run** before trusting it with a schedule:
 
 ```bash
-loopx run gitlab-loop
+loopx run issue-loop
 ```
 
 **5. Let it run.** In **Settings → Daemons**, load the scheduler. From then on it runs each loop on its own schedule.
@@ -102,7 +102,7 @@ To update later, re-run the installer with `--upgrade`. To remove it, run `bin/s
 ## Best practices
 
 1. **Start small.** Keep only the GitLab issues and topic monitor loops on at first, and list one or two projects you know well.
-2. **Try one run before scheduling.** Run `loopx run gitlab-loop` by hand and read the result before loading the scheduler.
+2. **Try one run before scheduling.** Run `loopx run issue-loop` by hand and read the result before loading the scheduler.
 3. **Check the checks the agent picks.** The agent works out each project's lint and test commands and logs them under each issue in the Live view. A merge request only opens when the loop's own re-run of them passes, so glance at them for a new project; saved `lint_cmd`/`test_cmd` values act as hints it starts from.
 4. **Review every merge request.** LoopX stops at an open merge request. Read the diff as you would a teammate's.
 5. **Write clear issues.** Include the expected behaviour and how to reproduce it. A precise issue gets a fix, a vague one gets a question.

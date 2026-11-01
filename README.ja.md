@@ -46,7 +46,7 @@ Loop X は、macOS 向けのローカルファーストな AI エージェント
 ## ベストプラクティス
 
 1. **小さく始める。** 最初は GitLab Issue ループとトピック監視ループだけをオンにし、よく知っているプロジェクトを 1〜2 件登録します。
-2. **スケジュール前に 1 回実行する。** `loopx run gitlab-loop` を手動で実行し、結果を確認してからスケジューラーを読み込みます。
+2. **スケジュール前に 1 回実行する。** `loopx run issue-loop` を手動で実行し、結果を確認してからスケジューラーを読み込みます。
 3. **エージェントが選んだチェックを確認する。** エージェントが各プロジェクトの lint とテストのコマンドを判断し、Live ビューの各 Issue の下に記録します。ループ自身が再実行して通ったときだけマージリクエストが開かれます。保存済みの `lint_cmd`/`test_cmd` は出発点のヒントです。
 4. **すべてのマージリクエストをレビューする。** Loop X はオープンなマージリクエストで止まります。チームメイトの変更と同じように差分を読んでください。
 5. **明確な Issue を書く。** 期待する動作と再現手順を含めます。明確な Issue には修正が、曖昧な Issue には質問が返ります。
@@ -79,7 +79,7 @@ Loop X は、macOS 向けのローカルファーストな AI エージェント
 
 ## 仕組み
 
-スケジュールされた各実行（`loopx run gitlab-loop`）では次のことを行います。
+スケジュールされた各実行（`loopx run issue-loop`）では次のことを行います。
 
 1. 設定内のすべてのプロジェクトエイリアスを対象に、設定したユーザー名にアサインされているオープンな GitLab Issue をすべて一覧化します。
 2. [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md) の段階的な判断手順に従い、それらを**一度に 1 件ずつ、決して並列にせず**処理します。
@@ -244,7 +244,7 @@ loopx config worktree-root          # issue ごとの worktree が作られる�
 スケジュールに任せる前に動作を確認するため、まず**手動で**一度実行します。
 
 ```bash
-loopx run gitlab-loop   # the daily GitLab issue loop
+loopx run issue-loop   # the daily GitLab issue loop
 loopx run topic-loop    # the topic monitor loop
 ```
 
@@ -274,7 +274,7 @@ localhost 専用の Web UI（サーバーサイドレンダリング、JS フレ
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Dashboard** (`/`) | ビュー：Overview — 現在/前回の実行状況、ライブの進捗インジケーター、Run now ボタン; Activity — ループとのメッセージスレッドと、専用のライブ進捗インジケーター。ここに GitLab Issue のリンクを貼り付けると、誰にアサインされているかに関係なく、その Issue 1 件をループに即座に処理させられます。 |
 | **Loops** (`/loops`) | アクティブなループと利用可能なループを分けて表示するカタログ。表示中の各ループは、サイドバーの **Loops** 配下にも子リンクとして並びます（Inbox Triage は無効かつ一度も実行されていない間はそこに表示されません） |
-| — **GitLab Issues** (`/loops/gitlab-loop`) | ビュー：Live — 現在アサインされている Issue とオープンな MR をライブで取得して表示; Projects — `~/.gitlab/config.json`（インスタンス、プロジェクトエイリアス、access bundles）と `~/.loopx/projects.json`（追跡するプロジェクト、ループの設定）を JSON を手動編集せずに管理 |
+| — **GitLab Issues** (`/loops/issue-loop`) | ビュー：Live — 現在アサインされている Issue とオープンな MR をライブで取得して表示; Projects — `~/.gitlab/config.json`（インスタンス、プロジェクトエイリアス、access bundles）と `~/.loopx/projects.json`（追跡するプロジェクト、ループの設定）を JSON を手動編集せずに管理 |
 | — **Topic Monitor** (`/loops/topic-loop`) | ビュー：Live — 設定済みの各トピックの状況と保存済みブリーフィング; Topics — 監視するトピックの追加・編集・削除 — 設定によって Live 状況表示が煩雑にならないよう、同じページ内の別ビューに分離 |
 | — **Inbox Triage** (`/loops/inbox-triage-loop`) | ビュー：Inbox Triage 自体のライブ状況（**Live**）と、メールボックスの接続・カテゴリ（**Setup**：Gmail/Outlook の接続、カテゴリ、VIP/除外する送信者、Slack バンドル） |
 | **Runs** (`/runs`) | ビュー：Loop Runs — `outputs/loop-runs/` 配下に記録されたすべての実行（処理した Issue またはトピックごとに 1 件）を新しい順に表示 — 読み取り専用。概要ストリップには総実行数、成功/エスカレーション率、平均コスト、実験的な Loop Efficiency Score を表示; History — 過去の各実行のレビューレポートを新しい順に表示; Logs — `logs/loop-engineering.log` の末尾 — GitLab ループ、トピックモニターループ、およびこのダッシュボード自身のチャットアシスタントにわたる、`claude` CLI の各呼び出しの出力 |
@@ -329,7 +329,7 @@ localhost 専用の Web UI（サーバーサイドレンダリング、JS フレ
 
 | コマンド / スクリプト | 用途                                                                                                                                                                                                                                 |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `loopx run <loop>` | 登録済みの 1 つのループを今すぐ実行します（`~/.loopx/loops.json` から検索）。`outputs/history/` にログを残し、イベントを記録し、失敗時に Slack へ通知します。`loopx run gitlab-loop <alias> <issue_iid>` は 1 件の issue だけを処理します。`loopx scheduler`（スケジュール実行）またはダッシュボード（オンデマンド）から呼び出されます |
+| `loopx run <loop>` | 登録済みの 1 つのループを今すぐ実行します（`~/.loopx/loops.json` から検索）。`outputs/history/` にログを残し、イベントを記録し、失敗時に Slack へ通知します。`loopx run issue-loop <alias> <issue_iid>` は 1 件の issue だけを処理します。`loopx scheduler`（スケジュール実行）またはダッシュボード（オンデマンド）から呼び出されます |
 | `loopx scheduler` | launchd（またはアプリ）が 15 分ごとに実行するポーリングループ。`~/.loopx/loops.json` を読み、実行時刻になった登録済みループを起動します |
 | `loopx loops`, `loopx ai-cli` | ループのレジストリ（`loops.json`: 名前・スケジュール・エントリポイント）と、すべてのループが呼び出す AI CLI（`claude` または `codex`、`ai_cli.json`） |
 | `loopx config` | `~/.loopx/projects.json` を読み取ります（エイリアス、担当者、worktree ルート、プロジェクトごとの設定） |

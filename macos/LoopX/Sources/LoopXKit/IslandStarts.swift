@@ -5,7 +5,7 @@ public enum IslandStarts {
 
     public static let all: [Start] = [
         Start(loop: "topic-loop", title: "Run Topic Monitor", symbol: "dot.radiowaves.left.and.right"),
-        Start(loop: "gitlab-loop", title: "Run issue loop", symbol: "arrow.triangle.branch"),
+        Start(loop: "issue-loop", title: "Run issue loop", symbol: "arrow.triangle.branch"),
         Start(loop: "inbox-triage-loop", title: "Triage inbox", symbol: "tray"),
     ]
 
@@ -24,7 +24,7 @@ public enum IslandStarts {
 
     public static func confirmText(loop: String) -> String {
         switch loop {
-        case "gitlab-loop": return "Run the issue loop now? It acts on your real GitLab and GitHub issues and Slack."
+        case "issue-loop": return "Run the issue loop now? It acts on your real GitLab and GitHub issues and Slack."
         case "topic-loop": return "Run the Topic Monitor now? It posts briefings to Slack."
         case "inbox-triage-loop": return "Triage your inbox now? It reads your mail and may draft replies."
         default: return "Run \(LoopNames.display(loop)) now?"

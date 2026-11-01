@@ -6,7 +6,7 @@ import Testing
     func parse(_ s: String) -> LoopXURL? { LoopXURL.parse(URL(string: s)!) }
 
     @Test func runNamesAKnownLoop() {
-        #expect(parse("loopx://run/gitlab-loop") == .run(loop: "gitlab-loop"))
+        #expect(parse("loopx://run/issue-loop") == .run(loop: "issue-loop"))
         #expect(parse("loopx://run/topic-loop") == .run(loop: "topic-loop"))
         #expect(parse("loopx://run/inbox-triage-loop") == .run(loop: "inbox-triage-loop"))
     }
@@ -15,8 +15,8 @@ import Testing
         #expect(parse("loopx://run/rm-rf") == nil)
         #expect(parse("loopx://run/") == nil)
         #expect(parse("loopx://run") == nil)
-        #expect(parse("loopx://run/gitlab-loop/extra") == nil)
-        #expect(parse("loopx://run/../gitlab-loop") == nil)
+        #expect(parse("loopx://run/issue-loop/extra") == nil)
+        #expect(parse("loopx://run/../issue-loop") == nil)
     }
 
     @Test func openWithoutAPageGoesHome() {
@@ -27,7 +27,7 @@ import Testing
     @Test func openAcceptsEveryDashboardMenuPageIncludingItsView() {
         #expect(parse("loopx://open/runs") == .open(path: "/runs"))
         #expect(parse("loopx://open/runs?view=logs") == .open(path: "/runs?view=logs"))
-        #expect(parse("loopx://open/loops/gitlab-loop") == .open(path: "/loops/gitlab-loop"))
+        #expect(parse("loopx://open/loops/issue-loop") == .open(path: "/loops/issue-loop"))
         for e in DashboardMenu.sections.flatMap(\.entries) {
             #expect(parse("loopx://open" + e.path) == .open(path: e.path), "\(e.path)")
         }
@@ -40,8 +40,8 @@ import Testing
     }
 
     @Test func otherSchemesAndActionsAreNotOurs() {
-        #expect(parse("https://run/gitlab-loop") == nil)
-        #expect(parse("loopx://delete/gitlab-loop") == nil)
-        #expect(parse("LOOPX://run/gitlab-loop") == .run(loop: "gitlab-loop"))
+        #expect(parse("https://run/issue-loop") == nil)
+        #expect(parse("loopx://delete/issue-loop") == nil)
+        #expect(parse("LOOPX://run/issue-loop") == .run(loop: "issue-loop"))
     }
 }

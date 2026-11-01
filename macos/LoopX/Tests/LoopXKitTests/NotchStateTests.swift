@@ -21,7 +21,7 @@ import Testing
     }
 
     @Test func runningNamesTheLoopAndIssue() {
-        let s = Snapshot(appState: .running, loops: ["gitlab-loop": LoopStatus(state: "running", pid: 1, currentIssue: "web #7", currentStep: "analyzing")])
+        let s = Snapshot(appState: .running, loops: ["issue-loop": LoopStatus(state: "running", pid: 1, currentIssue: "web #7", currentStep: "analyzing")])
         let n = NotchState.make(from: s, now: now)
         #expect(n.kind == .running)
         #expect(n.title == "Issues running")
@@ -66,7 +66,7 @@ import Testing
 
     @Test func awaitingApprovalHasAllowDenyAndOutranksEverything() {
         let s = Snapshot(appState: .awaitingApproval,
-                         loops: ["gitlab-loop": LoopStatus(state: "running")],
+                         loops: ["issue-loop": LoopStatus(state: "running")],
                          approvals: ApprovalsBlock(pending: [approval("apr_9")]),
                          attention: attention(.failed))
         let n = NotchState.make(from: s, now: now)
@@ -100,7 +100,7 @@ import Testing
 
     @Test func runningShowsAgainWhenAnAlertIsDismissed() {
         let a = attention(.escalated)
-        let s = Snapshot(appState: .running, loops: ["gitlab-loop": LoopStatus(state: "running")], attention: a)
+        let s = Snapshot(appState: .running, loops: ["issue-loop": LoopStatus(state: "running")], attention: a)
         #expect(NotchState.make(from: s, now: now).kind == .escalate)
         #expect(NotchState.make(from: s, now: now, dismissed: [a.key]).kind == .running)
     }
@@ -124,10 +124,10 @@ import Testing
 
     @Test func notchCarriesEveryTaskWithItsMessage() {
         let s = Snapshot(appState: .running,
-                         loops: ["gitlab-loop": LoopStatus(state: "running", currentIssue: "web #7", currentStep: "analyzing")],
+                         loops: ["issue-loop": LoopStatus(state: "running", currentIssue: "web #7", currentStep: "analyzing")],
                          topics: ["ai-news": TopicStatus(state: "idle")])
         let n = NotchState.make(from: s, now: now)
-        #expect(n.tasks.map(\.name) == ["gitlab-loop", "ai-news"])
+        #expect(n.tasks.map(\.name) == ["issue-loop", "ai-news"])
         #expect(n.tasks.first?.detail == "web #7 · analyzing")
     }
 
