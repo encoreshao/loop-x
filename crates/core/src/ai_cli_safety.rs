@@ -50,13 +50,16 @@ pub fn warning(cli: &str, site: CallSite) -> Option<&'static str> {
         "cursor" => {
             "Cursor Agent cannot be limited to a fixed set of tools here, so the model runs with its full tool access."
         }
+        "grok" => {
+            "Grok CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access."
+        }
         _ => "This AI CLI cannot be limited to a fixed set of tools here.",
     })
 }
 
 /// Newer integrations that have had less real-world use.
 pub fn experimental(cli: &str) -> bool {
-    matches!(cli, "gemini" | "kimi" | "cursor")
+    crate::agents::is_new_cli(cli)
 }
 
 #[cfg(test)]
@@ -82,7 +85,7 @@ mod tests {
 
     #[test]
     fn other_clis_are_unrestricted_and_warn() {
-        for cli in ["codex", "gemini", "kimi", "cursor"] {
+        for cli in ["codex", "gemini", "kimi", "cursor", "grok"] {
             for site in SITES {
                 assert_eq!(restriction(cli, site), Restriction::Unrestricted);
                 assert!(warning(cli, site).is_some(), "{cli}");
@@ -125,8 +128,16 @@ mod tests {
             ("gemini", true),
             ("kimi", true),
             ("cursor", true),
+            ("grok", true),
         ] {
             assert_eq!(experimental(cli), want, "{cli}");
         }
+    }
+
+    #[test]
+    fn grok_warning_names_grok() {
+        assert!(warning("grok", CallSite::GitlabLoop)
+            .unwrap()
+            .starts_with("Grok CLI"));
     }
 }

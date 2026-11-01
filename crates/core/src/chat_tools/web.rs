@@ -38,7 +38,7 @@ fn research_prompt(query: &str, url: Option<&str>) -> String {
 /// `program` and its argv for a read-only, web-only one-shot on `cli`; `None`
 /// when that CLI has no headless web search.
 pub(crate) fn search_command(cli: &str, prompt: &str) -> Option<(String, Vec<String>)> {
-    use crate::agents::{gemini, sealed};
+    use crate::agents::{gemini, grok, sealed};
     let strs = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let mut args = match cli {
         "claude" => strs(&[
@@ -65,6 +65,24 @@ pub(crate) fn search_command(cli: &str, prompt: &str) -> Option<(String, Vec<Str
             sealed::GEMINI_APPROVAL_MODE_DEFAULT,
             gemini::GEMINI_PROMPT_FLAG,
         ]),
+        // Web search and fetch are Grok's read-only tools; every other tool is denied.
+        "grok" => {
+            let mut a = strs(&[
+                grok::GROK_NO_UPDATE_FLAG,
+                grok::GROK_OUTPUT_FORMAT_FLAG,
+                grok::GROK_OUTPUT_FORMAT,
+                grok::GROK_PERMISSION_MODE_FLAG,
+                grok::GROK_PERMISSION_MODE_DONT_ASK,
+            ]);
+            for tool in grok::GROK_ALL_TOOLS
+                .iter()
+                .filter(|t| !matches!(**t, "WebSearch" | "WebFetch"))
+            {
+                a.extend([grok::GROK_DENY_FLAG.to_string(), (*tool).to_string()]);
+            }
+            a.push(grok::GROK_PROMPT_FLAG.into());
+            a
+        }
         _ => return None,
     };
     args.push(prompt.to_string());
@@ -75,6 +93,7 @@ pub(crate) fn search_command(cli: &str, prompt: &str) -> Option<(String, Vec<Str
 fn reply_text(cli: &str, stdout: &str) -> Result<String, String> {
     let text = match cli {
         "gemini" => crate::agents::gemini::gemini_reply(stdout)?,
+        "grok" => crate::agents::grok::grok_reply(stdout)?,
         _ => stdout.to_string(),
     };
     match text.trim() {
@@ -218,6 +237,29 @@ mod tests {
         let (_, gemini) = search_command("gemini", "P").unwrap();
         assert!(!gemini.contains(&"--yolo".to_string()));
         assert_eq!(gemini.last().unwrap(), "P");
+    }
+
+    #[test]
+    fn grok_searches_with_only_the_web_tools() {
+        let (program, argv) = search_command("grok", "P").unwrap();
+        assert_eq!(program, "grok");
+        assert!(!argv.contains(&"--yolo".to_string()));
+        let at = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
+        assert_eq!(at("--permission-mode"), "dontAsk");
+        for tool in ["Bash", "Read", "Edit", "Write"] {
+            assert!(
+                argv.windows(2).any(|w| w == ["--deny", tool]),
+                "{tool}: {argv:?}"
+            );
+        }
+        for tool in ["WebSearch", "WebFetch"] {
+            assert!(!argv.windows(2).any(|w| w == ["--deny", tool]), "{tool}");
+        }
+        assert_eq!(argv[argv.len() - 2..], ["-p", "P"]);
+        assert_eq!(
+            reply_text("grok", r#"{"text":" found it "}"#).unwrap(),
+            "found it"
+        );
     }
 
     #[test]

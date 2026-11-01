@@ -415,17 +415,21 @@ mod tests {
         let r = check(&f.env);
         assert_eq!(r["ai_clis"]["claude"]["version"], "2.1.0 (Claude Code)");
         assert_eq!(r["ai_clis"]["codex"]["version"], "codex-cli 0.9.1");
-        assert_eq!(r["ai_clis"].as_object().unwrap().len(), 5);
+        assert_eq!(
+            r["ai_clis"].as_object().unwrap().len(),
+            ai_cli_config::VALID_CLIS.len()
+        );
         assert_eq!(r["selected_cli"], "claude");
         assert_eq!(r["ready"], true);
     }
 
     #[test]
-    fn reports_all_five_clis_including_cursor_under_either_binary_name() {
+    fn reports_every_cli_including_cursor_under_either_binary_name() {
         let f = fx();
         script(&f.bin, "gemini", "echo 'gemini 1.0'");
         script(&f.bin, "kimi", "echo 'kimi 2.0'");
         script(&f.bin, "agent", "echo 'agent 3.0'");
+        script(&f.bin, "grok", "echo 'grok 0.4.0'");
         let r = check(&f.env);
         for cli in ai_cli_config::VALID_CLIS {
             assert!(r["ai_clis"].get(cli).is_some(), "{cli}");
@@ -433,6 +437,7 @@ mod tests {
         assert_eq!(r["ai_clis"]["gemini"]["version"], "gemini 1.0");
         assert_eq!(r["ai_clis"]["kimi"]["version"], "kimi 2.0");
         assert_eq!(r["ai_clis"]["cursor"]["version"], "agent 3.0");
+        assert_eq!(r["ai_clis"]["grok"]["version"], "grok 0.4.0");
         assert_eq!(r["ai_clis"]["claude"]["found"], false);
         let text = render(&r);
         assert!(text.contains("cursor") && text.contains("kimi"));

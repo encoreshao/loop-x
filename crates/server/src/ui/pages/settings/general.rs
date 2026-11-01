@@ -532,16 +532,17 @@ mod tests {
     }
 
     #[test]
-    fn the_picker_lists_all_five_and_tags_the_newer_ones_experimental() {
-        let html = ai_panel_for("claude", &["claude", "codex", "gemini", "kimi", "agent"]);
+    fn the_picker_lists_every_cli_and_tags_the_newer_ones_experimental() {
+        let html = ai_panel_for("claude", &["claude", "codex", "gemini", "kimi", "agent", "grok"]);
         let picker = &html[..html.find("/ai-cli/usage-pause").unwrap()];
-        assert_eq!(picker.matches("<option value=").count(), 5, "{html}");
+        assert_eq!(picker.matches("<option value=").count(), 6, "{html}");
         for (cli, name, experimental) in [
             ("claude", "Claude Code", false),
             ("codex", "Codex CLI", false),
             ("gemini", "Gemini CLI", true),
             ("kimi", "Kimi CLI", true),
             ("cursor", "Cursor CLI", true),
+            ("grok", "Grok CLI", true),
         ] {
             let label = option_label(&html, cli);
             assert!(label.starts_with(name), "{label}");

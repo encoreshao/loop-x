@@ -88,6 +88,7 @@ fn account_var(cli: &str) -> Option<&'static str> {
     match cli {
         "claude" => Some("CLAUDE_CONFIG_DIR"),
         "codex" => Some("CODEX_HOME"),
+        "grok" => Some("GROK_HOME"),
         _ => None,
     }
 }
@@ -844,6 +845,14 @@ mod tests {
         // Only CODEX_HOME is ours to set; CLAUDE_CONFIG_DIR is whatever we inherited.
         let seen = std::fs::read_to_string(&seen).unwrap();
         assert!(seen.trim().ends_with("|/srv/codex-bot"), "{seen}");
+    }
+
+    #[test]
+    fn each_cli_with_an_account_folder_gets_its_own_variable() {
+        assert_eq!(account_var("claude"), Some("CLAUDE_CONFIG_DIR"));
+        assert_eq!(account_var("codex"), Some("CODEX_HOME"));
+        assert_eq!(account_var("grok"), Some("GROK_HOME"));
+        assert_eq!(account_var("gemini"), None);
     }
 
     #[test]

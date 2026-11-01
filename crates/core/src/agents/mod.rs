@@ -10,6 +10,7 @@ pub mod claude;
 pub mod codex;
 pub mod cursor;
 pub mod gemini;
+pub mod grok;
 pub mod kimi;
 pub mod sealed;
 
@@ -17,7 +18,7 @@ use crate::ai_cli_config;
 use crate::proc::ProcOutput;
 use std::path::{Path, PathBuf};
 
-pub const VALID_PROVIDERS: [&str; 5] = ai_cli_config::VALID_CLIS;
+pub const VALID_PROVIDERS: [&str; 6] = ai_cli_config::VALID_CLIS;
 
 /// `"success"`, `"failed"` or `"timeout"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,12 +205,20 @@ pub(crate) fn error_message(error: &serde_json::Value) -> String {
         .unwrap_or_else(|| error.to_string())
 }
 
-/// What a gemini / kimi / cursor run printed, as the reply or the failure
-/// message; `None` for `claude` and `codex`, whose output the runners already
-/// handle.
+/// The CLIs driven through [`new_cli_args`] / [`extract_new_cli_reply`]: no
+/// tool allowlist, one headless call, the reply parsed from stdout. Claude and
+/// Codex have their own hardened command lines.
+pub fn is_new_cli(cli: &str) -> bool {
+    matches!(cli, "gemini" | "kimi" | "cursor" | "grok")
+}
+
+/// What a gemini / kimi / cursor / grok run printed, as the reply or the
+/// failure message; `None` for `claude` and `codex`, whose output the runners
+/// already handle.
 pub fn extract_new_cli_reply(cli: &str, stdout: &str) -> Option<Result<String, String>> {
     match cli {
         "gemini" => Some(gemini::gemini_reply(stdout)),
+        "grok" => Some(grok::grok_reply(stdout)),
         "kimi" => Some(kimi::kimi_reply(stdout)),
         "cursor" => Some(cursor::cursor_reply(stdout)),
         _ => None,
@@ -221,6 +230,7 @@ pub fn extract_new_cli_reply(cli: &str, stdout: &str) -> Option<Result<String, S
 pub fn new_cli_args(cli: &str, prompt: &str, opts: &RunOptions) -> Option<Vec<String>> {
     match cli {
         "gemini" => Some(gemini::gemini_args(prompt, opts)),
+        "grok" => Some(grok::grok_args(prompt, opts)),
         "kimi" => Some(kimi::kimi_args(prompt, opts)),
         "cursor" => Some(cursor::cursor_args(prompt, opts)),
         _ => None,
@@ -250,6 +260,7 @@ pub fn get_agent(
         "claude" => Ok(Box::new(claude::ClaudeAgent::default())),
         "codex" => Ok(Box::new(codex::CodexAgent::default())),
         "gemini" => Ok(Box::new(gemini::GeminiAgent::default())),
+        "grok" => Ok(Box::new(grok::GrokAgent::default())),
         "kimi" => Ok(Box::new(kimi::KimiAgent::default())),
         "cursor" => Ok(Box::new(cursor::CursorAgent::default())),
         other => Err(format!(

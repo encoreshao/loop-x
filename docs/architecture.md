@@ -125,7 +125,7 @@ subdirectories — see §9. Bare file names in the table below are in
 | `loop_audit.rs` | `loop audit` — scores a `LoopDefinition`'s readiness (PASS/WARN/FAIL per check + weighted score) |
 | `loop_eval.rs` | Evaluation dataset harness — drives a real `LoopRuntime` with a scripted agent/verifiers |
 | `loop_cmd.rs` | The `loop` CLI: `init`/`validate`/`run`/`status`/`inspect`/`audit`/`cost`/`doctor`/`replay`/`eval` |
-| `crates/core/src/agents/mod.rs`, `crates/core/src/agents/claude.rs`, `crates/core/src/agents/codex.rs`, `gemini.rs`, `kimi.rs`, `cursor.rs` | `Agent` trait + `AgentResult` + provider adapters |
+| `crates/core/src/agents/mod.rs`, `crates/core/src/agents/claude.rs`, `crates/core/src/agents/codex.rs`, `gemini.rs`, `kimi.rs`, `cursor.rs`, `grok.rs` | `Agent` trait + `AgentResult` + provider adapters |
 | `events.rs` | Append-only JSONL event log (read through the ledger, §2) |
 | `metrics.rs`, `cost.rs`, `health.rs`, `learning.rs` | Pure report builders over the event log (read through the ledger, §2) |
 | `gitlab_runner.rs` | Wires the real GitLab issue loop through `LoopRuntime`, one issue at a time |
@@ -229,7 +229,7 @@ failure never crashes the runtime — same `|| true` philosophy as
 - **Metrics** (`metrics.rs`) — issue/verification/classification/failure-
   taxonomy/quality-and-autonomy metrics computed from the event log.
 - **Cost** (`cost.rs`) — Claude-only usage/cost extraction (`claude -p
-  --output-format json`'s `total_cost_usd`); Codex, Gemini, Kimi and Cursor
+  --output-format json`'s `total_cost_usd`); Codex, Gemini, Kimi, Cursor and Grok
   cost is reported as `None` (unknown). Failed budget stops are booked at
   the per-call cap (`--max-budget-usd`, from `stop_conditions.max_cost_usd`);
   other unknown costs stay `None`.
@@ -431,7 +431,7 @@ definition's `prompt.md`, and `call_model` defaults to the sealed call.
 **Sealed model calls.** `crates/core/src/agents/sealed.rs` is the one hardened model call
 every plugin uses on untrusted content, run on the selected AI CLI: on Claude, no tools, no MCP
 servers, prompt on stdin, no session persistence, hooks disabled. CLIs that cannot be locked
-down that far (Codex, Gemini, Kimi, Cursor) still run, with a warning (`ai_cli_safety.rs`).
+down that far (Codex, Gemini, Kimi, Cursor, Grok) still run, with a warning (`ai_cli_safety.rs`).
 
 **`chat_*` helpers.** `chat_text`, `chat_url` and `chat_link` sanitize
 untrusted text before it goes into any chat message (control characters

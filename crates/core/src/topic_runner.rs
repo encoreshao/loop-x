@@ -88,7 +88,7 @@ pub fn cli_command(
     max_budget_usd: Option<f64>,
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
-    if matches!(ai_cli, "gemini" | "kimi" | "cursor") {
+    if crate::agents::is_new_cli(ai_cli) {
         // No tool allowlist exists for these. The run's cwd is the repo root, so
         // cursor's workspace is ".".
         let opts = RunOptions::new(Path::new("."), 0.0);
@@ -637,6 +637,7 @@ mod tests {
             ("gemini", "--yolo"),
             ("kimi", "--yolo"),
             ("cursor", "--force"),
+            ("grok", "--yolo"),
         ] {
             let c = cli_command(cli, "P", "x", "/h", None);
             assert!(
