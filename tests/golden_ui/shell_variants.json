@@ -3,7 +3,7 @@
   "variants": [
     {"id": "plain", "title": "Overview · LoopX Engineering", "active_page": "overview", "status": {"state": "idle"}, "body": "<p>body</p>"},
     {"id": "overview-running", "title": "Dashboard · LoopX Engineering", "active_page": "overview", "status": {"state": "running", "current_issue": "proj #12", "current_step": "analyzing"}, "body": "<div>x</div>", "refresh": true, "refresh_note": true},
-    {"id": "lazy", "title": "GitLab · LoopX Engineering", "active_page": "loop:gitlab-loop", "status": {"state": "failed"}, "body": "", "refresh": true, "refresh_note": true, "lazy_refresh": true},
+    {"id": "lazy", "title": "GitLab · LoopX Engineering", "active_page": "loop:issue-loop", "status": {"state": "failed"}, "body": "", "refresh": true, "refresh_note": true, "lazy_refresh": true},
     {"id": "runs", "title": "Runs · LoopX Engineering", "active_page": "history", "status": {"state": "never_run"}, "body": "<b>&amp;</b>"},
     {"id": "insights", "title": "Insights · LoopX Engineering", "active_page": "cost", "status": {"state": "stopped"}, "body": ""},
     {"id": "harness", "title": "Harness · LoopX Engineering", "active_page": "harness", "status": {"state": "idle"}, "body": ""},

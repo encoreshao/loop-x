@@ -1,5 +1,5 @@
 [
-  {"name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner", "description": "GitLab", "schedule": {"frequency": "daily", "hour": 10, "minute": 0}, "enabled": true},
+  {"name": "issue-loop", "entry_point": "bin.gitlab_loop_runner", "description": "GitLab", "schedule": {"frequency": "daily", "hour": 10, "minute": 0}, "enabled": true},
   {"name": "topic-loop", "entry_point": "x", "description": "Topics", "schedule": {"frequency": "daily", "hour": 8, "minute": 0}, "enabled": true},
   {"name": "inbox-triage-loop", "entry_point": "x", "description": "Inbox", "schedule": {"frequency": "daily", "hour": 8, "minute": 30}, "enabled": false},
   {"name": "rss-watch-loop", "entry_point": "x", "label": "RSS Watch", "description": "Feeds", "schedule": {"frequency": "daily", "hour": 7, "minute": 0}, "enabled": false},

@@ -17,7 +17,7 @@ use serde_json::Value;
 /// How many ledger steps the progress card lists.
 const FEED_LEN: usize = 6;
 
-const BUILTIN_LOOPS: [&str; 3] = ["gitlab-loop", "topic-loop", "inbox-triage-loop"];
+const BUILTIN_LOOPS: [&str; 3] = ["issue-loop", "topic-loop", "inbox-triage-loop"];
 
 pub fn register(_r: &mut Registry) {}
 
@@ -80,7 +80,7 @@ fn gitlab_status(ctx: &UiCtx, csrf: &str) -> LoopStatus {
             stop_action_html(
                 ctx,
                 "/gitlab/stop",
-                &ctx.t("Stop the running GitLab loop? The in-progress issue's work will be abandoned."),
+                &ctx.t("Stop the running issue loop? The in-progress issue's work will be abandoned."),
                 csrf,
             ),
         )
@@ -93,7 +93,7 @@ fn gitlab_status(ctx: &UiCtx, csrf: &str) -> LoopStatus {
                 "/run-now",
                 csrf,
                 Some(&ctx.t(
-                    "No projects configured yet - <a href='/loops/gitlab-loop?view=projects'>add one on the GitLab page</a>.",
+                    "No projects configured yet - <a href='/loops/issue-loop?view=projects'>add one on the GitLab page</a>.",
                 )),
             ),
             String::new(),
@@ -103,7 +103,7 @@ fn gitlab_status(ctx: &UiCtx, csrf: &str) -> LoopStatus {
         updated_at: status.get("updated_at").and_then(text),
         run_action,
         stop_action,
-        ..identity(ctx, "gitlab-loop", None, state, headline)
+        ..identity(ctx, "issue-loop", None, state, headline)
     }
 }
 
@@ -213,7 +213,7 @@ fn loop_statuses(ctx: &UiCtx) -> Vec<LoopStatus> {
             continue;
         }
         out.push(match name {
-            "gitlab-loop" => gitlab_status(ctx, &csrf),
+            "issue-loop" => gitlab_status(ctx, &csrf),
             "topic-loop" => topic_status(ctx, &csrf),
             _ => other_status(ctx, name, entry(name)),
         });
@@ -373,7 +373,7 @@ fn now_card_html(ctx: &UiCtx, loops: &[LoopStatus], log_tail: Option<&str>) -> S
     } else {
         format!("<p class='activity-now-meta'>{meta}</p>")
     };
-    let log = match log_tail.filter(|_| running.is_some_and(|l| l.name == "gitlab-loop")) {
+    let log = match log_tail.filter(|_| running.is_some_and(|l| l.name == "issue-loop")) {
         Some(tail) => format!(
             "<details class='activity-log'><summary>{}</summary><pre class='log'>{}</pre></details>",
             pyfmt::escape(&ctx.t("Today's log (tail)")),
@@ -531,7 +531,7 @@ mod tests {
         let state = state(dir.path());
         write(
             state.loops_config_path(),
-            r#"[{"name": "gitlab-loop", "enabled": true}, {"name": "topic-loop", "enabled": true},
+            r#"[{"name": "issue-loop", "enabled": true}, {"name": "topic-loop", "enabled": true},
                 {"name": "inbox-triage-loop", "enabled": true},
                 {"name": "daily-digest-loop", "label": "Daily Digest", "enabled": true},
                 {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": false}]"#,
@@ -546,7 +546,7 @@ mod tests {
         );
         let (_, cards) = render(&state);
         let pos = |name: &str| cards.find(&format!("data-loop='{name}'")).unwrap_or_else(|| panic!("{name}: {cards}"));
-        assert!(pos("gitlab-loop") < pos("topic-loop"));
+        assert!(pos("issue-loop") < pos("topic-loop"));
         assert!(pos("topic-loop") < pos("inbox-triage-loop"));
         assert!(pos("inbox-triage-loop") < pos("daily-digest-loop"));
         assert!(!cards.contains("rss-watch-loop"), "a disabled loop that never ran is hidden");

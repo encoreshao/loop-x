@@ -25,7 +25,7 @@ import Testing
         #expect(byTitle["Logs"] == "/runs?view=logs")
         #expect(byTitle["Daemons"] == "/settings?view=daemons")
         #expect(byTitle["Cost"] == "/insights?view=cost")
-        #expect(byTitle["GitLab Issues"] == "/loops/gitlab-loop")
+        #expect(byTitle["Issues"] == "/loops/issue-loop")
     }
 
     @Test func repositoryLinksPointAtTheProject() {

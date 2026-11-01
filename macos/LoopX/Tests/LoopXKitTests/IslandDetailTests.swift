@@ -6,7 +6,7 @@ import Testing
     func ev(_ type: String, at: String, project: String? = "web", iid: Int? = 7, data: JSONValue? = nil) -> RecentEvent {
         RecentEvent(type: type, at: at, runId: "r1", project: project, issueIid: iid, data: data)
     }
-    let task = NotchTask(id: "loop:gitlab-loop", name: "gitlab-loop", state: .running, detail: "web #7 · analyzing")
+    let task = NotchTask(id: "loop:issue-loop", name: "issue-loop", state: .running, detail: "web #7 · analyzing")
 
     @Test func rowsAreTheTasksIssueEventsNewestFirstWithTones() {
         let events = [
@@ -42,8 +42,8 @@ import Testing
     @Test func chipsAlwaysEndWithDashboardAndRunAgainOnlyWhenNotRunning() {
         let running = IslandDetail.make(task: task, events: [], attention: nil)
         #expect(running.chips == [.openDashboard])
-        let idle = NotchTask(id: "loop:gitlab-loop", name: "gitlab-loop", state: .idle, detail: nil)
-        #expect(IslandDetail.make(task: idle, events: [], attention: nil).chips == [.runAgain(loop: "gitlab-loop"), .openDashboard])
+        let idle = NotchTask(id: "loop:issue-loop", name: "issue-loop", state: .idle, detail: nil)
+        #expect(IslandDetail.make(task: idle, events: [], attention: nil).chips == [.runAgain(loop: "issue-loop"), .openDashboard])
     }
 
     @Test func topicsRunAgainViaTheTopicLoop() {

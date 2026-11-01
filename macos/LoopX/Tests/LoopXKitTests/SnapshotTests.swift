@@ -5,7 +5,7 @@ import Testing
 @Suite struct SnapshotTests {
     static let full = #"""
     {"version":1,"app_state":"awaiting_approval",
-     "loops":{"gitlab-loop":{"state":"running","updated_at":"2026-10-22T08:15:03.412907+00:00","pid":5150,"current_issue":"web #7","current_step":"analyzing"},
+     "loops":{"issue-loop":{"state":"running","updated_at":"2026-10-22T08:15:03.412907+00:00","pid":5150,"current_issue":"web #7","current_step":"analyzing"},
               "topic-loop":{"state":"idle","updated_at":"x","last_exit_code":0}},
      "topics":{"ai":{"state":"idle","updated_at":"x"}},
      "approvals":{"pending":[{"id":"apr_0123456789ab","kind":"open_mr","run_id":"run_1","project":"web","issue_iid":7,
@@ -19,8 +19,8 @@ import Testing
     @Test func decodesTheContractExample() throws {
         let s = try Snapshot.decode(Data(Self.full.utf8))
         #expect(s.appState == .awaitingApproval)
-        #expect(s.loops["gitlab-loop"]?.pid == 5150)
-        #expect(s.loops["gitlab-loop"]?.currentIssue == "web #7")
+        #expect(s.loops["issue-loop"]?.pid == 5150)
+        #expect(s.loops["issue-loop"]?.currentIssue == "web #7")
         #expect(s.loops["topic-loop"]?.lastExitCode == 0)
         #expect(s.topics["ai"]?.state == "idle")
         let a = try #require(s.approvals.pending.first)
@@ -34,7 +34,7 @@ import Testing
         #expect(s.attention?.mrURL == "https://gitlab.example.com/g/web/-/merge_requests/42")
         #expect(s.recentEvents.first?.type == "issue.completed")
         #expect(s.recentEvents.first?.data == .object(["n": .number(1), "ok": .bool(true), "l": .array([.number(1), .string("a"), .null])]))
-        #expect(s.runningLoop?.name == "gitlab-loop")
+        #expect(s.runningLoop?.name == "issue-loop")
     }
 
     @Test func decodesWhatNeedsYou() throws {

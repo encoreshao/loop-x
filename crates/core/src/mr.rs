@@ -38,6 +38,15 @@ pub fn push_command(
     .collect()
 }
 
+/// The `git` argv that only pushes `branch` (GitHub and other hosts: the
+/// loop opens the pull request through the API afterwards).
+pub fn branch_push_command(repo_path: &str, branch: &str) -> Vec<String> {
+    ["git", "-C", repo_path, "push", "-u", "origin", branch]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +76,13 @@ mod tests {
         assert_eq!(argv[9], "merge_request.target=main");
         assert_eq!(argv[11], "merge_request.title=My title");
         assert_eq!(argv.last().unwrap(), "merge_request.remove_source_branch");
+    }
+
+    #[test]
+    fn branch_push_has_no_gitlab_push_options() {
+        assert_eq!(
+            branch_push_command("/r", "loop/issue-5"),
+            ["git", "-C", "/r", "push", "-u", "origin", "loop/issue-5"]
+        );
     }
 }

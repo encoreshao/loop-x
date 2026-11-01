@@ -4,7 +4,7 @@
 //! its result file and the texts built from it.
 
 use crate::agents::{new_cli_args, RunOptions};
-use crate::gitlab_runner::{ASSET_BUILD_PATTERNS, DISALLOWED_TOOLS};
+use crate::issue_runner::{ASSET_BUILD_PATTERNS, DISALLOWED_TOOLS};
 use crate::runner_util::resolved_program;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -183,7 +183,7 @@ pub fn repeat_block_report(first: &DoctorResult, second: &Value) -> String {
 }
 
 /// The doctor session's CLI argv, shaped like the main agent's
-/// (`gitlab_runner::cli_command`) but writable only in the issue's worktree
+/// (`issue_runner::cli_command`) but writable only in the issue's worktree
 /// and, for Claude, its two result files beside `handoff` (the handoffs
 /// directory is added for reading; the other CLIs get it writable). Claude gets no `acceptEdits`: that would
 /// auto-approve edits in every added directory and undo the scoped

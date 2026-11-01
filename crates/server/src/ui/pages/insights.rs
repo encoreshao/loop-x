@@ -1065,7 +1065,7 @@ fn memory_body(ctx: &UiCtx) -> String {
         format!(
             "\n<div class='empty-state'>\n<div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-folder_off'/></svg></div>\n\
              <p class='empty-state-message'>{}</p>\n\
-             <a class='btn btn-primary empty-state-action' href='/loops/gitlab-loop?view=projects'>\n\
+             <a class='btn btn-primary empty-state-action' href='/loops/issue-loop?view=projects'>\n\
              <svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}\n</a>\n</div>\n",
             escape_text(&ctx.t("No projects configured yet, so there is no memory recorded.")),
             escape_text(&ctx.t("Set up a project"))

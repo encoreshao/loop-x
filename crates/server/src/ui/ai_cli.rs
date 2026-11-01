@@ -57,7 +57,7 @@ pub fn warning_text(lang: Lang, english: &str) -> String {
 /// The feature a call site stands for, as the Settings warning names it.
 pub fn feature_label(lang: Lang, site: CallSite) -> String {
     match site {
-        CallSite::GitlabLoop => t(lang, "GitLab issue loop", &[]),
+        CallSite::GitlabLoop => t(lang, "Issue loop", &[]),
         CallSite::TopicMonitor => t(lang, "Topic Monitor", &[]),
         CallSite::CalendarPrep => t(lang, "Calendar prep", &[]),
         CallSite::InboxTriage => t(lang, "Inbox Triage", &[]),

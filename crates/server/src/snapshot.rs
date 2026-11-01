@@ -92,7 +92,7 @@ pub fn loop_statuses(outputs: &Path) -> Map<String, Value> {
     let mut loops = Map::new();
     let legacy = outputs.join("status.json");
     if legacy.exists() {
-        loops.insert("gitlab-loop".into(), status::read_status(&legacy));
+        loops.insert("issue-loop".into(), status::read_status(&legacy));
     }
     if let Ok(entries) = std::fs::read_dir(outputs.join("status")) {
         let mut files: Vec<PathBuf> = entries
@@ -115,7 +115,7 @@ pub fn loop_statuses(outputs: &Path) -> Map<String, Value> {
     }
     // What the running GitLab agent last did, from its claude hooks.
     if let Some(doc) = loops
-        .get_mut("gitlab-loop")
+        .get_mut("issue-loop")
         .filter(|d| d["state"] == "running")
     {
         let all =
@@ -387,7 +387,7 @@ mod tests {
         let activity = json!({"at": "2026-10-31T09:00:00+00:00", "label": "web #7", "event": "PreToolUse", "tool": "Bash", "detail": "cargo test"});
         std::fs::write(p.outputs.join("agent-activity.json"), activity.to_string()).unwrap();
         let s = build_snapshot(&p, now());
-        assert_eq!(s["loops"]["gitlab-loop"]["agent_activity"], activity);
+        assert_eq!(s["loops"]["issue-loop"]["agent_activity"], activity);
         // Parallel issues: every agent is listed, newest first; the single
         // `agent_activity` stays the newest one for older app builds.
         let other = json!({"at": "2026-10-31T09:05:00+00:00", "label": "api #2", "event": "Start", "tool": null, "detail": null});
@@ -398,14 +398,14 @@ mod tests {
         )
         .unwrap();
         let s = build_snapshot(&p, now());
-        assert_eq!(s["loops"]["gitlab-loop"]["agent_activity"], other);
+        assert_eq!(s["loops"]["issue-loop"]["agent_activity"], other);
         assert_eq!(
-            s["loops"]["gitlab-loop"]["agent_activities"],
+            s["loops"]["issue-loop"]["agent_activities"],
             json!([other, activity])
         );
         status::write_status(&p.outputs.join("status.json"), "idle", &[]).unwrap();
         let s = build_snapshot(&p, now());
-        assert!(s["loops"]["gitlab-loop"].get("agent_activity").is_none());
+        assert!(s["loops"]["issue-loop"].get("agent_activity").is_none());
         let mut child = child;
         let _ = child.kill();
     }
@@ -434,7 +434,7 @@ mod tests {
         )
         .unwrap();
         let s = build_snapshot(&p, now());
-        assert_eq!(s["loops"]["gitlab-loop"]["state"], "idle");
+        assert_eq!(s["loops"]["issue-loop"]["state"], "idle");
         assert_eq!(s["loops"]["topic-loop"]["state"], "failed");
         assert_eq!(s["topics"]["ai"]["state"], "running");
         assert_eq!(s["app_state"], "failed");
@@ -459,7 +459,7 @@ mod tests {
         )
         .unwrap();
         let s = build_snapshot(&p, now());
-        assert_eq!(s["loops"]["gitlab-loop"]["state"], "stale");
+        assert_eq!(s["loops"]["issue-loop"]["state"], "stale");
         assert_eq!(s["app_state"], "idle");
     }
 

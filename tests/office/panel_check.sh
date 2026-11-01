@@ -115,9 +115,9 @@ def overlaps(a, b):
     return a["l"] < b["r"] and b["l"] < a["r"] and a["t"] < b["b"] and b["t"] < a["b"]
 
 # The sandbox's five loops, dealt out in name order to E1, E2 and E3.
-FIXTURE = {"gitlab-loop": "waiting", "busy-loop": "working", "broken-loop": "failed",
+FIXTURE = {"issue-loop": "waiting", "busy-loop": "working", "broken-loop": "failed",
            "quiet-loop": "idle", "off-loop": "disabled"}
-DEALT = {"E1": ["broken-loop", "off-loop"], "E2": ["busy-loop", "quiet-loop"], "E3": ["gitlab-loop"]}
+DEALT = {"E1": ["broken-loop", "off-loop"], "E2": ["busy-loop", "quiet-loop"], "E3": ["issue-loop"]}
 STATE = {"E1": "failed", "E2": "working", "E3": "waiting"}
 
 with Chrome() as c:

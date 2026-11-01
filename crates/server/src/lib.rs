@@ -228,7 +228,7 @@ mod tests {
                 if let Some(data) = line.strip_prefix("data: ") {
                     let v: serde_json::Value = serde_json::from_str(data).unwrap();
                     states.push(
-                        v["loops"]["gitlab-loop"]["state"]
+                        v["loops"]["issue-loop"]["state"]
                             .as_str()
                             .map(str::to_owned),
                     );

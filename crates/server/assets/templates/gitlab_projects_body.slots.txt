@@ -1,3 +1,0 @@
-html.escape(_t('View and manage the GitLab configuration and tracked projects this loop depends on.'))
-flash_html
-html.escape(_t('Loading settings'))

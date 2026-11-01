@@ -46,7 +46,7 @@ L'application locale montre ce qu'elle a fait, selon deux vues entre lesquelles 
 ## Bonnes pratiques
 
 1. **Commencer petit.** Gardez d'abord seulement les boucles « tickets GitLab » et « veille thématique », et listez un ou deux projets que vous connaissez bien.
-2. **Faire une exécution avant de planifier.** Lancez `loopx run gitlab-loop` à la main et lisez le résultat avant de charger le planificateur.
+2. **Faire une exécution avant de planifier.** Lancez `loopx run issue-loop` à la main et lisez le résultat avant de charger le planificateur.
 3. **Jeter un œil aux vérifications choisies par l'agent.** L'agent détermine les commandes de lint et de test de chaque projet et les consigne sous chaque ticket dans la vue Live. Une merge request ne s'ouvre que si la boucle les relance elle-même avec succès ; les `lint_cmd`/`test_cmd` enregistrés ne sont que des points de départ.
 4. **Relire chaque merge request.** Loop X s'arrête à une merge request ouverte. Lisez le diff comme celui d'un collègue.
 5. **Rédiger des tickets clairs.** Indiquez le comportement attendu et comment le reproduire. Un ticket précis reçoit un correctif, un ticket vague reçoit une question.
@@ -79,7 +79,7 @@ L'application locale montre ce qu'elle a fait, selon deux vues entre lesquelles 
 
 ## Comment ça marche
 
-Chaque exécution planifiée (`loopx run gitlab-loop`) :
+Chaque exécution planifiée (`loopx run issue-loop`) :
 
 1. Liste tous les tickets GitLab ouverts assignés au nom d'utilisateur configuré, sur chaque alias de projet de votre configuration.
 2. Les traite **un par un, jamais en parallèle**, en suivant la procédure de décision pas à pas de [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md).
@@ -244,7 +244,7 @@ Les bundles se trouvent dans la clé `bundles` de `~/.gitlab/config.json` et, si
 **Manuellement**, une fois, pour le voir fonctionner avant de lui confier un planning :
 
 ```bash
-loopx run gitlab-loop   # the daily GitLab issue loop
+loopx run issue-loop   # the daily GitLab issue loop
 loopx run topic-loop    # the topic monitor loop
 ```
 
@@ -274,7 +274,7 @@ Une interface web accessible uniquement en localhost (pages rendues côté serve
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Dashboard** (`/`) | Vues : Overview — L'état de l'exécution en cours/dernière, un indicateur de progression en direct et le bouton Run now; Activity — Un fil de messages avec la boucle, avec son propre indicateur de progression en direct. Collez-y le lien d'un ticket GitLab pour que la boucle le traite immédiatement, quelle que soit la personne à qui il est assigné. |
 | **Loops** (`/loops`) | Un catalogue qui sépare les boucles actives de celles disponibles ; chaque boucle visible apparaît aussi comme lien enfant sous **Loops** dans la barre latérale (Inbox Triage y reste masquée tant qu'elle est désactivée et n'a jamais été exécutée) |
-| — **GitLab Issues** (`/loops/gitlab-loop`) | Vues : Live — Vos tickets assignés et MR ouvertes du moment, récupérés en direct; Projects — Gère `~/.gitlab/config.json` (instances, alias de projet, access bundles) et `~/.loopx/projects.json` (projets suivis, réglages de la boucle) sans éditer de JSON à la main |
+| — **GitLab Issues** (`/loops/issue-loop`) | Vues : Live — Vos tickets assignés et MR ouvertes du moment, récupérés en direct; Projects — Gère `~/.gitlab/config.json` (instances, alias de projet, access bundles) et `~/.loopx/projects.json` (projets suivis, réglages de la boucle) sans éditer de JSON à la main |
 | — **Topic Monitor** (`/loops/topic-loop`) | Vues : Live — L'état et les synthèses enregistrées de chaque sujet configuré; Topics — Ajoute, modifie et supprime les sujets surveillés — une vue distincte sur la même page, pour que la configuration n'encombre pas la vue d'état Live |
 | — **Inbox Triage** (`/loops/inbox-triage-loop`) | Vues : L'état en direct propre à Inbox Triage (**Live**), plus la connexion des boîtes mail et les catégories (**Setup** : connecter Gmail/Outlook, catégories, expéditeurs VIP/exclus, bundle Slack) |
 | **Runs** (`/runs`) | Vues : Loop Runs — Chaque exécution enregistrée sous `outputs/loop-runs/` (une par ticket ou sujet traité), la plus récente en premier — en lecture seule ; un bandeau de synthèse indique le nombre total d'exécutions, le taux de réussite/escalade, le coût moyen et le Loop Efficiency Score expérimental; History — Le rapport de revue de chaque exécution passée, du plus récent au plus ancien; Logs — La fin de `logs/loop-engineering.log` - la sortie de chaque invocation de la CLI `claude`, pour la boucle GitLab, la boucle de surveillance de sujets et l'assistant de chat du tableau de bord lui-même |
@@ -329,7 +329,7 @@ Dépliez pour la liste complète
 
 | Commande / script | Rôle                                                                                                                                                                                                                                 |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `loopx run <loop>` | Exécute maintenant une boucle enregistrée (recherchée dans `~/.loopx/loops.json`) — journalise dans `outputs/history/`, enregistre des événements, notifie Slack en cas d'échec ; `loopx run gitlab-loop <alias> <issue_iid>` traite un seul ticket. Invoqué par `loopx scheduler` (selon le planning) ou par le tableau de bord (à la demande) |
+| `loopx run <loop>` | Exécute maintenant une boucle enregistrée (recherchée dans `~/.loopx/loops.json`) — journalise dans `outputs/history/`, enregistre des événements, notifie Slack en cas d'échec ; `loopx run issue-loop <alias> <issue_iid>` traite un seul ticket. Invoqué par `loopx scheduler` (selon le planning) ou par le tableau de bord (à la demande) |
 | `loopx scheduler` | La boucle de sondage que launchd (ou l'application) exécute toutes les 15 minutes : lit `~/.loopx/loops.json` et lance les boucles enregistrées qui sont dues |
 | `loopx loops`, `loopx ai-cli` | Le registre des boucles (`loops.json` : nom, planning, point d'entrée) et la CLI d'IA (`claude` ou `codex`) que chaque boucle invoque (`ai_cli.json`) |
 | `loopx config` | Lit `~/.loopx/projects.json` (alias, assigné, racine des worktrees, configuration par projet) |

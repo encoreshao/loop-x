@@ -86,7 +86,7 @@ def expected_state(loops):
             return s
     return "idle"
 
-FIXTURE = {"gitlab-loop": "waiting", "busy-loop": "working", "broken-loop": "failed",
+FIXTURE = {"issue-loop": "waiting", "busy-loop": "working", "broken-loop": "failed",
            "quiet-loop": "idle", "off-loop": "disabled"}
 
 with Chrome() as c:

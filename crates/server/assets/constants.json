@@ -198,6 +198,7 @@
   "_SECTION_ICON_AUDIT": "<svg class='icon' aria-hidden='true'><use href='#i-fact_check'/></svg>",
   "_SECTION_ICON_RISK": "<svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>",
   "_SECTION_ICON_FAILURE": "<svg class='icon' aria-hidden='true'><use href='#i-error'/></svg>",
+  "_SECTION_ICON_ISSUES": "<svg class='icon' aria-hidden='true'><use href='#i-task_alt'/></svg>",
   "_SECTION_ICON_GITLAB": "<svg class='gitlab-mark' viewBox='0 0 24 24' width='18' height='18' fill='currentColor' aria-hidden='true'><path d='m23.6 9.593-.033-.086L20.3.98a.85.85 0 0 0-.336-.405.875.875 0 0 0-1 .054.88.88 0 0 0-.29.44L16.47 7.818H7.537L5.333 1.07a.86.86 0 0 0-.29-.441.875.875 0 0 0-1-.054.86.86 0 0 0-.336.405L.433 9.502l-.032.086a6.066 6.066 0 0 0 2.012 7.01l.01.009.03.021 4.977 3.727 2.462 1.863 1.5 1.132a1.01 1.01 0 0 0 1.22 0l1.499-1.132 2.461-1.863 5.006-3.75.013-.01a6.07 6.07 0 0 0 2.01-7.002'/></svg>",
   "_SECTION_ICON_MEMORY": "<svg class='icon' aria-hidden='true'><use href='#i-lightbulb'/></svg>",
   "_SECTION_ICON_TOPIC_MONITOR": "<svg class='icon' aria-hidden='true'><use href='#i-newspaper'/></svg>",
@@ -346,7 +347,7 @@
   "_AI_PROMPT_LATEST": [
    "history",
    "Latest run",
-   "Summarize the latest GitLab run review.",
+   "Summarize the latest issue loop run.",
    true
   ],
   "_AI_PROMPT_ERRORS": [
@@ -358,7 +359,7 @@
   "_AI_PROMPT_RUN_ISSUE": [
    "bolt",
    "Run an issue",
-   "Run this GitLab issue now: ",
+   "Run this issue now (GitLab or GitHub link): ",
    false
   ],
   "_AI_PROMPT_INBOX": [
@@ -447,13 +448,13 @@
     [
      "history",
      "Latest run",
-     "Summarize the latest GitLab run review.",
+     "Summarize the latest issue loop run.",
      true
     ],
     [
      "bolt",
      "Run an issue",
-     "Run this GitLab issue now: ",
+     "Run this issue now (GitLab or GitHub link): ",
      false
     ],
     [
@@ -473,7 +474,7 @@
     [
      "bolt",
      "Run an issue",
-     "Run this GitLab issue now: ",
+     "Run this issue now (GitLab or GitHub link): ",
      false
     ],
     [
@@ -499,7 +500,7 @@
     [
      "history",
      "Latest run",
-     "Summarize the latest GitLab run review.",
+     "Summarize the latest issue loop run.",
      true
     ],
     [
@@ -537,7 +538,7 @@
     [
      "history",
      "Latest run",
-     "Summarize the latest GitLab run review.",
+     "Summarize the latest issue loop run.",
      true
     ]
    ],
@@ -612,12 +613,12 @@
    [
     "history",
     "Latest run",
-    "Summarize the latest GitLab run review."
+    "Summarize the latest issue loop run."
    ],
    [
     "bolt",
     "Run an issue",
-    "Run this GitLab issue now: "
+    "Run this issue now (GitLab or GitHub link): "
    ],
    [
     "email",
@@ -761,7 +762,7 @@
    "CRITICAL"
   ],
   "_CONNECTOR_OWNER_PAGES": {
-   "gitlab-config": "/loops/gitlab-loop?view=projects",
+   "gitlab-config": "/loops/issue-loop?view=projects",
    "slack-config": "/settings?tab=notifications",
    "inboxes": "/loops/inbox-triage-loop?view=setup"
   },
@@ -869,7 +870,8 @@
   "_LOOP_NEED_ICON": "<svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>",
   "_LEGACY_REDIRECTS": {
    "/activity": "/?view=activity",
-   "/gitlab": "/loops/gitlab-loop",
+   "/gitlab": "/loops/issue-loop",
+   "/loops/gitlab-loop": "/loops/issue-loop",
    "/topic-monitor": "/loops/topic-loop",
    "/topic-monitor/settings": "/loops/topic-loop?view=topics",
    "/inbox": "/loops/inbox-triage-loop",

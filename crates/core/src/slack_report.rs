@@ -292,7 +292,7 @@ pub fn sample() -> Report {
         ..Item::default()
     };
     Report {
-        title: "Daily GitLab loop".into(),
+        title: "Daily Issue Loop".into(),
         status: Some(Status {
             state: State::Done,
             text: "Completed (12m 4s, 3/3 issues)".into(),
@@ -343,7 +343,7 @@ pub fn sample() -> Report {
                 url: None,
             },
             Link {
-                text: "GitLab loop".into(),
+                text: crate::issue_report::ISSUE_LOOP_TITLE.into(),
                 url: None,
             },
         ],
@@ -801,7 +801,7 @@ mod tests {
         );
         let head = b[1]["text"]["text"].as_str().unwrap();
         assert!(
-            head.starts_with("*Daily GitLab loop*\n3 issues checked"),
+            head.starts_with("*Daily Issue Loop*\n3 issues checked"),
             "{head}"
         );
         assert!(head.contains("\n*Run:* sample"), "{head}");
@@ -817,7 +817,7 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with(":zap: *Needs you*"));
-        assert_eq!(b[11]["elements"][0]["text"], "LoopX \u{2022} GitLab loop");
+        assert_eq!(b[11]["elements"][0]["text"], "LoopX \u{2022} Issue Loop");
     }
 
     #[test]
@@ -883,7 +883,7 @@ mod tests {
         assert!(r.blocks.is_none());
         assert!(r
             .text
-            .starts_with("*Daily GitLab loop* :white_check_mark: Completed"));
+            .starts_with("*Daily Issue Loop* :white_check_mark: Completed"));
         assert!(r.text.contains("\u{2022} *<https://gitlab.example.com/web/-/issues/12|#12 (web)>* \u{2014} Fix the login redirect loop <https://gitlab.example.com/web/-/merge_requests/34|!34>"));
         assert!(r.text.contains(":zap: *Needs you*"));
         assert!(r.text.contains("```\nProject  Checked  Result"));

@@ -30,7 +30,7 @@ pub fn register(r: &mut Registry) {
     r.post("/loops/:name/notify", notify);
 }
 
-pub(crate) const BUILTIN: [&str; 3] = ["gitlab-loop", "topic-loop", "inbox-triage-loop"];
+pub(crate) const BUILTIN: [&str; 3] = ["issue-loop", "topic-loop", "inbox-triage-loop"];
 
 fn is_builtin(name: &str) -> bool {
     BUILTIN.contains(&name)

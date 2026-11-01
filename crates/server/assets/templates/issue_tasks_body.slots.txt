@@ -1,6 +1,6 @@
 html.escape(_t('Tasks'))
 html.escape(_t('Open issues and merge requests assigned to or created by you, across configured projects.'))
-_SECTION_ICON_GITLAB
-html.escape(_t('Live GitLab (open issues & MRs)'))
+_SECTION_ICON_ISSUES
+html.escape(_t('Open issues & merge requests, live'))
 html.escape(_t('Refreshing…'))
 lazy_inner

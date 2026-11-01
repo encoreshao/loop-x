@@ -41,6 +41,46 @@ impl Provider {
             Provider::Github => "github",
         }
     }
+
+    /// Every implemented provider. A new tracker (Jira, Linear, ...) is a
+    /// variant here plus its `IssueTracker` in `resolve`; the issue loop, MR
+    /// Review and the dashboard pick it up from this list.
+    pub const ALL: &'static [Provider] = &[Provider::Gitlab, Provider::Github];
+
+    /// The provider of a connector account kind (`"github"`), if any.
+    pub fn from_kind(kind: &str) -> Option<Provider> {
+        Provider::ALL.iter().copied().find(|p| p.kind() == kind)
+    }
+
+    /// How its change requests are numbered: GitLab `!7`, GitHub `#7`.
+    pub fn change_request_prefix(self) -> &'static str {
+        match self {
+            Provider::Gitlab => "!",
+            Provider::Github => "#",
+        }
+    }
+
+    /// Is a project on it set up through a connector account (`code_host`)?
+    /// GitLab keeps its own instances and aliases (`~/.gitlab/config.json`).
+    pub fn connected(self) -> bool {
+        self != Provider::Gitlab
+    }
+
+    /// The repository's web page, from the account's API URL.
+    pub fn repo_web_url(self, api_url: &str, repo: &str) -> Option<String> {
+        match self {
+            Provider::Github => {
+                // An account saved without one uses the connector's default.
+                let api = if api_url.trim().is_empty() {
+                    "https://api.github.com"
+                } else {
+                    api_url
+                };
+                Some(format!("{}/{repo}", github::web_base(api)))
+            }
+            Provider::Gitlab => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -545,5 +585,30 @@ mod tests {
         assert_eq!(num(&v, "n"), 7);
         assert_eq!(num(&v, "a"), 0);
         assert_eq!(logins(&v, "u", "login"), vec!["p", "q"]);
+    }
+
+    #[test]
+    fn providers_are_found_by_kind_and_number_change_requests_their_way() {
+        for p in Provider::ALL {
+            assert_eq!(Provider::from_kind(p.kind()), Some(*p));
+        }
+        assert_eq!(Provider::from_kind("jira"), None);
+        assert_eq!(Provider::Gitlab.change_request_prefix(), "!");
+        assert_eq!(Provider::Github.change_request_prefix(), "#");
+        // GitLab has its own config path; every other provider is connected.
+        assert!(!Provider::Gitlab.connected());
+        assert!(Provider::Github.connected());
+        assert_eq!(
+            Provider::Github.repo_web_url("https://api.github.com", "o/r"),
+            Some("https://github.com/o/r".into())
+        );
+        assert_eq!(
+            Provider::Github.repo_web_url("https://ghe.example/api/v3/", "o/r"),
+            Some("https://ghe.example/o/r".into())
+        );
+        assert_eq!(
+            Provider::Github.repo_web_url("", "o/r"),
+            Some("https://github.com/o/r".into())
+        );
     }
 }

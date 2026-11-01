@@ -576,8 +576,10 @@ pub(crate) fn trigger_named(state: &UiState, name: &str) -> Option<TriggerOutcom
     let fallback = state.repo_root.join("run-loop-now.sh");
     let queue = state.home_dir.join("run_queue.json");
     let launcher = Launcher { cmd: &state.run_cmd, cwd: &state.repo_root, fallback_path: &fallback, queue: Some(&queue) };
+    // The issue loop's old id (`gitlab-loop`) starts it too.
+    let name = loopx_core::loops_config::canonical_loop_name(name);
     Some(match name {
-        "gitlab-loop" => run_control::trigger_manual_run(&state.status_path(), name, &launcher),
+        "issue-loop" => run_control::trigger_manual_run(&state.status_path(), name, &launcher),
         "topic-loop" => run_control::trigger_topic_monitor_run(
             &state.repo_root.join("outputs").join("topic-monitor").join("status.json"),
             name,
@@ -599,7 +601,7 @@ fn run_now(ctx: &UiCtx) -> UiResponse {
     let queue = ctx.state.home_dir.join("run_queue.json");
     let outcome = run_control::trigger_manual_run(
         &ctx.state.status_path(),
-        "gitlab-loop",
+        "issue-loop",
         &launcher(ctx, &fallback, &queue),
     );
     let (ok, message) = trigger_message(ctx, outcome, STARTED);
@@ -613,8 +615,8 @@ fn gitlab_return_path(referer: Option<&str>) -> &'static str {
         .map(|r| r.split_once("://").map_or(r, |(_, rest)| rest.find('/').map_or("", |i| &rest[i..])))
         .unwrap_or("");
     let path = path.split(['?', '#']).next().unwrap_or("");
-    if path.trim_end_matches('/') == "/loops/gitlab-loop" {
-        "/loops/gitlab-loop"
+    if path.trim_end_matches('/') == "/loops/issue-loop" {
+        "/loops/issue-loop"
     } else {
         "/"
     }
@@ -731,10 +733,10 @@ mod return_path_tests {
     #[test]
     fn run_now_returns_to_the_gitlab_page_it_was_clicked_from() {
         let from = |r| gitlab_return_path(Some(r));
-        assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop"), "/loops/gitlab-loop");
-        assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop?view=live&flash=x"), "/loops/gitlab-loop");
+        assert_eq!(from("http://127.0.0.1:18420/loops/issue-loop"), "/loops/issue-loop");
+        assert_eq!(from("http://127.0.0.1:18420/loops/issue-loop?view=live&flash=x"), "/loops/issue-loop");
         assert_eq!(from("http://127.0.0.1:18420/"), "/");
-        assert_eq!(from("http://127.0.0.1:18420/loops/gitlab-loop-evil"), "/");
+        assert_eq!(from("http://127.0.0.1:18420/loops/issue-loop-evil"), "/");
         assert_eq!(gitlab_return_path(None), "/");
     }
 }

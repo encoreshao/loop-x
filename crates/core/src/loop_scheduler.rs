@@ -51,7 +51,7 @@ pub fn try_lock_poll(path: &Path) -> Option<PollLock> {
     (rc == 0).then_some(PollLock { _file: file })
 }
 
-/// `<LOOP_ENGINEERING_HOME>/outputs/status.json` for `gitlab-loop`, else
+/// `<LOOP_ENGINEERING_HOME>/outputs/status.json` for `issue-loop`, else
 /// `<..>/outputs/status/<loop>.json`. (Python resolves against the checkout
 /// root; the other Rust modules use `home_dir()` for `outputs/`, so this does
 /// too.)
@@ -59,7 +59,7 @@ pub fn status_path_for_loop(loop_name: &str, base_dir: Option<&Path>) -> PathBuf
     let base = base_dir
         .map_or_else(home_dir, Path::to_path_buf)
         .join("outputs");
-    if loop_name == "gitlab-loop" {
+    if crate::loops_config::canonical_loop_name(loop_name) == crate::loops_config::ISSUE_LOOP {
         base.join("status.json")
     } else {
         base.join("status").join(format!("{loop_name}.json"))
@@ -86,15 +86,26 @@ pub fn read_status_state(path: &Path) -> String {
 }
 
 /// An empty map when the file is missing, unreadable or not a JSON object.
+/// A renamed loop's entry reads under its current id (a key already written
+/// under the new id wins), so a rename never makes a loop look never-run.
 pub fn read_state(path: &Path) -> SchedulerState {
-    std::fs::read_to_string(path)
+    let raw = std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| match v {
             Value::Object(m) => Some(m),
             _ => None,
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let mut out = SchedulerState::new();
+    for (name, value) in raw {
+        let current = crate::loops_config::canonical_loop_name(&name);
+        if current != name && out.contains_key(current) {
+            continue;
+        }
+        out.insert(current.to_string(), value);
+    }
+    out
 }
 
 pub fn write_state(state: &SchedulerState, path: &Path) -> std::io::Result<()> {
@@ -416,6 +427,32 @@ mod tests {
     }
 
     #[test]
+    fn the_old_gitlab_loop_state_is_the_issue_loops() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("state.json");
+        std::fs::write(
+            &p,
+            r#"{"gitlab-loop": {"last_attempted_date": "2026-10-30"}, "topic-loop": {"last_attempted_date": "2026-10-29"}}"#,
+        )
+        .unwrap();
+        let st = read_state(&p);
+        // Otherwise the renamed loop would look never-run and fire at once.
+        assert_eq!(st["issue-loop"]["last_attempted_date"], "2026-10-30");
+        assert!(!st.contains_key("gitlab-loop"));
+        assert_eq!(st["topic-loop"]["last_attempted_date"], "2026-10-29");
+        // When both exist, the new key (written by this version) wins.
+        std::fs::write(
+            &p,
+            r#"{"gitlab-loop": {"last_attempted_date": "2026-10-01"}, "issue-loop": {"last_attempted_date": "2026-10-31"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_state(&p)["issue-loop"]["last_attempted_date"],
+            "2026-10-31"
+        );
+    }
+
+    #[test]
     fn seeding_marks_every_loop_attempted_today_and_never_overwrites() {
         let d = tempfile::tempdir().unwrap();
         let state_path = d.path().join("state.json");
@@ -586,7 +623,7 @@ mod tests {
     fn status_paths_and_state() {
         let base = Path::new("/x");
         assert_eq!(
-            status_path_for_loop("gitlab-loop", Some(base)),
+            status_path_for_loop("issue-loop", Some(base)),
             Path::new("/x/outputs/status.json")
         );
         assert_eq!(

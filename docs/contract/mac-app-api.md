@@ -57,7 +57,7 @@ ends, and treat "no message for 45 s" as dead.
   "version": 1,
   "app_state": "running",
   "loops": {
-    "gitlab-loop": {"state": "running", "updated_at": "2026-10-22T08:15:03.412907+00:00",
+    "issue-loop": {"state": "running", "updated_at": "2026-10-22T08:15:03.412907+00:00",
                     "pid": 5150, "current_issue": "web #7", "current_step": "analyzing"},
     "topic-loop":  {"state": "idle", "updated_at": "...", "last_exit_code": 0}
   },
@@ -76,7 +76,7 @@ ends, and treat "no message for 45 s" as dead.
 - Loop `state` values: `running`, `idle`, `failed`, `stopped`, `never_run` and `unknown` (as in
   `status.json`), plus `stale`, which the backend substitutes for a `running` status whose
   pid has died. Treat `stale` like `failed`.
-- A running `gitlab-loop` also carries `agent_activity`, the last thing its Claude agent did,
+- A running `issue-loop` also carries `agent_activity`, the last thing its Claude agent did,
   reported by Claude Code hooks: `{"at": "<UTC ISO>", "label": "web #7", "event":
   "PreToolUse" | "PostToolUse" | "Notification" | "Stop" | "Start", "tool": "Bash" | null,
   "detail": "cargo test" | null}`. `detail` is the command, file or pattern of the tool call

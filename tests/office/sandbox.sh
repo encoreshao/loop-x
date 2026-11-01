@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Disposable dev server for the Office view: every state directory is a fresh temp dir
 # (never the real ~/.loopx, Keychain or launchd), seeded with one loop per office state
-# plus a pending approval on gitlab-loop.
+# plus a pending approval on issue-loop.
 #
 # Usage: tests/office/sandbox.sh [port]     (default port 18420)
 # Prints "OFFICE_URL=http://127.0.0.1:<port>", plus SANDBOX_HOME (the config dir, with
@@ -42,10 +42,10 @@ trap cleanup EXIT
 trap 'exit 0' INT TERM
 
 # off-loop: disabled; busy-loop: running (this script's own pid is alive);
-# broken-loop: failed; quiet-loop: idle; gitlab-loop: idle + one pending approval -> waiting.
+# broken-loop: failed; quiet-loop: idle; issue-loop: idle + one pending approval -> waiting.
 cat > "$LOOP_ENGINEERING_HOME/loops.json" <<JSON
 [
-  {"name": "gitlab-loop", "enabled": true},
+  {"name": "issue-loop", "enabled": true},
   {"name": "busy-loop", "enabled": true},
   {"name": "broken-loop", "enabled": true},
   {"name": "quiet-loop", "enabled": true},

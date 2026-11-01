@@ -261,7 +261,7 @@ pub fn trigger_manual_run(
     start_run(launcher, loop_name)
 }
 
-/// One GitLab issue, now: `gitlab-loop <alias> <iid>` (the runner's scoped
+/// One GitLab issue, now: `issue-loop <alias> <iid>` (the runner's scoped
 /// single-issue mode). Refused while the GitLab loop's status says "running".
 /// Always launched directly: queue entries carry only a loop name.
 pub fn trigger_issue_run(
@@ -274,7 +274,7 @@ pub fn trigger_issue_run(
     if status.get("state").and_then(Value::as_str) == Some("running") {
         return TriggerOutcome::AlreadyRunning;
     }
-    launch_detached_with(launcher, &["gitlab-loop", alias, &issue_iid.to_string()])
+    launch_detached_with(launcher, &["issue-loop", alias, &issue_iid.to_string()])
 }
 
 /// `trigger_topic_monitor_run`: refuse while any topic is running.
@@ -499,7 +499,7 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(&marker).unwrap().trim(),
-            "gitlab-loop app 42"
+            "issue-loop app 42"
         );
         assert!(!queue.exists());
     }
@@ -525,7 +525,7 @@ mod tests {
         };
         status::write_status(&p, "running", &[]).unwrap();
         assert_eq!(
-            trigger_manual_run(&p, "gitlab-loop", &launcher),
+            trigger_manual_run(&p, "issue-loop", &launcher),
             TriggerOutcome::AlreadyRunning
         );
         assert!(!marker.exists());

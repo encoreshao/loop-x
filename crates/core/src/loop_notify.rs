@@ -351,10 +351,7 @@ mod tests {
         );
         assert!(out.iter().all(|r| r.1), "{out:?}");
         let sent = sent.borrow();
-        assert_eq!(
-            sent[0],
-            "Daily GitLab loop - Completed (12m 4s, 3/3 issues)"
-        );
+        assert_eq!(sent[0], "Daily Issue Loop - Completed (12m 4s, 3/3 issues)");
         assert!(
             sent[1].contains("#12 (web) (https://gitlab.example.com/web/-/issues/12)"),
             "{}",

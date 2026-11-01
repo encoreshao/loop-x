@@ -107,8 +107,9 @@ Project object:
 | `lint_cmd` | string | optional | Hint, as above. In gate mode it is also the verifier's fallback when the agent logged no lint command. See `CLAUDE.md` on pass-an-explicit-path (`rubocop .`) and `--cache false`. |
 | `test_cmd` | string | optional | Hint, as above; the verifier's fallback when the agent logged no test command. |
 | `instance` | string | optional | Per-project GitLab instance override. **Omitted entirely** (never `""`) when unset. |
-| `code_host` | object | optional | `{"account": "<connector account id>", "repo": "<group/project or owner/name>"}`. The connector account's kind (`gitlab`, `github`) picks the provider. When absent, the project is read as a GitLab code host from `instance` (or the top-level `gitlab_instance`) and `project_id`; when both shapes are present, `code_host` wins. Read by `loopx_core::providers::binding::binding_of`; nothing is rewritten on read. |
+| `code_host` | object | optional | `{"account": "<connector account id>", "repo": "<group/project or owner/name>"}`. The connector account's kind (`gitlab`, `github`) picks the provider. When absent, the project is read as a GitLab code host from `instance` (or the top-level `gitlab_instance`) and `project_id`; when both shapes are present, `code_host` wins. Read by `loopx_core::providers::binding::binding_of`; nothing is rewritten on read. A project with `code_host` is a *hosted* project (`loopx_core::hosted`): the issue loop lists, comments on and opens pull requests for it through the connector account, `loopx config project` reports `instance` = the account and `project_id` = the repo (the cache and memory keys), and `loopx gitlab <command> <alias>` / `loopx issues list` answer for it in GitLab's JSON shape. Its `instance` is `<provider>/<account>` (e.g. `github/gh-work`), and `gitlab_cache` keeps everything under that key in `<LOOP_ENGINEERING_HOME>/data/<provider>/<account>/` (same layout as `~/.gitlab/cache/<instance>/`), so one folder holds all of an account's local data. |
 | `tracker` | object | optional | `{"account": "...", "project": "..."}`: where the project's issues come from. Each missing field defaults to the `code_host` one. Only `gitlab` and `github` accounts can be trackers today. |
+| `assignee_username` | string | optional | `code_host` projects only: whose assigned issues the loop works there (a GitHub login). Defaults to the login of the connector account's token, never the top-level GitLab `assignee_username`. Written by the dashboard's Connected trackers "Add project" form only when given. |
 
 ### Semantics and quirks
 
@@ -266,7 +267,8 @@ Top level object; the only key consumed is:
 - **Path:** `<repo_root>/outputs/status.json` (`STATUS_PATH`). Not affected by
   `LOOP_ENGINEERING_HOME`. **Other loops** use
   `<repo_root>/outputs/status/<loop_name>.json` (same schema;
-  `status_path_for_loop`), so `gitlab-loop` is the only loop with the legacy
+  `status_path_for_loop`), so `issue-loop` (formerly `gitlab-loop`; the old id is still
+  accepted everywhere a loop id is read, see `loops_config::canonical_loop_name`) is the only loop with the legacy
   top-level path.
 - **Readers:** dashboard (`read_status`, Run/Stop/Overview pages, run-now
   refusal logic, `_process_alive` pid check), `run-loop-now.sh`.

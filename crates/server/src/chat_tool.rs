@@ -75,7 +75,7 @@ pub fn run(state: &UiState, action: &str, args: &[String], session: &str) -> Res
             Some(kind) => Ok(run_now(state, kind)),
         },
         "run-issue" => match args.first() {
-            None => usage("run-issue <gitlab issue url>"),
+            None => usage("run-issue <issue url (GitLab or GitHub)>"),
             Some(url) => Ok(run_issue(state, url)),
         },
         "topic-list" => {
@@ -444,7 +444,7 @@ fn run_now(state: &UiState, kind: &str) -> Value {
     };
     match kind {
         "gitlab" => trigger_message(
-            run_control::trigger_manual_run(&state.status_path(), "gitlab-loop", &launcher),
+            run_control::trigger_manual_run(&state.status_path(), "issue-loop", &launcher),
             STARTED,
         ),
         "topic-monitor" => trigger_message(
@@ -491,9 +491,34 @@ fn resolve_issue_url(
     None
 }
 
+/// A pasted issue link on any tracked project: GitLab's `/-/issues/N`
+/// (or `/-/work_items/N`), or `<repository>/issues/N` on a connected one
+/// (GitHub).
+fn resolve_any_issue_url(
+    url: &str,
+    gitlab: &crate::ui::markdown::GitlabPrefixes,
+    hosted: &crate::ui::markdown::GitlabPrefixes,
+) -> Option<(String, i64)> {
+    if let Some(hit) = resolve_issue_url(url, gitlab) {
+        return Some(hit);
+    }
+    let url = url.trim();
+    for (alias, base) in hosted {
+        let pattern = format!(
+            r"^{}/issues/(\d+)/?$",
+            regex::escape(base.trim_end_matches('/'))
+        );
+        if let Some(caps) = Regex::new(&pattern).ok()?.captures(url) {
+            return Some((alias.clone(), caps[1].parse().ok()?));
+        }
+    }
+    None
+}
+
 fn run_issue(state: &UiState, url: &str) -> Value {
-    let prefixes = crate::ui::gitlab::issue_url_prefixes(state);
-    let Some((alias, iid)) = resolve_issue_url(url, &prefixes) else {
+    let gitlab = crate::ui::gitlab::issue_url_prefixes(state);
+    let hosted = crate::ui::gitlab::hosted_issue_prefixes(state);
+    let Some((alias, iid)) = resolve_any_issue_url(url, &gitlab, &hosted) else {
         return json!({ "ok": false, "message": format!("Could not match {} to a tracked project", py_repr(url)) });
     };
     let fallback = state.repo_root.join("run-loop-now.sh");
@@ -895,6 +920,49 @@ mod tests {
             resolve_issue_url("https://other.example.com/g/web/-/issues/7", &prefixes),
             None
         );
+    }
+
+    #[test]
+    fn github_issue_urls_resolve_to_connected_projects() {
+        let gitlab = crate::ui::markdown::GitlabPrefixes::new();
+        let mut hosted = crate::ui::markdown::GitlabPrefixes::new();
+        hosted.insert("hub".into(), "https://github.com/octo/web".into());
+        let resolve = |u: &str| resolve_any_issue_url(u, &gitlab, &hosted);
+        assert_eq!(
+            resolve("https://github.com/octo/web/issues/7"),
+            Some(("hub".into(), 7))
+        );
+        assert_eq!(
+            resolve(" https://github.com/octo/web/issues/7/ "),
+            Some(("hub".into(), 7))
+        );
+        assert_eq!(resolve("https://github.com/octo/web/pull/7"), None);
+        assert_eq!(resolve("https://github.com/octo/web-other/issues/7"), None);
+        assert_eq!(resolve("https://github.com/octo/web/-/issues/7"), None);
+    }
+
+    #[test]
+    fn connected_projects_link_their_issues_on_their_own_host() {
+        let d = tempfile::tempdir().unwrap();
+        let s = state(d.path());
+        std::fs::create_dir_all(&s.home_dir).unwrap();
+        std::fs::write(
+            s.home_dir.join("connectors.json"),
+            r#"[{"id": "gh", "type": "github", "settings": {"api_url": "https://ghe.example/api/v3"}}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            s.home_dir.join("projects.json"),
+            r#"{"projects": {"hub": {"code_host": {"account": "gh", "repo": "octo/web"}},
+                             "web": {"project_id": "g/web"}}}"#,
+        )
+        .unwrap();
+        let p = crate::ui::gitlab::hosted_issue_prefixes(&s);
+        assert_eq!(
+            p.get("hub").map(String::as_str),
+            Some("https://ghe.example/octo/web")
+        );
+        assert!(!p.contains_key("web"));
     }
 
     #[test]

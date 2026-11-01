@@ -38,7 +38,7 @@
 <form method='post' action='/activity/messages' class='activity-composer-form' id='activity-composer-form'>
 ⟦csrf_input⟧
 ⟦session_input⟧
-<textarea name='text' class='activity-composer-input' rows='2' placeholder='⟦html.escape(_t('Ask the loop anything, or paste a GitLab issue link'))⟧' aria-label='⟦html.escape(_t('Message the loop'))⟧' required></textarea>
+<textarea name='text' class='activity-composer-input' rows='2' placeholder='⟦html.escape(_t('Ask the loop anything, or paste a GitLab or GitHub issue link'))⟧' aria-label='⟦html.escape(_t('Message the loop'))⟧' required></textarea>
 <div class='chat-composer-toolbar'>
 <div class='chat-chips'>⟦suggestions_html⟧</div>
 <button type='submit' class='chat-send-btn' aria-label='⟦html.escape(_t('Send'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
@@ -48,7 +48,7 @@
 </div>
 <div class='chat-hero-links'>
 <a class='btn btn-neutral chat-link-pill' href='/?view=activity'><svg class='icon' aria-hidden='true'><use href='#i-bolt'/></svg>⟦html.escape(_t('Loop activity'))⟧</a>
-<a class='btn btn-neutral chat-link-pill' href='/loops/gitlab-loop'><svg class='icon' aria-hidden='true'><use href='#i-merge'/></svg>⟦html.escape(_t('Live GitLab'))⟧</a>
+<a class='btn btn-neutral chat-link-pill' href='/loops/issue-loop'><svg class='icon' aria-hidden='true'><use href='#i-merge'/></svg>⟦html.escape(_t('Live GitLab'))⟧</a>
 ⟦_overview_live_links_html()⟧
 </div>
 </div>

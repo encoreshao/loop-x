@@ -7,7 +7,7 @@
 use crate::ai_cli_safety::{self, CallSite};
 use crate::config::default_config_path as projects_config_path;
 use crate::events::EventFields;
-use crate::gitlab_runner::{self, RunCtx};
+use crate::issue_runner::{self, RunCtx};
 use crate::runner_util::{append_unified_log, emit_best_effort, repo_root, unified_log_path};
 use crate::{
     ai_cli_config, loop_scheduler, loops_config, quota, slack_report, status, topic_runner,
@@ -159,6 +159,8 @@ pub fn failed_report(loop_name: &str, status: &str, detail: &str) -> slack_repor
 
 /// Run `loop_name` to completion; the return value is the process exit code.
 pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) -> i32 {
+    // `loopx run gitlab-loop` (the issue loop's old id) still runs it.
+    let loop_name = crate::loops_config::canonical_loop_name(loop_name);
     let unified = unified_log_path(&opts.root);
     let entry = match resolve_entry(loop_name) {
         Ok(e) => e,
@@ -649,9 +651,9 @@ pub fn run_entry(entry_point: &str, argv: &[String]) -> i32 {
     let root = repo_root();
     crate::bundled::seed(&root);
     match entry_point {
-        "bin.gitlab_loop_runner" | "gitlab-loop" => {
+        "bin.gitlab_loop_runner" | "issue-loop" => {
             let ctx = RunCtx::new(root);
-            gitlab_runner::main(&ctx.clone(), argv, gitlab_runner::cli_invoker(ctx))
+            issue_runner::main(&ctx.clone(), argv, issue_runner::cli_invoker(ctx))
         }
         "bin.topic_monitor_runner" | "topic-loop" => {
             let ctx = topic_runner::TopicCtx::new(root);
@@ -683,7 +685,7 @@ mod tests {
 
     #[test]
     fn a_failed_gitlab_run_is_titled_gitlab() {
-        assert_eq!(failed_report("gitlab-loop", "Failed", "x").title, "GitLab");
+        assert_eq!(failed_report("issue-loop", "Failed", "x").title, "Issues");
     }
 
     #[test]
@@ -705,7 +707,7 @@ mod tests {
         for ep in ["bin.topic_monitor_runner", "topic-loop"] {
             assert_eq!(call_site(ep), CallSite::TopicMonitor, "{ep}");
         }
-        for ep in ["bin.gitlab_loop_runner", "gitlab-loop"] {
+        for ep in ["bin.gitlab_loop_runner", "issue-loop"] {
             assert_eq!(call_site(ep), CallSite::GitlabLoop, "{ep}");
         }
         for ep in ["bin.inbox_triage_runner", "inbox-triage-loop"] {
@@ -734,7 +736,7 @@ mod tests {
         std::fs::write(
             dir.join("loops.json"),
             json!([{
-                "name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner",
+                "name": "issue-loop", "entry_point": "bin.gitlab_loop_runner",
                 "timeout_seconds": timeout, "log_suffix": "-x", "emit_run_events": emit,
                 "enabled": true, "schedule": {"frequency": "daily", "hour": 1, "minute": 0}
             }])
@@ -768,13 +770,13 @@ mod tests {
 
     fn attempted(dir: &Path) -> bool {
         loop_scheduler::read_state(&dir.join("loop_scheduler_state.json"))
-            .contains_key("gitlab-loop")
+            .contains_key("issue-loop")
     }
 
     fn mark_attempted(dir: &Path) {
         std::fs::write(
             dir.join("loop_scheduler_state.json"),
-            r#"{"gitlab-loop": {"last_attempted_date": "2026-10-31"}}"#,
+            r#"{"issue-loop": {"last_attempted_date": "2026-10-31"}}"#,
         )
         .unwrap();
     }
@@ -831,7 +833,7 @@ mod tests {
         // The shared usage check is about the default account: not this loop's.
         o.usage_probe = Some(usage_93);
         let code = with_env(d.path(), || {
-            with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+            with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
         });
         assert_eq!(code, 0);
         assert_eq!(
@@ -844,7 +846,7 @@ mod tests {
         std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "codex"}"#).unwrap();
         use_account(d.path(), "/srv/codex-bot");
         let code = with_env(d.path(), || {
-            with_reason("manual", || run_loop_now(&o, "gitlab-loop", &[]))
+            with_reason("manual", || run_loop_now(&o, "issue-loop", &[]))
         });
         assert_eq!(code, 0);
         // Only CODEX_HOME is ours to set; CLAUDE_CONFIG_DIR is whatever we inherited.
@@ -871,7 +873,7 @@ mod tests {
             fake_exe(d.path(), "echo 'Claude AI usage limit reached'; exit 1"),
         );
         let code = with_env(d.path(), || {
-            with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+            with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
         });
         assert_eq!(code, 1);
         assert!(!d.path().join("quota_pause.json").exists());
@@ -894,7 +896,7 @@ mod tests {
         );
         o.usage_probe = Some(usage_93);
         let code = with_env(d.path(), || {
-            with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+            with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
         });
         assert_eq!(code, QUOTA_PAUSED_EXIT);
         assert!(!marker.exists(), "the agent never started");
@@ -914,12 +916,12 @@ mod tests {
         // The next scheduled run skips on the pause without asking again.
         o.usage_probe = Some(usage_40);
         let code = with_env(d.path(), || {
-            with_reason("catch-up", || run_loop_now(&o, "gitlab-loop", &[]))
+            with_reason("catch-up", || run_loop_now(&o, "issue-loop", &[]))
         });
         assert_eq!(code, QUOTA_PAUSED_EXIT);
         // "Run now" always runs.
         let code = with_env(d.path(), || {
-            with_reason("manual", || run_loop_now(&o, "gitlab-loop", &[]))
+            with_reason("manual", || run_loop_now(&o, "issue-loop", &[]))
         });
         assert_eq!(code, 0);
         assert!(marker.exists());
@@ -945,7 +947,7 @@ mod tests {
             let mut o = opts(d.path(), fake_exe(d.path(), "exit 0"));
             o.usage_probe = Some(probe);
             let code = with_env(d.path(), || {
-                with_reason("scheduled", || run_loop_now(&o, "gitlab-loop", &[]))
+                with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
             });
             assert_eq!(code, 0, "{config}");
             assert!(!d.path().join("quota_pause.json").exists(), "{config}");
@@ -961,7 +963,7 @@ mod tests {
             "echo 'Invalid API key · Please run /login'; exit 1",
         );
         let code = with_env(d.path(), || {
-            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
         });
         assert_eq!(code, 1);
         let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
@@ -984,7 +986,7 @@ mod tests {
         );
         let code = with_env(d.path(), || {
             with_reason("scheduled", || {
-                run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+                run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
             })
         });
         assert_eq!(code, 1);
@@ -1004,7 +1006,7 @@ mod tests {
         std::fs::write(
             dir.join("loops.json"),
             json!([{
-                "name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner",
+                "name": "issue-loop", "entry_point": "bin.gitlab_loop_runner",
                 "timeout_seconds": 30, "log_suffix": "-x", "emit_run_events": true,
                 "enabled": true, "schedule": schedule
             }])
@@ -1032,7 +1034,7 @@ mod tests {
         let exe = fake_exe(d.path(), &format!("touch {}", marker.display()));
         let code = with_env(d.path(), || {
             with_reason("scheduled", || {
-                run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+                run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
             })
         });
         assert_eq!(code, PRECHECK_SKIPPED_EXIT);
@@ -1064,7 +1066,7 @@ mod tests {
             let exe = fake_exe(d.path(), &format!("touch {}", marker.display()));
             let code = with_env(d.path(), || {
                 with_reason(reason, || {
-                    run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+                    run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
                 })
             });
             assert_eq!(code, 0, "{reason}");
@@ -1087,7 +1089,7 @@ mod tests {
         let mut o = opts(d.path(), fake_exe(d.path(), "sleep 0.3"));
         o.caffeinate = Some(caffeinate);
         assert_eq!(
-            with_env(d.path(), || run_loop_now(&o, "gitlab-loop", &[])),
+            with_env(d.path(), || run_loop_now(&o, "issue-loop", &[])),
             0
         );
         let args = std::fs::read_to_string(&args_file).unwrap();
@@ -1102,7 +1104,7 @@ mod tests {
         let run = |body: &str| {
             let exe = fake_exe(d.path(), body);
             with_env(d.path(), || {
-                run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+                run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
             })
         };
         let log = || std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
@@ -1135,6 +1137,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         setup(d.path(), true, 30);
         let exe = fake_exe(d.path(), "echo \"args: $@\"; echo oops >&2");
+        // The issue loop's old id still runs it, logged under the new one.
         let code = with_env(d.path(), || {
             run_loop_now(
                 &opts(d.path(), exe),
@@ -1164,7 +1167,7 @@ mod tests {
         assert!(log.contains(" web 7"));
         assert!(log.contains("oops"), "stderr goes to the same log");
         let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
-        assert!(unified.contains("---- gitlab-loop ---- run started ----"));
+        assert!(unified.contains("---- issue-loop ---- run started ----"));
         assert!(unified.contains("run finished (exit 0)"));
         let events = std::fs::read_to_string(
             std::fs::read_dir(d.path().join("events"))
@@ -1190,7 +1193,7 @@ mod tests {
         std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "gemini"}"#).unwrap();
         let exe = fake_exe(d.path(), "true");
         let code = with_env(d.path(), || {
-            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
         });
         assert_eq!(code, 0);
         let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
@@ -1210,7 +1213,7 @@ mod tests {
         std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
         let exe = fake_exe(d.path(), "true");
         with_env(d.path(), || {
-            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
         });
         let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
         assert!(!unified.contains("full tool access"), "{unified}");
@@ -1235,7 +1238,7 @@ mod tests {
         setup(d.path(), true, 30);
         let exe = fake_exe(d.path(), "exit 3");
         let code = with_env(d.path(), || {
-            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
         });
         assert_eq!(code, 3);
         let st = status::read_status(&d.path().join("outputs/status.json"));
@@ -1275,7 +1278,7 @@ mod tests {
         setup(d.path(), false, 30);
         let exe = fake_exe(d.path(), "exit 0");
         with_env(d.path(), || {
-            run_loop_now(&opts(d.path(), exe), "gitlab-loop", &[])
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
         });
         assert!(!d.path().join("events").exists());
     }

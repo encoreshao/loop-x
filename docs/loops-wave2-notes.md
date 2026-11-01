@@ -50,7 +50,7 @@ and `output_keys` for the required answer JSON keys.
 - The GitHub, Jira and Linear connectors already exist
   (`crates/core/src/connectors/{github,jira,linear}.rs`); what is missing is the loop side.
 - Requires extracting an `IssueSource` interface out of
-  `crates/core/src/gitlab_runner.rs`: `list_assigned()`, `get(issue_ref)`,
+  `crates/core/src/issue_runner.rs`: `list_assigned()`, `get(issue_ref)`,
   `comment(issue_ref, body)`, `open_change_request(branch, title, body)`.
 - Do this **after** P4, so the gate and retry logic is shared rather than
   duplicated per provider.

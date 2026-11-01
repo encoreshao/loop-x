@@ -23,7 +23,7 @@ final class FakePower: PowerAssertion, @unchecked Sendable {
 
     @Test func holdsOnceWhileALoopRunsNoMatterHowManySnapshotsArrive() {
         let power = FakePower(); let k = KeepAwake(power: power)
-        for _ in 0..<3 { k.update(snapshot: snap(loops: ["gitlab-loop": "running"]), enabled: true) }
+        for _ in 0..<3 { k.update(snapshot: snap(loops: ["issue-loop": "running"]), enabled: true) }
         #expect(power.begun.count == 1)
         #expect(k.isHolding)
     }
@@ -79,8 +79,8 @@ final class FakePower: PowerAssertion, @unchecked Sendable {
 
     @Test func theReasonNamesTheRunningTask() {
         let power = FakePower(); let k = KeepAwake(power: power)
-        k.update(snapshot: snap(loops: ["gitlab-loop": "running"]), enabled: true)
-        #expect(power.begun.first?.contains("gitlab-loop") == true)
+        k.update(snapshot: snap(loops: ["issue-loop": "running"]), enabled: true)
+        #expect(power.begun.first?.contains("issue-loop") == true)
     }
 
     @Test func keepAwakeSettingDefaultsOnAndPersists() {

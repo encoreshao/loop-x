@@ -268,7 +268,9 @@ impl UiState {
     /// `status_path_for_loop`: `outputs/status.json` for the GitLab loop,
     /// `outputs/status/<name>.json` for every other.
     pub fn status_path_for_loop(&self, name: &str) -> PathBuf {
-        if name == "gitlab-loop" {
+        if loopx_core::loops_config::canonical_loop_name(name)
+            == loopx_core::loops_config::ISSUE_LOOP
+        {
             self.repo_root.join("outputs").join("status.json")
         } else {
             self.repo_root
@@ -279,7 +281,7 @@ impl UiState {
     }
 
     pub fn status_path(&self) -> PathBuf {
-        self.status_path_for_loop("gitlab-loop")
+        self.status_path_for_loop("issue-loop")
     }
 }
 
@@ -299,7 +301,7 @@ mod tests {
             .date_naive()
             .format("%Y-%m-%d")
             .to_string();
-        assert_eq!(state["gitlab-loop"]["last_attempted_date"], today);
+        assert_eq!(state["issue-loop"]["last_attempted_date"], today);
 
         // An existing registry is left alone, so the state is not re-seeded either.
         std::fs::remove_file(home.path().join("loop_scheduler_state.json")).unwrap();

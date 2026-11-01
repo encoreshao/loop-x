@@ -346,22 +346,22 @@
     "en": {
      "status": 301,
      "content_type": "",
-     "location": "/loops/gitlab-loop"
+     "location": "/loops/issue-loop"
     },
     "ja": {
      "status": 301,
      "content_type": "",
-     "location": "/loops/gitlab-loop"
+     "location": "/loops/issue-loop"
     },
     "zh": {
      "status": 301,
      "content_type": "",
-     "location": "/loops/gitlab-loop"
+     "location": "/loops/issue-loop"
     },
     "fr": {
      "status": 301,
      "content_type": "",
-     "location": "/loops/gitlab-loop"
+     "location": "/loops/issue-loop"
     }
    }
   },

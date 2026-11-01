@@ -40,12 +40,17 @@ pub fn default_config_path() -> PathBuf {
     home_dir().join("loops.json")
 }
 
+/// What a person calls the issue loop ([`ISSUE_LOOP`]): it works issues from
+/// GitLab, GitHub and any tracker the provider layer adds, so the name is not
+/// tied to one of them.
+pub const ISSUE_LOOP_NAME: &str = "Issues";
+
 /// The name a person sees for a loop (Slack titles, alerts): its `label` in
 /// `loops.json` when set, else this. The built-in loops have no label, and a
 /// plugin loop's id title-cases into the same words as its default label.
 pub fn display_name(loop_name: &str) -> String {
     let fixed = match loop_name {
-        "gitlab-loop" | "gitlab-issue-loop" => Some("GitLab"),
+        "issue-loop" | "gitlab-loop" | "gitlab-issue-loop" => Some(ISSUE_LOOP_NAME),
         "topic-loop" | "topic-monitor-loop" => Some("Topic Monitor"),
         "stale-sweeper-loop" => Some("Stale Work Sweeper"),
         _ => None,
@@ -209,17 +214,41 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
-// Loops renamed after release: (old, new, label renames).
+// Loops renamed after release: (old, new, text renames). A text rename
+// applies to a `label` or `description` that is still exactly the old
+// default; anything the user wrote is kept.
 type Rename = (
     &'static str,
     &'static str,
-    [(&'static str, &'static str); 1],
+    &'static [(&'static str, &'static str)],
 );
-const RENAMED_LOOPS: [Rename; 1] = [(
-    "calendar-prep-loop",
-    "meeting-prep-loop",
-    [("Calendar Prep", "Meeting Prep")],
+const RENAMED_LOOPS: [Rename; 3] = [
+    (
+        "calendar-prep-loop",
+        "meeting-prep-loop",
+        &[("Calendar Prep", "Meeting Prep")],
+    ),
+    ("gitlab-loop", ISSUE_LOOP, GITLAB_LOOP_TEXT),
+    ("gitlab-issue-loop", ISSUE_LOOP, GITLAB_LOOP_TEXT),
+];
+
+/// The issue loop's id. It was `gitlab-loop` before it worked GitHub (and
+/// any other tracker the provider layer adds); every place that takes a loop
+/// id still accepts the old one through [`canonical_loop_name`].
+pub const ISSUE_LOOP: &str = "issue-loop";
+
+const GITLAB_LOOP_TEXT: &[(&str, &str)] = &[(
+    "Works your assigned GitLab issues: fixes, answers or escalates each one.",
+    "Works your assigned issues (GitLab, GitHub): fixes, answers or escalates each one.",
 )];
+
+/// A loop's current id: a renamed loop's old id reads as its new one.
+pub fn canonical_loop_name(name: &str) -> &str {
+    RENAMED_LOOPS
+        .iter()
+        .find(|(old, _, _)| *old == name)
+        .map_or(name, |(_, new, _)| new)
+}
 
 fn migrate_renamed(loops: Vec<Value>) -> Vec<Value> {
     let names: Vec<Option<String>> = loops
@@ -238,19 +267,12 @@ fn migrate_renamed(loops: Vec<Value>) -> Vec<Value> {
             }
             if let Some(obj) = entry.as_object_mut() {
                 obj.insert("name".into(), json!(new));
-                let label = obj.get("label").cloned();
-                match label {
-                    Some(Value::String(l)) => {
-                        let renamed = labels
-                            .iter()
-                            .find(|(from, _)| *from == l)
-                            .map_or(l.clone(), |(_, to)| (*to).to_string());
-                        obj.insert("label".into(), json!(renamed));
+                for field in ["label", "description"] {
+                    if let Some(Value::String(text)) = obj.get(field).cloned() {
+                        if let Some((_, to)) = labels.iter().find(|(from, _)| *from == text) {
+                            obj.insert(field.into(), json!(to));
+                        }
                     }
-                    Some(other) => {
-                        obj.insert("label".into(), other);
-                    }
-                    None => {}
                 }
                 if let Some(Value::String(suffix)) = obj.get("log_suffix").cloned() {
                     obj.insert("log_suffix".into(), json!(suffix.replace(old, new)));
@@ -313,9 +335,10 @@ pub fn get_loop(
             py_repr_str(name)
         )));
     }
+    let canonical = canonical_loop_name(name);
     list_loops(config_path, template_path)?
         .into_iter()
-        .find(|l| name_of(l) == Some(name))
+        .find(|l| name_of(l) == Some(canonical))
         .ok_or_else(|| LoopsError::UnknownLoop(unknown(name)))
 }
 
@@ -343,6 +366,7 @@ fn with_loop(
     change: impl FnOnce(&mut Map<String, Value>) -> Result<String, String>,
 ) -> Outcome {
     let mut loops = list_loops(config_path, template_path).map_err(|e| e.to_string())?;
+    let name = canonical_loop_name(name);
     let Some(obj) = loops
         .iter_mut()
         .find(|l| name_of(l) == Some(name))
@@ -633,7 +657,7 @@ mod tests {
     #[test]
     fn loops_have_human_names_for_slack() {
         for (id, want) in [
-            ("gitlab-loop", "GitLab"),
+            ("issue-loop", "Issues"),
             ("topic-loop", "Topic Monitor"),
             ("inbox-triage-loop", "Inbox Triage"),
             ("rss-watch-loop", "RSS Watch"),
@@ -683,7 +707,7 @@ mod tests {
 
     fn two() -> Value {
         json!([
-            {"name": "gitlab-loop", "entry_point": "bin.gitlab_loop_runner", "enabled": true},
+            {"name": "issue-loop", "entry_point": "bin.gitlab_loop_runner", "enabled": true},
             {"name": "topic-loop", "entry_point": "bin.topic_monitor_runner"},
         ])
     }
@@ -728,13 +752,13 @@ mod tests {
         let template = f.none.with_file_name("template.json");
         std::fs::write(
             &template,
-            json!([{"name": "gitlab-loop", "x": 1}, {"name": "new-loop", "enabled": false}])
+            json!([{"name": "issue-loop", "x": 1}, {"name": "new-loop", "enabled": false}])
                 .to_string(),
         )
         .unwrap();
         let all = list_loops(&f.config, Some(&template)).unwrap();
         let names: Vec<_> = all.iter().map(|l| l["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["gitlab-loop", "topic-loop", "new-loop"]);
+        assert_eq!(names, ["issue-loop", "topic-loop", "new-loop"]);
         assert!(all[0].get("x").is_none(), "the user's own entry wins");
     }
 
@@ -758,6 +782,31 @@ mod tests {
         let all = list_loops(&f.config, Some(&f.none)).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0]["name"], "meeting-prep-loop");
+    }
+
+    #[test]
+    fn the_gitlab_loop_is_now_the_issue_loop() {
+        assert_eq!(canonical_loop_name("gitlab-loop"), ISSUE_LOOP);
+        assert_eq!(canonical_loop_name("gitlab-issue-loop"), ISSUE_LOOP);
+        assert_eq!(canonical_loop_name("issue-loop"), ISSUE_LOOP);
+        assert_eq!(canonical_loop_name("topic-loop"), "topic-loop");
+        assert_eq!(display_name("issue-loop"), "Issues");
+        let f = fx(json!([{"name": "gitlab-loop", "enabled": true,
+            "description": "Works your assigned GitLab issues: fixes, answers or escalates each one."}]));
+        let l = &list_loops(&f.config, Some(&f.none)).unwrap()[0];
+        assert_eq!(l["name"], "issue-loop");
+        assert_eq!(l["enabled"], true);
+        assert!(!l["description"].as_str().unwrap().contains("GitLab issues"));
+        // A description the user wrote is theirs.
+        let f = fx(json!([{"name": "gitlab-loop", "description": "Mine"}]));
+        assert_eq!(
+            list_loops(&f.config, Some(&f.none)).unwrap()[0]["description"],
+            "Mine"
+        );
+        // Changing it saves it under the new name.
+        set_enabled("gitlab-loop", false, &f.config, Some(&f.none)).unwrap();
+        assert_eq!(read(&f)[0]["name"], "issue-loop");
+        assert_eq!(read(&f)[0]["enabled"], false);
     }
 
     #[test]

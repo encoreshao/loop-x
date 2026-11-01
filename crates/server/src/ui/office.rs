@@ -48,7 +48,7 @@ pub fn office_state(enabled: bool, run_state: &str, pending_approvals: usize) ->
 /// Approvals carry no loop name and only the GitLab issue loop creates them, so
 /// the whole pending total belongs to it and to no other loop.
 pub fn pending_for(loop_name: &str, pending_total: usize) -> usize {
-    if loop_name == "gitlab-loop" {
+    if loop_name == "issue-loop" {
         pending_total
     } else {
         0
@@ -67,7 +67,7 @@ fn reason(ctx: &UiCtx, state: OfficeState) -> String {
 
 fn run_now_url(name: &str) -> String {
     match name {
-        "gitlab-loop" => "/run-now".to_string(),
+        "issue-loop" => "/run-now".to_string(),
         "topic-loop" => "/topic-monitor/run-now".to_string(),
         "inbox-triage-loop" => "/inbox/run-now".to_string(),
         _ => format!("/loops/{}/run-now", pyfmt::quote(name, "")),
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn pending_only_counts_for_gitlab_loop() {
-        assert_eq!(pending_for("gitlab-loop", 2), 2);
+        assert_eq!(pending_for("issue-loop", 2), 2);
         assert_eq!(pending_for("rss-watch", 2), 0);
     }
 }

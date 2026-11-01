@@ -46,7 +46,7 @@ Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划�
 ## 最佳实践
 
 1. **从小处开始。** 起初只开启 GitLab issue 和主题监控两个循环，并只列出一两个你熟悉的项目。
-2. **调度前先试跑一次。** 手动运行 `loopx run gitlab-loop` 并查看结果，再加载调度器。
+2. **调度前先试跑一次。** 手动运行 `loopx run issue-loop` 并查看结果，再加载调度器。
 3. **看一眼代理选的检查。** 代理会自行确定每个项目的 lint 和测试命令，并在 Live 视图的每个 issue 下记录。只有循环自己重新运行它们并通过，合并请求才会打开；已保存的 `lint_cmd`/`test_cmd` 只是它的起点提示。
 4. **审阅每一个合并请求。** Loop X 只会停在打开的合并请求上。请像审阅队友的代码一样查看差异。
 5. **把 issue 写清楚。** 写明预期行为和复现方式。清晰的 issue 会得到修复，含糊的 issue 会得到提问。
@@ -79,7 +79,7 @@ Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划�
 
 ## 工作原理
 
-每次定时运行（`loopx run gitlab-loop`）：
+每次定时运行（`loopx run issue-loop`）：
 
 1. 列出配置中每个项目别名下、分配给你所配置用户名的所有未关闭 GitLab issue。
 2. **逐个处理，绝不并行**，遵循 [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md) 中的分步决策流程。
@@ -244,7 +244,7 @@ Bundle 保存在 `~/.gitlab/config.json` 的 `bundles` 键中；如果设置了 
 **手动**运行一次，在把它交给定时任务之前先看看它如何工作：
 
 ```bash
-loopx run gitlab-loop   # the daily GitLab issue loop
+loopx run issue-loop   # the daily GitLab issue loop
 loopx run topic-loop    # the topic monitor loop
 ```
 
@@ -274,7 +274,7 @@ loopx run topic-loop    # the topic monitor loop
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Dashboard** (`/`) | 视图：Overview — 当前/上次运行状态、实时进度指示器，以及 Run now 按钮; Activity — 与循环的消息会话，并带有独立的实时进度指示器。在此粘贴 GitLab issue 链接即可让循环立即处理该 issue，无论它分配给了谁。 |
 | **Loops** (`/loops`) | 目录页，把已启用的循环与可用的循环分开列出；每个可见的循环也会作为子链接出现在侧边栏 **Loops** 之下（Inbox Triage 在被禁用且从未运行过时不会显示在那里） |
-| — **GitLab Issues** (`/loops/gitlab-loop`) | 视图：Live — 实时获取的当前分配给你的 issue 和未关闭的 MR; Projects — 管理 `~/.gitlab/config.json`（实例、项目别名、access bundles）和 `~/.loopx/projects.json`（跟踪的项目、循环设置），无需手动编辑 JSON |
+| — **GitLab Issues** (`/loops/issue-loop`) | 视图：Live — 实时获取的当前分配给你的 issue 和未关闭的 MR; Projects — 管理 `~/.gitlab/config.json`（实例、项目别名、access bundles）和 `~/.loopx/projects.json`（跟踪的项目、循环设置），无需手动编辑 JSON |
 | — **Topic Monitor** (`/loops/topic-loop`) | 视图：Live — 每个已配置主题的状态和已保存的简报; Topics — 添加、编辑和删除监控主题——同一页面上的独立视图，避免配置项干扰 Live 状态视图 |
 | — **Inbox Triage** (`/loops/inbox-triage-loop`) | 视图：Inbox Triage 自身的实时状态（**Live**），以及邮箱连接与分类（**Setup**：连接 Gmail/Outlook、分类、VIP/排除的发件人、Slack bundle） |
 | **Runs** (`/runs`) | 视图：Loop Runs — `outputs/loop-runs/` 下记录的每次运行（每个处理过的 issue 或主题一条），按时间倒序——只读；概览栏显示总运行次数、成功/升级比例、平均成本，以及实验性的 Loop Efficiency Score; History — 每次历史运行的回顾报告，按时间倒序; Logs — `logs/loop-engineering.log` 的末尾部分——包括 GitLab 循环、主题监控循环以及本仪表盘自身聊天助手的每次 `claude` CLI 调用输出 |
@@ -329,7 +329,7 @@ loopx run topic-loop    # the topic monitor loop
 
 | 命令 / 脚本 | 用途                                                                                                                                                                                                                              |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `loopx run <loop>` | 立即运行一个已注册的循环（从 `~/.loopx/loops.json` 查找）——日志写入 `outputs/history/`，记录事件，失败时通知 Slack；`loopx run gitlab-loop <alias> <issue_iid>` 只处理单个 issue。由 `loopx scheduler`（按计划）或仪表盘（按需）调用 |
+| `loopx run <loop>` | 立即运行一个已注册的循环（从 `~/.loopx/loops.json` 查找）——日志写入 `outputs/history/`，记录事件，失败时通知 Slack；`loopx run issue-loop <alias> <issue_iid>` 只处理单个 issue。由 `loopx scheduler`（按计划）或仪表盘（按需）调用 |
 | `loopx scheduler` | launchd（或应用）每 15 分钟运行一次的轮询循环：读取 `~/.loopx/loops.json`，启动已注册且到期的循环 |
 | `loopx loops`, `loopx ai-cli` | 循环注册表（`loops.json`：名称、计划、入口），以及每个循环调用哪个 AI CLI（`claude` 或 `codex`，`ai_cli.json`） |
 | `loopx config` | 读取 `~/.loopx/projects.json`（别名、负责人、worktree 根目录、各项目配置） |

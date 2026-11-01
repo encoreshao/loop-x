@@ -168,15 +168,24 @@ impl RunQueue {
         // `lock` drops here and releases the flock.
     }
 
+    /// A renamed loop's entries read under its current id.
     fn read_file(&self) -> QueueFile {
-        std::fs::read_to_string(&self.path)
+        let mut file: QueueFile = std::fs::read_to_string(&self.path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        for e in &mut file.entries {
+            let current = crate::loops_config::canonical_loop_name(&e.loop_name);
+            if current != e.loop_name {
+                e.loop_name = current.to_string();
+            }
+        }
+        file
     }
 
     /// Adds `loop_name` unless it is already queued or running.
     pub fn enqueue(&self, loop_name: &str, reason: Reason, now: &str) -> std::io::Result<Enqueued> {
+        let loop_name = crate::loops_config::canonical_loop_name(loop_name);
         self.with_file(|f| {
             if let Some(e) = f.entries.iter().find(|e| {
                 e.loop_name == loop_name && matches!(e.state.as_str(), "queued" | "running")
@@ -369,6 +378,7 @@ impl RunQueue {
     }
 
     pub fn is_active(&self, loop_name: &str) -> bool {
+        let loop_name = crate::loops_config::canonical_loop_name(loop_name);
         self.read_file()
             .entries
             .iter()
@@ -465,6 +475,24 @@ mod tests {
 
     fn sleeper(secs: &str) -> std::io::Result<std::process::Child> {
         std::process::Command::new("sleep").arg(secs).spawn()
+    }
+
+    #[test]
+    fn a_queued_gitlab_loop_is_the_issue_loop() {
+        let (_d, q) = queue();
+        std::fs::write(
+            q.path(),
+            r#"{"entries": [{"id": "1", "loop": "gitlab-loop", "reason": "scheduled", "priority": 0,
+                "enqueued_at": "t0", "state": "queued"}]}"#,
+        )
+        .unwrap();
+        assert!(q.is_active("issue-loop"));
+        assert_eq!(q.snapshot(5).queued[0].loop_name, "issue-loop");
+        // Not queued twice under its two names.
+        assert!(matches!(
+            q.enqueue("issue-loop", Reason::Manual, "t1").unwrap(),
+            Enqueued::Coalesced { .. }
+        ));
     }
 
     #[test]

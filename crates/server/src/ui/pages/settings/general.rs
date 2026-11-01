@@ -321,7 +321,7 @@ fn concurrency_form(ctx: &UiCtx, csrf: &str) -> String {
 <button type='submit' class='btn btn-neutral'>{}</button></form>",
         pyfmt::escape(&ctx.t("Running at once")),
         pyfmt::escape(&ctx.t("How many agents may work side by side. The same issue or topic never runs twice at once, and issues of a project without worktrees always take turns. 1 runs them one by one.")),
-        field("max_parallel_issues", ctx.t("GitLab issues"), limits.issues),
+        field("max_parallel_issues", ctx.t("Issue loop"), limits.issues),
         field("max_parallel_topics", ctx.t("Topics"), limits.topics),
         field("max_parallel_loops", ctx.t("Loops"), limits.loops),
         pyfmt::escape(&ctx.t("Save")),
@@ -570,7 +570,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no visible gemini warning: {html}"));
         let shown = &html[start..start + html[start..].find("</div>").unwrap()];
         assert!(shown.contains("full tool access"), "{shown}");
-        for feature in ["GitLab issue loop", "Topic Monitor", "Inbox Triage", "Dashboard chat"] {
+        for feature in ["Issue loop", "Topic Monitor", "Inbox Triage", "Dashboard chat"] {
             assert!(shown.contains(feature), "{feature}: {shown}");
         }
         // The other unrestricted CLIs' warnings are present but hidden, for the

@@ -88,9 +88,9 @@ import Testing
     }
 
     @Test func failedAndIdleLoopsGetALine() {
-        let s = Snapshot(loops: ["gitlab-loop": LoopStatus(state: "failed", updatedAt: ago(720)),
+        let s = Snapshot(loops: ["issue-loop": LoopStatus(state: "failed", updatedAt: ago(720)),
                                  "inbox": LoopStatus(state: "idle", updatedAt: ago(3 * 3600))])
-        #expect(LastRuns.lines(in: s, now: now) == ["gitlab-loop: failed 12m ago", "inbox: last ran 3h ago"])
+        #expect(LastRuns.lines(in: s, now: now) == ["issue-loop: failed 12m ago", "inbox: last ran 3h ago"])
     }
 
     @Test func staleCountsAsFailed() {

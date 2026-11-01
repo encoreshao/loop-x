@@ -23,7 +23,7 @@
 ⟦ai_cli_notes_html⟧<div class='ai-panel-prompts'>⟦prompts_html⟧</div>
 <form class='ai-panel-composer' id='ai-panel-form'>
 <input type='hidden' name='csrf_token' value="⟦html.escape(_CSRF_TOKEN)⟧">
-<textarea name='text' rows='1' placeholder='⟦html.escape(_t('Ask about this page, or paste a GitLab issue link'))⟧' aria-label='⟦html.escape(_t('Message the assistant'))⟧'></textarea>
+<textarea name='text' rows='1' placeholder='⟦html.escape(_t('Ask about this page, or paste a GitLab or GitHub issue link'))⟧' aria-label='⟦html.escape(_t('Message the assistant'))⟧'></textarea>
 <div class='ai-panel-composer-toolbar'>
 <button type='submit' class='ai-panel-send' aria-label='⟦html.escape(_t('Send'))⟧' title='⟦html.escape(_t('Send'))⟧' disabled><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>

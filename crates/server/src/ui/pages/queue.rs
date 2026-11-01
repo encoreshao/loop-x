@@ -70,7 +70,7 @@ fn short_age(secs: i64) -> String {
 /// files (one per issue, since issues run in parallel):
 /// "web #7: Agent is running Bash: cargo test · 1m ago".
 fn agent_activity(ctx: &UiCtx) -> Option<String> {
-    let base = loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("gitlab-loop"));
+    let base = loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("issue-loop"));
     let lines: Vec<String> = loopx_core::agent_activity::read_all(&base)
         .iter()
         .filter_map(|a| one_activity(ctx, a))
@@ -105,7 +105,7 @@ fn one_activity(ctx: &UiCtx, a: &serde_json::Value) -> Option<String> {
 
 /// `progress` plus, for the GitLab loop, what its agent is doing.
 fn with_agent_activity(ctx: &UiCtx, loop_name: &str, progress: String) -> String {
-    match (loop_name == "gitlab-loop").then(|| agent_activity(ctx)).flatten() {
+    match (loop_name == "issue-loop").then(|| agent_activity(ctx)).flatten() {
         Some(activity) => format!("{progress} · {activity}"),
         None => progress,
     }
@@ -122,16 +122,16 @@ fn live_status(ctx: &UiCtx, name: &str) -> Option<serde_json::Value> {
 /// A GitLab loop run started outside the queue (launchd, Run now): the pill and
 /// the page both show it alongside the queue's own running entries.
 fn outside_gitlab_run(ctx: &UiCtx, snap: &Snapshot) -> Option<serde_json::Value> {
-    if snap.running.iter().any(|e| e.loop_name == "gitlab-loop") {
+    if snap.running.iter().any(|e| e.loop_name == "issue-loop") {
         return None;
     }
-    live_status(ctx, "gitlab-loop")
+    live_status(ctx, "issue-loop")
 }
 
 /// What a running loop is doing right now, from its status file: the GitLab loop
 /// first (it also runs outside the queue), then each running queue entry.
 fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
-    std::iter::once("gitlab-loop")
+    std::iter::once("issue-loop")
         .chain(snap.running.iter().map(|e| e.loop_name.as_str()))
         .find_map(|name| live_status(ctx, name))
         .map(|status| progress_text(ctx.lang, &status))
@@ -248,7 +248,7 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
     let outside = outside_gitlab_run(ctx, snap).map(|status| {
         let e = Entry {
             id: String::new(),
-            loop_name: "gitlab-loop".into(),
+            loop_name: "issue-loop".into(),
             reason: "outside".into(),
             priority: 0,
             enqueued_at: String::new(),
@@ -260,7 +260,7 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
             note: None,
             cancel_requested: false,
         };
-        let progress = with_agent_activity(ctx, "gitlab-loop", progress_text(ctx.lang, &status));
+        let progress = with_agent_activity(ctx, "issue-loop", progress_text(ctx.lang, &status));
         row(ctx, &e, &progress, "")
     });
     let running = outside
@@ -429,12 +429,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let st = state(d.path());
         let q = RunQueue::new(d.path().join("run_queue.json"));
-        q.enqueue("gitlab-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
+        q.enqueue("issue-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
         q.enqueue("topic-loop", Reason::Scheduled, "2026-10-27T10:00:01").unwrap();
         q.enqueue("inbox-triage-loop", Reason::Scheduled, "2026-10-27T10:00:02").unwrap();
         q.claim_next("2026-10-27T10:00:05", 1).unwrap();
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
-        assert!(html.contains("gitlab-loop") && html.contains("topic-loop") && html.contains("inbox-triage-loop"));
+        assert!(html.contains("issue-loop") && html.contains("topic-loop") && html.contains("inbox-triage-loop"));
         assert!(html.contains("#2 in line"), "{html}");
         let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
         assert!(pill.contains("1 running") && pill.contains("2 queued"), "{pill}");
@@ -480,7 +480,7 @@ mod tests {
         );
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
         assert!(!html.contains("Nothing is running"), "{html}");
-        assert!(html.contains("gitlab-loop") && html.contains("Processing web #10"), "{html}");
+        assert!(html.contains("issue-loop") && html.contains("Processing web #10"), "{html}");
     }
 
     #[test]
@@ -545,11 +545,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let st = state(d.path());
         let q = RunQueue::new(d.path().join("run_queue.json"));
-        q.enqueue("gitlab-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
+        q.enqueue("issue-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
         q.claim_next("2026-10-27T10:00:05", 1).unwrap();
         write_status(d.path(), "status.json", r#"{"state": "running", "current_step": "analyzing"}"#);
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
-        assert_eq!(html.matches("<strong>gitlab-loop</strong>").count(), 1, "{html}");
+        assert_eq!(html.matches("<strong>issue-loop</strong>").count(), 1, "{html}");
         assert!(html.contains("Analyzing"), "{html}");
     }
 

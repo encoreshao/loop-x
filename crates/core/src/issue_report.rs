@@ -1,9 +1,12 @@
-//! The GitLab loop's end-of-run Slack report: one message per Slack bundle,
+//! The issue loop's end-of-run Slack report: one message per Slack bundle,
 //! built from this run's events - the same ledger the dashboard and the
 //! wrap-up session read - so it covers what the agent did as well as what the
 //! loop did itself.
 
-use crate::gitlab_runner::{escalation_reason_text, mr_iid};
+/// How Slack names the issue loop (it works GitLab, GitHub and other trackers).
+pub const ISSUE_LOOP_TITLE: &str = "Issue Loop";
+
+use crate::issue_runner::{escalation_reason_text, mr_iid};
 use crate::slack_report::{fmt_duration, Item, Link, Report, Section, State, Status};
 use serde_json::Value;
 
@@ -33,7 +36,7 @@ pub struct IssueLine {
 /// The run-level facts the events don't carry.
 #[derive(Debug, Clone, Default)]
 pub struct RunFacts {
-    /// "Daily GitLab loop" for the scheduled batch, else the run's own name.
+    /// "Daily Issue Loop" for the scheduled batch, else the run's own name.
     pub title: String,
     pub run_id: String,
     pub elapsed_seconds: f64,
@@ -309,7 +312,7 @@ pub fn build(lines: &[IssueLine], facts: &RunFacts) -> Report {
 
     let mut footer = vec![
         Link {
-            text: "LoopX GitLab loop".into(),
+            text: format!("LoopX {}", ISSUE_LOOP_TITLE),
             url: None,
         },
         Link {
@@ -325,7 +328,7 @@ pub fn build(lines: &[IssueLine], facts: &RunFacts) -> Report {
     }
     Report {
         title: if facts.title.is_empty() {
-            "Daily GitLab loop".into()
+            "Daily Issue Loop".into()
         } else {
             facts.title.clone()
         },
@@ -521,7 +524,7 @@ mod tests {
             .starts_with("Crashy - the run did not finish (failed: agent_failed)"));
         assert_eq!(
             r.footer.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
-            ["LoopX GitLab loop", "run R", "$1.23"]
+            ["LoopX Issue Loop", "run R", "$1.23"]
         );
     }
 

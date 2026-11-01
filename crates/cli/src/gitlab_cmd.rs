@@ -110,6 +110,16 @@ fn dispatch(argv: &[String]) -> Out {
         }
     }
     let command = args[0].clone();
+    // An alias bound through a connector account (`code_host`, e.g. GitHub)
+    // answers the same commands in the same JSON shape.
+    if instance_name.is_none() && command != "cache" {
+        if let Some(project) = args
+            .get(1)
+            .and_then(|alias| loopx_core::hosted::hosted_project(alias))
+        {
+            return hosted(&project, &command, &args[2..]);
+        }
+    }
     let config = gitlab::load_config();
 
     match command.as_str() {
@@ -285,6 +295,35 @@ fn dispatch(argv: &[String]) -> Out {
         }
         other => Err(format!("Unknown command: {other}")),
     }
+}
+
+/// A `code_host` project's command; `sync-issue` and `cached-issue` use the
+/// same local cache, keyed on the connector account and repository.
+fn hosted(project: &Value, command: &str, rest: &[String]) -> Out {
+    // `<provider>/<account>`: the account's data lives in its own folder.
+    let data_key = loopx_core::hosted::data_instance(project, &Default::default());
+    let account = data_key.as_str();
+    let repo = project["code_host"]["repo"].as_str().unwrap_or_default();
+    if command == "cached-issue" {
+        let iid = rest
+            .first()
+            .ok_or("Invalid arguments for command: cached-issue")?;
+        return match gitlab_cache::get_issue_cache(account, repo, iid) {
+            Some(v) => pretty(&v),
+            None => Err(format!(
+                "No cache for {repo}#{iid} \u{2014} run sync-issue first"
+            )),
+        };
+    }
+    let src = loopx_core::connectors_config::ConfigConnectors::real();
+    let resolved = loopx_core::hosted::resolve_project(&src, project).map_err(|e| e.to_string())?;
+    let out = loopx_core::hosted::helper(&resolved, project, command, rest)?;
+    if command == "sync-issue" {
+        let merged =
+            gitlab_cache::sync_issue(account, repo, &rest[0], &out).map_err(|e| e.to_string())?;
+        return pretty(&merged);
+    }
+    pretty(&out)
 }
 
 fn sync_group(client: &Client, instance: &str, path: &str) -> Result<Value, String> {

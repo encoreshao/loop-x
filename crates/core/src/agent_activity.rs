@@ -20,7 +20,7 @@ const HOOK_EVENTS: [&str; 4] = ["PreToolUse", "PostToolUse", "Notification", "St
 /// The activity file, next to the GitLab loop's `status.json`.
 pub fn path(base_dir: Option<&Path>) -> PathBuf {
     beside(&crate::loop_scheduler::status_path_for_loop(
-        "gitlab-loop",
+        "issue-loop",
         base_dir,
     ))
 }

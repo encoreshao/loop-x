@@ -253,7 +253,7 @@ pub fn mrs_html(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>) -> String 
         return format!(
             "<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{} <a href='/connectors'>{}</a></p></section>",
             h(&ctx.t("Merge requests")),
-            h(&ctx.t("Connect a GitLab account to see your merge requests.")),
+            h(&ctx.t("Connect a GitLab or GitHub account to see your merge requests.")),
             h(&ctx.t("Open Connectors"))
         );
     }
@@ -349,9 +349,12 @@ fn form_ref(ctx: &UiCtx) -> Option<String> {
     let (account, rest) = r.split_once(':')?;
     let (pid, iid) = rest.split_once('!')?;
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    let id_ok = !account.is_empty()
-        && account.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
-    (id_ok && digits(pid) && digits(iid)).then_some(r)
+    let name = |s: &str| {
+        !s.is_empty() && s != ".." && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    // GitLab's numeric project id, or a GitHub `owner/name`.
+    let project_ok = digits(pid) || pid.split_once('/').is_some_and(|(o, n)| name(o) && name(n));
+    (name(account) && project_ok && digits(iid)).then_some(r)
 }
 
 fn set_auto(ctx: &UiCtx) -> UiResponse {
@@ -556,7 +559,7 @@ mod tests {
         bad.error = Some("MailHTTPError".into());
         let html = render(&st, Ok(vec![bad]));
         assert!(html.contains("Could not load merge requests from Work (MailHTTPError)"));
-        assert!(render(&st, Ok(vec![])).contains("Connect a GitLab account"));
+        assert!(render(&st, Ok(vec![])).contains("Connect a GitLab or GitHub account"));
     }
 
     #[test]
@@ -579,6 +582,18 @@ mod tests {
         let r = post(&st, "/loops/mr-review-loop/mrs/review", "csrf_token=tok&mr=work%3A9%217");
         assert_eq!(r.status, 303);
         assert!(MrPrefs::load(&d.path().join("outputs/loops")).requested.contains("work:9!7"));
+    }
+
+    #[test]
+    fn a_github_pull_request_can_be_queued_by_owner_and_repo() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        post(&st, "/loops/mr-review-loop/mrs/review", "csrf_token=tok&mr=gh%3Aocto-org%2Fweb.app%211");
+        assert!(MrPrefs::load(&d.path().join("outputs/loops")).requested.contains("gh:octo-org/web.app!1"));
+        for bad in ["gh%3A..%2Fx%211", "gh%3Ao%2Fr%2Fz%211", "gh%3Ao%2F%211", "gh%3Ao%20x%2Fr%211"] {
+            let r = post(&st, "/loops/mr-review-loop/mrs/review", &format!("csrf_token=tok&mr={bad}"));
+            assert!(r.header("Location").unwrap().contains("ok=0"), "{bad}");
+        }
     }
 
     #[test]

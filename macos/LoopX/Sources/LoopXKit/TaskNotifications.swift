@@ -9,7 +9,7 @@ public struct NotchTask: Equatable, Sendable, Identifiable {
     /// The message that says what the task is doing (issue, step), nil when it has none.
     public var detail: String?
 
-    /// What to show: a loop's name ("GitLab", not `gitlab-loop`); a topic slug reads title-cased.
+    /// What to show: a loop's name ("GitLab", not `issue-loop`); a topic slug reads title-cased.
     public var title: String { id.hasPrefix("topic:") ? LoopNames.topic(name) : LoopNames.display(name) }
 }
 

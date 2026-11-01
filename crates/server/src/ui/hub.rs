@@ -141,11 +141,11 @@ pub fn hub_by_key(key: &str) -> Option<Hub> {
 pub fn builtin_loop_page(name: &str) -> Option<Hub> {
     let v = HubView::new;
     Some(match name {
-        "gitlab-loop" => hub(
+        "issue-loop" => hub(
             "loops",
-            "/loops/gitlab-loop",
-            "GitLab",
-            "_SECTION_ICON_GITLAB",
+            "/loops/issue-loop",
+            "Issues",
+            "_SECTION_ICON_ISSUES",
             vec![
                 v("live", "Live").refreshing(),
                 v("tasks", "Tasks").refreshing().lazy(),
