@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub const LOOP_SIGNATURE: &str = "<sub>— posted by loopx</sub>";
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ThreadStatus {
     New,
     Working,
@@ -61,11 +62,8 @@ impl IssueThreads {
 
     pub fn save(&self, alias: &str, issue_iid: i64, root: Option<&Path>) -> io::Result<()> {
         let path = path_for(alias, issue_iid, root);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
-        std::fs::write(path, json)
+        crate::file_lock::write_atomic(&path, json.as_bytes())
     }
 }
 
@@ -96,6 +94,17 @@ mod tests {
         t.save("p", 7, r).unwrap();
         assert!(root.path().join("p/mr-threads/7.json").exists());
         assert_eq!(IssueThreads::load("p", 7, r), t);
+        let raw = std::fs::read_to_string(root.path().join("p/mr-threads/7.json")).unwrap();
+        assert!(raw.contains("\"waiting_on_reviewer\""));
+        t.threads.get_mut("abc").unwrap().status = ThreadStatus::NeedsYou;
+        t.save("p", 7, r).unwrap();
+        let raw = std::fs::read_to_string(root.path().join("p/mr-threads/7.json")).unwrap();
+        assert!(raw.contains("\"needs_you\""));
+        assert_eq!(IssueThreads::load("p", 7, r), t);
+        let files: Vec<_> = std::fs::read_dir(root.path().join("p/mr-threads"))
+            .unwrap()
+            .collect();
+        assert_eq!(files.len(), 1, "no temp file left behind");
 
         std::fs::write(root.path().join("p/mr-threads/7.json"), "{not json").unwrap();
         assert_eq!(IssueThreads::load("p", 7, r), IssueThreads::default());
