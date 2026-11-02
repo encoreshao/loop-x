@@ -728,14 +728,9 @@ impl Round<'_> {
         let name = choice.name();
         match choice {
             UserChoice::Dismiss => {
-                // Everything in the thread so far counts as seen; only a newer
-                // human note brings it back. GitLab is asked on a best-effort
-                // basis: the decision stands without it.
-                let latest = self
-                    .open_thread(id)
-                    .map(|(_, d)| max_note_id(discussion_notes(&d)))
-                    .unwrap_or(0);
-                self.settle(&mut state, id, ThreadStatus::Decided, latest);
+                // Only what the user was shown counts as seen: a note that
+                // arrived while the thread waited on them reopens it next round.
+                self.settle(&mut state, id, ThreadStatus::Decided, t.last_note_id);
             }
             UserChoice::Instructions(text) => {
                 let text = text.trim();
@@ -752,13 +747,20 @@ impl Round<'_> {
             UserChoice::EditReply(text) => {
                 let body = safe_reply_body(&text)?;
                 let (mr, d) = self.open_mr_thread(&mut state, id)?;
+                if crate::mr_precheck::is_resolved(discussion_notes(&d)) {
+                    self.settle(&mut state, id, ThreadStatus::Resolved, t.last_note_id);
+                    return Err("the thread was resolved on GitLab; nothing was posted".into());
+                }
                 let note = self.deps.gitlab.reply(mr, id, &body)?;
                 let posted = note.get("id").and_then(Value::as_i64);
                 if let Some(n) = posted {
                     state.ledger.insert(n);
                 }
-                let latest = max_note_id(discussion_notes(&d)).max(posted.unwrap_or(0));
-                self.settle(&mut state, id, ThreadStatus::Answered, latest);
+                // `last_note_id` stays at what the user was shown, not the new
+                // note's id: note ids only grow, so moving it there would mark
+                // a reviewer note that arrived meanwhile as seen. The loop's
+                // own note is skipped through the ledger.
+                self.settle(&mut state, id, ThreadStatus::Answered, t.last_note_id);
                 self.emit(
                     "mr_feedback.replied",
                     json!({"discussion_id": id, "note_id": posted, "action": "user_reply"}),
@@ -817,6 +819,17 @@ impl Round<'_> {
     fn approve(&self, state: &mut IssueThreads, id: &str, t: &ThreadState) -> Result<(), String> {
         let plan = approvable_plan(t)?;
         let (mr, d) = self.open_mr_thread(state, id)?;
+        if crate::mr_precheck::is_resolved(discussion_notes(&d)) {
+            self.finish(
+                state,
+                id,
+                ThreadStatus::Resolved,
+                None,
+                None,
+                t.last_note_id,
+            );
+            return Err("the thread was resolved on GitLab; nothing was done".into());
+        }
         let notes: Vec<Value> = discussion_notes(&d)
             .iter()
             .filter(|n| !n.get("system").and_then(Value::as_bool).unwrap_or(false))
@@ -3523,11 +3536,9 @@ mod tests {
     fn dismiss_posts_nothing_and_waits_for_a_newer_note() {
         let h = H::new();
         h.needs_you_with("change_code");
-        // A note arrived after the plan; dismissing covers it too.
-        h.add_note(2, "ping");
         h.decide(UserChoice::Dismiss).unwrap();
         let t = h.thread();
-        assert_eq!((t.status, t.last_note_id), (ThreadStatus::Decided, 2));
+        assert_eq!((t.status, t.last_note_id), (ThreadStatus::Decided, 1));
         assert!(h.log.borrow().replies.is_empty());
         assert_eq!(h.run(), RoundOutcome::Skipped);
         // A newer human note brings it back to the planner.
@@ -3538,6 +3549,52 @@ mod tests {
             RoundOutcome::Processed { needs_you: 1, .. }
         ));
         assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+    }
+
+    #[test]
+    fn a_note_the_user_never_saw_reopens_the_thread_after_dismiss_or_their_reply() {
+        for choice in [
+            UserChoice::Dismiss,
+            UserChoice::EditReply("We keep x.".into()),
+        ] {
+            let h = H::new();
+            h.needs_you_with("change_code");
+            // The reviewer wrote again while the thread waited on the user.
+            h.add_note(2, "actually, also rename y");
+            h.decide(choice.clone()).unwrap();
+            let t = h.thread();
+            assert!(t.last_note_id < 2, "{choice:?}: note 2 must stay unseen");
+            // The next round picks note 2 up.
+            h.plans.borrow_mut().push_back(plan("wait", 90));
+            assert!(
+                matches!(h.run(), RoundOutcome::Processed { .. }),
+                "{choice:?}"
+            );
+            assert_eq!(h.log.borrow().calls.len(), 1, "{choice:?}: planned again");
+            assert_eq!(h.thread().status, ThreadStatus::WaitingOnReviewer);
+        }
+    }
+
+    #[test]
+    fn approving_a_thread_resolved_on_gitlab_posts_nothing_and_resolves_it() {
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        h.discussions.borrow_mut()[0]["notes"][0]["resolved"] = json!(true);
+        let err = h.decide(UserChoice::Approve).unwrap_err();
+        assert!(err.contains("resolved"), "{err}");
+        let log = h.log.borrow();
+        assert!(log.replies.is_empty() && log.calls.is_empty() && log.pushes.is_empty());
+        drop(log);
+        assert_eq!(h.thread().status, ThreadStatus::Resolved);
+
+        // The user's own reply is not posted on a resolved thread either.
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        h.discussions.borrow_mut()[0]["notes"][0]["resolved"] = json!(true);
+        let err = h.decide(UserChoice::EditReply("Done.".into())).unwrap_err();
+        assert!(err.contains("resolved"), "{err}");
+        assert!(h.log.borrow().replies.is_empty());
+        assert_eq!(h.thread().status, ThreadStatus::Resolved);
     }
 
     #[test]

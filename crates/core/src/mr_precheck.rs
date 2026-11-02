@@ -38,6 +38,15 @@ pub(crate) fn is_human(n: &Value, state: &IssueThreads) -> bool {
         .contains(LOOP_SIGNATURE)
 }
 
+/// A discussion whose resolvable notes are all resolved (system notes aside).
+pub(crate) fn is_resolved(notes: &[Value]) -> bool {
+    let resolvable: Vec<&Value> = notes
+        .iter()
+        .filter(|n| !flag(n, "system") && flag(n, "resolvable"))
+        .collect();
+    !resolvable.is_empty() && resolvable.iter().all(|n| flag(n, "resolved"))
+}
+
 pub fn actionable_threads(discussions: &[Value], state: &IssueThreads) -> Vec<Actionable> {
     let mut out = Vec::new();
     for d in discussions {
@@ -49,8 +58,7 @@ pub fn actionable_threads(discussions: &[Value], state: &IssueThreads) -> Vec<Ac
             .and_then(Value::as_array)
             .map(|a| a.iter().filter(|n| !flag(n, "system")).cloned().collect())
             .unwrap_or_default();
-        let resolvable: Vec<&Value> = notes.iter().filter(|n| flag(n, "resolvable")).collect();
-        if !resolvable.is_empty() && resolvable.iter().all(|n| flag(n, "resolved")) {
+        if is_resolved(&notes) {
             continue;
         }
         let entry = state.threads.get(id);
