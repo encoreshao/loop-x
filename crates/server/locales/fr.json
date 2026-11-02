@@ -1395,5 +1395,11 @@
   "{n}% used": "{n} % utilisé",
   "Could not read the Claude account": "Impossible de lire le compte Claude",
   "Not signed in. Open Terminal and run {cmd}; scheduled runs fail until then.": "Non connecté. Ouvrez le Terminal et lancez {cmd} ; les exécutions planifiées échouent d'ici là.",
-  "Usage unavailable: {reason}": "Utilisation indisponible : {reason}"
+  "Usage unavailable: {reason}": "Utilisation indisponible : {reason}",
+  "Claude accounts": "Comptes Claude",
+  "No other accounts yet.": "Aucun autre compte pour l'instant.",
+  "Switch accounts automatically": "Changer de compte automatiquement",
+  "Config folder": "Dossier de configuration",
+  "Add account": "Ajouter un compte",
+  "When a run reaches its usage limit, continue it on another signed-in account instead of pausing, with a short note about where it stopped. A loop pinned to its own account never switches. Add each other account by the config folder you signed it in with (its CLAUDE_CONFIG_DIR); the folder needs a .credentials.json so its usage can be read.": "Quand une exécution atteint sa limite d'utilisation, la poursuivre sur un autre compte connecté au lieu de la mettre en pause, avec une courte note indiquant où elle s'est arrêtée. Une boucle liée à son propre compte ne change jamais de compte. Ajoutez chaque autre compte par le dossier de configuration avec lequel vous l'avez connecté (son CLAUDE_CONFIG_DIR) ; ce dossier doit contenir un .credentials.json pour que son utilisation puisse être lue."
 }

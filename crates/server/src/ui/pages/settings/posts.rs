@@ -38,6 +38,9 @@ pub fn register(r: &mut Registry) {
     r.post("/ai-cli", ai_cli);
     r.post("/ai-cli/usage-pause", ai_cli_usage_pause);
     r.post("/ai-cli/concurrency", ai_cli_concurrency);
+    r.post("/ai-cli/auto-switch", ai_cli_auto_switch);
+    r.post("/ai-cli/accounts/add", ai_cli_account_add);
+    r.post("/ai-cli/accounts/remove", ai_cli_account_remove);
     r.post("/instructions", instructions);
     r.post("/topic-monitor/topics", topic_save);
     r.post("/topic-monitor/topics/:name/delete", topic_delete);
@@ -437,6 +440,37 @@ fn ai_cli_usage_pause(ctx: &UiCtx) -> UiResponse {
     )
 }
 
+fn ai_cli_auto_switch(ctx: &UiCtx) -> UiResponse {
+    // A checkbox is only sent when it is ticked.
+    let on = ctx.form().first("enabled").is_some();
+    result(
+        ai_cli_config::set_auto_switch_accounts(on, &ctx.state.ai_cli_config_path()),
+        "/settings?tab=ai-cli",
+    )
+}
+
+fn ai_cli_account_add(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    result(
+        ai_cli_config::add_claude_account(
+            form.first("name").unwrap_or(""),
+            form.first("config_dir").unwrap_or(""),
+            &ctx.state.ai_cli_config_path(),
+        ),
+        "/settings?tab=ai-cli",
+    )
+}
+
+fn ai_cli_account_remove(ctx: &UiCtx) -> UiResponse {
+    result(
+        ai_cli_config::remove_claude_account(
+            ctx.form().first("name").unwrap_or(""),
+            &ctx.state.ai_cli_config_path(),
+        ),
+        "/settings?tab=ai-cli",
+    )
+}
+
 fn ai_cli_concurrency(ctx: &UiCtx) -> UiResponse {
     use loopx_core::concurrency_config::{save, Limits};
     const BACK: &str = "/settings?tab=ai-cli";
@@ -588,6 +622,63 @@ mod tests {
         let cfg: Value =
             serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
         assert_eq!(cfg, json!({"cli": "claude"}));
+    }
+
+    #[test]
+    fn the_ai_cli_tab_manages_the_claude_accounts_and_auto_switching() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
+        let cfg = || -> Value {
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap()
+        };
+        // Every route is CSRF-checked.
+        for url in ["/ai-cli/auto-switch", "/ai-cli/accounts/add", "/ai-cli/accounts/remove"] {
+            assert_eq!(post(&st, url, "name=work&config_dir=%2Fa&enabled=on").status, 403, "{url}");
+        }
+        let add = "csrf_token=tok&name=work&config_dir=%7E%2F.claude-work";
+        assert_eq!(post(&st, "/ai-cli/accounts/add", add).status, 303);
+        assert_eq!(
+            cfg()["claude_accounts"],
+            json!([{"name": "work", "config_dir": "~/.claude-work"}])
+        );
+        assert_eq!(post(&st, "/ai-cli/auto-switch", "csrf_token=tok&enabled=on").status, 303);
+        assert_eq!(cfg()["auto_switch_accounts"], json!(true));
+        assert_eq!(post(&st, "/ai-cli/auto-switch", "csrf_token=tok").status, 303);
+        assert!(cfg().get("auto_switch_accounts").is_none());
+        assert_eq!(post(&st, "/ai-cli/accounts/remove", "csrf_token=tok&name=work").status, 303);
+        assert!(cfg().get("claude_accounts").is_none());
+    }
+
+    #[test]
+    fn the_ai_cli_tab_lists_the_claude_accounts_only_while_claude_is_selected() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        let page = |st: &UiState| {
+            st.registry.dispatch(st, &UiRequest::get("/settings?tab=ai-cli")).unwrap().body_text()
+        };
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "claude"}"#).unwrap();
+        let empty = page(&st);
+        assert!(empty.contains("Claude accounts"), "{empty}");
+        assert!(empty.contains("action='/ai-cli/accounts/add'"), "{empty}");
+        assert!(empty.contains("No other accounts yet."), "{empty}");
+        assert!(!empty.contains("name='enabled' checked"), "{empty}");
+
+        std::fs::write(
+            d.path().join("ai_cli.json"),
+            r#"{"cli": "claude", "auto_switch_accounts": true,
+                "claude_accounts": [{"name": "a&b", "config_dir": "~/.claude-work"}]}"#,
+        )
+        .unwrap();
+        let full = page(&st);
+        assert!(full.contains("action='/ai-cli/auto-switch'"), "{full}");
+        assert!(full.contains("name='enabled' checked"), "{full}");
+        assert!(full.contains("a&amp;b") && full.contains("~/.claude-work"), "{full}");
+        assert!(full.contains("action='/ai-cli/accounts/remove'"), "{full}");
+        assert!(!full.contains("No other accounts yet."), "{full}");
+
+        std::fs::write(d.path().join("ai_cli.json"), r#"{"cli": "codex"}"#).unwrap();
+        assert!(!page(&st).contains("action='/ai-cli/accounts/add'"));
     }
 
     #[test]

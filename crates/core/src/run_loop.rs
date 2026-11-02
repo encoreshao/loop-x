@@ -4,6 +4,7 @@
 //! loop's entry point (`loopx _entry ...`) under its timeout in a login shell so
 //! the user's PATH and `claude` auth are available.
 
+use crate::account_switch;
 use crate::ai_cli_safety::{self, CallSite};
 use crate::config::default_config_path as projects_config_path;
 use crate::events::EventFields;
@@ -42,7 +43,13 @@ pub struct RunLoopOpts {
     /// Reads the Claude subscription's usage windows before a scheduled run,
     /// when the user set a pause threshold.
     pub usage_probe: Option<quota::UsageProbe>,
+    /// Reads one account's usage when a run that hit its limit looks for
+    /// another account to continue on.
+    pub account_usage: Option<AccountUsageProbe>,
 }
+
+/// A seam: tests pass canned usage per account.
+pub type AccountUsageProbe = fn(&account_switch::Account) -> Result<Vec<quota::Window>, String>;
 
 impl RunLoopOpts {
     pub fn real() -> Self {
@@ -56,6 +63,7 @@ impl RunLoopOpts {
                 && (Path::new("/bin/zsh").exists() || Path::new("/usr/bin/zsh").exists()),
             caffeinate: Some(PathBuf::from("/usr/bin/caffeinate")).filter(|p| p.exists()),
             usage_probe: Some(quota::live_claude_usage),
+            account_usage: Some(account_switch::live_usage),
         }
     }
 }
@@ -250,11 +258,11 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
     let status_path = loop_scheduler::status_path_for_loop(loop_name, Some(&opts.root));
     let previous = status::read_status(&status_path);
     // Where this run's output starts in the day's (shared) log.
-    let log_start = std::fs::metadata(&log_path).map_or(0, |m| m.len());
+    let log_start = std::cell::Cell::new(std::fs::metadata(&log_path).map_or(0, |m| m.len()));
     let events_dir = None::<&Path>;
     let fail = |exit: i32| {
         let failures = repeated_failures(&previous, exit) + 1;
-        let output = run_output(&log_path, log_start);
+        let output = run_output(&log_path, log_start.get());
         if let Some(until) = (!own_account).then(|| limit_pause(&output)).flatten() {
             append_unified_log(
                 &format!(
@@ -391,32 +399,93 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         }
         _ => Vec::new(),
     };
-    let mut command = if opts.login_shell {
-        let mut c = Command::new("zsh");
-        c.args(["-i", "-l", "-c", "exec \"$@\"", "zsh", "/usr/bin/env"])
-            .args(&account)
-            .arg(&opts.exe)
-            .args(&args);
-        c
-    } else {
-        let mut c = Command::new("/usr/bin/env");
-        c.args(&account).arg(&opts.exe).args(&args);
-        c
-    };
-    command.current_dir(&opts.root);
-    command.stdin(Stdio::null());
-    match (log_file.try_clone(), log_file.try_clone()) {
-        (Ok(out), Ok(err)) => {
-            command.stdout(out).stderr(err);
+    // A run that hits its usage limit continues on another signed-in account,
+    // at most once per account, with a handoff note instead of its old session.
+    let mut switched: Vec<String> = Vec::new();
+    let mut tried = vec![account_switch::Account {
+        name: "Default".into(),
+        config_dir: None,
+    }];
+    let exit = loop {
+        let env_args = if switched.is_empty() {
+            &account
+        } else {
+            &switched
+        };
+        let mut command = if opts.login_shell {
+            let mut c = Command::new("zsh");
+            c.args(["-i", "-l", "-c", "exec \"$@\"", "zsh", "/usr/bin/env"])
+                .args(env_args)
+                .arg(&opts.exe)
+                .args(&args);
+            c
+        } else {
+            let mut c = Command::new("/usr/bin/env");
+            c.args(env_args).arg(&opts.exe).args(&args);
+            c
+        };
+        command.current_dir(&opts.root);
+        command.stdin(Stdio::null());
+        match (log_file.try_clone(), log_file.try_clone()) {
+            (Ok(out), Ok(err)) => {
+                command.stdout(out).stderr(err);
+            }
+            _ => return fail(1),
         }
-        _ => return fail(1),
-    }
-    let exit = match run_with_timeout(&mut command, entry.timeout_seconds) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("loopx: could not start the loop: {e}");
-            1
+        let exit = match run_with_timeout(&mut command, entry.timeout_seconds) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("loopx: could not start the loop: {e}");
+                1
+            }
+        };
+        if exit == 0 || own_account || cli != "claude" {
+            break exit;
         }
+        let output = run_output(&log_path, log_start.get());
+        let Some(next) = switch_target(opts, &output, &tried) else {
+            break exit;
+        };
+        let note_path = opts
+            .root
+            .join("outputs")
+            .join("handoffs")
+            .join(&run_id)
+            .join("account-switch.md");
+        let from = tried.last().cloned().unwrap_or_else(|| tried[0].clone());
+        let note = account_switch::handoff_note(&account_switch::Handoff {
+            loop_name,
+            run_id: &run_id,
+            from: &from,
+            to: &next,
+            log_tail: &output,
+            log_path: &log_path,
+        });
+        if let Some(dir) = note_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(&note_path, note) {
+            eprintln!("loopx: could not write the account handoff note: {e}");
+            break exit;
+        }
+        let Some(dir) = &next.config_dir else {
+            break exit;
+        };
+        append_unified_log(
+            &format!(
+                "[{}] ---- {loop_name} ---- account `{}` hit its usage limit; continuing on `{}` ----",
+                stamp(),
+                from.name,
+                next.name
+            ),
+            &unified,
+        );
+        log_start.set(std::fs::metadata(&log_path).map_or(0, |m| m.len()));
+        switched = vec![
+            format!("CLAUDE_CONFIG_DIR={}", dir.display()),
+            format!("LOOPX_HANDOFF_NOTE={}", note_path.display()),
+        ];
+        tried.push(next);
     };
     if exit != 0 {
         return fail(exit);
@@ -430,6 +499,34 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         &unified,
     );
     0
+}
+
+/// The account a run that just ended on `output` should continue on, when auto
+/// switching is on, the output says its account hit the limit, and another
+/// untried account has room under the pause threshold (90% when none is set).
+fn switch_target(
+    opts: &RunLoopOpts,
+    output: &str,
+    tried: &[account_switch::Account],
+) -> Option<account_switch::Account> {
+    if !quota::limit_hit(output) {
+        return None;
+    }
+    let config = ai_cli_config::load_config(&ai_cli_config::default_config_path());
+    if config.get("auto_switch_accounts") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let probe = opts.account_usage?;
+    let threshold = quota::pause_threshold(&config).unwrap_or(90.0);
+    let candidates: Vec<_> = account_switch::accounts(&config)
+        .into_iter()
+        .filter(|a| a.config_dir.is_some() && !tried.contains(a))
+        .map(|a| {
+            let usage = probe(&a);
+            (a, usage)
+        })
+        .collect();
+    account_switch::pick_next(&candidates, threshold).cloned()
 }
 
 /// "14:30" (local) for a pause's end.
@@ -760,6 +857,7 @@ mod tests {
             login_shell: false,
             caffeinate: None,
             usage_probe: None,
+            account_usage: None,
         }
     }
 
@@ -852,6 +950,121 @@ mod tests {
         // Only CODEX_HOME is ours to set; CLAUDE_CONFIG_DIR is whatever we inherited.
         let seen = std::fs::read_to_string(&seen).unwrap();
         assert!(seen.trim().ends_with("|/srv/codex-bot"), "{seen}");
+    }
+
+    fn usage_of_the_work_account(
+        a: &account_switch::Account,
+    ) -> Result<Vec<crate::quota::Window>, String> {
+        assert!(a.config_dir.is_some(), "the full account is never probed");
+        usage_40()
+    }
+
+    #[test]
+    fn a_run_that_hits_the_limit_continues_on_the_next_account_with_a_handoff_note() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        let work = d.path().join("work");
+        std::fs::write(
+            d.path().join("ai_cli.json"),
+            format!(
+                r#"{{"cli": "claude", "pause_above_percent": 90, "auto_switch_accounts": true,
+                    "claude_accounts": [{{"name": "work", "config_dir": "{}"}}]}}"#,
+                work.display()
+            ),
+        )
+        .unwrap();
+        let seen = d.path().join("seen");
+        let mut o = opts(
+            d.path(),
+            fake_exe(
+                d.path(),
+                &format!(
+                    "if [ -z \"$CLAUDE_CONFIG_DIR\" ]; then echo 'Claude AI usage limit reached'; exit 1; fi\n\
+                     echo \"$CLAUDE_CONFIG_DIR|$LOOPX_HANDOFF_NOTE\" > {}",
+                    seen.display()
+                ),
+            ),
+        );
+        o.account_usage = Some(usage_of_the_work_account);
+        let code = with_env(d.path(), || {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+            with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
+        });
+        assert_eq!(code, 0);
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let (dir, note) = seen.trim().split_once('|').unwrap();
+        assert_eq!(dir, work.display().to_string());
+        let note = std::fs::read_to_string(note).unwrap();
+        assert!(note.contains("Account switch handoff"), "{note}");
+        assert!(note.contains("usage limit reached"), "{note}");
+        assert!(!d.path().join("quota_pause.json").exists());
+    }
+
+    fn usage_95(_: &account_switch::Account) -> Result<Vec<crate::quota::Window>, String> {
+        Ok(vec![crate::quota::Window {
+            label: "5-hour",
+            used_percent: 95.0,
+            resets_at: None,
+        }])
+    }
+
+    fn switching_setup(d: &Path) -> PathBuf {
+        setup(d, false, 30);
+        let work = d.join("work");
+        std::fs::write(
+            d.join("ai_cli.json"),
+            format!(
+                r#"{{"cli": "claude", "auto_switch_accounts": true,
+                    "claude_accounts": [{{"name": "work", "config_dir": "{}"}}]}}"#,
+                work.display()
+            ),
+        )
+        .unwrap();
+        work
+    }
+
+    #[test]
+    fn when_every_other_account_is_full_the_run_ends_and_pauses_as_before() {
+        let d = tempfile::tempdir().unwrap();
+        switching_setup(d.path());
+        let mut o = opts(
+            d.path(),
+            fake_exe(d.path(), "echo 'Claude AI usage limit reached'; exit 1"),
+        );
+        o.account_usage = Some(usage_95);
+        let code = with_env(d.path(), || {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+            with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
+        });
+        assert_eq!(code, 1);
+        assert!(d.path().join("quota_pause.json").exists());
+        assert!(!d.path().join("outputs/handoffs").exists());
+    }
+
+    #[test]
+    fn a_second_account_that_also_hits_the_limit_is_not_switched_back_to_or_retried() {
+        let d = tempfile::tempdir().unwrap();
+        switching_setup(d.path());
+        let runs = d.path().join("runs");
+        let mut o = opts(
+            d.path(),
+            fake_exe(
+                d.path(),
+                &format!(
+                    "echo run >> {}; echo 'Claude AI usage limit reached'; exit 1",
+                    runs.display()
+                ),
+            ),
+        );
+        o.account_usage = Some(usage_of_the_work_account);
+        let code = with_env(d.path(), || {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+            with_reason("scheduled", || run_loop_now(&o, "issue-loop", &[]))
+        });
+        assert_eq!(code, 1);
+        // Once on the default account, once on `work`, then it stops.
+        assert_eq!(std::fs::read_to_string(&runs).unwrap().lines().count(), 2);
+        assert!(d.path().join("quota_pause.json").exists());
     }
 
     #[test]

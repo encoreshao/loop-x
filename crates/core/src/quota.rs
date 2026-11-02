@@ -180,6 +180,20 @@ pub fn fetch_claude_usage(
     Ok(windows)
 }
 
+/// The usage of the account whose config folder is `dir`, from the token in its
+/// `.credentials.json`.
+pub fn claude_usage_for_dir(
+    client: &dyn HttpClient,
+    url: &str,
+    dir: &Path,
+) -> Result<Vec<Window>, String> {
+    let path = dir.join(".credentials.json");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| format!("no sign-in found in {}", path.display()))?;
+    let token = oauth_token(&text).ok_or_else(|| format!("no token in {}", path.display()))?;
+    fetch_claude_usage(client, url, &token)
+}
+
 /// The live probe: Claude Code's own token against [`USAGE_URL`].
 pub fn live_claude_usage() -> Result<Vec<Window>, String> {
     let token = claude_credentials()
@@ -370,6 +384,28 @@ mod tests {
         drop(calls);
         let empty = crate::connectors::testutil::FakeHttp::new(|_| Ok(json!({})));
         assert!(fetch_claude_usage(empty.as_ref(), "https://usage.test/x", "tok").is_err());
+    }
+
+    #[test]
+    fn reads_an_accounts_usage_with_the_token_in_its_own_folder() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join(".credentials.json"),
+            r#"{"claudeAiOauth": {"accessToken": "tok-b"}}"#,
+        )
+        .unwrap();
+        let http = crate::connectors::testutil::FakeHttp::new(|_| {
+            Ok(json!({"five_hour": {"utilization": 7}}))
+        });
+        let w = claude_usage_for_dir(http.as_ref(), "https://usage.test/x", d.path()).unwrap();
+        assert_eq!(w[0].used_percent, 7.0);
+        assert_eq!(
+            http.calls.lock().unwrap()[0].token.as_deref(),
+            Some("tok-b")
+        );
+        let empty = tempfile::tempdir().unwrap();
+        let err = claude_usage_for_dir(http.as_ref(), "https://usage.test/x", empty.path());
+        assert!(err.unwrap_err().contains(".credentials.json"));
     }
 
     #[test]

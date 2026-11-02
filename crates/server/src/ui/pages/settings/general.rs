@@ -270,10 +270,67 @@ fn ai_cli_panel(ctx: &UiCtx, csrf: &str, current: &str) -> String {
     scope.set("html.escape(cli_labels[current_cli])", pyfmt::escape(&current_label));
     let panel = render("settings_ai_cli_panel", &scope);
     if current == "claude" {
-        format!("<div class='grid'>{panel}{}</div>", super::claude_account::card(ctx))
+        format!(
+            "<div class='grid'>{panel}{}{}</div>",
+            super::claude_account::card(ctx),
+            claude_accounts_card(ctx, csrf)
+        )
     } else {
         panel
     }
+}
+
+/// "Claude accounts": the extra signed-in accounts a run can move to when the
+/// one it is on reaches its usage limit, and the switch that turns that on.
+fn claude_accounts_card(ctx: &UiCtx, csrf: &str) -> String {
+    let config = ai_cli_config::load_config(&ctx.state.ai_cli_config_path());
+    let on = config.get("auto_switch_accounts") == Some(&serde_json::Value::Bool(true));
+    let rows: String = config
+        .get("claude_accounts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|a| {
+            let text = |key: &str| a.get(key).and_then(Value::as_str).unwrap_or("");
+            let name = text("name");
+            format!(
+                "<li class='account-row'><span><strong>{}</strong> <code>{}</code></span>\
+<form method='post' action='/ai-cli/accounts/remove' class='daemon-action-form'>{csrf}\
+<input type='hidden' name='name' value='{}'>\
+<button type='submit' class='btn btn-neutral'>{}</button></form></li>",
+                pyfmt::escape(name),
+                pyfmt::escape(text("config_dir")),
+                pyfmt::escape(name),
+                pyfmt::escape(&ctx.t("Remove")),
+            )
+        })
+        .collect();
+    let list = if rows.is_empty() {
+        format!("<p class='section-subtitle'>{}</p>", pyfmt::escape(&ctx.t("No other accounts yet.")))
+    } else {
+        format!("<ul class='account-list'>{rows}</ul>")
+    };
+    format!(
+        "<section class='card'><div class='section-header'>{icon}<h2>{title}</h2></div>\
+<p class='section-subtitle'>{subtitle}</p>\
+<form method='post' action='/ai-cli/auto-switch' class='daemon-action-form single-field'>{csrf}\
+<label><input type='checkbox' name='enabled'{checked}> {switch}</label>\
+<button type='submit' class='btn btn-neutral'>{save}</button></form>\
+{list}\
+<form method='post' action='/ai-cli/accounts/add' class='daemon-action-form'>{csrf}\
+<label>{name}<input type='text' name='name' required></label>\
+<label>{folder}<input type='text' name='config_dir' placeholder='~/.claude-work' required></label>\
+<button type='submit' class='btn btn-neutral'>{add}</button></form></section>",
+        icon = consts::ds("_SECTION_ICON_AI_CLI"),
+        title = pyfmt::escape(&ctx.t("Claude accounts")),
+        subtitle = pyfmt::escape(&ctx.t("When a run reaches its usage limit, continue it on another signed-in account instead of pausing, with a short note about where it stopped. A loop pinned to its own account never switches. Add each other account by the config folder you signed it in with (its CLAUDE_CONFIG_DIR); the folder needs a .credentials.json so its usage can be read.")),
+        checked = if on { " checked" } else { "" },
+        switch = pyfmt::escape(&ctx.t("Switch accounts automatically")),
+        save = pyfmt::escape(&ctx.t("Save")),
+        name = pyfmt::escape(&ctx.t("Name")),
+        folder = pyfmt::escape(&ctx.t("Config folder")),
+        add = pyfmt::escape(&ctx.t("Add account")),
+    )
 }
 
 /// "Pause scheduled runs above N% of the subscription's usage", and the pause in

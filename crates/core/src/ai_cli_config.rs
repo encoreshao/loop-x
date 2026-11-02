@@ -105,6 +105,68 @@ pub fn set_pause_above_percent(percent: Option<i64>, path: &Path) -> Result<Stri
     }
 }
 
+/// Turns moving a run to another Claude account at its usage limit on or off.
+pub fn set_auto_switch_accounts(on: bool, path: &Path) -> Result<String, String> {
+    update_config(path, "auto_switch_accounts", on.then(|| json!(true)))?;
+    Ok(if on {
+        "Runs move to another Claude account when one reaches its usage limit".into()
+    } else {
+        "Runs no longer move to another Claude account".into()
+    })
+}
+
+fn registered_accounts(config: &serde_json::Map<String, Value>) -> Vec<Value> {
+    config
+        .get("claude_accounts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn store_accounts(path: &Path, accounts: Vec<Value>) -> Result<(), String> {
+    let value = (!accounts.is_empty()).then(|| Value::Array(accounts));
+    update_config(path, "claude_accounts", value)
+}
+
+/// Registers another signed-in Claude account (its `CLAUDE_CONFIG_DIR`).
+pub fn add_claude_account(name: &str, config_dir: &str, path: &Path) -> Result<String, String> {
+    let (name, dir) = (name.trim(), config_dir.trim());
+    if name.is_empty() {
+        return Err("Give the account a name".into());
+    }
+    if name.eq_ignore_ascii_case("default") {
+        return Err(
+            "\"Default\" is the account Claude Code already uses; pick another name".into(),
+        );
+    }
+    if !(dir.starts_with('/') || dir.starts_with("~/")) {
+        return Err("The config folder must be an absolute path or start with ~/".into());
+    }
+    let mut accounts = registered_accounts(&load_config(path));
+    let text = |a: &Value, key: &str| a.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    if accounts.iter().any(|a| text(a, "name") == name) {
+        return Err(format!("There is already an account named {name}"));
+    }
+    if accounts.iter().any(|a| text(a, "config_dir") == dir) {
+        return Err("That config folder is already registered".into());
+    }
+    accounts.push(json!({"name": name, "config_dir": dir}));
+    store_accounts(path, accounts)?;
+    Ok(format!("Added the Claude account {name}"))
+}
+
+/// Forgets a registered account; the folder itself is left alone.
+pub fn remove_claude_account(name: &str, path: &Path) -> Result<String, String> {
+    let mut accounts = registered_accounts(&load_config(path));
+    let before = accounts.len();
+    accounts.retain(|a| a.get("name").and_then(Value::as_str) != Some(name));
+    if accounts.len() == before {
+        return Err(format!("No account named {name}"));
+    }
+    store_accounts(path, accounts)?;
+    Ok(format!("Removed the Claude account {name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +276,63 @@ mod tests {
             "Unknown AI CLI: gpt5"
         );
         assert!(!p.exists());
+    }
+
+    fn read(path: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn auto_switch_is_stored_as_a_flag_and_removed_when_off() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), r#"{"cli": "claude"}"#);
+        set_auto_switch_accounts(true, &p).unwrap();
+        assert_eq!(
+            read(&p),
+            json!({"cli": "claude", "auto_switch_accounts": true})
+        );
+        set_auto_switch_accounts(false, &p).unwrap();
+        assert_eq!(read(&p), json!({"cli": "claude"}));
+    }
+
+    #[test]
+    fn accounts_are_added_in_order_and_removed_by_name() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), r#"{"cli": "claude"}"#);
+        add_claude_account("work", "~/.claude-work", &p).unwrap();
+        add_claude_account("  side ", " /srv/claude-side ", &p).unwrap();
+        assert_eq!(
+            read(&p)["claude_accounts"],
+            json!([
+                {"name": "work", "config_dir": "~/.claude-work"},
+                {"name": "side", "config_dir": "/srv/claude-side"}
+            ])
+        );
+        remove_claude_account("work", &p).unwrap();
+        assert_eq!(
+            read(&p)["claude_accounts"],
+            json!([{"name": "side", "config_dir": "/srv/claude-side"}])
+        );
+        remove_claude_account("side", &p).unwrap();
+        assert!(read(&p).get("claude_accounts").is_none());
+        assert!(remove_claude_account("side", &p).is_err());
+    }
+
+    #[test]
+    fn a_bad_account_is_refused_and_nothing_is_written() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), r#"{"cli": "claude"}"#);
+        add_claude_account("work", "/srv/a", &p).unwrap();
+        for (name, dir) in [
+            ("", "/srv/b"),
+            ("Default", "/srv/b"),
+            ("work", "/srv/b"),
+            ("other", ""),
+            ("other", "relative/dir"),
+            ("other", "/srv/a"),
+        ] {
+            assert!(add_claude_account(name, dir, &p).is_err(), "{name} {dir}");
+        }
+        assert_eq!(read(&p)["claude_accounts"].as_array().unwrap().len(), 1);
     }
 }

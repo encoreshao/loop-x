@@ -1,5 +1,6 @@
 //! Shared logic for LoopX: config, contracts, and helpers used by the CLI and server.
 
+pub mod account_switch;
 pub mod agent_activity;
 pub mod agents;
 pub mod ai_cli_config;
