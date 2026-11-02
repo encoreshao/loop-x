@@ -186,22 +186,15 @@ pub fn assigned_issues(tracker: &dyn IssueTracker, user: &str) -> PResult<Vec<Va
 }
 
 /// The open change request from the loop's `loop/issue-<n>` branch, as
-/// `{iid, web_url, notes}`, or `None` when there is none.
+/// `{iid, web_url}`, or `None` when there is none.
 pub fn loop_mr(code: &dyn CodeHost, n: u64) -> PResult<Option<Value>> {
     let branch = crate::worktree::branch_name(&n.to_string());
     let Some(cr) = code.find_by_source_branch(&branch, Some(CrState::Open))? else {
         return Ok(None);
     };
-    let mut notes: Vec<Value> = code
-        .cr_comments(cr.number)?
-        .iter()
-        .map(|c| comment_json(c, true))
-        .collect();
-    notes.sort_by_key(|n| n["id"].as_i64().unwrap_or(0));
     Ok(Some(json!({
         "iid": cr.number,
         "web_url": cr.web_url,
-        "notes": notes,
     })))
 }
 
@@ -283,7 +276,7 @@ fn number(args: &[String], i: usize, command: &str) -> Result<u64, String> {
 
 /// `loopx gitlab <command> <alias> <args...>` for a hosted alias, in the
 /// GitLab JSON shape the agent already reads. `args` are what follows the
-/// alias. `sync-issue` returns the fresh issue (with `notes` and `loop_mr`);
+/// alias. `sync-issue` returns the fresh issue (with `notes` and `loop_mr`'s iid and URL);
 /// the caller merges it into the local cache.
 pub fn helper(
     r: &Resolved,
@@ -304,8 +297,8 @@ pub fn helper(
             let n = number(args, 0, command)?;
             let mut issue = issue_with_notes(r.tracker.as_ref(), n).map_err(err)?;
             if command == "sync-issue" {
-                // Review comments on the loop's own change request reach the
-                // agent with the issue's; a failed lookup never fails the sync.
+                // The loop's own change request (iid, URL); its review comments
+                // belong to the MR-feedback round. A failed lookup never fails the sync.
                 issue["loop_mr"] = match loop_mr(r.code.as_ref(), n) {
                     Ok(mr) => mr.unwrap_or(Value::Null),
                     Err(e) => {
@@ -680,29 +673,16 @@ mod tests {
     }
 
     #[test]
-    fn the_loop_mr_orders_mixed_comment_kinds_by_time() {
-        let mut review = comment("r900", "rev", "2026-10-03T00:00:00Z");
-        review.position = Some(crate::providers::DiffPosition {
-            path: "lib/a.rs".into(),
-            line: Some(3),
-            ..Default::default()
-        });
+    fn the_loop_mr_carries_its_iid_and_url_but_not_its_comments() {
         let host = Arc::new(Host {
             crs: vec![cr(5, "loop/issue-4", CrState::Open)],
-            cr_comments: vec![review, comment("v1", "rev", "2026-10-02T00:00:00Z")],
+            cr_comments: vec![comment("v1", "rev", "2026-10-02T00:00:00Z")],
             ..Default::default()
         });
         let mr = loop_mr(resolved(host).code.as_ref(), 4).unwrap().unwrap();
         assert_eq!(mr["iid"], 5);
         assert_eq!(mr["web_url"], "https://github.com/o/r/pull/5");
-        let notes = mr["notes"].as_array().unwrap();
-        assert_eq!(notes[0]["body"], "comment v1");
-        assert_eq!(notes[1]["position"]["new_path"], "lib/a.rs");
-        assert_eq!(notes[1]["position"]["new_line"], 3);
-        assert!(notes[0]["id"].as_i64() < notes[1]["id"].as_i64());
-        // the same comment always gets the same id
-        let again = note_id(&comment("r900", "rev", "2026-10-03T00:00:00Z"), true);
-        assert_eq!(notes[1]["id"].as_i64().unwrap(), again);
+        assert!(mr.get("notes").is_none());
     }
 
     #[test]

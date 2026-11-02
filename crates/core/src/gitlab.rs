@@ -398,7 +398,7 @@ impl Client {
     }
 
     /// The open merge request from the loop's `loop/issue-<iid>` branch, as
-    /// `{iid, web_url, notes}`, or `None` when there is none.
+    /// `{iid, web_url}`, or `None` when there is none.
     pub fn loop_merge_request(
         &self,
         project_id: &str,
@@ -411,11 +411,9 @@ impl Client {
             return Ok(None);
         };
         let mr_iid = mr.get("iid").cloned().unwrap_or(Value::Null);
-        let notes = self.get_all(&format!("{base}/{mr_iid}/notes"), &[("sort", "asc")])?;
         Ok(Some(serde_json::json!({
             "iid": mr_iid,
             "web_url": mr.get("web_url").cloned().unwrap_or(Value::Null),
-            "notes": notes,
         })))
     }
 
@@ -647,18 +645,13 @@ mod tests {
     }
 
     #[test]
-    fn the_loops_open_merge_request_comes_with_its_human_notes() {
+    fn the_loops_open_merge_request_comes_without_its_notes() {
         let served = crate::connectors::testutil::serve(vec![
             (
                 200,
                 "Content-Type: application/json\r\n",
                 json!([{"iid": 5, "web_url": "https://g.test/mr/5", "state": "opened"}])
                     .to_string(),
-            ),
-            (
-                200,
-                "Content-Type: application/json\r\n",
-                json!([{"id": 201, "body": "Rename this.", "system": false}]).to_string(),
             ),
             (200, "Content-Type: application/json\r\n", "[]".to_string()),
         ]);
@@ -667,7 +660,7 @@ mod tests {
         let mr = client.loop_merge_request("g/web", 7).unwrap().unwrap();
         assert_eq!(mr["iid"], 5);
         assert_eq!(mr["web_url"], "https://g.test/mr/5");
-        assert_eq!(mr["notes"][0]["body"], "Rename this.");
+        assert!(mr.get("notes").is_none());
         let requests = served.requests.lock().unwrap();
         assert!(
             requests[0].contains("source_branch=loop%2Fissue-7")
@@ -675,6 +668,7 @@ mod tests {
             "{}",
             requests[0]
         );
+        assert_eq!(requests.len(), 1, "only the MR lookup, no notes request");
         drop(requests);
         assert!(client.loop_merge_request("g/web", 8).unwrap().is_none());
     }

@@ -250,8 +250,8 @@ fn dispatch(argv: &[String]) -> Out {
         "sync-issue" => {
             let (project, iid) = (arg(1)?, int(arg(2)?)?);
             let mut fresh = client.get_issue(project, iid).map_err(api_err)?;
-            // Review comments on the loop's own MR reach the agent with the
-            // issue's (`loopx issues comments`); a failed lookup never fails the sync.
+            // The loop's own MR (iid, URL) is cached with the issue; its review
+            // notes belong to the MR-feedback round. A failed lookup never fails the sync.
             match client.loop_merge_request(project, iid) {
                 Ok(mr) => fresh["loop_mr"] = mr.unwrap_or(Value::Null),
                 Err(e) => eprintln!("sync-issue: merge request lookup failed: {e}"),
