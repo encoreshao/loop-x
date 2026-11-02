@@ -489,12 +489,75 @@ export function buildWorld(scene, THREE, opts = {}) {
     scene.add(g);
     clouds.push(g);
   }
+  // Night lighting for the cars: a soft cone of light, a pool on the road ahead and a glow
+  // at each lamp, all additive so they brighten what is behind them. Faded in by setNight.
+  const gradientTex = (draw) => {
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 128;
+    const cx = cv.getContext("2d");
+    draw(cx);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  // Apex (top of the canvas) is bright and fades to nothing at the far end.
+  const beamTex = gradientTex((cx) => {
+    const g = cx.createLinearGradient(0, 0, 0, 128);
+    g.addColorStop(0, "#fff"); g.addColorStop(0.35, "#777"); g.addColorStop(1, "#000");
+    cx.fillStyle = g; cx.fillRect(0, 0, 128, 128);
+  });
+  // The lit patch on the road: brightest just in front of the bumper, fading in every direction.
+  const poolTex = gradientTex((cx) => {
+    const g = cx.createRadialGradient(20, 64, 2, 20, 64, 108);
+    g.addColorStop(0, "#fff"); g.addColorStop(0.4, "#8a8a80"); g.addColorStop(1, "#000");
+    cx.fillStyle = g; cx.fillRect(0, 0, 128, 128);
+  });
+  const glowTex = gradientTex((cx) => {
+    const g = cx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, "#fff"); g.addColorStop(0.25, "#aaa"); g.addColorStop(1, "#000");
+    cx.fillStyle = g; cx.fillRect(0, 0, 128, 128);
+  });
+  const glowMat = (map, color) => new THREE.MeshBasicMaterial({ map, color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, opacity: 0 });
+  const beamM = glowMat(beamTex, 0xfff0c0), poolM = glowMat(poolTex, 0xffe9b0);
+  const headGlowM = new THREE.SpriteMaterial({ map: glowTex, color: 0xfff2c0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0 });
+  const tailGlowM = new THREE.SpriteMaterial({ map: glowTex, color: 0xff2a1a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0 });
+  const tailLightM = bm(0x7a1812);
+  const noPick = (o) => { o.raycast = () => {}; return o; };
+  function carLamps(g) {
+    // The car's front is +x. Two headlamps, each with a cone that widens over 9 units.
+    for (const sz of [-0.4, 0.4]) {
+      const len = 9;
+      const cone = noPick(new THREE.Mesh(new THREE.ConeGeometry(1.5, len, 20, 1, true), beamM));
+      cone.rotation.z = Math.PI / 2;
+      cone.scale.x = 0.35;
+      cone.position.set(1.3 + len / 2, 0.62, sz);
+      cone.renderOrder = 2;
+      g.add(cone);
+      const glow = new THREE.Sprite(headGlowM);
+      glow.scale.set(0.9, 0.9, 1);
+      glow.position.set(1.36, 0.7, sz);
+      glow.raycast = () => {};
+      g.add(glow);
+      const tail = new THREE.Sprite(tailGlowM);
+      tail.scale.set(0.55, 0.55, 1);
+      tail.position.set(-1.34, 0.7, sz);
+      tail.raycast = () => {};
+      g.add(tail);
+      om(new THREE.BoxGeometry(0.06, 0.14, 0.22), tailLightM, -1.3, 0.7, sz, g);
+    }
+    const pool = noPick(new THREE.Mesh(new THREE.PlaneGeometry(9, 4.2), poolM));
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(1.4 + 4.5 - 0.3, 0.03, 0);
+    pool.renderOrder = 1;
+    g.add(pool);
+  }
   function car(col) {
     const g = new THREE.Group();
+    carLamps(g);
     om(new THREE.BoxGeometry(2.6, 0.75, 1.2), M(col, { roughness: 0.4 }), 0, 0.65, 0, g);
     om(new THREE.BoxGeometry(1.4, 0.55, 1.05), M(0xbfd8ee, { roughness: 0.1 }), -0.1, 1.25, 0, g);
     for (const sx of [-0.85, 0.85]) for (const sz of [-0.6, 0.6]) om(new THREE.CylinderGeometry(0.3, 0.3, 0.2, 12), M(0x111111), sx, 0.3, sz, g).rotation.x = Math.PI / 2;
-    for (const sx of [-1.3, 1.3]) for (const sz of [-0.4, 0.4]) om(new THREE.BoxGeometry(0.06, 0.14, 0.22), carLightM, sx, 0.7, sz, g);
+    for (const sz of [-0.4, 0.4]) om(new THREE.BoxGeometry(0.06, 0.14, 0.22), carLightM, 1.3, 0.7, sz, g);
     return g;
   }
   for (let i = 0; i < 8; i++) {
@@ -571,7 +634,14 @@ export function buildWorld(scene, THREE, opts = {}) {
       const dayF = env.day, tw = env.tw || 0;
       lampShade.emissiveIntensity = lerp(1.8, 0.2, dayF);
       lampM.color.copy(mix(0xfff3a0, 0xbfc4cc, dayF));
-      carLightM.color.copy(mix(0xfff2a0, 0xcfd3da, dayF));
+      carLightM.color.copy(mix(0xfff8d0, 0xcfd3da, dayF));
+      // Headlights switch on as it gets dark (and glow a little at dusk).
+      const lit = Math.min(1, Math.max(0, (1 - dayF) * 1.15 + tw * 0.25));
+      beamM.opacity = lit * 0.2;
+      poolM.opacity = lit * 0.55;
+      headGlowM.opacity = lit * 0.9;
+      tailGlowM.opacity = lit * 0.8;
+      tailLightM.color.copy(mix(0xff3b2a, 0x7a1812, dayF));
       shopGlow.set(1 - dayF);
       grass.material.color.copy(mix(0x24402a, 0x75b455, dayF)).lerp(new C(0x8a6a3c), tw * 0.12);
       cloudM.color.copy(mix(0x39425f, 0xffffff, dayF)).lerp(new C(0xffb08a), tw * 0.5);
