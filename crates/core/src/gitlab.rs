@@ -462,6 +462,52 @@ impl Client {
         )
     }
 
+    /// Every discussion thread on a merge request, all pages.
+    pub fn list_mr_discussions(
+        &self,
+        project_id: &str,
+        mr_iid: i64,
+    ) -> Result<Vec<Value>, GitlabError> {
+        self.get_all(
+            &format!(
+                "projects/{}/merge_requests/{mr_iid}/discussions",
+                quote(project_id)
+            ),
+            &[],
+        )
+    }
+
+    /// Reply inside an existing merge request discussion thread.
+    pub fn reply_to_mr_discussion(
+        &self,
+        project_id: &str,
+        mr_iid: i64,
+        discussion_id: &str,
+        body: &str,
+    ) -> Result<Value, GitlabError> {
+        self.post_json(
+            &format!(
+                "projects/{}/merge_requests/{mr_iid}/discussions/{}/notes",
+                quote(project_id),
+                quote(discussion_id)
+            ),
+            &serde_json::json!({ "body": body }),
+        )
+    }
+
+    /// A merge request's `state`: `opened`, `merged` or `closed`.
+    pub fn mr_state(&self, project_id: &str, mr_iid: i64) -> Result<String, GitlabError> {
+        let mr = self.get_json(&format!(
+            "projects/{}/merge_requests/{mr_iid}",
+            quote(project_id)
+        ))?;
+        Ok(mr
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string())
+    }
+
     /// Unified-diff-ish text for a merge request, like `gitlab_api.py get-diff`.
     pub fn get_diff_content(&self, project_id: &str, iid: i64) -> Result<String, GitlabError> {
         let changes = self.get_json(&format!(
@@ -729,5 +775,85 @@ mod tests {
         assert!(client.issue_finished("g/app", 1).unwrap());
         assert!(client.issue_finished("g/app", 2).unwrap());
         assert!(!client.issue_finished("g/app", 3).unwrap());
+    }
+
+    #[test]
+    fn lists_mr_discussions_across_pages() {
+        let url = stub(|path| {
+            if path.ends_with("&page=1") {
+                let items: Vec<String> = (0..100).map(|i| format!(r#"{{"id": "d{i}"}}"#)).collect();
+                Box::leak(format!("[{}]", items.join(",")).into_boxed_str())
+            } else if path.ends_with("&page=2") {
+                r#"[{"id": "last"}]"#
+            } else {
+                "[]"
+            }
+        });
+        let client = Client::new(&url, "t".into());
+        let all = client.list_mr_discussions("g/app", 7).unwrap();
+        assert_eq!(all.len(), 101);
+        assert_eq!(all[100]["id"], "last");
+    }
+
+    #[test]
+    fn reply_posts_to_the_discussion_notes_endpoint() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Read, Write};
+            if let Some(s) = l.incoming().flatten().next() {
+                let mut r = BufReader::new(&s);
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    r.read_line(&mut h).unwrap();
+                    if h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0u8; len];
+                r.read_exact(&mut body).unwrap();
+                tx.send((line, String::from_utf8(body).unwrap())).unwrap();
+                let reply = r#"{"id": 5}"#;
+                let _ = write!(&s, "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
+            }
+        });
+        let client = Client::new(&url, "t".into());
+        let out = client
+            .reply_to_mr_discussion("g/app", 7, "abc123", "Fixed in the next commit")
+            .unwrap();
+        assert_eq!(out["id"], 5);
+        let (line, body) = rx.recv().unwrap();
+        assert!(
+            line.starts_with(
+                "POST /api/v4/projects/g%2Fapp/merge_requests/7/discussions/abc123/notes "
+            ),
+            "{line}"
+        );
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"body": "Fixed in the next commit"})
+        );
+    }
+
+    #[test]
+    fn mr_state_reads_the_state_field() {
+        let url = stub(|path| {
+            if path.contains("/merge_requests/1") {
+                r#"{"iid": 1, "state": "merged"}"#
+            } else {
+                r#"{"iid": 2, "state": "opened"}"#
+            }
+        });
+        let client = Client::new(&url, "t".into());
+        assert_eq!(client.mr_state("g/app", 1).unwrap(), "merged");
+        assert_eq!(client.mr_state("g/app", 2).unwrap(), "opened");
     }
 }
