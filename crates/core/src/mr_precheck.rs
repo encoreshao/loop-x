@@ -105,6 +105,8 @@ mod tests {
                 confidence: None,
                 attempts,
                 updated_at: String::new(),
+                plan: None,
+                reason: None,
             },
         );
         t

@@ -33,6 +33,13 @@ pub struct ThreadState {
     pub confidence: Option<u8>,
     pub attempts: u8,
     pub updated_at: String,
+    /// The planner's full plan for a `needs_you` thread, so a human's
+    /// "approve" can execute it as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<serde_json::Value>,
+    /// Why the runner sent the thread to the user (`needs_you` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -89,6 +96,8 @@ mod tests {
                 confidence: Some(80),
                 attempts: 1,
                 updated_at: "2026-11-02T00:00:00Z".into(),
+                plan: None,
+                reason: None,
             },
         );
         t.save("p", 7, r).unwrap();

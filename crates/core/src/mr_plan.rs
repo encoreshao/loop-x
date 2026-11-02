@@ -136,13 +136,13 @@ pub fn build_plan_input(a: &Actionable, state: Option<&ThreadState>, hunk: Optio
     build_plan_input_with_nonce(a, state, hunk, &crate::events::new_uuid_hex())
 }
 
-fn fenced(out: &mut String, label: &str, nonce: &str, text: &str) {
+pub(crate) fn fenced(out: &mut String, label: &str, nonce: &str, text: &str) {
     out.push_str(&format!(
         "\n<<<UNTRUSTED {label} {nonce}>>>\n{text}\n<<<END UNTRUSTED {label} {nonce}>>>\n"
     ));
 }
 
-fn build_plan_input_with_nonce(
+pub(crate) fn build_plan_input_with_nonce(
     a: &Actionable,
     state: Option<&ThreadState>,
     hunk: Option<&str>,
@@ -286,6 +286,8 @@ mod tests {
             confidence: None,
             attempts: 0,
             updated_at: String::new(),
+            plan: None,
+            reason: None,
         };
         let out = build_plan_input_with_nonce(&a, Some(&state), Some("hunk"), "n0nce");
         assert_eq!(out.matches("<<<END UNTRUSTED NOTE 7 n0nce>>>").count(), 1);
@@ -319,6 +321,8 @@ mod tests {
             confidence: None,
             attempts: 0,
             updated_at: String::new(),
+            plan: None,
+            reason: None,
         };
         let out = build_plan_input(&a, Some(&state), Some(&hunk));
         assert!(!out.contains("body-3"));

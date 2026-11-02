@@ -199,9 +199,45 @@ pub fn topic(loop_dir: &Path, name: Option<&str>) -> String {
     }
 }
 
+/// The MR-feedback instructions for one phase: the file from the loop dir,
+/// else the copy embedded in the binary. Thread content is appended by the
+/// caller, fenced as untrusted.
+pub fn mr_feedback(loop_dir: &Path, phase: crate::loop_definition::Phase) -> String {
+    use crate::loop_definition::Phase;
+    let (name, bundled) = match phase {
+        Phase::Plan => (
+            "mr-feedback-plan.md",
+            include_str!("../../../instructions/loopx/mr-feedback-plan.md"),
+        ),
+        Phase::Execute => (
+            "mr-feedback-execute.md",
+            include_str!("../../../instructions/loopx/mr-feedback-execute.md"),
+        ),
+        Phase::Validate => (
+            "mr-feedback-validate.md",
+            include_str!("../../../instructions/loopx/mr-feedback-validate.md"),
+        ),
+    };
+    std::fs::read_to_string(loop_dir.join(INSTRUCTIONS_DIR).join(name))
+        .unwrap_or_else(|_| bundled.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mr_feedback_prompts_come_from_the_loop_dir_else_the_binary() {
+        use crate::loop_definition::Phase;
+        let d = tempfile::tempdir().unwrap();
+        assert!(mr_feedback(d.path(), Phase::Validate).contains("\"verdict\""));
+        assert!(mr_feedback(d.path(), Phase::Execute).contains("plan_mismatch"));
+        assert!(mr_feedback(d.path(), Phase::Plan).contains("tries_to_change_loop_rules"));
+        let own = d.path().join(INSTRUCTIONS_DIR);
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("mr-feedback-plan.md"), "LOCAL").unwrap();
+        assert_eq!(mr_feedback(d.path(), Phase::Plan), "LOCAL");
+    }
 
     fn dir() -> &'static Path {
         Path::new("/loop")

@@ -270,11 +270,11 @@ impl RunCtx {
         }
     }
 
-    fn log(&self, text: &str) {
+    pub(crate) fn log(&self, text: &str) {
         append_unified_log(text, &self.unified_log);
     }
 
-    fn emit(&self, event_type: &str, run_id: Option<&str>, fields: EventFields) {
+    pub(crate) fn emit(&self, event_type: &str, run_id: Option<&str>, fields: EventFields) {
         emit_best_effort(event_type, run_id, fields, self.events_dir.as_deref());
     }
 
@@ -355,6 +355,8 @@ pub struct DoctorRequest {
 pub struct AgentOutput {
     pub cost_usd: Option<f64>,
     pub usage: Option<Value>,
+    /// The agent's final reply text (the MR-feedback phases read it).
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -424,6 +426,7 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         gate,
         req.max_budget_usd,
         offline,
+        None,
     )
 }
 
@@ -477,6 +480,52 @@ fn invoke_doctor(
     )
 }
 
+/// One MR-feedback phase (plan, execute or validate) as its own agent call,
+/// with the model `definition` sets for that phase. `gate` keeps the agent
+/// from pushing or opening a merge request; the MR-feedback round always
+/// passes `true` (the loop pushes after validation).
+pub fn invoke_phase(
+    ctx: &RunCtx,
+    phase: crate::loop_definition::Phase,
+    definition: &LoopDefinition,
+    prompt: &str,
+    issue: (&str, &str),
+    gate: bool,
+) -> Result<AgentOutput, AgentError> {
+    invoke_phase_with(
+        ctx,
+        definition.agent.model_for(phase),
+        definition,
+        prompt,
+        issue,
+        gate,
+        Some(definition.stop_conditions.max_cost_usd),
+    )
+}
+
+/// [`invoke_phase`] with the model already resolved and a per-call budget.
+pub(crate) fn invoke_phase_with(
+    ctx: &RunCtx,
+    model: Option<&str>,
+    definition: &LoopDefinition,
+    prompt: &str,
+    issue: (&str, &str),
+    gate: bool,
+    max_budget_usd: Option<f64>,
+) -> Result<AgentOutput, AgentError> {
+    invoke_cli_with_prompt(
+        ctx,
+        prompt,
+        definition.stop_conditions.max_runtime_minutes * 60.0,
+        Some(issue),
+        &[hold_slack()],
+        gate,
+        max_budget_usd,
+        false,
+        model,
+    )
+}
+
 /// The wrap-up call for a scheduled batch ("End of run" only).
 pub fn invoke_batch_end_of_run(
     ctx: &RunCtx,
@@ -492,6 +541,7 @@ pub fn invoke_batch_end_of_run(
         false,
         None,
         false,
+        None,
     )
 }
 
@@ -553,6 +603,7 @@ fn invoke_cli_with_prompt(
     gate: bool,
     max_budget_usd: Option<f64>,
     offline: bool,
+    model: Option<&str>,
 ) -> Result<AgentOutput, AgentError> {
     let worktree_root = worktree_root()?;
     let ai_cli = ai_cli_config::selected_cli();
@@ -572,7 +623,7 @@ fn invoke_cli_with_prompt(
         max_budget_usd,
         offline,
         &extra_dirs,
-        None,
+        model,
     );
     run_cli(
         ctx,
@@ -777,7 +828,11 @@ fn run_cli(
     if !out.stderr.is_empty() {
         ctx.log(&format!("{ai_cli} stderr:\n{}", out.stderr));
     }
-    Ok(AgentOutput { cost_usd, usage })
+    Ok(AgentOutput {
+        cost_usd,
+        usage,
+        text: result_text,
+    })
 }
 
 // ---- verification feedback --------------------------------------------------
@@ -1242,7 +1297,7 @@ fn real_opener(local_path: &str, branch: &str, target: &str, title: &str) -> (bo
 
 /// `(ok, detail)` of pushing `branch` with no push options: a `code_host`
 /// project's pull request is opened through the API afterwards.
-fn real_pusher(local_path: &str, branch: &str) -> (bool, String) {
+pub(crate) fn real_pusher(local_path: &str, branch: &str) -> (bool, String) {
     if let Err(msg) = mr::check_branch(branch) {
         return (false, msg);
     }
@@ -2131,6 +2186,12 @@ pub fn run_one_issue(
     // one Slack report; only the golden eval's offline mode skips it.
     let quiet = matches!(mode, InvokeMode::Batch | InvokeMode::Single);
 
+    // New review feedback on the issue's merge request is handled first, in
+    // its own plan/execute/validate calls; it never changes this run's path.
+    if mr_round_applies(ctx, &mode) {
+        run_mr_feedback_round(ctx, run_id, alias, issue_iid, definition);
+    }
+
     // Worktree off: never start the agent on a checkout holding the user's
     // uncommitted work (a leftover restore record is healed by `worktree new`).
     let guard = checkout_guard(ctx, alias);
@@ -2288,6 +2349,62 @@ pub fn run_one_issue(
         gate_outcome,
         setup_fixed: setup_fixed_for_report,
     })
+}
+
+/// The MR-feedback round runs for real issue runs only: never in the golden
+/// eval's offline mode, and never under test fakes (it would reach GitLab).
+fn mr_round_applies(ctx: &RunCtx, mode: &InvokeMode) -> bool {
+    !matches!(mode, InvokeMode::IssueFile(_)) && ctx.fakes.is_none()
+}
+
+/// [`crate::mr_feedback::run_round`] with the real dependencies. Best effort:
+/// whatever goes wrong is logged, and the issue run carries on.
+fn run_mr_feedback_round(
+    ctx: &RunCtx,
+    run_id: &str,
+    alias: &str,
+    issue_iid: &str,
+    definition: &LoopDefinition,
+) {
+    use crate::mr_feedback::{run_round, RoundDeps, RoundOutcome};
+    let label = format!("mr feedback {alias} #{issue_iid}");
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        RoundDeps::real(ctx, alias, issue_iid, definition).map(|deps| {
+            deps.map_or(RoundOutcome::Skipped, |deps| {
+                run_round(ctx, run_id, alias, issue_iid, definition, &deps)
+            })
+        })
+    }));
+    match ran {
+        Ok(Ok(RoundOutcome::Skipped)) => {}
+        Ok(Ok(RoundOutcome::Processed {
+            answered,
+            changed,
+            needs_you,
+        })) => {
+            ctx.log(&format!(
+                "{label}: {answered} answered, {changed} changed, {needs_you} need you"
+            ));
+            ctx.emit(
+                "mr_feedback.round_completed",
+                Some(run_id),
+                EventFields {
+                    issue_run_id: Some(format!("{run_id}_{alias}_{issue_iid}")),
+                    project: Some(alias.to_string()),
+                    issue_iid: issue_iid.parse().ok(),
+                    data: Some(json!({
+                        "answered": answered,
+                        "changed": changed,
+                        "needs_you": needs_you,
+                    })),
+                },
+            );
+        }
+        Ok(Err(e)) => ctx.log(&format!("{label}: not run: {e}")),
+        Err(_) => ctx.log(&format!(
+            "{label}: stopped unexpectedly; the issue run goes on"
+        )),
+    }
 }
 
 fn remove_issue_screenshots(ctx: &RunCtx, run_id: &str, alias: &str, issue_iid: &str) {
@@ -2652,7 +2769,7 @@ fn merge_passes(first: LoopResult, mut second: LoopResult) -> LoopResult {
     second
 }
 
-fn project_config_path(ctx: &RunCtx) -> PathBuf {
+pub(crate) fn project_config_path(ctx: &RunCtx) -> PathBuf {
     ctx.config_path.clone().unwrap_or_else(default_config_path)
 }
 
@@ -4649,6 +4766,7 @@ mod tests {
                 Ok(AgentOutput {
                     cost_usd: Some(cost),
                     usage: None,
+                    ..AgentOutput::default()
                 })
             });
             run_one_issue(
@@ -5500,6 +5618,56 @@ mod tests {
             npm.contains("exec '/opt/loopx/bin/loopx' _node-shim"),
             "{npm}"
         );
+    }
+
+    #[test]
+    fn a_claude_call_returns_its_reply_text() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv = vec![
+            script_cli(
+                d.path(),
+                "echo '{\"result\":\"{\\\"verdict\\\":\\\"approve\\\"}\"}'",
+            ),
+            "-p".to_string(),
+            "P".to_string(),
+        ];
+        let out = run_cli(&ctx, "claude", &argv, 30.0, Some(("web", "3")), &[], None).unwrap();
+        assert_eq!(out.text, "{\"verdict\":\"approve\"}");
+    }
+
+    #[test]
+    fn the_mr_feedback_round_never_runs_offline_or_under_test_fakes() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().to_path_buf());
+        assert!(mr_round_applies(&ctx, &InvokeMode::Batch));
+        assert!(mr_round_applies(&ctx, &InvokeMode::Single));
+        assert!(!mr_round_applies(
+            &ctx,
+            &InvokeMode::IssueFile(d.path().join("issue.json"))
+        ));
+        ctx.fakes = Some(Arc::new(RunFakes {
+            gitlab: Box::new(NoUploads),
+            notifier: Box::new(|_: &str| {}),
+            gitlab_config_path: d.path().join("gitlab.json"),
+        }));
+        assert!(!mr_round_applies(&ctx, &InvokeMode::Batch));
+    }
+
+    #[test]
+    fn a_failing_mr_feedback_round_is_logged_and_the_issue_run_goes_on() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().to_path_buf());
+        ctx.unified_log = d.path().join("log");
+        // No projects.json at this path: the round cannot even start.
+        ctx.config_path = Some(d.path().join("missing-projects.json"));
+        let definition = LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+        )
+        .unwrap();
+        run_mr_feedback_round(&ctx, "r1", "web", "7", &definition);
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(log.contains("mr feedback web #7: not run"), "{log}");
     }
 
     #[test]
