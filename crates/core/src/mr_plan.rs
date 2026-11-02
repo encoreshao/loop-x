@@ -288,6 +288,7 @@ mod tests {
             updated_at: String::new(),
             plan: None,
             reason: None,
+            base: None,
         };
         let out = build_plan_input_with_nonce(&a, Some(&state), Some("hunk"), "n0nce");
         assert_eq!(out.matches("<<<END UNTRUSTED NOTE 7 n0nce>>>").count(), 1);
@@ -323,6 +324,7 @@ mod tests {
             updated_at: String::new(),
             plan: None,
             reason: None,
+            base: None,
         };
         let out = build_plan_input(&a, Some(&state), Some(&hunk));
         assert!(!out.contains("body-3"));

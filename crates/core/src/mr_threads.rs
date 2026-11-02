@@ -40,6 +40,10 @@ pub struct ThreadState {
     /// Why the runner sent the thread to the user (`needs_you` only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The commit a code change for this thread started from, kept while it
+    /// is `working` so a retry can tell the change was already pushed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -98,6 +102,7 @@ mod tests {
                 updated_at: "2026-11-02T00:00:00Z".into(),
                 plan: None,
                 reason: None,
+                base: None,
             },
         );
         t.save("p", 7, r).unwrap();

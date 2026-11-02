@@ -21,7 +21,7 @@ fn flag(n: &Value, key: &str) -> bool {
     n.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn is_human(n: &Value, state: &IssueThreads) -> bool {
+pub(crate) fn is_human(n: &Value, state: &IssueThreads) -> bool {
     if flag(n, "system") || state.ledger.contains(&note_id(n)) {
         return false;
     }
@@ -107,6 +107,7 @@ mod tests {
                 updated_at: String::new(),
                 plan: None,
                 reason: None,
+                base: None,
             },
         );
         t

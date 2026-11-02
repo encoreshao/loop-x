@@ -49,19 +49,48 @@ pub trait MrGitlab {
     fn file_diff(&self, mr_iid: i64, path: &str) -> Option<String>;
 }
 
+/// Where `loop/issue-<iid>` stands against its remote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Branch {
+    /// Local and remote agree at this commit: every change this round makes
+    /// builds on it, and only commits after it are ever pushed.
+    InSync(String),
+    /// The remote has commits the local branch lacks (someone else pushed).
+    Diverged,
+    /// The local branch has commits the remote lacks (never pushed or
+    /// validated by this round).
+    Ahead,
+}
+
+/// What the issue's branch and worktree look like at one moment; agents
+/// other than the executor must leave it exactly as it was.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Snapshot {
+    /// `refs/heads/loop/issue-<iid>`, if it exists.
+    pub branch: Option<String>,
+    /// The worktree's path and HEAD, if it exists.
+    pub worktree: Option<(PathBuf, String)>,
+    /// `git status --porcelain` in the worktree (empty when clean or absent).
+    pub status: String,
+}
+
 /// The issue's git worktree and branch.
 pub trait Workspace {
-    /// Fetches the remote `loop/issue-<iid>` and says whether it has commits
-    /// the local branch lacks (someone else pushed). Recreates a missing
-    /// local branch from the remote one.
-    fn diverged(&self) -> Result<bool, String>;
-    /// Creates or reuses the issue's worktree; returns its path.
+    /// Fetches the remote `loop/issue-<iid>` and compares it with the local
+    /// branch, recreating a missing local branch from the remote one.
+    fn sync(&self) -> Result<Branch, String>;
+    /// Reuses the issue's worktree, or adds one on the existing branch
+    /// (never merging anything into it); returns its path.
     fn ensure(&self) -> Result<PathBuf, String>;
+    fn snapshot(&self) -> Result<Snapshot, String>;
     fn head(&self, worktree: &Path) -> Result<String, String>;
     /// `git diff <base> HEAD`, bounded.
     fn diff(&self, worktree: &Path, base: &str) -> Result<String, String>;
-    /// Moves the branch back to `base`, keeping the discarded commits under
-    /// `refs/loopx/mr-feedback/<keep_as>`.
+    /// `git diff --name-only <base> HEAD`.
+    fn changed_files(&self, worktree: &Path, base: &str) -> Result<Vec<String>, String>;
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, String>;
+    /// Moves the branch back to `base` (hard reset), keeping the discarded
+    /// commits under `refs/loopx/mr-feedback/<keep_as>-<sha>`.
     fn rollback(&self, worktree: &Path, base: &str, keep_as: &str) -> Result<(), String>;
 }
 
@@ -133,6 +162,7 @@ pub fn run_round(
         definition,
         deps,
         spent: Cell::new(0.0),
+        push_blocked: Cell::new(false),
     };
     match round.run() {
         Ok(outcome) => outcome,
@@ -153,6 +183,9 @@ struct Round<'a> {
     deps: &'a RoundDeps,
     /// What this round's agent calls have cost so far.
     spent: Cell<f64>,
+    /// Set when taking unpushed commits off the branch failed: nothing more
+    /// is pushed this round.
+    push_blocked: Cell<bool>,
 }
 
 /// How one thread's processing ended.
@@ -200,6 +233,7 @@ fn fresh(discussion_id: &str) -> ThreadState {
         updated_at: now(),
         plan: None,
         reason: None,
+        base: None,
     }
 }
 
@@ -347,6 +381,82 @@ fn hunk_around(diff: &str, line: Option<i64>) -> String {
         .unwrap_or_else(|| diff.to_string())
 }
 
+/// The note the loop posts: the reply plus its signature. GitLab runs a line
+/// starting with `/` as a quick action (`/merge`, `/approve`, `/close`, ...)
+/// with the poster's token, the user's own here, so such a reply is refused.
+pub fn safe_reply_body(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("the reply is empty".into());
+    }
+    let quick_action = text.lines().any(|l| {
+        l.trim_start()
+            .strip_prefix('/')
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_alphabetic()))
+    });
+    if quick_action {
+        return Err("reply contains a GitLab quick action".into());
+    }
+    Ok(format!("{text}\n\n{LOOP_SIGNATURE}"))
+}
+
+/// A ref-safe, never-empty, time-stamped name for a thread's discarded work.
+fn keep_ref_name(discussion_id: &str) -> String {
+    let mut name: String = discussion_id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(64)
+        .collect();
+    if name.is_empty() {
+        // FNV-1a of the raw id.
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in discussion_id.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x100000001b3);
+        }
+        name = format!("d{h:016x}");
+    }
+    format!("{name}-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"))
+}
+
+fn normalize_path(p: &str) -> String {
+    let p = p.trim();
+    p.strip_prefix("./").unwrap_or(p).to_string()
+}
+
+/// The hard rules applied to what the executor actually changed.
+fn files_rule(changed: &[String], planned: &[String]) -> Option<String> {
+    let planned: std::collections::BTreeSet<String> =
+        planned.iter().map(|p| normalize_path(p)).collect();
+    let changed: Vec<String> = changed.iter().map(|p| normalize_path(p)).collect();
+    if changed.len() > mr_plan::MAX_FILES {
+        return Some(format!(
+            "the change touches {} files (limit {}): {}",
+            changed.len(),
+            mr_plan::MAX_FILES,
+            changed.join(", ")
+        ));
+    }
+    let outside: Vec<&str> = changed
+        .iter()
+        .filter(|f| !planned.contains(*f))
+        .map(String::as_str)
+        .collect();
+    (!outside.is_empty()).then(|| {
+        format!(
+            "the change touches files outside the plan: {}",
+            outside.join(", ")
+        )
+    })
+}
+
+fn is_loop_note(n: &Value, state: &IssueThreads) -> bool {
+    !n.get("system").and_then(Value::as_bool).unwrap_or(false)
+        && (state.ledger.contains(&note_id(n))
+            || n.get("body")
+                .and_then(Value::as_str)
+                .is_some_and(|b| b.contains(LOOP_SIGNATURE)))
+}
+
 impl Round<'_> {
     fn log(&self, text: &str) {
         self.ctx.log(&format!(
@@ -375,6 +485,21 @@ impl Round<'_> {
     }
 
     fn run(&self) -> Result<RoundOutcome, String> {
+        // An in-place checkout is the user's working copy: the round never
+        // touches it, so the whole round is skipped for such a project.
+        let local_path = self
+            .deps
+            .project
+            .get("local_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let config = crate::issue_runner::project_config_path(self.ctx);
+        if !crate::config::use_worktree(&self.deps.project)
+            || !crate::worktree::uses_worktree_for(local_path, &config)
+        {
+            self.log("skipped: the project works in its checkout (use_worktree is off), so review feedback on its merge request is left to you");
+            return Ok(RoundOutcome::Skipped);
+        }
         let gitlab = &*self.deps.gitlab;
         let Some(mr) = gitlab.find_mr(self.iid)? else {
             return Ok(RoundOutcome::Skipped);
@@ -474,6 +599,7 @@ impl Round<'_> {
             t.plan_summary = r.to_string();
         }
         t.reason = reason.map(str::to_owned);
+        t.base = None;
         t.last_note_id = t.last_note_id.max(latest);
         t.updated_at = now();
         self.save(state);
@@ -542,6 +668,12 @@ impl Round<'_> {
         let id = a.discussion_id.as_str();
         let prev = state.threads.get(id).cloned();
         let latest = max_note_id(&a.notes);
+        // A retry after a crash: the reply or the push may already be out.
+        if let Some(p) = prev.as_ref().filter(|p| p.status == ThreadStatus::Working) {
+            if let Some(end) = self.recover(state, mr, a, p, latest) {
+                return end;
+            }
+        }
         // Marked working before any agent runs, with `last_note_id` left as is,
         // so a crash leaves the thread for one more try.
         let attempts = match &prev {
@@ -557,6 +689,29 @@ impl Round<'_> {
         t.updated_at = now();
         self.save(state);
 
+        // The planner and validator can edit files (there is no read-only
+        // allowlist), so the branch and worktree are pinned around them.
+        let before = match self.deps.workspace.snapshot() {
+            Ok(s) if s.status.is_empty() => s,
+            Ok(_) => {
+                return self.needs_you(
+                    state,
+                    id,
+                    None,
+                    "the issue's worktree has uncommitted changes",
+                    latest,
+                )
+            }
+            Err(e) => {
+                return self.needs_you(
+                    state,
+                    id,
+                    None,
+                    &format!("could not read the issue's worktree: {e}"),
+                    latest,
+                )
+            }
+        };
         let decision = self.plan(mr, a, prev.as_ref());
         let (label, plan) = match &decision {
             Decision::Execute(p) => ("execute", Some(p)),
@@ -572,6 +727,9 @@ impl Round<'_> {
                 "confidence": plan.map(|p| p.confidence),
             }),
         );
+        if let Some(end) = self.check_untouched(state, id, &before, plan, latest) {
+            return end;
+        }
         match decision {
             Decision::NeedsYou { plan, reason } => {
                 self.needs_you(state, id, plan.as_ref(), &reason, latest)
@@ -587,21 +745,97 @@ impl Round<'_> {
                 );
                 ThreadEnd::Waiting
             }
-            Decision::Execute(plan) if plan.reply.trim().is_empty() => self.needs_you(
-                state,
-                id,
-                Some(&plan),
-                "the plan has no reply to post",
-                latest,
-            ),
-            Decision::Execute(plan) => match plan.action {
-                PlanAction::ReplyOnly => self.reply_only(state, mr, a, &plan, latest),
-                PlanAction::ChangeCode => self.change_code(state, mr, a, &plan, latest),
-                PlanAction::Wait => {
-                    self.needs_you(state, id, Some(&plan), "unexpected wait plan", latest)
+            Decision::Execute(plan) => {
+                if let Err(reason) = safe_reply_body(&plan.reply) {
+                    return self.needs_you(state, id, Some(&plan), &reason, latest);
                 }
-            },
+                match plan.action {
+                    PlanAction::ReplyOnly => self.reply_only(state, mr, a, &plan, latest, &before),
+                    PlanAction::ChangeCode => self.change_code(state, mr, a, &plan, latest),
+                    PlanAction::Wait => {
+                        self.needs_you(state, id, Some(&plan), "unexpected wait plan", latest)
+                    }
+                }
+            }
         }
+    }
+
+    /// A `working` thread whose last run stopped after GitLab already got
+    /// the reply, or after the change was pushed: finish it without planning
+    /// (or posting) again.
+    fn recover(
+        &self,
+        state: &mut IssueThreads,
+        mr: i64,
+        a: &Actionable,
+        prev: &ThreadState,
+        latest: i64,
+    ) -> Option<ThreadEnd> {
+        let id = a.discussion_id.as_str();
+        let last_human = a
+            .notes
+            .iter()
+            .filter(|n| crate::mr_precheck::is_human(n, state))
+            .map(note_id)
+            .max()
+            .unwrap_or(0);
+        let ours: Vec<i64> = a
+            .notes
+            .iter()
+            .filter(|n| is_loop_note(n, state))
+            .map(note_id)
+            .collect();
+        if ours.iter().any(|n| *n > last_human) {
+            state.ledger.extend(ours);
+            self.finish(state, id, ThreadStatus::Answered, None, None, latest);
+            self.log(&format!(
+                "thread {id} was answered before the last run stopped"
+            ));
+            return Some(ThreadEnd::Answered);
+        }
+        let base = prev.base.as_deref()?;
+        let plan = mr_plan::parse_plan(&prev.plan.as_ref()?.to_string()).ok()?;
+        if plan.action != PlanAction::ChangeCode {
+            return None;
+        }
+        let ws = &*self.deps.workspace;
+        match ws.sync() {
+            Ok(Branch::InSync(tip)) if tip != base && ws.is_ancestor(base, &tip) == Ok(true) => {
+                self.log(&format!(
+                    "thread {id}: its change was pushed before the last run stopped; replying"
+                ));
+                Some(match self.post(state, mr, id, &plan, latest) {
+                    ThreadEnd::Answered => ThreadEnd::Changed,
+                    other => other,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// `None` when the branch and worktree still match `expected`; otherwise
+    /// puts the worktree back and sends the thread to the user.
+    fn check_untouched(
+        &self,
+        state: &mut IssueThreads,
+        id: &str,
+        expected: &Snapshot,
+        plan: Option<&Plan>,
+        latest: i64,
+    ) -> Option<ThreadEnd> {
+        let now = self.deps.workspace.snapshot();
+        if now.as_ref() == Ok(expected) {
+            return None;
+        }
+        let mut reason = "an agent changed the worktree outside the execute phase".to_string();
+        if let Some((worktree, head)) = &expected.worktree {
+            if let Some(e) = self.rollback(worktree, head, id) {
+                reason.push_str(&format!(
+                    "; rolling the branch back failed ({e}), so nothing more is pushed this round"
+                ));
+            }
+        }
+        Some(self.needs_you(state, id, plan, &reason, latest))
     }
 
     fn plan(&self, mr: i64, a: &Actionable, prev: Option<&ThreadState>) -> Decision {
@@ -656,9 +890,14 @@ impl Round<'_> {
         a: &Actionable,
         plan: &Plan,
         latest: i64,
+        before: &Snapshot,
     ) -> ThreadEnd {
         let id = a.discussion_id.as_str();
-        match self.validate(a, plan, None) {
+        let verdict = self.validate(a, plan, None);
+        if let Some(end) = self.check_untouched(state, id, before, Some(plan), latest) {
+            return end;
+        }
+        match verdict {
             Verdict::Approve => self.post(state, mr, id, plan, latest),
             Verdict::Reject(r) => self.needs_you(
                 state,
@@ -687,7 +926,10 @@ impl Round<'_> {
         plan: &Plan,
         latest: i64,
     ) -> ThreadEnd {
-        let body = format!("{}\n\n{LOOP_SIGNATURE}", plan.reply.trim());
+        let body = match safe_reply_body(&plan.reply) {
+            Ok(b) => b,
+            Err(reason) => return self.needs_you(state, id, Some(plan), &reason, latest),
+        };
         match self.deps.gitlab.reply(mr, id, &body) {
             Ok(note) => {
                 let posted = note.get("id").and_then(Value::as_i64);
@@ -759,14 +1001,32 @@ impl Round<'_> {
         reason: &str,
         latest: i64,
     ) -> ThreadEnd {
-        self.rollback(worktree, base, id);
-        self.needs_you(state, id, Some(plan), reason, latest)
+        let mut reason = reason.to_string();
+        if let Some(e) = self.rollback(worktree, base, id) {
+            reason.push_str(&format!(
+                "; rolling the branch back failed ({e}), so nothing more is pushed this round"
+            ));
+        }
+        self.needs_you(state, id, Some(plan), &reason, latest)
     }
 
-    fn rollback(&self, worktree: &Path, base: &str, id: &str) {
-        let keep_as: String = id.chars().filter(char::is_ascii_alphanumeric).collect();
-        if let Err(e) = self.deps.workspace.rollback(worktree, base, &keep_as) {
-            self.log(&format!("rolling back {} failed: {e}", worktree.display()));
+    /// Resets the branch to `base`, keeping what it drops under a ref. On
+    /// failure no later push happens this round; returns the error.
+    fn rollback(&self, worktree: &Path, base: &str, id: &str) -> Option<String> {
+        match self
+            .deps
+            .workspace
+            .rollback(worktree, base, &keep_ref_name(id))
+        {
+            Ok(()) => None,
+            Err(e) => {
+                self.push_blocked.set(true);
+                self.log(&format!(
+                    "rolling {} back to {base} failed: {e}; no more pushes this round",
+                    worktree.display()
+                ));
+                Some(e)
+            }
         }
     }
 
@@ -787,60 +1047,61 @@ impl Round<'_> {
             .get("local_path")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !crate::config::use_worktree(&self.deps.project) || local_path.is_empty() {
-            return self.needs_you(
-                state,
-                id,
-                Some(plan),
-                "the project has no worktree for this issue (use_worktree is off), so the loop does not change its code for review feedback",
-                latest,
-            );
+        let refuse = |state: &mut IssueThreads, reason: &str| {
+            self.needs_you(state, id, Some(plan), reason, latest)
+        };
+        if local_path.is_empty() {
+            return refuse(state, "the project has no local checkout");
         }
-        match ws.diverged() {
-            Ok(false) => {}
-            Ok(true) => {
-                return self.needs_you(
+        // Every change builds on the remote branch tip, so what is pushed is
+        // exactly the commits validated below.
+        let base = match ws.sync() {
+            Ok(Branch::InSync(b)) => b,
+            Ok(Branch::Diverged) => {
+                return refuse(
                     state,
-                    id,
-                    Some(plan),
                     &format!("someone else pushed to {branch}; the loop does not build on commits it has not seen"),
-                    latest,
+                )
+            }
+            Ok(Branch::Ahead) => {
+                return refuse(
+                    state,
+                    &format!("{branch} has unpushed commits; the loop only pushes commits it validated in this round"),
                 )
             }
             Err(e) => {
-                return self.needs_you(
+                return refuse(
                     state,
-                    id,
-                    Some(plan),
                     &format!("could not compare {branch} with its remote: {e}"),
-                    latest,
                 )
             }
+        };
+        if self.push_blocked.get() {
+            return refuse(
+                state,
+                "an earlier rollback in this round failed, so nothing more is changed or pushed",
+            );
         }
         let worktree = match ws.ensure() {
             Ok(w) => w,
-            Err(e) => {
-                return self.needs_you(
+            Err(e) => return refuse(state, &format!("could not prepare the worktree: {e}")),
+        };
+        match ws.head(&worktree) {
+            Ok(h) if h == base => {}
+            Ok(h) => {
+                return refuse(
                     state,
-                    id,
-                    Some(plan),
-                    &format!("could not prepare the worktree: {e}"),
-                    latest,
+                    &format!("the worktree is at {h}, not at {branch}'s tip {base}"),
                 )
             }
-        };
-        let base = match ws.head(&worktree) {
-            Ok(h) => h,
-            Err(e) => {
-                return self.needs_you(
-                    state,
-                    id,
-                    Some(plan),
-                    &format!("could not read the worktree's HEAD: {e}"),
-                    latest,
-                )
-            }
-        };
+            Err(e) => return refuse(state, &format!("could not read the worktree's HEAD: {e}")),
+        }
+        // Recorded so a retry after a crash can tell the change was pushed.
+        if let Some(t) = state.threads.get_mut(id) {
+            t.base = Some(base.clone());
+            t.plan = Some(plan_json(plan));
+        }
+        self.save(state);
         let handoff = handoff_path(
             &self.ctx.repo_root,
             self.run_id,
@@ -850,7 +1111,7 @@ impl Round<'_> {
         );
         let attempts = self.definition.stop_conditions.max_iterations.max(1);
         let mut feedback: Option<String> = None;
-        let mut approved = false;
+        let mut approved: Option<String> = None;
         let abandon = |state: &mut IssueThreads, reason: &str| {
             self.abandon(state, &worktree, &base, id, plan, reason, latest)
         };
@@ -866,10 +1127,19 @@ impl Round<'_> {
             if let Err(reason) = read_execute_handoff(&handoff) {
                 return abandon(state, &reason);
             }
-            match ws.head(&worktree) {
-                Ok(h) if h != base => {}
+            let head = match ws.head(&worktree) {
+                Ok(h) if h != base => h,
                 Ok(_) => return abandon(state, "the executor committed nothing"),
                 Err(e) => return abandon(state, &format!("could not read HEAD: {e}")),
+            };
+            // The hard rules hold for what changed, not only for the plan.
+            match ws.changed_files(&worktree, &base) {
+                Ok(files) => {
+                    if let Some(reason) = files_rule(&files, &plan.files) {
+                        return abandon(state, &reason);
+                    }
+                }
+                Err(e) => return abandon(state, &format!("could not list changed files: {e}")),
             }
             let checks = (self.deps.verify)(&handoff);
             let checks_out = checks_text(&checks);
@@ -881,9 +1151,20 @@ impl Round<'_> {
                 Ok(d) => d,
                 Err(e) => return abandon(state, &format!("could not read the diff: {e}")),
             };
-            match self.validate(a, plan, Some((&diff, &checks_out))) {
+            let pinned = match ws.snapshot() {
+                Ok(s) => s,
+                Err(e) => return abandon(state, &format!("could not read the worktree: {e}")),
+            };
+            let verdict = self.validate(a, plan, Some((&diff, &checks_out)));
+            if ws.snapshot().as_ref() != Ok(&pinned) {
+                return abandon(
+                    state,
+                    "an agent changed the worktree outside the execute phase",
+                );
+            }
+            match verdict {
                 Verdict::Approve => {
-                    approved = true;
+                    approved = Some(head);
                     break;
                 }
                 Verdict::Reject(r) => feedback = Some(format!("The validator rejected it: {r}")),
@@ -892,13 +1173,19 @@ impl Round<'_> {
                 }
             }
         }
-        if !approved {
+        let Some(approved) = approved else {
             return abandon(
                 state,
                 &format!(
                     "the change was not accepted after {attempts} attempt(s): {}",
                     feedback.as_deref().unwrap_or("")
                 ),
+            );
+        };
+        if self.push_blocked.get() {
+            return abandon(
+                state,
+                "an earlier rollback in this round failed, so nothing more is pushed",
             );
         }
         // Never push to a merge request that is no longer open.
@@ -915,6 +1202,11 @@ impl Round<'_> {
                 )
             }
         }
+        // Push only the commit the validator approved.
+        match ws.head(&worktree) {
+            Ok(h) if h == approved => {}
+            _ => return abandon(state, "the branch moved after validation"),
+        }
         if let Err(e) = crate::mr::check_branch(&branch) {
             return abandon(state, &e);
         }
@@ -927,7 +1219,7 @@ impl Round<'_> {
         }
         self.emit(
             "mr_feedback.executed",
-            json!({"discussion_id": id, "branch": branch, "files": plan.files}),
+            json!({"discussion_id": id, "branch": branch, "head": approved, "files": plan.files}),
         );
         match self.post(state, mr, id, plan, latest) {
             ThreadEnd::Answered => ThreadEnd::Changed,
@@ -967,44 +1259,117 @@ pub struct GitWorkspace {
     pub worktree_root: String,
 }
 
-impl Workspace for GitWorkspace {
-    fn diverged(&self) -> Result<bool, String> {
-        let branch = crate::worktree::branch_name(&self.issue_iid);
-        let remote = format!("refs/remotes/origin/{branch}");
-        let local = format!("refs/heads/{branch}");
-        git_ok(
+impl GitWorkspace {
+    fn branch(&self) -> String {
+        crate::worktree::branch_name(&self.issue_iid)
+    }
+
+    fn worktree(&self) -> PathBuf {
+        PathBuf::from(crate::worktree::worktree_path(
             &self.local_path,
-            &["fetch", "origin", &format!("+refs/heads/{branch}:{remote}")],
-        )?;
-        if git(
-            &self.local_path,
-            &["show-ref", "--verify", "--quiet", &local],
-        )?
-        .0 != Some(0)
-        {
-            // The branch was swept with its worktree: rebuild it from the MR's.
-            git_ok(&self.local_path, &["branch", &branch, &remote])?;
-            return Ok(false);
+            &self.issue_iid,
+            &self.worktree_root,
+        ))
+    }
+
+    /// The commit `rev` names in the checkout, if it exists.
+    fn rev(&self, rev: &str) -> Result<Option<String>, String> {
+        match git(&self.local_path, &["rev-parse", "--verify", "--quiet", rev])? {
+            (Some(0), out) => Ok(Some(out.trim().to_string())),
+            (Some(1), _) => Ok(None),
+            (_, out) => Err(format!("git rev-parse {rev}: {}", out.trim())),
         }
-        match git(
+    }
+}
+
+impl Workspace for GitWorkspace {
+    fn sync(&self) -> Result<Branch, String> {
+        let branch = self.branch();
+        let remote_ref = format!("refs/remotes/origin/{branch}");
+        let local_ref = format!("refs/heads/{branch}");
+        let remote = match git(
             &self.local_path,
-            &["merge-base", "--is-ancestor", &remote, &local],
+            &["ls-remote", "--exit-code", "--heads", "origin", &local_ref],
         )? {
-            (Some(0), _) => Ok(false),
-            (Some(1), _) => Ok(true),
-            (_, out) => Err(format!("git merge-base: {}", out.trim())),
+            (Some(0), _) => {
+                git_ok(
+                    &self.local_path,
+                    &["fetch", "origin", &format!("+{local_ref}:{remote_ref}")],
+                )?;
+                self.rev(&remote_ref)?
+            }
+            (Some(2), _) => None,
+            (_, out) => return Err(format!("git ls-remote: {}", out.trim())),
+        };
+        match (self.rev(&local_ref)?, remote) {
+            (None, Some(r)) => {
+                // The branch was swept with its worktree: rebuild it from the MR's.
+                git_ok(&self.local_path, &["branch", &branch, &r])?;
+                Ok(Branch::InSync(r))
+            }
+            (None, None) => Err(format!("{branch} exists neither locally nor on the remote")),
+            (Some(l), Some(r)) if l == r => Ok(Branch::InSync(r)),
+            (Some(l), Some(r)) => Ok(if self.is_ancestor(&r, &l)? {
+                Branch::Ahead
+            } else {
+                Branch::Diverged
+            }),
+            (Some(l), None) => {
+                let target = format!("refs/remotes/origin/{}", self.target_branch);
+                let base = git_ok(&self.local_path, &["merge-base", &target, &l])?;
+                Ok(if base == l {
+                    Branch::InSync(base)
+                } else {
+                    Branch::Ahead
+                })
+            }
         }
     }
 
     fn ensure(&self) -> Result<PathBuf, String> {
-        crate::worktree::new_worktree(
-            &self.local_path,
-            &self.target_branch,
-            &self.issue_iid,
-            &self.worktree_root,
-        )
-        .map(PathBuf::from)
-        .map_err(|f| f.message)
+        if !Path::new(&self.worktree_root).is_absolute() {
+            return Err(format!(
+                "worktree_root must be an absolute path: {}",
+                self.worktree_root
+            ));
+        }
+        let (wt, branch) = (self.worktree(), self.branch());
+        if !wt.is_dir() {
+            std::fs::create_dir_all(&self.worktree_root)
+                .map_err(|e| format!("cannot create {}: {e}", self.worktree_root))?;
+            let _ = git(&self.local_path, &["worktree", "prune"]);
+            git_ok(
+                &self.local_path,
+                &["worktree", "add", &wt.display().to_string(), &branch],
+            )?;
+        }
+        let on = git_ok(
+            &wt.display().to_string(),
+            &["symbolic-ref", "--short", "HEAD"],
+        )?;
+        if on != branch {
+            return Err(format!("{} is on {on}, not {branch}", wt.display()));
+        }
+        Ok(wt)
+    }
+
+    fn snapshot(&self) -> Result<Snapshot, String> {
+        let branch = self.rev(&format!("refs/heads/{}", self.branch()))?;
+        let wt = self.worktree();
+        if !wt.is_dir() {
+            return Ok(Snapshot {
+                branch,
+                ..Snapshot::default()
+            });
+        }
+        let dir = wt.display().to_string();
+        let head = git_ok(&dir, &["rev-parse", "HEAD"])?;
+        let status = git_ok(&dir, &["status", "--porcelain"])?;
+        Ok(Snapshot {
+            branch,
+            worktree: Some((wt, head)),
+            status,
+        })
     }
 
     fn head(&self, worktree: &Path) -> Result<String, String> {
@@ -1022,20 +1387,53 @@ impl Workspace for GitWorkspace {
         ))
     }
 
+    fn changed_files(&self, worktree: &Path, base: &str) -> Result<Vec<String>, String> {
+        let out = git_ok(
+            &worktree.display().to_string(),
+            &["diff", "--name-only", base, "HEAD"],
+        )?;
+        Ok(out
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, String> {
+        match git(
+            &self.local_path,
+            &["merge-base", "--is-ancestor", ancestor, descendant],
+        )? {
+            (Some(0), _) => Ok(true),
+            (Some(1), _) => Ok(false),
+            (_, out) => Err(format!("git merge-base: {}", out.trim())),
+        }
+    }
+
     fn rollback(&self, worktree: &Path, base: &str, keep_as: &str) -> Result<(), String> {
         let dir = worktree.display().to_string();
-        let head = self.head(worktree)?;
-        if head != base {
-            git_ok(
-                &dir,
-                &[
-                    "update-ref",
-                    &format!("refs/loopx/mr-feedback/{keep_as}"),
-                    &head,
-                ],
-            )?;
+        let mut errors = Vec::new();
+        match self.head(worktree) {
+            Ok(head) if head != base => {
+                let short: String = head.chars().take(12).collect();
+                let keep = format!("refs/loopx/mr-feedback/{keep_as}-{short}");
+                if let Err(e) = git_ok(&dir, &["update-ref", &keep, &head]) {
+                    errors.push(e);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => errors.push(e),
         }
-        git_ok(&dir, &["reset", "--hard", base]).map(|_| ())
+        // The reset runs even when keeping the ref failed: unvalidated
+        // commits must not stay on the branch (they remain in the reflog).
+        if let Err(e) = git_ok(&dir, &["reset", "--hard", base]) {
+            errors.push(e);
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 }
 
@@ -1266,17 +1664,31 @@ mod tests {
 
     struct FakeWorkspace {
         log: Shared<Log>,
-        diverged: bool,
+        branch: Option<Branch>,
         head: Shared<String>,
+        dirty: Shared<String>,
+        changed: Option<Vec<String>>,
+        rollback_fails: bool,
     }
 
     impl Workspace for FakeWorkspace {
-        fn diverged(&self) -> Result<bool, String> {
-            Ok(self.diverged)
+        fn sync(&self) -> Result<Branch, String> {
+            Ok(self
+                .branch
+                .clone()
+                .unwrap_or_else(|| Branch::InSync(self.head.borrow().clone())))
         }
         fn ensure(&self) -> Result<PathBuf, String> {
             self.log.borrow_mut().ensured += 1;
             Ok(PathBuf::from("/wt/repo-issue-7"))
+        }
+        fn snapshot(&self) -> Result<Snapshot, String> {
+            let head = self.head.borrow().clone();
+            Ok(Snapshot {
+                branch: Some(head.clone()),
+                worktree: Some((PathBuf::from("/wt/repo-issue-7"), head)),
+                status: self.dirty.borrow().clone(),
+            })
         }
         fn head(&self, _: &Path) -> Result<String, String> {
             Ok(self.head.borrow().clone())
@@ -1284,11 +1696,23 @@ mod tests {
         fn diff(&self, _: &Path, base: &str) -> Result<String, String> {
             Ok(format!("diff {base}..HEAD\n-old\n+new"))
         }
+        fn changed_files(&self, _: &Path, _: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .changed
+                .clone()
+                .unwrap_or_else(|| vec!["./a.rs".into()]))
+        }
+        fn is_ancestor(&self, _: &str, _: &str) -> Result<bool, String> {
+            Ok(true)
+        }
         fn rollback(&self, _: &Path, base: &str, keep_as: &str) -> Result<(), String> {
             self.log
                 .borrow_mut()
                 .rollbacks
                 .push((base.into(), keep_as.into()));
+            if self.rollback_fails {
+                return Err("cannot lock ref".into());
+            }
             *self.head.borrow_mut() = base.into();
             Ok(())
         }
@@ -1307,7 +1731,10 @@ mod tests {
         handoffs: Shared<VecDeque<String>>,
         verdicts: Shared<VecDeque<String>>,
         verify_passes: Shared<VecDeque<bool>>,
-        diverged: bool,
+        branch: Option<Branch>,
+        dirty: Shared<String>,
+        changed: Option<Vec<String>>,
+        rollback_fails: bool,
         use_worktree: bool,
     }
 
@@ -1347,6 +1774,7 @@ mod tests {
             ctx.events_dir = Some(dir.path().join("events"));
             ctx.memory_root = Some(dir.path().join("memory"));
             ctx.unified_log = dir.path().join("log.txt");
+            ctx.config_path = Some(dir.path().join("projects.json"));
             let definition = LoopDefinition::from_value(&json!({
                 "name": "t", "version": 1, "trigger": {"type": "manual"},
                 "goal": {"type": "g"},
@@ -1371,7 +1799,10 @@ mod tests {
                 handoffs: Rc::default(),
                 verdicts: Rc::default(),
                 verify_passes: Rc::default(),
-                diverged: false,
+                branch: None,
+                dirty: Rc::default(),
+                changed: None,
+                rollback_fails: false,
                 use_worktree: true,
             }
         }
@@ -1383,6 +1814,13 @@ mod tests {
                 self.handoffs.clone(),
                 self.verdicts.clone(),
             );
+            let projects = json!({"web": {"project_id": "g/p", "local_path": "/repo",
+                                          "target_branch": "main", "use_worktree": self.use_worktree}});
+            std::fs::write(
+                self.ctx.config_path.as_ref().unwrap(),
+                json!({"worktree_root": "/wt", "projects": projects}).to_string(),
+            )
+            .unwrap();
             let commits = Cell::new(0);
             let invoke: PhaseInvoker = Box::new(move |call: &PhaseCall<'_>| {
                 {
@@ -1396,9 +1834,17 @@ mod tests {
                         .pop_front()
                         .unwrap_or_else(|| panic!("unexpected {:?} call", call.phase))
                 };
+                // "COMMIT <text>": the agent commits in the worktree, then answers.
+                let agent_commit = |text: String| match text.strip_prefix("COMMIT ") {
+                    Some(rest) => {
+                        *head.borrow_mut() = "agent-commit".into();
+                        rest.to_string()
+                    }
+                    None => text,
+                };
                 let text = match call.phase {
-                    Phase::Plan => pop(&plans),
-                    Phase::Validate => pop(&verdicts),
+                    Phase::Plan => agent_commit(pop(&plans)),
+                    Phase::Validate => agent_commit(pop(&verdicts)),
                     Phase::Execute => {
                         let handoff = pop(&handoffs);
                         let path = call
@@ -1461,8 +1907,11 @@ mod tests {
                 }),
                 workspace: Box::new(FakeWorkspace {
                     log: self.log.clone(),
-                    diverged: self.diverged,
+                    branch: self.branch.clone(),
                     head: self.head.clone(),
+                    dirty: self.dirty.clone(),
+                    changed: self.changed.clone(),
+                    rollback_fails: self.rollback_fails,
                 }),
                 project: json!({"project_id": "g/p", "local_path": "/repo", "instance": "g",
                                 "target_branch": "main", "use_worktree": self.use_worktree}),
@@ -1510,6 +1959,7 @@ mod tests {
                 updated_at: String::new(),
                 plan: None,
                 reason: None,
+                base: None,
             },
         );
         t
@@ -1796,7 +2246,7 @@ mod tests {
     #[test]
     fn diverged_branch_goes_to_needs_you() {
         let mut h = H::new();
-        h.diverged = true;
+        h.branch = Some(Branch::Diverged);
         h.plans.borrow_mut().push_back(plan("change_code", 92));
         let out = h.run();
         assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
@@ -1808,13 +2258,225 @@ mod tests {
     }
 
     #[test]
-    fn code_change_on_a_project_without_worktree_goes_to_needs_you() {
+    fn a_project_working_in_its_checkout_skips_the_round() {
+        {
+            let mut h = H::new();
+            h.use_worktree = false;
+            h.plans.borrow_mut().push_back(plan("reply_only", 95));
+            assert_eq!(h.run(), RoundOutcome::Skipped);
+            let log = h.log.borrow();
+            assert!(log.calls.is_empty() && log.ensured == 0 && log.replies.is_empty());
+            let text = std::fs::read_to_string(&h.ctx.unified_log).unwrap();
+            assert!(text.contains("use_worktree is off"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_reply_with_a_quick_action_never_reaches_gitlab() {
+        for reply in ["/merge", "Done.\n  /approve", "/assign_reviewer @me"] {
+            let h = H::new();
+            let p = plan("reply_only", 95).replace("Renamed it.", &reply.replace('\n', "\\n"));
+            h.plans.borrow_mut().push_back(p);
+            let out = h.run();
+            assert!(
+                matches!(out, RoundOutcome::Processed { needs_you: 1, .. }),
+                "{reply}"
+            );
+            let log = h.log.borrow();
+            assert!(log.replies.is_empty(), "{reply}");
+            assert_eq!(log.calls.len(), 1, "no validation of {reply:?}");
+            assert_eq!(
+                h.thread().reason.as_deref(),
+                Some("reply contains a GitLab quick action")
+            );
+        }
+        assert!(safe_reply_body("Use /usr/bin/env or a/b.").is_ok());
+        assert!(safe_reply_body("/ 2 is fine").is_ok());
+        assert!(safe_reply_body("ok\n/close").is_err());
+        assert!(safe_reply_body("  ").is_err());
+    }
+
+    #[test]
+    fn local_branch_ahead_of_the_remote_goes_to_needs_you_without_push() {
         let mut h = H::new();
-        h.use_worktree = false;
+        h.branch = Some(Branch::Ahead);
         h.plans.borrow_mut().push_back(plan("change_code", 92));
         let out = h.run();
         assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
-        assert_eq!(h.log.borrow().ensured, 0);
+        let log = h.log.borrow();
+        assert_eq!(log.calls.len(), 1);
+        assert!(log.pushes.is_empty() && log.ensured == 0);
+        assert!(h.thread().reason.unwrap().contains("unpushed commits"));
+    }
+
+    #[test]
+    fn a_planner_commit_goes_to_needs_you_and_is_rolled_back() {
+        let h = H::new();
+        h.plans
+            .borrow_mut()
+            .push_back(format!("COMMIT {}", plan("change_code", 92)));
+        let out = h.run();
+        assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
+        let log = h.log.borrow();
+        assert_eq!(log.calls.len(), 1, "no executor after a planner commit");
+        assert!(log.pushes.is_empty() && log.replies.is_empty());
+        assert_eq!(log.rollbacks.len(), 1);
+        assert_eq!(*h.head.borrow(), "base");
+        assert!(h
+            .thread()
+            .reason
+            .unwrap()
+            .contains("outside the execute phase"));
+    }
+
+    #[test]
+    fn a_dirty_worktree_before_planning_goes_to_needs_you() {
+        let h = H::new();
+        *h.dirty.borrow_mut() = " M a.rs".into();
+        let out = h.run();
+        assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
+        assert!(h.log.borrow().calls.is_empty());
+    }
+
+    #[test]
+    fn a_validator_commit_is_never_pushed() {
+        for action in ["change_code", "reply_only"] {
+            let h = H::new();
+            h.plans.borrow_mut().push_back(plan(action, 92));
+            if action == "change_code" {
+                h.handoffs.borrow_mut().push_back(done_handoff());
+            }
+            h.verdicts
+                .borrow_mut()
+                .push_back(format!("COMMIT {}", approve()));
+            let out = h.run();
+            assert!(
+                matches!(out, RoundOutcome::Processed { needs_you: 1, .. }),
+                "{action}"
+            );
+            let log = h.log.borrow();
+            assert!(log.pushes.is_empty() && log.replies.is_empty(), "{action}");
+            assert_eq!(*h.head.borrow(), "base", "{action}");
+        }
+    }
+
+    #[test]
+    fn changed_files_outside_the_plan_or_over_the_limit_go_to_needs_you() {
+        let cases = [
+            (vec!["a.rs", "b.rs"], "outside the plan: b.rs"),
+            (
+                vec!["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"],
+                "touches 6 files",
+            ),
+        ];
+        for (files, why) in cases {
+            let mut h = H::new();
+            h.changed = Some(files.iter().map(|f| f.to_string()).collect());
+            h.plans.borrow_mut().push_back(plan("change_code", 92));
+            h.handoffs.borrow_mut().push_back(done_handoff());
+            let out = h.run();
+            assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
+            let log = h.log.borrow();
+            assert!(log.pushes.is_empty() && log.replies.is_empty());
+            assert_eq!(log.calls.len(), 2, "no checks or validation");
+            assert_eq!(log.rollbacks.len(), 1);
+            let reason = h.thread().reason.unwrap();
+            assert!(reason.contains(why), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_failed_rollback_blocks_every_later_push_in_the_round() {
+        let mut h = H::new();
+        h.rollback_fails = true;
+        h.discussions
+            .borrow_mut()
+            .push(disc("d2", vec![note(2, "also rename z")]));
+        // d1 is rejected twice and cannot be rolled back; d2 is approved.
+        h.plans.borrow_mut().push_back(plan("change_code", 92));
+        h.handoffs
+            .borrow_mut()
+            .extend([done_handoff(), done_handoff()]);
+        h.verdicts
+            .borrow_mut()
+            .extend([reject("no"), reject("still no")]);
+        h.plans.borrow_mut().push_back(plan("change_code", 92));
+        let out = h.run();
+        assert_eq!(
+            out,
+            RoundOutcome::Processed {
+                answered: 0,
+                changed: 0,
+                needs_you: 2
+            }
+        );
+        let log = h.log.borrow();
+        assert!(log.pushes.is_empty() && log.replies.is_empty());
+        let threads = h.threads();
+        let first = threads.threads["d1"].reason.clone().unwrap();
+        assert!(first.contains("rolling the branch back failed"), "{first}");
+        let second = threads.threads["d2"].reason.clone().unwrap();
+        assert!(second.contains("earlier rollback"), "{second}");
+        assert_eq!(h.events("mr_feedback.needs_you").len(), 2);
+    }
+
+    #[test]
+    fn kept_refs_are_never_empty_and_never_collide_by_name() {
+        let a = keep_ref_name("d1");
+        assert!(a.starts_with("d1-"), "{a}");
+        let b = keep_ref_name("!!!");
+        assert!(b.starts_with('d') && b.len() > 18, "{b}");
+        assert_ne!(keep_ref_name("!!!"), keep_ref_name("???"));
+    }
+
+    #[test]
+    fn a_retry_after_the_reply_went_out_does_not_reply_again() {
+        let h = H::new();
+        h.save(&stored(ThreadStatus::Working, 0, 1));
+        let body = format!("Renamed it.\n\n{LOOP_SIGNATURE}");
+        h.discussions.borrow_mut()[0]["notes"]
+            .as_array_mut()
+            .unwrap()
+            .push(note(5, &body));
+        assert_eq!(
+            h.run(),
+            RoundOutcome::Processed {
+                answered: 1,
+                changed: 0,
+                needs_you: 0
+            }
+        );
+        let log = h.log.borrow();
+        assert!(log.calls.is_empty() && log.replies.is_empty());
+        let t = h.threads();
+        assert!(t.ledger.contains(&5));
+        assert_eq!(t.threads["d1"].status, ThreadStatus::Answered);
+        assert_eq!(t.threads["d1"].last_note_id, 5);
+    }
+
+    #[test]
+    fn a_retry_after_the_push_only_replies() {
+        let h = H::new();
+        let mut t = stored(ThreadStatus::Working, 0, 1);
+        let entry = t.threads.get_mut("d1").unwrap();
+        entry.base = Some("base".into());
+        entry.plan = Some(serde_json::from_str(&plan("change_code", 92)).unwrap());
+        h.save(&t);
+        // The remote and local branch already carry the pushed change.
+        *h.head.borrow_mut() = "c1".into();
+        assert_eq!(
+            h.run(),
+            RoundOutcome::Processed {
+                answered: 0,
+                changed: 1,
+                needs_you: 0
+            }
+        );
+        let log = h.log.borrow();
+        assert!(log.calls.is_empty() && log.pushes.is_empty());
+        assert_eq!(log.replies.len(), 1);
+        assert_eq!(h.thread().status, ThreadStatus::Answered);
+        assert_eq!(h.thread().base, None);
     }
 
     #[test]
@@ -1969,29 +2631,57 @@ mod tests {
         commit(&repo, "a.txt", "1");
         sh(&repo, &["push", "-q", "origin", "main"]);
         sh(&repo, &["checkout", "-q", "-b", "loop/issue-7"]);
-        commit(&repo, "b.txt", "loop fix");
+        let pushed = commit(&repo, "b.txt", "loop fix");
         sh(&repo, &["push", "-q", "origin", "loop/issue-7"]);
         sh(&repo, &["checkout", "-q", "main"]);
+        // main moves on: the worktree must NOT merge it into the MR branch.
+        commit(&repo, "m.txt", "later on main");
+        sh(&repo, &["push", "-q", "origin", "main"]);
         let ws = GitWorkspace {
             local_path: repo.display().to_string(),
             target_branch: "main".into(),
             issue_iid: "7".into(),
             worktree_root: p.join("wt").display().to_string(),
         };
-        assert_eq!(ws.diverged(), Ok(false));
+        assert_eq!(ws.sync(), Ok(Branch::InSync(pushed.clone())));
+        let before = ws.snapshot().unwrap();
+        assert_eq!(before.worktree, None);
         let wt = ws.ensure().unwrap();
-        assert!(
-            wt.join("b.txt").exists(),
-            "the worktree is on the MR branch"
-        );
-        let base = ws.head(&wt).unwrap();
+        assert!(wt.join("b.txt").exists() && !wt.join("m.txt").exists());
+        assert_eq!(ws.head(&wt).unwrap(), pushed);
+        let snap = ws.snapshot().unwrap();
+        assert_eq!(snap.status, "");
+        assert_eq!(snap.worktree.as_ref().unwrap().1, pushed);
+        std::fs::write(wt.join("scratch.txt"), "x").unwrap();
+        assert_ne!(ws.snapshot().unwrap(), snap, "an untracked file shows");
+        std::fs::remove_file(wt.join("scratch.txt")).unwrap();
+
         let fix = commit(&wt, "c.txt", "review fix");
-        assert!(ws.diff(&wt, &base).unwrap().contains("+review fix"));
+        assert!(ws.diff(&wt, &pushed).unwrap().contains("+review fix"));
+        assert_eq!(ws.changed_files(&wt, &pushed).unwrap(), ["c.txt"]);
+        assert_eq!(ws.sync(), Ok(Branch::Ahead), "unpushed commits");
+        assert_eq!(ws.is_ancestor(&pushed, &fix), Ok(true));
+        assert_eq!(ws.is_ancestor(&fix, &pushed), Ok(false));
         // A rejected change leaves the branch but is kept under a ref.
-        ws.rollback(&wt, &base, "d1").unwrap();
-        assert_eq!(ws.head(&wt).unwrap(), base);
-        assert_eq!(sh(&repo, &["rev-parse", "refs/loopx/mr-feedback/d1"]), fix);
-        assert_eq!(ws.diverged(), Ok(false));
+        ws.rollback(&wt, &pushed, "d1-x").unwrap();
+        assert_eq!(ws.head(&wt).unwrap(), pushed);
+        let kept = sh(
+            &repo,
+            &[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/loopx/mr-feedback/",
+            ],
+        );
+        assert!(
+            kept.starts_with("refs/loopx/mr-feedback/d1-x-") && kept.ends_with(&fix),
+            "{kept}"
+        );
+        assert_eq!(ws.sync(), Ok(Branch::InSync(pushed.clone())));
+        // A rollback that cannot keep the ref still resets, and says so.
+        commit(&wt, "e.txt", "again");
+        assert!(ws.rollback(&wt, &pushed, "bad..name").is_err());
+        assert_eq!(ws.head(&wt).unwrap(), pushed);
 
         // A human pushes to the MR branch from elsewhere.
         sh(
@@ -2007,7 +2697,7 @@ mod tests {
         );
         commit(&p.join("other"), "d.txt", "human");
         sh(&p.join("other"), &["push", "-q", "origin", "loop/issue-7"]);
-        assert_eq!(ws.diverged(), Ok(true));
+        assert_eq!(ws.sync(), Ok(Branch::Diverged));
 
         // A checkout that lost the local branch gets it back from the MR's.
         sh(p, &["clone", "-q", &origin.display().to_string(), "fresh"]);
@@ -2015,11 +2705,9 @@ mod tests {
             local_path: p.join("fresh").display().to_string(),
             ..ws
         };
-        assert_eq!(fresh.diverged(), Ok(false));
-        assert_eq!(
-            sh(&p.join("fresh"), &["rev-parse", "loop/issue-7"]),
-            sh(&p.join("other"), &["rev-parse", "HEAD"])
-        );
+        let tip = sh(&p.join("other"), &["rev-parse", "HEAD"]);
+        assert_eq!(fresh.sync(), Ok(Branch::InSync(tip.clone())));
+        assert_eq!(sh(&p.join("fresh"), &["rev-parse", "loop/issue-7"]), tip);
     }
 
     #[test]
