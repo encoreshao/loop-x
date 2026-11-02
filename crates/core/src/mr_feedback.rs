@@ -572,7 +572,7 @@ fn is_loop_note(n: &Value, state: &IssueThreads) -> bool {
         && (state.ledger.contains(&note_id(n))
             || n.get("body")
                 .and_then(Value::as_str)
-                .is_some_and(|b| b.contains(LOOP_SIGNATURE)))
+                .is_some_and(crate::mr_threads::is_signed))
 }
 
 impl Round<'_> {
@@ -1326,7 +1326,11 @@ impl Round<'_> {
                     ThreadStatus::Answered,
                     Some(plan),
                     None,
-                    latest.max(posted.unwrap_or(0)),
+                    // The newest note read before working on the thread, not
+                    // the posted one: a reviewer note that arrived meanwhile
+                    // has a smaller id than the reply and must stay unseen.
+                    // The loop's own note is skipped through the ledger.
+                    latest,
                 );
                 self.emit(
                     "mr_feedback.replied",
@@ -1956,14 +1960,14 @@ impl RoundDeps {
             let (ctx, definition) = (ctx.clone(), definition.clone());
             let (alias, iid) = (alias.to_string(), issue_iid.to_string());
             Box::new(move |call: &PhaseCall<'_>| {
-                // Every phase runs with the gate allowlist: no push, no MR.
+                // Each phase has its own narrow tool lists (no push, no MR, no loopx).
                 crate::issue_runner::invoke_phase_with(
                     &ctx,
+                    call.phase,
                     call.model,
                     &definition,
                     call.prompt,
                     (&alias, &iid),
-                    true,
                     call.max_budget_usd,
                 )
             })
@@ -2456,13 +2460,44 @@ mod tests {
         assert!(threads.ledger.contains(&100));
         let t = &threads.threads["d1"];
         assert_eq!(t.status, ThreadStatus::Answered);
-        assert_eq!(t.last_note_id, 100);
+        // The newest note seen when the thread was read, not the loop's own
+        // (skipped through the ledger).
+        assert_eq!(t.last_note_id, 1);
         assert_eq!(t.confidence, Some(95));
         assert_eq!(h.events("mr_feedback.replied").len(), 1);
         assert_eq!(h.events("mr_feedback.planned").len(), 1);
         // The next run sees its own note and does nothing.
         assert_eq!(h.run(), RoundOutcome::Skipped);
         assert_eq!(h.log.borrow().calls.len(), 2);
+    }
+
+    #[test]
+    fn a_reviewer_note_arriving_while_the_loop_works_is_answered_next_round() {
+        let h = H::new();
+        h.plans.borrow_mut().push_back(plan("reply_only", 95));
+        h.verdicts.borrow_mut().push_back(approve());
+        let deps = h.deps();
+        let discussions = h.discussions.clone();
+        let late = RoundDeps {
+            invoke: Box::new(move |call: &PhaseCall<'_>| {
+                if call.phase == Phase::Validate {
+                    discussions.borrow_mut()[0]["notes"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(note(60, "and also handle empty input"));
+                }
+                (deps.invoke)(call)
+            }),
+            ..h.deps()
+        };
+        run_round(&h.ctx, "r1", "web", "7", &h.definition, &late);
+        assert_eq!(h.log.borrow().replies.len(), 1);
+        assert_eq!(h.thread().last_note_id, 1);
+        // Note 60 is older than the loop's reply (100) but was never read.
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        assert_ne!(h.run(), RoundOutcome::Skipped);
+        assert_eq!(h.log.borrow().calls.len(), 3);
+        assert!(h.log.borrow().prompts[2].contains("and also handle empty input"));
     }
 
     #[test]
@@ -3032,6 +3067,22 @@ mod tests {
     }
 
     #[test]
+    fn a_quote_of_the_loops_reply_does_not_count_as_the_loops_answer() {
+        let h = H::new();
+        h.save(&stored(ThreadStatus::Working, 0, 1));
+        let quote = format!("> Renamed it.\n> {LOOP_SIGNATURE}\n\nNo you did not.");
+        h.discussions.borrow_mut()[0]["notes"]
+            .as_array_mut()
+            .unwrap()
+            .push(note(5, &quote));
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        h.run();
+        // Planned again rather than taken as already answered.
+        assert_eq!(h.log.borrow().calls.len(), 1);
+        assert!(!h.threads().ledger.contains(&5));
+    }
+
+    #[test]
     fn a_retry_after_the_push_only_replies() {
         let h = H::new();
         let mut t = stored(ThreadStatus::Working, 0, 1);
@@ -3366,7 +3417,7 @@ mod tests {
         let threads = h.threads();
         assert!(threads.ledger.contains(&100));
         let t = &threads.threads["d1"];
-        assert_eq!((t.status, t.last_note_id), (ThreadStatus::Answered, 100));
+        assert_eq!((t.status, t.last_note_id), (ThreadStatus::Answered, 1));
         assert_eq!(
             h.events("mr_feedback.decided")[0]["data"]["choice"],
             "approve"

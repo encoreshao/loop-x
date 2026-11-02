@@ -11,7 +11,7 @@ use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
 use crate::config::{default_config_path, Config};
 use crate::events::EventFields;
 use crate::gitlab::{self, quote, Client};
-use crate::loop_definition::LoopDefinition;
+use crate::loop_definition::{LoopDefinition, Phase};
 use crate::loop_result::{AgentCost, IterationResult, LoopResult};
 use crate::loop_runtime::{AgentFailure, AgentFn, AgentSuccess, LoopRuntime};
 use crate::loop_serialize::write_result;
@@ -193,17 +193,37 @@ pub fn cli_command(
             s(prompt),
         ];
     }
+    claude_command(
+        prompt,
+        &roots,
+        allowed_tools(repo_root, exe, gate, offline),
+        disallowed_tools(exe, gate, offline),
+        max_budget_usd,
+        model,
+    )
+}
+
+/// `claude -p` with these roots and tool lists.
+fn claude_command(
+    prompt: &str,
+    roots: &[String],
+    allowed: String,
+    disallowed: String,
+    max_budget_usd: Option<f64>,
+    model: Option<&str>,
+) -> Vec<String> {
+    let s = |v: &str| v.to_string();
     let mut cmd = vec![s("claude"), s("-p")];
-    for root in &roots {
+    for root in roots {
         cmd.extend([s("--add-dir"), root.clone()]);
     }
     cmd.extend([
         s("--permission-mode"),
         s("acceptEdits"),
         s("--allowedTools"),
-        allowed_tools(repo_root, exe, gate, offline),
+        allowed,
         s("--disallowedTools"),
-        disallowed_tools(exe, gate, offline),
+        disallowed,
     ]);
     cmd.extend(cost::budget_args(max_budget_usd));
     if let Some(m) = model {
@@ -211,6 +231,111 @@ pub fn cli_command(
     }
     cmd.extend([s("--output-format"), s("json"), s(prompt)]);
     cmd
+}
+
+/// What an MR-feedback phase may use. The planner and validator only read;
+/// the executor edits, commits and runs the project's checks, and nothing
+/// more: no `loopx` helper (GitLab, Slack, memory), no push, no network.
+pub fn phase_allowed_tools(phase: Phase) -> String {
+    match phase {
+        Phase::Plan | Phase::Validate => "Read Grep Glob".to_string(),
+        Phase::Execute => {
+            let mut t: Vec<String> = [
+                "Read",
+                "Grep",
+                "Glob",
+                "Edit",
+                "Write",
+                "Bash(git status*)",
+                "Bash(git diff*)",
+                "Bash(git log*)",
+                "Bash(git add*)",
+                "Bash(git commit*)",
+                "Bash(cd *)",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+            t.extend(crate::verify_commands::claude_patterns());
+            t.push("Bash(RAILS_ENV=test bundle exec rake db:test:prepare*)".into());
+            t.join(" ")
+        }
+    }
+}
+
+/// Denied to every MR-feedback phase (a deny wins over `acceptEdits` and any
+/// allow): the `loopx` helpers, pushing, network posters, and edits to the
+/// loop's own prompts and config. The planner and validator get no Bash,
+/// Edit or Write at all.
+pub fn phase_disallowed_tools(repo_root: &str, exe: &str, phase: Phase) -> String {
+    let mut parts: Vec<String> = vec![DISALLOWED_TOOLS.to_string()];
+    parts.extend(
+        [
+            "Bash(loopx*)",
+            "Bash(git push*)",
+            "Bash(git remote*)",
+            "Bash(git config*)",
+            "Bash(curl*)",
+            "Bash(wget*)",
+            "Bash(gh *)",
+            "Bash(glab*)",
+            "WebFetch",
+            "WebSearch",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    parts.push(format!("Bash({exe}*)"));
+    for dir in ["instructions", "loops", "templates", "config", ".claude"] {
+        parts.push(format!("Edit({repo_root}/{dir}/**)"));
+        parts.push(format!("Write({repo_root}/{dir}/**)"));
+    }
+    if matches!(phase, Phase::Plan | Phase::Validate) {
+        parts.extend(["Bash", "Edit", "Write", "NotebookEdit"].map(String::from));
+    }
+    parts.join(" ")
+}
+
+/// The agent argv for one MR-feedback phase. Only `claude` has tool lists;
+/// the other CLIs run as in gate mode, and for them the round's Rust guards
+/// (worktree pins, file rules, validated-HEAD push, quick-action filter) are
+/// the only backstop.
+#[allow(clippy::too_many_arguments)]
+pub fn phase_cli_command(
+    ai_cli: &str,
+    prompt: &str,
+    repo_root: &str,
+    worktree_root: &str,
+    exe: &str,
+    phase: Phase,
+    max_budget_usd: Option<f64>,
+    model: Option<&str>,
+    extra_dirs: &[String],
+) -> Vec<String> {
+    if ai_cli != "claude" {
+        return cli_command(
+            ai_cli,
+            prompt,
+            repo_root,
+            worktree_root,
+            exe,
+            true,
+            max_budget_usd,
+            false,
+            extra_dirs,
+            model,
+        );
+    }
+    let mut roots = vec![repo_root.to_string(), worktree_root.to_string()];
+    roots.extend(extra_dirs.iter().cloned());
+    claude_command(
+        prompt,
+        &roots,
+        phase_allowed_tools(phase),
+        phase_disallowed_tools(repo_root, exe, phase),
+        max_budget_usd,
+        model,
+    )
 }
 
 // ---- run context ------------------------------------------------------------
@@ -481,48 +606,41 @@ fn invoke_doctor(
 }
 
 /// One MR-feedback phase (plan, execute or validate) as its own agent call,
-/// with the model `definition` sets for that phase. `gate` keeps the agent
-/// from pushing or opening a merge request; the MR-feedback round always
-/// passes `true` (the loop pushes after validation).
-pub fn invoke_phase(
-    ctx: &RunCtx,
-    phase: crate::loop_definition::Phase,
-    definition: &LoopDefinition,
-    prompt: &str,
-    issue: (&str, &str),
-    gate: bool,
-) -> Result<AgentOutput, AgentError> {
-    invoke_phase_with(
-        ctx,
-        definition.agent.model_for(phase),
-        definition,
-        prompt,
-        issue,
-        gate,
-        Some(definition.stop_conditions.max_cost_usd),
-    )
-}
-
-/// [`invoke_phase`] with the model already resolved and a per-call budget.
+/// with that phase's model, tool lists and a per-call budget.
 pub(crate) fn invoke_phase_with(
     ctx: &RunCtx,
+    phase: Phase,
     model: Option<&str>,
     definition: &LoopDefinition,
     prompt: &str,
     issue: (&str, &str),
-    gate: bool,
     max_budget_usd: Option<f64>,
 ) -> Result<AgentOutput, AgentError> {
-    invoke_cli_with_prompt(
+    let worktree_root = worktree_root()?;
+    let ai_cli = ai_cli_config::selected_cli();
+    let repo_root = ctx.repo_root.display().to_string();
+    let run_id = std::env::var("LOOP_RUN_ID").ok();
+    let prompt = prompt::with_run_id(prompt.to_string(), run_id.as_deref());
+    let extra_dirs = in_place_dirs(&project_config_path(ctx), issue.0);
+    let argv = phase_cli_command(
+        &ai_cli,
+        &prompt,
+        &repo_root,
+        &worktree_root,
+        &ctx.exe,
+        phase,
+        max_budget_usd,
+        model,
+        &extra_dirs,
+    );
+    run_cli(
         ctx,
-        prompt,
+        &ai_cli,
+        &argv,
         definition.stop_conditions.max_runtime_minutes * 60.0,
         Some(issue),
         &[hold_slack()],
-        gate,
         max_budget_usd,
-        false,
-        model,
     )
 }
 
@@ -5618,6 +5736,77 @@ mod tests {
             npm.contains("exec '/opt/loopx/bin/loopx' _node-shim"),
             "{npm}"
         );
+    }
+
+    #[test]
+    fn mr_feedback_phases_get_their_own_narrow_tool_lists() {
+        use crate::loop_definition::Phase;
+        let exe = "/opt/loopx/bin/loopx";
+        for phase in [Phase::Plan, Phase::Validate] {
+            let allowed = phase_allowed_tools(phase);
+            assert_eq!(allowed, "Read Grep Glob", "{phase:?}");
+            let denied = phase_disallowed_tools("/r", exe, phase);
+            for tool in ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch"] {
+                assert!(
+                    denied.split(' ').any(|t| t == tool),
+                    "{phase:?} denies {tool}: {denied}"
+                );
+            }
+        }
+        let allowed = phase_allowed_tools(Phase::Execute);
+        for needed in [
+            "Read",
+            "Edit",
+            "Write",
+            "Bash(git commit*)",
+            "Bash(git add*)",
+            "Bash(bundle exec rspec*)",
+        ] {
+            assert!(
+                allowed.contains(needed),
+                "execute needs {needed}: {allowed}"
+            );
+        }
+        let denied = phase_disallowed_tools("/r", exe, Phase::Execute);
+        for blocked in [
+            "Bash(loopx*)",
+            "Bash(/opt/loopx/bin/loopx*)",
+            "Bash(git push*)",
+            "Bash(curl*)",
+            "Bash(gh *)",
+            "Bash(glab*)",
+            "Edit(/r/instructions/**)",
+            "Write(/r/loops/**)",
+        ] {
+            assert!(
+                denied.contains(blocked),
+                "execute denies {blocked}: {denied}"
+            );
+        }
+        for phase in [Phase::Plan, Phase::Execute, Phase::Validate] {
+            let allowed = phase_allowed_tools(phase);
+            assert!(!allowed.contains("loopx"), "{phase:?}: {allowed}");
+            assert!(!allowed.contains("git push"), "{phase:?}: {allowed}");
+            assert!(!allowed.contains("WebFetch"), "{phase:?}: {allowed}");
+        }
+        // The claude argv carries them; nothing from the gate list leaks in.
+        let argv = phase_cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/w",
+            exe,
+            Phase::Plan,
+            Some(1.0),
+            Some("opus"),
+            &[],
+        );
+        let at = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
+        assert_eq!(at("--allowedTools"), "Read Grep Glob");
+        assert!(at("--disallowedTools").contains("Bash(loopx*)"));
+        assert_eq!(at("--model"), "opus");
+        assert_eq!(argv.last().unwrap(), "P");
+        assert!(!argv.join(" ").contains("loopx gitlab"));
     }
 
     #[test]

@@ -1,7 +1,9 @@
 //! Model-free pre-check: which MR discussions need the agent's attention.
 //! Pure function over GitLab discussion JSON and the persisted thread state.
 
-use crate::mr_threads::{IssueThreads, ThreadStatus, LOOP_SIGNATURE};
+#[cfg(test)]
+use crate::mr_threads::LOOP_SIGNATURE;
+use crate::mr_threads::{is_signed, IssueThreads, ThreadStatus};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,10 +34,7 @@ pub(crate) fn is_human(n: &Value, state: &IssueThreads) -> bool {
     {
         return false;
     }
-    !n.get("body")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .contains(LOOP_SIGNATURE)
+    !is_signed(n.get("body").and_then(Value::as_str).unwrap_or(""))
 }
 
 /// A discussion whose resolvable notes are all resolved (system notes aside).
@@ -178,6 +177,18 @@ mod tests {
         let body = format!("because\n\n{LOOP_SIGNATURE}");
         let d = disc("d1", vec![note(1, "why?"), note(2, &body)]);
         assert!(actionable_threads(&[d], &s).is_empty());
+    }
+
+    #[test]
+    fn a_quote_reply_of_the_loops_note_is_still_feedback() {
+        let s = st(ThreadStatus::Answered, 2, 0);
+        let quote = format!("> because\n>\n> {LOOP_SIGNATURE}\n\nThat does not answer it.");
+        let d = disc("d1", vec![note(1, "why?"), note(3, &quote)]);
+        assert_eq!(actionable_threads(&[d], &s).len(), 1);
+        assert!(crate::mr_threads::is_signed(&format!(
+            "ok\n\n{LOOP_SIGNATURE}\n"
+        )));
+        assert!(!crate::mr_threads::is_signed(&quote));
     }
 
     #[test]

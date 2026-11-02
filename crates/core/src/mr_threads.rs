@@ -12,6 +12,13 @@ use std::path::{Path, PathBuf};
 /// Marker appended to every note the loop posts.
 pub const LOOP_SIGNATURE: &str = "<sub>— posted by loopx</sub>";
 
+/// Whether a note body is one the loop posted: it ends with the signature.
+/// A reviewer quoting the loop's note carries the signature mid-text, and
+/// is still the reviewer's feedback.
+pub fn is_signed(body: &str) -> bool {
+    body.trim_end().ends_with(LOOP_SIGNATURE)
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadStatus {
