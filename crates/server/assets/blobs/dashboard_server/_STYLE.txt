@@ -1738,7 +1738,8 @@ ul.plain li { font-size: 0.9rem; }
 .claude-acct-empty { margin: 0; font-size: 0.9rem; color: var(--md-on-surface-variant); }
 .claude-acct-add { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.75rem 1rem; align-items: end; margin: 0; }
 .claude-acct-add label { display: grid; gap: 0.35rem; margin: 0; min-width: 0; font-size: 0.85rem; color: var(--md-on-surface-variant); }
-.claude-acct-add input[type='text'] { width: 100%; box-sizing: border-box; }
+.claude-acct-add input[type='text'] { width: 100%; box-sizing: border-box; height: 2.75rem; padding: 0 0.9rem; border-radius: 12px; font-size: 0.95rem; }
+.claude-acct-add .btn { height: 2.75rem; padding-top: 0; padding-bottom: 0; font-size: 0.9rem; white-space: nowrap; }
 @media (max-width: 720px) {
   .claude-acct-add { grid-template-columns: 1fr; }
   .claude-accts .claude-acct-switch { flex-wrap: wrap; }
