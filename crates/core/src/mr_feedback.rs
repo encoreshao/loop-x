@@ -12,7 +12,7 @@ use crate::loop_definition::{LoopDefinition, Phase};
 use crate::loop_result::VerificationResult;
 use crate::mr_plan::{self, Decision, Plan, PlanAction};
 use crate::mr_precheck::{actionable_threads, Actionable};
-use crate::mr_threads::{IssueThreads, ThreadState, ThreadStatus, LOOP_SIGNATURE};
+use crate::mr_threads::{IssueThreads, ReviewNote, ThreadState, ThreadStatus, LOOP_SIGNATURE};
 use crate::runner_util::tail;
 use crate::{cost, events, prompt};
 use serde_json::{json, Value};
@@ -24,6 +24,10 @@ use std::path::{Path, PathBuf};
 const DIFF_MAX_CHARS: usize = 20_000;
 /// How much of the checks' output the validator (or a retry) sees.
 const CHECKS_TAIL_CHARS: usize = 4_000;
+/// How much of the reviewer's comment is kept to show the user.
+const COMMENT_MAX_CHARS: usize = 2_000;
+/// The longest instructions the user can give a thread.
+const INSTRUCTIONS_MAX_CHARS: usize = 4_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoundOutcome {
@@ -175,6 +179,98 @@ pub fn run_round(
     }
 }
 
+/// What the user decided, from Needs you, for a thread waiting on them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserChoice {
+    /// Carry out the stored plan as written. A reply is posted as is (the
+    /// user read it); a code change still goes through execute, the checks,
+    /// the validator and every push guard.
+    Approve,
+    /// Post the user's own text in the thread instead.
+    EditReply(String),
+    /// Settle the thread without posting anything.
+    Dismiss,
+    /// Plan the thread again with the user's text as trusted input.
+    Instructions(String),
+}
+
+impl UserChoice {
+    fn name(&self) -> &'static str {
+        match self {
+            UserChoice::Approve => "approve",
+            UserChoice::EditReply(_) => "edit_reply",
+            UserChoice::Dismiss => "dismiss",
+            UserChoice::Instructions(_) => "instructions",
+        }
+    }
+}
+
+/// The stored plan of a thread, if the user can approve it as it stands: a
+/// plan that parses, and whose reply (unless it waits) is safe to post.
+fn approvable_plan(t: &ThreadState) -> Result<Plan, String> {
+    let plan = t
+        .plan
+        .as_ref()
+        .ok_or("there is no plan to approve; give instructions instead")
+        .and_then(|p| {
+            mr_plan::parse_plan(&p.to_string())
+                .map_err(|_| "there is no usable plan to approve; give instructions instead")
+        })?;
+    if plan.action != PlanAction::Wait {
+        safe_reply_body(&plan.reply)?;
+    }
+    Ok(plan)
+}
+
+/// Whether [`UserChoice::Approve`] can carry out this thread's stored plan,
+/// checked before anything runs (the dashboard asks before starting it).
+pub fn approvable(t: &ThreadState) -> Result<(), String> {
+    approvable_plan(t).map(|_| ())
+}
+
+/// Carries out the user's decision on a `needs_you` thread. Never alongside
+/// a run working on the same issue (it takes the issue's lock). `Err` says
+/// what stopped it; a code change that fails a guard is back with the user,
+/// with the new reason.
+pub fn decide_thread(
+    ctx: &RunCtx,
+    definition: &LoopDefinition,
+    alias: &str,
+    issue_iid: i64,
+    discussion_id: &str,
+    choice: UserChoice,
+    deps: &RoundDeps,
+) -> Result<(), String> {
+    let iid_text = issue_iid.to_string();
+    let lock_path = crate::file_lock::issue_lock_path(&ctx.repo_root, alias, &iid_text);
+    let Some(_lock) = crate::file_lock::FileLock::try_exclusive(&lock_path)
+        .map_err(|e| format!("cannot lock {alias} #{issue_iid}: {e}"))?
+    else {
+        return Err(format!(
+            "{alias} #{issue_iid} is being worked on by a run right now; try again when it finishes"
+        ));
+    };
+    let run_id = format!("decide-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let round = Round {
+        ctx,
+        run_id: &run_id,
+        alias,
+        issue_iid: &iid_text,
+        iid: issue_iid,
+        definition,
+        deps,
+        spent: Cell::new(0.0),
+        push_blocked: Cell::new(false),
+    };
+    let result = round.decide(discussion_id, choice);
+    if let Err(e) = &result {
+        round.log(&format!(
+            "decision on thread {discussion_id} not carried out: {e}"
+        ));
+    }
+    result
+}
+
 struct Round<'a> {
     ctx: &'a RunCtx,
     run_id: &'a str,
@@ -236,6 +332,9 @@ fn fresh(discussion_id: &str) -> ThreadState {
         plan: None,
         reason: None,
         base: None,
+        user_instructions: None,
+        mr_iid: None,
+        last_comment: None,
     }
 }
 
@@ -460,6 +559,14 @@ fn files_rule(changed: &[String], planned: &[String]) -> Option<String> {
     })
 }
 
+/// The user's trusted instructions for a thread, if they gave any.
+fn user_instructions(state: &IssueThreads, id: &str) -> Option<String> {
+    state
+        .threads
+        .get(id)
+        .and_then(|t| t.user_instructions.clone())
+}
+
 fn is_loop_note(n: &Value, state: &IssueThreads) -> bool {
     !n.get("system").and_then(Value::as_bool).unwrap_or(false)
         && (state.ledger.contains(&note_id(n))
@@ -604,6 +711,173 @@ impl Round<'_> {
         }
     }
 
+    fn decide(&self, id: &str, choice: UserChoice) -> Result<(), String> {
+        let mut state = IssueThreads::load(self.alias, self.iid, self.ctx.memory_root.as_deref());
+        let Some(t) = state.threads.get(id).cloned() else {
+            return Err(format!("there is no review thread {id} for this issue"));
+        };
+        if t.status != ThreadStatus::NeedsYou {
+            return Err(format!(
+                "the thread is {}, not waiting on you",
+                serde_json::to_value(t.status)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default()
+            ));
+        }
+        let name = choice.name();
+        match choice {
+            UserChoice::Dismiss => {
+                // Everything in the thread so far counts as seen; only a newer
+                // human note brings it back. GitLab is asked on a best-effort
+                // basis: the decision stands without it.
+                let latest = self
+                    .open_thread(id)
+                    .map(|(_, d)| max_note_id(discussion_notes(&d)))
+                    .unwrap_or(0);
+                self.settle(&mut state, id, ThreadStatus::Decided, latest);
+            }
+            UserChoice::Instructions(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    return Err("write what the loop should do with the thread".into());
+                }
+                let entry = state.threads.get_mut(id).expect("checked above");
+                entry.status = ThreadStatus::New;
+                entry.attempts = 0;
+                entry.user_instructions = Some(text.chars().take(INSTRUCTIONS_MAX_CHARS).collect());
+                entry.updated_at = now();
+                self.save(&state);
+            }
+            UserChoice::EditReply(text) => {
+                let body = safe_reply_body(&text)?;
+                let (mr, d) = self.open_mr_thread(&mut state, id)?;
+                let note = self.deps.gitlab.reply(mr, id, &body)?;
+                let posted = note.get("id").and_then(Value::as_i64);
+                if let Some(n) = posted {
+                    state.ledger.insert(n);
+                }
+                let latest = max_note_id(discussion_notes(&d)).max(posted.unwrap_or(0));
+                self.settle(&mut state, id, ThreadStatus::Answered, latest);
+                self.emit(
+                    "mr_feedback.replied",
+                    json!({"discussion_id": id, "note_id": posted, "action": "user_reply"}),
+                );
+            }
+            UserChoice::Approve => self.approve(&mut state, id, &t)?,
+        }
+        self.log(&format!("thread {id}: the user chose {name}"));
+        self.emit(
+            "mr_feedback.decided",
+            json!({"discussion_id": id, "choice": name}),
+        );
+        Ok(())
+    }
+
+    /// The merge request and the discussion `id` on it, as GitLab has them.
+    fn open_thread(&self, id: &str) -> Result<(i64, Value), String> {
+        let mr = self
+            .deps
+            .gitlab
+            .find_mr(self.iid)?
+            .ok_or("the issue has no merge request")?;
+        let d = self
+            .deps
+            .gitlab
+            .discussions(mr)?
+            .into_iter()
+            .find(|d| d.get("id").and_then(Value::as_str) == Some(id))
+            .ok_or("the discussion is no longer on the merge request")?;
+        Ok((mr, d))
+    }
+
+    /// [`Self::open_thread`] on a merge request that is still open; a merged or
+    /// closed one resolves the thread instead.
+    fn open_mr_thread(&self, state: &mut IssueThreads, id: &str) -> Result<(i64, Value), String> {
+        let (mr, d) = self.open_thread(id)?;
+        match self.deps.gitlab.mr_state(mr)?.as_str() {
+            "opened" => Ok((mr, d)),
+            s @ ("merged" | "closed") => {
+                self.resolve_all(state, std::slice::from_ref(&d), s);
+                Err(format!("the merge request is {s}; nothing was done"))
+            }
+            other => Err(format!(
+                "the merge request is in state {other:?}; nothing was done"
+            )),
+        }
+    }
+
+    /// A decided thread: `status`, every note up to `latest` seen, no reason.
+    fn settle(&self, state: &mut IssueThreads, id: &str, status: ThreadStatus, latest: i64) {
+        self.finish(state, id, status, None, None, latest);
+    }
+
+    /// Executes the stored plan the user approved, through the same guards
+    /// as an automatic one.
+    fn approve(&self, state: &mut IssueThreads, id: &str, t: &ThreadState) -> Result<(), String> {
+        let plan = approvable_plan(t)?;
+        let (mr, d) = self.open_mr_thread(state, id)?;
+        let notes: Vec<Value> = discussion_notes(&d)
+            .iter()
+            .filter(|n| !n.get("system").and_then(Value::as_bool).unwrap_or(false))
+            .cloned()
+            .collect();
+        if notes
+            .iter()
+            .any(|n| crate::mr_precheck::is_human(n, state) && note_id(n) > t.last_note_id)
+        {
+            return Err(
+                "someone replied in the thread after this plan was made; the loop plans it again on its next run"
+                    .into(),
+            );
+        }
+        let a = Actionable {
+            discussion_id: id.to_string(),
+            position: notes.first().and_then(|n| n.get("position")).cloned(),
+            notes,
+        };
+        let latest = max_note_id(&a.notes);
+        let end = match plan.action {
+            PlanAction::Wait => {
+                self.finish(
+                    state,
+                    id,
+                    ThreadStatus::WaitingOnReviewer,
+                    Some(&plan),
+                    None,
+                    latest,
+                );
+                ThreadEnd::Waiting
+            }
+            PlanAction::ReplyOnly => self.post(state, mr, id, &plan, latest),
+            PlanAction::ChangeCode => {
+                // Its notes are already seen, so a crash would leave it working
+                // with nothing to retry it: marked as on its last attempt, the
+                // next round hands it straight back to the user (after taking
+                // any unvalidated commit off the branch).
+                self.start_working(state, mr, &a, 2);
+                match self.clean_snapshot(state, id, Some(&plan), latest) {
+                    Ok(_) => self.change_code(state, mr, &a, &plan, latest),
+                    Err(end) => end,
+                }
+            }
+        };
+        match end {
+            ThreadEnd::Answered | ThreadEnd::Changed | ThreadEnd::Waiting => Ok(()),
+            ThreadEnd::NeedsYou => Err(state
+                .threads
+                .get(id)
+                .and_then(|t| t.reason.clone())
+                .unwrap_or_else(|| "the plan was not carried out".into())),
+            ThreadEnd::MrNotOpen(s) => {
+                if s == "merged" || s == "closed" {
+                    self.resolve_all(state, std::slice::from_ref(&d), &s);
+                }
+                Err(format!("the merge request is {s}; nothing was pushed"))
+            }
+        }
+    }
+
     /// A merged or closed MR: every thread is done, nothing runs.
     fn resolve_all(&self, state: &mut IssueThreads, discussions: &[Value], mr_state: &str) {
         for d in discussions {
@@ -646,6 +920,8 @@ impl Round<'_> {
         }
         t.reason = reason.map(str::to_owned);
         t.base = None;
+        // The user's instructions are for the plan they triggered: used once.
+        t.user_instructions = None;
         t.last_note_id = t.last_note_id.max(latest);
         t.updated_at = now();
         self.save(state);
@@ -720,43 +996,16 @@ impl Round<'_> {
                 return end;
             }
         }
-        // Marked working before any agent runs, with `last_note_id` left as is,
-        // so a crash leaves the thread for one more try.
         let attempts = match &prev {
             Some(p) if p.status == ThreadStatus::Working => p.attempts.saturating_add(1),
             _ => 1,
         };
-        let t = state
-            .threads
-            .entry(id.to_string())
-            .or_insert_with(|| fresh(id));
-        t.status = ThreadStatus::Working;
-        t.attempts = attempts;
-        t.updated_at = now();
-        self.save(state);
-
+        self.start_working(state, mr, a, attempts);
         // The planner and validator can edit files (there is no read-only
         // allowlist), so the branch and worktree are pinned around them.
-        let before = match self.deps.workspace.snapshot() {
-            Ok(s) if tracked_changes(&s.status).is_empty() => s,
-            Ok(_) => {
-                return self.needs_you(
-                    state,
-                    id,
-                    None,
-                    "the issue's worktree has uncommitted changes",
-                    latest,
-                )
-            }
-            Err(e) => {
-                return self.needs_you(
-                    state,
-                    id,
-                    None,
-                    &format!("could not read the issue's worktree: {e}"),
-                    latest,
-                )
-            }
+        let before = match self.clean_snapshot(state, id, None, latest) {
+            Ok(s) => s,
+            Err(end) => return end,
         };
         let decision = self.plan(mr, a, prev.as_ref());
         let (label, plan) = match &decision {
@@ -803,6 +1052,73 @@ impl Round<'_> {
                     }
                 }
             }
+        }
+    }
+
+    /// Marks the thread `working` before any agent runs, with `last_note_id`
+    /// left as is so a crash leaves it for one more try, and keeps what the
+    /// user needs to see should it end up with them.
+    fn start_working(&self, state: &mut IssueThreads, mr: i64, a: &Actionable, attempts: u8) {
+        let comment = a
+            .notes
+            .iter()
+            .filter(|n| crate::mr_precheck::is_human(n, state))
+            .max_by_key(|n| note_id(n))
+            .map(|n| ReviewNote {
+                note_id: note_id(n),
+                author: n
+                    .pointer("/author/username")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                body: n
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .take(COMMENT_MAX_CHARS)
+                    .collect(),
+            });
+        let id = a.discussion_id.as_str();
+        let t = state
+            .threads
+            .entry(id.to_string())
+            .or_insert_with(|| fresh(id));
+        t.status = ThreadStatus::Working;
+        t.attempts = attempts;
+        t.mr_iid = Some(mr);
+        if comment.is_some() {
+            t.last_comment = comment;
+        }
+        t.updated_at = now();
+        self.save(state);
+    }
+
+    /// The branch and worktree as they are, which must hold no uncommitted
+    /// tracked change; otherwise the thread goes to the user.
+    fn clean_snapshot(
+        &self,
+        state: &mut IssueThreads,
+        id: &str,
+        plan: Option<&Plan>,
+        latest: i64,
+    ) -> Result<Snapshot, ThreadEnd> {
+        match self.deps.workspace.snapshot() {
+            Ok(s) if tracked_changes(&s.status).is_empty() => Ok(s),
+            Ok(_) => Err(self.needs_you(
+                state,
+                id,
+                plan,
+                "the issue's worktree has uncommitted changes",
+                latest,
+            )),
+            Err(e) => Err(self.needs_you(
+                state,
+                id,
+                plan,
+                &format!("could not read the issue's worktree: {e}"),
+                latest,
+            )),
         }
     }
 
@@ -909,9 +1225,18 @@ impl Round<'_> {
 
     /// The validator's verdict on the plan's reply and, for a code change,
     /// the diff and the checks' output. Everything it reads is fenced.
-    fn validate(&self, a: &Actionable, plan: &Plan, change: Option<(&str, &str)>) -> Verdict {
+    fn validate(
+        &self,
+        a: &Actionable,
+        plan: &Plan,
+        change: Option<(&str, &str)>,
+        instructions: Option<&str>,
+    ) -> Verdict {
         let nonce = events::new_uuid_hex();
         let mut input = mr_plan::build_plan_input_with_nonce(a, None, None, &nonce);
+        if let Some(text) = instructions {
+            mr_plan::trusted_instructions(&mut input, &nonce, text);
+        }
         let plan_text = serde_json::to_string_pretty(&plan_json(plan)).unwrap_or_default();
         mr_plan::fenced(&mut input, "PLAN", &nonce, &plan_text);
         mr_plan::fenced(&mut input, "REPLY DRAFT", &nonce, &plan.reply);
@@ -939,7 +1264,7 @@ impl Round<'_> {
         before: &Snapshot,
     ) -> ThreadEnd {
         let id = a.discussion_id.as_str();
-        let verdict = self.validate(a, plan, None);
+        let verdict = self.validate(a, plan, None, user_instructions(state, id).as_deref());
         if let Some(end) = self.check_untouched(state, id, before, Some(plan), latest) {
             return end;
         }
@@ -1013,9 +1338,13 @@ impl Round<'_> {
         worktree: &Path,
         handoff: &Path,
         feedback: Option<&str>,
+        instructions: Option<&str>,
     ) -> String {
         let nonce = events::new_uuid_hex();
         let mut input = mr_plan::build_plan_input_with_nonce(a, None, None, &nonce);
+        if let Some(text) = instructions {
+            mr_plan::trusted_instructions(&mut input, &nonce, text);
+        }
         let plan_text = serde_json::to_string_pretty(&plan_json(plan)).unwrap_or_default();
         mr_plan::fenced(&mut input, "PLAN", &nonce, &plan_text);
         if let Some(f) = feedback {
@@ -1156,6 +1485,7 @@ impl Round<'_> {
             id,
         );
         let attempts = self.definition.stop_conditions.max_iterations.max(1);
+        let instructions = user_instructions(state, id);
         let mut feedback: Option<String> = None;
         let mut approved: Option<String> = None;
         let abandon = |state: &mut IssueThreads, reason: &str| {
@@ -1166,7 +1496,14 @@ impl Round<'_> {
             if let Some(dir) = handoff.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let prompt = self.execute_prompt(a, plan, &worktree, &handoff, feedback.as_deref());
+            let prompt = self.execute_prompt(
+                a,
+                plan,
+                &worktree,
+                &handoff,
+                feedback.as_deref(),
+                instructions.as_deref(),
+            );
             if let Err(e) = self.call(Phase::Execute, &prompt) {
                 return abandon(state, &format!("the executor failed: {e}"));
             }
@@ -1228,7 +1565,8 @@ impl Round<'_> {
                 }
                 Err(e) => return abandon(state, &format!("could not read the worktree: {e}")),
             };
-            let verdict = self.validate(a, plan, Some((&diff, &checks_out)));
+            let verdict =
+                self.validate(a, plan, Some((&diff, &checks_out)), instructions.as_deref());
             if ws.snapshot().as_ref() != Ok(&pinned) {
                 return abandon(
                     state,
@@ -2048,6 +2386,9 @@ mod tests {
                 plan: None,
                 reason: None,
                 base: None,
+                user_instructions: None,
+                mr_iid: None,
+                last_comment: None,
             },
         );
         t
@@ -2946,6 +3287,325 @@ mod tests {
         let tip = sh(&p.join("other"), &["rev-parse", "HEAD"]);
         assert_eq!(fresh.sync(), Ok(Branch::InSync(tip.clone())));
         assert_eq!(sh(&p.join("fresh"), &["rev-parse", "loop/issue-7"]), tip);
+    }
+
+    impl H {
+        /// A round with a low-confidence `action` plan: the thread waits on the user.
+        fn needs_you_with(&self, action: &str) {
+            self.plans.borrow_mut().push_back(plan(action, 60));
+            assert!(matches!(
+                self.run(),
+                RoundOutcome::Processed { needs_you: 1, .. }
+            ));
+            let mut log = self.log.borrow_mut();
+            log.calls.clear();
+            log.prompts.clear();
+            log.order.clear();
+            log.notified.clear();
+        }
+
+        fn decide(&self, choice: UserChoice) -> Result<(), String> {
+            decide_thread(
+                &self.ctx,
+                &self.definition,
+                "web",
+                7,
+                "d1",
+                choice,
+                &self.deps(),
+            )
+        }
+
+        fn add_note(&self, id: i64, body: &str) {
+            self.discussions.borrow_mut()[0]["notes"]
+                .as_array_mut()
+                .unwrap()
+                .push(note(id, body));
+        }
+    }
+
+    #[test]
+    fn a_needs_you_thread_keeps_the_comment_and_merge_request_it_was_about() {
+        let h = H::new();
+        h.needs_you_with("change_code");
+        let t = h.thread();
+        assert_eq!(t.mr_iid, Some(31));
+        let c = t.last_comment.expect("the reviewer's comment");
+        assert_eq!((c.note_id, c.author.as_str()), (1, "rev"));
+        assert_eq!(c.body, "please rename x");
+        assert_eq!(t.user_instructions, None);
+    }
+
+    #[test]
+    fn approving_a_reply_only_plan_posts_the_stored_reply() {
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        h.decide(UserChoice::Approve).unwrap();
+        let log = h.log.borrow();
+        assert!(
+            log.calls.is_empty(),
+            "the user's approval replaces the validator for a reply"
+        );
+        assert_eq!(log.replies.len(), 1);
+        let (mr, discussion, body) = &log.replies[0];
+        assert_eq!((*mr, discussion.as_str()), (31, "d1"));
+        assert!(body.starts_with("Renamed it.") && body.trim_end().ends_with(LOOP_SIGNATURE));
+        let threads = h.threads();
+        assert!(threads.ledger.contains(&100));
+        let t = &threads.threads["d1"];
+        assert_eq!((t.status, t.last_note_id), (ThreadStatus::Answered, 100));
+        assert_eq!(
+            h.events("mr_feedback.decided")[0]["data"]["choice"],
+            "approve"
+        );
+    }
+
+    #[test]
+    fn approving_a_code_change_runs_execute_validate_and_the_push_guards() {
+        let h = H::new();
+        h.needs_you_with("change_code");
+        h.handoffs.borrow_mut().push_back(done_handoff());
+        h.verdicts.borrow_mut().push_back(approve());
+        h.decide(UserChoice::Approve).unwrap();
+        let log = h.log.borrow();
+        // No new plan: the stored one is executed, validated, pushed, answered.
+        assert_eq!(log.order, ["Execute", "Validate", "push", "reply"]);
+        assert_eq!(log.pushes, vec![("/repo".into(), "loop/issue-7".into())]);
+        assert!(log.prompts.last().unwrap().contains("diff base..HEAD"));
+        assert_eq!(h.thread().status, ThreadStatus::Answered);
+        assert_eq!(h.events("mr_feedback.executed").len(), 1);
+    }
+
+    #[test]
+    fn approving_does_not_bypass_the_guards() {
+        // Someone else pushed: nothing runs, the thread stays with the user.
+        let mut h = H::new();
+        h.needs_you_with("change_code");
+        h.branch = Some(Branch::Diverged);
+        let err = h.decide(UserChoice::Approve).unwrap_err();
+        assert!(err.contains("someone else pushed"), "{err}");
+        {
+            let log = h.log.borrow();
+            assert!(log.calls.is_empty() && log.pushes.is_empty() && log.replies.is_empty());
+        }
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+
+        // The executor strays outside the plan's files: rolled back, not pushed.
+        let mut h = H::new();
+        h.needs_you_with("change_code");
+        h.changed = Some(vec!["a.rs".into(), "secrets.rs".into()]);
+        h.handoffs.borrow_mut().push_back(done_handoff());
+        let err = h.decide(UserChoice::Approve).unwrap_err();
+        assert!(err.contains("outside the plan"), "{err}");
+        assert!(h.log.borrow().pushes.is_empty());
+        assert_eq!(h.log.borrow().rollbacks.len(), 1);
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+
+        // The validator rejects every attempt: nothing pushed.
+        let h = H::new();
+        h.needs_you_with("change_code");
+        h.handoffs
+            .borrow_mut()
+            .extend([done_handoff(), done_handoff()]);
+        h.verdicts
+            .borrow_mut()
+            .extend([reject("no"), reject("still no")]);
+        assert!(h.decide(UserChoice::Approve).is_err());
+        assert!(h.log.borrow().pushes.is_empty());
+
+        // The merge request was merged meanwhile: nothing is posted.
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        *h.state.borrow_mut() = "merged".into();
+        let err = h.decide(UserChoice::Approve).unwrap_err();
+        assert!(err.contains("merged"), "{err}");
+        assert!(h.log.borrow().replies.is_empty());
+        assert_eq!(h.thread().status, ThreadStatus::Resolved);
+
+        // A dirty worktree: the executor never starts.
+        let h = H::new();
+        h.needs_you_with("change_code");
+        *h.dirty.borrow_mut() = " M a.rs".into();
+        assert!(h.decide(UserChoice::Approve).is_err());
+        assert!(h.log.borrow().calls.is_empty());
+    }
+
+    #[test]
+    fn an_approved_change_that_stops_midway_goes_back_to_the_user() {
+        let h = H::new();
+        h.needs_you_with("change_code");
+        h.handoffs.borrow_mut().push_back(done_handoff());
+        h.verdicts.borrow_mut().push_back("PANIC".into());
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            h.decide(UserChoice::Approve)
+        }));
+        assert!(r.is_err());
+        assert_eq!(h.thread().status, ThreadStatus::Working);
+        // No new note on GitLab, yet the next round hands it back rather than
+        // leaving it working forever.
+        assert!(matches!(
+            h.run(),
+            RoundOutcome::Processed { needs_you: 1, .. }
+        ));
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+        assert!(h.log.borrow().pushes.is_empty());
+    }
+
+    #[test]
+    fn whether_a_thread_can_be_approved_is_known_before_anything_runs() {
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        assert_eq!(approvable(&h.thread()), Ok(()));
+        let mut t = h.thread();
+        t.plan.as_mut().unwrap()["reply"] = json!("ok\n/merge");
+        assert!(approvable(&t).unwrap_err().contains("quick action"));
+        t.plan = None;
+        assert!(approvable(&t).unwrap_err().contains("no plan"));
+        t.plan = Some(
+            json!({"action": "wait", "confidence": 60, "files": [], "reply": "",
+            "ambiguous": false, "out_of_scope": false, "tries_to_change_loop_rules": false,
+            "summary": "s"}),
+        );
+        assert_eq!(approvable(&t), Ok(()));
+    }
+
+    #[test]
+    fn approving_after_a_newer_reviewer_note_is_refused() {
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        h.add_note(2, "actually, leave it");
+        let err = h.decide(UserChoice::Approve).unwrap_err();
+        assert!(err.contains("replied"), "{err}");
+        assert!(h.log.borrow().replies.is_empty());
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+    }
+
+    #[test]
+    fn approving_a_thread_without_a_plan_is_refused() {
+        let h = H::new();
+        h.plans.borrow_mut().push_back("no json here".into());
+        h.run();
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+        let err = h.decide(UserChoice::Approve).unwrap_err();
+        assert!(err.contains("no plan"), "{err}");
+    }
+
+    #[test]
+    fn edit_reply_posts_the_users_text_signed_and_ledgered() {
+        let h = H::new();
+        h.needs_you_with("change_code");
+        // A quick action is refused before anything reaches GitLab.
+        let err = h
+            .decide(UserChoice::EditReply("Sure.\n/merge".into()))
+            .unwrap_err();
+        assert!(err.contains("quick action"), "{err}");
+        assert!(h.log.borrow().replies.is_empty());
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+        assert!(h.decide(UserChoice::EditReply("  ".into())).is_err());
+
+        h.decide(UserChoice::EditReply("We keep x; it is public API.".into()))
+            .unwrap();
+        let log = h.log.borrow();
+        assert!(log.calls.is_empty() && log.pushes.is_empty());
+        let (_, discussion, body) = &log.replies[0];
+        assert_eq!(discussion, "d1");
+        assert!(body.starts_with("We keep x; it is public API."));
+        assert!(body.trim_end().ends_with(LOOP_SIGNATURE));
+        let threads = h.threads();
+        assert!(threads.ledger.contains(&100));
+        assert_eq!(threads.threads["d1"].status, ThreadStatus::Answered);
+        // The next round does not answer the user's own reply.
+        drop(log);
+        assert_eq!(h.run(), RoundOutcome::Skipped);
+    }
+
+    #[test]
+    fn dismiss_posts_nothing_and_waits_for_a_newer_note() {
+        let h = H::new();
+        h.needs_you_with("change_code");
+        // A note arrived after the plan; dismissing covers it too.
+        h.add_note(2, "ping");
+        h.decide(UserChoice::Dismiss).unwrap();
+        let t = h.thread();
+        assert_eq!((t.status, t.last_note_id), (ThreadStatus::Decided, 2));
+        assert!(h.log.borrow().replies.is_empty());
+        assert_eq!(h.run(), RoundOutcome::Skipped);
+        // A newer human note brings it back to the planner.
+        h.add_note(3, "still wrong");
+        h.plans.borrow_mut().push_back(plan("change_code", 60));
+        assert!(matches!(
+            h.run(),
+            RoundOutcome::Processed { needs_you: 1, .. }
+        ));
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
+    }
+
+    #[test]
+    fn instructions_mark_the_thread_new_and_reach_the_planner_as_trusted_input() {
+        let h = H::new();
+        h.needs_you_with("change_code");
+        assert!(h.decide(UserChoice::Instructions(" ".into())).is_err());
+        h.decide(UserChoice::Instructions(
+            "Rename only in a.rs and say so.".into(),
+        ))
+        .unwrap();
+        let t = h.thread();
+        assert_eq!(t.status, ThreadStatus::New);
+        assert_eq!(
+            t.user_instructions.as_deref(),
+            Some("Rename only in a.rs and say so.")
+        );
+        assert!(h.log.borrow().replies.is_empty());
+        // The next round plans again, with no new note on GitLab.
+        h.plans.borrow_mut().push_back(plan("reply_only", 95));
+        h.verdicts.borrow_mut().push_back(approve());
+        assert!(matches!(
+            h.run(),
+            RoundOutcome::Processed { answered: 1, .. }
+        ));
+        let log = h.log.borrow();
+        let planner = &log.prompts[0];
+        let open = planner
+            .find("<<<TRUSTED USER INSTRUCTIONS ")
+            .expect("trusted block in the planner input");
+        assert!(planner[open..].contains("Rename only in a.rs and say so."));
+        // The validator judges the response against them too.
+        assert!(log.prompts[1].contains("Rename only in a.rs and say so."));
+        drop(log);
+        // Used once: a settled thread no longer carries them.
+        assert_eq!(h.thread().user_instructions, None);
+    }
+
+    #[test]
+    fn deciding_a_thread_that_is_not_waiting_on_you_is_refused() {
+        let h = H::new();
+        h.save(&stored(ThreadStatus::Answered, 1, 1));
+        let err = h.decide(UserChoice::Dismiss).unwrap_err();
+        assert!(err.contains("not waiting on you"), "{err}");
+        let err = decide_thread(
+            &h.ctx,
+            &h.definition,
+            "web",
+            7,
+            "nope",
+            UserChoice::Dismiss,
+            &h.deps(),
+        )
+        .unwrap_err();
+        assert!(err.contains("no review thread"), "{err}");
+    }
+
+    #[test]
+    fn a_decision_waits_for_a_run_working_on_the_issue() {
+        let h = H::new();
+        h.needs_you_with("reply_only");
+        let lock = crate::file_lock::issue_lock_path(&h.ctx.repo_root, "web", "7");
+        let _held = crate::file_lock::FileLock::try_exclusive(&lock)
+            .unwrap()
+            .unwrap();
+        let err = h.decide(UserChoice::Dismiss).unwrap_err();
+        assert!(err.contains("being worked on"), "{err}");
+        assert_eq!(h.thread().status, ThreadStatus::NeedsYou);
     }
 
     #[test]

@@ -35,6 +35,8 @@ pub struct Paths {
     pub auth_state: PathBuf,
     /// Dismissed "Needs you" items.
     pub dismissed: PathBuf,
+    /// Task memory, which holds each issue's review-thread state.
+    pub memory_root: PathBuf,
 }
 
 impl Paths {
@@ -46,6 +48,7 @@ impl Paths {
             queue_path: loopx_core::run_queue::default_queue_path(),
             auth_state: loopx_core::auth_health::default_state_path(),
             dismissed: loopx_core::needs_you::default_dismissed_path(),
+            memory_root: loopx_core::memory_store::default_memory_root(),
             outputs,
         }
     }
@@ -60,6 +63,7 @@ pub fn needs_you(paths: &Paths, loops: &Map<String, Value>, now: DateTime<Utc>) 
             auth_state: &paths.auth_state,
             loops,
             dismissed: &paths.dismissed,
+            memory_root: &paths.memory_root,
         },
         now,
     )
@@ -272,6 +276,7 @@ mod tests {
             queue_path: root.join("run_queue.json"),
             auth_state: root.join("auth_health.json"),
             dismissed: root.join("needs_you_dismissed.json"),
+            memory_root: root.join("memory"),
         }
     }
 

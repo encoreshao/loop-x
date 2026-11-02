@@ -68,6 +68,20 @@ impl RoutePolicy {
     }
 }
 
+/// Builds what a Needs-you decision on a merge-request review thread works
+/// with (GitLab, the agent CLI, git, push, Slack) for `(alias, issue_iid)`.
+/// `Ok(None)`: the project has no GitLab merge request to act on.
+pub type MrFeedbackDeps = Arc<
+    dyn Fn(
+            &loopx_core::issue_runner::RunCtx,
+            &loopx_core::loop_definition::LoopDefinition,
+            &str,
+            &str,
+        ) -> Result<Option<loopx_core::mr_feedback::RoundDeps>, String>
+        + Send
+        + Sync,
+>;
+
 pub struct UiState {
     /// The checkout (`LOOP_DIR`): `README.md`, `outputs/`, `loops/`, `config/`.
     pub repo_root: PathBuf,
@@ -105,6 +119,9 @@ pub struct UiState {
     /// Does `POST /connectors/linkedin/connect` really open the sign-in window / does
     /// `POST /loops/<name>/run-now` really start `run-loop-now.sh`?
     pub spawn_processes: bool,
+    /// Needs you → review threads: `None` is the real GitLab, agent CLI and
+    /// git ([`loopx_core::mr_feedback::RoundDeps::real`]); tests inject fakes.
+    pub mr_feedback_deps: Option<MrFeedbackDeps>,
     pub registry: Arc<Registry>,
 }
 
@@ -168,6 +185,7 @@ impl UiState {
             connector_store: None,
             connector_http: None,
             spawn_processes: true,
+            mr_feedback_deps: None,
             registry: Arc::new(Registry::with_pages()),
         }
     }
@@ -199,6 +217,7 @@ impl UiState {
             connector_store: None,
             connector_http: None,
             spawn_processes: false,
+            mr_feedback_deps: None,
             registry: Arc::new(Registry::with_pages()),
         }
     }
@@ -230,6 +249,12 @@ impl UiState {
     /// Point the eval results somewhere else (tests, the golden harness).
     pub fn with_evals_dir(mut self, dir: &Path) -> Self {
         self.evals_dir = dir.to_path_buf();
+        self
+    }
+
+    /// Replace what Needs-you decisions on review threads reach (tests).
+    pub fn with_mr_feedback_deps(mut self, deps: MrFeedbackDeps) -> Self {
+        self.mr_feedback_deps = Some(deps);
         self
     }
 

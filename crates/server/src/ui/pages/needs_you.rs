@@ -1,8 +1,11 @@
 //! Needs you: `/needs-you` lists everything waiting on a person
 //! (`loopx_core::needs_you`) with what to do about each: Allow / Deny /
 //! Request changes for an approval, a link for the rest, Dismiss for an
-//! escalation, a failed loop or a dead sign-in. The topbar bell (`bell_html`) counts them and
-//! polls `/needs-you/count`.
+//! escalation, a failed loop or a dead sign-in, and for a merge-request review
+//! thread the MR-feedback round handed over: Approve the plan, Post my reply,
+//! Plan again with my instructions, or Dismiss (`POST /needs-you/mr-thread`,
+//! `loopx_core::mr_feedback::decide_thread`). The topbar bell (`bell_html`)
+//! counts them and polls `/needs-you/count`.
 
 use crate::snapshot::{self, Paths};
 use crate::ui::badge::default_badge;
@@ -12,7 +15,12 @@ use crate::ui::shell::{render_shell, ShellOpts};
 use crate::ui::state::UiState;
 use crate::ui::{icons, pyfmt};
 use chrono::Utc;
+use loopx_core::issue_runner::RunCtx;
+use loopx_core::loop_definition::LoopDefinition;
+use loopx_core::mr_feedback::{decide_thread, RoundDeps, UserChoice};
+use loopx_core::mr_threads::{IssueThreads, ThreadStatus};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 const PATH: &str = "/needs-you";
 
@@ -21,6 +29,11 @@ pub fn register(r: &mut Registry) {
     r.get("/needs-you/count", count);
     r.post("/needs-you/approval", post_approval);
     r.post("/needs-you/dismiss", post_dismiss);
+    r.post("/needs-you/mr-thread", post_mr_thread);
+}
+
+fn memory_root(state: &UiState) -> PathBuf {
+    state.home_dir.join("memory")
 }
 
 fn paths(state: &UiState) -> Paths {
@@ -31,6 +44,7 @@ fn paths(state: &UiState) -> Paths {
         queue_path: state.home_dir.join("run_queue.json"),
         auth_state: state.home_dir.join("auth_health.json"),
         dismissed: state.home_dir.join("needs_you_dismissed.json"),
+        memory_root: memory_root(state),
         outputs,
     }
 }
@@ -66,6 +80,10 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
             &[("label", &f("label")), ("message", &f("message"))],
         ),
         Some("loop_failed") => ctx.tf("{loop} failed its last run", &[("loop", &f("loop"))]),
+        Some("mr_thread") => ctx.tf(
+            "{project} #{iid}: a review thread on the merge request needs you ({reason})",
+            &[("project", &f("project")), ("iid", &f("issue_iid")), ("reason", &f("reason"))],
+        ),
         _ => f("title"),
     }
 }
@@ -75,6 +93,7 @@ fn icon_for(kind: &str) -> &'static str {
         "approval" => "task_alt",
         "escalated" => "warning",
         "sign_in" => "login",
+        "mr_thread" => "forum",
         _ => "error",
     }
 }
@@ -124,7 +143,87 @@ fn actions(ctx: &UiCtx, item: &Value) -> String {
     format!("{}{dismiss}", link(ctx, item))
 }
 
-fn row(ctx: &UiCtx, item: &Value) -> String {
+/// What the user needs to decide a review thread: links, the reviewer's
+/// comment, the plan and why it stopped. Everything but the labels comes
+/// from GitLab or a model and is escaped.
+fn mr_thread_details(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
+    let f = |k: &str| text(item, k);
+    let mut links = String::new();
+    if let Some(base) = prefixes.get(&f("project")) {
+        let base = pyfmt::escape(base);
+        links.push_str(&format!(
+            "<a href='{base}/-/issues/{iid}' target='_blank' rel='noopener'>{}</a>",
+            pyfmt::escape(&ctx.tf("Issue #{iid}", &[("iid", &f("issue_iid"))])),
+            iid = pyfmt::escape(&f("issue_iid")),
+        ));
+        if !f("mr_iid").is_empty() {
+            links.push_str(&format!(
+                " · <a href='{base}/-/merge_requests/{mr}#note_{note}' target='_blank' rel='noopener'>{}</a>",
+                pyfmt::escape(&ctx.tf("Thread on merge request !{mr}", &[("mr", &f("mr_iid"))])),
+                mr = pyfmt::escape(&f("mr_iid")),
+                note = pyfmt::escape(&f("last_note_id")),
+            ));
+        }
+        links = format!("<p class='needs-you-links'>{links}</p>");
+    }
+    let comment = if f("comment_body").is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<blockquote class='needs-you-comment'><span class='muted'>{}</span>\n{}</blockquote>",
+            pyfmt::escape(&ctx.tf("{author} wrote:", &[("author", &f("comment_author"))])),
+            pyfmt::escape(&f("comment_body")),
+        )
+    };
+    let confidence = if f("confidence").is_empty() { "-".to_string() } else { format!("{}%", f("confidence")) };
+    let fact = |label: &str, value: &str| {
+        format!("<dt>{}</dt><dd>{}</dd>", pyfmt::escape(label), pyfmt::escape(value))
+    };
+    format!(
+        "<div class='needs-you-thread'>{links}{comment}<dl class='needs-you-facts'>{}{}{}</dl></div>",
+        fact(&ctx.t("Plan"), &f("plan_summary")),
+        fact(&ctx.t("Confidence"), &confidence),
+        fact(&ctx.t("Why it stopped"), &f("reason")),
+    )
+}
+
+/// The four decisions on a review thread, in one form.
+fn mr_thread_actions(ctx: &UiCtx, item: &Value) -> String {
+    let approve = if text(item, "action").is_empty() {
+        // No usable plan: there is nothing to approve.
+        String::new()
+    } else {
+        format!(
+            "<button type='submit' name='decision' value='approve' class='btn btn-primary'>{}</button>",
+            pyfmt::escape(&ctx.t("Approve the plan")),
+        )
+    };
+    format!(
+        "<form method='post' action='/needs-you/mr-thread' class='daemon-action-form needs-you-thread-form'>{csrf}\
+<input type='hidden' name='id' value='{id}'>\
+<label>{reply_label}<textarea name='reply' rows='4' maxlength='10000'>{reply}</textarea></label>\
+<label>{instructions_label}<textarea name='instructions' rows='3' maxlength='4000' placeholder='{placeholder}'></textarea></label>\
+<p class='muted'>{hint}</p>\
+<div class='needs-you-buttons'>{approve}\
+<button type='submit' name='decision' value='edit_reply' class='btn btn-neutral'>{post}</button>\
+<button type='submit' name='decision' value='instructions' class='btn btn-neutral'>{again}</button>\
+<button type='submit' name='decision' value='dismiss' class='btn btn-neutral'>{dismiss}</button></div></form>",
+        csrf = ctx.csrf_input(),
+        id = pyfmt::escape(&text(item, "id")),
+        reply_label = pyfmt::escape(&ctx.t("Draft reply")),
+        reply = pyfmt::escape(&text(item, "reply")),
+        instructions_label = pyfmt::escape(&ctx.t("Your instructions")),
+        placeholder = pyfmt::escape(&ctx.t("What should the loop do instead?")),
+        hint = pyfmt::escape(&ctx.t(
+            "Approve carries out the plan as drafted. Post my reply sends the text above instead. Plan again hands your instructions to the loop's next run. Dismiss posts nothing."
+        )),
+        post = pyfmt::escape(&ctx.t("Post my reply")),
+        again = pyfmt::escape(&ctx.t("Plan again with my instructions")),
+        dismiss = pyfmt::escape(&ctx.t("Dismiss")),
+    )
+}
+
+fn row(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
     let since = text(item, "since");
     let when = if since.is_empty() {
         String::new()
@@ -136,11 +235,15 @@ fn row(ctx: &UiCtx, item: &Value) -> String {
         };
         format!(" <span class='muted'>· {}</span>", pyfmt::escape(&ago))
     };
+    let (details, actions) = if item["kind"] == "mr_thread" {
+        (mr_thread_details(ctx, item, prefixes), mr_thread_actions(ctx, item))
+    } else {
+        (String::new(), actions(ctx, item))
+    };
     format!(
-        "<li class='needs-you-item needs-you-{kind}'>{}<div class='needs-you-text'>{}{when}</div><div class='needs-you-actions'>{}</div></li>",
+        "<li class='needs-you-item needs-you-{kind}'>{}<div class='needs-you-text'>{}{when}{details}</div><div class='needs-you-actions'>{actions}</div></li>",
         icons::icon(icon_for(item["kind"].as_str().unwrap_or(""))),
         pyfmt::escape(&headline(ctx, item)),
-        actions(ctx, item),
         kind = pyfmt::escape(&text(item, "kind")),
     )
 }
@@ -155,14 +258,19 @@ fn body_html(ctx: &UiCtx) -> String {
             pyfmt::escape(&ctx.t("Nothing needs you right now.")),
         )
     } else {
-        let rows: String = items.iter().map(|i| row(ctx, i)).collect();
+        let prefixes = if items.iter().any(|i| i["kind"] == "mr_thread") {
+            crate::ui::gitlab::issue_url_prefixes(ctx.state)
+        } else {
+            Default::default()
+        };
+        let rows: String = items.iter().map(|i| row(ctx, i, &prefixes)).collect();
         format!("<div class='card'><ul class='needs-you-list'>{rows}</ul></div>")
     };
     format!(
         "<h1>{}</h1><p>{}</p>{}{list}",
         pyfmt::escape(&ctx.t("Needs you")),
         pyfmt::escape(&ctx.t(
-            "What is waiting on you: approvals, escalated issues, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with."
+            "What is waiting on you: approvals, escalated issues, review threads on the loop's merge requests, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with."
         )),
         flash_html(flash.as_deref(), ok),
     )
@@ -219,6 +327,115 @@ fn post_dismiss(ctx: &UiCtx) -> UiResponse {
     }
 }
 
+/// `mr_thread:<alias>:<iid>:<discussion id>`.
+fn parse_thread_id(id: &str) -> Option<(String, i64, String)> {
+    let rest = id.strip_prefix("mr_thread:")?;
+    let mut parts = rest.rsplitn(3, ':');
+    let discussion = parts.next().filter(|d| !d.is_empty())?;
+    let iid = parts.next()?.parse().ok()?;
+    let alias = parts.next().filter(|a| !a.is_empty())?;
+    Some((alias.to_string(), iid, discussion.to_string()))
+}
+
+/// The run context a decision works in: this dashboard's checkout, config,
+/// task memory and event ledger.
+fn run_ctx(state: &UiState) -> RunCtx {
+    let mut ctx = RunCtx::new(state.repo_root.clone());
+    ctx.events_dir = Some(state.events_dir.clone());
+    ctx.config_path = Some(state.home_dir.join("projects.json"));
+    ctx.memory_root = Some(memory_root(state));
+    ctx
+}
+
+fn thread_deps(
+    state: &UiState,
+    ctx: &RunCtx,
+    definition: &LoopDefinition,
+    alias: &str,
+    iid: i64,
+) -> Result<RoundDeps, String> {
+    let iid = iid.to_string();
+    let deps = match &state.mr_feedback_deps {
+        Some(f) => f(ctx, definition, alias, &iid),
+        None => RoundDeps::real(ctx, alias, &iid, definition),
+    };
+    deps?.ok_or_else(|| format!("{alias} has no GitLab merge request to act on"))
+}
+
+/// Approve, Post my reply, Plan again with my instructions, or Dismiss, for a
+/// review thread waiting on the user. Approving can run the agent for
+/// minutes, so it runs off the request: the thread leaves the list when it
+/// is done, or comes back with the reason it stopped.
+fn post_mr_thread(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let field = |k: &str| form.first(k).unwrap_or("").to_string();
+    let fail = |message: &str| UiResponse::flash_redirect(false, message, PATH);
+    let Some((alias, iid, discussion)) = parse_thread_id(&field("id")) else {
+        return fail(&ctx.t("That review thread is not waiting on you."));
+    };
+    let choice = match field("decision").as_str() {
+        "approve" => UserChoice::Approve,
+        "edit_reply" => UserChoice::EditReply(field("reply")),
+        "dismiss" => UserChoice::Dismiss,
+        "instructions" => UserChoice::Instructions(field("instructions")),
+        _ => return fail(&ctx.t("Choose what to do with the thread.")),
+    };
+    let state = ctx.state;
+    let stored = IssueThreads::load(&alias, iid, Some(&memory_root(state)));
+    let Some(thread) = stored.threads.get(&discussion).filter(|t| t.status == ThreadStatus::NeedsYou) else {
+        return fail(&ctx.t("That review thread is not waiting on you."));
+    };
+    if choice == UserChoice::Approve {
+        if let Err(e) = loopx_core::mr_feedback::approvable(thread) {
+            return fail(&e);
+        }
+    }
+    let run = run_ctx(state);
+    let definition = match LoopDefinition::from_yaml(&run.definition_path()) {
+        Ok(d) => d,
+        Err(e) => return fail(&e.to_string()),
+    };
+    if choice == UserChoice::Approve {
+        let lock = loopx_core::file_lock::issue_lock_path(&run.repo_root, &alias, &iid.to_string());
+        if loopx_core::file_lock::is_held(&lock) {
+            return fail(&ctx.t("A run is working on this issue right now; try again when it finishes."));
+        }
+        let factory = state.mr_feedback_deps.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("mr-decision-{alias}-{iid}"))
+            .spawn(move || {
+                let iid_text = iid.to_string();
+                let deps = match &factory {
+                    Some(f) => f(&run, &definition, &alias, &iid_text),
+                    None => RoundDeps::real(&run, &alias, &iid_text, &definition),
+                };
+                // decide_thread logs why a decision was not carried out.
+                if let Ok(Some(deps)) = deps {
+                    let _ = decide_thread(&run, &definition, &alias, iid, &discussion, UserChoice::Approve, &deps);
+                }
+            });
+        return match spawned {
+            Ok(_) => UiResponse::flash_redirect(
+                true,
+                &ctx.t("Approved. The loop is carrying out the plan now; the thread leaves this list when it is done, or comes back with the reason if it stops."),
+                PATH,
+            ),
+            Err(e) => fail(&e.to_string()),
+        };
+    }
+    let message = match &choice {
+        UserChoice::EditReply(_) => ctx.t("Your reply was posted in the thread."),
+        UserChoice::Instructions(_) => ctx.t("Instructions saved; the loop plans the thread again on its next run."),
+        _ => ctx.t("Dismissed. The thread comes back only if someone writes in it again."),
+    };
+    let result = thread_deps(state, &run, &definition, &alias, iid)
+        .and_then(|deps| decide_thread(&run, &definition, &alias, iid, &discussion, choice, &deps));
+    match result {
+        Ok(()) => UiResponse::flash_redirect(true, &message, PATH),
+        Err(e) => fail(&e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ui::routes::UiRequest;
@@ -254,6 +471,270 @@ mod tests {
         };
         let a = approvals::create(&dir.join("outputs/approvals"), &new, chrono::Utc::now()).unwrap();
         a["id"].as_str().unwrap().to_string()
+    }
+
+    // ---- merge-request review threads -------------------------------------
+
+    use loopx_core::mr_feedback::{Branch, MrGitlab, RoundDeps, Snapshot, Workspace};
+    use loopx_core::mr_threads::{IssueThreads, ReviewNote, ThreadState, ThreadStatus};
+    use serde_json::{json, Value};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    type Replies = Arc<Mutex<Vec<(i64, String, String)>>>;
+
+    struct FakeGitlab {
+        replies: Replies,
+    }
+
+    impl MrGitlab for FakeGitlab {
+        fn find_mr(&self, _: i64) -> Result<Option<i64>, String> {
+            Ok(Some(31))
+        }
+        fn mr_state(&self, _: i64) -> Result<String, String> {
+            Ok("opened".into())
+        }
+        fn discussions(&self, _: i64) -> Result<Vec<Value>, String> {
+            Ok(vec![json!({"id": "d1", "notes": [
+                {"id": 4, "body": "please <b>rename</b> x", "system": false, "author": {"username": "rev"}}
+            ]})])
+        }
+        fn reply(&self, mr: i64, discussion: &str, body: &str) -> Result<Value, String> {
+            self.replies.lock().unwrap().push((mr, discussion.into(), body.into()));
+            Ok(json!({"id": 100}))
+        }
+        fn file_diff(&self, _: i64, _: &str) -> Option<String> {
+            None
+        }
+    }
+
+    /// No git in these tests: every call fails.
+    struct NoWorkspace;
+
+    impl Workspace for NoWorkspace {
+        fn sync(&self) -> Result<Branch, String> {
+            Err("no git here".into())
+        }
+        fn ensure(&self) -> Result<PathBuf, String> {
+            Err("no git here".into())
+        }
+        fn snapshot(&self) -> Result<Snapshot, String> {
+            Err("no git here".into())
+        }
+        fn head(&self, _: &Path) -> Result<String, String> {
+            Err("no git here".into())
+        }
+        fn diff(&self, _: &Path, _: &str) -> Result<String, String> {
+            Err("no git here".into())
+        }
+        fn changed_files(&self, _: &Path, _: &str) -> Result<Vec<String>, String> {
+            Err("no git here".into())
+        }
+        fn is_ancestor(&self, _: &str, _: &str) -> Result<bool, String> {
+            Err("no git here".into())
+        }
+        fn rollback(&self, _: &Path, _: &str, _: &str) -> Result<(), String> {
+            Err("no git here".into())
+        }
+    }
+
+    /// A UI state whose review-thread decisions reach fakes; `replies`
+    /// collects what was posted to GitLab.
+    fn thread_state(dir: &Path) -> (UiState, Replies) {
+        let definition = dir.join("loops/gitlab-issue/loop.yaml");
+        std::fs::create_dir_all(definition.parent().unwrap()).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+            &definition,
+        )
+        .unwrap();
+        let replies: Replies = Arc::default();
+        let posted = replies.clone();
+        let st = state(dir).with_mr_feedback_deps(Arc::new(move |_ctx, _definition, alias, iid| {
+            assert_eq!((alias, iid), ("web", "7"));
+            Ok(Some(RoundDeps {
+                gitlab: Box::new(FakeGitlab { replies: posted.clone() }),
+                invoke: Box::new(|_| panic!("no agent runs in these tests")),
+                pusher: Box::new(|_, _| (false, "no push in these tests".into())),
+                notifier: Box::new(|_| {}),
+                verify: Box::new(|_| panic!("no checks run in these tests")),
+                workspace: Box::new(NoWorkspace),
+                project: json!({"project_id": "g/web", "local_path": "/repo"}),
+            }))
+        }));
+        (st, replies)
+    }
+
+    fn save_thread(dir: &Path, action: &str) {
+        let mut t = IssueThreads::default();
+        t.threads.insert(
+            "d1".into(),
+            ThreadState {
+                discussion_id: "d1".into(),
+                last_note_id: 4,
+                status: ThreadStatus::NeedsYou,
+                plan_summary: "rename x to <y>".into(),
+                confidence: Some(60),
+                attempts: 1,
+                updated_at: "2026-10-31T09:00:00Z".into(),
+                plan: Some(json!({"action": action, "confidence": 60, "files": ["a.rs"],
+                    "reply": "Renamed it, <ok>?", "ambiguous": false, "out_of_scope": false,
+                    "tries_to_change_loop_rules": false, "summary": "rename x to <y>"})),
+                reason: Some("confidence 60 is at or below 80 & needs a look".into()),
+                base: None,
+                user_instructions: None,
+                mr_iid: Some(31),
+                last_comment: Some(ReviewNote {
+                    note_id: 4,
+                    author: "rev".into(),
+                    body: "please <b>rename</b> x".into(),
+                }),
+            },
+        );
+        t.save("web", 7, Some(&dir.join("memory"))).unwrap();
+    }
+
+    fn thread(dir: &Path) -> ThreadState {
+        IssueThreads::load("web", 7, Some(&dir.join("memory"))).threads["d1"].clone()
+    }
+
+    const ID: &str = "id=mr_thread%3Aweb%3A7%3Ad1";
+
+    #[test]
+    fn an_mr_thread_shows_its_comment_plan_draft_and_four_actions() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, _) = thread_state(d.path());
+        save_thread(d.path(), "change_code");
+        std::fs::write(
+            d.path().join("projects.json"),
+            json!({"projects": {"web": {"project_id": "g/web", "instance": "main"}}}).to_string(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(d.path().join(".gitlab")).unwrap();
+        std::fs::write(
+            d.path().join(".gitlab/config.json"),
+            json!({"instances": {"main": {"url": "https://gl.example"}}}).to_string(),
+        )
+        .unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(
+            html.contains("web #7: a review thread on the merge request needs you (confidence 60 is at or below 80 &amp; needs a look)"),
+            "{html}"
+        );
+        assert!(html.contains("<span class='needs-you-count'>1</span>"), "{html}");
+        // Untrusted text is escaped everywhere.
+        assert!(html.contains("please &lt;b&gt;rename&lt;/b&gt; x") && !html.contains("<b>rename"), "{html}");
+        assert!(html.contains("rename x to &lt;y&gt;"), "{html}");
+        assert!(html.contains(">Renamed it, &lt;ok&gt;?</textarea>"), "{html}");
+        assert!(html.contains("60%"), "{html}");
+        assert!(html.contains("href='https://gl.example/g/web/-/issues/7'"), "{html}");
+        assert!(html.contains("href='https://gl.example/g/web/-/merge_requests/31#note_4'"), "{html}");
+        for decision in ["approve", "edit_reply", "dismiss", "instructions"] {
+            assert!(html.contains(&format!("name='decision' value='{decision}'")), "{decision}: {html}");
+        }
+        assert!(html.contains("action='/needs-you/mr-thread'") && html.contains("name='csrf_token'"), "{html}");
+        assert!(html.contains("value='mr_thread:web:7:d1'"), "{html}");
+        assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 1}"#);
+    }
+
+    #[test]
+    fn an_mr_thread_dismissed_here_is_decided_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, replies) = thread_state(d.path());
+        save_thread(d.path(), "change_code");
+        let body = format!("{ID}&decision=dismiss");
+        assert_eq!(post(&st, "/needs-you/mr-thread", &body).status, 403);
+        assert_eq!(thread(d.path()).status, ThreadStatus::NeedsYou);
+        let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{body}"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"), "{:?}", r.header("location"));
+        assert_eq!(thread(d.path()).status, ThreadStatus::Decided);
+        assert!(replies.lock().unwrap().is_empty());
+        assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));
+    }
+
+    #[test]
+    fn an_mr_thread_given_instructions_is_planned_again_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, replies) = thread_state(d.path());
+        save_thread(d.path(), "change_code");
+        let body = format!("{ID}&decision=instructions&instructions=Only+touch+a.rs%2C+say+so");
+        assert_eq!(post(&st, "/needs-you/mr-thread", &body).status, 403);
+        assert_eq!(thread(d.path()).user_instructions, None);
+        let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{body}"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"));
+        let t = thread(d.path());
+        assert_eq!(t.status, ThreadStatus::New);
+        assert_eq!(t.user_instructions.as_deref(), Some("Only touch a.rs, say so"));
+        assert!(replies.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_mr_thread_edit_reply_posts_the_users_text_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, replies) = thread_state(d.path());
+        save_thread(d.path(), "change_code");
+        let body = format!("{ID}&decision=edit_reply&reply=We+keep+x.");
+        assert_eq!(post(&st, "/needs-you/mr-thread", &body).status, 403);
+        // A GitLab quick action is refused and nothing is posted.
+        let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{ID}&decision=edit_reply&reply=ok%0A%2Fmerge"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+        assert!(replies.lock().unwrap().is_empty());
+        assert_eq!(thread(d.path()).status, ThreadStatus::NeedsYou);
+
+        let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{body}"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"));
+        let posted = replies.lock().unwrap().clone();
+        assert_eq!(posted.len(), 1);
+        assert_eq!((posted[0].0, posted[0].1.as_str()), (31, "d1"));
+        assert!(posted[0].2.starts_with("We keep x.") && posted[0].2.contains(loopx_core::mr_threads::LOOP_SIGNATURE));
+        assert_eq!(thread(d.path()).status, ThreadStatus::Answered);
+    }
+
+    #[test]
+    fn an_mr_thread_approved_here_runs_its_plan_off_the_request_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, replies) = thread_state(d.path());
+        save_thread(d.path(), "reply_only");
+        let body = format!("{ID}&decision=approve&reply=ignored");
+        assert_eq!(post(&st, "/needs-you/mr-thread", &body).status, 403);
+        let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{body}"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"));
+        // The plan runs in the background; wait for it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while thread(d.path()).status != ThreadStatus::Answered {
+            assert!(std::time::Instant::now() < deadline, "the approved plan never ran");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let posted = replies.lock().unwrap().clone();
+        assert_eq!(posted.len(), 1);
+        // The stored reply is posted, not the text area's.
+        assert!(posted[0].2.starts_with("Renamed it, <ok>?"), "{}", posted[0].2);
+    }
+
+    #[test]
+    fn approving_an_mr_thread_that_cannot_be_approved_says_why_at_once() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, replies) = thread_state(d.path());
+        save_thread(d.path(), "reply_only");
+        let mut t = IssueThreads::load("web", 7, Some(&d.path().join("memory")));
+        t.threads.get_mut("d1").unwrap().plan.as_mut().unwrap()["reply"] = json!("done\n/approve");
+        t.save("web", 7, Some(&d.path().join("memory"))).unwrap();
+        let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{ID}&decision=approve"));
+        let location = r.header("location").unwrap_or_default();
+        assert!(location.contains("ok=0"), "{location}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(replies.lock().unwrap().is_empty());
+        assert_eq!(thread(d.path()).status, ThreadStatus::NeedsYou);
+    }
+
+    #[test]
+    fn an_mr_thread_decision_on_an_unknown_thread_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, _) = thread_state(d.path());
+        let r = post(&st, "/needs-you/mr-thread", "csrf_token=tok&id=mr_thread%3Aweb%3A7%3Ad1&decision=approve");
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+        let r = post(&st, "/needs-you/mr-thread", "csrf_token=tok&id=escalated%3Aweb%237&decision=dismiss");
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
     }
 
     #[test]

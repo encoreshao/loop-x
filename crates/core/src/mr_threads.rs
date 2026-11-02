@@ -44,6 +44,26 @@ pub struct ThreadState {
     /// is `working` so a retry can tell the change was already pushed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// What the user told the loop to do with this thread from Needs you.
+    /// Trusted input for the next plan; only the dashboard's authenticated
+    /// decision sets it, never anything read from GitLab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_instructions: Option<String>,
+    /// The merge request the thread is on, for links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mr_iid: Option<i64>,
+    /// The newest human note the loop read in the thread, shown (escaped) to
+    /// the user when the thread needs them. Untrusted text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_comment: Option<ReviewNote>,
+}
+
+/// One note of a review thread as shown to the user.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct ReviewNote {
+    pub note_id: i64,
+    pub author: String,
+    pub body: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -103,6 +123,13 @@ mod tests {
                 plan: None,
                 reason: None,
                 base: None,
+                user_instructions: Some("only touch a.rs".into()),
+                mr_iid: Some(31),
+                last_comment: Some(ReviewNote {
+                    note_id: 9,
+                    author: "rev".into(),
+                    body: "rename <x>".into(),
+                }),
             },
         );
         t.save("p", 7, r).unwrap();

@@ -2986,6 +2986,21 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .needs-you-text { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
 .needs-you-actions, .needs-you-approval, .needs-you-dismiss { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .needs-you-approval input[type='text'] { min-width: 17rem; }
+/* A review thread: what the reviewer wrote, the plan, and the decision form
+   below it at full width. */
+.needs-you-mr_thread { align-items: flex-start; }
+.needs-you-mr_thread .needs-you-actions { flex: 1 1 100%; }
+.needs-you-thread { display: flex; flex-direction: column; gap: 0.5rem; padding-top: 0.5rem; }
+.needs-you-links { margin: 0; font-size: 0.85rem; }
+.needs-you-comment { margin: 0; padding: 0.5rem 0.75rem; border-left: 3px solid var(--md-outline-variant); white-space: pre-wrap; overflow-wrap: anywhere; }
+.needs-you-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.25rem 0.75rem; margin: 0; font-size: 0.875rem; }
+.needs-you-facts dt { color: var(--md-on-surface-variant); }
+.needs-you-facts dd { margin: 0; overflow-wrap: anywhere; }
+.needs-you-thread-form { flex: 1 1 100%; flex-direction: column; align-items: stretch; gap: 0.5rem; }
+.needs-you-thread-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
+.needs-you-thread-form textarea { flex: 0 0 auto; min-width: 0; resize: vertical; }
+.needs-you-thread-form p { margin: 0; font-size: 0.8rem; }
+.needs-you-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .btn-tonal { background: var(--md-primary-container); color: var(--md-on-primary-container); border-color: transparent; }
 .btn-tonal:hover { filter: brightness(0.96); }
 

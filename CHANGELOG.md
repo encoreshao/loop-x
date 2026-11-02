@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Needs you: a review thread on the loop's own merge request that the loop would not handle on its own (low confidence, a hard rule, a failed check) is listed with the reviewer's comment, the plan, its confidence, why it stopped and the draft reply. You can approve the plan (a code change still goes through the checks, the validator and every push guard), post your own reply in the thread, have the loop plan it again with your instructions, or dismiss it until someone writes in the thread again. Nothing is posted on the merge request until you decide.
 - A `calendar.free_busy` chat tool takes several colleagues' email addresses and a date range and returns each person's busy blocks plus the gaps where everyone is free (never meeting titles), so you can pick a time to book.
 - The chat's `calendar.list_events` tool takes an optional `calendar` argument (a colleague's email address) to read their calendar, so you can see when they are busy before booking a meeting. It shows what they share with you in Google Calendar; free/busy-only shares return busy blocks without titles.
 - Every add, update, delete, copy and failure message in the dashboard (including queue Remove/Stop/Move to front and the issue tracking switch) now appears as a card at the bottom left, in the Office view's notification style. Successes fade after a few seconds; failures stay until dismissed.

@@ -4,7 +4,12 @@
 //! app's menu bar count them; each one already alerted once in Slack, so this
 //! is where it stays visible instead of being alerted again.
 //!
-//! Escalations, failing loops and dead sign-ins can be dismissed
+//! A merge-request review thread the MR-feedback round handed to the user
+//! (`<memory root>/<alias>/mr-threads/<iid>.json`, status `needs_you`) waits
+//! here too, with the plan, the reviewer's comment and why it stopped; the
+//! user decides it (`mr_feedback::decide_thread`).
+//!
+//! Escalations, failing loops, dead sign-ins and review threads can be dismissed
 //! (`needs_you_dismissed.json`: `{<item id>: <UTC ISO>}`); a newer escalation
 //! of the same issue, a newer failure, or a sign-in that recovers and breaks
 //! again brings them back. Reconnecting clears a sign-in on its own
@@ -41,6 +46,8 @@ pub struct Sources<'a> {
     /// Each loop's status document (with its effective `state`).
     pub loops: &'a Map<String, Value>,
     pub dismissed: &'a Path,
+    /// Task memory, where each issue's review-thread state lives.
+    pub memory_root: &'a Path,
 }
 
 /// An RFC 3339 time, or a naive one in local time (`auth_health`, run status).
@@ -82,7 +89,7 @@ fn item(id: String, kind: &str, title: String, since: Option<&str>, fields: Valu
         "kind": kind,
         "title": title,
         "since": since,
-        "dismissable": matches!(kind, "escalated" | "loop_failed" | "sign_in"),
+        "dismissable": matches!(kind, "escalated" | "loop_failed" | "sign_in" | "mr_thread"),
     });
     if let (Some(v), Value::Object(f)) = (v.as_object_mut(), fields) {
         v.extend(f);
@@ -219,6 +226,72 @@ fn failed_loops(src: &Sources, dismissed: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// Review threads in `needs_you`, from every issue's thread state.
+fn mr_threads(src: &Sources, dismissed: &Value) -> Vec<Value> {
+    use crate::mr_threads::{IssueThreads, ThreadStatus};
+    let mut out = Vec::new();
+    let Ok(projects) = std::fs::read_dir(src.memory_root) else {
+        return out;
+    };
+    let mut files: Vec<(String, i64)> = projects
+        .flatten()
+        .filter_map(|p| {
+            let alias = p.file_name().to_str()?.to_string();
+            let dir = std::fs::read_dir(p.path().join("mr-threads")).ok()?;
+            Some(
+                dir.flatten()
+                    .filter_map(|f| {
+                        let name = f.file_name();
+                        let iid = name.to_str()?.strip_suffix(".json")?.parse().ok()?;
+                        Some((alias.clone(), iid))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect();
+    files.sort();
+    for (alias, iid) in files {
+        let state = IssueThreads::load(&alias, iid, Some(src.memory_root));
+        for (discussion, t) in &state.threads {
+            if t.status != ThreadStatus::NeedsYou {
+                continue;
+            }
+            let id = format!("mr_thread:{alias}:{iid}:{discussion}");
+            if dismissed_since(dismissed, &id, Some(&t.updated_at)) {
+                continue;
+            }
+            let reason = t.reason.clone().unwrap_or_default();
+            let plan = t.plan.as_ref();
+            let plan_text = |k: &str| plan.and_then(|p| p.get(k)).and_then(Value::as_str);
+            let comment = t.last_comment.as_ref();
+            out.push(item(
+                id,
+                "mr_thread",
+                format!(
+                    "{alias} #{iid}: a review thread on the merge request needs you ({reason})"
+                ),
+                Some(&t.updated_at),
+                json!({
+                    "project": alias,
+                    "issue_iid": iid,
+                    "discussion_id": discussion,
+                    "mr_iid": t.mr_iid,
+                    "reason": reason,
+                    "plan_summary": t.plan_summary,
+                    "confidence": t.confidence,
+                    "action": plan_text("action"),
+                    "reply": plan_text("reply"),
+                    "comment_author": comment.map(|c| c.author.as_str()),
+                    "comment_body": comment.map(|c| c.body.as_str()),
+                    "last_note_id": t.last_note_id,
+                }),
+            ));
+        }
+    }
+    out
+}
+
 /// Everything waiting on a person, oldest first.
 pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     let dismissed = read_json(src.dismissed);
@@ -226,6 +299,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     items.extend(escalations(src, &dismissed, now));
     items.extend(sign_ins(src, &dismissed));
     items.extend(failed_loops(src, &dismissed));
+    items.extend(mr_threads(src, &dismissed));
     // Oldest first; an item with no time goes last.
     items.sort_by_key(|i| {
         let since = i["since"].as_str().and_then(parse);
@@ -236,7 +310,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
 
 /// Hide a dismissable item until it happens again.
 pub fn dismiss(path: &Path, id: &str, now: DateTime<Utc>) -> Result<(), String> {
-    if !["escalated:", "loop_failed:", "sign_in:"]
+    if !["escalated:", "loop_failed:", "sign_in:", "mr_thread:"]
         .iter()
         .any(|p| id.starts_with(p))
     {
@@ -286,11 +360,12 @@ mod tests {
             std::fs::write(file, text).unwrap();
         }
         fn collect(&self) -> Vec<Value> {
-            let (approvals, events, auth, dismissed) = (
+            let (approvals, events, auth, dismissed, memory) = (
                 self.p("approvals"),
                 self.p("events"),
                 self.p("auth_health.json"),
                 self.p("dismissed.json"),
+                self.p("memory"),
             );
             collect(
                 &Sources {
@@ -299,6 +374,7 @@ mod tests {
                     auth_state: &auth,
                     loops: &self.loops,
                     dismissed: &dismissed,
+                    memory_root: &memory,
                 },
                 now(),
             )
@@ -309,6 +385,105 @@ mod tests {
                 .map(|i| i["id"].as_str().unwrap().to_string())
                 .collect()
         }
+    }
+
+    fn thread(
+        status: crate::mr_threads::ThreadStatus,
+        updated_at: &str,
+    ) -> crate::mr_threads::ThreadState {
+        crate::mr_threads::ThreadState {
+            discussion_id: "d1".into(),
+            last_note_id: 4,
+            status,
+            plan_summary: "rename x to y".into(),
+            confidence: Some(60),
+            attempts: 1,
+            updated_at: updated_at.into(),
+            plan: Some(
+                json!({"action": "change_code", "confidence": 60, "files": ["a.rs"],
+                              "reply": "Renamed <it>.", "summary": "rename x to y"}),
+            ),
+            reason: Some("confidence 60 is at or below 80".into()),
+            base: None,
+            user_instructions: None,
+            mr_iid: Some(31),
+            last_comment: Some(crate::mr_threads::ReviewNote {
+                note_id: 4,
+                author: "rev".into(),
+                body: "please <b>rename</b> x".into(),
+            }),
+        }
+    }
+
+    fn save_threads(f: &Fx, threads: &[(&str, crate::mr_threads::ThreadState)]) {
+        let mut t = crate::mr_threads::IssueThreads::default();
+        for (id, s) in threads {
+            let mut s = s.clone();
+            s.discussion_id = (*id).into();
+            t.threads.insert((*id).into(), s);
+        }
+        t.save("web", 7, Some(&f.p("memory"))).unwrap();
+    }
+
+    #[test]
+    fn needs_you_lists_mr_threads_in_needs_you_state() {
+        use crate::mr_threads::ThreadStatus;
+        let f = Fx::new();
+        save_threads(
+            &f,
+            &[
+                ("d1", thread(ThreadStatus::NeedsYou, "2026-10-31T09:00:00Z")),
+                ("d2", thread(ThreadStatus::Answered, "2026-10-31T09:00:00Z")),
+                ("d3", thread(ThreadStatus::Decided, "2026-10-31T09:00:00Z")),
+            ],
+        );
+        // A stray file under memory/ is not a thread state.
+        std::fs::write(f.p("memory/web/notes.md"), "x").unwrap();
+        let items = f.collect();
+        assert_eq!(items.len(), 1, "{items:?}");
+        let i = &items[0];
+        assert_eq!(i["id"], "mr_thread:web:7:d1");
+        assert_eq!(i["kind"], "mr_thread");
+        assert_eq!(i["since"], "2026-10-31T09:00:00Z");
+        assert_eq!(i["dismissable"], true);
+        assert_eq!(
+            i["title"],
+            "web #7: a review thread on the merge request needs you (confidence 60 is at or below 80)"
+        );
+        assert_eq!(
+            (
+                i["project"].as_str(),
+                i["issue_iid"].as_i64(),
+                i["discussion_id"].as_str()
+            ),
+            (Some("web"), Some(7), Some("d1"))
+        );
+        assert_eq!(i["mr_iid"], 31);
+        assert_eq!(i["plan_summary"], "rename x to y");
+        assert_eq!(i["confidence"], 60);
+        assert_eq!(i["action"], "change_code");
+        assert_eq!(i["reply"], "Renamed <it>.");
+        assert_eq!(i["comment_author"], "rev");
+        assert_eq!(i["comment_body"], "please <b>rename</b> x");
+        assert_eq!(i["last_note_id"], 4);
+    }
+
+    #[test]
+    fn dismissed_thread_leaves_the_list_until_newer_note() {
+        use crate::mr_threads::ThreadStatus;
+        let f = Fx::new();
+        save_threads(
+            &f,
+            &[("d1", thread(ThreadStatus::NeedsYou, "2026-10-31T09:00:00Z"))],
+        );
+        dismiss(&f.p("dismissed.json"), "mr_thread:web:7:d1", now()).unwrap();
+        assert!(f.collect().is_empty());
+        // A newer note made the loop send the thread to the user again.
+        save_threads(
+            &f,
+            &[("d1", thread(ThreadStatus::NeedsYou, "2026-10-31T13:00:00Z"))],
+        );
+        assert_eq!(f.ids(), ["mr_thread:web:7:d1"]);
     }
 
     #[test]

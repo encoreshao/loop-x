@@ -58,9 +58,15 @@ pub fn actionable_threads(discussions: &[Value], state: &IssueThreads) -> Vec<Ac
             continue;
         }
         let last = entry.map_or(0, |e| e.last_note_id);
-        if !notes
-            .iter()
-            .any(|n| is_human(n, state) && note_id(n) > last)
+        // The user gave instructions from Needs you: plan again with them.
+        let instructed = entry.is_some_and(|e| {
+            e.user_instructions.is_some()
+                && matches!(e.status, ThreadStatus::New | ThreadStatus::Working)
+        });
+        if !instructed
+            && !notes
+                .iter()
+                .any(|n| is_human(n, state) && note_id(n) > last)
         {
             continue;
         }
@@ -108,6 +114,9 @@ mod tests {
                 plan: None,
                 reason: None,
                 base: None,
+                user_instructions: None,
+                mr_iid: None,
+                last_comment: None,
             },
         );
         t
@@ -191,6 +200,27 @@ mod tests {
             1
         );
         assert!(actionable_threads(&[d], &st(ThreadStatus::Working, 0, 2)).is_empty());
+    }
+
+    #[test]
+    fn a_thread_given_instructions_is_planned_again_without_a_new_note() {
+        let d = disc("d1", vec![note(1, "fix")]);
+        let mut s = st(ThreadStatus::New, 1, 0);
+        // Seen, no instructions: nothing to do.
+        assert!(actionable_threads(std::slice::from_ref(&d), &s).is_empty());
+        s.threads.get_mut("d1").unwrap().user_instructions = Some("only a.rs".into());
+        assert_eq!(actionable_threads(std::slice::from_ref(&d), &s).len(), 1);
+        // A crash mid-plan leaves it working: retried once, like any thread.
+        let t = s.threads.get_mut("d1").unwrap();
+        t.status = ThreadStatus::Working;
+        t.attempts = 1;
+        assert_eq!(actionable_threads(std::slice::from_ref(&d), &s).len(), 1);
+        s.threads.get_mut("d1").unwrap().attempts = 2;
+        assert!(actionable_threads(std::slice::from_ref(&d), &s).is_empty());
+        // Instructions left on a settled thread do not reopen it.
+        let t = s.threads.get_mut("d1").unwrap();
+        t.status = ThreadStatus::Decided;
+        assert!(actionable_threads(&[d], &s).is_empty());
     }
 
     #[test]
