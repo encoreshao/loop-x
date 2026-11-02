@@ -1401,5 +1401,7 @@
   "Switch accounts automatically": "自动切换账户",
   "Config folder": "配置文件夹",
   "Add account": "添加账户",
-  "When a run reaches its usage limit, continue it on another signed-in account instead of pausing, with a short note about where it stopped. A loop pinned to its own account never switches. Add each other account by the config folder you signed it in with (its CLAUDE_CONFIG_DIR); the folder needs a .credentials.json so its usage can be read.": "当运行达到用量上限时，不再暂停，而是在另一个已登录的账户上继续，并附上一份说明上次停在哪里的简短笔记。固定使用自己账户的循环不会切换。请通过登录时使用的配置文件夹（即其 CLAUDE_CONFIG_DIR）添加其他账户；该文件夹中需要有 .credentials.json，以便读取其用量。"
+  "When a run reaches its usage limit, continue it on another signed-in account instead of pausing, with a short note about where it stopped. A loop pinned to its own account never switches. Add each other account by the config folder you signed it in with (its CLAUDE_CONFIG_DIR); the folder needs a .credentials.json so its usage can be read.": "当运行达到用量上限时，不再暂停，而是在另一个已登录的账户上继续，并附上一份说明上次停在哪里的简短笔记。固定使用自己账户的循环不会切换。请通过登录时使用的配置文件夹（即其 CLAUDE_CONFIG_DIR）添加其他账户；该文件夹中需要有 .credentials.json，以便读取其用量。",
+  "Signed-in accounts": "已登录的账号",
+  "Add an account": "添加账号"
 }

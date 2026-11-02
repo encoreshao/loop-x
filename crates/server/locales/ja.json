@@ -1401,5 +1401,7 @@
   "Switch accounts automatically": "アカウントを自動で切り替える",
   "Config folder": "設定フォルダ",
   "Add account": "アカウントを追加",
-  "When a run reaches its usage limit, continue it on another signed-in account instead of pausing, with a short note about where it stopped. A loop pinned to its own account never switches. Add each other account by the config folder you signed it in with (its CLAUDE_CONFIG_DIR); the folder needs a .credentials.json so its usage can be read.": "実行が利用上限に達したら、一時停止する代わりに、別のサインイン済みアカウントで、どこまで進んだかの短いメモを添えて続行します。専用アカウントに固定されたループは切り替わりません。他のアカウントは、サインインに使った設定フォルダ（CLAUDE_CONFIG_DIR）で追加してください。使用量を読み取るため、そのフォルダに .credentials.json が必要です。"
+  "When a run reaches its usage limit, continue it on another signed-in account instead of pausing, with a short note about where it stopped. A loop pinned to its own account never switches. Add each other account by the config folder you signed it in with (its CLAUDE_CONFIG_DIR); the folder needs a .credentials.json so its usage can be read.": "実行が利用上限に達したら、一時停止する代わりに、別のサインイン済みアカウントで、どこまで進んだかの短いメモを添えて続行します。専用アカウントに固定されたループは切り替わりません。他のアカウントは、サインインに使った設定フォルダ（CLAUDE_CONFIG_DIR）で追加してください。使用量を読み取るため、そのフォルダに .credentials.json が必要です。",
+  "Signed-in accounts": "サインイン済みアカウント",
+  "Add an account": "アカウントを追加"
 }

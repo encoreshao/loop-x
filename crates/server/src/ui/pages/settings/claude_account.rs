@@ -13,8 +13,10 @@ use crate::ui::consts;
 use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use chrono::{DateTime, Local, Utc};
+use loopx_core::account_switch;
+use loopx_core::ai_cli_config;
 use loopx_core::claude_status::{self, Account, AccountState, Snapshot};
-use loopx_core::quota::{self, Window};
+use loopx_core::quota::Window;
 
 pub const FRAGMENT_URL: &str = "/ai-cli/claude-status";
 
@@ -27,6 +29,30 @@ pub fn register(r: &mut Registry) {
 
 /// The card, empty but for a spinner; its script loads the fragment.
 pub fn card(ctx: &UiCtx) -> String {
+    let accounts = account_switch::accounts(&ai_cli_config::load_config(&ctx.state.ai_cli_config_path()));
+    let switcher = if accounts.len() < 2 {
+        String::new()
+    } else {
+        let buttons: String = accounts
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                // The default account is the empty name, so the request carries no `account`.
+                let (value, label) = if i == 0 { (String::new(), ctx.t("Default")) } else { (a.name.clone(), a.name.clone()) };
+                format!(
+                    "<button type='button' class='pref-segmented-option{}' data-claude-pick='{}' aria-pressed='{}'>{}</button>",
+                    if i == 0 { " is-active" } else { "" },
+                    h(&value),
+                    i == 0,
+                    h(&label)
+                )
+            })
+            .collect();
+        format!(
+            "<div class='pref-segmented claude-switcher' role='group' aria-label='{}'>{buttons}</div>",
+            h(&ctx.t("Claude account"))
+        )
+    };
     let load_error = serde_json::to_string(&format!(
         "<p class='inline-error'>{}</p>",
         h(&ctx.t("Couldn't load this section."))
@@ -36,10 +62,10 @@ pub fn card(ctx: &UiCtx) -> String {
     format!(
         "<section class='card' data-claude-account>\
 <div class='section-header'>{icon}<h2>{title}</h2></div>\
-<p class='section-subtitle'>{subtitle}</p>\
+<p class='section-subtitle'>{subtitle}</p>{switcher}\
 <div data-claude-body data-lazy-src='{FRAGMENT_URL}'><div class='lazy-loading'><div class='md-spinner'></div>\
 <p class='loading-text'>{loading}<span class='loading-dots'><span>.</span><span>.</span><span>.</span></span></p></div></div>\
-<button type='button' class='btn btn-neutral' data-claude-refresh>{refresh}</button>\
+<div class='claude-actions'><button type='button' class='btn btn-neutral' data-claude-refresh>{refresh}</button></div>\
 <script>
 (function() {{
   var card = document.querySelector('[data-claude-account]');
@@ -48,18 +74,32 @@ pub fn card(ctx: &UiCtx) -> String {
   var button = card.querySelector('[data-claude-refresh]');
   var spinner = body.innerHTML;
   var busy = false;
+  var account = '';
   function load() {{
     if (busy) return;
     busy = true;
     button.disabled = true;
     body.innerHTML = spinner;
-    fetch(body.getAttribute('data-lazy-src'))
+    var url = body.getAttribute('data-lazy-src') + (account ? '?account=' + encodeURIComponent(account) : '');
+    fetch(url)
       .then(function(r) {{ return r.text(); }})
       .then(function(html) {{ body.innerHTML = html; }})
       .catch(function() {{ body.innerHTML = {load_error}; }})
       .then(function() {{ busy = false; button.disabled = false; }});
   }}
   button.addEventListener('click', load);
+  card.querySelectorAll('[data-claude-pick]').forEach(function(pick) {{
+    pick.addEventListener('click', function() {{
+      if (busy) return;
+      account = pick.getAttribute('data-claude-pick');
+      card.querySelectorAll('[data-claude-pick]').forEach(function(other) {{
+        var on = other === pick;
+        other.classList.toggle('is-active', on);
+        other.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }});
+      load();
+    }});
+  }});
   // The AI CLI tab is one of several panels in the page: fetch only once it is shown.
   var panel = card.closest('[data-tab-panel]');
   if (!panel || !panel.hidden) {{ load(); return; }}
@@ -71,6 +111,7 @@ pub fn card(ctx: &UiCtx) -> String {
 }})();
 </script></section>",
         icon = consts::ds("_SECTION_ICON_AI_CLI"),
+        switcher = switcher,
         title = h(&ctx.t("Claude account & usage")),
         subtitle = h(&ctx.t("The account Claude Code is signed in as and how much of your subscription is used, as /status and /usage show it. The Subscription usage setting is what pauses scheduled runs.")),
         loading = h(&ctx.t("Loading your Claude account and usage")),
@@ -176,16 +217,26 @@ pub fn fragment_html(ctx: &UiCtx, snap: &Snapshot) -> String {
     format!("{account}{usage}")
 }
 
-fn live() -> Snapshot {
+fn live(account: &account_switch::Account) -> Snapshot {
     let path = loopx_core::ai_cli_health::login_shell_path(
         "zsh",
         &std::env::var("PATH").unwrap_or_default(),
     );
-    claude_status::snapshot(&path, quota::live_claude_usage)
+    claude_status::snapshot_in(&path, account.config_dir.as_deref(), &|| {
+        account_switch::live_usage(account)
+    })
+}
+
+/// The registered account named by `?account=`; the default one when absent or unknown.
+fn requested_account(ctx: &UiCtx) -> account_switch::Account {
+    let accounts = account_switch::accounts(&ai_cli_config::load_config(&ctx.state.ai_cli_config_path()));
+    let wanted = ctx.query().first("account").unwrap_or("").to_string();
+    let default = accounts[0].clone();
+    accounts.into_iter().skip(1).find(|a| a.name == wanted).unwrap_or(default)
 }
 
 fn fragment(ctx: &UiCtx) -> UiResponse {
-    let snap = ctx.state.claude_snapshot.clone().unwrap_or_else(live);
+    let snap = ctx.state.claude_snapshot.clone().unwrap_or_else(|| live(&requested_account(ctx)));
     UiResponse::html(fragment_html(ctx, &snap))
 }
 
@@ -247,6 +298,47 @@ mod tests {
         );
         assert!(html.contains("md-spinner") && html.contains("Loading your Claude account and usage"), "{html}");
         assert!(html.contains("data-claude-refresh") && html.contains(">Refresh<"), "{html}");
+    }
+
+    fn state_with_accounts(dir: &std::path::Path) -> UiState {
+        let st = state(dir);
+        std::fs::write(
+            st.ai_cli_config_path(),
+            r#"{"claude_accounts": [{"name": "Work", "config_dir": "/w"}, {"name": "A&B", "config_dir": "/ab"}]}"#,
+        )
+        .unwrap();
+        st
+    }
+
+    #[test]
+    fn one_account_has_no_switcher() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let html = card(&UiCtx::new(&st, &UiRequest::get("/settings?tab=ai-cli")));
+        assert!(!html.contains("pref-segmented-option"), "{html}");
+    }
+
+    #[test]
+    fn several_accounts_get_a_switcher_with_the_default_selected() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state_with_accounts(d.path());
+        let html = card(&UiCtx::new(&st, &UiRequest::get("/settings?tab=ai-cli")));
+        assert_eq!(html.matches("pref-segmented-option").count(), 3, "{html}");
+        assert!(html.contains("data-claude-pick='' aria-pressed='true'"), "{html}");
+        assert!(html.contains("data-claude-pick='Work' aria-pressed='false'"), "{html}");
+        assert!(html.contains("data-claude-pick='A&amp;B'"), "names are escaped: {html}");
+    }
+
+    #[test]
+    fn the_fragment_for_an_unknown_account_falls_back_to_the_default() {
+        let d = tempfile::tempdir().unwrap();
+        let mut st = state_with_accounts(d.path());
+        st.claude_snapshot = Some(signed_in(Ok(vec![window("5-hour", 7.0, None)])));
+        for url in [format!("{FRAGMENT_URL}?account=Work"), format!("{FRAGMENT_URL}?account=Nobody")] {
+            let res = st.registry.dispatch(&st, &UiRequest::get(&url)).unwrap();
+            assert_eq!(res.status, 200, "{url}");
+            assert!(res.body_text().contains("7% used"), "{url}");
+        }
     }
 
     #[test]

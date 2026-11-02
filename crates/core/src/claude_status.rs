@@ -7,6 +7,7 @@ use crate::doctor::find_on_path;
 use crate::proc;
 use crate::quota::{UsageProbe, Window};
 use serde_json::Value;
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -64,14 +65,21 @@ pub fn parse_auth_status(stdout: &str) -> Result<AccountState, String> {
 
 /// Runs `claude auth status` from `path` (a colon-separated `PATH`).
 pub fn read_account(path: &str) -> Result<AccountState, String> {
+    read_account_in(path, None)
+}
+
+/// [`read_account`] for the account whose config folder is `config_dir`
+/// (`CLAUDE_CONFIG_DIR`); `None` is the default account.
+pub fn read_account_in(path: &str, config_dir: Option<&Path>) -> Result<AccountState, String> {
     let program = find_on_path("claude", path)
         .ok_or("claude is not installed or not on your login shell's PATH")?;
-    let out = proc::run(
-        Command::new(program).args(["auth", "status"]),
-        None,
-        Some(COMMAND_TIMEOUT),
-    )
-    .map_err(|e| format!("could not run claude auth status: {e}"))?;
+    let mut cmd = Command::new(program);
+    cmd.args(["auth", "status"]);
+    if let Some(dir) = config_dir {
+        cmd.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    let out = proc::run(&mut cmd, None, Some(COMMAND_TIMEOUT))
+        .map_err(|e| format!("could not run claude auth status: {e}"))?;
     if out.timed_out {
         return Err("claude auth status timed out".into());
     }
@@ -81,7 +89,16 @@ pub fn read_account(path: &str) -> Result<AccountState, String> {
 
 /// The account, then, only when signed in, the usage from `probe`.
 pub fn snapshot(path: &str, probe: UsageProbe) -> Snapshot {
-    let account = read_account(path);
+    snapshot_in(path, None, &probe)
+}
+
+/// [`snapshot`] for the account whose config folder is `config_dir`.
+pub fn snapshot_in(
+    path: &str,
+    config_dir: Option<&Path>,
+    probe: &dyn Fn() -> Result<Vec<Window>, String>,
+) -> Snapshot {
+    let account = read_account_in(path, config_dir);
     let usage = match &account {
         Ok(AccountState::SignedIn(_)) => probe(),
         Ok(AccountState::SignedOut) => Err("not signed in".to_string()),
@@ -217,5 +234,21 @@ mod tests {
         let s = snapshot(&d.path().display().to_string(), || Err("offline".into()));
         assert_eq!(s.account, Ok(AccountState::SignedIn(account(Some("team")))));
         assert_eq!(s.usage, Err("offline".into()));
+    }
+
+    #[test]
+    fn another_accounts_status_is_read_with_its_own_config_folder() {
+        let d = tempfile::tempdir().unwrap();
+        script(
+            d.path(),
+            "claude",
+            "echo \"{\\\"loggedIn\\\": true, \\\"authMethod\\\": \\\"claude.ai\\\", \\\"email\\\": \\\"$CLAUDE_CONFIG_DIR\\\"}\"",
+        );
+        let path = d.path().display().to_string();
+        let s = snapshot_in(&path, Some(Path::new("/work-dir")), &|| Ok(vec![]));
+        match s.account {
+            Ok(AccountState::SignedIn(a)) => assert_eq!(a.email.as_deref(), Some("/work-dir")),
+            other => panic!("{other:?}"),
+        }
     }
 }

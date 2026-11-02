@@ -41,6 +41,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Settings → AI CLI → Claude account & usage: once more than one Claude account is registered, a switcher at the top of the card shows each account's email, plan and session/week usage. The Claude accounts card has a cleaner layout, with the automatic-switch toggle, the signed-in accounts and the add form in separate, evenly spaced sections.
+
 - The LinkedIn Autopilot loop is now just "LinkedIn" in the menu, the Loops page, Slack and the Mac app (a label you set yourself is kept).
 - The Issues loop's scheduled Slack report is skipped when it has nothing new (every issue checked with nothing to act on, or still waiting on review) and the last report went out less than two days ago, to avoid repeated messages.
 - The chat composer's suggestion chips are now a "+" menu that lists each action with a short hint.

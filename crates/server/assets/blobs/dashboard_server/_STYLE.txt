@@ -1720,10 +1720,29 @@ ul.plain li { font-size: 0.9rem; }
 .usage-meter-fill { height: 100%; border-radius: 999px; background: var(--md-primary); }
 .usage-meter.is-high .usage-meter-fill { background: var(--md-warning); }
 .usage-meter-reset { margin: 0; font-size: 0.8rem; color: var(--md-on-surface-variant); }
-/* Settings -> AI CLI -> Claude accounts: the extra accounts a run can move to. */
-.account-list { list-style: none; margin: 0 0 1rem; padding: 0; display: grid; gap: 0.5rem; }
-.account-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: 0.9rem; }
-.account-row code { color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+/* Settings -> AI CLI -> Claude account & usage: the account switcher and the refresh row. */
+.claude-switcher { margin: 0.25rem 0 1.25rem; }
+.claude-actions { margin-top: 1.25rem; }
+.claude-facts { margin-bottom: 1.5rem; }
+.usage-meters { gap: 1.25rem; margin-bottom: 0; }
+/* Settings -> AI CLI -> Claude accounts: the switch, the signed-in accounts, the add form. */
+.claude-accts .claude-acct-switch { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 1.25rem 0 0; padding: 0.85rem 1rem; border: 1px solid var(--md-outline-variant); border-radius: 12px; }
+.claude-acct-check { display: inline-flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 0.95rem; cursor: pointer; }
+.claude-acct-check input { margin: 0; }
+.claude-acct-heading { margin: 1.75rem 0 0.75rem; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-on-surface-variant); }
+.claude-acct-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--md-outline-variant); border-radius: 12px; overflow: hidden; }
+.claude-acct-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem 1rem; }
+.claude-acct-row + .claude-acct-row { border-top: 1px solid var(--md-outline-variant); }
+.claude-acct-id { display: grid; gap: 0.15rem; min-width: 0; }
+.claude-acct-id code { font-size: 0.8rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+.claude-acct-empty { margin: 0; font-size: 0.9rem; color: var(--md-on-surface-variant); }
+.claude-acct-add { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.75rem 1rem; align-items: end; margin: 0; }
+.claude-acct-add label { display: grid; gap: 0.35rem; margin: 0; min-width: 0; font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.claude-acct-add input[type='text'] { width: 100%; box-sizing: border-box; }
+@media (max-width: 720px) {
+  .claude-acct-add { grid-template-columns: 1fr; }
+  .claude-accts .claude-acct-switch { flex-wrap: wrap; }
+}
 .lazy-stale { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.75rem; font-size: 0.8rem; color: var(--md-on-surface-variant); }
 .mr-count { font-weight: 400; font-size: 0.9rem; color: var(--md-on-surface-variant); }
 .result-summary { margin: 0.35rem 0 0; font-size: 0.9rem; line-height: 1.45; color: var(--md-on-surface-variant); }

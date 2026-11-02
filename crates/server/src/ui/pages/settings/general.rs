@@ -294,7 +294,7 @@ fn claude_accounts_card(ctx: &UiCtx, csrf: &str) -> String {
             let text = |key: &str| a.get(key).and_then(Value::as_str).unwrap_or("");
             let name = text("name");
             format!(
-                "<li class='account-row'><span><strong>{}</strong> <code>{}</code></span>\
+                "<li class='claude-acct-row'><div class='claude-acct-id'><strong>{}</strong><code>{}</code></div>\
 <form method='post' action='/ai-cli/accounts/remove' class='daemon-action-form'>{csrf}\
 <input type='hidden' name='name' value='{}'>\
 <button type='submit' class='btn btn-neutral'>{}</button></form></li>",
@@ -306,20 +306,21 @@ fn claude_accounts_card(ctx: &UiCtx, csrf: &str) -> String {
         })
         .collect();
     let list = if rows.is_empty() {
-        format!("<p class='section-subtitle'>{}</p>", pyfmt::escape(&ctx.t("No other accounts yet.")))
+        format!("<p class='claude-acct-empty'>{}</p>", pyfmt::escape(&ctx.t("No other accounts yet.")))
     } else {
-        format!("<ul class='account-list'>{rows}</ul>")
+        format!("<ul class='claude-acct-list'>{rows}</ul>")
     };
     format!(
-        "<section class='card'><div class='section-header'>{icon}<h2>{title}</h2></div>\
+        "<section class='card claude-accts'><div class='section-header'>{icon}<h2>{title}</h2></div>\
 <p class='section-subtitle'>{subtitle}</p>\
-<form method='post' action='/ai-cli/auto-switch' class='daemon-action-form single-field'>{csrf}\
-<label><input type='checkbox' name='enabled'{checked}> {switch}</label>\
+<form method='post' action='/ai-cli/auto-switch' class='claude-acct-switch'>{csrf}\
+<label class='claude-acct-check'><input type='checkbox' name='enabled'{checked}><span>{switch}</span></label>\
 <button type='submit' class='btn btn-neutral'>{save}</button></form>\
-{list}\
-<form method='post' action='/ai-cli/accounts/add' class='daemon-action-form'>{csrf}\
-<label>{name}<input type='text' name='name' required></label>\
-<label>{folder}<input type='text' name='config_dir' placeholder='~/.claude-work' required></label>\
+<h3 class='claude-acct-heading'>{accounts}</h3>{list}\
+<h3 class='claude-acct-heading'>{add_heading}</h3>\
+<form method='post' action='/ai-cli/accounts/add' class='claude-acct-add'>{csrf}\
+<label><span>{name}</span><input type='text' name='name' required></label>\
+<label><span>{folder}</span><input type='text' name='config_dir' placeholder='~/.claude-work' required></label>\
 <button type='submit' class='btn btn-neutral'>{add}</button></form></section>",
         icon = consts::ds("_SECTION_ICON_AI_CLI"),
         title = pyfmt::escape(&ctx.t("Claude accounts")),
@@ -327,6 +328,8 @@ fn claude_accounts_card(ctx: &UiCtx, csrf: &str) -> String {
         checked = if on { " checked" } else { "" },
         switch = pyfmt::escape(&ctx.t("Switch accounts automatically")),
         save = pyfmt::escape(&ctx.t("Save")),
+        accounts = pyfmt::escape(&ctx.t("Signed-in accounts")),
+        add_heading = pyfmt::escape(&ctx.t("Add an account")),
         name = pyfmt::escape(&ctx.t("Name")),
         folder = pyfmt::escape(&ctx.t("Config folder")),
         add = pyfmt::escape(&ctx.t("Add account")),
