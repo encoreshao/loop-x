@@ -160,6 +160,7 @@ pub fn cli_command(
     max_budget_usd: Option<f64>,
     offline: bool,
     extra_dirs: &[String],
+    model: Option<&str>,
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
     let mut roots = vec![s(repo_root), s(worktree_root)];
@@ -205,6 +206,9 @@ pub fn cli_command(
         disallowed_tools(exe, gate, offline),
     ]);
     cmd.extend(cost::budget_args(max_budget_usd));
+    if let Some(m) = model {
+        cmd.extend([s("--model"), s(m)]);
+    }
     cmd.extend([s("--output-format"), s("json"), s(prompt)]);
     cmd
 }
@@ -568,6 +572,7 @@ fn invoke_cli_with_prompt(
         max_budget_usd,
         offline,
         &extra_dirs,
+        None,
     );
     run_cli(
         ctx,
@@ -5262,6 +5267,7 @@ mod tests {
             Some(1.5),
             false,
             &[],
+            None,
         );
         assert_eq!(&c[..2], ["claude", "-p"]);
         let i = c.iter().position(|a| a == "--max-budget-usd").unwrap();
@@ -5269,17 +5275,68 @@ mod tests {
         assert_eq!(c.last().unwrap(), "PROMPT");
         assert_eq!(c[c.len() - 3], "--output-format");
         assert!(c.contains(&"--add-dir".to_string()));
-        let nocap = cli_command("claude", "P", "/r", "/wt", "x", false, None, false, &[]);
+        let nocap = cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            None,
+        );
         assert!(!nocap.contains(&"--max-budget-usd".to_string()));
+    }
+
+    #[test]
+    fn claude_command_carries_model_flag() {
+        let c = cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            Some("opus"),
+        );
+        let i = c.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(c[i + 1], "opus");
+        assert_eq!(c.last().unwrap(), "P");
+    }
+
+    #[test]
+    fn codex_command_ignores_model() {
+        let c = cli_command(
+            "codex",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            Some("opus"),
+        );
+        assert!(!c.contains(&"--model".to_string()));
     }
 
     #[test]
     fn in_place_checkout_is_added_as_a_writable_dir() {
         let extra = ["/co".to_string()];
-        let c = cli_command("claude", "P", "/r", "/wt", "x", true, None, false, &extra);
+        let c = cli_command(
+            "claude", "P", "/r", "/wt", "x", true, None, false, &extra, None,
+        );
         let i = c.iter().rposition(|a| a == "/co").unwrap();
         assert_eq!(c[i - 1], "--add-dir");
-        let x = cli_command("codex", "P", "/r", "/wt", "x", true, None, false, &extra);
+        let x = cli_command(
+            "codex", "P", "/r", "/wt", "x", true, None, false, &extra, None,
+        );
         assert!(
             x.contains(&r#"sandbox_workspace_write.writable_roots=["/r","/wt","/co"]"#.to_string())
         );
@@ -5301,7 +5358,18 @@ mod tests {
 
     #[test]
     fn codex_command_uses_compact_writable_roots() {
-        let c = cli_command("codex", "P", "/r", "/wt", "x", false, None, false, &[]);
+        let c = cli_command(
+            "codex",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            None,
+        );
         assert_eq!(&c[..4], ["codex", "exec", "--sandbox", "workspace-write"]);
         assert!(c.contains(&r#"sandbox_workspace_write.writable_roots=["/r","/wt"]"#.to_string()));
         assert_eq!(c.last().unwrap(), "P");
@@ -5315,7 +5383,7 @@ mod tests {
             ("cursor", "--force"),
             ("grok", "--yolo"),
         ] {
-            let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false, &[]);
+            let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false, &[], None);
             assert!(
                 ai_cli_config::binary_candidates(cli).contains(&c[0].as_str()),
                 "{cli}: {}",
@@ -5324,11 +5392,33 @@ mod tests {
             assert!(c.contains(&"P".to_string()), "{cli}");
             assert!(c.contains(&flag.to_string()), "{cli}");
         }
-        let g = cli_command("gemini", "P", "/r", "/wt", "x", false, None, false, &[]);
+        let g = cli_command(
+            "gemini",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            None,
+        );
         assert!(g
             .windows(2)
             .any(|w| w[0] == "--include-directories" && w[1] == "/r,/wt"));
-        let c = cli_command("cursor", "P", "/r", "/wt", "x", false, None, false, &[]);
+        let c = cli_command(
+            "cursor",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            None,
+        );
         assert!(c.windows(2).any(|w| w[0] == "--workspace" && w[1] == "/r"));
     }
 

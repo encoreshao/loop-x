@@ -17,6 +17,11 @@ goal:
 agent:
   provider: claude
   model: default
+  # Used only by the MR-feedback path; the single-session issue run keeps `model`.
+  models:
+    plan: opus
+    execute: sonnet
+    validate: opus
 
 context:
   sources:

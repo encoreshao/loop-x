@@ -50,6 +50,38 @@ pub struct GoalConfig {
 pub struct AgentConfig {
     pub provider: Option<String>,
     pub model: Option<String>,
+    pub models: PhaseModels,
+}
+
+/// Per-phase model overrides for the MR-feedback path (plan/execute/validate).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct PhaseModels {
+    pub plan: Option<String>,
+    pub execute: Option<String>,
+    pub validate: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Plan,
+    Execute,
+    Validate,
+}
+
+impl AgentConfig {
+    /// The model for `phase`: its own entry, else `model`; `"default"` and
+    /// empty mean "no flag".
+    pub fn model_for(&self, phase: Phase) -> Option<&str> {
+        let own = match phase {
+            Phase::Plan => &self.models.plan,
+            Phase::Execute => &self.models.execute,
+            Phase::Validate => &self.models.validate,
+        };
+        own.as_deref()
+            .or(self.model.as_deref())
+            .map(str::trim)
+            .filter(|m| !m.is_empty() && *m != "default")
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -252,6 +284,27 @@ fn required_str(sec: &Value, key: &str, label: &str) -> Result<String, Definitio
     }
 }
 
+fn parse_phase_models(agent: Option<&Value>) -> Result<PhaseModels, DefinitionError> {
+    let Some(v) = get(agent, "models") else {
+        return Ok(PhaseModels::default());
+    };
+    let Some(map) = v.as_object() else {
+        return invalid("LoopDefinition: 'agent.models' must be a mapping");
+    };
+    for key in map.keys() {
+        if !["plan", "execute", "validate"].contains(&key.as_str()) {
+            return invalid(format!(
+                "LoopDefinition: unknown key 'agent.models.{key}' (expected plan, execute, validate)"
+            ));
+        }
+    }
+    Ok(PhaseModels {
+        plan: opt_string(Some(v), "plan", "agent.models.plan")?,
+        execute: opt_string(Some(v), "execute", "agent.models.execute")?,
+        validate: opt_string(Some(v), "validate", "agent.models.validate")?,
+    })
+}
+
 impl LoopDefinition {
     /// `LoopDefinition.from_dict`: validate a parsed mapping.
     pub fn from_value(data: &Value) -> Result<Self, DefinitionError> {
@@ -315,6 +368,7 @@ impl LoopDefinition {
             agent: AgentConfig {
                 provider: opt_string(agent, "provider", "agent.provider")?,
                 model: opt_string(agent, "model", "agent.model")?,
+                models: parse_phase_models(agent)?,
             },
             context: ContextConfig {
                 sources: string_list(context, "sources", "context.sources")?,
@@ -450,6 +504,33 @@ mod tests {
 
     fn err(v: &Value) -> String {
         LoopDefinition::from_value(v).unwrap_err().to_string()
+    }
+
+    fn with_agent(agent: Value) -> Value {
+        let mut v = minimal();
+        v["agent"] = agent;
+        v
+    }
+
+    #[test]
+    fn agent_models_parse_and_fall_back() {
+        let d = LoopDefinition::from_value(&with_agent(json!({
+            "model": "default",
+            "models": {"plan": "opus", "execute": "sonnet", "validate": "opus"}
+        })))
+        .unwrap();
+        assert_eq!(d.agent.model_for(Phase::Plan), Some("opus"));
+        assert_eq!(d.agent.model_for(Phase::Execute), Some("sonnet"));
+        assert_eq!(d.agent.model_for(Phase::Validate), Some("opus"));
+        let d = LoopDefinition::from_value(&with_agent(json!({"model": "sonnet"}))).unwrap();
+        for p in [Phase::Plan, Phase::Execute, Phase::Validate] {
+            assert_eq!(d.agent.model_for(p), Some("sonnet"));
+        }
+        let d = LoopDefinition::from_value(&with_agent(json!({"model": "default"}))).unwrap();
+        assert_eq!(d.agent.model_for(Phase::Plan), None);
+        let d = LoopDefinition::from_value(&with_agent(json!({"models": {"plan": ""}}))).unwrap();
+        assert_eq!(d.agent.model_for(Phase::Plan), None);
+        assert!(err(&with_agent(json!({"models": {"bogus": "x"}}))).contains("agent.models.bogus"));
     }
 
     #[test]
