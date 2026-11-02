@@ -1371,6 +1371,7 @@
   "What should the loop do instead?": "Que doit faire la boucle à la place ?",
   "Approve carries out the plan as drafted. Post my reply sends the text above instead. Plan again hands your instructions to the loop's next run. Dismiss posts nothing.": "« Approuver le plan » applique le plan tel que rédigé. « Publier ma réponse » envoie plutôt le texte ci-dessus. « Replanifier avec mes instructions » transmet vos instructions à la prochaine exécution de la boucle. « Ignorer » ne publie rien.",
   "Post my reply": "Publier ma réponse",
+  "You changed the draft reply. Approve posts the draft as written; to send your text, use Post my reply.": "Vous avez modifié le brouillon de réponse. « Approuver le plan » publie le brouillon tel quel ; pour envoyer votre texte, utilisez « Publier ma réponse ».",
   "Plan again with my instructions": "Replanifier avec mes instructions",
   "That review thread is not waiting on you.": "Ce fil de revue ne vous attend pas.",
   "Choose what to do with the thread.": "Choisissez quoi faire du fil.",

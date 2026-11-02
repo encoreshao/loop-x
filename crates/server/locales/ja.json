@@ -1371,6 +1371,7 @@
   "What should the loop do instead?": "代わりにループに何をさせますか?",
   "Approve carries out the plan as drafted. Post my reply sends the text above instead. Plan again hands your instructions to the loop's next run. Dismiss posts nothing.": "「計画を承認」は下書きどおりに計画を実行します。「返信を投稿」は代わりに上のテキストを送ります。「指示して再計画」はあなたの指示をループの次の実行に渡します。「非表示にする」は何も投稿しません。",
   "Post my reply": "返信を投稿",
+  "You changed the draft reply. Approve posts the draft as written; to send your text, use Post my reply.": "下書きの返信が変更されています。「計画を承認」は下書きをそのまま投稿します。あなたのテキストを送るには「返信を投稿」を使ってください。",
   "Plan again with my instructions": "指示して再計画",
   "That review thread is not waiting on you.": "そのレビュースレッドはあなたの判断を待っていません。",
   "Choose what to do with the thread.": "スレッドをどうするか選んでください。",

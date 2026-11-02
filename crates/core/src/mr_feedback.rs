@@ -29,7 +29,7 @@ const COMMENT_MAX_CHARS: usize = 2_000;
 /// The longest instructions the user can give a thread.
 const INSTRUCTIONS_MAX_CHARS: usize = 4_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RoundOutcome {
     /// Nothing to do (no MR, no new feedback, MR not open): no agent ran.
     Skipped,
@@ -37,7 +37,25 @@ pub enum RoundOutcome {
         answered: usize,
         changed: usize,
         needs_you: usize,
+        /// What the round's agent calls cost; `None` when no call reported
+        /// a cost (unknown, not zero).
+        cost_usd: Option<f64>,
     },
+}
+
+impl RoundOutcome {
+    /// `(answered, changed, needs_you)` for a processed round.
+    pub fn counts(&self) -> Option<(usize, usize, usize)> {
+        match self {
+            RoundOutcome::Skipped => None,
+            RoundOutcome::Processed {
+                answered,
+                changed,
+                needs_you,
+                ..
+            } => Some((*answered, *changed, *needs_you)),
+        }
+    }
 }
 
 /// The GitLab calls a round makes, scoped to one project.
@@ -124,6 +142,17 @@ pub struct RoundDeps {
     pub workspace: Box<dyn Workspace>,
     /// The project's projects.json entry.
     pub project: Value,
+    /// The newest MR note the old MR-note path had already seen for this
+    /// issue (`_notes.loop_last_seen_mr_note_id` in its cache), if any: a
+    /// thread with no state of its own starts there instead of at 0.
+    pub seen_mr_note: Option<i64>,
+}
+
+/// The old MR-note path's watermark in an issue's cache.
+pub fn mr_watermark(cache: &Value) -> Option<i64> {
+    let v = cache.pointer("/_notes/loop_last_seen_mr_note_id")?;
+    v.as_i64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
 }
 
 /// Where the execute phase writes its handoff.
@@ -168,6 +197,7 @@ pub fn run_round(
         definition,
         deps,
         spent: Cell::new(0.0),
+        priced: Cell::new(false),
         push_blocked: Cell::new(false),
     };
     match round.run() {
@@ -260,6 +290,7 @@ pub fn decide_thread(
         definition,
         deps,
         spent: Cell::new(0.0),
+        priced: Cell::new(false),
         push_blocked: Cell::new(false),
     };
     let result = round.decide(discussion_id, choice);
@@ -281,6 +312,8 @@ struct Round<'a> {
     deps: &'a RoundDeps,
     /// What this round's agent calls have cost so far.
     spent: Cell<f64>,
+    /// Whether any of those calls reported a cost at all.
+    priced: Cell<bool>,
     /// Set when taking unpushed commits off the branch failed: nothing more
     /// is pushed this round.
     push_blocked: Cell<bool>,
@@ -624,13 +657,32 @@ impl Round<'_> {
         };
         let discussions = gitlab.discussions(mr)?;
         let mut state = IssueThreads::load(self.alias, self.iid, self.ctx.memory_root.as_deref());
+        // An MR from before this round existed: its old notes were already
+        // handled by the old path, so new threads start at its watermark.
+        if let Some(seen) = self.deps.seen_mr_note {
+            for d in &discussions {
+                if let Some(id) = d.get("id").and_then(Value::as_str) {
+                    state
+                        .threads
+                        .entry(id.to_string())
+                        .or_insert_with(|| ThreadState {
+                            last_note_id: seen,
+                            ..fresh(id)
+                        });
+                }
+            }
+        }
         reopen_resolved(&mut state, &discussions);
+        // Before the quiet return: commits a stopped run left on the branch
+        // must come off even when the thread no longer needs anything (the
+        // issue pass could push them). No model call; git only when a
+        // working thread recorded a base.
+        self.undo_unvalidated(&mut state);
         let actionable = actionable_threads(&discussions, &state);
         let stuck = stuck_threads(&state, &discussions);
         if actionable.is_empty() && stuck.is_empty() {
             return Ok(RoundOutcome::Skipped);
         }
-        self.undo_unvalidated(&state);
         let mr_state = gitlab.mr_state(mr)?;
         match mr_state.as_str() {
             "opened" => {}
@@ -674,6 +726,7 @@ impl Round<'_> {
             answered,
             changed,
             needs_you,
+            cost_usd: self.priced.get().then(|| self.spent.get()),
         })
     }
 
@@ -681,33 +734,42 @@ impl Round<'_> {
     /// unvalidated commits on the branch, past the `base` the thread recorded.
     /// They are taken off (kept under a ref) before anything else looks at
     /// the branch, so neither this round nor the issue pass can push them.
-    fn undo_unvalidated(&self, state: &IssueThreads) {
+    fn undo_unvalidated(&self, state: &mut IssueThreads) {
         let ws = &*self.deps.workspace;
-        for (id, t) in &state.threads {
-            let Some(base) = t
-                .base
-                .as_deref()
-                .filter(|_| t.status == ThreadStatus::Working)
-            else {
-                continue;
+        let pending: Vec<(String, String)> = state
+            .threads
+            .iter()
+            .filter(|(_, t)| t.status == ThreadStatus::Working)
+            .filter_map(|(id, t)| Some((id.clone(), t.base.clone()?)))
+            .collect();
+        for (id, base) in pending {
+            let undone = match ws.sync() {
+                Ok(Branch::Ahead(tip)) if tip == base => match ws.ensure() {
+                    Ok(worktree) => {
+                        self.log(&format!(
+                            "thread {id}: taking unvalidated commits from a stopped run off the branch"
+                        ));
+                        self.rollback(&worktree, &base, &id).is_none()
+                    }
+                    Err(e) => {
+                        self.push_blocked.set(true);
+                        self.log(&format!(
+                            "thread {id}: unvalidated commits on the branch, and its worktree is unusable ({e}); no pushes this round"
+                        ));
+                        false
+                    }
+                },
+                // Nothing past the base (or the change was pushed: recover()
+                // needs the base to see that, so it stays).
+                Ok(Branch::InSync(tip)) => tip == base,
+                _ => false,
             };
-            if !matches!(ws.sync(), Ok(Branch::Ahead(tip)) if tip == base) {
-                continue;
-            }
-            let worktree = match ws.ensure() {
-                Ok(w) => w,
-                Err(e) => {
-                    self.push_blocked.set(true);
-                    self.log(&format!(
-                        "thread {id}: unvalidated commits on the branch, and its worktree is unusable ({e}); no pushes this round"
-                    ));
-                    continue;
+            if undone {
+                if let Some(t) = state.threads.get_mut(&id) {
+                    t.base = None;
                 }
-            };
-            self.log(&format!(
-                "thread {id}: taking unvalidated commits from a stopped run off the branch"
-            ));
-            self.rollback(&worktree, base, id);
+                self.save(state);
+            }
         }
     }
 
@@ -986,14 +1048,19 @@ impl Round<'_> {
             prompt,
             max_budget_usd: cost::remaining_budget(Some(max), Some(self.spent.get()), 0.05),
         };
+        let add = |cost: Option<f64>| {
+            if let Some(c) = cost {
+                self.priced.set(true);
+                self.spent.set(self.spent.get() + c);
+            }
+        };
         match (self.deps.invoke)(&call) {
             Ok(out) => {
-                self.spent
-                    .set(self.spent.get() + out.cost_usd.unwrap_or(0.0));
+                add(out.cost_usd);
                 Ok(out.text)
             }
             Err(e) => {
-                self.spent.set(self.spent.get() + e.cost_usd.unwrap_or(0.0));
+                add(e.cost_usd);
                 Err(e.message)
             }
         }
@@ -1988,13 +2055,24 @@ impl RoundDeps {
                     })
             })
         };
+        let instance = project
+            .get("instance")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        // The cache is keyed by the concrete instance name, as `loopx gitlab`
+        // writes it: the project's own, else the configured default.
+        let cache_instance = instance.clone().filter(|n| !n.is_empty()).or_else(|| {
+            crate::gitlab::load_config()
+                .and_then(|c| c.get("default").and_then(Value::as_str).map(str::to_owned))
+                .filter(|n| !n.is_empty())
+        });
+        let seen_mr_note = cache_instance
+            .and_then(|i| crate::gitlab_cache::get_issue_cache(&i, &project_id, issue_iid))
+            .and_then(|c| mr_watermark(&c));
         Ok(Some(RoundDeps {
             gitlab: Box::new(RealMrGitlab {
                 project_id,
-                instance: project
-                    .get("instance")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                instance,
             }),
             invoke,
             pusher: Box::new(crate::issue_runner::real_pusher),
@@ -2009,6 +2087,7 @@ impl RoundDeps {
                 worktree_root,
             }),
             project,
+            seen_mr_note,
         }))
     }
 }
@@ -2031,6 +2110,7 @@ mod tests {
         order: Vec<String>,
         notified: Vec<String>,
         ensured: usize,
+        synced: usize,
         rollbacks: Vec<(String, String)>,
     }
 
@@ -2091,6 +2171,7 @@ mod tests {
 
     impl Workspace for FakeWorkspace {
         fn sync(&self) -> Result<Branch, String> {
+            self.log.borrow_mut().synced += 1;
             if let Some(b) = self.syncs.borrow_mut().pop_front() {
                 return Ok(b);
             }
@@ -2165,6 +2246,9 @@ mod tests {
         exec_dirty: Option<String>,
         checks_dirty: Option<String>,
         use_worktree: bool,
+        seen_mr_note: Option<i64>,
+        /// What each agent call reports it cost.
+        call_cost: Option<f64>,
     }
 
     fn note(id: i64, body: &str) -> Value {
@@ -2237,6 +2321,8 @@ mod tests {
                 exec_dirty: None,
                 checks_dirty: None,
                 use_worktree: true,
+                seen_mr_note: None,
+                call_cost: Some(0.01),
             }
         }
 
@@ -2256,6 +2342,7 @@ mod tests {
             .unwrap();
             let commits = Cell::new(0);
             let (dirty, exec_dirty) = (self.dirty.clone(), self.exec_dirty.clone());
+            let call_cost = self.call_cost;
             let invoke: PhaseInvoker = Box::new(move |call: &PhaseCall<'_>| {
                 {
                     let mut l = log.borrow_mut();
@@ -2302,7 +2389,7 @@ mod tests {
                     panic!("simulated crash");
                 }
                 Ok(AgentOutput {
-                    cost_usd: Some(0.01),
+                    cost_usd: call_cost,
                     text,
                     ..AgentOutput::default()
                 })
@@ -2358,6 +2445,7 @@ mod tests {
                 }),
                 project: json!({"project_id": "g/p", "local_path": "/repo", "instance": "g",
                                 "target_branch": "main", "use_worktree": self.use_worktree}),
+                seen_mr_note: self.seen_mr_note,
             }
         }
 
@@ -2429,6 +2517,16 @@ mod tests {
         assert_eq!(h.run(), RoundOutcome::Skipped);
         let log = h.log.borrow();
         assert!(log.calls.is_empty() && log.ensured == 0 && log.replies.is_empty());
+        assert_eq!(log.synced, 0, "no git work for a quiet merge request");
+        drop(log);
+        // A thread that stopped working before recording a base, now
+        // resolved: still no git work.
+        let h = H::new();
+        h.save(&stored(ThreadStatus::Working, 1, 1));
+        h.discussions.borrow_mut()[0]["notes"][0]["resolved"] = json!(true);
+        assert_eq!(h.run(), RoundOutcome::Skipped);
+        let log = h.log.borrow();
+        assert!(log.calls.is_empty() && log.ensured == 0 && log.synced == 0);
     }
 
     #[test]
@@ -2436,14 +2534,7 @@ mod tests {
         let h = H::new();
         h.plans.borrow_mut().push_back(plan("reply_only", 95));
         h.verdicts.borrow_mut().push_back(approve());
-        assert_eq!(
-            h.run(),
-            RoundOutcome::Processed {
-                answered: 1,
-                changed: 0,
-                needs_you: 0
-            }
-        );
+        assert_eq!(h.run().counts(), Some((1, 0, 0)));
         {
             let log = h.log.borrow();
             assert_eq!(log.replies.len(), 1);
@@ -2501,17 +2592,69 @@ mod tests {
     }
 
     #[test]
+    fn open_mrs_from_before_the_round_start_at_the_old_watermark() {
+        // The old MR-note path had already seen note 5.
+        let mut h = H::new();
+        h.seen_mr_note = Some(5);
+        h.discussions
+            .borrow_mut()
+            .push(disc("d2", vec![note(3, "old"), note(6, "new since then")]));
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        h.run();
+        let log = h.log.borrow();
+        assert_eq!(log.calls.len(), 1, "only the thread with a newer note");
+        assert!(log.prompts[0].contains("new since then"));
+        drop(log);
+        let t = h.threads();
+        assert_eq!(t.threads["d2"].status, ThreadStatus::WaitingOnReviewer);
+        assert_eq!(t.threads["d1"].last_note_id, 5, "seeded, never planned");
+        // A stored thread keeps its own watermark.
+        let mut h = H::new();
+        h.seen_mr_note = Some(5);
+        h.save(&stored(ThreadStatus::Answered, 0, 1));
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        h.run();
+        assert_eq!(h.log.borrow().calls.len(), 1);
+    }
+
+    #[test]
+    fn the_old_watermark_is_read_from_the_issue_cache() {
+        let cache = |v: Value| json!({"_notes": {"loop_last_seen_mr_note_id": v}});
+        assert_eq!(mr_watermark(&cache(json!("200"))), Some(200));
+        assert_eq!(mr_watermark(&cache(json!(201))), Some(201));
+        assert_eq!(mr_watermark(&cache(json!("x"))), None);
+        assert_eq!(
+            mr_watermark(&json!({"_notes": {"loop_last_seen_note_id": "9"}})),
+            None
+        );
+        assert_eq!(mr_watermark(&json!({})), None);
+    }
+
+    #[test]
+    fn a_processed_round_reports_what_its_calls_cost() {
+        let h = H::new();
+        h.plans.borrow_mut().push_back(plan("reply_only", 95));
+        h.verdicts.borrow_mut().push_back(approve());
+        let RoundOutcome::Processed { cost_usd, .. } = h.run() else {
+            panic!("the round ran");
+        };
+        assert!((cost_usd.unwrap() - 0.02).abs() < 1e-9, "{cost_usd:?}");
+        // No call reported a cost: unknown, not zero.
+        let mut h = H::new();
+        h.call_cost = None;
+        h.plans.borrow_mut().push_back(plan("reply_only", 95));
+        h.verdicts.borrow_mut().push_back(approve());
+        let RoundOutcome::Processed { cost_usd, .. } = h.run() else {
+            panic!("the round ran");
+        };
+        assert_eq!(cost_usd, None);
+    }
+
+    #[test]
     fn low_confidence_posts_nothing_and_sets_needs_you() {
         let h = H::new();
         h.plans.borrow_mut().push_back(plan("change_code", 60));
-        assert_eq!(
-            h.run(),
-            RoundOutcome::Processed {
-                answered: 0,
-                changed: 0,
-                needs_you: 1
-            }
-        );
+        assert_eq!(h.run().counts(), Some((0, 0, 1)));
         let log = h.log.borrow();
         assert_eq!(log.calls.len(), 1, "only the planner ran");
         assert!(log.replies.is_empty() && log.pushes.is_empty() && log.ensured == 0);
@@ -2550,14 +2693,7 @@ mod tests {
         h.plans.borrow_mut().push_back(plan("change_code", 92));
         h.handoffs.borrow_mut().push_back(done_handoff());
         h.verdicts.borrow_mut().push_back(approve());
-        assert_eq!(
-            h.run(),
-            RoundOutcome::Processed {
-                answered: 0,
-                changed: 1,
-                needs_you: 0
-            }
-        );
+        assert_eq!(h.run().counts(), Some((0, 1, 0)));
         let log = h.log.borrow();
         assert_eq!(log.pushes, vec![("/repo".into(), "loop/issue-7".into())]);
         assert_eq!(log.order, ["Plan", "Execute", "Validate", "push", "reply"]);
@@ -2879,14 +3015,7 @@ mod tests {
             .extend([reject("no"), reject("still no")]);
         h.plans.borrow_mut().push_back(plan("change_code", 92));
         let out = h.run();
-        assert_eq!(
-            out,
-            RoundOutcome::Processed {
-                answered: 0,
-                changed: 0,
-                needs_you: 2
-            }
-        );
+        assert_eq!(out.counts(), Some((0, 0, 2)));
         let log = h.log.borrow();
         assert!(log.pushes.is_empty() && log.replies.is_empty());
         let threads = h.threads();
@@ -3008,6 +3137,26 @@ mod tests {
     }
 
     #[test]
+    fn unvalidated_commits_are_undone_even_when_the_thread_was_resolved_meanwhile() {
+        let h = H::new();
+        let mut t = stored(ThreadStatus::Working, 0, 1);
+        t.threads.get_mut("d1").unwrap().base = Some("base".into());
+        h.save(&t);
+        *h.head.borrow_mut() = "c1".into();
+        h.syncs.borrow_mut().push_back(Branch::Ahead("base".into()));
+        // The reviewer resolved the thread while the run was down.
+        h.discussions.borrow_mut()[0]["notes"][0]["resolved"] = json!(true);
+        assert_eq!(h.run(), RoundOutcome::Skipped);
+        let log = h.log.borrow();
+        assert!(log.calls.is_empty() && log.pushes.is_empty() && log.replies.is_empty());
+        assert_eq!(log.rollbacks.len(), 1);
+        drop(log);
+        assert_eq!(*h.head.borrow(), "base");
+        // Done once: the recorded base is cleared, so no later round syncs for it.
+        assert_eq!(h.thread().base, None);
+    }
+
+    #[test]
     fn a_failed_undo_of_unvalidated_commits_blocks_pushes() {
         let mut h = H::new();
         h.rollback_fails = true;
@@ -3050,14 +3199,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(note(5, &body));
-        assert_eq!(
-            h.run(),
-            RoundOutcome::Processed {
-                answered: 1,
-                changed: 0,
-                needs_you: 0
-            }
-        );
+        assert_eq!(h.run().counts(), Some((1, 0, 0)));
         let log = h.log.borrow();
         assert!(log.calls.is_empty() && log.replies.is_empty());
         let t = h.threads();
@@ -3092,14 +3234,7 @@ mod tests {
         h.save(&t);
         // The remote and local branch already carry the pushed change.
         *h.head.borrow_mut() = "c1".into();
-        assert_eq!(
-            h.run(),
-            RoundOutcome::Processed {
-                answered: 0,
-                changed: 1,
-                needs_you: 0
-            }
-        );
+        assert_eq!(h.run().counts(), Some((0, 1, 0)));
         let log = h.log.borrow();
         assert!(log.calls.is_empty() && log.pushes.is_empty());
         assert_eq!(log.replies.len(), 1);
@@ -3130,14 +3265,7 @@ mod tests {
         let h = H::new();
         h.plans.borrow_mut().push_back(plan("wait", 90));
         let out = h.run();
-        assert_eq!(
-            out,
-            RoundOutcome::Processed {
-                answered: 0,
-                changed: 0,
-                needs_you: 0
-            }
-        );
+        assert_eq!(out.counts(), Some((0, 0, 0)));
         let t = h.thread();
         assert_eq!(t.status, ThreadStatus::WaitingOnReviewer);
         assert_eq!(t.last_note_id, 1);

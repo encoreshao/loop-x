@@ -1371,6 +1371,7 @@
   "What should the loop do instead?": "希望循环改为做什么？",
   "Approve carries out the plan as drafted. Post my reply sends the text above instead. Plan again hands your instructions to the loop's next run. Dismiss posts nothing.": "“批准计划”按草稿执行计划。“发布我的回复”改为发送上面的文字。“按我的指示重新计划”把你的指示交给循环的下一次运行。“忽略”不发布任何内容。",
   "Post my reply": "发布我的回复",
+  "You changed the draft reply. Approve posts the draft as written; to send your text, use Post my reply.": "你修改了回复草稿。“批准计划”会按原样发布草稿；要发送你的文字，请使用“发布我的回复”。",
   "Plan again with my instructions": "按我的指示重新计划",
   "That review thread is not waiting on you.": "该评审讨论并不在等待你处理。",
   "Choose what to do with the thread.": "请选择如何处理该讨论。",

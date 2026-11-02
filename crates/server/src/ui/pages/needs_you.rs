@@ -389,6 +389,18 @@ fn post_mr_thread(ctx: &UiCtx) -> UiResponse {
         if let Err(e) = loopx_core::mr_feedback::approvable(thread) {
             return fail(&e);
         }
+        // Approve posts the stored draft: text edited in the box would be
+        // silently dropped, so it has to go through Post my reply.
+        let normalize = |s: &str| s.replace("\r\n", "\n").trim().to_string();
+        let draft = thread
+            .plan
+            .as_ref()
+            .and_then(|p| p.get("reply"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if form.first("reply").is_some_and(|r| normalize(r) != normalize(draft)) {
+            return fail(&ctx.t("You changed the draft reply. Approve posts the draft as written; to send your text, use Post my reply."));
+        }
     }
     let run = run_ctx(state);
     let definition = match LoopDefinition::from_yaml(&run.definition_path()) {
@@ -560,6 +572,7 @@ mod tests {
                 verify: Box::new(|_| panic!("no checks run in these tests")),
                 workspace: Box::new(NoWorkspace),
                 project: json!({"project_id": "g/web", "local_path": "/repo"}),
+                seen_mr_note: None,
             }))
         }));
         (st, replies)
@@ -695,7 +708,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (st, replies) = thread_state(d.path());
         save_thread(d.path(), "reply_only");
-        let body = format!("{ID}&decision=approve&reply=ignored");
+        // The draft as the text area sends it back (CRLF line endings).
+        let body = format!("{ID}&decision=approve&reply=Renamed+it%2C+%3Cok%3E%3F%0D%0A");
         assert_eq!(post(&st, "/needs-you/mr-thread", &body).status, 403);
         let r = post(&st, "/needs-you/mr-thread", &format!("csrf_token=tok&{body}"));
         assert!(r.header("location").unwrap_or_default().contains("ok=1"));
@@ -707,8 +721,25 @@ mod tests {
         }
         let posted = replies.lock().unwrap().clone();
         assert_eq!(posted.len(), 1);
-        // The stored reply is posted, not the text area's.
         assert!(posted[0].2.starts_with("Renamed it, <ok>?"), "{}", posted[0].2);
+    }
+
+    #[test]
+    fn approving_an_mr_thread_with_an_edited_draft_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let (st, replies) = thread_state(d.path());
+        save_thread(d.path(), "reply_only");
+        let r = post(
+            &st,
+            "/needs-you/mr-thread",
+            &format!("csrf_token=tok&{ID}&decision=approve&reply=Something+else+entirely"),
+        );
+        let location = r.header("location").unwrap_or_default();
+        assert!(location.contains("ok=0"), "{location}");
+        assert!(location.contains("Post%20my%20reply"), "{location}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(replies.lock().unwrap().is_empty());
+        assert_eq!(thread(d.path()).status, ThreadStatus::NeedsYou);
     }
 
     #[test]

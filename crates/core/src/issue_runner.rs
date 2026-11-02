@@ -2306,9 +2306,13 @@ pub fn run_one_issue(
 
     // New review feedback on the issue's merge request is handled first, in
     // its own plan/execute/validate calls; it never changes this run's path.
-    if mr_round_applies(ctx, &mode) {
-        run_mr_feedback_round(ctx, run_id, alias, issue_iid, definition);
-    }
+    // Its spend is its own budget, on top of the pass's, and adds to the
+    // issue's cost below.
+    let round_cost = if mr_round_applies(ctx, &mode) {
+        run_mr_feedback_round(ctx, run_id, alias, issue_iid, definition)
+    } else {
+        None
+    };
 
     // Worktree off: never start the agent on a checkout holding the user's
     // uncommitted work (a leftover restore record is healed by `worktree new`).
@@ -2445,10 +2449,7 @@ pub fn run_one_issue(
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
     // un-coerced figure to keep "cost $0" apart from "never got a cost".
-    result.agent_cost_usd = match sum_or_none(&raw_costs) {
-        Some(v) => AgentCost::Usd(v),
-        None => AgentCost::Unknown,
-    };
+    result.agent_cost_usd = issue_agent_cost(&raw_costs, round_cost);
     let usage = sum_usages(&raw_usages);
 
     if let Err(e) = write_result(
@@ -2469,6 +2470,18 @@ pub fn run_one_issue(
     })
 }
 
+/// The issue's agent cost: its passes' calls plus, when the MR-feedback round
+/// ran (`Some`), what the round's calls cost (`Some(None)`: unknown). No
+/// call reporting any cost at all is `Unknown`, never 0.
+fn issue_agent_cost(pass_costs: &[Option<f64>], round_cost: Option<Option<f64>>) -> AgentCost {
+    let mut all = pass_costs.to_vec();
+    all.extend(round_cost);
+    match sum_or_none(&all) {
+        Some(v) => AgentCost::Usd(v),
+        None => AgentCost::Unknown,
+    }
+}
+
 /// The MR-feedback round runs for real issue runs only: never in the golden
 /// eval's offline mode, and never under test fakes (it would reach GitLab).
 fn mr_round_applies(ctx: &RunCtx, mode: &InvokeMode) -> bool {
@@ -2476,14 +2489,15 @@ fn mr_round_applies(ctx: &RunCtx, mode: &InvokeMode) -> bool {
 }
 
 /// [`crate::mr_feedback::run_round`] with the real dependencies. Best effort:
-/// whatever goes wrong is logged, and the issue run carries on.
+/// whatever goes wrong is logged, and the issue run carries on. What the
+/// round cost, as [`report_round`] gives it.
 fn run_mr_feedback_round(
     ctx: &RunCtx,
     run_id: &str,
     alias: &str,
     issue_iid: &str,
     definition: &LoopDefinition,
-) {
+) -> Option<Option<f64>> {
     use crate::mr_feedback::{run_round, RoundDeps, RoundOutcome};
     let label = format!("mr feedback {alias} #{issue_iid}");
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2494,35 +2508,58 @@ fn run_mr_feedback_round(
         })
     }));
     match ran {
-        Ok(Ok(RoundOutcome::Skipped)) => {}
-        Ok(Ok(RoundOutcome::Processed {
-            answered,
-            changed,
-            needs_you,
-        })) => {
-            ctx.log(&format!(
-                "{label}: {answered} answered, {changed} changed, {needs_you} need you"
-            ));
-            ctx.emit(
-                "mr_feedback.round_completed",
-                Some(run_id),
-                EventFields {
-                    issue_run_id: Some(format!("{run_id}_{alias}_{issue_iid}")),
-                    project: Some(alias.to_string()),
-                    issue_iid: issue_iid.parse().ok(),
-                    data: Some(json!({
-                        "answered": answered,
-                        "changed": changed,
-                        "needs_you": needs_you,
-                    })),
-                },
-            );
+        Ok(Ok(outcome)) => report_round(ctx, run_id, alias, issue_iid, &outcome),
+        Ok(Err(e)) => {
+            ctx.log(&format!("{label}: not run: {e}"));
+            None
         }
-        Ok(Err(e)) => ctx.log(&format!("{label}: not run: {e}")),
-        Err(_) => ctx.log(&format!(
-            "{label}: stopped unexpectedly; the issue run goes on"
-        )),
+        Err(_) => {
+            ctx.log(&format!(
+                "{label}: stopped unexpectedly; the issue run goes on"
+            ));
+            None
+        }
     }
+}
+
+/// Logs a processed round and emits `mr_feedback.round_completed`. `None`
+/// when no round ran (skipped), else what its calls cost (`None`: unknown).
+fn report_round(
+    ctx: &RunCtx,
+    run_id: &str,
+    alias: &str,
+    issue_iid: &str,
+    outcome: &crate::mr_feedback::RoundOutcome,
+) -> Option<Option<f64>> {
+    let crate::mr_feedback::RoundOutcome::Processed {
+        answered,
+        changed,
+        needs_you,
+        cost_usd,
+    } = *outcome
+    else {
+        return None;
+    };
+    let cost = cost_usd.map_or_else(|| "unknown".to_string(), |c| format!("${c:.2}"));
+    ctx.log(&format!(
+        "mr feedback {alias} #{issue_iid}: {answered} answered, {changed} changed, {needs_you} need you (cost {cost})"
+    ));
+    ctx.emit(
+        "mr_feedback.round_completed",
+        Some(run_id),
+        EventFields {
+            issue_run_id: Some(format!("{run_id}_{alias}_{issue_iid}")),
+            project: Some(alias.to_string()),
+            issue_iid: issue_iid.parse().ok(),
+            data: Some(json!({
+                "answered": answered,
+                "changed": changed,
+                "needs_you": needs_you,
+                "cost_usd": cost_usd,
+            })),
+        },
+    );
+    Some(cost_usd)
 }
 
 fn remove_issue_screenshots(ctx: &RunCtx, run_id: &str, alias: &str, issue_iid: &str) {
@@ -5841,6 +5878,65 @@ mod tests {
             gitlab_config_path: d.path().join("gitlab.json"),
         }));
         assert!(!mr_round_applies(&ctx, &InvokeMode::Batch));
+    }
+
+    #[test]
+    fn a_processed_mr_feedback_round_reports_its_cost() {
+        use crate::mr_feedback::RoundOutcome;
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().to_path_buf());
+        ctx.unified_log = d.path().join("log");
+        ctx.events_dir = Some(d.path().join("events"));
+        let processed = |cost_usd| RoundOutcome::Processed {
+            answered: 1,
+            changed: 0,
+            needs_you: 0,
+            cost_usd,
+        };
+        assert_eq!(
+            report_round(&ctx, "r1", "web", "7", &processed(Some(0.25))),
+            Some(Some(0.25))
+        );
+        assert_eq!(
+            report_round(&ctx, "r1", "web", "7", &processed(None)),
+            Some(None)
+        );
+        assert_eq!(
+            report_round(&ctx, "r1", "web", "7", &RoundOutcome::Skipped),
+            None
+        );
+        let events: Vec<Value> = std::fs::read_dir(d.path().join("events"))
+            .unwrap()
+            .flatten()
+            .flat_map(|e| crate::events::read_events_file(&e.path()))
+            .filter(|e| e["event_type"] == "mr_feedback.round_completed")
+            .collect();
+        assert_eq!(events.len(), 2, "a skipped round emits nothing");
+        assert_eq!(events[0]["data"]["cost_usd"], json!(0.25));
+        assert_eq!(events[0]["data"]["answered"], json!(1));
+        assert_eq!(events[1]["data"]["cost_usd"], Value::Null);
+    }
+
+    #[test]
+    fn the_mr_feedback_rounds_cost_adds_to_the_issues_cost() {
+        // The round ran and reported a cost: added to the pass's.
+        assert_eq!(
+            issue_agent_cost(&[Some(1.0), None], Some(Some(0.5))),
+            AgentCost::Usd(1.5)
+        );
+        // Only the round reported one.
+        assert_eq!(
+            issue_agent_cost(&[None], Some(Some(0.5))),
+            AgentCost::Usd(0.5)
+        );
+        // The round ran with an unknown cost, or did not run at all.
+        assert_eq!(
+            issue_agent_cost(&[Some(1.0)], Some(None)),
+            AgentCost::Usd(1.0)
+        );
+        assert_eq!(issue_agent_cost(&[None], Some(None)), AgentCost::Unknown);
+        assert_eq!(issue_agent_cost(&[None], None), AgentCost::Unknown);
+        assert_eq!(issue_agent_cost(&[Some(0.0)], None), AgentCost::Usd(0.0));
     }
 
     #[test]
