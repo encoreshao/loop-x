@@ -93,6 +93,20 @@ fn instant(text: &str, label: &str) -> Result<chrono::DateTime<Utc>, ToolError> 
         .with_timezone(&Utc))
 }
 
+/// A plain `local@domain` address: no whitespace, slashes or extra `@`.
+fn is_email(text: &str) -> bool {
+    let mut parts = text.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-+".contains(c))
+    };
+    ok(local) && ok(domain) && domain.contains('.')
+}
+
 fn list_events(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolResult {
     let c = connector_of(c)?;
     let given = |k: &str| args.get(k).filter(|v| truthy(v));
@@ -107,7 +121,16 @@ fn list_events(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -
     if end <= start {
         return Err(ToolError::input("end must be after start"));
     }
-    let events = conn(c.list_events(&utc_text(start), &utc_text(end), MAX_EVENTS))?;
+    let calendar = match given("calendar") {
+        Some(v) => py_str(v).trim().to_string(),
+        None => String::new(),
+    };
+    if !calendar.is_empty() && !is_email(&calendar) {
+        return Err(ToolError::input(
+            "calendar must be a person's email address (e.g. maxime@ekohe.com)",
+        ));
+    }
+    let events = conn(c.list_events_in(&calendar, &utc_text(start), &utc_text(end), MAX_EVENTS))?;
     let rows: Vec<Value> = events
         .iter()
         .map(|e| {
@@ -130,6 +153,98 @@ fn list_events(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -
         })
         .collect();
     Ok(json!({"events": rows}))
+}
+
+const MAX_CALENDARS: usize = 20;
+const DEFAULT_MIN_MINUTES: i64 = 30;
+
+/// Gaps of at least `min` inside `[start, end]` that no busy block touches.
+fn free_gaps(
+    busy: &[(chrono::DateTime<Utc>, chrono::DateTime<Utc>)],
+    start: chrono::DateTime<Utc>,
+    end: chrono::DateTime<Utc>,
+    min: Duration,
+) -> Vec<Value> {
+    let mut blocks: Vec<_> = busy.to_vec();
+    blocks.sort();
+    let mut gaps = Vec::new();
+    let mut cursor = start;
+    for (s, e) in blocks {
+        if s > cursor && s - cursor >= min {
+            gaps.push(json!({"start": utc_text(cursor), "end": utc_text(s.min(end))}));
+        }
+        cursor = cursor.max(e);
+        if cursor >= end {
+            return gaps;
+        }
+    }
+    if end - cursor >= min {
+        gaps.push(json!({"start": utc_text(cursor), "end": utc_text(end)}));
+    }
+    gaps
+}
+
+fn free_busy(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolResult {
+    let c = connector_of(c)?;
+    let given = |k: &str| args.get(k).filter(|v| truthy(v));
+    let calendars: Vec<String> = py_str(&args["calendars"])
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if calendars.is_empty() || calendars.len() > MAX_CALENDARS {
+        return Err(ToolError::input(format!(
+            "calendars must list 1-{MAX_CALENDARS} email addresses, comma-separated"
+        )));
+    }
+    if let Some(bad) = calendars.iter().find(|a| !is_email(a)) {
+        return Err(ToolError::input(format!(
+            "calendars must be email addresses (e.g. maxime@ekohe.com), got {bad:?}"
+        )));
+    }
+    let start = match given("start") {
+        Some(v) => instant(&py_str(v), "start")?,
+        None => Utc::now(),
+    };
+    let end = match given("end") {
+        Some(v) => instant(&py_str(v), "end")?,
+        None => start + Duration::days(DEFAULT_DAYS),
+    };
+    if end <= start {
+        return Err(ToolError::input("end must be after start"));
+    }
+    let min_minutes = match given("min_minutes") {
+        Some(v) => py_str(v)
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|m| (1..=24 * 60).contains(m))
+            .ok_or_else(|| ToolError::input("min_minutes must be a whole number of minutes"))?,
+        None => DEFAULT_MIN_MINUTES,
+    };
+    let rows = conn(c.free_busy(&calendars, &utc_text(start), &utc_text(end)))?;
+    let mut busy = Vec::new();
+    let mut unavailable = Vec::new();
+    for row in &rows {
+        if !get(row, "error").as_str().unwrap_or("").is_empty() {
+            unavailable.push(get(row, "calendar"));
+        }
+        for b in get(row, "busy").as_array().into_iter().flatten() {
+            let parse = |k: &str| {
+                chrono::DateTime::parse_from_rfc3339(get(b, k).as_str().unwrap_or(""))
+                    .ok()
+                    .map(|t| t.with_timezone(&Utc))
+            };
+            if let (Some(s), Some(e)) = (parse("start"), parse("end")) {
+                busy.push((s.max(start), e.min(end)));
+            }
+        }
+    }
+    let free = free_gaps(&busy, start, end, Duration::minutes(min_minutes));
+    Ok(
+        json!({"calendars": rows, "free": free, "unavailable": unavailable,
+              "range": {"start": utc_text(start), "end": utc_text(end)}}),
+    )
 }
 
 /// The user's own instant must carry an explicit UTC offset: a bare
@@ -197,7 +312,13 @@ fn create_event(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) 
     conn(c.create_event(&event))
 }
 
-static LIST_ARGS: [Arg; 2] = [Arg::opt("start"), Arg::opt("end")];
+static FREE_BUSY_ARGS: [Arg; 4] = [
+    Arg::req("calendars"),
+    Arg::opt("start"),
+    Arg::opt("end"),
+    Arg::opt("min_minutes"),
+];
+static LIST_ARGS: [Arg; 3] = [Arg::opt("start"), Arg::opt("end"), Arg::opt("calendar")];
 static CREATE_ARGS: [Arg; 6] = [
     Arg::req("summary"),
     Arg::req("start"),
@@ -211,11 +332,20 @@ pub(crate) fn tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "calendar.list_events",
-            description: "List Google Calendar events between two dates (start/end: YYYY-MM-DD or ISO date-time; default: the next 7 days). Read-only",
+            description: "List Google Calendar events between two dates (start/end: YYYY-MM-DD or ISO date-time; default: the next 7 days). Optional calendar: a colleague's email address to read their calendar instead of the user's own (shows what they share with the user; free/busy-only shares return busy blocks without titles). Read-only",
             args: &LIST_ARGS,
             mode: Mode::Read,
             connector_type: Some("google_calendar"),
             handler: list_events,
+            select: None,
+        },
+        Tool {
+            name: "calendar.free_busy",
+            description: "When colleagues are busy and when they are all free (calendars: comma-separated email addresses; start/end: YYYY-MM-DD or ISO date-time, read as UTC unless an offset is given; default: the next 7 days; min_minutes: shortest free gap to report, default 30). `free` lists gaps where every listed person is free across the whole range, including nights and weekends, so pick gaps inside working hours; calendars listed in `unavailable` could not be read and are not reflected in `free`. Shows busy times only, never meeting titles. Read-only",
+            args: &FREE_BUSY_ARGS,
+            mode: Mode::Read,
+            connector_type: Some("google_calendar"),
+            handler: free_busy,
             select: None,
         },
         Tool {
@@ -261,6 +391,96 @@ mod tests {
     fn list(f: &Fake, args: Value) -> Value {
         let (e, _d) = setup(f);
         run(&e, "calendar.list_events", &args.to_string(), "")
+    }
+
+    #[test]
+    fn lists_another_persons_calendar_when_given_an_address() {
+        let f = cal_fake();
+        let out = list(
+            &f,
+            json!({"start": "2026-10-12", "end": "2026-10-13", "calendar": " maxime@ekohe.com "}),
+        );
+        assert!(out["result"]["events"].is_array(), "{out}");
+        assert_eq!(
+            f.log()[0],
+            json!([
+                "list_events",
+                "2026-10-12T00:00:00+00:00",
+                "2026-10-13T00:00:00+00:00",
+                50,
+                "maxime@ekohe.com"
+            ])
+        );
+    }
+
+    #[test]
+    fn rejects_a_calendar_that_is_not_an_email_address() {
+        let f = cal_fake();
+        let out = list(&f, json!({"calendar": "../primary"}));
+        assert!(out["result"].is_null(), "{out}");
+        assert!(f.log().is_empty());
+    }
+
+    fn busy_fake(
+        a: Vec<(&'static str, &'static str)>,
+        b: Vec<(&'static str, &'static str)>,
+    ) -> Fake {
+        let mut f = cal_fake();
+        f.free_busy = Some(Arc::new(move |cals: &[String]| {
+            let rows = |cal: &str, v: &[(&str, &str)]| {
+                json!({"calendar": cal, "error": "",
+                       "busy": v.iter().map(|(s, e)| json!({"start": s, "end": e})).collect::<Vec<_>>()})
+            };
+            Ok(vec![rows(&cals[0], &a), rows(&cals[1], &b)])
+        }));
+        f
+    }
+
+    fn free(f: &Fake, args: Value) -> Value {
+        let (e, _d) = setup(f);
+        run(&e, "calendar.free_busy", &args.to_string(), "")
+    }
+
+    #[test]
+    fn free_busy_returns_busy_blocks_and_the_gaps_everyone_shares() {
+        let f = busy_fake(
+            vec![("2026-10-12T09:00:00Z", "2026-10-12T10:00:00Z")],
+            vec![
+                ("2026-10-12T09:30:00Z", "2026-10-12T11:00:00Z"),
+                ("2026-10-12T12:00:00Z", "2026-10-12T12:10:00Z"),
+            ],
+        );
+        let out = free(
+            &f,
+            json!({"calendars": "a@x.com, b@x.com", "start": "2026-10-12T08:00:00Z",
+                   "end": "2026-10-12T13:00:00Z", "min_minutes": "30"}),
+        );
+        let r = &out["result"];
+        assert!(r.is_object(), "{out}");
+        assert_eq!(r["calendars"][0]["calendar"], "a@x.com");
+        assert_eq!(r["calendars"][1]["busy"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            r["free"],
+            json!([
+                {"start": "2026-10-12T08:00:00+00:00", "end": "2026-10-12T09:00:00+00:00"},
+                {"start": "2026-10-12T11:00:00+00:00", "end": "2026-10-12T12:00:00+00:00"},
+                {"start": "2026-10-12T12:10:00+00:00", "end": "2026-10-12T13:00:00+00:00"},
+            ])
+        );
+    }
+
+    #[test]
+    fn free_busy_needs_valid_addresses() {
+        let f = busy_fake(vec![], vec![]);
+        for bad in [
+            json!({}),
+            json!({"calendars": "nope"}),
+            json!({"calendars": "a@x.com,../x"}),
+        ] {
+            let out = free(&f, bad);
+            assert!(out["result"].is_null(), "{out}");
+        }
+        assert!(f.log().is_empty());
     }
 
     #[test]

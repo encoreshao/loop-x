@@ -706,6 +706,7 @@ pub(crate) mod testutil {
 
     type ApiFn = dyn Fn(&str, &str, Option<&Value>) -> ConnResult<Value> + Send + Sync;
     type EventsFn = dyn Fn(&str, &str, u32) -> ConnResult<Vec<Value>> + Send + Sync;
+    type BusyFn = dyn Fn(&[String]) -> ConnResult<Vec<Value>> + Send + Sync;
     type ValueFn = dyn Fn(&Value) -> ConnResult<Value> + Send + Sync;
     type SearchFn = dyn Fn(&str, u32) -> ConnResult<Vec<Value>> + Send + Sync;
     type ReadFn = dyn Fn(&str) -> ConnResult<Value> + Send + Sync;
@@ -720,6 +721,7 @@ pub(crate) mod testutil {
         pub api: Option<Arc<ApiFn>>,
         pub list_events: Option<Arc<EventsFn>>,
         pub create_event: Option<Arc<ValueFn>>,
+        pub free_busy: Option<Arc<BusyFn>>,
         pub search: Option<Arc<SearchFn>>,
         pub read: Option<Arc<ReadFn>>,
         pub send: Option<Arc<SendFn>>,
@@ -734,6 +736,7 @@ pub(crate) mod testutil {
                 api: None,
                 list_events: None,
                 create_event: None,
+                free_busy: None,
                 search: None,
                 read: None,
                 send: None,
@@ -770,6 +773,29 @@ pub(crate) mod testutil {
             self.push(json!(["list_events", min, max, n]));
             match &self.list_events {
                 Some(f) => f(min, max, n),
+                None => unsupported(),
+            }
+        }
+        fn list_events_in(
+            &self,
+            calendar: &str,
+            min: &str,
+            max: &str,
+            n: u32,
+        ) -> ConnResult<Vec<Value>> {
+            if calendar.is_empty() {
+                return self.list_events(min, max, n);
+            }
+            self.push(json!(["list_events", min, max, n, calendar]));
+            match &self.list_events {
+                Some(f) => f(min, max, n),
+                None => unsupported(),
+            }
+        }
+        fn free_busy(&self, calendars: &[String], min: &str, max: &str) -> ConnResult<Vec<Value>> {
+            self.push(json!(["free_busy", calendars, min, max]));
+            match &self.free_busy {
+                Some(f) => f(calendars),
                 None => unsupported(),
             }
         }
@@ -1112,7 +1138,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 18);
+        assert_eq!(names.len(), 19);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));

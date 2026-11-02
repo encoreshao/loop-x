@@ -454,6 +454,33 @@ pub trait Connector: Send + Sync {
         unsupported("list_events")
     }
 
+    /// Calendar: like `list_events`, but for another person's calendar (their
+    /// address, as the calendar id). An empty `calendar` means the account's own.
+    fn list_events_in(
+        &self,
+        calendar: &str,
+        time_min: &str,
+        time_max: &str,
+        max_results: u32,
+    ) -> ConnResult<Vec<Value>> {
+        if calendar.is_empty() {
+            self.list_events(time_min, time_max, max_results)
+        } else {
+            unsupported("list_events_in")
+        }
+    }
+
+    /// Calendar: busy blocks of several calendars (addresses) between two RFC 3339
+    /// instants; one `{calendar, busy: [{start, end}], error}` row per calendar.
+    fn free_busy(
+        &self,
+        _calendars: &[String],
+        _time_min: &str,
+        _time_max: &str,
+    ) -> ConnResult<Vec<Value>> {
+        unsupported("free_busy")
+    }
+
     /// Calendar: create one event; returns `{id, html_link}`.
     fn create_event(&self, _event: &Value) -> ConnResult<Value> {
         unsupported("create_event")

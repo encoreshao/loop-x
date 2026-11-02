@@ -45,6 +45,7 @@ fn chat_tool_chips_js(lang: Lang) -> String {
         ("github.comment", "Commenting"),
         ("rss.read_feed", "Reading feed"),
         ("calendar.list_events", "Reading calendar"),
+        ("calendar.free_busy", "Reading calendar"),
         ("mail.search", "Searching mail"),
         ("mail.read", "Reading email"),
         ("mail.send", "Sending email"),

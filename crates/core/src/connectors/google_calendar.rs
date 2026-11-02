@@ -64,7 +64,16 @@ impl GoogleCalendarConnector {
     }
 
     fn calendar_path(&self) -> String {
-        let id = self.account.setting("calendar_id").trim().to_string();
+        self.calendar_path_for("")
+    }
+
+    /// Path of `calendar` (an address), or the configured/primary one when empty.
+    fn calendar_path_for(&self, calendar: &str) -> String {
+        let id = if calendar.trim().is_empty() {
+            self.account.setting("calendar_id").trim().to_string()
+        } else {
+            calendar.trim().to_string()
+        };
         let id = if id.is_empty() {
             "primary".to_string()
         } else {
@@ -186,6 +195,17 @@ impl Connector for GoogleCalendarConnector {
         time_max: &str,
         max_results: u32,
     ) -> ConnResult<Vec<Value>> {
+        self.list_events_in("", time_min, time_max, max_results)
+    }
+
+    /// Events of another calendar, by address; what Google shows the signed-in user.
+    fn list_events_in(
+        &self,
+        calendar: &str,
+        time_min: &str,
+        time_max: &str,
+        max_results: u32,
+    ) -> ConnResult<Vec<Value>> {
         let token = self.access_token().map_err(ConnectorError::msg)?;
         let query = urlencode(&[
             ("timeMin", time_min.to_string()),
@@ -196,7 +216,7 @@ impl Connector for GoogleCalendarConnector {
         ]);
         let data = self
             .get(
-                &format!("{}/events?{query}", self.calendar_path()),
+                &format!("{}/events?{query}", self.calendar_path_for(calendar)),
                 &token,
                 30,
                 3,
@@ -274,6 +294,52 @@ impl Connector for GoogleCalendarConnector {
     /// Creates one event (`{summary, start, end, description?, location?,
     /// attendees?}`; start/end are RFC 3339 with an offset). Invitations go out
     /// only when there are attendees.
+    /// Google's freeBusy query: busy blocks only, never titles, so it works
+    /// even for colleagues who share just their availability.
+    fn free_busy(
+        &self,
+        calendars: &[String],
+        time_min: &str,
+        time_max: &str,
+    ) -> ConnResult<Vec<Value>> {
+        let token = self.access_token().map_err(ConnectorError::msg)?;
+        let items: Vec<Value> = calendars.iter().map(|c| json!({"id": c})).collect();
+        let req = HttpRequest::new("POST", &format!("{API_URL}/freeBusy"))
+            .token(Some(&token))
+            .json(Some(
+                json!({"timeMin": time_min, "timeMax": time_max, "items": items}),
+            ));
+        let data = self.http.request_json(&req).map_err(|e| {
+            ConnectorError::msg(self.describe(&ConnectorError::Http(e), Some(&token)))
+        })?;
+        Ok(calendars
+            .iter()
+            .map(|id| {
+                let entry = data.pointer(&format!(
+                    "/calendars/{}",
+                    id.replace('~', "~0").replace('/', "~1")
+                ));
+                let busy: Vec<Value> = entry
+                    .and_then(|e| e.get("busy"))
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(
+                        |b| json!({"start": text_of(b.get("start")), "end": text_of(b.get("end"))}),
+                    )
+                    .collect();
+                let error = match entry {
+                    None => "notReturned".to_string(),
+                    Some(e) => e
+                        .pointer("/errors/0/reason")
+                        .map(|r| text_of(Some(r)))
+                        .unwrap_or_default(),
+                };
+                json!({"calendar": id, "busy": busy, "error": error})
+            })
+            .collect())
+    }
+
     fn create_event(&self, event: &Value) -> ConnResult<Value> {
         let token = self.access_token().map_err(ConnectorError::msg)?;
         let field = |k: &str| {
@@ -517,6 +583,57 @@ mod tests {
             "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=2026-10-06T00%3A00%3A00Z&timeMax=2026-10-08T00%3A00%3A00Z&maxResults=5&singleEvents=true&orderBy=startTime"
         );
         assert_eq!(call.token.as_deref(), Some("AT"));
+    }
+
+    #[test]
+    fn list_events_in_reads_another_calendar_by_address() {
+        let http = FakeHttp::ok(json!({"items": []}));
+        gcal(Some("RT"), http.clone(), at("AT"))
+            .list_events_in("maxime@ekohe.com", "a", "b", 5)
+            .unwrap();
+        let call = http.calls.lock().unwrap()[0].clone();
+        assert!(
+            call.url.starts_with(
+                "https://www.googleapis.com/calendar/v3/calendars/maxime%40ekohe.com/events?"
+            ),
+            "{}",
+            call.url
+        );
+    }
+
+    #[test]
+    fn free_busy_posts_one_query_and_shapes_each_calendar() {
+        let http = FakeHttp::ok(json!({"calendars": {
+            "a@x.com": {"busy": [{"start": "2026-10-12T09:00:00Z", "end": "2026-10-12T10:00:00Z"}]},
+            "b@x.com": {"busy": [], "errors": [{"domain": "global", "reason": "notFound"}]},
+        }}));
+        let rows = gcal(Some("RT"), http.clone(), at("AT"))
+            .free_busy(
+                &["a@x.com".to_string(), "b@x.com".to_string()],
+                "2026-10-12T00:00:00Z",
+                "2026-10-13T00:00:00Z",
+            )
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                json!({"calendar": "a@x.com", "error": "",
+                       "busy": [{"start": "2026-10-12T09:00:00Z", "end": "2026-10-12T10:00:00Z"}]}),
+                json!({"calendar": "b@x.com", "busy": [], "error": "notFound"}),
+            ]
+        );
+        let call = http.calls.lock().unwrap()[0].clone();
+        assert_eq!(
+            (call.method.as_str(), call.url.as_str()),
+            ("POST", "https://www.googleapis.com/calendar/v3/freeBusy")
+        );
+        assert_eq!(
+            call.json_body,
+            Some(
+                json!({"timeMin": "2026-10-12T00:00:00Z", "timeMax": "2026-10-13T00:00:00Z",
+                        "items": [{"id": "a@x.com"}, {"id": "b@x.com"}]})
+            )
+        );
     }
 
     #[test]

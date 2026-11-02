@@ -90,7 +90,7 @@ pub fn tool_label(lang: Lang, name: &str) -> String {
         "github.read_pr" => "Reading pull request",
         "github.comment" => "Commenting",
         "rss.read_feed" => "Reading feed",
-        "calendar.list_events" => "Reading calendar",
+        "calendar.list_events" | "calendar.free_busy" => "Reading calendar",
         "mail.search" => "Searching mail",
         "mail.read" => "Reading email",
         "mail.send" => "Sending email",
