@@ -1379,5 +1379,21 @@
   "Approved. The loop is carrying out the plan now; the thread leaves this list when it is done, or comes back with the reason if it stops.": "承認しました。ループが今計画を実行しています。終わればスレッドはこの一覧から消え、止まった場合は理由とともに戻ってきます。",
   "Your reply was posted in the thread.": "返信をスレッドに投稿しました。",
   "Instructions saved; the loop plans the thread again on its next run.": "指示を保存しました。ループは次の実行でこのスレッドを計画し直します。",
-  "Dismissed. The thread comes back only if someone writes in it again.": "非表示にしました。誰かがスレッドに再び書き込んだときだけ戻ってきます。"
+  "Dismissed. The thread comes back only if someone writes in it again.": "非表示にしました。誰かがスレッドに再び書き込んだときだけ戻ってきます。",
+  "Claude account & usage": "Claudeアカウントと使用量",
+  "The account Claude Code is signed in as and how much of your subscription is used, as /status and /usage show it. The Subscription usage setting is what pauses scheduled runs.": "Claude Code がサインインしているアカウントと、サブスクリプションの使用状況（/status と /usage の表示と同じ）です。スケジュール実行を一時停止するのは「サブスクリプションの使用量」の設定です。",
+  "Loading your Claude account and usage": "Claudeアカウントと使用量を読み込み中",
+  "Refresh": "更新",
+  "Claude {plan} account": "Claude {plan} アカウント",
+  "Claude account": "Claudeアカウント",
+  "Email": "メールアドレス",
+  "Organization": "組織",
+  "Login method": "ログイン方法",
+  "Current session": "現在のセッション",
+  "Current week": "今週",
+  "Resets {when}": "{when} にリセット",
+  "{n}% used": "{n}% 使用済み",
+  "Could not read the Claude account": "Claudeアカウントを読み取れませんでした",
+  "Not signed in. Open Terminal and run {cmd}; scheduled runs fail until then.": "サインインしていません。ターミナルで {cmd} を実行してください。それまでスケジュール実行は失敗します。",
+  "Usage unavailable: {reason}": "使用量を取得できません: {reason}"
 }

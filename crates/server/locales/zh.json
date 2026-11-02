@@ -1379,5 +1379,21 @@
   "Approved. The loop is carrying out the plan now; the thread leaves this list when it is done, or comes back with the reason if it stops.": "已批准。循环正在执行计划；完成后该讨论会从列表中消失，若中途停止则会带着原因重新出现。",
   "Your reply was posted in the thread.": "你的回复已发布到讨论中。",
   "Instructions saved; the loop plans the thread again on its next run.": "指示已保存；循环会在下次运行时重新计划该讨论。",
-  "Dismissed. The thread comes back only if someone writes in it again.": "已忽略。只有有人再次在该讨论中发言时才会重新出现。"
+  "Dismissed. The thread comes back only if someone writes in it again.": "已忽略。只有有人再次在该讨论中发言时才会重新出现。",
+  "Claude account & usage": "Claude 账户与用量",
+  "The account Claude Code is signed in as and how much of your subscription is used, as /status and /usage show it. The Subscription usage setting is what pauses scheduled runs.": "Claude Code 当前登录的账户以及订阅的已用量（与 /status 和 /usage 显示的相同）。暂停定时运行的是“订阅用量”设置。",
+  "Loading your Claude account and usage": "正在加载 Claude 账户与用量",
+  "Refresh": "刷新",
+  "Claude {plan} account": "Claude {plan} 账户",
+  "Claude account": "Claude 账户",
+  "Email": "邮箱",
+  "Organization": "组织",
+  "Login method": "登录方式",
+  "Current session": "当前会话",
+  "Current week": "本周",
+  "Resets {when}": "{when} 重置",
+  "{n}% used": "已用 {n}%",
+  "Could not read the Claude account": "无法读取 Claude 账户",
+  "Not signed in. Open Terminal and run {cmd}; scheduled runs fail until then.": "未登录。请打开终端运行 {cmd}；在此之前定时运行会失败。",
+  "Usage unavailable: {reason}": "无法获取用量：{reason}"
 }

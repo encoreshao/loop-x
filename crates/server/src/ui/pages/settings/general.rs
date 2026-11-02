@@ -268,7 +268,12 @@ fn ai_cli_panel(ctx: &UiCtx, csrf: &str, current: &str) -> String {
             format!("{}{}", usage_pause_form(ctx, csrf, current), concurrency_form(ctx, csrf)),
         );
     scope.set("html.escape(cli_labels[current_cli])", pyfmt::escape(&current_label));
-    render("settings_ai_cli_panel", &scope)
+    let panel = render("settings_ai_cli_panel", &scope);
+    if current == "claude" {
+        format!("<div class='grid'>{panel}{}</div>", super::claude_account::card(ctx))
+    } else {
+        panel
+    }
 }
 
 /// "Pause scheduled runs above N% of the subscription's usage", and the pause in
@@ -579,6 +584,17 @@ mod tests {
             assert!(html.contains(&format!("data-ai-cli-warning='{cli}' hidden>")), "{cli}: {html}");
         }
         assert!(!html.contains("data-ai-cli-warning='claude'"), "{html}");
+    }
+
+    #[test]
+    fn the_claude_account_card_shows_only_while_claude_is_selected() {
+        let claude = ai_panel_for("claude", &["claude"]);
+        assert!(claude.contains("data-claude-account"), "{claude}");
+        assert!(claude.starts_with("<div class='grid'>"), "two cards stack in a grid: {claude}");
+        for cli in ["codex", "gemini", "kimi", "cursor", "grok"] {
+            let html = ai_panel_for(cli, &["claude"]);
+            assert!(!html.contains("data-claude-account"), "{cli}: {html}");
+        }
     }
 
     #[test]

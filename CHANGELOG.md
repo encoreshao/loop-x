@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Settings → General → AI CLI: while Claude Code is the selected CLI, a "Claude account & usage" card shows the signed-in account (email, organization, plan, login method) and a bar for the current session and current week usage with their reset times, as `/status` and `/usage` show them. It loads when you open the tab and has a Refresh button; display only.
 - Needs you: a review thread on the loop's own merge request that the loop would not handle on its own (low confidence, a hard rule, a failed check) is listed with the reviewer's comment, the plan, its confidence, why it stopped and the draft reply. You can approve the plan (a code change still goes through the checks, the validator and every push guard), post your own reply in the thread, have the loop plan it again with your instructions, or dismiss it until someone writes in the thread again. Nothing is posted on the merge request until you decide.
 - A `calendar.free_busy` chat tool takes several colleagues' email addresses and a date range and returns each person's busy blocks plus the gaps where everyone is free (never meeting titles), so you can pick a time to book.
 - The chat's `calendar.list_events` tool takes an optional `calendar` argument (a colleague's email address) to read their calendar, so you can see when they are busy before booking a meeting. It shows what they share with you in Google Calendar; free/busy-only shares return busy blocks without titles.

@@ -1379,5 +1379,21 @@
   "Approved. The loop is carrying out the plan now; the thread leaves this list when it is done, or comes back with the reason if it stops.": "Approuvé. La boucle applique le plan maintenant ; le fil quitte cette liste une fois terminé, ou revient avec la raison s'il s'arrête.",
   "Your reply was posted in the thread.": "Votre réponse a été publiée dans le fil.",
   "Instructions saved; the loop plans the thread again on its next run.": "Instructions enregistrées ; la boucle replanifie le fil à sa prochaine exécution.",
-  "Dismissed. The thread comes back only if someone writes in it again.": "Ignoré. Le fil ne revient que si quelqu'un y écrit de nouveau."
+  "Dismissed. The thread comes back only if someone writes in it again.": "Ignoré. Le fil ne revient que si quelqu'un y écrit de nouveau.",
+  "Claude account & usage": "Compte Claude et utilisation",
+  "The account Claude Code is signed in as and how much of your subscription is used, as /status and /usage show it. The Subscription usage setting is what pauses scheduled runs.": "Le compte avec lequel Claude Code est connecté et la part de votre abonnement utilisée, comme l'affichent /status et /usage. C'est le réglage Utilisation de l'abonnement qui met en pause les exécutions planifiées.",
+  "Loading your Claude account and usage": "Chargement de votre compte Claude et de l'utilisation",
+  "Refresh": "Actualiser",
+  "Claude {plan} account": "Compte Claude {plan}",
+  "Claude account": "Compte Claude",
+  "Email": "E-mail",
+  "Organization": "Organisation",
+  "Login method": "Méthode de connexion",
+  "Current session": "Session en cours",
+  "Current week": "Semaine en cours",
+  "Resets {when}": "Réinitialisation {when}",
+  "{n}% used": "{n} % utilisé",
+  "Could not read the Claude account": "Impossible de lire le compte Claude",
+  "Not signed in. Open Terminal and run {cmd}; scheduled runs fail until then.": "Non connecté. Ouvrez le Terminal et lancez {cmd} ; les exécutions planifiées échouent d'ici là.",
+  "Usage unavailable: {reason}": "Utilisation indisponible : {reason}"
 }

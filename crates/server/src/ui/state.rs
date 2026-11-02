@@ -111,6 +111,10 @@ pub struct UiState {
     /// Settings: `Some(names)` pins which AI CLIs count as installed instead of probing
     /// a login shell (tests and the golden harness).
     pub cli_pinned: Option<Vec<String>>,
+    /// Settings → AI CLI: `Some(snapshot)` is what the Claude account and usage card
+    /// shows instead of running `claude auth status` and reading the Keychain token
+    /// (`None` is the live probe; tests and the golden harness pin one).
+    pub claude_snapshot: Option<loopx_core::claude_status::Snapshot>,
     /// Connectors: the secret store for connector secrets (`None` = the Keychain, sandbox
     /// suffixed under `LOOP_ENGINEERING_HOME`) and the HTTP client for connector tests
     /// (`None` = the real one). Tests and the golden harness inject fakes.
@@ -182,6 +186,7 @@ impl UiState {
             ],
             launchctl: vec!["launchctl".to_string()],
             cli_pinned: None,
+            claude_snapshot: None,
             connector_store: None,
             connector_http: None,
             spawn_processes: true,
@@ -214,6 +219,10 @@ impl UiState {
             run_cmd: Vec::new(),
             launchctl: Vec::new(),
             cli_pinned: Some(vec!["claude".to_string()]),
+            claude_snapshot: Some(loopx_core::claude_status::Snapshot {
+                account: Err("not checked".to_string()),
+                usage: Err("not checked".to_string()),
+            }),
             connector_store: None,
             connector_http: None,
             spawn_processes: false,

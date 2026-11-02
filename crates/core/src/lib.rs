@@ -13,6 +13,7 @@ pub mod bundled;
 pub mod chat;
 pub mod chat_eval;
 pub mod chat_tools;
+pub mod claude_status;
 pub mod command_hints;
 pub mod concurrency_config;
 pub mod config;

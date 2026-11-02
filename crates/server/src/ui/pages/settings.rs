@@ -3,6 +3,8 @@
 //! Chat tools, plus the POST routes behind them. `/settings/fragment` and the
 //! GitLab/bundle/tracked-project POSTs belong to the GitLab loop page.
 
+#[path = "settings/claude_account.rs"]
+mod claude_account;
 #[path = "settings/daemons.rs"]
 mod daemons;
 #[path = "settings/general.rs"]
@@ -18,6 +20,7 @@ use crate::ui::routes::{Registry, UiCtx, UiResponse};
 
 pub fn register(r: &mut Registry) {
     r.get("/settings", page);
+    claude_account::register(r);
     posts::register(r);
 }
 
