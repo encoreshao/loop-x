@@ -19,7 +19,8 @@ use serde_json::{json, Value};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-/// How much of the branch diff the validator sees.
+/// The largest diff the validator is given; a larger change goes to the user
+/// rather than being validated from a partial view.
 const DIFF_MAX_CHARS: usize = 20_000;
 /// How much of the checks' output the validator (or a retry) sees.
 const CHECKS_TAIL_CHARS: usize = 4_000;
@@ -57,9 +58,10 @@ pub enum Branch {
     InSync(String),
     /// The remote has commits the local branch lacks (someone else pushed).
     Diverged,
-    /// The local branch has commits the remote lacks (never pushed or
-    /// validated by this round).
-    Ahead,
+    /// The local branch has commits past this one (the remote tip, or the
+    /// fork point from the target branch when there is no remote branch)
+    /// that were never pushed.
+    Ahead(String),
 }
 
 /// What the issue's branch and worktree look like at one moment; agents
@@ -84,7 +86,7 @@ pub trait Workspace {
     fn ensure(&self) -> Result<PathBuf, String>;
     fn snapshot(&self) -> Result<Snapshot, String>;
     fn head(&self, worktree: &Path) -> Result<String, String>;
-    /// `git diff <base> HEAD`, bounded.
+    /// `git diff <base> HEAD`, whole (the round refuses one too large).
     fn diff(&self, worktree: &Path, base: &str) -> Result<String, String>;
     /// `git diff --name-only <base> HEAD`.
     fn changed_files(&self, worktree: &Path, base: &str) -> Result<Vec<String>, String>;
@@ -418,6 +420,15 @@ fn keep_ref_name(discussion_id: &str) -> String {
     format!("{name}-{}", chrono::Utc::now().format("%Y%m%d%H%M%S"))
 }
 
+/// `git status --porcelain` lines for tracked files (untracked `??` output,
+/// such as files a test run leaves behind, is allowed).
+fn tracked_changes(status: &str) -> Vec<&str> {
+    status
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with("??"))
+        .collect()
+}
+
 fn normalize_path(p: &str) -> String {
     let p = p.trim();
     p.strip_prefix("./").unwrap_or(p).to_string()
@@ -512,6 +523,7 @@ impl Round<'_> {
         if actionable.is_empty() && stuck.is_empty() {
             return Ok(RoundOutcome::Skipped);
         }
+        self.undo_unvalidated(&state);
         let mr_state = gitlab.mr_state(mr)?;
         match mr_state.as_str() {
             "opened" => {}
@@ -556,6 +568,40 @@ impl Round<'_> {
             changed,
             needs_you,
         })
+    }
+
+    /// A run that stopped between the executor's commit and the push leaves
+    /// unvalidated commits on the branch, past the `base` the thread recorded.
+    /// They are taken off (kept under a ref) before anything else looks at
+    /// the branch, so neither this round nor the issue pass can push them.
+    fn undo_unvalidated(&self, state: &IssueThreads) {
+        let ws = &*self.deps.workspace;
+        for (id, t) in &state.threads {
+            let Some(base) = t
+                .base
+                .as_deref()
+                .filter(|_| t.status == ThreadStatus::Working)
+            else {
+                continue;
+            };
+            if !matches!(ws.sync(), Ok(Branch::Ahead(tip)) if tip == base) {
+                continue;
+            }
+            let worktree = match ws.ensure() {
+                Ok(w) => w,
+                Err(e) => {
+                    self.push_blocked.set(true);
+                    self.log(&format!(
+                        "thread {id}: unvalidated commits on the branch, and its worktree is unusable ({e}); no pushes this round"
+                    ));
+                    continue;
+                }
+            };
+            self.log(&format!(
+                "thread {id}: taking unvalidated commits from a stopped run off the branch"
+            ));
+            self.rollback(&worktree, base, id);
+        }
     }
 
     /// A merged or closed MR: every thread is done, nothing runs.
@@ -692,7 +738,7 @@ impl Round<'_> {
         // The planner and validator can edit files (there is no read-only
         // allowlist), so the branch and worktree are pinned around them.
         let before = match self.deps.workspace.snapshot() {
-            Ok(s) if s.status.is_empty() => s,
+            Ok(s) if tracked_changes(&s.status).is_empty() => s,
             Ok(_) => {
                 return self.needs_you(
                     state,
@@ -1063,7 +1109,7 @@ impl Round<'_> {
                     &format!("someone else pushed to {branch}; the loop does not build on commits it has not seen"),
                 )
             }
-            Ok(Branch::Ahead) => {
+            Ok(Branch::Ahead(_)) => {
                 return refuse(
                     state,
                     &format!("{branch} has unpushed commits; the loop only pushes commits it validated in this round"),
@@ -1132,6 +1178,21 @@ impl Round<'_> {
                 Ok(_) => return abandon(state, "the executor committed nothing"),
                 Err(e) => return abandon(state, &format!("could not read HEAD: {e}")),
             };
+            // Only commits are validated and pushed, so the checks must run on
+            // exactly them: no tracked edits may be left uncommitted.
+            match ws.snapshot() {
+                Ok(snap) if tracked_changes(&snap.status).is_empty() => {}
+                Ok(snap) => {
+                    return abandon(
+                        state,
+                        &format!(
+                            "the executor left uncommitted changes: {}",
+                            tracked_changes(&snap.status).join(", ")
+                        ),
+                    )
+                }
+                Err(e) => return abandon(state, &format!("could not read the worktree: {e}")),
+            }
             // The hard rules hold for what changed, not only for the plan.
             match ws.changed_files(&worktree, &base) {
                 Ok(files) => {
@@ -1148,11 +1209,23 @@ impl Round<'_> {
                 continue;
             }
             let diff = match ws.diff(&worktree, &base) {
+                Ok(d) if d.chars().count() > DIFF_MAX_CHARS => {
+                    return abandon(state, "the diff is too large to validate")
+                }
                 Ok(d) => d,
                 Err(e) => return abandon(state, &format!("could not read the diff: {e}")),
             };
             let pinned = match ws.snapshot() {
-                Ok(s) => s,
+                Ok(s) if tracked_changes(&s.status).is_empty() => s,
+                Ok(s) => {
+                    return abandon(
+                        state,
+                        &format!(
+                            "the project's checks changed tracked files: {}",
+                            tracked_changes(&s.status).join(", ")
+                        ),
+                    )
+                }
                 Err(e) => return abandon(state, &format!("could not read the worktree: {e}")),
             };
             let verdict = self.validate(a, plan, Some((&diff, &checks_out)));
@@ -1284,6 +1357,8 @@ impl GitWorkspace {
 
 impl Workspace for GitWorkspace {
     fn sync(&self) -> Result<Branch, String> {
+        // Parallel issues of one checkout fetch into the same repository.
+        let _lock = crate::worktree::checkout_lock(&self.local_path).map_err(|f| f.message)?;
         let branch = self.branch();
         let remote_ref = format!("refs/remotes/origin/{branch}");
         let local_ref = format!("refs/heads/{branch}");
@@ -1310,7 +1385,7 @@ impl Workspace for GitWorkspace {
             (None, None) => Err(format!("{branch} exists neither locally nor on the remote")),
             (Some(l), Some(r)) if l == r => Ok(Branch::InSync(r)),
             (Some(l), Some(r)) => Ok(if self.is_ancestor(&r, &l)? {
-                Branch::Ahead
+                Branch::Ahead(r)
             } else {
                 Branch::Diverged
             }),
@@ -1320,33 +1395,24 @@ impl Workspace for GitWorkspace {
                 Ok(if base == l {
                     Branch::InSync(base)
                 } else {
-                    Branch::Ahead
+                    Branch::Ahead(base)
                 })
             }
         }
     }
 
     fn ensure(&self) -> Result<PathBuf, String> {
-        if !Path::new(&self.worktree_root).is_absolute() {
-            return Err(format!(
-                "worktree_root must be an absolute path: {}",
-                self.worktree_root
-            ));
-        }
-        let (wt, branch) = (self.worktree(), self.branch());
-        if !wt.is_dir() {
-            std::fs::create_dir_all(&self.worktree_root)
-                .map_err(|e| format!("cannot create {}: {e}", self.worktree_root))?;
-            let _ = git(&self.local_path, &["worktree", "prune"]);
+        let wt =
+            crate::worktree::reuse_worktree(&self.local_path, &self.issue_iid, &self.worktree_root)
+                .map(PathBuf::from)
+                .map_err(|f| f.message)?;
+        let (on, branch) = (
             git_ok(
-                &self.local_path,
-                &["worktree", "add", &wt.display().to_string(), &branch],
-            )?;
-        }
-        let on = git_ok(
-            &wt.display().to_string(),
-            &["symbolic-ref", "--short", "HEAD"],
-        )?;
+                &wt.display().to_string(),
+                &["symbolic-ref", "--short", "HEAD"],
+            )?,
+            self.branch(),
+        );
         if on != branch {
             return Err(format!("{} is on {on}, not {branch}", wt.display()));
         }
@@ -1377,20 +1443,14 @@ impl Workspace for GitWorkspace {
     }
 
     fn diff(&self, worktree: &Path, base: &str) -> Result<String, String> {
-        let diff = git_ok(&worktree.display().to_string(), &["diff", base, "HEAD"])?;
-        if diff.chars().count() <= DIFF_MAX_CHARS {
-            return Ok(diff);
-        }
-        let cut: String = diff.chars().take(DIFF_MAX_CHARS).collect();
-        Ok(format!(
-            "{cut}\n[diff truncated at {DIFF_MAX_CHARS} characters]"
-        ))
+        git_ok(&worktree.display().to_string(), &["diff", base, "HEAD"])
     }
 
     fn changed_files(&self, worktree: &Path, base: &str) -> Result<Vec<String>, String> {
         let out = git_ok(
             &worktree.display().to_string(),
-            &["diff", "--name-only", base, "HEAD"],
+            // A rename would list only the new path, hiding its source.
+            &["diff", "--name-only", "--no-renames", base, "HEAD"],
         )?;
         Ok(out
             .lines()
@@ -1664,15 +1724,21 @@ mod tests {
 
     struct FakeWorkspace {
         log: Shared<Log>,
+        /// Sync results to give first, before `branch`.
+        syncs: Shared<VecDeque<Branch>>,
         branch: Option<Branch>,
         head: Shared<String>,
         dirty: Shared<String>,
         changed: Option<Vec<String>>,
         rollback_fails: bool,
+        big_diff: bool,
     }
 
     impl Workspace for FakeWorkspace {
         fn sync(&self) -> Result<Branch, String> {
+            if let Some(b) = self.syncs.borrow_mut().pop_front() {
+                return Ok(b);
+            }
             Ok(self
                 .branch
                 .clone()
@@ -1694,6 +1760,9 @@ mod tests {
             Ok(self.head.borrow().clone())
         }
         fn diff(&self, _: &Path, base: &str) -> Result<String, String> {
+            if self.big_diff {
+                return Ok("+x\n".repeat(DIFF_MAX_CHARS));
+            }
             Ok(format!("diff {base}..HEAD\n-old\n+new"))
         }
         fn changed_files(&self, _: &Path, _: &str) -> Result<Vec<String>, String> {
@@ -1731,10 +1800,15 @@ mod tests {
         handoffs: Shared<VecDeque<String>>,
         verdicts: Shared<VecDeque<String>>,
         verify_passes: Shared<VecDeque<bool>>,
+        syncs: Shared<VecDeque<Branch>>,
         branch: Option<Branch>,
         dirty: Shared<String>,
         changed: Option<Vec<String>>,
         rollback_fails: bool,
+        big_diff: bool,
+        /// `git status --porcelain` the executor / the checks leave behind.
+        exec_dirty: Option<String>,
+        checks_dirty: Option<String>,
         use_worktree: bool,
     }
 
@@ -1799,10 +1873,14 @@ mod tests {
                 handoffs: Rc::default(),
                 verdicts: Rc::default(),
                 verify_passes: Rc::default(),
+                syncs: Rc::default(),
                 branch: None,
                 dirty: Rc::default(),
                 changed: None,
                 rollback_fails: false,
+                big_diff: false,
+                exec_dirty: None,
+                checks_dirty: None,
                 use_worktree: true,
             }
         }
@@ -1822,6 +1900,7 @@ mod tests {
             )
             .unwrap();
             let commits = Cell::new(0);
+            let (dirty, exec_dirty) = (self.dirty.clone(), self.exec_dirty.clone());
             let invoke: PhaseInvoker = Box::new(move |call: &PhaseCall<'_>| {
                 {
                     let mut l = log.borrow_mut();
@@ -1858,6 +1937,9 @@ mod tests {
                             commits.set(commits.get() + 1);
                             *head.borrow_mut() = format!("c{}", commits.get());
                         }
+                        if let Some(d) = &exec_dirty {
+                            *dirty.borrow_mut() = d.clone();
+                        }
                         "finished".to_string()
                     }
                 };
@@ -1873,6 +1955,7 @@ mod tests {
             let push_log = self.log.clone();
             let notify_log = self.log.clone();
             let passes = self.verify_passes.clone();
+            let (dirty, checks_dirty) = (self.dirty.clone(), self.checks_dirty.clone());
             RoundDeps {
                 gitlab: Box::new(FakeGitlab {
                     log: self.log.clone(),
@@ -1892,6 +1975,9 @@ mod tests {
                 verify: Box::new(move |handoff| {
                     assert!(handoff.exists());
                     let passed = passes.borrow_mut().pop_front().unwrap_or(true);
+                    if let Some(d) = &checks_dirty {
+                        *dirty.borrow_mut() = d.clone();
+                    }
                     VerificationResult {
                         name: "project_commands".into(),
                         passed,
@@ -1907,11 +1993,13 @@ mod tests {
                 }),
                 workspace: Box::new(FakeWorkspace {
                     log: self.log.clone(),
+                    syncs: self.syncs.clone(),
                     branch: self.branch.clone(),
                     head: self.head.clone(),
                     dirty: self.dirty.clone(),
                     changed: self.changed.clone(),
                     rollback_fails: self.rollback_fails,
+                    big_diff: self.big_diff,
                 }),
                 project: json!({"project_id": "g/p", "local_path": "/repo", "instance": "g",
                                 "target_branch": "main", "use_worktree": self.use_worktree}),
@@ -2299,7 +2387,7 @@ mod tests {
     #[test]
     fn local_branch_ahead_of_the_remote_goes_to_needs_you_without_push() {
         let mut h = H::new();
-        h.branch = Some(Branch::Ahead);
+        h.branch = Some(Branch::Ahead("base".into()));
         h.plans.borrow_mut().push_back(plan("change_code", 92));
         let out = h.run();
         assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
@@ -2418,6 +2506,141 @@ mod tests {
         let second = threads.threads["d2"].reason.clone().unwrap();
         assert!(second.contains("earlier rollback"), "{second}");
         assert_eq!(h.events("mr_feedback.needs_you").len(), 2);
+    }
+
+    fn change_round(h: &H) -> RoundOutcome {
+        h.plans.borrow_mut().push_back(plan("change_code", 92));
+        h.handoffs.borrow_mut().push_back(done_handoff());
+        h.verdicts.borrow_mut().push_back(approve());
+        h.run()
+    }
+
+    #[test]
+    fn executor_leaving_tracked_edits_uncommitted_goes_to_needs_you() {
+        let mut h = H::new();
+        h.exec_dirty = Some(" M a.rs".into());
+        let out = change_round(&h);
+        assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
+        {
+            let log = h.log.borrow();
+            assert_eq!(log.calls.len(), 2, "no checks or validation");
+            assert!(log.pushes.is_empty() && log.replies.is_empty());
+            assert_eq!(log.rollbacks.len(), 1);
+        }
+        let reason = h.thread().reason.unwrap();
+        assert!(
+            reason.contains("left uncommitted changes:  M a.rs"),
+            "{reason}"
+        );
+        // Untracked leftovers are fine.
+        let mut h = H::new();
+        h.exec_dirty = Some("?? tmp/out.txt".into());
+        assert!(matches!(
+            change_round(&h),
+            RoundOutcome::Processed { changed: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn checks_that_change_tracked_files_go_to_needs_you() {
+        let mut h = H::new();
+        h.checks_dirty = Some(" M db/schema.rb".into());
+        let out = change_round(&h);
+        assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
+        {
+            let log = h.log.borrow();
+            assert!(log.pushes.is_empty() && log.replies.is_empty());
+            assert_eq!(log.calls.len(), 2, "no validation");
+        }
+        assert!(h
+            .thread()
+            .reason
+            .unwrap()
+            .contains("checks changed tracked files"));
+        // Untracked test output is allowed and pushes as usual.
+        let mut h = H::new();
+        h.checks_dirty = Some("?? coverage/".into());
+        assert!(matches!(
+            change_round(&h),
+            RoundOutcome::Processed { changed: 1, .. }
+        ));
+        assert_eq!(h.log.borrow().pushes.len(), 1);
+    }
+
+    #[test]
+    fn a_diff_too_large_to_validate_goes_to_needs_you() {
+        let mut h = H::new();
+        h.big_diff = true;
+        h.plans.borrow_mut().push_back(plan("change_code", 92));
+        h.handoffs.borrow_mut().push_back(done_handoff());
+        let out = h.run();
+        assert!(matches!(out, RoundOutcome::Processed { needs_you: 1, .. }));
+        {
+            let log = h.log.borrow();
+            assert_eq!(log.calls.len(), 2, "no validation of a partial view");
+            assert!(log.pushes.is_empty());
+        }
+        assert!(h.thread().reason.unwrap().contains("too large to validate"));
+    }
+
+    #[test]
+    fn unvalidated_commits_from_a_stopped_run_are_taken_off_the_branch() {
+        let mut h = H::new();
+        let mut t = stored(ThreadStatus::Working, 0, 1);
+        let entry = t.threads.get_mut("d1").unwrap();
+        entry.base = Some("base".into());
+        entry.plan = Some(serde_json::from_str(&plan("change_code", 92)).unwrap());
+        h.save(&t);
+        // The executor committed, then the run stopped before validation.
+        *h.head.borrow_mut() = "c1".into();
+        h.branch = Some(Branch::Ahead("base".into()));
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        h.run();
+        {
+            let log = h.log.borrow();
+            assert_eq!(log.rollbacks.len(), 1);
+            assert_eq!(log.rollbacks[0].0, "base");
+            assert!(log.rollbacks[0].1.starts_with("d1-"), "{:?}", log.rollbacks);
+            assert!(log.pushes.is_empty() && log.replies.is_empty());
+            // Not mistaken for a pushed change: the thread was planned again.
+            assert_eq!(log.calls.len(), 1);
+        }
+        assert_eq!(*h.head.borrow(), "base");
+        assert_eq!(h.thread().status, ThreadStatus::WaitingOnReviewer);
+        // Ahead of something other than the recorded base: left alone.
+        let mut h = H::new();
+        let mut t = stored(ThreadStatus::Working, 0, 1);
+        t.threads.get_mut("d1").unwrap().base = Some("base".into());
+        h.save(&t);
+        h.branch = Some(Branch::Ahead("other".into()));
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        h.run();
+        assert!(h.log.borrow().rollbacks.is_empty());
+    }
+
+    #[test]
+    fn a_failed_undo_of_unvalidated_commits_blocks_pushes() {
+        let mut h = H::new();
+        h.rollback_fails = true;
+        let mut t = stored(ThreadStatus::Working, 0, 1);
+        t.threads.get_mut("d1").unwrap().base = Some("base".into());
+        h.save(&t);
+        *h.head.borrow_mut() = "c1".into();
+        // Only the round-start check sees the stopped run's commits; d2's
+        // change is then built, validated and approved...
+        h.syncs.borrow_mut().push_back(Branch::Ahead("base".into()));
+        h.discussions
+            .borrow_mut()
+            .push(disc("d2", vec![note(2, "rename z")]));
+        h.plans.borrow_mut().push_back(plan("wait", 90));
+        h.plans.borrow_mut().push_back(plan("change_code", 92));
+        h.handoffs.borrow_mut().push_back(done_handoff());
+        h.verdicts.borrow_mut().push_back(approve());
+        h.run();
+        // ...but never pushed after the failed undo.
+        assert!(h.log.borrow().pushes.is_empty());
+        let reason = h.threads().threads["d2"].reason.clone().unwrap();
+        assert!(reason.contains("earlier rollback"), "{reason}");
     }
 
     #[test]
@@ -2659,7 +2882,11 @@ mod tests {
         let fix = commit(&wt, "c.txt", "review fix");
         assert!(ws.diff(&wt, &pushed).unwrap().contains("+review fix"));
         assert_eq!(ws.changed_files(&wt, &pushed).unwrap(), ["c.txt"]);
-        assert_eq!(ws.sync(), Ok(Branch::Ahead), "unpushed commits");
+        assert_eq!(
+            ws.sync(),
+            Ok(Branch::Ahead(pushed.clone())),
+            "unpushed commits"
+        );
         assert_eq!(ws.is_ancestor(&pushed, &fix), Ok(true));
         assert_eq!(ws.is_ancestor(&fix, &pushed), Ok(false));
         // A rejected change leaves the branch but is kept under a ref.
@@ -2670,7 +2897,7 @@ mod tests {
             &[
                 "for-each-ref",
                 "--format=%(refname) %(objectname)",
-                "refs/loopx/mr-feedback/",
+                "refs/loopx/mr-feedback/d1-x-*",
             ],
         );
         assert!(
@@ -2678,6 +2905,17 @@ mod tests {
             "{kept}"
         );
         assert_eq!(ws.sync(), Ok(Branch::InSync(pushed.clone())));
+        // A rename lists both paths, so an unplanned file cannot hide behind one.
+        sh(&wt, &["mv", "b.txt", "planned.txt"]);
+        sh(&wt, &["commit", "-qm", "rename"]);
+        let files = ws.changed_files(&wt, &pushed).unwrap();
+        assert!(files.contains(&"b.txt".to_string()), "{files:?}");
+        assert!(files.contains(&"planned.txt".to_string()), "{files:?}");
+        assert_eq!(
+            files_rule(&files, &["planned.txt".into()]).unwrap(),
+            "the change touches files outside the plan: b.txt"
+        );
+        ws.rollback(&wt, &pushed, "d1-r").unwrap();
         // A rollback that cannot keep the ref still resets, and says so.
         commit(&wt, "e.txt", "again");
         assert!(ws.rollback(&wt, &pushed, "bad..name").is_err());

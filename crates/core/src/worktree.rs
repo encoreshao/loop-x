@@ -170,7 +170,7 @@ fn usable_checkout(repo_path: &str) -> Result<(), Failure> {
 /// in parallel, and two `git fetch` / `git worktree add` calls on one checkout at
 /// once fail on git's own ref locks. The lock file lives in the shared git dir,
 /// so every worktree of the checkout (and every process) takes the same one.
-fn checkout_lock(repo_path: &str) -> Result<crate::file_lock::FileLock, Failure> {
+pub(crate) fn checkout_lock(repo_path: &str) -> Result<crate::file_lock::FileLock, Failure> {
     let common = git_stdout(repo_path, &["rev-parse", "--git-common-dir"])?;
     let common = Path::new(repo_path).join(common.trim());
     crate::file_lock::FileLock::exclusive(&common.join("loopx-checkout.lock"))
@@ -242,6 +242,13 @@ fn new_worktree_locked(
         )?;
     }
 
+    prepare_worktree(repo_path, &wt)?;
+    Ok(wt)
+}
+
+/// What every issue worktree gets after `git worktree add`, on every run:
+/// the gitignored per-developer files and initialised submodules.
+fn prepare_worktree(repo_path: &str, wt: &str) -> Result<(), Failure> {
     // Gitignored per-developer files `git worktree add` never brings along;
     // copied on every run so later changes are picked up too.
     for rel in [".ruby-version", "config/database.yml"] {
@@ -260,7 +267,7 @@ fn new_worktree_locked(
         "config/credentials/test.key",
     ] {
         let src = Path::new(repo_path).join(rel);
-        if !src.is_file() || !git(&wt, &["check-ignore", "-q", rel])? {
+        if !src.is_file() || !git(wt, &["check-ignore", "-q", rel])? {
             continue;
         }
         let dst = Path::new(&wt).join(rel);
@@ -273,7 +280,45 @@ fn new_worktree_locked(
     }
 
     // Submodule checkouts are per-worktree; init them on every run.
-    ensure_submodules(&wt)?;
+    ensure_submodules(wt)
+}
+
+/// The worktree of the existing `loop/issue-<iid>` branch, re-added when its
+/// directory is gone, and prepared like [`new_worktree`]'s, but with no fetch
+/// and no merge of the target branch: the branch stays exactly as it is.
+pub fn reuse_worktree(
+    repo_path: &str,
+    issue_iid: &str,
+    worktree_root: &str,
+) -> Result<String, Failure> {
+    usable_checkout(repo_path)?;
+    let _lock = checkout_lock(repo_path)?;
+    if !Path::new(worktree_root).is_absolute() {
+        return Err(Failure::new(format!(
+            "worktree_root must be an absolute path: {worktree_root}"
+        )));
+    }
+    let branch = branch_name(issue_iid);
+    let wt = worktree_path(repo_path, issue_iid, worktree_root);
+    if !git(
+        repo_path,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )? {
+        return Err(Failure::new(format!("no local branch {branch} to reuse")));
+    }
+    if !Path::new(&wt).is_dir() {
+        std::fs::create_dir_all(worktree_root)
+            .map_err(|e| Failure::new(format!("cannot create {worktree_root}: {e}")))?;
+        // A worktree whose directory was deleted is still registered.
+        git_ok(repo_path, &["worktree", "prune"])?;
+        git_ok(repo_path, &["worktree", "add", &wt, &branch])?;
+    }
+    prepare_worktree(repo_path, &wt)?;
     Ok(wt)
 }
 
@@ -999,6 +1044,54 @@ mod tests {
         assert!(!Path::new(&wt3).exists());
         assert!(Path::new(&wt4).exists() && Path::new(&wt5).exists());
         assert_eq!(branches(&repo), "loop/issue-4\nloop/issue-5\nloop/other");
+    }
+
+    #[test]
+    fn a_reused_worktree_is_prepared_without_merging_the_target_branch() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let local = Path::new(&repo);
+        sh(local, &["checkout", "-q", "main"]);
+        std::fs::write(
+            local.join(".gitignore"),
+            "/.ruby-version\n/config/database.yml\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(local.join("config")).unwrap();
+        std::fs::write(local.join("config/application.rb"), "app").unwrap();
+        sh(local, &["add", ".gitignore", "config/application.rb"]);
+        sh(local, &["commit", "-qm", "ignore"]);
+        sh(local, &["push", "-q", "origin", "main"]);
+        sh(local, &["branch", "loop/issue-7"]);
+        // main moves on after the MR branch was cut.
+        std::fs::write(local.join("later.txt"), "x").unwrap();
+        sh(local, &["add", "later.txt"]);
+        sh(local, &["commit", "-qm", "later"]);
+        sh(local, &["push", "-q", "origin", "main"]);
+        std::fs::create_dir_all(local.join("config")).unwrap();
+        std::fs::write(local.join(".ruby-version"), "3.3.0").unwrap();
+        std::fs::write(local.join("config/database.yml"), "test: {}").unwrap();
+        let root = d.path().join("wt").display().to_string();
+        let wt = reuse_worktree(&repo, "7", &root).unwrap();
+        let wt_path = Path::new(&wt);
+        assert_eq!(head(&wt), "loop/issue-7");
+        assert!(!wt_path.join("later.txt").exists(), "no merge of main");
+        assert_eq!(
+            std::fs::read_to_string(wt_path.join(".ruby-version")).unwrap(),
+            "3.3.0"
+        );
+        assert_eq!(
+            std::fs::read_to_string(wt_path.join("config/database.yml")).unwrap(),
+            "test: {}"
+        );
+        assert_eq!(sh(wt_path, &["status", "--porcelain"]), "");
+        // Removed and re-added: prepared again.
+        std::fs::remove_dir_all(wt_path).unwrap();
+        let again = reuse_worktree(&repo, "7", &root).unwrap();
+        assert_eq!(again, wt);
+        assert!(wt_path.join("config/database.yml").is_file());
+        // No branch: nothing to reuse.
+        assert!(reuse_worktree(&repo, "8", &root).is_err());
     }
 
     #[test]
