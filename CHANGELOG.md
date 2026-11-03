@@ -67,6 +67,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- The History tab of Daily Digest, MR Review, RSS Watch, LinkedIn Autopilot, Meeting Prep and every other plugin loop (and the run report links in it) showed "No history yet" even though runs were saved; the report file-name check was off by one character and rejected every name.
 - Creating a calendar event with guests from chat now adds you to it as a guest, accepted, besides the people you invite, so you appear on the guest list as well as the organizer.
 - Issues → Projects → GitLab → Connections: the instance, bundle and project selects and the Set default button no longer stretch to a tall block, and the GitHub tab's "Manage GitHub accounts under Connectors" link now sits with the intro text at the top.
 - Settings → Daemons → Registered Loops: the AI account folder row no longer touches the schedule row above it.

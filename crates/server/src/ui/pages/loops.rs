@@ -624,9 +624,9 @@ pub fn valid_history_name(s: &str) -> bool {
         && b.iter().enumerate().all(|(i, c)| match i {
             4 | 7 => *c == b'-',
             10 => *c == b'_',
-            16 => *c == b'.',
-            17 => *c == b'm',
-            18 => *c == b'd',
+            17 => *c == b'.',
+            18 => *c == b'm',
+            19 => *c == b'd',
             _ => c.is_ascii_digit(),
         })
         && s.ends_with(".md")
@@ -1535,5 +1535,33 @@ mod people_tests {
         // The embedded JSON must not be able to close its own <script> element.
         assert!(!html.contains("Ada </script>"), "{html}");
         assert!(html.contains("Ada \\u003c/script>"), "{html}");
+    }
+}
+
+#[cfg(test)]
+mod history_name_tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+
+    #[test]
+    fn a_run_report_name_as_the_runner_writes_it_is_valid() {
+        assert!(valid_history_name("2026-10-24_033051.md"));
+        assert!(!valid_history_name("2026-10-24_03305.md"));
+        assert!(!valid_history_name("2026-10-24_033051.txt"));
+        assert!(!valid_history_name("../6-10-24_033051.md"));
+    }
+
+    #[test]
+    fn history_lists_the_runs_the_runner_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", None);
+        let hist = output_dir(&state, "daily-digest-loop").join("history");
+        std::fs::create_dir_all(&hist).unwrap();
+        std::fs::write(hist.join("2026-10-24_033051.md"), "# run\n\n- [done] digest: ok\n").unwrap();
+        assert_eq!(history_files(&state, "daily-digest-loop"), vec!["2026-10-24_033051.md"]);
+        let req = UiRequest::get("/");
+        let html = history_body(&UiCtx::new(&state, &req), "daily-digest-loop", None, false);
+        assert!(!html.contains("No history yet"), "{html}");
+        assert!(html.contains("/loops/daily-digest-loop/history/2026-10-24_033051.md"), "{html}");
     }
 }
