@@ -1671,8 +1671,9 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         card(
             &t("Connections"),
             format!(
-                "<details class='loop-settings source-connections'><summary>{}</summary><div class='loop-settings-body'><h3>{}</h3>{default_form}<h3>{}</h3>{instances_html}{add_instance_form}<h3>{}</h3><p class='subtitle'>{}</p>{bundles_html}{add_bundle_form}</div></details>",
-                et("Instances, default instance and access bundles"),
+                "{}<details class='loop-settings source-connections'><summary>{}</summary><div class='loop-settings-body'><h3>{}</h3>{default_form}<h3>{}</h3>{instances_html}{add_instance_form}<h3>{}</h3><p class='subtitle'>{}</p>{bundles_html}{add_bundle_form}</div></details>",
+                connections_list(ctx, Provider::Gitlab),
+                et("Advanced: instances, default instance and access bundles"),
                 et("Default instance"),
                 et("Instances"),
                 et("Access bundles"),
@@ -1697,9 +1698,13 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
     for provider in Provider::ALL.iter().copied().filter(|p| p.connected()) {
         panels.push((
             provider.kind().into(),
-            card(
-                &ctx.tf("{provider} projects", &[("provider", provider.label())]),
-                connected_section(ctx, tracked, &csrf, provider),
+            format!(
+                "{}{}",
+                card(
+                    &ctx.tf("{provider} projects", &[("provider", provider.label())]),
+                    connected_section(ctx, tracked, &csrf, provider),
+                ),
+                card(&t("Connections"), connections_list(ctx, provider))
             ),
             project_count(ctx, projects, tracked, Some(provider)),
         ));
@@ -2351,6 +2356,51 @@ fn connected_accounts(ctx: &UiCtx) -> Vec<ConnectedAccount> {
         .collect()
 }
 
+/// The read-only "Connections" list of a provider's tab: the connector accounts its projects can
+/// use, with where each was added. Accounts are added and signed in under Connectors, never here,
+/// so no token or form is rendered.
+fn connections_list(ctx: &UiCtx, provider: Provider) -> String {
+    let paths = super::connectors::paths(ctx.state);
+    let accounts: Vec<loopx_core::connectors::Account> = loopx_core::connectors_config::list_accounts(&paths)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.kind == provider.kind())
+        .collect();
+    let manage = format!(
+        "<a href='/connectors'>{}</a>",
+        pyfmt::escape(&ctx.tf("Manage {provider} accounts under Connectors", &[("provider", provider.label())]))
+    );
+    let intro = format!(
+        "<p class='subtitle'>{} {manage}</p>",
+        esc_t(ctx, "Accounts are added and signed in under Connectors. This list shows the ones available here.")
+    );
+    if accounts.is_empty() {
+        return format!(
+            "{intro}<p>{}</p>",
+            pyfmt::escape(&ctx.tf("No {provider} account yet.", &[("provider", provider.label())]))
+        );
+    }
+    let rows: Vec<String> = accounts
+        .iter()
+        .map(|a| {
+            let name = if a.label.is_empty() || a.label == a.id { a.id.clone() } else { format!("{} ({})", a.label, a.id) };
+            let url = ["api_url", "url"].iter().map(|k| a.setting(k)).find(|v| !v.is_empty()).unwrap_or_default();
+            let source = if a.managed_by == "gitlab-config" { esc_t(ctx, "GitLab config file") } else { esc_t(ctx, "Connectors") };
+            let off = if a.enabled { String::new() } else { format!(" <span class='pill'>{}</span>", esc_t(ctx, "Disabled")) };
+            format!(
+                "<tr><td>{}{off}</td><td>{}</td><td>{}</td></tr>",
+                pyfmt::escape(&name),
+                pyfmt::escape(url),
+                source
+            )
+        })
+        .collect();
+    format!(
+        "{intro}{}",
+        table(&[esc_t(ctx, "Account"), esc_t(ctx, "URL"), esc_t(ctx, "Source")], &rows)
+    )
+}
+
 /// The "Add project" form's fields (connected trackers card).
 struct ConnectedProjectForm<'a> {
     alias: &'a str,
@@ -2971,6 +3021,50 @@ mod tests {
         assert!(gh.contains("href='/connectors'"), "{gh}");
         // An unknown source falls back to All.
         assert!(projects_fragment(&sb, "?source=nope").contains("data-tab-target='all' role='tab' aria-selected='true'"));
+    }
+
+    #[test]
+    fn the_github_tab_lists_the_connector_accounts_under_connections() {
+        let sb = Sandbox::new();
+        two_sources(&sb);
+        let gh = panel(&projects_fragment(&sb, "?source=github"), "github").to_string();
+        let connections = &gh[gh.find("<h2>Connections</h2>").expect("a Connections card")..];
+        assert!(connections.contains("Work GitHub (gh-work)"), "{connections}");
+        assert!(connections.contains("https://ghe.example/api/v3"), "{connections}");
+        assert!(connections.contains("href='/connectors'"), "{connections}");
+        // Display only: nothing here writes a token or an account.
+        assert!(!connections.contains("<form"), "{connections}");
+        assert!(!connections.contains("type='password'"), "{connections}");
+    }
+
+    #[test]
+    fn the_github_connections_card_points_to_connectors_when_there_is_no_account() {
+        let sb = Sandbox::new();
+        sb.seed_projects(json!({"projects": {}}));
+        let gh = panel(&projects_fragment(&sb, "?source=github"), "github").to_string();
+        let connections = &gh[gh.find("<h2>Connections</h2>").expect("a Connections card")..];
+        assert!(connections.contains("No GitHub account yet."), "{connections}");
+        assert!(connections.contains("href='/connectors'"), "{connections}");
+    }
+
+    #[test]
+    fn the_gitlab_connections_card_lists_its_instances_above_the_advanced_editor() {
+        let sb = Sandbox::new();
+        two_sources(&sb);
+        let dir = sb.state.user_home.join(".gitlab");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"instances": {"work": {"url": "https://gl.example", "token": "glpat-secret"}}}"#,
+        )
+        .unwrap();
+        let gl = panel(&projects_fragment(&sb, ""), "gitlab").to_string();
+        let connections = &gl[gl.find("<h2>Connections</h2>").expect("a Connections card")..];
+        let list = connections.find("https://gl.example").expect("the instance is listed");
+        let editor = connections.find("<details class='loop-settings source-connections'>").expect("editor kept");
+        assert!(list < editor, "{connections}");
+        assert!(connections.contains("href='/connectors'"), "{connections}");
+        assert!(!connections[..editor].contains("glpat-secret"), "{connections}");
     }
 
     #[test]
