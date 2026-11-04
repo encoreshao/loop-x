@@ -153,6 +153,29 @@ fn list_issues(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -
     Ok(json!({"issues": rows}))
 }
 
+/// Users the token is allowed to see (`GET /users`); GitLab applies the
+/// token's own visibility rules. Names are third-party text, so untrusted.
+fn list_users(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolResult {
+    let c = connector_of(c)?;
+    let mut path = String::from("/users?active=true&per_page=100");
+    if let Some(search) = args.get("search").filter(|v| truthy(v)) {
+        path.push_str(&format!("&search={}", quote(&py_str(search))));
+    }
+    let users = c.api("GET", &path, &ApiOpts::default())?;
+    let Value::Array(users) = users else {
+        return Err(ToolError::Other("TypeError".into()));
+    };
+    let rows: Vec<Value> = users
+        .iter()
+        .map(|u| {
+            json!({"id": get(u, "id"), "username": untrusted_value(get(u, "username")),
+                   "name": untrusted_value(get(u, "name")), "state": get(u, "state"),
+                   "web_url": get(u, "web_url")})
+        })
+        .collect();
+    Ok(json!({"truncated": rows.len() >= 100, "users": rows}))
+}
+
 fn comment(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolResult {
     let c = connector_of(c)?;
     let (project, iid) = issue_ref(args)?;
@@ -166,6 +189,7 @@ fn comment(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> To
 
 static READ_ARGS: [Arg; 3] = [Arg::opt("url"), Arg::opt("project"), Arg::opt_int("iid")];
 static LIST_ARGS: [Arg; 2] = [Arg::req("project"), Arg::opt("state")];
+static USERS_ARGS: [Arg; 1] = [Arg::opt("search")];
 static COMMENT_ARGS: [Arg; 4] = [
     Arg::req("body"),
     Arg::opt("url"),
@@ -191,6 +215,15 @@ pub(crate) fn tools() -> Vec<Tool> {
             mode: Mode::Read,
             connector_type: Some("gitlab"),
             handler: list_issues,
+            select: None,
+        },
+        Tool {
+            name: "gitlab.list_users",
+            description: "List active GitLab users the token can see, up to 100 (optional search by name, username or email)",
+            args: &USERS_ARGS,
+            mode: Mode::Read,
+            connector_type: Some("gitlab"),
+            handler: list_users,
             select: None,
         },
         Tool {
@@ -389,6 +422,34 @@ mod tests {
             "",
         );
         assert_eq!(r["result"], json!({"issues": []}));
+    }
+
+    #[test]
+    fn list_users_returns_compact_rows_and_flags_a_full_page() {
+        let f = fake(vec![(
+            "/users?active=true&per_page=100",
+            json!([{"id": 7, "username": "ann", "name": "Ann Lee", "state": "active",
+                    "web_url": "https://gitlab.example.com/ann", "email": "x@y"}]),
+        )]);
+        let (r, _, _d) = go(&f, "gitlab.list_users", json!({}), "");
+        let u = &r["result"]["users"][0];
+        assert_eq!(u["id"], 7);
+        assert!(u["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("<untrusted_content>"));
+        assert!(u["username"]
+            .as_str()
+            .unwrap()
+            .starts_with("<untrusted_content>"));
+        assert!(u.get("email").is_none());
+        assert_eq!(r["result"]["truncated"], false);
+        let f = fake(vec![(
+            "/users?active=true&per_page=100&search=an%20n",
+            json!([]),
+        )]);
+        let (r, _, _d) = go(&f, "gitlab.list_users", json!({"search": "an n"}), "");
+        assert_eq!(r["result"]["users"], json!([]));
     }
 
     #[test]

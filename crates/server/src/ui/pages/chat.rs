@@ -86,6 +86,7 @@ fn prefixes(state: &UiState) -> markdown::GitlabPrefixes {
 pub const TOOL_LABELS: &[(&str, &str)] = &[
     ("gitlab.read_issue", "Reading issue"),
     ("gitlab.list_issues", "Listing issues"),
+    ("gitlab.list_users", "Listing users"),
     ("gitlab.comment", "Commenting on issue"),
     ("github.read_issue", "Reading issue"),
     ("github.read_pr", "Reading pull request"),
