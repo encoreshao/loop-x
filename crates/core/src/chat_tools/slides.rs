@@ -23,15 +23,8 @@ fn account_id(c: &dyn Connector) -> String {
 }
 
 /// `file_ref.kind` "deck": what the chat preview panel opens on.
-const DECKS: gfiles::Kind = gfiles::Kind {
-    file_kind: "deck",
-    prefix: "slides",
-    label: "Google Slides",
-    noun: "presentation",
-};
-
 fn deck_ref(account: &str, id: &str) -> Value {
-    gfiles::file_ref(&DECKS, account, id)
+    gfiles::file_ref(&gfiles::DECKS, account, id)
 }
 
 fn ticked(e: &Env, c: &dyn Connector, template_id: &str) -> Result<Value, ToolError> {

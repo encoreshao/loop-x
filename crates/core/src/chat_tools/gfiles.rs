@@ -62,9 +62,53 @@ pub(crate) const SHEETS: Kind = Kind {
     noun: "spreadsheet",
 };
 
+/// Google Slides decks (`file_ref.kind` "deck"); the Slides tools only open
+/// ticked templates and decks chat created, never pasted links.
+pub(crate) const DECKS: Kind = Kind {
+    file_kind: "deck",
+    prefix: "slides",
+    label: "Google Slides",
+    noun: "presentation",
+};
+
 impl Kind {
     pub(crate) fn dir(&self, e: &Env) -> PathBuf {
         e.home_dir.join(self.prefix)
+    }
+}
+
+/// `^[A-Za-z0-9_-]{1,200}$`: what a Google file id may look like.
+pub fn valid_file_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ID_CHARS
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// A `file_ref` reduced to `{kind, account, file}` when every field is well
+/// formed (`kind` doc/sheet/deck, a valid account id, a valid file id).
+pub fn valid_file_ref(v: &Value) -> Option<Value> {
+    let field = |k: &str| v.get(k).and_then(Value::as_str);
+    let (kind, account, file) = (field("kind")?, field("account")?, field("file")?);
+    let ok = matches!(kind, "doc" | "sheet" | "deck")
+        && crate::connectors_config::is_valid_id(account)
+        && valid_file_id(file);
+    ok.then(|| json!({"kind": kind, "account": account, "file": file}))
+}
+
+/// May the chat preview panel show this file in `session`? The tools' own
+/// rules, checked on local state only (no Google call): docs and sheets
+/// follow [`readable`] (ticked, created here, or pasted in this session);
+/// decks follow the Slides tools (ticked or created here, no pasted links).
+pub fn preview_allowed(e: &Env, session: &str, file_kind: &str, account: &str, id: &str) -> bool {
+    match file_kind {
+        "doc" | "sheet" => {
+            let kind = if file_kind == "doc" { &DOCS } else { &SHEETS };
+            readable(&e.clone().with_session(session), kind, account, id).is_ok()
+        }
+        "deck" => editable_row(e, &DECKS, account, id).is_some(),
+        _ => false,
     }
 }
 
@@ -163,12 +207,7 @@ pub(crate) fn file_id(args: &Map<String, Value>, key: &str) -> Result<String, To
     } else {
         raw.to_string()
     };
-    let ok = !id.is_empty()
-        && id.len() <= MAX_ID_CHARS
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-    if !ok {
+    if !valid_file_id(&id) {
         return Err(ToolError::input(format!(
             "{key} must be a Google file id or a link to the file"
         )));
@@ -387,6 +426,60 @@ mod tests {
                 "{raw}"
             );
         }
+    }
+
+    fn tick(home: &std::path::Path, prefix: &str, account: &str, id: &str) {
+        let dir = home.join(prefix);
+        store::cache_templates(&dir, account, &[json!({"id": id, "name": "T"})], "now").unwrap();
+        store::set_selected(&dir, account, &[id.to_string()]).unwrap();
+    }
+
+    #[test]
+    fn preview_follows_the_read_rule_for_docs_and_sheets_and_the_slides_rule_for_decks() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let e = Env::new(home.join("repo"), home);
+        tick(home, "gdocs", "gd", "tdoc");
+        store::record_deck(&home.join("gsheets"), "gs", json!({"id": "made"})).unwrap();
+        tick(home, "slides", "sl", "tdeck");
+        store::record_deck(&home.join("slides"), "sl", json!({"id": "deck1"})).unwrap();
+        file_grants::record(&file_grants::dir(home), "s1", &["pasted".into()]).unwrap();
+
+        assert!(preview_allowed(&e, "s1", "doc", "gd", "tdoc"));
+        assert!(preview_allowed(&e, "", "sheet", "gs", "made"));
+        assert!(preview_allowed(&e, "s1", "doc", "gd", "pasted"));
+        assert!(preview_allowed(&e, "s1", "sheet", "gs", "pasted"));
+        // A grant is for its own session only, and decks never take grants.
+        assert!(!preview_allowed(&e, "s2", "doc", "gd", "pasted"));
+        assert!(!preview_allowed(&e, "s1", "deck", "sl", "pasted"));
+        assert!(preview_allowed(&e, "s2", "deck", "sl", "tdeck"));
+        assert!(preview_allowed(&e, "s2", "deck", "sl", "deck1"));
+        // Wrong account, wrong kind's store, unknown kind.
+        assert!(!preview_allowed(&e, "s1", "doc", "other", "tdoc"));
+        assert!(!preview_allowed(&e, "s1", "sheet", "gs", "tdoc"));
+        assert!(!preview_allowed(&e, "s1", "pdf", "gd", "tdoc"));
+    }
+
+    #[test]
+    fn file_refs_are_validated_field_by_field() {
+        let ok = json!({"kind": "deck", "account": "sl-2", "file": "1Ab_c-D", "extra": 1});
+        assert_eq!(
+            valid_file_ref(&ok),
+            Some(json!({"kind": "deck", "account": "sl-2", "file": "1Ab_c-D"}))
+        );
+        for bad in [
+            json!({"kind": "docs", "account": "a", "file": "b"}),
+            json!({"kind": "doc", "account": "A", "file": "b"}),
+            json!({"kind": "doc", "account": "a", "file": "b c"}),
+            json!({"kind": "doc", "account": "a", "file": ""}),
+            json!({"kind": "doc", "account": "a", "file": "x".repeat(201)}),
+            json!({"kind": "doc", "file": "b"}),
+            json!("doc"),
+        ] {
+            assert_eq!(valid_file_ref(&bad), None, "{bad}");
+        }
+        assert!(valid_file_id("1AbCd_-9"));
+        assert!(!valid_file_id("a/b") && !valid_file_id(""));
     }
 
     #[test]

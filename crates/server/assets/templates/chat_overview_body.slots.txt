@@ -15,6 +15,9 @@ ai_cli_notes_html
 html.escape(announce_text)
 hero_title_html
 messages_html
+html.escape(_t('File preview'))
+html.escape(_t('Files in this chat'))
+html.escape(_t('Close preview'))
 session_input
 html.escape(_t('Ask the loop anything, or paste a GitLab or GitHub issue link'))
 html.escape(_t('Message the loop'))

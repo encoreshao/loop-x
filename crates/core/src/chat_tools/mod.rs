@@ -13,6 +13,7 @@ pub mod calendar;
 pub mod documents;
 pub mod gdocs;
 pub(crate) mod gfiles;
+pub use gfiles::{preview_allowed, valid_file_id, valid_file_ref};
 pub mod github;
 pub mod gitlab;
 pub mod gsheets;

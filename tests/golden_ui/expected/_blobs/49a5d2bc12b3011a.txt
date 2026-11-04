@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Lecture du ticket", "gitlab.list_issues": "Liste des tickets", "gitlab.comment": "Commentaire sur le ticket", "github.read_issue": "Lecture du ticket", "github.read_pr": "Lecture de la pull request", "github.comment": "Commentaire en cours", "rss.read_feed": "Lecture du flux", "calendar.list_events": "Lecture de l'agenda", "calendar.free_busy": "Lecture de l'agenda", "mail.search": "Recherche de courriels", "mail.read": "Lecture du courriel", "mail.send": "Envoi du courriel", "calendar.create_event": "Cr\u00e9ation de l'\u00e9v\u00e9nement", "docs.save": "Enregistrement du document", "web.search": "Recherche sur le web"};
-window.__loopToolStatusText = "Analyse des r\u00e9sultats\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "Issue \u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gitlab.list_issues": "Issue \u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gitlab.comment": "Issue \u306b\u30b3\u30e1\u30f3\u30c8\u4e2d", "github.read_issue": "Issue \u3092\u8aad\u307f\u53d6\u308a\u4e2d", "github.read_pr": "\u30d7\u30eb\u30ea\u30af\u30a8\u30b9\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "github.comment": "\u30b3\u30e1\u30f3\u30c8\u4e2d", "rss.read_feed": "\u30d5\u30a3\u30fc\u30c9\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "calendar.list_events": "\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "calendar.free_busy": "\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "mail.search": "\u30e1\u30fc\u30eb\u3092\u691c\u7d22\u4e2d", "mail.read": "\u30e1\u30fc\u30eb\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "mail.send": "\u30e1\u30fc\u30eb\u3092\u9001\u4fe1\u4e2d", "calendar.create_event": "\u4e88\u5b9a\u3092\u4f5c\u6210\u4e2d", "docs.save": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4fdd\u5b58\u4e2d", "web.search": "\u30a6\u30a7\u30d6\u3092\u691c\u7d22\u4e2d", "gdocs.list_templates": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gsheets.list_templates": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gdocs.template_info": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gsheets.template_info": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gdocs.read": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gsheets.read": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gdocs.create": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4f5c\u6210\u4e2d", "gdocs.create_from_template": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4f5c\u6210\u4e2d", "gsheets.create": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u4f5c\u6210\u4e2d", "gsheets.create_from_template": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u4f5c\u6210\u4e2d", "gdocs.edit": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u7de8\u96c6\u4e2d", "gsheets.edit": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u7de8\u96c6\u4e2d", "slides.edit_deck": "\u30d7\u30ec\u30bc\u30f3\u30c6\u30fc\u30b7\u30e7\u30f3\u3092\u7de8\u96c6\u4e2d"};
+window.__loopToolStatusText = "\u7d50\u679c\u3092\u5206\u6790\u4e2d\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -83,6 +83,7 @@ window.__loopToolChips = function(host, getSession) {
       text.textContent = (window.__loopToolLabels[ev.name] || ev.name) + (ev.summary ? ' \u00b7 ' + ev.summary : '');
       chip.appendChild(icon);
       chip.appendChild(text);
+      chip.__loopToolName = String(ev.name || '');
       (chips[ev.id] = chips[ev.id] || []).push(chip);
       row.appendChild(chip);
       document.dispatchEvent(new CustomEvent('loopx:tool', { detail: { name: ev.name } }));
@@ -91,8 +92,27 @@ window.__loopToolChips = function(host, getSession) {
         chip.className = 'tool-chip ' + (ev.ok ? 'tool-chip-ok' : 'tool-chip-err');
         chip.querySelector('.tool-chip-icon use').setAttribute('href', '#i-' + (ev.ok ? 'check_circle' : 'error'));
       });
+      // A Google Docs/Sheets/Slides result names its file: mark the chip
+      // and tell the chat page, which opens it in the preview panel.
+      var ref = ev.file_ref;
+      var fileChip = null;
+      if (ref && typeof ref === 'object') {
+        mine.forEach(function(chip) {
+          if (!/^(gdocs|gsheets|slides)\./.test(chip.__loopToolName || '')) return;
+          chip.classList.add('tool-chip-file');
+          chip.setAttribute('data-file-kind', String(ref.kind || ''));
+          chip.setAttribute('data-file-account', String(ref.account || ''));
+          chip.setAttribute('data-file-id', String(ref.file || ''));
+          chip.setAttribute('role', 'button');
+          chip.setAttribute('tabindex', '0');
+          fileChip = chip;
+        });
+      }
       var running = row.querySelector('.tool-chip-run');
       setStatus(!running);
+      if (fileChip) {
+        fileChip.dispatchEvent(new CustomEvent('loopx:file-ref', { bubbles: true, detail: { kind: ref.kind, account: ref.account, file: ref.file } }));
+      }
     } else if (ev.kind === 'pending' && row && window.__loopPendingCard) {
       row.parentNode.insertBefore(window.__loopPendingCard(ev, getSession ? getSession() : ''), row.nextSibling);
     }
@@ -122,7 +142,7 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "En attente de votre approbation"));
+  head.appendChild(el('span', '', "\u627f\u8a8d\u5f85\u3061\u3067\u3059"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
@@ -132,12 +152,12 @@ window.__loopPendingCard = function(ev, session) {
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("Approuver"));
+  approve.appendChild(document.createTextNode("\u627f\u8a8d"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("Rejeter"));
+  reject.appendChild(document.createTextNode("\u5374\u4e0b"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -168,14 +188,21 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "Approuv\u00e9." : "Rejet\u00e9.") : ((data && data.error) || "Une erreur s'est produite - r\u00e9essayez.");
+        if (status) status.textContent = ok ? (approving ? "\u627f\u8a8d\u3057\u307e\u3057\u305f\u3002" : "\u5374\u4e0b\u3057\u307e\u3057\u305f\u3002") : ((data && data.error) || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
+        // An approved Google Docs/Sheets/Slides write names the file it made
+        // or changed: the chat page shows it in the preview panel.
+        var done = ok && approving && data.result;
+        var ref = done && data.result.result && data.result.result.file_ref;
+        if (ref && typeof ref === 'object' && /^(gdocs|gsheets|slides)\./.test(String(data.result.tool || ''))) {
+          card.dispatchEvent(new CustomEvent('loopx:file-ref', { bubbles: true, detail: { kind: ref.kind, account: ref.account, file: ref.file } }));
+        }
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "Une erreur s'est produite - r\u00e9essayez.";
+        if (status) status.textContent = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -217,8 +244,14 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      if (document.documentElement.classList.contains('ai-panel-open')) { __loopScheduleRefresh(); return; }
-      location.reload();
+      var indicator = document.getElementById('gitlab-refresh-indicator');
+      if (indicator) { indicator.style.display = ''; }
+      Promise.all(Array.prototype.map.call(
+        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
+      )).then(function() {
+        if (indicator) { indicator.style.display = 'none'; }
+        __loopScheduleRefresh();
+      });
     }, refreshSeconds * 1000);
   })();
 })();
@@ -227,7 +260,7 @@ if (!window.__loopPendingCardClicks) {
     var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
     var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
     var el = document.getElementById('refresh-note-text');
-    if (el) el.textContent = "actualisation auto toutes les {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
+    if (el) el.textContent = "{interval}\u3054\u3068\u306b\u81ea\u52d5\u66f4\u65b0".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
   });
 })();
 (function() {
@@ -459,12 +492,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "Impossible de charger le document.";
+      var docFailed = "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "Copi\u00e9";
+      var docCopiedText = "\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -509,6 +542,7 @@ if (!window.__loopPendingCardClicks) {
         docBody.textContent = '';
         docRaw = '';
         resetCopy();
+        docRoot.classList.remove('file-panel-open');
         docRoot.classList.add('doc-panel-open');
         fetch(href).then(function(r) { return r.ok ? r.text() : ''; })
           .then(function(raw) { docRaw = raw; }).catch(function() {});
@@ -517,6 +551,122 @@ if (!window.__loopPendingCardClicks) {
           return r.text();
         }).then(function(markup) { docBody.innerHTML = markup; })
           .catch(function() { docBody.textContent = docFailed; });
+      });
+    }
+
+    // The Google file preview panel (#file-panel). A gdocs/gsheets/slides
+    // tool result that names a file (a 'loopx:file-ref' event from the live
+    // tool chips or an approved card) opens it; the panel keeps the most
+    // recent file active plus a tab per other file this chat touched (the
+    // stored chips carry data-file-* so they are known after a reload too,
+    // but nothing is fetched until a file is touched or a tab clicked).
+    // Closing is remembered only until the next touch. Refresh re-fetches
+    // the active file's fragment and never posts into the conversation.
+    var syncFileTabs = function() {};
+    var filePanel = document.getElementById('file-panel');
+    if (filePanel) {
+      var fileRoot = document.documentElement;
+      var fileTabs = filePanel.querySelector('[data-file-tabs]');
+      var fileBody = filePanel.querySelector('[data-file-body]');
+      var fileLoading = "\u8aad\u307f\u8fbc\u307f\u4e2d\u2026";
+      var fileFailed = "\u30d7\u30ec\u30d3\u30e5\u30fc\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002";
+      var fileNouns = { doc: "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8", sheet: "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8", deck: "\u30d7\u30ec\u30bc\u30f3\u30c6\u30fc\u30b7\u30e7\u30f3" };
+      var files = [];
+      var activeFile = null;
+      var fileSeq = 0;
+      var fileKey = function(f) { return f.kind + ':' + f.account + ':' + f.file; };
+      var validFileRef = function(r) {
+        return !!r && /^(doc|sheet|deck)$/.test(String(r.kind)) &&
+          /^[a-z0-9][a-z0-9-]{0,47}$/.test(String(r.account)) &&
+          /^[A-Za-z0-9_-]{1,200}$/.test(String(r.file));
+      };
+      var rememberFile = function(r) {
+        if (!validFileRef(r)) return null;
+        var key = fileKey(r);
+        for (var i = 0; i < files.length; i++) if (fileKey(files[i]) === key) return files[i];
+        var f = { kind: String(r.kind), account: String(r.account), file: String(r.file), title: '' };
+        files.push(f);
+        return f;
+      };
+      var renderFileTabs = function() {
+        fileTabs.textContent = '';
+        files.forEach(function(f) {
+          var tab = document.createElement('button');
+          var on = f === activeFile;
+          tab.type = 'button';
+          tab.className = 'file-tab' + (on ? ' is-active' : '');
+          tab.setAttribute('role', 'tab');
+          tab.setAttribute('aria-selected', on ? 'true' : 'false');
+          tab.textContent = f.title || fileNouns[f.kind] || f.kind;
+          tab.title = tab.textContent;
+          tab.addEventListener('click', function() { showFile(f); });
+          fileTabs.appendChild(tab);
+        });
+        var current = fileTabs.querySelector('.is-active');
+        if (current && current.scrollIntoView) current.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      };
+      var loadFile = function(f) {
+        var seq = ++fileSeq;
+        fileBody.setAttribute('aria-busy', 'true');
+        fileBody.innerHTML = "<div class='file-preview-loading'><span class='file-preview-spinner' aria-hidden='true'></span><span></span></div>";
+        fileBody.querySelector('.file-preview-loading span:last-child').textContent = fileLoading;
+        var query = '?session=' + encodeURIComponent(sessionInput ? sessionInput.value : '') +
+          '&kind=' + encodeURIComponent(f.kind) + '&account=' + encodeURIComponent(f.account) +
+          '&file=' + encodeURIComponent(f.file);
+        fetch('/chat/preview' + query, { cache: 'no-store', credentials: 'same-origin' })
+          .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+          .then(function(markup) {
+            if (seq !== fileSeq) return;
+            // Server-rendered fragment: every file text is escaped there.
+            fileBody.innerHTML = markup;
+            var head = fileBody.querySelector('[data-file-title]');
+            var title = head ? head.getAttribute('data-file-title') : '';
+            if (title) { f.title = title; renderFileTabs(); }
+          })
+          .catch(function() { if (seq === fileSeq) fileBody.textContent = fileFailed; })
+          .then(function() { if (seq === fileSeq) fileBody.removeAttribute('aria-busy'); });
+      };
+      var showFile = function(f) {
+        activeFile = f;
+        fileRoot.classList.remove('doc-panel-open');
+        fileRoot.classList.add('file-panel-open');
+        renderFileTabs();
+        loadFile(f);
+      };
+      var touchFile = function(r) {
+        var f = rememberFile(r);
+        if (f) showFile(f);
+      };
+      var chipRef = function(chip) {
+        return {
+          kind: chip.getAttribute('data-file-kind'),
+          account: chip.getAttribute('data-file-account'),
+          file: chip.getAttribute('data-file-id')
+        };
+      };
+      // Every file a stored chip names joins the tab strip (without a fetch).
+      syncFileTabs = function() {
+        var before = files.length;
+        list.querySelectorAll('.tool-chip-file[data-file-kind]').forEach(function(chip) { rememberFile(chipRef(chip)); });
+        if (files.length !== before && fileRoot.classList.contains('file-panel-open')) renderFileTabs();
+      };
+      syncFileTabs();
+      list.addEventListener('loopx:file-ref', function(ev) { touchFile(ev.detail); });
+      var openChip = function(ev) {
+        var chip = ev.target.closest && ev.target.closest('.tool-chip-file[data-file-kind]');
+        if (!chip || !list.contains(chip)) return false;
+        touchFile(chipRef(chip));
+        return true;
+      };
+      list.addEventListener('click', openChip);
+      list.addEventListener('keydown', function(ev) {
+        if ((ev.key === 'Enter' || ev.key === ' ') && openChip(ev)) ev.preventDefault();
+      });
+      filePanel.querySelector('[data-file-close]').addEventListener('click', function() {
+        fileRoot.classList.remove('file-panel-open');
+      });
+      filePanel.addEventListener('click', function(ev) {
+        if (ev.target.closest && ev.target.closest('[data-refresh]') && activeFile) loadFile(activeFile);
       });
     }
 
@@ -584,6 +734,9 @@ if (!window.__loopPendingCardClicks) {
     if (composer && messagesGrid) {
       var syncComposerSpacing = function() {
         messagesGrid.style.marginBottom = (composer.offsetHeight + 24) + 'px';
+        // On narrow windows the file preview panel stacks under the thread
+        // and takes over this reserved space (see .file-panel).
+        if (chatPage) chatPage.style.setProperty('--composer-space', (composer.offsetHeight + 24) + 'px');
       };
       syncComposerSpacing();
       if (window.ResizeObserver) {
@@ -605,7 +758,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u00e0 l&#x27;instant" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u305f\u3063\u305f\u4eca" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -645,6 +798,7 @@ if (!window.__loopPendingCardClicks) {
         .then(function(response) { return response.text(); })
         .then(function(responseHtml) {
           list.innerHTML = responseHtml;
+          syncFileTabs();
           scrollToBottom();
         });
     }
@@ -705,10 +859,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "Modifier le message" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u7de8\u96c6" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Annuler" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "Envoyer" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "\u30ad\u30e3\u30f3\u30bb\u30eb" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "\u9001\u4fe1" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -745,7 +899,7 @@ if (!window.__loopPendingCardClicks) {
       var copyBtn = ev.target.closest('[data-copy-message]');
       if (copyBtn) {
         var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
-        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("Copi\u00e9", true); }, function() { flashIcon(copyBtn, 'error'); });
+        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f", true); }, function() { flashIcon(copyBtn, 'error'); });
         return;
       }
       var editBtn = ev.target.closest('[data-edit-message]');
@@ -769,7 +923,7 @@ if (!window.__loopPendingCardClicks) {
     // While a reply is being written the send button is the stop button.
     var activeStop = null;
     function setSendMode(button, stop) {
-      var label = stop ? "Arr\u00eater" : "Envoyer";
+      var label = stop ? "\u505c\u6b62" : "\u9001\u4fe1";
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       var use = button.querySelector('svg.icon use');
@@ -788,7 +942,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "Vous" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "\u3042\u306a\u305f" + "</span>", text);
       input.value = '';
       autoGrow();
       setSendMode(button, true);
@@ -807,7 +961,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "R\u00e9flexion\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "\u8003\u3048\u4e2d\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -882,7 +1036,7 @@ if (!window.__loopPendingCardClicks) {
         if (source) source.close();
         if (activeKey) postStop(activeKey);
         reveal.stop();
-        var stopped = "(r\u00e9ponse arr\u00eat\u00e9e)";
+        var stopped = "\uff08\u8fd4\u4fe1\u3092\u505c\u6b62\u3057\u307e\u3057\u305f\uff09";
         pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
         resetSendButton();
         stopStreamingFlag();
@@ -919,7 +1073,7 @@ if (!window.__loopPendingCardClicks) {
         });
         source.addEventListener('error', function(ev) {
           if (aborted) return;
-          var message = "Une erreur s'est produite - r\u00e9essayez.";
+          var message = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -930,7 +1084,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "(r\u00e9ponse interrompue)", false);
+            pending.show(accumulated + ' ' + "\uff08\u8fd4\u4fe1\u304c\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f\uff09", false);
           }
           resetSendButton();
           stopStreamingFlag();
@@ -947,7 +1101,7 @@ if (!window.__loopPendingCardClicks) {
             return;
           }
           if (!result.ok) {
-            pending.show(result.data.error || "Une erreur s'est produite.", false);
+            pending.show(result.data.error || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002", false);
             resetSendButton();
             stopStreamingFlag();
             return;
@@ -974,7 +1128,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("Une erreur s'est produite - r\u00e9essayez.", false);
+          pending.show("\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002", false);
           if (aborted) return;
           resetSendButton();
           stopStreamingFlag();
@@ -1025,7 +1179,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "Veuillez remplir ce champ.";
+    if (text) text.textContent = field.validationMessage || "\u3053\u306e\u9805\u76ee\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -1103,7 +1257,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Impossible de charger cette section." + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "\u3053\u306e\u30bb\u30af\u30b7\u30e7\u30f3\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002" + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1250,7 +1404,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "Arr\u00eater le suivi de #{iid}" : "Suivre \u00e0 nouveau #{iid}").replace('{iid}', issueIid);
+          var label = (enabled ? "#{iid} \u306e\u8ffd\u8de1\u3092\u505c\u6b62" : "#{iid} \u306e\u8ffd\u8de1\u3092\u518d\u958b").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }

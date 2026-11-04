@@ -323,6 +323,7 @@
         docBody.textContent = '';
         docRaw = '';
         resetCopy();
+        docRoot.classList.remove('file-panel-open');
         docRoot.classList.add('doc-panel-open');
         fetch(href).then(function(r) { return r.ok ? r.text() : ''; })
           .then(function(raw) { docRaw = raw; }).catch(function() {});
@@ -331,6 +332,122 @@
           return r.text();
         }).then(function(markup) { docBody.innerHTML = markup; })
           .catch(function() { docBody.textContent = docFailed; });
+      });
+    }
+
+    // The Google file preview panel (#file-panel). A gdocs/gsheets/slides
+    // tool result that names a file (a 'loopx:file-ref' event from the live
+    // tool chips or an approved card) opens it; the panel keeps the most
+    // recent file active plus a tab per other file this chat touched (the
+    // stored chips carry data-file-* so they are known after a reload too,
+    // but nothing is fetched until a file is touched or a tab clicked).
+    // Closing is remembered only until the next touch. Refresh re-fetches
+    // the active file's fragment and never posts into the conversation.
+    var syncFileTabs = function() {};
+    var filePanel = document.getElementById('file-panel');
+    if (filePanel) {
+      var fileRoot = document.documentElement;
+      var fileTabs = filePanel.querySelector('[data-file-tabs]');
+      var fileBody = filePanel.querySelector('[data-file-body]');
+      var fileLoading = ⟦json.dumps(_t('Loading…'))⟧;
+      var fileFailed = ⟦json.dumps(_t('Could not load the preview.'))⟧;
+      var fileNouns = { doc: ⟦json.dumps(_t('Document'))⟧, sheet: ⟦json.dumps(_t('Spreadsheet'))⟧, deck: ⟦json.dumps(_t('Presentation'))⟧ };
+      var files = [];
+      var activeFile = null;
+      var fileSeq = 0;
+      var fileKey = function(f) { return f.kind + ':' + f.account + ':' + f.file; };
+      var validFileRef = function(r) {
+        return !!r && /^(doc|sheet|deck)$/.test(String(r.kind)) &&
+          /^[a-z0-9][a-z0-9-]{0,47}$/.test(String(r.account)) &&
+          /^[A-Za-z0-9_-]{1,200}$/.test(String(r.file));
+      };
+      var rememberFile = function(r) {
+        if (!validFileRef(r)) return null;
+        var key = fileKey(r);
+        for (var i = 0; i < files.length; i++) if (fileKey(files[i]) === key) return files[i];
+        var f = { kind: String(r.kind), account: String(r.account), file: String(r.file), title: '' };
+        files.push(f);
+        return f;
+      };
+      var renderFileTabs = function() {
+        fileTabs.textContent = '';
+        files.forEach(function(f) {
+          var tab = document.createElement('button');
+          var on = f === activeFile;
+          tab.type = 'button';
+          tab.className = 'file-tab' + (on ? ' is-active' : '');
+          tab.setAttribute('role', 'tab');
+          tab.setAttribute('aria-selected', on ? 'true' : 'false');
+          tab.textContent = f.title || fileNouns[f.kind] || f.kind;
+          tab.title = tab.textContent;
+          tab.addEventListener('click', function() { showFile(f); });
+          fileTabs.appendChild(tab);
+        });
+        var current = fileTabs.querySelector('.is-active');
+        if (current && current.scrollIntoView) current.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      };
+      var loadFile = function(f) {
+        var seq = ++fileSeq;
+        fileBody.setAttribute('aria-busy', 'true');
+        fileBody.innerHTML = "<div class='file-preview-loading'><span class='file-preview-spinner' aria-hidden='true'></span><span></span></div>";
+        fileBody.querySelector('.file-preview-loading span:last-child').textContent = fileLoading;
+        var query = '?session=' + encodeURIComponent(sessionInput ? sessionInput.value : '') +
+          '&kind=' + encodeURIComponent(f.kind) + '&account=' + encodeURIComponent(f.account) +
+          '&file=' + encodeURIComponent(f.file);
+        fetch('/chat/preview' + query, { cache: 'no-store', credentials: 'same-origin' })
+          .then(function(r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+          .then(function(markup) {
+            if (seq !== fileSeq) return;
+            // Server-rendered fragment: every file text is escaped there.
+            fileBody.innerHTML = markup;
+            var head = fileBody.querySelector('[data-file-title]');
+            var title = head ? head.getAttribute('data-file-title') : '';
+            if (title) { f.title = title; renderFileTabs(); }
+          })
+          .catch(function() { if (seq === fileSeq) fileBody.textContent = fileFailed; })
+          .then(function() { if (seq === fileSeq) fileBody.removeAttribute('aria-busy'); });
+      };
+      var showFile = function(f) {
+        activeFile = f;
+        fileRoot.classList.remove('doc-panel-open');
+        fileRoot.classList.add('file-panel-open');
+        renderFileTabs();
+        loadFile(f);
+      };
+      var touchFile = function(r) {
+        var f = rememberFile(r);
+        if (f) showFile(f);
+      };
+      var chipRef = function(chip) {
+        return {
+          kind: chip.getAttribute('data-file-kind'),
+          account: chip.getAttribute('data-file-account'),
+          file: chip.getAttribute('data-file-id')
+        };
+      };
+      // Every file a stored chip names joins the tab strip (without a fetch).
+      syncFileTabs = function() {
+        var before = files.length;
+        list.querySelectorAll('.tool-chip-file[data-file-kind]').forEach(function(chip) { rememberFile(chipRef(chip)); });
+        if (files.length !== before && fileRoot.classList.contains('file-panel-open')) renderFileTabs();
+      };
+      syncFileTabs();
+      list.addEventListener('loopx:file-ref', function(ev) { touchFile(ev.detail); });
+      var openChip = function(ev) {
+        var chip = ev.target.closest && ev.target.closest('.tool-chip-file[data-file-kind]');
+        if (!chip || !list.contains(chip)) return false;
+        touchFile(chipRef(chip));
+        return true;
+      };
+      list.addEventListener('click', openChip);
+      list.addEventListener('keydown', function(ev) {
+        if ((ev.key === 'Enter' || ev.key === ' ') && openChip(ev)) ev.preventDefault();
+      });
+      filePanel.querySelector('[data-file-close]').addEventListener('click', function() {
+        fileRoot.classList.remove('file-panel-open');
+      });
+      filePanel.addEventListener('click', function(ev) {
+        if (ev.target.closest && ev.target.closest('[data-refresh]') && activeFile) loadFile(activeFile);
       });
     }
 
@@ -398,6 +515,9 @@
     if (composer && messagesGrid) {
       var syncComposerSpacing = function() {
         messagesGrid.style.marginBottom = (composer.offsetHeight + 24) + 'px';
+        // On narrow windows the file preview panel stacks under the thread
+        // and takes over this reserved space (see .file-panel).
+        if (chatPage) chatPage.style.setProperty('--composer-space', (composer.offsetHeight + 24) + 'px');
       };
       syncComposerSpacing();
       if (window.ResizeObserver) {
@@ -459,6 +579,7 @@
         .then(function(response) { return response.text(); })
         .then(function(responseHtml) {
           list.innerHTML = responseHtml;
+          syncFileTabs();
           scrollToBottom();
         });
     }

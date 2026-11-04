@@ -36,24 +36,7 @@ fn json_t(lang: Lang, text: &str) -> String {
 /// `_chat_tool_chips_js()`.
 fn chat_tool_chips_js(lang: Lang) -> String {
     let mut labels = serde_json::Map::new();
-    let names = [
-        ("gitlab.read_issue", "Reading issue"),
-        ("gitlab.list_issues", "Listing issues"),
-        ("gitlab.comment", "Commenting on issue"),
-        ("github.read_issue", "Reading issue"),
-        ("github.read_pr", "Reading pull request"),
-        ("github.comment", "Commenting"),
-        ("rss.read_feed", "Reading feed"),
-        ("calendar.list_events", "Reading calendar"),
-        ("calendar.free_busy", "Reading calendar"),
-        ("mail.search", "Searching mail"),
-        ("mail.read", "Reading email"),
-        ("mail.send", "Sending email"),
-        ("calendar.create_event", "Creating event"),
-        ("docs.save", "Saving document"),
-        ("web.search", "Searching the web"),
-    ];
-    for (name, label) in names {
+    for (name, label) in super::pages::chat::TOOL_LABELS {
         labels.insert(name.to_string(), json!(i18n::t(lang, label, &[])));
     }
     consts::ds("_CHAT_TOOL_CHIPS_JS")
@@ -414,6 +397,23 @@ mod tests {
     use super::*;
     use crate::ui::routes::UiRequest;
     use crate::ui::state::UiState;
+
+    #[test]
+    fn live_tool_chips_use_the_same_labels_as_stored_ones() {
+        let js = chat_tool_chips_js(Lang::Ja);
+        for name in [
+            "gdocs.read",
+            "gsheets.create",
+            "slides.edit_deck",
+            "mail.read",
+        ] {
+            let label = crate::ui::pages::chat::tool_label(Lang::Ja, name);
+            assert!(
+                js.contains(&format!("\"{name}\": {}", pyfmt::json_str(&label))),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn the_shell_renders_with_every_slot_resolved() {

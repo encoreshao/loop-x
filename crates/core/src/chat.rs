@@ -819,7 +819,17 @@ fn tool_result_events(id: &str, text: &str, is_error: bool) -> Vec<Value> {
     let is_err_obj = data
         .as_ref()
         .is_some_and(|d| d.as_object().is_some_and(|o| o.contains_key("error")));
-    let mut out = vec![json!({"kind": "result", "id": id, "ok": !is_error && !is_err_obj})];
+    let mut result = json!({"kind": "result", "id": id, "ok": !is_error && !is_err_obj});
+    // The Google file a gdocs/gsheets/slides result names, for the chat's
+    // preview panel; only a well-formed one is passed on.
+    if let Some(file_ref) = data
+        .as_ref()
+        .and_then(|d| d.pointer("/result/file_ref"))
+        .and_then(crate::chat_tools::valid_file_ref)
+    {
+        result["file_ref"] = file_ref;
+    }
+    let mut out = vec![result];
     if let Some(d) = data.as_ref().filter(|d| d.is_object()) {
         if d.get("status").and_then(Value::as_str) == Some("pending_approval") {
             out.push(json!({
@@ -932,7 +942,15 @@ pub fn chat_tool_actions_for(cli: &str, line: &str) -> Vec<String> {
         .collect()
 }
 
-/// `merge_tool_events`: `[{"name","summary","ok"[,"pending"]}]` in call order.
+/// The chat tools whose results may open a file in the preview panel.
+pub fn is_google_file_tool(name: &str) -> bool {
+    ["gdocs.", "gsheets.", "slides."]
+        .iter()
+        .any(|p| name.starts_with(p))
+}
+
+/// `merge_tool_events`: `[{"name","summary","ok"[,"pending"][,"file_ref"]}]` in
+/// call order; `file_ref` only on a Google file tool's entry.
 pub fn merge_tool_events(events: &[Value]) -> Vec<Value> {
     let mut order: Vec<Map<String, Value>> = Vec::new();
     // One shell call can chain several `chat-tool` commands; they share its id.
@@ -955,6 +973,13 @@ pub fn merge_tool_events(events: &[Value]) -> Vec<Value> {
             Some("result") => {
                 for &i in by_id.get(&id).into_iter().flatten() {
                     order[i].insert("ok".into(), e["ok"].clone());
+                    let google = order[i]
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_google_file_tool);
+                    if let Some(file_ref) = e.get("file_ref").filter(|_| google) {
+                        order[i].insert("file_ref".into(), file_ref.clone());
+                    }
                 }
             }
             Some("pending") => {
@@ -1834,6 +1859,59 @@ mod tests {
         assert_eq!(merged[0]["ok"], true);
         assert_eq!(merged[0]["pending"]["tool"], "gitlab.comment");
         assert!(merged[1]["ok"].is_null());
+    }
+
+    fn google_tool_turn(name: &str, stdout: &str) -> Vec<Value> {
+        let call = json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "g1", "input": {"command":
+              format!("loopx chat-tool call {name} '{{\"file_id\": \"abc\"}}'")}}
+        ]}})
+        .to_string();
+        let res = json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "g1", "content": stdout}]}})
+        .to_string();
+        let mut all = chat_tool_events_in_stream_line(&call);
+        all.extend(chat_tool_events_in_stream_line(&res));
+        all
+    }
+
+    #[test]
+    fn a_google_file_result_carries_its_file_ref_to_the_event_and_the_stored_entry() {
+        let stdout = r#"{"tool": "gdocs.read", "result": {"title": "x",
+            "file_ref": {"kind": "doc", "account": "gd", "file": "1AbC_d-9"}}}"#;
+        let all = google_tool_turn("gdocs.read", stdout);
+        let want = json!({"kind": "doc", "account": "gd", "file": "1AbC_d-9"});
+        let result = all.iter().find(|e| e["kind"] == "result").unwrap();
+        assert_eq!(result["file_ref"], want, "{result}");
+        let merged = merge_tool_events(&all);
+        assert_eq!(merged[0]["file_ref"], want, "{merged:?}");
+        assert_eq!(merged[0]["ok"], true);
+    }
+
+    #[test]
+    fn file_refs_are_dropped_unless_well_formed_and_from_a_google_file_tool() {
+        let good = r#"{"result": {"file_ref": {"kind": "sheet", "account": "gs", "file": "abc"}}}"#;
+        // A non-Google tool never opens the panel, even if its output has the shape.
+        let merged = merge_tool_events(&google_tool_turn("mail.read", good));
+        assert!(merged[0].get("file_ref").is_none(), "{merged:?}");
+        for bad in [
+            r#"{"result": {"file_ref": {"kind": "pdf", "account": "gs", "file": "abc"}}}"#,
+            r#"{"result": {"file_ref": {"kind": "doc", "account": "Bad Id", "file": "abc"}}}"#,
+            r#"{"result": {"file_ref": {"kind": "doc", "account": "gs", "file": "../x"}}}"#,
+            r#"{"result": {"file_ref": {"kind": "doc", "account": "gs"}}}"#,
+            r#"{"result": {"file_ref": "doc:gs:abc"}}"#,
+            r#"{"error": "nope"}"#,
+        ] {
+            let all = google_tool_turn("gsheets.read", bad);
+            let result = all.iter().find(|e| e["kind"] == "result").unwrap();
+            assert!(result.get("file_ref").is_none(), "{bad}: {result}");
+            let merged = merge_tool_events(&all);
+            assert!(merged[0].get("file_ref").is_none(), "{bad}: {merged:?}");
+        }
+        // Entries without a file_ref keep exactly the old shape.
+        let merged = merge_tool_events(&google_tool_turn("gdocs.list_templates", "{}"));
+        let keys: Vec<_> = merged[0].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["name", "summary", "ok"]);
     }
 
     #[test]
