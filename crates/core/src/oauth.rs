@@ -34,6 +34,10 @@ https://www.googleapis.com/auth/calendar.events";
 /// (`drive.file` and `drive.readonly` cannot copy a file this app did not create).
 pub const SLIDES_SCOPE: &str = "https://www.googleapis.com/auth/presentations \
 https://www.googleapis.com/auth/drive";
+pub const DOCS_SCOPE: &str = "https://www.googleapis.com/auth/documents \
+https://www.googleapis.com/auth/drive";
+pub const SHEETS_SCOPE: &str = "https://www.googleapis.com/auth/spreadsheets \
+https://www.googleapis.com/auth/drive";
 pub const LINKEDIN_SCOPE: &str = "openid profile email";
 
 /// A pending sign-in state is single use and lives this long.
@@ -113,6 +117,8 @@ impl Provider {
 pub fn connector_scope(type_name: &str) -> &'static str {
     match type_name {
         "google_slides" => SLIDES_SCOPE,
+        "google_docs" => DOCS_SCOPE,
+        "google_sheets" => SHEETS_SCOPE,
         _ => CALENDAR_SCOPE,
     }
 }
@@ -123,6 +129,14 @@ pub fn connector_required_scopes(type_name: &str) -> &'static [&'static str] {
     match type_name {
         "google_slides" => &[
             "https://www.googleapis.com/auth/presentations",
+            "https://www.googleapis.com/auth/drive",
+        ],
+        "google_docs" => &[
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/drive",
+        ],
+        "google_sheets" => &[
+            "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
         ],
         _ => &["https://www.googleapis.com/auth/calendar.readonly"],
@@ -899,6 +913,18 @@ mod tests {
         assert_eq!(super::connector_scope("google_slides"), super::SLIDES_SCOPE);
         for scope in super::connector_required_scopes("google_slides") {
             assert!(super::SLIDES_SCOPE.split_whitespace().any(|s| s == *scope));
+        }
+        for (kind, own) in [
+            ("google_docs", "documents"),
+            ("google_sheets", "spreadsheets"),
+        ] {
+            let scope = super::connector_scope(kind);
+            assert!(scope.contains(&format!("auth/{own}")) && scope.contains("auth/drive"));
+            let required = super::connector_required_scopes(kind);
+            assert_eq!(required.len(), 2);
+            for r in required {
+                assert!(scope.split_whitespace().any(|s| s == *r));
+            }
         }
         for scope in super::connector_required_scopes("google_calendar") {
             assert!(super::CALENDAR_SCOPE

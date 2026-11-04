@@ -33,6 +33,13 @@
 <div class='chat-thread activity-messages-grid'>
 ⟦messages_html⟧
 </div>
+<aside class='file-panel' id='file-panel' aria-label='⟦html.escape(_t('File preview'))⟧'>
+<div class='file-panel-header'>
+<div class='file-panel-tabs' role='tablist' aria-label='⟦html.escape(_t('Files in this chat'))⟧' data-file-tabs></div>
+<button type='button' class='message-action-btn' data-file-close aria-label='⟦html.escape(_t('Close preview'))⟧' title='⟦html.escape(_t('Close preview'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-close'/></svg></button>
+</div>
+<div class='file-panel-body' role='tabpanel' aria-live='polite' data-file-body></div>
+</aside>
 <div class='activity-composer'>
 <div class='activity-composer-inner'>
 <form method='post' action='/activity/messages' class='activity-composer-form' id='activity-composer-form'>

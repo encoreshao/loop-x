@@ -1423,6 +1423,57 @@ html.doc-panel-open .doc-panel { display: flex; }
   html.doc-panel-open { --shell-right: var(--shell-gap); }
   .doc-panel { left: var(--shell-gap); width: auto; z-index: 120; }
 }
+/* Chat file preview panel: a Google Doc, Sheet or Slides deck a chat tool
+   touched, beside the thread. Wide windows: fixed on the right like the doc
+   panel, narrowing the main card via --shell-right. Narrow windows: it stacks
+   under the thread in the page flow and takes over the space reserved for the
+   pinned composer (--composer-space, kept in sync by the composer script).
+   In the header the tab strip is the only shrinking child and it scrolls
+   rather than clips (min-width: 0 + overflow-x: auto), so the close button
+   (flex: none) can never crush it to nothing. */
+:root { --file-panel-width: min(44vw, 720px); }
+.file-panel {
+  display: none; flex-direction: column; z-index: 90;
+  border-radius: var(--shell-radius); border: 1px solid var(--md-outline-variant);
+  background: var(--md-surface); overflow: hidden;
+}
+html.file-panel-open .file-panel { display: flex; }
+@media (min-width: 901px) {
+  html.file-panel-open { --shell-right: calc(var(--file-panel-width) + var(--shell-gap) * 2); }
+  html.file-panel-open .chat-page { align-items: flex-start; }
+  html.file-panel-open .activity-composer-inner { margin: 0; }
+  .file-panel { position: fixed; top: var(--shell-top); right: var(--shell-gap); bottom: var(--shell-gap); width: var(--file-panel-width); }
+}
+@media (max-width: 900px) {
+  .chat-page > .file-panel { position: relative; z-index: 1; width: 100%; max-width: var(--chat-width); max-height: 70vh; margin-bottom: var(--composer-space, 9rem); }
+  html.file-panel-open .chat-thread { margin-bottom: 1rem !important; }
+}
+.file-panel-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.6rem 0.5rem 0.75rem; border-bottom: 1px solid var(--md-outline-variant); }
+.file-panel-header .message-action-btn { flex: none; }
+.file-panel-tabs { flex: 1 1 auto; min-width: 0; display: flex; gap: 0.35rem; overflow-x: auto; scrollbar-width: thin; }
+.file-tab { flex: none; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; font-size: 0.82rem; padding: 0.3rem 0.7rem; border-radius: 999px; border: 1px solid var(--md-outline-variant); background: none; color: var(--md-on-surface-variant); cursor: pointer; }
+.file-tab:hover { background: var(--md-surface-container-high); }
+.file-tab.is-active { background: color-mix(in srgb, var(--md-primary) 14%, var(--md-surface)); border-color: color-mix(in srgb, var(--md-primary) 40%, transparent); color: var(--md-on-surface); font-weight: 500; }
+.file-panel-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 1rem 1.25rem 1.5rem; }
+.file-preview-head { display: flex; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.file-preview-title { flex: 1 1 12rem; min-width: 0; margin: 0; font-size: 1.05rem; overflow-wrap: anywhere; }
+.file-preview-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.file-preview-note { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.75rem; padding: 0.5rem 0.75rem; border-radius: 10px; font-size: 0.85rem; background: var(--md-warning-container); color: var(--md-on-surface); }
+.file-preview-error-text { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.75rem; color: var(--md-on-surface); }
+.file-preview-error-text .icon { color: var(--md-warning); flex: none; }
+.file-preview-empty { color: var(--md-on-surface-variant); font-style: italic; }
+.file-preview-doc p { margin: 0 0 0.65em; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-preview-tab + .file-preview-tab { margin-top: 1.25rem; }
+.file-preview-tab h4 { margin: 0 0 0.5rem; font-size: 0.9rem; }
+.file-preview-tab .table-wrap { overflow-x: auto; }
+.file-preview-table { border-collapse: collapse; font-size: 0.82rem; }
+.file-preview-table td { border: 1px solid var(--md-outline-variant); padding: 0.25rem 0.5rem; vertical-align: top; white-space: pre-wrap; max-width: 24rem; overflow-wrap: anywhere; }
+.file-preview-deck .slide-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-top: 0; }
+.file-preview-loading { display: flex; align-items: center; gap: 0.6rem; color: var(--md-on-surface-variant); }
+/* Loading motion is functional (see .md-spinner): not gated by reduced motion. */
+.file-preview-spinner { flex: none; width: 1.1rem; height: 1.1rem; border-radius: 50%; border: 2px solid var(--md-outline-variant); border-top-color: var(--md-primary); animation: tool-chip-spin 0.9s linear infinite; }
+.tool-chip-file { cursor: pointer; }
+.tool-chip-file:hover .tool-chip-text { text-decoration: underline; }
 .tool-chips { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin: 0.6rem 0 0.75rem; max-width: 100%; border: 1px solid var(--md-outline-variant); border-radius: 12px; background: var(--md-surface-container-low); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); overflow: hidden; }
 .tool-chip { display: flex; align-items: center; gap: 0.6rem; min-width: 0; font-size: 0.82rem; line-height: 1.3; padding: 0.55rem 0.85rem; border-left: 3px solid transparent; color: var(--md-on-surface-variant); }
 .tool-chip + .tool-chip, .tool-chip + .tool-status { border-top: 1px solid var(--md-outline-variant); }

@@ -9,10 +9,13 @@
 //! Messages are English (the dashboard translates its own copy), and never
 //! contain a secret.
 
+pub mod drive;
 pub mod github;
 pub mod gitlab;
 pub mod google_auth;
 pub mod google_calendar;
+pub mod google_docs;
+pub mod google_sheets;
 pub mod google_slides;
 pub mod http;
 pub mod jira;
@@ -40,6 +43,9 @@ pub const MAIL: &str = "mail";
 pub const DOCS: &str = "docs";
 pub const CALENDAR: &str = "calendar";
 pub const SLIDES: &str = "slides";
+/// Google Docs (the local documents feature already owns `DOCS`).
+pub const GDOCS: &str = "gdocs";
+pub const SHEETS: &str = "sheets";
 pub const SOCIAL: &str = "social";
 
 /// `ConnectorError` and the other failures a connector call can end in.
@@ -268,11 +274,13 @@ fn is_email(value: &str) -> bool {
 }
 
 /// Every type, in registry order.
-pub fn all_types() -> [&'static TypeInfo; 13] {
+pub fn all_types() -> [&'static TypeInfo; 15] {
     [
         &github::INFO,
         &gitlab::INFO,
         &google_calendar::INFO,
+        &google_docs::INFO,
+        &google_sheets::INFO,
         &google_slides::INFO,
         &jira::INFO,
         &linear::INFO,
@@ -486,7 +494,7 @@ pub trait Connector: Send + Sync {
         unsupported("create_event")
     }
 
-    /// Slides: presentations usable as templates (`id`, `name`, `modified`,
+    /// Docs, Sheets and Slides: files of the connector's type usable as templates (`id`, `name`, `modified`,
     /// `web_link`, `owned_by_me`, `owner`), newest first; `query` filters by name.
     fn list_templates(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
         unsupported("list_templates")
@@ -507,6 +515,73 @@ pub trait Connector: Send + Sync {
     fn describe_deck(&self, _deck_id: &str, _thumbnails: bool) -> ConnResult<Value> {
         unsupported("describe_deck")
     }
+
+    // --- Slides operations ---
+
+    /// Slides: apply ordered `{"op": "replace", "find", "with"}` edits to a deck; returns `{applied}`.
+    fn edit_deck(&self, _deck_id: &str, _ops: &[Value]) -> ConnResult<Value> {
+        unsupported("edit_deck")
+    }
+
+    // --- end Slides operations ---
+
+    // --- Docs operations ---
+
+    /// Docs: copy a template into a new document named `title`; returns `{id, web_link}`.
+    fn copy_doc(&self, _template_id: &str, _title: &str) -> ConnResult<Value> {
+        unsupported("copy_doc")
+    }
+
+    /// Docs: replace each `{{key}}` with its value; returns `{replaced}`.
+    fn fill_doc(&self, _doc_id: &str, _replacements: &[(String, String)]) -> ConnResult<Value> {
+        unsupported("fill_doc")
+    }
+
+    /// Docs: create a document with `title` and initial `text`; returns `{id, web_link}`.
+    fn create_doc(&self, _title: &str, _text: &str) -> ConnResult<Value> {
+        unsupported("create_doc")
+    }
+
+    /// Docs: `{id, title, web_link, placeholders, text, truncated}`.
+    fn describe_doc(&self, _doc_id: &str) -> ConnResult<Value> {
+        unsupported("describe_doc")
+    }
+
+    /// Docs: apply ordered edit ops (`replace`, `append`, `insert_after`); returns `{applied}`.
+    fn edit_doc(&self, _doc_id: &str, _ops: &[Value]) -> ConnResult<Value> {
+        unsupported("edit_doc")
+    }
+
+    // --- end Docs operations ---
+
+    // --- Sheets operations ---
+
+    /// Sheets: copy a template into a new spreadsheet named `title`; returns `{id, web_link}`.
+    fn copy_sheet(&self, _template_id: &str, _title: &str) -> ConnResult<Value> {
+        unsupported("copy_sheet")
+    }
+
+    /// Sheets: replace each `{{key}}` in every tab; returns `{replaced}`.
+    fn fill_sheet(&self, _sheet_id: &str, _replacements: &[(String, String)]) -> ConnResult<Value> {
+        unsupported("fill_sheet")
+    }
+
+    /// Sheets: create a spreadsheet with `title` and tabs `{name, rows}`; returns `{id, web_link}`.
+    fn create_sheet(&self, _title: &str, _tabs: &[Value]) -> ConnResult<Value> {
+        unsupported("create_sheet")
+    }
+
+    /// Sheets: `{id, title, web_link, placeholders, tabs: [{name, rows, truncated}], truncated}`.
+    fn describe_sheet(&self, _sheet_id: &str) -> ConnResult<Value> {
+        unsupported("describe_sheet")
+    }
+
+    /// Sheets: apply ordered `set` / `append` ops on A1 ranges; returns `{applied}`.
+    fn edit_sheet(&self, _sheet_id: &str, _ops: &[Value]) -> ConnResult<Value> {
+        unsupported("edit_sheet")
+    }
+
+    // --- end Sheets operations ---
 
     /// Mail: search the mailbox.
     fn search_messages(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
@@ -571,6 +646,10 @@ pub fn build(
         "github" => Box::new(github::GitHubConnector::new(account, secret, http)),
         "gitlab" => Box::new(gitlab::GitLabConnector::new(account, secret, http)),
         "google_calendar" => Box::new(google_calendar::GoogleCalendarConnector::new(
+            account, secret, http,
+        )),
+        "google_docs" => Box::new(google_docs::GoogleDocsConnector::new(account, secret, http)),
+        "google_sheets" => Box::new(google_sheets::GoogleSheetsConnector::new(
             account, secret, http,
         )),
         "google_slides" => Box::new(google_slides::GoogleSlidesConnector::new(
@@ -697,6 +776,65 @@ pub(crate) mod testutil {
     /// Serialises tests that set process-wide environment variables.
     pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// A Google 403 for a token without the needed scope (real body shape,
+    /// with an access token in it that must never be shown).
+    pub const SCOPE_403: &str = r#"{"error": {"code": 403, "message": "Request had insufficient authentication scopes. AT-SECRET", "errors": [{"reason": "insufficientPermissions"}], "status": "PERMISSION_DENIED", "details": [{"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
+    /// A Google 403 for a file this account was never given access to.
+    pub const FILE_403: &str = r#"{"error": {"code": 403, "message": "The caller does not have permission AT-SECRET", "status": "PERMISSION_DENIED"}}"#;
+    pub const NOT_FOUND_404: &str = r#"{"error": {"code": 404, "message": "Requested entity was not found. AT-SECRET", "status": "NOT_FOUND"}}"#;
+
+    /// Checks how a Google connector words a failed call on one file (`op`)
+    /// and its Test (`test`) for each status and body shape; `reconnect` is the
+    /// connector's own "Reconnect ..." message.
+    pub fn assert_google_failures(
+        op: impl Fn(Arc<FakeHttp>) -> String,
+        test: impl Fn(Arc<FakeHttp>) -> (bool, String),
+        reconnect: &str,
+    ) {
+        let fail = |status: u16, body: &'static str| {
+            FakeHttp::new(move |req| Err(HttpError::new(Some(status), body, &req.url)))
+        };
+        let scrubbed = |m: &str| !m.contains("AT-SECRET") && !m.contains("RT-SECRET");
+        for (status, body) in [
+            (401, "expired AT-SECRET"),
+            (403, SCOPE_403),
+            (
+                403,
+                "Insufficient Permission: Request had insufficient authentication scopes.",
+            ),
+        ] {
+            let m = op(fail(status, body));
+            assert_eq!(m, reconnect, "{status} {body}");
+            let (ok, m) = test(fail(status, body));
+            assert!(!ok && m == reconnect, "test() {status} {body}: {m}");
+        }
+        let m = op(fail(403, FILE_403));
+        assert!(
+            m.contains("This Google account can't open that file")
+                && m.contains("share it")
+                && !m.contains("Reconnect")
+                && scrubbed(&m),
+            "{m}"
+        );
+        // A Test lists files, so "that file" would be wrong: the scrubbed reason.
+        let (ok, m) = test(fail(403, FILE_403));
+        assert!(
+            !ok && m.contains("403") && !m.contains("Reconnect") && scrubbed(&m),
+            "{m}"
+        );
+        let m = op(fail(404, NOT_FOUND_404));
+        assert!(
+            m.contains("could not find that file") && !m.contains("Reconnect") && scrubbed(&m),
+            "{m}"
+        );
+        // Rate limits and a disabled API are not about one file's sharing.
+        let m = op(fail(
+            403,
+            r#"{"error": {"errors": [{"reason": "userRateLimitExceeded"}]}}"#,
+        ));
+        assert!(m.contains("403") && !m.contains("can't open"), "{m}");
+    }
+
     pub struct Served {
         pub url: String,
         pub requests: Arc<Mutex<Vec<String>>>,
@@ -795,6 +933,8 @@ mod tests {
                 "github",
                 "gitlab",
                 "google_calendar",
+                "google_docs",
+                "google_sheets",
                 "google_slides",
                 "jira",
                 "linear",
@@ -808,6 +948,16 @@ mod tests {
             ]
         );
         assert!(get_type("gitlab").is_some() && get_type("nope").is_none());
+    }
+
+    #[test]
+    fn build_returns_the_docs_and_sheets_connectors() {
+        let http: Arc<dyn HttpClient> = testutil::FakeHttp::ok(json!({}));
+        for (kind, caps) in [("google_docs", GDOCS), ("google_sheets", SHEETS)] {
+            let c = build(Account::new("a", kind), None, http.clone()).unwrap();
+            assert_eq!(c.info().name, kind);
+            assert_eq!(c.info().capabilities, &[caps]);
+        }
     }
 
     #[test]

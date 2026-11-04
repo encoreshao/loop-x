@@ -5,17 +5,14 @@
 //! (`auth = OauthGoogle`); the OAuth client is the one saved on the Inbox Triage
 //! setup page. No message built here ever contains a token.
 
+use super::drive::{self, placeholders_in, text_of};
 use super::google_auth::GoogleAuth;
 pub use super::google_auth::{ClientFn, RefreshError, RefreshFn};
 use super::http::{quote, urlencode, TEST_TIMEOUT_SECONDS};
 use super::*;
-use regex::Regex;
 use serde_json::json;
-use std::sync::OnceLock;
 
 pub const SLIDES_URL: &str = "https://slides.googleapis.com/v1/presentations";
-pub const DRIVE_URL: &str = "https://www.googleapis.com/drive/v3";
-const PRESENTATION_MIME: &str = "application/vnd.google-apps.presentation";
 /// Slides whose thumbnail is fetched for a review; later ones are text only.
 const MAX_THUMBNAILS: usize = 30;
 
@@ -35,37 +32,17 @@ pub const INFO: TypeInfo = TypeInfo {
     auth: Auth::OauthGoogle,
 };
 
+/// What a dead or under-scoped sign-in says.
+const RECONNECT: &str = "Reconnect Google Slides to grant Slides and Drive access";
+
 pub struct GoogleSlidesConnector {
     account: Account,
     http: Arc<dyn HttpClient>,
     auth: GoogleAuth,
 }
 
-fn placeholder_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"\{\{\s*([A-Za-z0-9_][A-Za-z0-9_. -]{0,59}?)\s*\}\}").expect("static regex")
-    })
-}
-
-/// The distinct `{{name}}` placeholders in `text`, in first-seen order.
-pub fn placeholders_in(text: &str) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
-    for c in placeholder_re().captures_iter(text) {
-        let name = c[1].to_string();
-        if !found.contains(&name) {
-            found.push(name);
-        }
-    }
-    found
-}
-
 pub fn web_link(deck_id: &str) -> String {
     format!("https://docs.google.com/presentation/d/{deck_id}/edit")
-}
-
-fn text_of(v: Option<&Value>) -> String {
-    v.and_then(Value::as_str).unwrap_or("").to_string()
 }
 
 /// All the text on one slide, one line per text box.
@@ -93,6 +70,22 @@ fn slide_text(slide: &Value) -> String {
     lines.join("\n")
 }
 
+/// An edit op is `{"op": "replace", "find": non-empty text, "with": text}`.
+pub fn validate_op(op: &Value) -> ConnResult<()> {
+    let bad = |m: &str| Err(ConnectorError::msg(m.to_string()));
+    if op.get("op").and_then(Value::as_str) != Some("replace") {
+        return bad("A deck edit op must be {\"op\": \"replace\", \"find\", \"with\"}");
+    }
+    match op.get("find").and_then(Value::as_str) {
+        Some(f) if !f.is_empty() => {}
+        _ => return bad("replace needs a non-empty \"find\" text"),
+    }
+    if op.get("with").and_then(Value::as_str).is_none() {
+        return bad("replace needs a \"with\" text (it may be empty)");
+    }
+    Ok(())
+}
+
 impl GoogleSlidesConnector {
     pub fn new(account: Account, secret: Option<String>, http: Arc<dyn HttpClient>) -> Self {
         Self {
@@ -113,12 +106,7 @@ impl GoogleSlidesConnector {
     }
 
     fn fail(&self, e: HttpError, token: &str) -> ConnectorError {
-        match e.status {
-            Some(401) | Some(403) => {
-                ConnectorError::msg("Reconnect Google Slides to grant Slides and Drive access")
-            }
-            _ => ConnectorError::msg(self.auth.describe(&ConnectorError::Http(e), Some(token))),
-        }
+        ConnectorError::msg(self.auth.file_failure(e, token, RECONNECT))
     }
 
     fn call(
@@ -154,17 +142,7 @@ impl Connector for GoogleSlidesConnector {
             Ok(t) => t,
             Err(m) => return (false, m),
         };
-        let url = format!(
-            "{DRIVE_URL}/files?{}",
-            urlencode(&[
-                (
-                    "q",
-                    format!("mimeType='{PRESENTATION_MIME}' and trashed=false")
-                ),
-                ("pageSize", "1".to_string()),
-                ("fields", "files(id)".to_string()),
-            ])
-        );
+        let url = drive::probe_url(drive::PRESENTATION_MIME);
         let req = HttpRequest::new("GET", &url)
             .token(Some(&token))
             .timeout_secs(TEST_TIMEOUT_SECONDS)
@@ -174,65 +152,20 @@ impl Connector for GoogleSlidesConnector {
                 true,
                 "Connected: Google Slides and Drive are reachable".into(),
             ),
-            Err(e) => (
-                false,
-                self.auth.describe(&ConnectorError::Http(e), Some(&token)),
-            ),
+            Err(e) => (false, self.auth.probe_failure(e, &token, RECONNECT)),
         }
     }
 
     fn list_templates(&self, query: &str, limit: u32) -> ConnResult<Vec<Value>> {
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
-        let mut q = format!("mimeType='{PRESENTATION_MIME}' and trashed=false");
-        let term = query.trim().replace('\\', "").replace('\'', "\\'");
-        if !term.is_empty() {
-            q.push_str(&format!(" and name contains '{term}'"));
-        }
-        let url = format!(
-            "{DRIVE_URL}/files?{}",
-            urlencode(&[
-                ("q", q),
-                ("pageSize", limit.min(100).to_string()),
-                ("orderBy", "modifiedTime desc".to_string()),
-                (
-                    "fields",
-                    "files(id,name,modifiedTime,webViewLink,ownedByMe,owners(displayName))".into()
-                ),
-                ("supportsAllDrives", "true".to_string()),
-                ("includeItemsFromAllDrives", "true".to_string()),
-            ])
-        );
+        let url = drive::list_url(drive::PRESENTATION_MIME, query, limit);
         let data = self.call("GET", &url, &token, None, 3)?;
-        Ok(data
-            .get("files")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|f| f.is_object())
-            .map(|f| {
-                let id = text_of(f.get("id"));
-                let link = match text_of(f.get("webViewLink")) {
-                    l if l.is_empty() => web_link(&id),
-                    l => l,
-                };
-                json!({
-                    "id": id,
-                    "name": text_of(f.get("name")),
-                    "modified": text_of(f.get("modifiedTime")),
-                    "web_link": link,
-                    "owned_by_me": f.get("ownedByMe").and_then(Value::as_bool).unwrap_or(false),
-                    "owner": text_of(f.pointer("/owners/0/displayName")),
-                })
-            })
-            .collect())
+        Ok(drive::rows(&data, web_link))
     }
 
     fn copy_deck(&self, template_id: &str, title: &str) -> ConnResult<Value> {
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
-        let url = format!(
-            "{DRIVE_URL}/files/{}/copy?supportsAllDrives=true&fields=id",
-            quote(template_id)
-        );
+        let url = drive::copy_url(template_id);
         let made = self.call("POST", &url, &token, Some(json!({"name": title})), 1)?;
         let id = text_of(made.get("id"));
         if id.is_empty() {
@@ -266,6 +199,49 @@ impl Connector for GoogleSlidesConnector {
             .filter_map(|r| r.pointer("/replaceAllText/occurrencesChanged")?.as_u64())
             .sum();
         Ok(json!({"replaced": replaced}))
+    }
+
+    /// Ops run in order, one `replaceAllText` request each (matching case); the
+    /// result has each op's `occurrences_changed` and the `unmatched` find
+    /// texts that changed nothing. Every
+    /// op is checked before the first request; a later failure says how many ops
+    /// were applied.
+    fn edit_deck(&self, deck_id: &str, ops: &[Value]) -> ConnResult<Value> {
+        for op in ops {
+            validate_op(op)?;
+        }
+        let token = self.auth.access_token().map_err(ConnectorError::msg)?;
+        let url = format!("{SLIDES_URL}/{}:batchUpdate", quote(deck_id));
+        let mut applied = 0u64;
+        let mut counts: Vec<u64> = Vec::new();
+        let mut unmatched: Vec<String> = Vec::new();
+        for op in ops {
+            let find = op.get("find").and_then(Value::as_str).unwrap_or_default();
+            let with = op.get("with").and_then(Value::as_str).unwrap_or_default();
+            let request = json!({"replaceAllText": {
+                "containsText": {"text": find, "matchCase": true}, "replaceText": with}});
+            let done = self
+                .call(
+                    "POST",
+                    &url,
+                    &token,
+                    Some(json!({"requests": [request]})),
+                    1,
+                )
+                .map_err(|e| {
+                    ConnectorError::msg(format!(
+                        "{e} ({applied} earlier edit{} applied)",
+                        if applied == 1 { "" } else { "s" }
+                    ))
+                })?;
+            applied += 1;
+            let changed = drive::occurrences_changed(&done);
+            if changed == 0 {
+                unmatched.push(find.to_string());
+            }
+            counts.push(changed);
+        }
+        Ok(json!({"applied": applied, "occurrences_changed": counts, "unmatched": unmatched}))
     }
 
     fn describe_deck(&self, deck_id: &str, thumbnails: bool) -> ConnResult<Value> {
@@ -337,14 +313,6 @@ mod tests {
         );
         assert_eq!(INFO.capabilities, &[SLIDES]);
         assert!(get_type("google_slides").is_some());
-    }
-
-    #[test]
-    fn placeholders_are_distinct_and_trimmed() {
-        assert_eq!(
-            placeholders_in("Hi {{ name }}, {{date}} and {{name}} {{ }} {single}"),
-            vec!["name", "date"]
-        );
     }
 
     #[test]
@@ -460,20 +428,161 @@ mod tests {
     }
 
     #[test]
-    fn permission_errors_ask_to_reconnect_and_never_leak_tokens() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
-        let c =
-            GoogleSlidesConnector::new(Account::new("s", "google_slides"), Some("RT".into()), http)
-                .with_client_fn(Arc::new(|| json!({"client_id": "c", "client_secret": "s"})))
-                .with_refresh_fn(Arc::new(|_, _| Ok("AT-SECRET".to_string())));
-        let msg = c.list_templates("", 10).unwrap_err().to_string();
-        assert!(
-            msg.contains("Reconnect") && !msg.contains("AT-SECRET"),
-            "{msg}"
+    fn failures_say_reconnect_only_for_sign_in_problems() {
+        super::super::testutil::assert_google_failures(
+            |http| {
+                slides(http, Some("RT"))
+                    .describe_deck("d", false)
+                    .unwrap_err()
+                    .to_string()
+            },
+            |http| slides(http, Some("RT")).test(),
+            "Reconnect Google Slides to grant Slides and Drive access",
         );
-        let (ok, msg) = c.test();
-        assert!(!ok && !msg.contains("AT-SECRET"), "{msg}");
+    }
+
+    #[test]
+    fn edit_deck_sends_one_case_sensitive_replace_per_op_in_order() {
+        let http =
+            FakeHttp::ok(json!({"replies": [{"replaceAllText": {"occurrencesChanged": 1}}]}));
+        let out = slides(http.clone(), Some("RT"))
+            .edit_deck(
+                "d 1",
+                &[
+                    json!({"op": "replace", "find": "Old", "with": "New"}),
+                    json!({"op": "replace", "find": "A", "with": ""}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(out["applied"], 2);
+        let calls = http.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].method, "POST");
+        assert!(
+            calls[0].url.ends_with("/d%201:batchUpdate"),
+            "{}",
+            calls[0].url
+        );
+        let b0 = calls[0].json_body.clone().unwrap();
+        assert_eq!(b0["requests"].as_array().unwrap().len(), 1);
+        let r = &b0["requests"][0]["replaceAllText"];
+        assert_eq!(r["containsText"], json!({"text": "Old", "matchCase": true}));
+        assert_eq!(r["replaceText"], "New");
+        let b1 = calls[1].json_body.clone().unwrap();
+        assert_eq!(
+            b1["requests"][0]["replaceAllText"]["containsText"]["text"],
+            "A"
+        );
+        assert_eq!(b1["requests"][0]["replaceAllText"]["replaceText"], "");
+    }
+
+    #[test]
+    fn edit_deck_reports_each_ops_count_and_the_finds_that_matched_nothing() {
+        let http = FakeHttp::new(|req| {
+            let body = req.json_body.clone().unwrap_or_default();
+            let find = body["requests"][0]["replaceAllText"]["containsText"]["text"].clone();
+            // Google omits occurrencesChanged when nothing matched.
+            Ok(if find == "Old" {
+                json!({"replies": [{"replaceAllText": {"occurrencesChanged": 2}}]})
+            } else {
+                json!({"replies": [{"replaceAllText": {}}]})
+            })
+        });
+        let out = slides(http, Some("RT"))
+            .edit_deck(
+                "d",
+                &[
+                    json!({"op": "replace", "find": "Old", "with": "New"}),
+                    json!({"op": "replace", "find": "Missing", "with": "X"}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(out["applied"], 2);
+        assert_eq!(out["occurrences_changed"], json!([2, 0]));
+        assert_eq!(out["unmatched"], json!(["Missing"]));
+    }
+
+    #[test]
+    fn edit_deck_rejects_bad_ops_before_any_request() {
+        for ops in [
+            vec![json!({"op": "append", "text": "x"})],
+            vec![json!({"op": "replace", "find": "", "with": "x"})],
+            vec![json!({"op": "replace", "with": "x"})],
+            vec![json!({"op": "replace", "find": "a"})],
+            vec![json!({"op": "replace", "find": "a", "with": 1})],
+            vec![
+                json!({"op": "replace", "find": "a", "with": "b"}),
+                json!({"op": "insert_after", "find": "a", "text": "b"}),
+            ],
+            vec![json!("replace")],
+        ] {
+            let http = FakeHttp::ok(json!({}));
+            let r = slides(http.clone(), Some("RT")).edit_deck("d", &ops);
+            assert!(r.is_err(), "{ops:?}");
+            assert!(http.calls.lock().unwrap().is_empty(), "{ops:?}");
+        }
+    }
+
+    #[test]
+    fn edit_deck_failure_reports_how_many_ops_were_applied() {
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let http =
+            FakeHttp::new(
+                move |req| match n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => Ok(json!({})),
+                    1 => Err(HttpError::new(Some(500), "boom AT-SECRET", &req.url)),
+                    _ => Ok(json!({})),
+                },
+            );
+        let op = json!({"op": "replace", "find": "a", "with": "b"});
+        let e = slides(http.clone(), Some("RT"))
+            .edit_deck("d", &[op.clone(), op.clone(), op.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("1 earlier edit applied") && !e.contains("AT-SECRET"),
+            "{e}"
+        );
+        assert_eq!(http.calls.lock().unwrap().len(), 2);
+        // plural, and a first-op failure says none were applied
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let http = FakeHttp::new(move |req| {
+            if n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+                return Err(HttpError::new(Some(500), "boom", &req.url));
+            }
+            Ok(json!({}))
+        });
+        let e = slides(http, Some("RT"))
+            .edit_deck("d", &[op.clone(), op.clone(), op.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("2 earlier edits applied"), "{e}");
+        let http = FakeHttp::new(|req| Err(HttpError::new(Some(500), "boom", &req.url)));
+        let e = slides(http, Some("RT"))
+            .edit_deck("d", &[op])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("0 earlier edits applied"), "{e}");
+    }
+
+    #[test]
+    fn edit_deck_on_a_file_shared_with_someone_else_says_so_without_the_token() {
+        let http = FakeHttp::new(|req| {
+            Err(HttpError::new(
+                Some(403),
+                super::super::testutil::FILE_403,
+                &req.url,
+            ))
+        });
+        let c = slides(http, Some("RT"));
+        let e = c
+            .edit_deck("d", &[json!({"op": "replace", "find": "a", "with": "b"})])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("can't open that file") && !e.contains("AT-SECRET"),
+            "{e}"
+        );
     }
 
     #[test]

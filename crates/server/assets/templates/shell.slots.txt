@@ -10,6 +10,11 @@ refresh_schedule_script
 refresh_note_script
 json.dumps(_t('Could not load the document.'))
 json.dumps(_t('Copied'))
+json.dumps(_t('Loading…'))
+json.dumps(_t('Could not load the preview.'))
+json.dumps(_t('Document'))
+json.dumps(_t('Spreadsheet'))
+json.dumps(_t('Presentation'))
 json.dumps(html.escape(_t('just now')))
 json.dumps(html.escape(_t('Edit message')))
 json.dumps(html.escape(_t('Cancel')))

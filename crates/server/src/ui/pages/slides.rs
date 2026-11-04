@@ -46,7 +46,7 @@ fn text(v: &Value, key: &str) -> String {
 }
 
 /// Only Google's own hosts are ever linked or loaded as an image.
-fn google_link(url: &str) -> Option<&str> {
+pub(crate) fn google_link(url: &str) -> Option<&str> {
     url.strip_prefix("https://docs.google.com/").map(|_| url)
 }
 
@@ -130,10 +130,10 @@ fn select(ctx: &UiCtx) -> UiResponse {
 // ---- rendering -------------------------------------------------------------------------
 
 fn when(stamp: &str) -> String {
-    if stamp.len() >= 16 {
-        format!("{} UTC", stamp[..16].replace('T', " "))
-    } else {
-        stamp.to_string()
+    // `get` so a stamp with a multi-byte character near byte 16 is shown as is.
+    match stamp.get(..16) {
+        Some(head) => format!("{} UTC", head.replace('T', " ")),
+        None => stamp.to_string(),
     }
 }
 
@@ -269,25 +269,10 @@ fn decks_card(ctx: &UiCtx, account: &Account) -> String {
     )
 }
 
-/// The review of one deck as `describe_deck` returned it.
-fn review_card(ctx: &UiCtx, account: &Account, deck: &Value) -> String {
-    let pending: Vec<String> = deck
-        .get("placeholders")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|p| p.as_str().map(|s| format!("<span class='pill pill-red'>{{{{{}}}}}</span>", h(s))))
-        .collect();
-    let notice = if pending.is_empty() {
-        format!("<span class='pill pill-green'>{}</span>", h(&ctx.t("No placeholders left")))
-    } else {
-        format!(
-            "<span class='pill pill-grey'>{}</span>{}",
-            h(&ctx.t("Still unfilled:")),
-            pending.join("")
-        )
-    };
-    let slides: String = deck
+/// One `<figure>` per slide: its thumbnail (Google image hosts only) and its
+/// text, escaped. Shared with the chat preview panel.
+pub(crate) fn slide_cards_html(ctx: &UiCtx, deck: &Value) -> String {
+    deck
         .get("slides")
         .and_then(Value::as_array)
         .into_iter()
@@ -312,7 +297,28 @@ fn review_card(ctx: &UiCtx, account: &Account, deck: &Value) -> String {
                 h(&text(s, "text"))
             )
         })
+        .collect()
+}
+
+/// The review of one deck as `describe_deck` returned it.
+fn review_card(ctx: &UiCtx, account: &Account, deck: &Value) -> String {
+    let pending: Vec<String> = deck
+        .get("placeholders")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.as_str().map(|s| format!("<span class='pill pill-red'>{{{{{}}}}}</span>", h(s))))
         .collect();
+    let notice = if pending.is_empty() {
+        format!("<span class='pill pill-green'>{}</span>", h(&ctx.t("No placeholders left")))
+    } else {
+        format!(
+            "<span class='pill pill-grey'>{}</span>{}",
+            h(&ctx.t("Still unfilled:")),
+            pending.join("")
+        )
+    };
+    let slides = slide_cards_html(ctx, deck);
     format!(
         "<div class='card'><div class='section-header'>{}<h2>{}</h2></div>\
 <div class='pill-row'>{notice}</div>\
@@ -379,6 +385,15 @@ mod tests {
     use axum::http::Method;
     use loopx_core::connectors::{ConnResult, ConnectorError, TypeInfo};
     use serde_json::json;
+
+    #[test]
+    fn when_never_slices_inside_a_character() {
+        assert_eq!(when("2026-11-04T09:30:00+00:00"), "2026-11-04 09:30 UTC");
+        // 15 ASCII bytes then a 2-byte character straddling byte 16.
+        let odd = "2026-11-04T09:3é0";
+        assert_eq!(when(odd), odd);
+        assert_eq!(when("short"), "short");
+    }
 
     fn state(dir: &std::path::Path) -> UiState {
         UiState::explicit(dir, dir, dir, &dir.join("update"), "tok", None)

@@ -69,6 +69,35 @@ pub fn google_refresh(
     }
 }
 
+/// What a failed call on one file says when the account was never given access to it.
+pub const NO_FILE_ACCESS_MESSAGE: &str = "This Google account can't open that file. Ask the file's owner to share it with this account, or use a file this account can open";
+/// What a failed call on one file says when Google has no such file for this account.
+pub const FILE_NOT_FOUND_MESSAGE: &str = "Google could not find that file. Check the link: the file may have been deleted, or not shared with this Google account";
+
+/// A 403 body that is about the sign-in's granted scopes, which reconnecting
+/// (and granting access again) fixes, rather than about one file's sharing.
+pub fn is_scope_problem(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("access_token_scope_insufficient")
+        || lower.contains("\"insufficientpermissions\"")
+        || lower.contains("insufficient authentication scopes")
+}
+
+/// A 403 that is neither about scopes nor about one file: a rate limit, a
+/// quota, or the API being disabled for the OAuth client's project.
+fn is_service_problem(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    [
+        "ratelimitexceeded",
+        "rate_limit_exceeded",
+        "quota",
+        "accessnotconfigured",
+        "service_disabled",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
+}
+
 /// One Google account's credentials: its refresh token plus the seams that
 /// resolve the OAuth client and exchange the token.
 pub struct GoogleAuth {
@@ -121,6 +150,30 @@ impl GoogleAuth {
             other => other.clone(),
         };
         self.scrub(&describe_http_error(&err), access_token)
+    }
+
+    /// The message for a failed call on one file: `reconnect` for a dead or
+    /// under-scoped sign-in (401, or a 403 about scopes), a sharing message
+    /// for any other 403 that is about the file, a not-found message for 404,
+    /// and otherwise the scrubbed [`Self::describe`].
+    pub fn file_failure(&self, e: HttpError, token: &str, reconnect: &str) -> String {
+        match e.status {
+            Some(401) => reconnect.to_string(),
+            Some(403) if is_scope_problem(&e.body) => reconnect.to_string(),
+            Some(403) if !is_service_problem(&e.body) => NO_FILE_ACCESS_MESSAGE.to_string(),
+            Some(404) => FILE_NOT_FOUND_MESSAGE.to_string(),
+            _ => self.describe(&super::ConnectorError::Http(e), Some(token)),
+        }
+    }
+
+    /// The message for a failed connection Test (a Drive listing, not one
+    /// file): `reconnect` for a sign-in problem, otherwise the scrubbed reason.
+    pub fn probe_failure(&self, e: HttpError, token: &str, reconnect: &str) -> String {
+        match e.status {
+            Some(401) => reconnect.to_string(),
+            Some(403) if is_scope_problem(&e.body) => reconnect.to_string(),
+            _ => self.describe(&super::ConnectorError::Http(e), Some(token)),
+        }
     }
 
     /// `(token, None)` or `(None, failure message)`.

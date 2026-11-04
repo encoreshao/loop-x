@@ -81,25 +81,45 @@ fn prefixes(state: &UiState) -> markdown::GitlabPrefixes {
 
 // ----- tool chips and approval cards -----
 
-/// `tool_label`.
+/// Each chat tool's chip label (English; translated where shown). The live
+/// chips (`shell::chat_tool_chips_js`) and the stored ones share this table.
+pub const TOOL_LABELS: &[(&str, &str)] = &[
+    ("gitlab.read_issue", "Reading issue"),
+    ("gitlab.list_issues", "Listing issues"),
+    ("gitlab.comment", "Commenting on issue"),
+    ("github.read_issue", "Reading issue"),
+    ("github.read_pr", "Reading pull request"),
+    ("github.comment", "Commenting"),
+    ("rss.read_feed", "Reading feed"),
+    ("calendar.list_events", "Reading calendar"),
+    ("calendar.free_busy", "Reading calendar"),
+    ("mail.search", "Searching mail"),
+    ("mail.read", "Reading email"),
+    ("mail.send", "Sending email"),
+    ("calendar.create_event", "Creating event"),
+    ("docs.save", "Saving document"),
+    ("web.search", "Searching the web"),
+    ("gdocs.list_templates", "Listing templates"),
+    ("gsheets.list_templates", "Listing templates"),
+    ("gdocs.template_info", "Reading template"),
+    ("gsheets.template_info", "Reading template"),
+    ("gdocs.read", "Reading document"),
+    ("gsheets.read", "Reading spreadsheet"),
+    ("gdocs.create", "Creating document"),
+    ("gdocs.create_from_template", "Creating document"),
+    ("gsheets.create", "Creating spreadsheet"),
+    ("gsheets.create_from_template", "Creating spreadsheet"),
+    ("gdocs.edit", "Editing document"),
+    ("gsheets.edit", "Editing spreadsheet"),
+    ("slides.edit_deck", "Editing presentation"),
+];
+
+/// `tool_label`: the translated label, or the tool name when it has none.
 pub fn tool_label(lang: Lang, name: &str) -> String {
-    let label = match name {
-        "gitlab.read_issue" | "github.read_issue" => "Reading issue",
-        "gitlab.list_issues" => "Listing issues",
-        "gitlab.comment" => "Commenting on issue",
-        "github.read_pr" => "Reading pull request",
-        "github.comment" => "Commenting",
-        "rss.read_feed" => "Reading feed",
-        "calendar.list_events" | "calendar.free_busy" => "Reading calendar",
-        "mail.search" => "Searching mail",
-        "mail.read" => "Reading email",
-        "mail.send" => "Sending email",
-        "calendar.create_event" => "Creating event",
-        "docs.save" => "Saving document",
-        "web.search" => "Searching the web",
-        _ => return name.to_string(),
-    };
-    t(lang, label)
+    match TOOL_LABELS.iter().find(|(n, _)| *n == name) {
+        Some((_, label)) => t(lang, label),
+        None => name.to_string(),
+    }
 }
 
 /// `chat_pending_card_html`.
@@ -147,6 +167,26 @@ fn text_of(v: Option<&Value>) -> String {
     }
 }
 
+/// The tail of a chip's class attribute plus the data attributes the page
+/// script opens the file preview panel from; empty unless a Google file tool's
+/// entry carries a well-formed `file_ref` (older messages have none).
+fn file_ref_attrs(name: &str, file_ref: Option<&Value>) -> String {
+    let Some(r) = file_ref
+        .filter(|_| chat::is_google_file_tool(name))
+        .and_then(chat_tools::valid_file_ref)
+    else {
+        return String::new();
+    };
+    let field = |k: &str| pyfmt::escape(r[k].as_str().unwrap_or(""));
+    format!(
+        " tool-chip-file\" data-file-kind=\"{}\" data-file-account=\"{}\" data-file-id=\"{}\" \
+         role=\"button\" tabindex=\"0",
+        field("kind"),
+        field("account"),
+        field("file")
+    )
+}
+
 /// `chat_tool_chips_html`: chips for a stored loop message's `tools` list.
 pub fn tool_chips_html(
     state: &UiState,
@@ -179,11 +219,13 @@ pub fn tool_chips_html(
             _ => "autorenew",
         };
         let icon_svg = icons::icon_with(icon, "tool-chip-icon");
+        let name = text_of(tool.get("name"));
         chips.push_str(&format!(
-            "<span class=\"tool-chip tool-chip-{kind}\">\
+            "<span class=\"tool-chip tool-chip-{kind}{}\">\
              {icon_svg}\
              <span class=\"tool-chip-text\">{}{summary}</span></span>",
-            pyfmt::escape(&tool_label(lang, &text_of(tool.get("name"))))
+            file_ref_attrs(&name, tool.get("file_ref")),
+            pyfmt::escape(&tool_label(lang, &name))
         ));
         if let (Some(session), Some(Value::Object(stored))) =
             (session.filter(|s| !s.is_empty()), tool.get("pending"))
@@ -770,10 +812,23 @@ fn field<'a>(form: &'a [(String, String)], name: &str) -> Option<&'a str> {
     form.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
 }
 
+/// Stores a message the user posted and grants the Google file ids in it to
+/// its chat session, before any agent runs. This is the only place grants
+/// are recorded: ids in tool output, replies or documents never get here.
+fn send_user_message(state: &UiState, text: &str, session: Option<&str>) -> Option<String> {
+    let session_id = store(state).send_chat_message(text, session)?;
+    let _ = loopx_core::file_grants::record_user_message(
+        &loopx_core::file_grants::dir(&state.home_dir),
+        &session_id,
+        text,
+    );
+    Some(session_id)
+}
+
 fn post_message(ctx: &UiCtx) -> UiResponse {
     let form = form_keep_blank(&ctx.req.body);
     let text = field(&form, "text").unwrap_or("");
-    match store(ctx.state).send_chat_message(text, field(&form, "session")) {
+    match send_user_message(ctx.state, text, field(&form, "session")) {
         Some(session) => UiResponse::flash_redirect(
             true,
             &ctx.t("Message sent"),
@@ -806,12 +861,21 @@ fn post_delete_message(ctx: &UiCtx) -> UiResponse {
     UiResponse::flash_redirect(ok, &message, &location)
 }
 
+/// Deletes a chat session and the file grants its messages made.
+fn delete_session(state: &UiState, session_id: &str) -> bool {
+    let ok = store(state).delete_chat_session(session_id);
+    if ok {
+        loopx_core::file_grants::forget(&loopx_core::file_grants::dir(&state.home_dir), session_id);
+    }
+    ok
+}
+
 fn post_delete_session(ctx: &UiCtx) -> UiResponse {
     let session_id = ctx.param("id");
     let form = form_keep_blank(&ctx.req.body);
     let viewing = field(&form, "viewing").unwrap_or("");
     // parse_qs without keep_blank in Python: a blank `viewing` is "".
-    let ok = store(ctx.state).delete_chat_session(session_id);
+    let ok = delete_session(ctx.state, session_id);
     let message = if ok { ctx.t("Chat deleted") } else { ctx.t("Chat not found") };
     let location = if !viewing.is_empty() && viewing != session_id {
         format!("/?session={}&history=1", pyfmt::quote(viewing, ""))
@@ -834,9 +898,48 @@ fn pending_form(ctx: &UiCtx) -> (String, String) {
     )
 }
 
+/// The `tools` entry stored with an approved Google file write's follow-up
+/// message, so its chip can reopen the file in the preview panel after a
+/// reload. `None` (the message stays as before) for every other tool.
+fn approval_tools(tool: &str, summary: &str, result: &Value) -> Option<Value> {
+    if !chat::is_google_file_tool(tool) || result.get("error").is_some() {
+        return None;
+    }
+    let file_ref = result
+        .pointer("/result/file_ref")
+        .and_then(chat_tools::valid_file_ref)?;
+    Some(json!([{"name": tool, "summary": summary, "ok": true, "file_ref": file_ref}]))
+}
+
+/// The chat message stored after an approved write ran: the failure, or
+/// "Approved and done" plus any replace ops that matched nothing and any
+/// warning (a copy whose fill failed), so a no-op never reads as success.
+fn approval_text(lang: Lang, tool: &str, summary: &str, result: &Value) -> String {
+    if let Some(error) = result.get("error") {
+        return i18n::t(lang, "{tool} failed: {error}", &[("tool", tool), ("error", &pydumps::py_str(error))]);
+    }
+    let mut text = i18n::t(lang, "Approved and done: {tool} {summary}", &[("tool", tool), ("summary", summary)]);
+    let finds: Vec<String> = result
+        .pointer("/result/unmatched")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|f| format!("\"{}\"", pydumps::py_str(f)))
+        .collect();
+    if !finds.is_empty() {
+        text.push(' ');
+        text.push_str(&i18n::t(lang, "Nothing matched, so nothing changed for: {finds}", &[("finds", &finds.join(", "))]));
+    }
+    if let Some(warning) = result.pointer("/result/warning").and_then(Value::as_str) {
+        text.push(' ');
+        text.push_str(&i18n::t(lang, "Warning: {warning}", &[("warning", warning)]));
+    }
+    text
+}
+
 /// `_chat_approve`.
 pub fn chat_approve(state: &UiState, lang: Lang, pending_id: &str, session: &str) -> Value {
-    let env = tools_env(state);
+    let env = tools_env(state).with_session(session);
     let expired = || json!({"ok": false, "error": t(lang, "This action expired or was already handled.")});
     let Some(record) = chat_tools::pending::claim(&env, pending_id, session, Some(epoch(state))) else {
         return expired();
@@ -847,19 +950,7 @@ pub fn chat_approve(state: &UiState, lang: Lang, pending_id: &str, session: &str
     }
     let result = chat_tools::execute_tool(&env, &record.tool, &record.args);
     let failed = result.get("error").is_some();
-    let text = if failed {
-        i18n::t(
-            lang,
-            "{tool} failed: {error}",
-            &[("tool", &record.tool), ("error", &pydumps::py_str(&result["error"]))],
-        )
-    } else {
-        i18n::t(
-            lang,
-            "Approved and done: {tool} {summary}",
-            &[("tool", &record.tool), ("summary", &record.summary)],
-        )
-    };
+    let text = approval_text(lang, &record.tool, &record.summary, &result);
     let body = if failed {
         format!("error: {}", pydumps::py_str(&result["error"]))
     } else {
@@ -871,7 +962,8 @@ pub fn chat_approve(state: &UiState, lang: Lang, pending_id: &str, session: &str
         &format!("approve {}", record.tool),
         Some(&body),
     );
-    store(state).append_message("loop", &text, Some(session), None);
+    let tools = approval_tools(&record.tool, &record.summary, &result);
+    store(state).append_message("loop", &text, Some(session), tools.as_ref());
     if failed {
         json!({"ok": false, "error": text, "result": result})
     } else {
@@ -944,7 +1036,7 @@ pub fn start_reply(
     page: Option<&str>,
 ) -> Result<(String, String), String> {
     let store = store(state);
-    let Some(session_id) = store.send_chat_message(text, session) else {
+    let Some(session_id) = send_user_message(state, text, session) else {
         return Err(t(lang, "Message is required"));
     };
     let all = store.chat_session_messages(&session_id);
@@ -1050,6 +1142,158 @@ fn _paths(_: PathBuf) {}
 mod tests {
     use super::*;
     use crate::ui::routes::UiRequest;
+
+    #[test]
+    fn google_file_tools_have_translated_labels() {
+        for (name, en, ja) in [
+            ("gdocs.read", "Reading document", "ドキュメントを読み取り中"),
+            ("gsheets.read", "Reading spreadsheet", "スプレッドシートを読み取り中"),
+            ("gdocs.create_from_template", "Creating document", "ドキュメントを作成中"),
+            ("gsheets.edit", "Editing spreadsheet", "スプレッドシートを編集中"),
+            ("slides.edit_deck", "Editing presentation", "プレゼンテーションを編集中"),
+            ("gsheets.list_templates", "Listing templates", "テンプレートを一覧表示中"),
+        ] {
+            assert_eq!(tool_label(Lang::En, name), en);
+            assert_eq!(tool_label(Lang::Ja, name), ja);
+        }
+    }
+
+    fn chips(tools: Value) -> String {
+        tool_chips_html(&UiState::for_tests(), Lang::En, Some(&tools), None)
+    }
+
+    #[test]
+    fn a_tool_entry_without_a_file_ref_renders_exactly_as_before() {
+        let html = chips(json!([{"name": "gdocs.read", "summary": "x", "ok": true}]));
+        assert_eq!(
+            html,
+            format!(
+                "<div class=\"tool-chips\"><span class=\"tool-chip tool-chip-ok\">{}\
+                 <span class=\"tool-chip-text\">Reading document \u{b7} x</span></span></div>",
+                icons::icon_with("check_circle", "tool-chip-icon")
+            )
+        );
+    }
+
+    #[test]
+    fn a_google_file_entry_carries_its_file_ref_as_data_attributes() {
+        let html = chips(json!([{"name": "gsheets.create", "summary": "", "ok": true,
+            "file_ref": {"kind": "sheet", "account": "gs", "file": "1Ab-c_D"}}]));
+        assert!(
+            html.contains(
+                "<span class=\"tool-chip tool-chip-ok tool-chip-file\" data-file-kind=\"sheet\" \
+                 data-file-account=\"gs\" data-file-id=\"1Ab-c_D\" role=\"button\" tabindex=\"0\""
+            ),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_bad_or_foreign_file_ref_is_not_rendered() {
+        for tools in [
+            json!([{"name": "mail.read", "ok": true,
+                    "file_ref": {"kind": "doc", "account": "gd", "file": "abc"}}]),
+            json!([{"name": "gdocs.read", "ok": true,
+                    "file_ref": {"kind": "doc", "account": "gd", "file": "a\"><script>"}}]),
+            json!([{"name": "gdocs.read", "ok": true, "file_ref": "doc"}]),
+        ] {
+            let html = chips(tools.clone());
+            assert!(!html.contains("data-file-") && !html.contains("<script>"), "{tools}: {html}");
+        }
+    }
+
+    #[test]
+    fn an_approved_google_write_is_stored_with_its_file_ref() {
+        let result = json!({"tool": "gdocs.create", "result": {"file_id": "d1",
+            "file_ref": {"kind": "doc", "account": "gd", "file": "d1"}}});
+        assert_eq!(
+            approval_tools("gdocs.create", "Plan", &result),
+            Some(json!([{"name": "gdocs.create", "summary": "Plan", "ok": true,
+                "file_ref": {"kind": "doc", "account": "gd", "file": "d1"}}]))
+        );
+        let plain = json!({"tool": "mail.send", "result": {"file_ref": {"kind": "doc", "account": "gd", "file": "d1"}}});
+        assert_eq!(approval_tools("mail.send", "", &plain), None);
+        assert_eq!(approval_tools("gdocs.create", "", &json!({"error": "x"})), None);
+    }
+
+    #[test]
+    fn the_approval_message_names_finds_that_matched_nothing_and_warnings() {
+        let done = json!({"tool": "gdocs.edit", "result": {"applied": 2,
+            "occurrences_changed": [1, 0], "unmatched": ["Q3 total"]}});
+        let text = approval_text(Lang::En, "gdocs.edit", "d1", &done);
+        assert!(text.starts_with("Approved and done: gdocs.edit d1"), "{text}");
+        assert!(text.contains("Nothing matched, so nothing changed for: \"Q3 total\""), "{text}");
+        let ja = approval_text(Lang::Ja, "gdocs.edit", "d1", &done);
+        assert!(!ja.contains("Nothing matched") && ja.contains("Q3 total"), "{ja}");
+
+        let warned = json!({"tool": "gdocs.create_from_template", "result": {"file_id": "n",
+            "warning": "The document was created but its text could not be filled: boom"}});
+        let text = approval_text(Lang::En, "gdocs.create_from_template", "Acme", &warned);
+        assert!(text.contains("Warning: The document was created but its text could not be filled: boom"), "{text}");
+        let fr = approval_text(Lang::Fr, "gdocs.create_from_template", "Acme", &warned);
+        assert!(!fr.contains("Warning:") && fr.contains("boom"), "{fr}");
+
+        let clean = json!({"tool": "gdocs.edit", "result": {"applied": 1, "unmatched": []}});
+        assert_eq!(approval_text(Lang::En, "gdocs.edit", "d1", &clean), "Approved and done: gdocs.edit d1");
+        let failed = json!({"error": "nope"});
+        assert_eq!(approval_text(Lang::En, "gdocs.edit", "d1", &failed), "gdocs.edit failed: nope");
+    }
+
+    #[test]
+    fn the_chat_page_has_the_file_preview_panel() {
+        let html = overview_for("claude", None);
+        assert!(html.contains("id='file-panel'"), "{html}");
+        assert!(html.contains("data-file-tabs") && html.contains("data-file-close"), "{html}");
+        assert!(html.contains("data-file-body"), "{html}");
+    }
+
+    const FILE_ID: &str = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+
+    #[test]
+    fn a_user_message_grants_its_file_ids_to_its_session_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let url = format!("look at https://docs.google.com/document/d/{FILE_ID}/edit");
+        let sid = send_user_message(&state, &url, None).unwrap();
+        let grants = loopx_core::file_grants::dir(&state.home_dir);
+        assert!(loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
+        assert!(!loopx_core::file_grants::granted(&grants, "other", FILE_ID));
+    }
+
+    #[test]
+    fn deleting_a_chat_drops_its_file_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let url = format!("look at https://docs.google.com/document/d/{FILE_ID}/edit");
+        let sid = send_user_message(&state, &url, None).unwrap();
+        let grants = loopx_core::file_grants::dir(&state.home_dir);
+        assert!(grants.join(format!("{sid}.json")).exists());
+        assert!(delete_session(&state, &sid));
+        assert!(!grants.join(format!("{sid}.json")).exists());
+        assert!(!loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
+        assert!(!delete_session(&state, &sid));
+    }
+
+    #[test]
+    fn assistant_and_tool_output_never_grant_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let sid = send_user_message(&state, "hello", None).unwrap();
+        let hostile = format!("open https://docs.google.com/spreadsheets/d/{FILE_ID}/edit");
+        // How the chat stores a reply (which carries tool results), and a stored
+        // document that contains a link.
+        store(&state).append_message("assistant", &hostile, Some(&sid), Some(&json!([{"result": hostile}])));
+        let env = tools_env(&state);
+        let saved = loopx_core::chat_tools::run(
+            &env,
+            "docs.save",
+            &json!({"title": "notes", "content": hostile}).to_string(),
+            &sid,
+        );
+        assert!(saved.get("error").is_none(), "{saved}");
+        let grants = loopx_core::file_grants::dir(&state.home_dir);
+        assert!(!loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
+    }
 
     fn overview_for(cli: &str, lang_cookie: Option<&str>) -> String {
         let dir = tempfile::tempdir().unwrap();

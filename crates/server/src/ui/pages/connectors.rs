@@ -285,13 +285,21 @@ fn account_row_html(ctx: &UiCtx, account: &Account, csrf: &str, result: Option<&
             ));
         }
     }
-    if account.kind == "google_slides" && managed_by == "native" {
-        connect_html.push_str(&format!(
-            "<a class='btn btn-neutral' href='/connectors/slides?id={}'>{} {}</a>",
-            h(&quoted_id),
-            icons::icon("slideshow"),
-            h(&ctx.t("Templates and decks"))
-        ));
+    if managed_by == "native" {
+        let templates = match account.kind.as_str() {
+            "google_slides" => Some(("/connectors/slides", "slideshow", ctx.t("Templates and decks"))),
+            "google_docs" => Some(("/connectors/gdocs", "description", ctx.t("Templates and documents"))),
+            "google_sheets" => Some(("/connectors/gsheets", "fact_check", ctx.t("Templates and spreadsheets"))),
+            _ => None,
+        };
+        if let Some((route, icon, label)) = templates {
+            connect_html.push_str(&format!(
+                "<a class='btn btn-neutral' href='{route}?id={}'>{} {}</a>",
+                h(&quoted_id),
+                icons::icon(icon),
+                h(&label)
+            ));
+        }
     }
     let mut buttons = format!(
         "{connect_html}<form method='post' action='/connectors/test' class='daemon-action-form'>{csrf}\
@@ -1138,13 +1146,15 @@ fn reconnected(state: &UiState, id: &str) {
     );
 }
 
-fn renamed_or_deleted(ctx: &UiCtx, old: &str, new: Option<&str>) {
+pub(super) fn renamed_or_deleted(ctx: &UiCtx, old: &str, new: Option<&str>) {
     // The loops' notify lists live in `<home>/loops.json`.
     cc::account_renamed_or_deleted_in(old, new, &results_path(ctx.state), &ctx.state.loops_config_path());
-    let slides = ctx.state.home_dir.join("slides");
-    match new {
-        Some(new) => loopx_core::slides_store::rename(&slides, old, new),
-        None => loopx_core::slides_store::remove(&slides, old),
+    for sub in ["slides", "gdocs", "gsheets"] {
+        let store_dir = ctx.state.home_dir.join(sub);
+        match new {
+            Some(new) => loopx_core::slides_store::rename(&store_dir, old, new),
+            None => loopx_core::slides_store::remove(&store_dir, old),
+        }
     }
 }
 
@@ -1517,10 +1527,17 @@ pub fn google_callback(
         if missing {
             return (
                 false,
-                if account.kind == "google_slides" {
-                    t("Google didn't grant Slides and Drive access - reconnect and keep every box ticked")
-                } else {
-                    t("Google didn't grant calendar access - reconnect and keep the Calendar box ticked")
+                match account.kind.as_str() {
+                    "google_slides" => {
+                        t("Google didn't grant Slides and Drive access - reconnect and keep every box ticked")
+                    }
+                    "google_docs" => {
+                        t("Google didn't grant Docs and Drive access - reconnect and keep every box ticked")
+                    }
+                    "google_sheets" => {
+                        t("Google didn't grant Sheets and Drive access - reconnect and keep every box ticked")
+                    }
+                    _ => t("Google didn't grant calendar access - reconnect and keep the Calendar box ticked"),
                 },
             );
         }

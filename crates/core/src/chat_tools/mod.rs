@@ -11,8 +11,12 @@
 
 pub mod calendar;
 pub mod documents;
+pub mod gdocs;
+pub(crate) mod gfiles;
+pub use gfiles::{preview_allowed, valid_file_id, valid_file_ref};
 pub mod github;
 pub mod gitlab;
+pub mod gsheets;
 pub mod mail;
 pub mod pending;
 pub mod rss;
@@ -99,6 +103,9 @@ pub type ToolResult = Result<Value, ToolError>;
 pub enum ArgKind {
     Str,
     Int,
+    /// Structured data: a JSON array or object, or a string holding one
+    /// (handlers read it with `gfiles::json_text`).
+    Json,
 }
 
 /// One declared argument of a tool.
@@ -139,6 +146,22 @@ impl Arg {
         Self {
             name,
             kind: ArgKind::Int,
+            required: false,
+            help: "",
+        }
+    }
+    pub const fn req_json(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ArgKind::Json,
+            required: true,
+            help: "",
+        }
+    }
+    pub const fn opt_json(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ArgKind::Json,
             required: false,
             help: "",
         }
@@ -280,6 +303,9 @@ pub struct Env {
     pub home_dir: PathBuf,
     pub provider: Arc<dyn ConnectorProvider>,
     pub inbox_provider: Arc<InboxProvider>,
+    /// The chat session a call runs in ("" outside a chat). Handlers use it to
+    /// check [`crate::file_grants`].
+    pub session: String,
 }
 
 impl Env {
@@ -296,6 +322,7 @@ impl Env {
         Self {
             repo_root,
             home_dir,
+            session: String::new(),
             provider: Arc::new(ConfigProvider::new(paths)),
             inbox_provider: Arc::new(move |id| {
                 crate::inbox_config::get_inbox(id, &inbox_path)
@@ -307,6 +334,11 @@ impl Env {
                     })
             }),
         }
+    }
+
+    pub fn with_session(mut self, session: &str) -> Self {
+        self.session = session.to_string();
+        self
     }
 
     pub fn with_provider(mut self, provider: impl ConnectorProvider + 'static) -> Self {
@@ -411,14 +443,35 @@ pub fn tools() -> &'static [Tool] {
         let mut all = Vec::new();
         all.extend(calendar::tools());
         all.extend(documents::tools());
+        all.extend(gdocs::tools());
         all.extend(github::tools());
         all.extend(gitlab::tools());
+        all.extend(gsheets::tools());
         all.extend(mail::tools());
         all.extend(rss::tools());
         all.extend(slides::tools());
         all.extend(web::tools());
         all
     })
+}
+
+/// Checks a write tool's args (and the target file's access rule) for the
+/// chosen account before its Approve card is created, so the card only ever
+/// shows a call that can run. The handler repeats the same check when it runs.
+pub(crate) type Check = fn(&Env, &str, &Map<String, Value>) -> Result<(), ToolError>;
+
+fn precheck(name: &str) -> Option<Check> {
+    static CHECKS: OnceLock<Vec<(&'static str, Check)>> = OnceLock::new();
+    CHECKS
+        .get_or_init(|| {
+            let mut all = gdocs::checks();
+            all.extend(gsheets::checks());
+            all.extend(slides::checks());
+            all
+        })
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, c)| *c)
 }
 
 fn find<'a>(tools: &'a [Tool], name: &str) -> Option<&'a Tool> {
@@ -514,6 +567,14 @@ fn validate(tool: &Tool, raw: &str) -> Result<Map<String, Value>, String> {
             ArgKind::Str => {
                 if !value.is_string() {
                     return Err(format!("{} must be a string", arg.name));
+                }
+            }
+            ArgKind::Json => {
+                if !(value.is_string() || value.is_array() || value.is_object()) {
+                    return Err(format!(
+                        "{} must be JSON: an array or object, or a string holding one",
+                        arg.name
+                    ));
                 }
             }
         }
@@ -646,6 +707,8 @@ pub(crate) fn run_in(
     let Some(tool) = find(tools, name) else {
         return json!({"error": format!("Unknown tool: {name}")});
     };
+    let session_env = env.clone().with_session(session);
+    let env = &session_env;
     let mut args = match validate(tool, args_json) {
         Ok(a) => a,
         Err(e) => return json!({"error": e}),
@@ -672,6 +735,13 @@ pub(crate) fn run_in(
             return json!({"error": format!("{} failed ({})", tool.name, e.class_name())})
         }
         Ok(Some(id)) => {
+            if let Some(check) = precheck(tool.name) {
+                let mut clean = args.clone();
+                clean.shift_remove("account");
+                if let Err(e) = check(env, &id, &clean) {
+                    return failure(tool, e);
+                }
+            }
             args.insert("account".into(), Value::String(id)); // freeze the target for approve
         }
         Ok(None) => {}
@@ -985,6 +1055,38 @@ mod tests {
     }
 
     #[test]
+    fn json_args_take_a_real_array_or_object_or_a_json_string() {
+        static ARGS: [Arg; 1] = [Arg::req_json("ops")];
+        fn h(_: &Env, _: Option<&dyn Connector>, _: &Map<String, Value>) -> ToolResult {
+            Ok(json!({}))
+        }
+        let tool = Tool {
+            name: "x.y",
+            description: "",
+            args: &ARGS,
+            mode: Mode::Read,
+            connector_type: None,
+            handler: h,
+            select: None,
+        };
+        for ok in [
+            r#"{"ops": [{"op": "a"}]}"#,
+            r#"{"ops": {"a": 1}}"#,
+            r#"{"ops": "[1]"}"#,
+        ] {
+            assert!(validate(&tool, ok).is_ok(), "{ok}");
+        }
+        for bad in [r#"{"ops": 5}"#, r#"{"ops": true}"#] {
+            assert_eq!(
+                validate(&tool, bad).unwrap_err(),
+                "ops must be JSON: an array or object, or a string holding one",
+                "{bad}"
+            );
+        }
+        assert_eq!(validate(&tool, "{}").unwrap_err(), "ops is required");
+    }
+
+    #[test]
     fn missing_bad_typed_and_unknown_args() {
         let t = setup(accts(&["a1"]));
         let f = fixture();
@@ -1138,7 +1240,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 32);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1146,6 +1248,22 @@ mod tests {
             "gitlab.read_issue (read): Read one GitLab issue with its description and comments (pass the issue url, or project and iid). Args: url (optional), project (optional), iid (optional)"
         ));
         assert!(text.contains("docs.save (local): Save a markdown document (e.g. a summary) and get a link the user can open. Args: title, content"));
+    }
+
+    #[test]
+    fn template_tools_tell_the_model_to_pass_bare_placeholder_names() {
+        let all = describe_all();
+        for name in [
+            "gdocs.template_info",
+            "gdocs.create_from_template",
+            "gsheets.template_info",
+            "gsheets.create_from_template",
+        ] {
+            let line = all.lines().find(|l| l.starts_with(name)).unwrap();
+            assert!(line.contains("bare placeholder name"), "{name}: {line}");
+            assert!(line.contains("untrusted_content"), "{name}: {line}");
+        }
+        assert!(gfiles::HEAD_CUT_NOTE.contains("ask the user"));
     }
 
     #[test]
@@ -1158,12 +1276,46 @@ mod tests {
             write_tool_names(),
             [
                 "calendar.create_event",
+                "gdocs.create",
+                "gdocs.create_from_template",
+                "gdocs.edit",
                 "github.comment",
                 "gitlab.comment",
+                "gsheets.create",
+                "gsheets.create_from_template",
+                "gsheets.edit",
                 "mail.send",
-                "slides.create_deck"
+                "slides.create_deck",
+                "slides.edit_deck"
             ]
         );
+    }
+
+    #[test]
+    fn every_pre_approval_check_belongs_to_a_write_tool() {
+        let mut names: Vec<&str> = gdocs::checks().into_iter().map(|(n, _)| n).collect();
+        names.extend(gsheets::checks().into_iter().map(|(n, _)| n));
+        names.extend(slides::checks().into_iter().map(|(n, _)| n));
+        assert_eq!(names.len(), 7);
+        for n in names {
+            assert_eq!(tool_mode(n), Some(Mode::Write), "{n}");
+            assert!(precheck(n).is_some(), "{n}");
+        }
+    }
+
+    #[test]
+    fn every_google_file_write_tool_has_a_pre_approval_check() {
+        let writes: Vec<&Tool> = tools()
+            .iter()
+            .filter(|t| {
+                t.mode == Mode::Write
+                    && matches!(t.connector_type, Some("google_docs" | "google_sheets"))
+            })
+            .collect();
+        assert_eq!(writes.len(), 6);
+        for t in writes {
+            assert!(precheck(t.name).is_some(), "{}", t.name);
+        }
     }
 
     fn write_tool(handler: Handler, kind: Option<&'static str>) -> Tool {
@@ -1196,6 +1348,29 @@ mod tests {
         let rec = pending::claim(&t.env, id, "s1", None).unwrap();
         assert_eq!(rec.tool, "fake.write");
         assert_eq!(rec.args["account"], "a1");
+    }
+
+    fn report_session(e: &Env, _c: Option<&dyn Connector>, _a: &Map<String, Value>) -> ToolResult {
+        Ok(json!({"session": e.session}))
+    }
+
+    #[test]
+    fn handlers_see_the_chat_session() {
+        let t = setup(accts(&["a1"]));
+        let f = vec![
+            tool("fake.read", Mode::Read, None, &NONE_ARGS, report_session),
+            write_tool(report_session, None),
+        ];
+        let r = run_in(&f, &t.env, "fake.read", "{}", "sess1");
+        assert_eq!(r["result"]["session"], "sess1");
+        assert_eq!(t.env.session, "", "the caller's env is not mutated");
+        let w = execute_named(
+            &f,
+            &t.env.clone().with_session("sess2"),
+            "fake.write",
+            &json!({"body": "x"}),
+        );
+        assert_eq!(w["result"]["session"], "sess2");
     }
 
     #[test]
