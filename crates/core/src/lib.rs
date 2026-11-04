@@ -24,6 +24,7 @@ pub mod content_archive;
 pub mod cost;
 pub mod doctor;
 pub mod events;
+pub mod file_grants;
 pub mod file_lock;
 pub mod gate_stats;
 pub mod gitlab;

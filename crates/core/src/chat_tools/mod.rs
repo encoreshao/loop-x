@@ -280,6 +280,9 @@ pub struct Env {
     pub home_dir: PathBuf,
     pub provider: Arc<dyn ConnectorProvider>,
     pub inbox_provider: Arc<InboxProvider>,
+    /// The chat session a call runs in ("" outside a chat). Handlers use it to
+    /// check [`crate::file_grants`].
+    pub session: String,
 }
 
 impl Env {
@@ -296,6 +299,7 @@ impl Env {
         Self {
             repo_root,
             home_dir,
+            session: String::new(),
             provider: Arc::new(ConfigProvider::new(paths)),
             inbox_provider: Arc::new(move |id| {
                 crate::inbox_config::get_inbox(id, &inbox_path)
@@ -307,6 +311,11 @@ impl Env {
                     })
             }),
         }
+    }
+
+    pub fn with_session(mut self, session: &str) -> Self {
+        self.session = session.to_string();
+        self
     }
 
     pub fn with_provider(mut self, provider: impl ConnectorProvider + 'static) -> Self {
@@ -646,6 +655,8 @@ pub(crate) fn run_in(
     let Some(tool) = find(tools, name) else {
         return json!({"error": format!("Unknown tool: {name}")});
     };
+    let session_env = env.clone().with_session(session);
+    let env = &session_env;
     let mut args = match validate(tool, args_json) {
         Ok(a) => a,
         Err(e) => return json!({"error": e}),
@@ -1196,6 +1207,29 @@ mod tests {
         let rec = pending::claim(&t.env, id, "s1", None).unwrap();
         assert_eq!(rec.tool, "fake.write");
         assert_eq!(rec.args["account"], "a1");
+    }
+
+    fn report_session(e: &Env, _c: Option<&dyn Connector>, _a: &Map<String, Value>) -> ToolResult {
+        Ok(json!({"session": e.session}))
+    }
+
+    #[test]
+    fn handlers_see_the_chat_session() {
+        let t = setup(accts(&["a1"]));
+        let f = vec![
+            tool("fake.read", Mode::Read, None, &NONE_ARGS, report_session),
+            write_tool(report_session, None),
+        ];
+        let r = run_in(&f, &t.env, "fake.read", "{}", "sess1");
+        assert_eq!(r["result"]["session"], "sess1");
+        assert_eq!(t.env.session, "", "the caller's env is not mutated");
+        let w = execute_named(
+            &f,
+            &t.env.clone().with_session("sess2"),
+            "fake.write",
+            &json!({"body": "x"}),
+        );
+        assert_eq!(w["result"]["session"], "sess2");
     }
 
     #[test]
