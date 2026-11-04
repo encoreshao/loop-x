@@ -861,12 +861,21 @@ fn post_delete_message(ctx: &UiCtx) -> UiResponse {
     UiResponse::flash_redirect(ok, &message, &location)
 }
 
+/// Deletes a chat session and the file grants its messages made.
+fn delete_session(state: &UiState, session_id: &str) -> bool {
+    let ok = store(state).delete_chat_session(session_id);
+    if ok {
+        loopx_core::file_grants::forget(&loopx_core::file_grants::dir(&state.home_dir), session_id);
+    }
+    ok
+}
+
 fn post_delete_session(ctx: &UiCtx) -> UiResponse {
     let session_id = ctx.param("id");
     let form = form_keep_blank(&ctx.req.body);
     let viewing = field(&form, "viewing").unwrap_or("");
     // parse_qs without keep_blank in Python: a blank `viewing` is "".
-    let ok = store(ctx.state).delete_chat_session(session_id);
+    let ok = delete_session(ctx.state, session_id);
     let message = if ok { ctx.t("Chat deleted") } else { ctx.t("Chat not found") };
     let location = if !viewing.is_empty() && viewing != session_id {
         format!("/?session={}&history=1", pyfmt::quote(viewing, ""))
@@ -1212,6 +1221,20 @@ mod tests {
         let grants = loopx_core::file_grants::dir(&state.home_dir);
         assert!(loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
         assert!(!loopx_core::file_grants::granted(&grants, "other", FILE_ID));
+    }
+
+    #[test]
+    fn deleting_a_chat_drops_its_file_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let url = format!("look at https://docs.google.com/document/d/{FILE_ID}/edit");
+        let sid = send_user_message(&state, &url, None).unwrap();
+        let grants = loopx_core::file_grants::dir(&state.home_dir);
+        assert!(grants.join(format!("{sid}.json")).exists());
+        assert!(delete_session(&state, &sid));
+        assert!(!grants.join(format!("{sid}.json")).exists());
+        assert!(!loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
+        assert!(!delete_session(&state, &sid));
     }
 
     #[test]

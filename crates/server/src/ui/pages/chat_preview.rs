@@ -30,12 +30,9 @@ struct Target {
     session: String,
 }
 
-/// `^[A-Za-z0-9_-]{1,64}$` or empty (a chat with no session yet).
+/// A grant-file-safe session name, or empty (a chat with no session yet).
 fn valid_session(s: &str) -> bool {
-    s.is_empty()
-        || (s.len() <= 64
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+    s.is_empty() || loopx_core::file_grants::valid_session(s)
 }
 
 fn parse(ctx: &UiCtx) -> Option<Target> {

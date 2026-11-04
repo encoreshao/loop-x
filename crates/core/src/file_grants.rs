@@ -65,7 +65,7 @@ pub fn dir(home: &Path) -> PathBuf {
 }
 
 /// `^[A-Za-z0-9_-]{1,64}$`: a session name that is safe as a file name.
-fn valid_session(session: &str) -> bool {
+pub fn valid_session(session: &str) -> bool {
     (1..=64).contains(&session.len())
         && session
             .bytes()
@@ -95,15 +95,30 @@ pub fn record(dir: &Path, session: &str, ids: &[String]) -> Result<(), String> {
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{session}.json"));
-    let mut all = read_ids(&path);
-    for id in ids {
-        all.retain(|x| x != id);
-        all.push(id.clone());
+    // Two messages posted at once must not drop each other's ids.
+    crate::file_lock::with_lock(&path, || {
+        let mut all = read_ids(&path);
+        for id in ids {
+            all.retain(|x| x != id);
+            all.push(id.clone());
+        }
+        if all.len() > MAX_IDS {
+            all.drain(..all.len() - MAX_IDS);
+        }
+        atomic_write_json(&json!({"ids": all}), &path).map_err(|e| e.to_string())
+    })
+    .map_err(|e| e.to_string())?
+}
+
+/// Drops every grant of `session` (when its chat is deleted). A no-op for an
+/// unknown or invalid session name.
+pub fn forget(dir: &Path, session: &str) {
+    if !valid_session(session) {
+        return;
     }
-    if all.len() > MAX_IDS {
-        all.drain(..all.len() - MAX_IDS);
-    }
-    atomic_write_json(&json!({"ids": all}), &path).map_err(|e| e.to_string())
+    let path = dir.join(format!("{session}.json"));
+    let _ = std::fs::remove_file(crate::file_lock::lock_path_for(&path));
+    let _ = std::fs::remove_file(path);
 }
 
 /// True only when `id` was recorded for exactly this session.
@@ -175,6 +190,51 @@ mod tests {
             assert!(!granted(d.path(), bad, ID));
         }
         assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn concurrent_records_keep_every_id() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().to_path_buf();
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for j in 0..5 {
+                        record(&dir, "s", &[format!("id-{i}-{j}")]).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        for i in 0..8 {
+            for j in 0..5 {
+                assert!(granted(&dir, "s", &format!("id-{i}-{j}")), "id-{i}-{j}");
+            }
+        }
+    }
+
+    #[test]
+    fn forget_removes_only_that_sessions_grants() {
+        let d = tempfile::tempdir().unwrap();
+        record(d.path(), "s1", &[ID.to_string()]).unwrap();
+        record(d.path(), "s2", &[ID.to_string()]).unwrap();
+        forget(d.path(), "s1");
+        assert!(!d.path().join("s1.json").exists());
+        assert!(!granted(d.path(), "s1", ID));
+        assert!(granted(d.path(), "s2", ID));
+        // Unknown and invalid sessions are a no-op.
+        forget(d.path(), "never");
+        forget(d.path(), "../s2");
+        assert!(granted(d.path(), "s2", ID));
+    }
+
+    #[test]
+    fn session_names_are_checked_by_one_public_rule() {
+        assert!(valid_session("a-B_9") && valid_session(&"s".repeat(64)));
+        assert!(!valid_session("") && !valid_session("a.b") && !valid_session(&"s".repeat(65)));
     }
 
     #[test]

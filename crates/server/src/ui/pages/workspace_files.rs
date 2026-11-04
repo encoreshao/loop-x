@@ -235,10 +235,10 @@ fn select(ctx: &UiCtx, kind: Kind) -> UiResponse {
 // ---- rendering -------------------------------------------------------------------------
 
 fn when(stamp: &str) -> String {
-    if stamp.len() >= 16 {
-        format!("{} UTC", stamp[..16].replace('T', " "))
-    } else {
-        stamp.to_string()
+    // `get` so a stamp with a multi-byte character near byte 16 is shown as is.
+    match stamp.get(..16) {
+        Some(head) => format!("{} UTC", head.replace('T', " ")),
+        None => stamp.to_string(),
     }
 }
 
@@ -390,6 +390,15 @@ mod tests {
     use axum::http::Method;
     use loopx_core::connectors::{ConnResult, ConnectorError, TypeInfo};
     use serde_json::json;
+
+    #[test]
+    fn when_never_slices_inside_a_character() {
+        assert_eq!(when("2026-11-04T09:30:00+00:00"), "2026-11-04 09:30 UTC");
+        // 15 ASCII bytes then a 2-byte character straddling byte 16.
+        let odd = "2026-11-04T09:3é0";
+        assert_eq!(when(odd), odd);
+        assert_eq!(when("short"), "short");
+    }
 
     const KINDS: [(Kind, &str, &str); 2] = [
         (Kind::Docs, "google_docs", "gdocs"),
