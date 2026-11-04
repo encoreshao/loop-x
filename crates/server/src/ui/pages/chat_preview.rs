@@ -533,6 +533,17 @@ mod tests {
     }
 
     #[test]
+    fn a_file_the_account_cannot_open_says_so_rather_than_reconnect() {
+        let fx = Fixture::new();
+        fx.created("gdocs", "gd", "doc1");
+        let message = loopx_core::connectors::google_auth::NO_FILE_ACCESS_MESSAGE;
+        let html = fx.render(DOC, Err(message.into()));
+        assert!(html.contains("file-preview-error"), "{html}");
+        assert!(html.contains(&h(message)), "{html}");
+        assert!(!html.contains("Reconnect"), "{html}");
+    }
+
+    #[test]
     fn a_pasted_doc_opens_in_its_own_session_only() {
         let fx = Fixture::new();
         loopx_core::file_grants::record(

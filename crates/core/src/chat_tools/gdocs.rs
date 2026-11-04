@@ -215,10 +215,11 @@ fn edit(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolRe
     let account = account_id(c);
     let (id, ops) = prepare_edit(e, &account, args)?;
     let r = conn(c.edit_doc(&id, &ops))?;
-    Ok(
-        json!({"applied": get(&r, "applied"), "web_link": google_docs::web_link(&id),
-              "file_ref": gfiles::file_ref(&DOCS, &account, &id)}),
-    )
+    Ok(gfiles::edit_result(
+        &r,
+        google_docs::web_link(&id),
+        gfiles::file_ref(&DOCS, &account, &id),
+    ))
 }
 
 static NO_ARGS: [Arg; 0] = [];
@@ -348,8 +349,22 @@ mod tests {
         }
         fn edit_doc(&self, doc_id: &str, ops: &[Value]) -> ConnResult<Value> {
             self.log.lock().unwrap().push(json!(["edit", doc_id, ops]));
-            Ok(json!({"applied": ops.len()}))
+            Ok(fake_edit_result(ops))
         }
+    }
+
+    /// What the connectors return for an edit: a replace of "nomatch" changes nothing.
+    fn fake_edit_result(ops: &[Value]) -> Value {
+        let counts: Vec<u64> = ops
+            .iter()
+            .map(|o| u64::from(o["find"] != "nomatch"))
+            .collect();
+        let unmatched: Vec<&Value> = ops
+            .iter()
+            .filter(|o| o["find"] == "nomatch")
+            .map(|o| &o["find"])
+            .collect();
+        json!({"applied": ops.len(), "occurrences_changed": counts, "unmatched": unmatched})
     }
 
     /// `{{name}}` occurrences, first-seen order, like the connector reports them.
@@ -637,6 +652,27 @@ mod tests {
         );
         assert_eq!(fx.calls()[1][0], "edit");
         assert_eq!(fx.calls()[1][2][1]["op"], "insert_after");
+    }
+
+    #[test]
+    fn an_edit_whose_find_matched_nothing_is_reported_not_counted_as_done() {
+        let fx = setup();
+        let ops = r#"[{"op": "replace", "find": "Hello", "with": "Hi"},
+                      {"op": "replace", "find": "nomatch", "with": "x"}]"#;
+        let out = fx.approve("gdocs.edit", json!({"file_id": "t1", "ops": ops}));
+        let r = &out["result"];
+        assert_eq!(r["unmatched"], json!(["nomatch"]), "{out}");
+        assert_eq!(r["occurrences_changed"], json!([1, 0]), "{out}");
+        assert!(
+            r["note"].as_str().unwrap().contains("matched nothing"),
+            "{out}"
+        );
+        let out = fx.approve(
+            "gdocs.edit",
+            json!({"file_id": "t1", "ops": r#"[{"op": "append", "text": "x"}]"#}),
+        );
+        assert_eq!(out["result"]["unmatched"], json!([]), "{out}");
+        assert!(out["result"].get("note").is_none(), "{out}");
     }
 
     #[test]

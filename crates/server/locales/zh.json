@@ -1454,5 +1454,7 @@
   "Loading…": "正在加载…",
   "Could not load the preview.": "无法加载预览。",
   "Spreadsheet": "电子表格",
-  "Presentation": "演示文稿"
+  "Presentation": "演示文稿",
+  "Nothing matched, so nothing changed for: {finds}": "没有找到匹配内容，因此以下各项未作更改：{finds}",
+  "Warning: {warning}": "警告：{warning}"
 }

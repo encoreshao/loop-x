@@ -1454,5 +1454,7 @@
   "Loading…": "Chargement…",
   "Could not load the preview.": "Impossible de charger l'aperçu.",
   "Spreadsheet": "Feuille de calcul",
-  "Presentation": "Présentation"
+  "Presentation": "Présentation",
+  "Nothing matched, so nothing changed for: {finds}": "Aucune correspondance, donc rien n’a été modifié pour : {finds}",
+  "Warning: {warning}": "Avertissement : {warning}"
 }

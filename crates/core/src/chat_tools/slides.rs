@@ -171,10 +171,11 @@ fn edit_deck(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> T
     let account = account_id(c);
     let (id, ops) = prepare_edit(e, &account, args)?;
     let r = conn(c.edit_deck(&id, &ops))?;
-    Ok(
-        json!({"applied": get(&r, "applied"), "web_link": google_slides::web_link(&id),
-              "file_ref": deck_ref(&account, &id)}),
-    )
+    Ok(gfiles::edit_result(
+        &r,
+        google_slides::web_link(&id),
+        deck_ref(&account, &id),
+    ))
 }
 
 static NO_ARGS: [Arg; 0] = [];
@@ -277,7 +278,7 @@ mod tests {
         }
         fn edit_deck(&self, deck_id: &str, ops: &[Value]) -> ConnResult<Value> {
             self.log.lock().unwrap().push(json!(["edit", deck_id, ops]));
-            Ok(json!({"applied": ops.len()}))
+            Ok(fake_edit_result(ops))
         }
         fn describe_deck(&self, deck_id: &str, thumbs: bool) -> ConnResult<Value> {
             self.log
@@ -290,6 +291,20 @@ mod tests {
                 "slides": [{"index": 1, "id": "p", "text": "Hi {{client}}", "thumbnail_url": ""}]}),
             )
         }
+    }
+
+    /// What the connectors return for an edit: a replace of "nomatch" changes nothing.
+    fn fake_edit_result(ops: &[Value]) -> Value {
+        let counts: Vec<u64> = ops
+            .iter()
+            .map(|o| u64::from(o["find"] != "nomatch"))
+            .collect();
+        let unmatched: Vec<&Value> = ops
+            .iter()
+            .filter(|o| o["find"] == "nomatch")
+            .map(|o| &o["find"])
+            .collect();
+        json!({"applied": ops.len(), "occurrences_changed": counts, "unmatched": unmatched})
     }
 
     fn setup(fail_fill: bool) -> (Env, tempfile::TempDir, Arc<Mutex<Vec<Value>>>) {
@@ -509,6 +524,25 @@ mod tests {
         let edit = log.iter().find(|c| c[0] == "edit").unwrap();
         assert_eq!(edit[1], "new1");
         assert_eq!(edit[2][1]["with"], "c");
+    }
+
+    #[test]
+    fn an_edit_deck_find_that_matched_nothing_is_reported() {
+        let (e, _d, _) = setup(false);
+        make_deck(&e);
+        let ops = r#"[{"op": "replace", "find": "nomatch", "with": "x"}]"#;
+        let out = execute_tool(
+            &e,
+            "slides.edit_deck",
+            &json!({"deck_id": "new1", "ops": ops}),
+        );
+        let r = &out["result"];
+        assert_eq!(r["unmatched"], json!(["nomatch"]), "{out}");
+        assert_eq!(r["occurrences_changed"], json!([0]), "{out}");
+        assert!(
+            r["note"].as_str().unwrap().contains("matched nothing"),
+            "{out}"
+        );
     }
 
     #[test]

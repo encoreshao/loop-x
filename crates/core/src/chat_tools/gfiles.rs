@@ -321,6 +321,22 @@ pub(crate) fn file_ref(kind: &Kind, account: &str, id: &str) -> Value {
     json!({"kind": kind.file_kind, "account": account, "file": id})
 }
 
+/// An edit's result: `applied`, each op's `occurrences_changed`, the
+/// `unmatched` find texts (replaces that changed nothing) and, when there are
+/// any, a `note` so the model never reports those ops as done.
+pub(crate) fn edit_result(r: &Value, web_link: String, file_ref: Value) -> Value {
+    let unmatched = get(r, "unmatched").as_array().cloned().unwrap_or_default();
+    let mut out = json!({"applied": get(r, "applied"),
+                         "occurrences_changed": get(r, "occurrences_changed"),
+                         "unmatched": unmatched, "web_link": web_link, "file_ref": file_ref});
+    if !unmatched.is_empty() {
+        out["note"] = json!(
+            "Some replace ops matched nothing, so they changed nothing (see unmatched). Tell the user which ones, and check the exact text (case matters) before trying again."
+        );
+    }
+    out
+}
+
 /// Remember a file chat created, so it can be read and edited later.
 pub(crate) fn record_created(
     e: &Env,

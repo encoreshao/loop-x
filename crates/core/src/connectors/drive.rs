@@ -106,6 +106,14 @@ pub fn copy_url(file_id: &str) -> String {
     )
 }
 
+/// `occurrencesChanged` of the first `replaceAllText` reply in a batchUpdate
+/// response; Google leaves it out when nothing matched, so absent is 0.
+pub fn occurrences_changed(done: &Value) -> u64 {
+    done.pointer("/replies/0/replaceAllText/occurrencesChanged")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

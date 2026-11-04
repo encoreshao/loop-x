@@ -36,6 +36,9 @@ pub const INFO: TypeInfo = TypeInfo {
     auth: Auth::OauthGoogle,
 };
 
+/// What a dead or under-scoped sign-in says.
+const RECONNECT: &str = "Reconnect Google Sheets to grant Sheets and Drive access";
+
 pub struct GoogleSheetsConnector {
     account: Account,
     http: Arc<dyn HttpClient>,
@@ -204,12 +207,7 @@ impl GoogleSheetsConnector {
     }
 
     fn fail(&self, e: HttpError, token: &str) -> ConnectorError {
-        match e.status {
-            Some(401) | Some(403) => {
-                ConnectorError::msg("Reconnect Google Sheets to grant Sheets and Drive access")
-            }
-            _ => ConnectorError::msg(self.auth.describe(&ConnectorError::Http(e), Some(token))),
-        }
+        ConnectorError::msg(self.auth.file_failure(e, token, RECONNECT))
     }
 
     fn call(
@@ -277,16 +275,7 @@ impl Connector for GoogleSheetsConnector {
                 true,
                 "Connected: Google Sheets and Drive are reachable".into(),
             ),
-            Err(e) => match e.status {
-                Some(401) | Some(403) => (
-                    false,
-                    "Reconnect Google Sheets to grant Sheets and Drive access".into(),
-                ),
-                _ => (
-                    false,
-                    self.auth.describe(&ConnectorError::Http(e), Some(&token)),
-                ),
-            },
+            Err(e) => (false, self.auth.probe_failure(e, &token, RECONNECT)),
         }
     }
 
@@ -532,13 +521,16 @@ mod tests {
     }
 
     #[test]
-    fn permission_errors_ask_to_reconnect_and_never_leak_tokens() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
-        let (ok, msg) = conn(http, Some("RT")).test();
-        assert!(
-            !ok && msg.contains("Reconnect") && !msg.contains("AT-SECRET"),
-            "{msg}"
+    fn failures_say_reconnect_only_for_sign_in_problems() {
+        super::super::testutil::assert_google_failures(
+            |http| {
+                conn(http, Some("RT"))
+                    .describe_sheet("s")
+                    .unwrap_err()
+                    .to_string()
+            },
+            |http| conn(http, Some("RT")).test(),
+            "Reconnect Google Sheets to grant Sheets and Drive access",
         );
     }
 
@@ -948,17 +940,24 @@ mod tests {
     }
 
     #[test]
-    fn permission_errors_on_operations_ask_to_reconnect() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
-        let e = conn(http, Some("RT"))
-            .describe_sheet("s")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            e.contains("Reconnect Google Sheets to grant Sheets and Drive access")
-                && !e.contains("AT-SECRET"),
-            "{e}"
-        );
+    fn a_file_shared_with_someone_else_says_so_on_every_operation() {
+        let http = FakeHttp::new(|req| {
+            Err(HttpError::new(
+                Some(403),
+                super::super::testutil::FILE_403,
+                &req.url,
+            ))
+        });
+        let c = conn(http, Some("RT"));
+        let op = json!({"op": "set", "range": "A!A1", "values": [["x"]]});
+        for e in [
+            c.copy_sheet("t", "n").unwrap_err().to_string(),
+            c.edit_sheet("s", &[op]).unwrap_err().to_string(),
+        ] {
+            assert!(
+                e.contains("can't open that file") && !e.contains("AT-SECRET"),
+                "{e}"
+            );
+        }
     }
 }

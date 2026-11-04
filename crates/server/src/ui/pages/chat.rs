@@ -911,6 +911,32 @@ fn approval_tools(tool: &str, summary: &str, result: &Value) -> Option<Value> {
     Some(json!([{"name": tool, "summary": summary, "ok": true, "file_ref": file_ref}]))
 }
 
+/// The chat message stored after an approved write ran: the failure, or
+/// "Approved and done" plus any replace ops that matched nothing and any
+/// warning (a copy whose fill failed), so a no-op never reads as success.
+fn approval_text(lang: Lang, tool: &str, summary: &str, result: &Value) -> String {
+    if let Some(error) = result.get("error") {
+        return i18n::t(lang, "{tool} failed: {error}", &[("tool", tool), ("error", &pydumps::py_str(error))]);
+    }
+    let mut text = i18n::t(lang, "Approved and done: {tool} {summary}", &[("tool", tool), ("summary", summary)]);
+    let finds: Vec<String> = result
+        .pointer("/result/unmatched")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|f| format!("\"{}\"", pydumps::py_str(f)))
+        .collect();
+    if !finds.is_empty() {
+        text.push(' ');
+        text.push_str(&i18n::t(lang, "Nothing matched, so nothing changed for: {finds}", &[("finds", &finds.join(", "))]));
+    }
+    if let Some(warning) = result.pointer("/result/warning").and_then(Value::as_str) {
+        text.push(' ');
+        text.push_str(&i18n::t(lang, "Warning: {warning}", &[("warning", warning)]));
+    }
+    text
+}
+
 /// `_chat_approve`.
 pub fn chat_approve(state: &UiState, lang: Lang, pending_id: &str, session: &str) -> Value {
     let env = tools_env(state).with_session(session);
@@ -924,19 +950,7 @@ pub fn chat_approve(state: &UiState, lang: Lang, pending_id: &str, session: &str
     }
     let result = chat_tools::execute_tool(&env, &record.tool, &record.args);
     let failed = result.get("error").is_some();
-    let text = if failed {
-        i18n::t(
-            lang,
-            "{tool} failed: {error}",
-            &[("tool", &record.tool), ("error", &pydumps::py_str(&result["error"]))],
-        )
-    } else {
-        i18n::t(
-            lang,
-            "Approved and done: {tool} {summary}",
-            &[("tool", &record.tool), ("summary", &record.summary)],
-        )
-    };
+    let text = approval_text(lang, &record.tool, &record.summary, &result);
     let body = if failed {
         format!("error: {}", pydumps::py_str(&result["error"]))
     } else {
@@ -1200,6 +1214,29 @@ mod tests {
         let plain = json!({"tool": "mail.send", "result": {"file_ref": {"kind": "doc", "account": "gd", "file": "d1"}}});
         assert_eq!(approval_tools("mail.send", "", &plain), None);
         assert_eq!(approval_tools("gdocs.create", "", &json!({"error": "x"})), None);
+    }
+
+    #[test]
+    fn the_approval_message_names_finds_that_matched_nothing_and_warnings() {
+        let done = json!({"tool": "gdocs.edit", "result": {"applied": 2,
+            "occurrences_changed": [1, 0], "unmatched": ["Q3 total"]}});
+        let text = approval_text(Lang::En, "gdocs.edit", "d1", &done);
+        assert!(text.starts_with("Approved and done: gdocs.edit d1"), "{text}");
+        assert!(text.contains("Nothing matched, so nothing changed for: \"Q3 total\""), "{text}");
+        let ja = approval_text(Lang::Ja, "gdocs.edit", "d1", &done);
+        assert!(!ja.contains("Nothing matched") && ja.contains("Q3 total"), "{ja}");
+
+        let warned = json!({"tool": "gdocs.create_from_template", "result": {"file_id": "n",
+            "warning": "The document was created but its text could not be filled: boom"}});
+        let text = approval_text(Lang::En, "gdocs.create_from_template", "Acme", &warned);
+        assert!(text.contains("Warning: The document was created but its text could not be filled: boom"), "{text}");
+        let fr = approval_text(Lang::Fr, "gdocs.create_from_template", "Acme", &warned);
+        assert!(!fr.contains("Warning:") && fr.contains("boom"), "{fr}");
+
+        let clean = json!({"tool": "gdocs.edit", "result": {"applied": 1, "unmatched": []}});
+        assert_eq!(approval_text(Lang::En, "gdocs.edit", "d1", &clean), "Approved and done: gdocs.edit d1");
+        let failed = json!({"error": "nope"});
+        assert_eq!(approval_text(Lang::En, "gdocs.edit", "d1", &failed), "gdocs.edit failed: nope");
     }
 
     #[test]

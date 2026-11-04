@@ -32,6 +32,9 @@ pub const INFO: TypeInfo = TypeInfo {
     auth: Auth::OauthGoogle,
 };
 
+/// What a dead or under-scoped sign-in says.
+const RECONNECT: &str = "Reconnect Google Slides to grant Slides and Drive access";
+
 pub struct GoogleSlidesConnector {
     account: Account,
     http: Arc<dyn HttpClient>,
@@ -103,12 +106,7 @@ impl GoogleSlidesConnector {
     }
 
     fn fail(&self, e: HttpError, token: &str) -> ConnectorError {
-        match e.status {
-            Some(401) | Some(403) => {
-                ConnectorError::msg("Reconnect Google Slides to grant Slides and Drive access")
-            }
-            _ => ConnectorError::msg(self.auth.describe(&ConnectorError::Http(e), Some(token))),
-        }
+        ConnectorError::msg(self.auth.file_failure(e, token, RECONNECT))
     }
 
     fn call(
@@ -154,10 +152,7 @@ impl Connector for GoogleSlidesConnector {
                 true,
                 "Connected: Google Slides and Drive are reachable".into(),
             ),
-            Err(e) => (
-                false,
-                self.auth.describe(&ConnectorError::Http(e), Some(&token)),
-            ),
+            Err(e) => (false, self.auth.probe_failure(e, &token, RECONNECT)),
         }
     }
 
@@ -206,7 +201,9 @@ impl Connector for GoogleSlidesConnector {
         Ok(json!({"replaced": replaced}))
     }
 
-    /// Ops run in order, one `replaceAllText` request each (matching case). Every
+    /// Ops run in order, one `replaceAllText` request each (matching case); the
+    /// result has each op's `occurrences_changed` and the `unmatched` find
+    /// texts that changed nothing. Every
     /// op is checked before the first request; a later failure says how many ops
     /// were applied.
     fn edit_deck(&self, deck_id: &str, ops: &[Value]) -> ConnResult<Value> {
@@ -216,27 +213,35 @@ impl Connector for GoogleSlidesConnector {
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
         let url = format!("{SLIDES_URL}/{}:batchUpdate", quote(deck_id));
         let mut applied = 0u64;
+        let mut counts: Vec<u64> = Vec::new();
+        let mut unmatched: Vec<String> = Vec::new();
         for op in ops {
             let find = op.get("find").and_then(Value::as_str).unwrap_or_default();
             let with = op.get("with").and_then(Value::as_str).unwrap_or_default();
             let request = json!({"replaceAllText": {
                 "containsText": {"text": find, "matchCase": true}, "replaceText": with}});
-            self.call(
-                "POST",
-                &url,
-                &token,
-                Some(json!({"requests": [request]})),
-                1,
-            )
-            .map_err(|e| {
-                ConnectorError::msg(format!(
-                    "{e} ({applied} earlier edit{} applied)",
-                    if applied == 1 { "" } else { "s" }
-                ))
-            })?;
+            let done = self
+                .call(
+                    "POST",
+                    &url,
+                    &token,
+                    Some(json!({"requests": [request]})),
+                    1,
+                )
+                .map_err(|e| {
+                    ConnectorError::msg(format!(
+                        "{e} ({applied} earlier edit{} applied)",
+                        if applied == 1 { "" } else { "s" }
+                    ))
+                })?;
             applied += 1;
+            let changed = drive::occurrences_changed(&done);
+            if changed == 0 {
+                unmatched.push(find.to_string());
+            }
+            counts.push(changed);
         }
-        Ok(json!({"applied": applied}))
+        Ok(json!({"applied": applied, "occurrences_changed": counts, "unmatched": unmatched}))
     }
 
     fn describe_deck(&self, deck_id: &str, thumbnails: bool) -> ConnResult<Value> {
@@ -423,20 +428,17 @@ mod tests {
     }
 
     #[test]
-    fn permission_errors_ask_to_reconnect_and_never_leak_tokens() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
-        let c =
-            GoogleSlidesConnector::new(Account::new("s", "google_slides"), Some("RT".into()), http)
-                .with_client_fn(Arc::new(|| json!({"client_id": "c", "client_secret": "s"})))
-                .with_refresh_fn(Arc::new(|_, _| Ok("AT-SECRET".to_string())));
-        let msg = c.list_templates("", 10).unwrap_err().to_string();
-        assert!(
-            msg.contains("Reconnect") && !msg.contains("AT-SECRET"),
-            "{msg}"
+    fn failures_say_reconnect_only_for_sign_in_problems() {
+        super::super::testutil::assert_google_failures(
+            |http| {
+                slides(http, Some("RT"))
+                    .describe_deck("d", false)
+                    .unwrap_err()
+                    .to_string()
+            },
+            |http| slides(http, Some("RT")).test(),
+            "Reconnect Google Slides to grant Slides and Drive access",
         );
-        let (ok, msg) = c.test();
-        assert!(!ok && !msg.contains("AT-SECRET"), "{msg}");
     }
 
     #[test]
@@ -472,6 +474,32 @@ mod tests {
             "A"
         );
         assert_eq!(b1["requests"][0]["replaceAllText"]["replaceText"], "");
+    }
+
+    #[test]
+    fn edit_deck_reports_each_ops_count_and_the_finds_that_matched_nothing() {
+        let http = FakeHttp::new(|req| {
+            let body = req.json_body.clone().unwrap_or_default();
+            let find = body["requests"][0]["replaceAllText"]["containsText"]["text"].clone();
+            // Google omits occurrencesChanged when nothing matched.
+            Ok(if find == "Old" {
+                json!({"replies": [{"replaceAllText": {"occurrencesChanged": 2}}]})
+            } else {
+                json!({"replies": [{"replaceAllText": {}}]})
+            })
+        });
+        let out = slides(http, Some("RT"))
+            .edit_deck(
+                "d",
+                &[
+                    json!({"op": "replace", "find": "Old", "with": "New"}),
+                    json!({"op": "replace", "find": "Missing", "with": "X"}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(out["applied"], 2);
+        assert_eq!(out["occurrences_changed"], json!([2, 0]));
+        assert_eq!(out["unmatched"], json!(["Missing"]));
     }
 
     #[test]
@@ -538,15 +566,23 @@ mod tests {
     }
 
     #[test]
-    fn edit_deck_permission_error_asks_to_reconnect_without_the_token() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
+    fn edit_deck_on_a_file_shared_with_someone_else_says_so_without_the_token() {
+        let http = FakeHttp::new(|req| {
+            Err(HttpError::new(
+                Some(403),
+                super::super::testutil::FILE_403,
+                &req.url,
+            ))
+        });
         let c = slides(http, Some("RT"));
         let e = c
             .edit_deck("d", &[json!({"op": "replace", "find": "a", "with": "b"})])
             .unwrap_err()
             .to_string();
-        assert!(e.contains("Reconnect") && !e.contains("AT-SECRET"), "{e}");
+        assert!(
+            e.contains("can't open that file") && !e.contains("AT-SECRET"),
+            "{e}"
+        );
     }
 
     #[test]

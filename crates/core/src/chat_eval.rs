@@ -441,7 +441,10 @@ impl crate::connectors::Connector for StubConnector {
     }
     fn edit_doc(&self, _: &str, ops: &[Value]) -> crate::connectors::ConnResult<Value> {
         self.effect("gdocs.edit");
-        Ok(json!({"applied": ops.len()}))
+        Ok(
+            json!({"applied": ops.len(), "occurrences_changed": vec![1; ops.len()],
+                   "unmatched": []}),
+        )
     }
     fn describe_sheet(&self, id: &str) -> crate::connectors::ConnResult<Value> {
         let f = self.file("sheets", id)?;
@@ -488,7 +491,10 @@ impl crate::connectors::Connector for StubConnector {
     }
     fn edit_deck(&self, _: &str, ops: &[Value]) -> crate::connectors::ConnResult<Value> {
         self.effect("slides.edit");
-        Ok(json!({"applied": ops.len()}))
+        Ok(
+            json!({"applied": ops.len(), "occurrences_changed": vec![1; ops.len()],
+                   "unmatched": []}),
+        )
     }
 }
 

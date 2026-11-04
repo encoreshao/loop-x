@@ -31,6 +31,9 @@ pub const INFO: TypeInfo = TypeInfo {
     auth: Auth::OauthGoogle,
 };
 
+/// What a dead or under-scoped sign-in says.
+const RECONNECT: &str = "Reconnect Google Docs to grant Docs and Drive access";
+
 pub struct GoogleDocsConnector {
     account: Account,
     http: Arc<dyn HttpClient>,
@@ -129,12 +132,7 @@ impl GoogleDocsConnector {
     }
 
     fn fail(&self, e: HttpError, token: &str) -> ConnectorError {
-        match e.status {
-            Some(401) | Some(403) => {
-                ConnectorError::msg("Reconnect Google Docs to grant Docs and Drive access")
-            }
-            _ => ConnectorError::msg(self.auth.describe(&ConnectorError::Http(e), Some(token))),
-        }
+        ConnectorError::msg(self.auth.file_failure(e, token, RECONNECT))
     }
 
     fn call(
@@ -194,16 +192,7 @@ impl Connector for GoogleDocsConnector {
                 true,
                 "Connected: Google Docs and Drive are reachable".into(),
             ),
-            Err(e) => match e.status {
-                Some(401) | Some(403) => (
-                    false,
-                    "Reconnect Google Docs to grant Docs and Drive access".into(),
-                ),
-                _ => (
-                    false,
-                    self.auth.describe(&ConnectorError::Http(e), Some(&token)),
-                ),
-            },
+            Err(e) => (false, self.auth.probe_failure(e, &token, RECONNECT)),
         }
     }
 
@@ -294,7 +283,9 @@ impl Connector for GoogleDocsConnector {
         }))
     }
 
-    /// Ops run in order, one request each. `append` and `insert_after` both add a
+    /// Ops run in order, one request each; the result has each op's
+    /// `occurrences_changed` and the `unmatched` find texts of replaces that
+    /// changed nothing. `append` and `insert_after` both add a
     /// new paragraph (a leading newline at the paragraph's last insertable index,
     /// so the neighbour's style, tables and lists are never disturbed). An error
     /// says how many ops were already applied.
@@ -304,10 +295,13 @@ impl Connector for GoogleDocsConnector {
         }
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
         let mut applied = 0u64;
+        let mut counts: Vec<u64> = Vec::new();
+        let mut unmatched: Vec<String> = Vec::new();
         let partial = |e: ConnectorError, applied: u64| {
             ConnectorError::msg(format!("{e} ({applied} earlier edits applied)"))
         };
         for op in ops {
+            let is_replace = str_field(op, "op") == "replace";
             let request = match str_field(op, "op") {
                 "replace" => replace_request(str_field(op, "find"), str_field(op, "with")),
                 kind => {
@@ -342,11 +336,22 @@ impl Connector for GoogleDocsConnector {
                     }
                 }
             };
-            self.batch_update(doc_id, &token, vec![request])
+            let done = self
+                .batch_update(doc_id, &token, vec![request])
                 .map_err(|e| partial(e, applied))?;
             applied += 1;
+            // An insert always adds its one paragraph; a replace may match nothing.
+            let changed = if is_replace {
+                drive::occurrences_changed(&done)
+            } else {
+                1
+            };
+            if changed == 0 {
+                unmatched.push(str_field(op, "find").to_string());
+            }
+            counts.push(changed);
         }
-        Ok(json!({"applied": applied}))
+        Ok(json!({"applied": applied, "occurrences_changed": counts, "unmatched": unmatched}))
     }
 }
 
@@ -406,13 +411,16 @@ mod tests {
     }
 
     #[test]
-    fn permission_errors_ask_to_reconnect_and_never_leak_tokens() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
-        let (ok, msg) = conn(http, Some("RT")).test();
-        assert!(
-            !ok && msg.contains("Reconnect") && !msg.contains("AT-SECRET"),
-            "{msg}"
+    fn failures_say_reconnect_only_for_sign_in_problems() {
+        super::super::testutil::assert_google_failures(
+            |http| {
+                conn(http, Some("RT"))
+                    .describe_doc("d")
+                    .unwrap_err()
+                    .to_string()
+            },
+            |http| conn(http, Some("RT")).test(),
+            "Reconnect Google Docs to grant Docs and Drive access",
         );
     }
 
@@ -582,6 +590,36 @@ mod tests {
         let ins = &b[1]["requests"][0]["insertText"];
         assert_eq!(ins["text"], "\nPS", "a new paragraph, not a continuation");
         assert_eq!(ins["location"]["index"], 37, "one before the final newline");
+    }
+
+    #[test]
+    fn edit_doc_reports_each_ops_count_and_the_finds_that_matched_nothing() {
+        let http = FakeHttp::new(|req| {
+            if req.method == "GET" {
+                return Ok(doc_body());
+            }
+            let body = req.json_body.clone().unwrap_or_default();
+            let find = body["requests"][0]["replaceAllText"]["containsText"]["text"].clone();
+            Ok(if find == "Closing" {
+                json!({"replies": [{"replaceAllText": {"occurrencesChanged": 1}}]})
+            } else {
+                // Google omits occurrencesChanged when nothing matched.
+                json!({"replies": [{"replaceAllText": {}}]})
+            })
+        });
+        let out = conn(http, Some("RT"))
+            .edit_doc(
+                "d1",
+                &[
+                    json!({"op": "replace", "find": "Closing", "with": "Bye"}),
+                    json!({"op": "replace", "find": "Nowhere", "with": "X"}),
+                    json!({"op": "append", "text": "PS"}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(out["applied"], 3);
+        assert_eq!(out["occurrences_changed"], json!([1, 0, 1]));
+        assert_eq!(out["unmatched"], json!(["Nowhere"]));
     }
 
     #[test]
@@ -783,18 +821,26 @@ mod tests {
     }
 
     #[test]
-    fn permission_errors_on_operations_ask_to_reconnect() {
-        let http =
-            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
-        let e = conn(http, Some("RT"))
-            .describe_doc("d")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            e.contains("Reconnect Google Docs to grant Docs and Drive access")
-                && !e.contains("AT-SECRET"),
-            "{e}"
-        );
+    fn a_file_shared_with_someone_else_says_so_on_every_operation() {
+        let http = FakeHttp::new(|req| {
+            Err(HttpError::new(
+                Some(403),
+                super::super::testutil::FILE_403,
+                &req.url,
+            ))
+        });
+        let c = conn(http, Some("RT"));
+        for e in [
+            c.copy_doc("t", "n").unwrap_err().to_string(),
+            c.edit_doc("d", &[json!({"op": "replace", "find": "a", "with": "b"})])
+                .unwrap_err()
+                .to_string(),
+        ] {
+            assert!(
+                e.contains("can't open that file") && !e.contains("AT-SECRET"),
+                "{e}"
+            );
+        }
     }
 
     #[test]

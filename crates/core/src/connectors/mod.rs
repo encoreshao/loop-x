@@ -776,6 +776,65 @@ pub(crate) mod testutil {
     /// Serialises tests that set process-wide environment variables.
     pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// A Google 403 for a token without the needed scope (real body shape,
+    /// with an access token in it that must never be shown).
+    pub const SCOPE_403: &str = r#"{"error": {"code": 403, "message": "Request had insufficient authentication scopes. AT-SECRET", "errors": [{"reason": "insufficientPermissions"}], "status": "PERMISSION_DENIED", "details": [{"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
+    /// A Google 403 for a file this account was never given access to.
+    pub const FILE_403: &str = r#"{"error": {"code": 403, "message": "The caller does not have permission AT-SECRET", "status": "PERMISSION_DENIED"}}"#;
+    pub const NOT_FOUND_404: &str = r#"{"error": {"code": 404, "message": "Requested entity was not found. AT-SECRET", "status": "NOT_FOUND"}}"#;
+
+    /// Checks how a Google connector words a failed call on one file (`op`)
+    /// and its Test (`test`) for each status and body shape; `reconnect` is the
+    /// connector's own "Reconnect ..." message.
+    pub fn assert_google_failures(
+        op: impl Fn(Arc<FakeHttp>) -> String,
+        test: impl Fn(Arc<FakeHttp>) -> (bool, String),
+        reconnect: &str,
+    ) {
+        let fail = |status: u16, body: &'static str| {
+            FakeHttp::new(move |req| Err(HttpError::new(Some(status), body, &req.url)))
+        };
+        let scrubbed = |m: &str| !m.contains("AT-SECRET") && !m.contains("RT-SECRET");
+        for (status, body) in [
+            (401, "expired AT-SECRET"),
+            (403, SCOPE_403),
+            (
+                403,
+                "Insufficient Permission: Request had insufficient authentication scopes.",
+            ),
+        ] {
+            let m = op(fail(status, body));
+            assert_eq!(m, reconnect, "{status} {body}");
+            let (ok, m) = test(fail(status, body));
+            assert!(!ok && m == reconnect, "test() {status} {body}: {m}");
+        }
+        let m = op(fail(403, FILE_403));
+        assert!(
+            m.contains("This Google account can't open that file")
+                && m.contains("share it")
+                && !m.contains("Reconnect")
+                && scrubbed(&m),
+            "{m}"
+        );
+        // A Test lists files, so "that file" would be wrong: the scrubbed reason.
+        let (ok, m) = test(fail(403, FILE_403));
+        assert!(
+            !ok && m.contains("403") && !m.contains("Reconnect") && scrubbed(&m),
+            "{m}"
+        );
+        let m = op(fail(404, NOT_FOUND_404));
+        assert!(
+            m.contains("could not find that file") && !m.contains("Reconnect") && scrubbed(&m),
+            "{m}"
+        );
+        // Rate limits and a disabled API are not about one file's sharing.
+        let m = op(fail(
+            403,
+            r#"{"error": {"errors": [{"reason": "userRateLimitExceeded"}]}}"#,
+        ));
+        assert!(m.contains("403") && !m.contains("can't open"), "{m}");
+    }
+
     pub struct Served {
         pub url: String,
         pub requests: Arc<Mutex<Vec<String>>>,

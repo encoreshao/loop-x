@@ -1454,5 +1454,7 @@
   "Loading…": "読み込み中…",
   "Could not load the preview.": "プレビューを読み込めませんでした。",
   "Spreadsheet": "スプレッドシート",
-  "Presentation": "プレゼンテーション"
+  "Presentation": "プレゼンテーション",
+  "Nothing matched, so nothing changed for: {finds}": "一致する箇所がなかったため、次は変更されていません: {finds}",
+  "Warning: {warning}": "警告: {warning}"
 }
