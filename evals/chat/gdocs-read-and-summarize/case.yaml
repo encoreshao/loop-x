@@ -1,0 +1,17 @@
+# Synthetic fixture. A pasted link is readable: the assistant reads the doc and
+# summarizes it, and touches no write tool.
+name: gdocs-read-and-summarize
+prompt: "Summarize this document for me: https://docs.google.com/document/d/evalDocReadable0001/edit"
+fixture:
+  issue: {iid: 1, title: "Unused", web_url: "https://gitlab.example.com/acme/shop/-/issues/1", description: "Not used by this case."}
+  google:
+    docs:
+      files:
+        evalDocReadable0001:
+          title: "Orion launch notes"
+          text: "Orion launch notes. The beta opens on 3 March for 50 invited teams. Support rota starts 1 March. Open risk: the import tool is slow on files over 10 MB."
+expect:
+  calls_required: [gdocs.read]
+  calls_forbidden: [gdocs.create, gdocs.create_from_template, gdocs.edit, gsheets.create, gsheets.create_from_template, gsheets.edit, slides.edit_deck, mail.send, gitlab.comment, github.comment, calendar.create_event]
+  effects: []
+  reply_matches: ["beta"]
