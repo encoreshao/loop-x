@@ -1419,5 +1419,22 @@
   "No {provider} account yet.": "还没有 {provider} 账户。",
   "GitLab config file": "GitLab 配置文件",
   "URL": "URL",
-  "Advanced: instances, default instance and access bundles": "高级:实例、默认实例和访问包"
+  "Advanced: instances, default instance and access bundles": "高级:实例、默认实例和访问包",
+  "Templates and documents": "模板和文档",
+  "Templates and spreadsheets": "模板和电子表格",
+  "Google Docs": "Google 文档",
+  "Google Sheets": "Google 表格",
+  "No Google Docs connector with id {id}": "没有 ID 为 {id} 的 Google 文档连接器",
+  "No Google Sheets connector with id {id}": "没有 ID 为 {id} 的 Google 表格连接器",
+  "Could not open the Google Docs connector": "无法打开 Google 文档连接器",
+  "Could not open the Google Sheets connector": "无法打开 Google 表格连接器",
+  "Open in Google Docs": "在 Google 文档中打开",
+  "Open in Google Sheets": "在 Google 表格中打开",
+  "No templates yet. Refresh to list the documents you own or that were shared with you.": "还没有模板。刷新以列出您拥有或与您共享的文档。",
+  "No templates yet. Refresh to list the spreadsheets you own or that were shared with you.": "还没有模板。刷新以列出您拥有或与您共享的电子表格。",
+  "Tick the documents the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "勾选聊天可以复制的文档。在模板文本中放入 {{placeholders}},聊天会自动填写。",
+  "Tick the spreadsheets the chat may copy. Put {{placeholders}} in a template's cells and the chat fills them in.": "勾选聊天可以复制的电子表格。在模板单元格中放入 {{placeholders}},聊天会自动填写。",
+  "Spreadsheets": "电子表格",
+  "No documents yet. Ask in Chat to create one from an enabled template.": "还没有文档。请在聊天中让它基于已启用的模板创建一个。",
+  "No spreadsheets yet. Ask in Chat to create one from an enabled template.": "还没有电子表格。请在聊天中让它基于已启用的模板创建一个。"
 }

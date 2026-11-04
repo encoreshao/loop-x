@@ -24,7 +24,7 @@ pub const INFO: TypeInfo = TypeInfo {
     secret_label: None,
     external: false,
     brand: "googledocs",
-    description: "Pick shared document templates, create a new document from one with your approval in chat, and review it here.",
+    description: "Tick the documents the chat may copy as templates, then create and edit documents in chat with your approval, read and summarize them, and preview them beside the chat.",
     docs_url: "https://support.google.com/docs/answer/6000292",
     category: "google",
     presets: &[],

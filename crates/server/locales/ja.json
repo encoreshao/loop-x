@@ -1419,5 +1419,22 @@
   "No {provider} account yet.": "{provider} アカウントはまだありません。",
   "GitLab config file": "GitLab 設定ファイル",
   "URL": "URL",
-  "Advanced: instances, default instance and access bundles": "詳細設定: インスタンス、既定のインスタンス、アクセスバンドル"
+  "Advanced: instances, default instance and access bundles": "詳細設定: インスタンス、既定のインスタンス、アクセスバンドル",
+  "Templates and documents": "テンプレートとドキュメント",
+  "Templates and spreadsheets": "テンプレートとスプレッドシート",
+  "Google Docs": "Google ドキュメント",
+  "Google Sheets": "Google スプレッドシート",
+  "No Google Docs connector with id {id}": "ID {id} の Google ドキュメントコネクタはありません",
+  "No Google Sheets connector with id {id}": "ID {id} の Google スプレッドシートコネクタはありません",
+  "Could not open the Google Docs connector": "Google ドキュメントコネクタを開けませんでした",
+  "Could not open the Google Sheets connector": "Google スプレッドシートコネクタを開けませんでした",
+  "Open in Google Docs": "Google ドキュメントで開く",
+  "Open in Google Sheets": "Google スプレッドシートで開く",
+  "No templates yet. Refresh to list the documents you own or that were shared with you.": "テンプレートはまだありません。更新すると、所有している、または共有されているドキュメントが一覧表示されます。",
+  "No templates yet. Refresh to list the spreadsheets you own or that were shared with you.": "テンプレートはまだありません。更新すると、所有している、または共有されているスプレッドシートが一覧表示されます。",
+  "Tick the documents the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "チャットがコピーしてよいドキュメントにチェックを入れてください。テンプレートの本文に {{placeholders}} を入れると、チャットが埋めます。",
+  "Tick the spreadsheets the chat may copy. Put {{placeholders}} in a template's cells and the chat fills them in.": "チャットがコピーしてよいスプレッドシートにチェックを入れてください。テンプレートのセルに {{placeholders}} を入れると、チャットが埋めます。",
+  "Spreadsheets": "スプレッドシート",
+  "No documents yet. Ask in Chat to create one from an enabled template.": "ドキュメントはまだありません。チャットで、有効なテンプレートから作成するよう依頼してください。",
+  "No spreadsheets yet. Ask in Chat to create one from an enabled template.": "スプレッドシートはまだありません。チャットで、有効なテンプレートから作成するよう依頼してください。"
 }

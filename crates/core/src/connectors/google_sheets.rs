@@ -29,7 +29,7 @@ pub const INFO: TypeInfo = TypeInfo {
     secret_label: None,
     external: false,
     brand: "googlesheets",
-    description: "Pick shared spreadsheet templates, create a new sheet from one with your approval in chat, and review it here.",
+    description: "Tick the spreadsheets the chat may copy as templates, then create and edit spreadsheets in chat with your approval, read and summarize them, and preview them beside the chat.",
     docs_url: "https://support.google.com/docs/answer/6000292",
     category: "google",
     presets: &[],

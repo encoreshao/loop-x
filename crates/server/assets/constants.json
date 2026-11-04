@@ -814,12 +814,16 @@
    "microsoftteams": "teams",
    "googlechat": "google chat",
    "googleslides": "google slides presentation deck powerpoint",
+   "googledocs": "google docs document word",
+   "googlesheets": "google sheets spreadsheet excel",
    "telegram": "tg"
   },
   "_GOOGLE_TILE_ORDER": [
    "gmail",
    "googlecalendar",
    "googleslides",
+   "googledocs",
+   "googlesheets",
    "googlechat"
   ],
   "_MAILBOX_TILES": [

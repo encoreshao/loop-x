@@ -1419,5 +1419,22 @@
   "No {provider} account yet.": "Aucun compte {provider} pour l'instant.",
   "GitLab config file": "Fichier de configuration GitLab",
   "URL": "URL",
-  "Advanced: instances, default instance and access bundles": "Avancé : instances, instance par défaut et lots d'accès"
+  "Advanced: instances, default instance and access bundles": "Avancé : instances, instance par défaut et lots d'accès",
+  "Templates and documents": "Modèles et documents",
+  "Templates and spreadsheets": "Modèles et feuilles de calcul",
+  "Google Docs": "Google Docs",
+  "Google Sheets": "Google Sheets",
+  "No Google Docs connector with id {id}": "Aucun connecteur Google Docs avec l'identifiant {id}",
+  "No Google Sheets connector with id {id}": "Aucun connecteur Google Sheets avec l'identifiant {id}",
+  "Could not open the Google Docs connector": "Impossible d'ouvrir le connecteur Google Docs",
+  "Could not open the Google Sheets connector": "Impossible d'ouvrir le connecteur Google Sheets",
+  "Open in Google Docs": "Ouvrir dans Google Docs",
+  "Open in Google Sheets": "Ouvrir dans Google Sheets",
+  "No templates yet. Refresh to list the documents you own or that were shared with you.": "Aucun modèle pour le moment. Actualisez pour lister les documents que vous possédez ou qui ont été partagés avec vous.",
+  "No templates yet. Refresh to list the spreadsheets you own or that were shared with you.": "Aucun modèle pour le moment. Actualisez pour lister les feuilles de calcul que vous possédez ou qui ont été partagées avec vous.",
+  "Tick the documents the chat may copy. Put {{placeholders}} in a template's text and the chat fills them in.": "Cochez les documents que le chat peut copier. Placez des {{placeholders}} dans le texte d'un modèle et le chat les remplit.",
+  "Tick the spreadsheets the chat may copy. Put {{placeholders}} in a template's cells and the chat fills them in.": "Cochez les feuilles de calcul que le chat peut copier. Placez des {{placeholders}} dans les cellules d'un modèle et le chat les remplit.",
+  "Spreadsheets": "Feuilles de calcul",
+  "No documents yet. Ask in Chat to create one from an enabled template.": "Aucun document pour le moment. Demandez dans le Chat d'en créer un à partir d'un modèle activé.",
+  "No spreadsheets yet. Ask in Chat to create one from an enabled template.": "Aucune feuille de calcul pour le moment. Demandez dans le Chat d'en créer une à partir d'un modèle activé."
 }
