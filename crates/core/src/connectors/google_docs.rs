@@ -261,7 +261,12 @@ impl Connector for GoogleDocsConnector {
         }
         if !text.is_empty() {
             let insert = json!({"insertText": {"location": {"index": 1}, "text": text}});
-            self.batch_update(&id, &token, vec![insert])?;
+            self.batch_update(&id, &token, vec![insert]).map_err(|e| {
+                ConnectorError::msg(format!(
+                    "{e} (the empty document was created: {})",
+                    web_link(&id)
+                ))
+            })?;
         }
         Ok(json!({"id": id, "web_link": web_link(&id)}))
     }
@@ -273,66 +278,72 @@ impl Connector for GoogleDocsConnector {
         paragraphs(doc.pointer("/body/content"), &mut paras);
         let full: String = paras.into_iter().map(|p| p.2).collect();
         let truncated = full.chars().count() > MAX_TEXT_CHARS;
+        let placeholders = placeholders_in(&full);
         let text: String = if truncated {
             full.chars().take(MAX_TEXT_CHARS).collect()
         } else {
-            full.clone()
+            full
         };
         Ok(json!({
             "id": doc_id,
             "title": text_of(doc.get("title")),
             "web_link": web_link(doc_id),
-            "placeholders": placeholders_in(&full),
+            "placeholders": placeholders,
             "text": text,
             "truncated": truncated,
         }))
     }
 
+    /// Ops run in order, one request each. `append` and `insert_after` both add a
+    /// new paragraph (a leading newline at the paragraph's last insertable index,
+    /// so the neighbour's style, tables and lists are never disturbed). An error
+    /// says how many ops were already applied.
     fn edit_doc(&self, doc_id: &str, ops: &[Value]) -> ConnResult<Value> {
         for op in ops {
             validate_op(op)?;
         }
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
         let mut applied = 0u64;
+        let partial = |e: ConnectorError, applied: u64| {
+            ConnectorError::msg(format!("{e} ({applied} earlier edits applied)"))
+        };
         for op in ops {
             let request = match str_field(op, "op") {
                 "replace" => replace_request(str_field(op, "find"), str_field(op, "with")),
                 kind => {
-                    let doc = self.fetch(doc_id, &token)?;
-                    let doc_end = doc
-                        .pointer("/body/content")
-                        .and_then(Value::as_array)
-                        .and_then(|c| c.last())
-                        .and_then(|e| e.get("endIndex")?.as_u64())
-                        .unwrap_or(1);
+                    let doc = self
+                        .fetch(doc_id, &token)
+                        .map_err(|e| partial(e, applied))?;
+                    let mut paras = Vec::new();
+                    paragraphs(doc.pointer("/body/content"), &mut paras);
+                    let text = str_field(op, "text");
                     if kind == "append" {
+                        let doc_end = doc
+                            .pointer("/body/content")
+                            .and_then(Value::as_array)
+                            .and_then(|c| c.last())
+                            .and_then(|e| e.get("endIndex")?.as_u64())
+                            .unwrap_or(1);
+                        let empty = paras.iter().all(|p| p.2.trim().is_empty());
                         json!({"insertText": {
                             "location": {"index": doc_end.saturating_sub(1).max(1)},
-                            "text": str_field(op, "text")}})
+                            "text": if empty { text.to_string() } else { format!("\n{text}") }}})
                     } else {
                         let find = str_field(op, "find");
-                        let mut paras = Vec::new();
-                        paragraphs(doc.pointer("/body/content"), &mut paras);
                         let Some((_, end, _)) = paras.iter().find(|p| p.2.contains(find)) else {
                             return Err(ConnectorError::msg(format!(
                                 "insert_after: no paragraph contains \"{find}\" ({applied} earlier edits applied)"
                             )));
                         };
-                        let text = str_field(op, "text");
-                        if *end >= doc_end {
-                            // Last paragraph: the index at the end is not insertable.
-                            json!({"insertText": {
-                                "location": {"index": end.saturating_sub(1).max(1)},
-                                "text": format!("\n{text}")}})
-                        } else {
-                            json!({"insertText": {
-                                "location": {"index": end},
-                                "text": format!("{text}\n")}})
-                        }
+                        // Indices come from the API (UTF-16) and are used as given.
+                        json!({"insertText": {
+                            "location": {"index": end.saturating_sub(1).max(1)},
+                            "text": format!("\n{text}")}})
                     }
                 }
             };
-            self.batch_update(doc_id, &token, vec![request])?;
+            self.batch_update(doc_id, &token, vec![request])
+                .map_err(|e| partial(e, applied))?;
             applied += 1;
         }
         Ok(json!({"applied": applied}))
@@ -569,7 +580,7 @@ mod tests {
         );
         assert_eq!(b[0]["requests"][0]["replaceAllText"]["replaceText"], "Bye");
         let ins = &b[1]["requests"][0]["insertText"];
-        assert_eq!(ins["text"], "PS");
+        assert_eq!(ins["text"], "\nPS", "a new paragraph, not a continuation");
         assert_eq!(ins["location"]["index"], 37, "one before the final newline");
     }
 
@@ -584,22 +595,127 @@ mod tests {
             .unwrap();
         assert_eq!(out["applied"], 1);
         let ins = &batch_bodies(&http)[0]["requests"][0]["insertText"];
-        assert_eq!(ins["text"], "Note\n");
-        assert_eq!(ins["location"]["index"], 30);
+        assert_eq!(ins["text"], "\nNote");
+        assert_eq!(
+            ins["location"]["index"], 29,
+            "before the matched paragraph's newline"
+        );
+    }
+
+    fn edit_http(body: Value) -> Arc<FakeHttp> {
+        FakeHttp::new(move |req| {
+            if req.method == "GET" {
+                Ok(body.clone())
+            } else {
+                Ok(json!({"replies": []}))
+            }
+        })
+    }
+
+    fn insert_after_index(body: Value, find: &str) -> (u64, String) {
+        let http = edit_http(body);
+        conn(http.clone(), Some("RT"))
+            .edit_doc(
+                "d",
+                &[json!({"op": "insert_after", "find": find, "text": "N"})],
+            )
+            .unwrap();
+        let b = batch_bodies(&http);
+        let ins = &b[0]["requests"][0]["insertText"];
+        (
+            ins["location"]["index"].as_u64().unwrap(),
+            ins["text"].as_str().unwrap().to_string(),
+        )
+    }
+
+    fn para(start: u64, end: u64, text: &str) -> Value {
+        json!({"startIndex": start, "endIndex": end,
+            "paragraph": {"elements": [{"textRun": {"content": text}}]}})
     }
 
     #[test]
-    fn edit_doc_insert_after_the_last_paragraph_prepends_a_newline() {
-        let http = doc_http();
-        conn(http.clone(), Some("RT"))
+    fn insert_after_a_paragraph_followed_by_a_table_stays_before_the_newline() {
+        let body = json!({"body": {"content": [
+            para(1, 6, "Intro\n"),
+            {"startIndex": 6, "endIndex": 20, "table": {"tableRows": [{"tableCells": [
+                {"content": [para(8, 12, "Cell\n")]}]}]}},
+            para(20, 24, "End\n")]}});
+        assert_eq!(insert_after_index(body, "Intro"), (5, "\nN".into()));
+    }
+
+    #[test]
+    fn insert_after_the_last_paragraph_of_a_table_cell_stays_inside_the_cell() {
+        let body = json!({"body": {"content": [
+            {"startIndex": 1, "endIndex": 20, "table": {"tableRows": [{"tableCells": [
+                {"content": [para(3, 8, "Cell\n")]},
+                {"content": [para(9, 14, "Next\n")]}]}]}},
+            para(20, 24, "End\n")]}});
+        assert_eq!(insert_after_index(body, "Cell"), (7, "\nN".into()));
+    }
+
+    #[test]
+    fn insert_after_uses_the_apis_utf16_indices_for_emoji() {
+        // "Hi 😀\n" is 5 characters but 6 UTF-16 units, so the API reports end 7.
+        let body = json!({"body": {"content": [
+            para(1, 7, "Hi \u{1F600}\n"), para(7, 12, "Next\n")]}});
+        assert_eq!(insert_after_index(body, "Hi"), (6, "\nN".into()));
+    }
+
+    #[test]
+    fn edit_doc_failure_reports_how_many_ops_were_applied() {
+        let posts = std::sync::atomic::AtomicUsize::new(0);
+        let http = FakeHttp::new(move |req| {
+            if req.method == "GET" {
+                return Ok(doc_body());
+            }
+            if posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                return Err(HttpError::new(Some(500), "boom AT-SECRET", &req.url));
+            }
+            Ok(json!({"replies": []}))
+        });
+        let e = conn(http, Some("RT"))
             .edit_doc(
                 "d1",
-                &[json!({"op": "insert_after", "find": "Closing", "text": "Z"})],
+                &[
+                    json!({"op": "replace", "find": "a", "with": "b"}),
+                    json!({"op": "replace", "find": "c", "with": "d"}),
+                    json!({"op": "append", "text": "x"}),
+                ],
             )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("1 earlier edits applied") && !e.contains("AT-SECRET"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn create_doc_insert_failure_names_the_new_document() {
+        let http = FakeHttp::new(|req| {
+            if req.url.ends_with(":batchUpdate") {
+                Err(HttpError::new(Some(500), "boom", &req.url))
+            } else {
+                Ok(json!({"documentId": "n9"}))
+            }
+        });
+        let e = conn(http, Some("RT"))
+            .create_doc("T", "x")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("/document/d/n9/"), "{e}");
+    }
+
+    #[test]
+    fn append_to_an_empty_document_adds_no_leading_newline() {
+        let body = json!({"body": {"content": [para(1, 2, "\n")]}});
+        let http = edit_http(body);
+        conn(http.clone(), Some("RT"))
+            .edit_doc("d", &[json!({"op": "append", "text": "First"})])
             .unwrap();
-        let ins = &batch_bodies(&http)[0]["requests"][0]["insertText"];
-        assert_eq!(ins["text"], "\nZ");
-        assert_eq!(ins["location"]["index"], 37);
+        let b = batch_bodies(&http);
+        assert_eq!(b[0]["requests"][0]["insertText"]["text"], "First");
+        assert_eq!(b[0]["requests"][0]["insertText"]["location"]["index"], 1);
     }
 
     #[test]
