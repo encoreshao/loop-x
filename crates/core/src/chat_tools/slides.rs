@@ -6,17 +6,13 @@
 //! template names are third-party text.
 
 use super::{
-    conn, connector_of, get, or_empty, req_str, untrusted_value, Arg, Env, Mode, Tool, ToolError,
-    ToolResult,
+    conn, connector_of, get, gfiles, or_empty, req_str, untrusted_value, Arg, Env, Mode, Tool,
+    ToolError, ToolResult,
 };
 use crate::connectors::Connector;
 use crate::slides_store as store;
 use chrono::Utc;
 use serde_json::{json, Map, Value};
-
-const MAX_FIELDS: usize = 40;
-const MAX_VALUE_CHARS: usize = 4000;
-const MAX_TITLE_CHARS: usize = 150;
 
 fn dir(e: &Env) -> std::path::PathBuf {
     e.home_dir.join("slides")
@@ -27,14 +23,11 @@ fn account_id(c: &dyn Connector) -> String {
 }
 
 fn ticked(e: &Env, c: &dyn Connector, template_id: &str) -> Result<Value, ToolError> {
-    store::selected_templates(&dir(e), &account_id(c))
-        .into_iter()
-        .find(|t| get(t, "id").as_str() == Some(template_id))
-        .ok_or_else(|| {
-            ToolError::input(
-                "That template is not enabled. Ask the user to tick it on the Connectors page (Google Slides), or call slides.list_templates for the ones that are",
-            )
-        })
+    gfiles::find_ticked(&dir(e), &account_id(c), template_id).ok_or_else(|| {
+        ToolError::input(
+            "That template is not enabled. Ask the user to tick it on the Connectors page (Google Slides), or call slides.list_templates for the ones that are",
+        )
+    })
 }
 
 fn list_templates(e: &Env, c: Option<&dyn Connector>, _args: &Map<String, Value>) -> ToolResult {
@@ -73,61 +66,12 @@ fn template_info(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) 
               "placeholders": get(&deck, "placeholders"), "slides": slide_rows(&deck)}))
 }
 
-/// `fields`: a JSON object of placeholder name -> text.
-fn parse_fields(raw: &str) -> Result<Vec<(String, String)>, ToolError> {
-    let bad = || {
-        ToolError::input(
-            "fields must be a JSON object of placeholder name to text, e.g. {\"client\": \"Acme\"}",
-        )
-    };
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(Vec::new());
-    }
-    let Value::Object(map) = serde_json::from_str::<Value>(raw).map_err(|_| bad())? else {
-        return Err(bad());
-    };
-    if map.len() > MAX_FIELDS {
-        return Err(ToolError::input(format!(
-            "fields may have at most {MAX_FIELDS} entries"
-        )));
-    }
-    let mut out = Vec::new();
-    for (k, v) in map {
-        let k = k.trim().to_string();
-        let ok_key =
-            !k.is_empty() && k.chars().count() <= 60 && !k.contains(['{', '}', '\n', '\r']);
-        let text = match v {
-            Value::String(s) => s,
-            Value::Number(n) => n.to_string(),
-            Value::Bool(b) => b.to_string(),
-            _ => return Err(bad()),
-        };
-        if !ok_key || text.chars().count() > MAX_VALUE_CHARS {
-            return Err(ToolError::input(format!(
-                "each placeholder name must be 1-60 characters without braces and each value at most {MAX_VALUE_CHARS} characters"
-            )));
-        }
-        out.push((k, text));
-    }
-    Ok(out)
-}
-
 fn create_deck(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolResult {
     let c = connector_of(c)?;
     let template_id = req_str(args, "template_id")?.trim().to_string();
     let template = ticked(e, c, &template_id)?;
-    let title = req_str(args, "title")?.trim().to_string();
-    if title.is_empty()
-        || title.contains('\n')
-        || title.contains('\r')
-        || title.chars().count() > MAX_TITLE_CHARS
-    {
-        return Err(ToolError::input(format!(
-            "title must be a single non-empty line of at most {MAX_TITLE_CHARS} characters"
-        )));
-    }
-    let fields = parse_fields(&or_empty(args.get("fields").unwrap_or(&Value::Null)))?;
+    let title = gfiles::title(args)?;
+    let fields = gfiles::parse_fields(&or_empty(args.get("fields").unwrap_or(&Value::Null)))?;
     let made = conn(c.copy_deck(&template_id, &title))?;
     let deck_id = get(&made, "id").as_str().unwrap_or("").to_string();
     let link = get(&made, "web_link").clone();

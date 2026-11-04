@@ -80,7 +80,7 @@ fn str_field<'a>(op: &'a Value, key: &str) -> &'a str {
 }
 
 /// Check one edit op's shape; the error names the op.
-fn validate_op(op: &Value) -> ConnResult<()> {
+pub(crate) fn validate_op(op: &Value) -> ConnResult<()> {
     let kind = str_field(op, "op");
     let ok = match kind {
         "replace" => {

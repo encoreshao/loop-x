@@ -140,7 +140,7 @@ fn validate_range(range: &str) -> ConnResult<()> {
 /// Whether `value` would be read as a formula if a cell were set to it: it starts
 /// with `=`, or with `+`, `-` or `@` followed by a letter or `(`. Plain numbers
 /// and text such as `-5` or `+1 555 0100` are not formulas.
-fn looks_like_formula(value: &str) -> bool {
+pub(crate) fn looks_like_formula(value: &str) -> bool {
     let mut chars = value.chars();
     match chars.next() {
         Some('=') => true,
@@ -152,7 +152,7 @@ fn looks_like_formula(value: &str) -> bool {
 }
 
 /// Check one edit op's shape; the error names the op.
-fn validate_op(op: &Value) -> ConnResult<()> {
+pub(crate) fn validate_op(op: &Value) -> ConnResult<()> {
     let kind = str_field(op, "op");
     if kind != "set" && kind != "append" {
         return Err(ConnectorError::msg(format!(
@@ -167,7 +167,7 @@ fn validate_op(op: &Value) -> ConnResult<()> {
 }
 
 /// Check one new tab's shape and return its name and rows.
-fn validate_tab(tab: &Value) -> ConnResult<(String, Vec<Vec<String>>)> {
+pub(crate) fn validate_tab(tab: &Value) -> ConnResult<(String, Vec<Vec<String>>)> {
     let name = str_field(tab, "name").trim().to_string();
     if name.is_empty()
         || name.chars().count() > 100

@@ -11,8 +11,11 @@
 
 pub mod calendar;
 pub mod documents;
+pub mod gdocs;
+pub(crate) mod gfiles;
 pub mod github;
 pub mod gitlab;
+pub mod gsheets;
 pub mod mail;
 pub mod pending;
 pub mod rss;
@@ -420,14 +423,34 @@ pub fn tools() -> &'static [Tool] {
         let mut all = Vec::new();
         all.extend(calendar::tools());
         all.extend(documents::tools());
+        all.extend(gdocs::tools());
         all.extend(github::tools());
         all.extend(gitlab::tools());
+        all.extend(gsheets::tools());
         all.extend(mail::tools());
         all.extend(rss::tools());
         all.extend(slides::tools());
         all.extend(web::tools());
         all
     })
+}
+
+/// Checks a write tool's args (and the target file's access rule) for the
+/// chosen account before its Approve card is created, so the card only ever
+/// shows a call that can run. The handler repeats the same check when it runs.
+pub(crate) type Check = fn(&Env, &str, &Map<String, Value>) -> Result<(), ToolError>;
+
+fn precheck(name: &str) -> Option<Check> {
+    static CHECKS: OnceLock<Vec<(&'static str, Check)>> = OnceLock::new();
+    CHECKS
+        .get_or_init(|| {
+            let mut all = gdocs::checks();
+            all.extend(gsheets::checks());
+            all
+        })
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, c)| *c)
 }
 
 fn find<'a>(tools: &'a [Tool], name: &str) -> Option<&'a Tool> {
@@ -683,6 +706,13 @@ pub(crate) fn run_in(
             return json!({"error": format!("{} failed ({})", tool.name, e.class_name())})
         }
         Ok(Some(id)) => {
+            if let Some(check) = precheck(tool.name) {
+                let mut clean = args.clone();
+                clean.shift_remove("account");
+                if let Err(e) = check(env, &id, &clean) {
+                    return failure(tool, e);
+                }
+            }
             args.insert("account".into(), Value::String(id)); // freeze the target for approve
         }
         Ok(None) => {}
@@ -1149,7 +1179,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 31);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1169,12 +1199,29 @@ mod tests {
             write_tool_names(),
             [
                 "calendar.create_event",
+                "gdocs.create",
+                "gdocs.create_from_template",
+                "gdocs.edit",
                 "github.comment",
                 "gitlab.comment",
+                "gsheets.create",
+                "gsheets.create_from_template",
+                "gsheets.edit",
                 "mail.send",
                 "slides.create_deck"
             ]
         );
+    }
+
+    #[test]
+    fn every_pre_approval_check_belongs_to_a_write_tool() {
+        let mut names: Vec<&str> = gdocs::checks().into_iter().map(|(n, _)| n).collect();
+        names.extend(gsheets::checks().into_iter().map(|(n, _)| n));
+        assert_eq!(names.len(), 6);
+        for n in names {
+            assert_eq!(tool_mode(n), Some(Mode::Write), "{n}");
+            assert!(precheck(n).is_some(), "{n}");
+        }
     }
 
     fn write_tool(handler: Handler, kind: Option<&'static str>) -> Tool {

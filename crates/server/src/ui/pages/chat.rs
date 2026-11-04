@@ -97,6 +97,14 @@ pub fn tool_label(lang: Lang, name: &str) -> String {
         "calendar.create_event" => "Creating event",
         "docs.save" => "Saving document",
         "web.search" => "Searching the web",
+        "gdocs.list_templates" | "gsheets.list_templates" => "Listing templates",
+        "gdocs.template_info" | "gsheets.template_info" => "Reading template",
+        "gdocs.read" => "Reading document",
+        "gsheets.read" => "Reading spreadsheet",
+        "gdocs.create" | "gdocs.create_from_template" => "Creating document",
+        "gsheets.create" | "gsheets.create_from_template" => "Creating spreadsheet",
+        "gdocs.edit" => "Editing document",
+        "gsheets.edit" => "Editing spreadsheet",
         _ => return name.to_string(),
     };
     t(lang, label)
@@ -776,7 +784,7 @@ fn field<'a>(form: &'a [(String, String)], name: &str) -> Option<&'a str> {
 fn send_user_message(state: &UiState, text: &str, session: Option<&str>) -> Option<String> {
     let session_id = store(state).send_chat_message(text, session)?;
     let _ = loopx_core::file_grants::record_user_message(
-        &state.home_dir.join("file_grants"),
+        &loopx_core::file_grants::dir(&state.home_dir),
         &session_id,
         text,
     );
@@ -1064,6 +1072,20 @@ mod tests {
     use super::*;
     use crate::ui::routes::UiRequest;
 
+    #[test]
+    fn google_file_tools_have_translated_labels() {
+        for (name, en, ja) in [
+            ("gdocs.read", "Reading document", "ドキュメントを読み取り中"),
+            ("gsheets.read", "Reading spreadsheet", "スプレッドシートを読み取り中"),
+            ("gdocs.create_from_template", "Creating document", "ドキュメントを作成中"),
+            ("gsheets.edit", "Editing spreadsheet", "スプレッドシートを編集中"),
+            ("gsheets.list_templates", "Listing templates", "テンプレートを一覧表示中"),
+        ] {
+            assert_eq!(tool_label(Lang::En, name), en);
+            assert_eq!(tool_label(Lang::Ja, name), ja);
+        }
+    }
+
     const FILE_ID: &str = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
 
     #[test]
@@ -1072,7 +1094,7 @@ mod tests {
         let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
         let url = format!("look at https://docs.google.com/document/d/{FILE_ID}/edit");
         let sid = send_user_message(&state, &url, None).unwrap();
-        let grants = state.home_dir.join("file_grants");
+        let grants = loopx_core::file_grants::dir(&state.home_dir);
         assert!(loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
         assert!(!loopx_core::file_grants::granted(&grants, "other", FILE_ID));
     }
@@ -1094,7 +1116,7 @@ mod tests {
             &sid,
         );
         assert!(saved.get("error").is_none(), "{saved}");
-        let grants = state.home_dir.join("file_grants");
+        let grants = loopx_core::file_grants::dir(&state.home_dir);
         assert!(!loopx_core::file_grants::granted(&grants, &sid, FILE_ID));
     }
 

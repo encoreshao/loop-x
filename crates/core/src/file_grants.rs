@@ -7,7 +7,7 @@
 //! reply or any stored document text, so a hostile document cannot make the
 //! chat read another file.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -57,6 +57,11 @@ pub fn extract_file_ids(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Where the grants live under the per-machine config directory.
+pub fn dir(home: &Path) -> PathBuf {
+    home.join("file_grants")
 }
 
 /// `^[A-Za-z0-9_-]{1,64}$`: a session name that is safe as a file name.
