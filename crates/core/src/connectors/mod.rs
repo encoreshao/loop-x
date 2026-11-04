@@ -516,6 +516,15 @@ pub trait Connector: Send + Sync {
         unsupported("describe_deck")
     }
 
+    // --- Slides operations ---
+
+    /// Slides: apply ordered `{"op": "replace", "find", "with"}` edits to a deck; returns `{applied}`.
+    fn edit_deck(&self, _deck_id: &str, _ops: &[Value]) -> ConnResult<Value> {
+        unsupported("edit_deck")
+    }
+
+    // --- end Slides operations ---
+
     // --- Docs operations ---
 
     /// Docs: copy a template into a new document named `title`; returns `{id, web_link}`.

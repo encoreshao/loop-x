@@ -446,6 +446,7 @@ fn precheck(name: &str) -> Option<Check> {
         .get_or_init(|| {
             let mut all = gdocs::checks();
             all.extend(gsheets::checks());
+            all.extend(slides::checks());
             all
         })
         .iter()
@@ -1179,7 +1180,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 31);
+        assert_eq!(names.len(), 32);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1187,6 +1188,22 @@ mod tests {
             "gitlab.read_issue (read): Read one GitLab issue with its description and comments (pass the issue url, or project and iid). Args: url (optional), project (optional), iid (optional)"
         ));
         assert!(text.contains("docs.save (local): Save a markdown document (e.g. a summary) and get a link the user can open. Args: title, content"));
+    }
+
+    #[test]
+    fn template_tools_tell_the_model_to_pass_bare_placeholder_names() {
+        let all = describe_all();
+        for name in [
+            "gdocs.template_info",
+            "gdocs.create_from_template",
+            "gsheets.template_info",
+            "gsheets.create_from_template",
+        ] {
+            let line = all.lines().find(|l| l.starts_with(name)).unwrap();
+            assert!(line.contains("bare placeholder name"), "{name}: {line}");
+            assert!(line.contains("untrusted_content"), "{name}: {line}");
+        }
+        assert!(gfiles::HEAD_CUT_NOTE.contains("ask the user"));
     }
 
     #[test]
@@ -1208,7 +1225,8 @@ mod tests {
                 "gsheets.create_from_template",
                 "gsheets.edit",
                 "mail.send",
-                "slides.create_deck"
+                "slides.create_deck",
+                "slides.edit_deck"
             ]
         );
     }
@@ -1217,7 +1235,8 @@ mod tests {
     fn every_pre_approval_check_belongs_to_a_write_tool() {
         let mut names: Vec<&str> = gdocs::checks().into_iter().map(|(n, _)| n).collect();
         names.extend(gsheets::checks().into_iter().map(|(n, _)| n));
-        assert_eq!(names.len(), 6);
+        names.extend(slides::checks().into_iter().map(|(n, _)| n));
+        assert_eq!(names.len(), 7);
         for n in names {
             assert_eq!(tool_mode(n), Some(Mode::Write), "{n}");
             assert!(precheck(n).is_some(), "{n}");

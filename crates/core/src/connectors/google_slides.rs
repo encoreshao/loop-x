@@ -67,6 +67,22 @@ fn slide_text(slide: &Value) -> String {
     lines.join("\n")
 }
 
+/// An edit op is `{"op": "replace", "find": non-empty text, "with": text}`.
+pub fn validate_op(op: &Value) -> ConnResult<()> {
+    let bad = |m: &str| Err(ConnectorError::msg(m.to_string()));
+    if op.get("op").and_then(Value::as_str) != Some("replace") {
+        return bad("A deck edit op must be {\"op\": \"replace\", \"find\", \"with\"}");
+    }
+    match op.get("find").and_then(Value::as_str) {
+        Some(f) if !f.is_empty() => {}
+        _ => return bad("replace needs a non-empty \"find\" text"),
+    }
+    if op.get("with").and_then(Value::as_str).is_none() {
+        return bad("replace needs a \"with\" text (it may be empty)");
+    }
+    Ok(())
+}
+
 impl GoogleSlidesConnector {
     pub fn new(account: Account, secret: Option<String>, http: Arc<dyn HttpClient>) -> Self {
         Self {
@@ -188,6 +204,39 @@ impl Connector for GoogleSlidesConnector {
             .filter_map(|r| r.pointer("/replaceAllText/occurrencesChanged")?.as_u64())
             .sum();
         Ok(json!({"replaced": replaced}))
+    }
+
+    /// Ops run in order, one `replaceAllText` request each (matching case). Every
+    /// op is checked before the first request; a later failure says how many ops
+    /// were applied.
+    fn edit_deck(&self, deck_id: &str, ops: &[Value]) -> ConnResult<Value> {
+        for op in ops {
+            validate_op(op)?;
+        }
+        let token = self.auth.access_token().map_err(ConnectorError::msg)?;
+        let url = format!("{SLIDES_URL}/{}:batchUpdate", quote(deck_id));
+        let mut applied = 0u64;
+        for op in ops {
+            let find = op.get("find").and_then(Value::as_str).unwrap_or_default();
+            let with = op.get("with").and_then(Value::as_str).unwrap_or_default();
+            let request = json!({"replaceAllText": {
+                "containsText": {"text": find, "matchCase": true}, "replaceText": with}});
+            self.call(
+                "POST",
+                &url,
+                &token,
+                Some(json!({"requests": [request]})),
+                1,
+            )
+            .map_err(|e| {
+                ConnectorError::msg(format!(
+                    "{e} ({applied} earlier edit{} applied)",
+                    if applied == 1 { "" } else { "s" }
+                ))
+            })?;
+            applied += 1;
+        }
+        Ok(json!({"applied": applied}))
     }
 
     fn describe_deck(&self, deck_id: &str, thumbnails: bool) -> ConnResult<Value> {
@@ -388,6 +437,116 @@ mod tests {
         );
         let (ok, msg) = c.test();
         assert!(!ok && !msg.contains("AT-SECRET"), "{msg}");
+    }
+
+    #[test]
+    fn edit_deck_sends_one_case_sensitive_replace_per_op_in_order() {
+        let http =
+            FakeHttp::ok(json!({"replies": [{"replaceAllText": {"occurrencesChanged": 1}}]}));
+        let out = slides(http.clone(), Some("RT"))
+            .edit_deck(
+                "d 1",
+                &[
+                    json!({"op": "replace", "find": "Old", "with": "New"}),
+                    json!({"op": "replace", "find": "A", "with": ""}),
+                ],
+            )
+            .unwrap();
+        assert_eq!(out["applied"], 2);
+        let calls = http.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].method, "POST");
+        assert!(
+            calls[0].url.ends_with("/d%201:batchUpdate"),
+            "{}",
+            calls[0].url
+        );
+        let b0 = calls[0].json_body.clone().unwrap();
+        assert_eq!(b0["requests"].as_array().unwrap().len(), 1);
+        let r = &b0["requests"][0]["replaceAllText"];
+        assert_eq!(r["containsText"], json!({"text": "Old", "matchCase": true}));
+        assert_eq!(r["replaceText"], "New");
+        let b1 = calls[1].json_body.clone().unwrap();
+        assert_eq!(
+            b1["requests"][0]["replaceAllText"]["containsText"]["text"],
+            "A"
+        );
+        assert_eq!(b1["requests"][0]["replaceAllText"]["replaceText"], "");
+    }
+
+    #[test]
+    fn edit_deck_rejects_bad_ops_before_any_request() {
+        for ops in [
+            vec![json!({"op": "append", "text": "x"})],
+            vec![json!({"op": "replace", "find": "", "with": "x"})],
+            vec![json!({"op": "replace", "with": "x"})],
+            vec![json!({"op": "replace", "find": "a"})],
+            vec![json!({"op": "replace", "find": "a", "with": 1})],
+            vec![
+                json!({"op": "replace", "find": "a", "with": "b"}),
+                json!({"op": "insert_after", "find": "a", "text": "b"}),
+            ],
+            vec![json!("replace")],
+        ] {
+            let http = FakeHttp::ok(json!({}));
+            let r = slides(http.clone(), Some("RT")).edit_deck("d", &ops);
+            assert!(r.is_err(), "{ops:?}");
+            assert!(http.calls.lock().unwrap().is_empty(), "{ops:?}");
+        }
+    }
+
+    #[test]
+    fn edit_deck_failure_reports_how_many_ops_were_applied() {
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let http =
+            FakeHttp::new(
+                move |req| match n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    0 => Ok(json!({})),
+                    1 => Err(HttpError::new(Some(500), "boom AT-SECRET", &req.url)),
+                    _ => Ok(json!({})),
+                },
+            );
+        let op = json!({"op": "replace", "find": "a", "with": "b"});
+        let e = slides(http.clone(), Some("RT"))
+            .edit_deck("d", &[op.clone(), op.clone(), op.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("1 earlier edit applied") && !e.contains("AT-SECRET"),
+            "{e}"
+        );
+        assert_eq!(http.calls.lock().unwrap().len(), 2);
+        // plural, and a first-op failure says none were applied
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let http = FakeHttp::new(move |req| {
+            if n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
+                return Err(HttpError::new(Some(500), "boom", &req.url));
+            }
+            Ok(json!({}))
+        });
+        let e = slides(http, Some("RT"))
+            .edit_deck("d", &[op.clone(), op.clone(), op.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("2 earlier edits applied"), "{e}");
+        let http = FakeHttp::new(|req| Err(HttpError::new(Some(500), "boom", &req.url)));
+        let e = slides(http, Some("RT"))
+            .edit_deck("d", &[op])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("0 earlier edits applied"), "{e}");
+    }
+
+    #[test]
+    fn edit_deck_permission_error_asks_to_reconnect_without_the_token() {
+        let http =
+            FakeHttp::new(|req| Err(HttpError::new(Some(403), "denied AT-SECRET", &req.url)));
+        let c = slides(http, Some("RT"));
+        let e = c
+            .edit_deck("d", &[json!({"op": "replace", "find": "a", "with": "b"})])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Reconnect") && !e.contains("AT-SECRET"), "{e}");
     }
 
     #[test]

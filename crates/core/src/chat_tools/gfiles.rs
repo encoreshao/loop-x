@@ -30,10 +30,11 @@ const MAX_ID_CHARS: usize = 200;
 const MAX_SHOWN_TITLE_CHARS: usize = 200;
 /// The most (serialised) bytes the placeholder list of a read result may use.
 const PLACEHOLDER_BUDGET: usize = 6000;
-/// What a read result may use, leaving room for the registry's own wrapper so
+/// What a read result may use, leaving room for the registry's own wrapper and
+/// the truncation note (added after the fit) so
 /// the result is never cut into an unstructured prefix (which would drop
 /// `file_ref` and the truncation note).
-const RESULT_BUDGET: usize = MAX_RESULT_BYTES - 300;
+const RESULT_BUDGET: usize = MAX_RESULT_BYTES - 600;
 
 /// One Google file type the tools handle.
 pub(crate) struct Kind {
@@ -341,7 +342,7 @@ pub(crate) fn read_head(
 
 /// The note's sentence for a cut [`read_head`].
 pub(crate) const HEAD_CUT_NOTE: &str =
-    " Some placeholders (or a very long title) were left out; open web_link to see them all.";
+    " Some placeholders (or a very long title) were left out; open web_link to see them all, and ask the user for the name of any placeholder you need that is not shown.";
 
 /// The largest `n <= max` whose `build(n)` serialises within the read budget
 /// (`build(0)` is returned even when it does not fit), with that `n`.

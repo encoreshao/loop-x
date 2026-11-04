@@ -105,6 +105,7 @@ pub fn tool_label(lang: Lang, name: &str) -> String {
         "gsheets.create" | "gsheets.create_from_template" => "Creating spreadsheet",
         "gdocs.edit" => "Editing document",
         "gsheets.edit" => "Editing spreadsheet",
+        "slides.edit_deck" => "Editing presentation",
         _ => return name.to_string(),
     };
     t(lang, label)
@@ -1079,6 +1080,7 @@ mod tests {
             ("gsheets.read", "Reading spreadsheet", "スプレッドシートを読み取り中"),
             ("gdocs.create_from_template", "Creating document", "ドキュメントを作成中"),
             ("gsheets.edit", "Editing spreadsheet", "スプレッドシートを編集中"),
+            ("slides.edit_deck", "Editing presentation", "プレゼンテーションを編集中"),
             ("gsheets.list_templates", "Listing templates", "テンプレートを一覧表示中"),
         ] {
             assert_eq!(tool_label(Lang::En, name), en);
