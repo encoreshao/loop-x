@@ -12,8 +12,10 @@ use super::*;
 use serde_json::json;
 
 pub const DOCS_URL: &str = "https://docs.googleapis.com/v1/documents";
-/// Document text returned to the caller is cut at this many characters.
-const MAX_TEXT_CHARS: usize = 60_000;
+/// Document text returned to the caller is cut at this many characters. The
+/// chat reads it in parts (`gdocs.read` with `start`) and the preview panel
+/// shows only its first part, so this only bounds a pathological document.
+const MAX_TEXT_CHARS: usize = 1_000_000;
 
 pub const INFO: TypeInfo = TypeInfo {
     name: "google_docs",
@@ -472,13 +474,20 @@ mod tests {
     }
 
     #[test]
-    fn describe_doc_truncates_long_text() {
-        let big = "é".repeat(70_000);
-        let http = FakeHttp::ok(json!({"title": "T", "body": {"content": [
-            {"endIndex": 5, "paragraph": {"elements": [{"textRun": {"content": big}}]}}]}}));
-        let d = conn(http, Some("RT")).describe_doc("d1").unwrap();
+    fn describe_doc_returns_long_text_for_paged_reads_and_caps_only_huge_ones() {
+        let doc = |text: String| {
+            FakeHttp::ok(json!({"title": "T", "body": {"content": [
+                {"endIndex": 5, "paragraph": {"elements": [{"textRun": {"content": text}}]}}]}}))
+        };
+        let d = conn(doc("é".repeat(70_000)), Some("RT"))
+            .describe_doc("d1")
+            .unwrap();
+        assert_eq!(d["truncated"], false);
+        assert_eq!(d["text"].as_str().unwrap().chars().count(), 70_000);
+        let huge = "é".repeat(MAX_TEXT_CHARS + 1);
+        let d = conn(doc(huge), Some("RT")).describe_doc("d1").unwrap();
         assert_eq!(d["truncated"], true);
-        assert_eq!(d["text"].as_str().unwrap().chars().count(), 60_000);
+        assert_eq!(d["text"].as_str().unwrap().chars().count(), MAX_TEXT_CHARS);
     }
 
     #[test]

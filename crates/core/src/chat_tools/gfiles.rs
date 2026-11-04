@@ -215,6 +215,17 @@ pub(crate) fn file_id(args: &Map<String, Value>, key: &str) -> Result<String, To
     Ok(id)
 }
 
+/// The optional `start` offset of a paged read (absent = 0).
+pub(crate) fn start_arg(args: &Map<String, Value>) -> Result<usize, ToolError> {
+    match args.get("start") {
+        None | Some(Value::Null) => Ok(0),
+        Some(v) => v
+            .as_u64()
+            .map(|n| n as usize)
+            .ok_or_else(|| ToolError::input("start must be 0 or a positive whole number")),
+    }
+}
+
 /// A single non-empty line of at most [`MAX_TITLE_CHARS`].
 pub(crate) fn title(args: &Map<String, Value>) -> Result<String, ToolError> {
     let title = req_str(args, "title")?.trim().to_string();
@@ -408,7 +419,7 @@ pub(crate) fn read_head(
 
 /// The note's sentence for a cut [`read_head`].
 pub(crate) const HEAD_CUT_NOTE: &str =
-    " Some placeholders (or a very long title) were left out; open web_link to see them all, and ask the user for the name of any placeholder you need that is not shown.";
+    " Some placeholders (or a very long title) were left out; ask the user for the name of any placeholder you need that is not shown.";
 
 /// The largest `n <= max` whose `build(n)` serialises within the read budget
 /// (`build(0)` is returned even when it does not fit), with that `n`.

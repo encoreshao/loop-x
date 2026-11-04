@@ -114,16 +114,24 @@ fn failure_text(ctx: &UiCtx, e: &ConnectorError) -> String {
     }
 }
 
-fn doc_body(ctx: &UiCtx, doc: &Value) -> String {
-    let paragraphs: String = text(doc, "text")
+/// The most document text the panel shows; a longer document gets the "long" note.
+const PREVIEW_DOC_CHARS: usize = 60_000;
+
+/// The document's paragraphs (its first [`PREVIEW_DOC_CHARS`] characters) and
+/// whether the text was cut.
+fn doc_body(ctx: &UiCtx, doc: &Value) -> (String, bool) {
+    let full = text(doc, "text");
+    let shown: String = full.chars().take(PREVIEW_DOC_CHARS).collect();
+    let cut = shown.len() < full.len();
+    let paragraphs: String = shown
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| format!("<p>{}</p>", h(l)))
         .collect();
     if paragraphs.is_empty() {
-        return format!("<p class='file-preview-empty'>{}</p>", h(&ctx.t("This document is empty.")));
+        return (format!("<p class='file-preview-empty'>{}</p>", h(&ctx.t("This document is empty."))), cut);
     }
-    format!("<div class='file-preview-doc'>{paragraphs}</div>")
+    (format!("<div class='file-preview-doc'>{paragraphs}</div>"), cut)
 }
 
 fn cell(v: &Value) -> String {
@@ -202,7 +210,7 @@ fn open_link(ctx: &UiCtx, url: &str) -> String {
 
 fn file_fragment(ctx: &UiCtx, target: &Target, file: &Value) -> String {
     let (body, cut) = match target.kind {
-        "doc" => (doc_body(ctx, file), false),
+        "doc" => doc_body(ctx, file),
         "sheet" => sheet_body(ctx, file),
         _ => (deck_body(ctx, file), false),
     };
@@ -530,6 +538,19 @@ mod tests {
         assert!(html.contains("file-preview-error"), "{html}");
         assert!(html.contains("Reconnect Google Docs &lt;now&gt;"), "{html}");
         assert!(html.contains("data-refresh"), "{html}");
+    }
+
+    #[test]
+    fn a_long_doc_preview_shows_its_first_part_with_the_long_note() {
+        let fx = Fixture::new();
+        fx.created("gdocs", "gd", "doc1");
+        let text = format!("{}\nTHE-END-MARKER", "Paragraph line.\n".repeat(5000));
+        let html = fx.render(DOC, Ok(json!({"title": "T", "text": text, "truncated": false})));
+        assert!(html.contains("file-preview-note"), "long note missing");
+        assert!(html.contains("Paragraph line."));
+        assert!(!html.contains("THE-END-MARKER"));
+        let short = fx.render(DOC, Ok(json!({"title": "T", "text": "Hi", "truncated": false})));
+        assert!(!short.contains("file-preview-note"), "{short}");
     }
 
     #[test]
