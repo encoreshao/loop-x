@@ -494,7 +494,7 @@ pub trait Connector: Send + Sync {
         unsupported("create_event")
     }
 
-    /// Slides: presentations usable as templates (`id`, `name`, `modified`,
+    /// Docs, Sheets and Slides: files of the connector's type usable as templates (`id`, `name`, `modified`,
     /// `web_link`, `owned_by_me`, `owner`), newest first; `query` filters by name.
     fn list_templates(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
         unsupported("list_templates")
@@ -544,6 +544,35 @@ pub trait Connector: Send + Sync {
     }
 
     // --- end Docs operations ---
+
+    // --- Sheets operations ---
+
+    /// Sheets: copy a template into a new spreadsheet named `title`; returns `{id, web_link}`.
+    fn copy_sheet(&self, _template_id: &str, _title: &str) -> ConnResult<Value> {
+        unsupported("copy_sheet")
+    }
+
+    /// Sheets: replace each `{{key}}` in every tab; returns `{replaced}`.
+    fn fill_sheet(&self, _sheet_id: &str, _replacements: &[(String, String)]) -> ConnResult<Value> {
+        unsupported("fill_sheet")
+    }
+
+    /// Sheets: create a spreadsheet with `title` and tabs `{name, rows}`; returns `{id, web_link}`.
+    fn create_sheet(&self, _title: &str, _tabs: &[Value]) -> ConnResult<Value> {
+        unsupported("create_sheet")
+    }
+
+    /// Sheets: `{id, title, web_link, placeholders, tabs: [{name, rows, truncated}], truncated}`.
+    fn describe_sheet(&self, _sheet_id: &str) -> ConnResult<Value> {
+        unsupported("describe_sheet")
+    }
+
+    /// Sheets: apply ordered `set` / `append` ops on A1 ranges; returns `{applied}`.
+    fn edit_sheet(&self, _sheet_id: &str, _ops: &[Value]) -> ConnResult<Value> {
+        unsupported("edit_sheet")
+    }
+
+    // --- end Sheets operations ---
 
     /// Mail: search the mailbox.
     fn search_messages(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
