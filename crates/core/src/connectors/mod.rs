@@ -516,6 +516,35 @@ pub trait Connector: Send + Sync {
         unsupported("describe_deck")
     }
 
+    // --- Docs operations ---
+
+    /// Docs: copy a template into a new document named `title`; returns `{id, web_link}`.
+    fn copy_doc(&self, _template_id: &str, _title: &str) -> ConnResult<Value> {
+        unsupported("copy_doc")
+    }
+
+    /// Docs: replace each `{{key}}` with its value; returns `{replaced}`.
+    fn fill_doc(&self, _doc_id: &str, _replacements: &[(String, String)]) -> ConnResult<Value> {
+        unsupported("fill_doc")
+    }
+
+    /// Docs: create a document with `title` and initial `text`; returns `{id, web_link}`.
+    fn create_doc(&self, _title: &str, _text: &str) -> ConnResult<Value> {
+        unsupported("create_doc")
+    }
+
+    /// Docs: `{id, title, web_link, placeholders, text, truncated}`.
+    fn describe_doc(&self, _doc_id: &str) -> ConnResult<Value> {
+        unsupported("describe_doc")
+    }
+
+    /// Docs: apply ordered edit ops (`replace`, `append`, `insert_after`); returns `{applied}`.
+    fn edit_doc(&self, _doc_id: &str, _ops: &[Value]) -> ConnResult<Value> {
+        unsupported("edit_doc")
+    }
+
+    // --- end Docs operations ---
+
     /// Mail: search the mailbox.
     fn search_messages(&self, _query: &str, _limit: u32) -> ConnResult<Vec<Value>> {
         unsupported("search_messages")

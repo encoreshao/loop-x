@@ -5,14 +5,12 @@
 //! (`auth = OauthGoogle`); the OAuth client is the one saved on the Inbox Triage
 //! setup page. No message built here ever contains a token.
 
-use super::drive::{self, text_of};
+use super::drive::{self, placeholders_in, text_of};
 use super::google_auth::GoogleAuth;
 pub use super::google_auth::{ClientFn, RefreshError, RefreshFn};
 use super::http::{quote, urlencode, TEST_TIMEOUT_SECONDS};
 use super::*;
-use regex::Regex;
 use serde_json::json;
-use std::sync::OnceLock;
 
 pub const SLIDES_URL: &str = "https://slides.googleapis.com/v1/presentations";
 /// Slides whose thumbnail is fetched for a review; later ones are text only.
@@ -38,25 +36,6 @@ pub struct GoogleSlidesConnector {
     account: Account,
     http: Arc<dyn HttpClient>,
     auth: GoogleAuth,
-}
-
-fn placeholder_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"\{\{\s*([A-Za-z0-9_][A-Za-z0-9_. -]{0,59}?)\s*\}\}").expect("static regex")
-    })
-}
-
-/// The distinct `{{name}}` placeholders in `text`, in first-seen order.
-pub fn placeholders_in(text: &str) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
-    for c in placeholder_re().captures_iter(text) {
-        let name = c[1].to_string();
-        if !found.contains(&name) {
-            found.push(name);
-        }
-    }
-    found
 }
 
 pub fn web_link(deck_id: &str) -> String {
@@ -280,14 +259,6 @@ mod tests {
         );
         assert_eq!(INFO.capabilities, &[SLIDES]);
         assert!(get_type("google_slides").is_some());
-    }
-
-    #[test]
-    fn placeholders_are_distinct_and_trimmed() {
-        assert_eq!(
-            placeholders_in("Hi {{ name }}, {{date}} and {{name}} {{ }} {single}"),
-            vec!["name", "date"]
-        );
     }
 
     #[test]

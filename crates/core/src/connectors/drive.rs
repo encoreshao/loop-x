@@ -4,12 +4,33 @@
 //! call itself so its own permission message and token scrubbing apply.
 
 use super::http::{quote, urlencode};
+use regex::Regex;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 pub const DRIVE_URL: &str = "https://www.googleapis.com/drive/v3";
 pub const DOCUMENT_MIME: &str = "application/vnd.google-apps.document";
 pub const SPREADSHEET_MIME: &str = "application/vnd.google-apps.spreadsheet";
 pub const PRESENTATION_MIME: &str = "application/vnd.google-apps.presentation";
+
+fn placeholder_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\{\{\s*([A-Za-z0-9_][A-Za-z0-9_. -]{0,59}?)\s*\}\}").expect("static regex")
+    })
+}
+
+/// The distinct `{{name}}` placeholders in `text`, in first-seen order.
+pub fn placeholders_in(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for c in placeholder_re().captures_iter(text) {
+        let name = c[1].to_string();
+        if !found.contains(&name) {
+            found.push(name);
+        }
+    }
+    found
+}
 
 pub fn text_of(v: Option<&Value>) -> String {
     v.and_then(Value::as_str).unwrap_or("").to_string()
@@ -88,6 +109,14 @@ pub fn copy_url(file_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placeholders_are_distinct_and_trimmed() {
+        assert_eq!(
+            placeholders_in("Hi {{ name }}, {{date}} and {{name}} {{ }} {single}"),
+            vec!["name", "date"]
+        );
+    }
 
     #[test]
     fn list_url_filters_by_mime_escapes_quotes_and_caps_the_limit() {
