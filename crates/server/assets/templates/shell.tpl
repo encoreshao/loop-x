@@ -1092,16 +1092,22 @@
 })();
 (function() {
   // Generic copy button: a [data-copy-target] button copies the text of the
-  // element with that id, then shows its data-copied-label (translated by the
+  // element with that id (a [data-copy] button copies that attribute's value),
+  // then shows its data-copied-label (translated by the
   // page) and a check for a moment. navigator.clipboard needs a secure
   // context, so plain http falls back to execCommand('copy'), as the doc
   // panel's Copy does.
   document.addEventListener('click', function(ev) {
-    var button = ev.target.closest('[data-copy-target]');
+    var button = ev.target.closest('[data-copy-target], [data-copy]');
     if (!button) return;
-    var source = document.getElementById(button.getAttribute('data-copy-target'));
-    if (!source) return;
-    var text = source.textContent;
+    var text;
+    if (button.hasAttribute('data-copy')) {
+      text = button.getAttribute('data-copy');
+    } else {
+      var source = document.getElementById(button.getAttribute('data-copy-target'));
+      if (!source) return;
+      text = source.textContent;
+    }
     var icon = button.querySelector('use');
     var label = button.querySelector('[data-copy-label]');
     var done = function() {

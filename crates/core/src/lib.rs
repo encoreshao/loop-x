@@ -22,6 +22,7 @@ pub mod connectors;
 pub mod connectors_config;
 pub mod content_archive;
 pub mod cost;
+pub mod creator;
 pub mod doctor;
 pub mod events;
 pub mod file_grants;

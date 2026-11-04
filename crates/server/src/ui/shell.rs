@@ -53,6 +53,13 @@ fn chat_pending_card_js(lang: Lang) -> String {
         .replace("__WAITING__", &json_t(lang, "Waiting for your approval"))
         .replace("__APPROVE__", &json_t(lang, "Approve"))
         .replace("__REJECT__", &json_t(lang, "Reject"))
+        .replace(
+            "__RIGHTS_NOTE__",
+            &json_t(
+                lang,
+                "Approving confirms you own this video or have permission to reuse it.",
+            ),
+        )
         .replace("__APPROVED__", &json_t(lang, "Approved."))
         .replace("__REJECTED__", &json_t(lang, "Rejected."))
         .replace(
@@ -416,6 +423,21 @@ mod tests {
     }
 
     #[test]
+    fn the_live_approve_card_states_the_rights_claim_for_creator_generate() {
+        let en = chat_pending_card_js(Lang::En);
+        assert!(!en.contains("__RIGHTS_NOTE__"), "{en}");
+        assert!(
+            en.contains("String(ev.tool || '') === 'creator.generate'"),
+            "{en}"
+        );
+        assert!(en.contains(&pyfmt::json_str(
+            "Approving confirms you own this video or have permission to reuse it."
+        )));
+        let ja = chat_pending_card_js(Lang::Ja);
+        assert!(!ja.contains("Approving confirms"), "{ja}");
+    }
+
+    #[test]
     fn the_shell_renders_with_every_slot_resolved() {
         let state = UiState::for_tests();
         let req = UiRequest::get("/");
@@ -438,7 +460,7 @@ mod tests {
         assert!(!html.contains('\u{27e6}'));
         assert!(html.contains("name='csrf_token' value=\"test-csrf-token\""));
         assert!(
-            html.contains("ev.target.closest('[data-copy-target]')"),
+            html.contains("ev.target.closest('[data-copy-target], [data-copy]')"),
             "every page can opt in to a copy button"
         );
     }

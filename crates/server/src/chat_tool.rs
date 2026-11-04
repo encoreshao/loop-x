@@ -126,7 +126,7 @@ pub fn run(state: &UiState, action: &str, args: &[String], session: &str) -> Res
         "call" => match args.first() {
             None => usage("call <tool> <json>"),
             Some(tool) => {
-                let env = tools_env(state);
+                let env = cli_env(state);
                 let args_json = args.get(1).map_or("{}", String::as_str);
                 let result = chat_tools::run(&env, tool, args_json, session);
                 // Tool name and outcome only: the args may hold issue or email text.
@@ -152,8 +152,22 @@ pub fn render(result: &Value) -> String {
 }
 
 /// The tools registry's environment (also what the chat page approves with).
+/// Creator writes start agent jobs only where the dashboard itself would
+/// (`spawn_processes`), under the same user home.
 pub fn tools_env(state: &UiState) -> ToolsEnv {
     ToolsEnv::new(&state.repo_root, &state.home_dir)
+        .with_user_home(&state.user_home)
+        .with_creator_spawn(
+            state
+                .spawn_processes
+                .then(loopx_core::chat_tools::creator::real_spawn),
+        )
+}
+
+/// The env for `loopx chat-tool call`: the model's own subprocess never starts
+/// a Creator job, only the dashboard's Approve route does.
+fn cli_env(state: &UiState) -> ToolsEnv {
+    tools_env(state).with_creator_spawn(None)
 }
 
 fn py_repr(s: &str) -> String {
@@ -788,6 +802,24 @@ mod tests {
     fn call(state: &UiState, action: &str, args: &[&str]) -> Result<Value, String> {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         run(state, action, &args, "")
+    }
+
+    #[test]
+    fn the_cli_call_path_can_never_start_a_creator_job() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = state(d.path());
+        s.spawn_processes = true;
+        // The Approve route may start jobs here; the `call` subprocess may not.
+        assert!(tools_env(&s).creator_spawn.is_some());
+        assert!(cli_env(&s).creator_spawn.is_none());
+        assert_eq!(cli_env(&s).user_home, s.user_home);
+        let args = vec![
+            "creator.generate".to_string(),
+            r#"{"url": "https://example.com/v", "rights_confirmed": true}"#.to_string(),
+        ];
+        let out = run(&s, "call", &args, "s1").unwrap();
+        assert_eq!(out["status"], "pending_approval", "{out}");
+        assert!(!loopx_core::creator::jobs::jobs_dir(&s.home_dir).exists());
     }
 
     #[test]

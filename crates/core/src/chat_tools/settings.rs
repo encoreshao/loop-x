@@ -17,6 +17,8 @@ use std::path::PathBuf;
 pub enum SettingsError {
     #[error("{0} is not a chat write tool")]
     NotWriteTool(String),
+    #[error("{0} always needs approval")]
+    AlwaysReviewed(String),
     /// The file could not be written (Python raises `OSError`).
     #[error("{0}")]
     Io(String),
@@ -46,15 +48,23 @@ pub(crate) fn auto_approved_in(env: &Env, write_tools: &BTreeSet<String>) -> BTr
     names
         .iter()
         .filter_map(Value::as_str)
-        .filter(|n| write_tools.contains(*n))
+        .filter(|n| write_tools.contains(*n) && !always_reviewed(n))
         .map(str::to_string)
         .collect()
+}
+
+/// Write tools whose review can never be turned off.
+fn always_reviewed(name: &str) -> bool {
+    super::creator::ALWAYS_REVIEW.contains(&name)
 }
 
 /// Turns review off (`enabled`) or back on for one write tool.
 pub fn set_auto_approve(env: &Env, tool: &str, enabled: bool) -> Result<(), SettingsError> {
     if !write_tool_names().iter().any(|n| n == tool) {
         return Err(SettingsError::NotWriteTool(tool.to_string()));
+    }
+    if enabled && always_reviewed(tool) {
+        return Err(SettingsError::AlwaysReviewed(tool.to_string()));
     }
     let mut chosen = auto_approved(env);
     if enabled {
@@ -65,7 +75,8 @@ pub fn set_auto_approve(env: &Env, tool: &str, enabled: bool) -> Result<(), Sett
     save(env, &chosen)
 }
 
-/// Replaces the whole list (every name must be a known write tool). Written
+/// Replaces the whole list (every name must be a known write tool; one that
+/// always needs approval is dropped). Written
 /// atomically (temp file, then rename) with mode 0600, `indent=2`, sorted.
 pub fn save<I, S>(env: &Env, names: I) -> Result<(), SettingsError>
 where
@@ -77,6 +88,7 @@ where
     if let Some(bad) = names.iter().find(|n| !known.contains(n)) {
         return Err(SettingsError::NotWriteTool(bad.clone()));
     }
+    let names: BTreeSet<String> = names.into_iter().filter(|n| !always_reviewed(n)).collect();
     let io = |e: std::io::Error| SettingsError::Io(e.to_string());
     let path = settings_path(env);
     if let Some(parent) = path.parent() {
