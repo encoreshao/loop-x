@@ -1069,6 +1069,8 @@
   "Decks": "Présentations",
   "Found {count} templates in Drive": "{count} modèles trouvés dans Drive",
   "Google didn't grant Slides and Drive access - reconnect and keep every box ticked": "Google n'a pas accordé l'accès à Slides et Drive : reconnectez-vous en laissant toutes les cases cochées",
+  "Google didn't grant Docs and Drive access - reconnect and keep every box ticked": "Google n'a pas accordé l'accès à Docs et Drive : reconnectez-vous en laissant toutes les cases cochées",
+  "Google didn't grant Sheets and Drive access - reconnect and keep every box ticked": "Google n'a pas accordé l'accès à Sheets et Drive : reconnectez-vous en laissant toutes les cases cochées",
   "Google Slides": "Google Slides",
   "Last refreshed {when}": "Dernière actualisation : {when}",
   "No decks yet. Ask in Chat to create one from an enabled template.": "Aucune présentation pour l'instant. Demandez dans le chat d'en créer une à partir d'un modèle activé.",

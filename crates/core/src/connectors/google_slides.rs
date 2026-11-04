@@ -5,6 +5,7 @@
 //! (`auth = OauthGoogle`); the OAuth client is the one saved on the Inbox Triage
 //! setup page. No message built here ever contains a token.
 
+use super::drive::{self, text_of};
 use super::google_auth::GoogleAuth;
 pub use super::google_auth::{ClientFn, RefreshError, RefreshFn};
 use super::http::{quote, urlencode, TEST_TIMEOUT_SECONDS};
@@ -14,8 +15,6 @@ use serde_json::json;
 use std::sync::OnceLock;
 
 pub const SLIDES_URL: &str = "https://slides.googleapis.com/v1/presentations";
-pub const DRIVE_URL: &str = "https://www.googleapis.com/drive/v3";
-const PRESENTATION_MIME: &str = "application/vnd.google-apps.presentation";
 /// Slides whose thumbnail is fetched for a review; later ones are text only.
 const MAX_THUMBNAILS: usize = 30;
 
@@ -62,10 +61,6 @@ pub fn placeholders_in(text: &str) -> Vec<String> {
 
 pub fn web_link(deck_id: &str) -> String {
     format!("https://docs.google.com/presentation/d/{deck_id}/edit")
-}
-
-fn text_of(v: Option<&Value>) -> String {
-    v.and_then(Value::as_str).unwrap_or("").to_string()
 }
 
 /// All the text on one slide, one line per text box.
@@ -154,17 +149,7 @@ impl Connector for GoogleSlidesConnector {
             Ok(t) => t,
             Err(m) => return (false, m),
         };
-        let url = format!(
-            "{DRIVE_URL}/files?{}",
-            urlencode(&[
-                (
-                    "q",
-                    format!("mimeType='{PRESENTATION_MIME}' and trashed=false")
-                ),
-                ("pageSize", "1".to_string()),
-                ("fields", "files(id)".to_string()),
-            ])
-        );
+        let url = drive::probe_url(drive::PRESENTATION_MIME);
         let req = HttpRequest::new("GET", &url)
             .token(Some(&token))
             .timeout_secs(TEST_TIMEOUT_SECONDS)
@@ -183,56 +168,14 @@ impl Connector for GoogleSlidesConnector {
 
     fn list_templates(&self, query: &str, limit: u32) -> ConnResult<Vec<Value>> {
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
-        let mut q = format!("mimeType='{PRESENTATION_MIME}' and trashed=false");
-        let term = query.trim().replace('\\', "").replace('\'', "\\'");
-        if !term.is_empty() {
-            q.push_str(&format!(" and name contains '{term}'"));
-        }
-        let url = format!(
-            "{DRIVE_URL}/files?{}",
-            urlencode(&[
-                ("q", q),
-                ("pageSize", limit.min(100).to_string()),
-                ("orderBy", "modifiedTime desc".to_string()),
-                (
-                    "fields",
-                    "files(id,name,modifiedTime,webViewLink,ownedByMe,owners(displayName))".into()
-                ),
-                ("supportsAllDrives", "true".to_string()),
-                ("includeItemsFromAllDrives", "true".to_string()),
-            ])
-        );
+        let url = drive::list_url(drive::PRESENTATION_MIME, query, limit);
         let data = self.call("GET", &url, &token, None, 3)?;
-        Ok(data
-            .get("files")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|f| f.is_object())
-            .map(|f| {
-                let id = text_of(f.get("id"));
-                let link = match text_of(f.get("webViewLink")) {
-                    l if l.is_empty() => web_link(&id),
-                    l => l,
-                };
-                json!({
-                    "id": id,
-                    "name": text_of(f.get("name")),
-                    "modified": text_of(f.get("modifiedTime")),
-                    "web_link": link,
-                    "owned_by_me": f.get("ownedByMe").and_then(Value::as_bool).unwrap_or(false),
-                    "owner": text_of(f.pointer("/owners/0/displayName")),
-                })
-            })
-            .collect())
+        Ok(drive::rows(&data, web_link))
     }
 
     fn copy_deck(&self, template_id: &str, title: &str) -> ConnResult<Value> {
         let token = self.auth.access_token().map_err(ConnectorError::msg)?;
-        let url = format!(
-            "{DRIVE_URL}/files/{}/copy?supportsAllDrives=true&fields=id",
-            quote(template_id)
-        );
+        let url = drive::copy_url(template_id);
         let made = self.call("POST", &url, &token, Some(json!({"name": title})), 1)?;
         let id = text_of(made.get("id"));
         if id.is_empty() {

@@ -9,10 +9,13 @@
 //! Messages are English (the dashboard translates its own copy), and never
 //! contain a secret.
 
+pub mod drive;
 pub mod github;
 pub mod gitlab;
 pub mod google_auth;
 pub mod google_calendar;
+pub mod google_docs;
+pub mod google_sheets;
 pub mod google_slides;
 pub mod http;
 pub mod jira;
@@ -40,6 +43,9 @@ pub const MAIL: &str = "mail";
 pub const DOCS: &str = "docs";
 pub const CALENDAR: &str = "calendar";
 pub const SLIDES: &str = "slides";
+/// Google Docs (the local documents feature already owns `DOCS`).
+pub const GDOCS: &str = "gdocs";
+pub const SHEETS: &str = "sheets";
 pub const SOCIAL: &str = "social";
 
 /// `ConnectorError` and the other failures a connector call can end in.
@@ -268,11 +274,13 @@ fn is_email(value: &str) -> bool {
 }
 
 /// Every type, in registry order.
-pub fn all_types() -> [&'static TypeInfo; 13] {
+pub fn all_types() -> [&'static TypeInfo; 15] {
     [
         &github::INFO,
         &gitlab::INFO,
         &google_calendar::INFO,
+        &google_docs::INFO,
+        &google_sheets::INFO,
         &google_slides::INFO,
         &jira::INFO,
         &linear::INFO,
@@ -573,6 +581,10 @@ pub fn build(
         "google_calendar" => Box::new(google_calendar::GoogleCalendarConnector::new(
             account, secret, http,
         )),
+        "google_docs" => Box::new(google_docs::GoogleDocsConnector::new(account, secret, http)),
+        "google_sheets" => Box::new(google_sheets::GoogleSheetsConnector::new(
+            account, secret, http,
+        )),
         "google_slides" => Box::new(google_slides::GoogleSlidesConnector::new(
             account, secret, http,
         )),
@@ -795,6 +807,8 @@ mod tests {
                 "github",
                 "gitlab",
                 "google_calendar",
+                "google_docs",
+                "google_sheets",
                 "google_slides",
                 "jira",
                 "linear",
@@ -808,6 +822,16 @@ mod tests {
             ]
         );
         assert!(get_type("gitlab").is_some() && get_type("nope").is_none());
+    }
+
+    #[test]
+    fn build_returns_the_docs_and_sheets_connectors() {
+        let http: Arc<dyn HttpClient> = testutil::FakeHttp::ok(json!({}));
+        for (kind, caps) in [("google_docs", GDOCS), ("google_sheets", SHEETS)] {
+            let c = build(Account::new("a", kind), None, http.clone()).unwrap();
+            assert_eq!(c.info().name, kind);
+            assert_eq!(c.info().capabilities, &[caps]);
+        }
     }
 
     #[test]

@@ -1069,6 +1069,8 @@
   "Decks": "演示文稿",
   "Found {count} templates in Drive": "在云端硬盘中找到 {count} 个模板",
   "Google didn't grant Slides and Drive access - reconnect and keep every box ticked": "Google 未授予幻灯片和云端硬盘访问权限——请重新连接并保持所有选项勾选",
+  "Google didn't grant Docs and Drive access - reconnect and keep every box ticked": "Google 未授予文档和云端硬盘访问权限——请重新连接并保持所有选项勾选",
+  "Google didn't grant Sheets and Drive access - reconnect and keep every box ticked": "Google 未授予表格和云端硬盘访问权限——请重新连接并保持所有选项勾选",
   "Google Slides": "Google 幻灯片",
   "Last refreshed {when}": "上次刷新：{when}",
   "No decks yet. Ask in Chat to create one from an enabled template.": "还没有演示文稿。请在聊天中让它用已启用的模板创建一个。",

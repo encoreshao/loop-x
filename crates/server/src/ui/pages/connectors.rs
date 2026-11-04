@@ -1519,6 +1519,10 @@ pub fn google_callback(
                 false,
                 if account.kind == "google_slides" {
                     t("Google didn't grant Slides and Drive access - reconnect and keep every box ticked")
+                } else if account.kind == "google_docs" {
+                    t("Google didn't grant Docs and Drive access - reconnect and keep every box ticked")
+                } else if account.kind == "google_sheets" {
+                    t("Google didn't grant Sheets and Drive access - reconnect and keep every box ticked")
                 } else {
                     t("Google didn't grant calendar access - reconnect and keep the Calendar box ticked")
                 },

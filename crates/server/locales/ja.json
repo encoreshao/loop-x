@@ -1069,6 +1069,8 @@
   "Decks": "スライド",
   "Found {count} templates in Drive": "Drive で {count} 件のテンプレートが見つかりました",
   "Google didn't grant Slides and Drive access - reconnect and keep every box ticked": "Google がスライドと Drive へのアクセスを許可しませんでした。すべてのチェックボックスをオンにしたまま再接続してください",
+  "Google didn't grant Docs and Drive access - reconnect and keep every box ticked": "Google がドキュメントと Drive へのアクセスを許可しませんでした。すべてのチェックボックスをオンにしたまま再接続してください",
+  "Google didn't grant Sheets and Drive access - reconnect and keep every box ticked": "Google がスプレッドシートと Drive へのアクセスを許可しませんでした。すべてのチェックボックスをオンにしたまま再接続してください",
   "Google Slides": "Google スライド",
   "Last refreshed {when}": "最終更新 {when}",
   "No decks yet. Ask in Chat to create one from an enabled template.": "スライドはまだありません。チャットで、有効なテンプレートから作成するよう依頼してください。",
