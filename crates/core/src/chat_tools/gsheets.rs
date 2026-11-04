@@ -117,7 +117,7 @@ fn check_grid(rows: &[Vec<String>], what: &str) -> Result<(), ToolError> {
 
 fn prepare_create(args: &Map<String, Value>) -> Result<(String, Vec<Value>), ToolError> {
     let title = gfiles::title(args)?;
-    let raw = or_empty(args.get("tabs").unwrap_or(&Value::Null));
+    let raw = gfiles::json_text(args, "tabs");
     if raw.trim().is_empty() {
         return Ok((title, Vec::new()));
     }
@@ -164,7 +164,7 @@ fn prepare_from_template(
     let template_id = gfiles::file_id(args, "template_id")?;
     let template = gfiles::editable(e, &SHEETS, account, &template_id)?;
     let title = gfiles::title(args)?;
-    let fields = gfiles::parse_fields(&or_empty(args.get("fields").unwrap_or(&Value::Null)))?;
+    let fields = gfiles::parse_fields(&gfiles::json_text(args, "fields"))?;
     // Find/replace cannot write raw text, so the connector refuses formulas;
     // refuse them here too so the Approve card never shows one.
     if let Some((k, _)) = fields
@@ -202,10 +202,7 @@ fn prepare_edit(
 ) -> Result<(String, Vec<Value>), ToolError> {
     let id = gfiles::file_id(args, "file_id")?;
     gfiles::editable(e, &SHEETS, account, &id)?;
-    let ops = gfiles::parse_ops(
-        &or_empty(args.get("ops").unwrap_or(&Value::Null)),
-        OPS_EXAMPLE,
-    )?;
+    let ops = gfiles::parse_ops(&gfiles::json_text(args, "ops"), OPS_EXAMPLE)?;
     for op in &ops {
         check_op(op)?;
     }
@@ -296,13 +293,13 @@ fn edit(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolRe
 static NO_ARGS: [Arg; 0] = [];
 static INFO_ARGS: [Arg; 1] = [Arg::req("template_id")];
 static READ_ARGS: [Arg; 1] = [Arg::req("file_id")];
-static CREATE_ARGS: [Arg; 2] = [Arg::req("title"), Arg::opt("tabs")];
+static CREATE_ARGS: [Arg; 2] = [Arg::req("title"), Arg::opt_json("tabs")];
 static FROM_TEMPLATE_ARGS: [Arg; 3] = [
     Arg::req("template_id"),
     Arg::req("title"),
-    Arg::opt("fields"),
+    Arg::opt_json("fields"),
 ];
-static EDIT_ARGS: [Arg; 2] = [Arg::req("file_id"), Arg::req("ops")];
+static EDIT_ARGS: [Arg; 2] = [Arg::req("file_id"), Arg::req_json("ops")];
 
 pub(crate) fn tools() -> Vec<Tool> {
     let t = |name, description, args, mode, handler| Tool {
@@ -498,6 +495,57 @@ mod tests {
             &json!({"file_id": id}).to_string(),
             session,
         )
+    }
+
+    #[test]
+    fn ops_tabs_and_fields_may_be_real_json_or_a_json_string() {
+        let fx = setup();
+        let set = json!([{"op": "set", "range": "Data!A1", "values": [["x"]]}]);
+        for (name, args) in [
+            ("gsheets.edit", json!({"file_id": "t1", "ops": set})),
+            (
+                "gsheets.create",
+                json!({"title": "New", "tabs": [{"name": "A", "rows": [["1"]]}]}),
+            ),
+            (
+                "gsheets.create_from_template",
+                json!({"template_id": "t1", "title": "Acme", "fields": {"client": "Acme"}}),
+            ),
+        ] {
+            let out = run(&fx.env, name, &args.to_string(), "s1");
+            assert_eq!(out["status"], "pending_approval", "{name}: {out}");
+            let out = fx.approve(name, out["args"].clone());
+            assert!(out.get("error").is_none(), "{name}: {out}");
+        }
+        let calls = fx.calls();
+        assert_eq!(calls[0], json!(["edit", "t1", set]));
+        assert_eq!(
+            calls[1],
+            json!(["create", "New", [{"name": "A", "rows": [["1"]]}]])
+        );
+        assert_eq!(calls[3], json!(["fill", "newcopy", [["client", "Acme"]]]));
+        for (name, args) in [
+            (
+                "gsheets.edit",
+                json!({"file_id": "t1", "ops": [{"op": "set", "range": "nope", "values": [["x"]]}]}),
+            ),
+            (
+                "gsheets.create",
+                json!({"title": "x", "tabs": [{"name": "a/b"}]}),
+            ),
+            (
+                "gsheets.create",
+                json!({"title": "x", "tabs": {"name": "A"}}),
+            ),
+            (
+                "gsheets.create_from_template",
+                json!({"template_id": "t1", "title": "x", "fields": {"a": "=1+1"}}),
+            ),
+        ] {
+            let out = run(&fx.env, name, &args.to_string(), "s1");
+            assert!(out.get("error").is_some(), "{args} -> {out}");
+        }
+        assert_eq!(fx.pending_count(), 3);
     }
 
     #[test]

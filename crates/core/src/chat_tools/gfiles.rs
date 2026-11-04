@@ -230,6 +230,17 @@ pub(crate) fn title(args: &Map<String, Value>) -> Result<String, ToolError> {
     Ok(title)
 }
 
+/// A JSON-valued argument (`ops`, `fields`, `tabs`) as JSON text: a string
+/// as given, a real array or object serialised, absent as "". The parsers
+/// below then check both forms the same way.
+pub(crate) fn json_text(args: &Map<String, Value>, key: &str) -> String {
+    match args.get(key) {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(v) => v.to_string(),
+    }
+}
+
 /// `fields`: a JSON object of placeholder name -> text.
 pub(crate) fn parse_fields(raw: &str) -> Result<Vec<(String, String)>, ToolError> {
     let bad = || {

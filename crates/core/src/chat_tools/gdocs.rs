@@ -95,7 +95,7 @@ fn prepare_from_template(
     let template_id = gfiles::file_id(args, "template_id")?;
     let template = gfiles::editable(e, &DOCS, account, &template_id)?;
     let title = gfiles::title(args)?;
-    let fields = gfiles::parse_fields(&or_empty(args.get("fields").unwrap_or(&Value::Null)))?;
+    let fields = gfiles::parse_fields(&gfiles::json_text(args, "fields"))?;
     Ok(FromTemplate {
         template_id,
         template,
@@ -129,10 +129,7 @@ fn prepare_edit(
 ) -> Result<(String, Vec<Value>), ToolError> {
     let id = gfiles::file_id(args, "file_id")?;
     gfiles::editable(e, &DOCS, account, &id)?;
-    let ops = gfiles::parse_ops(
-        &or_empty(args.get("ops").unwrap_or(&Value::Null)),
-        OPS_EXAMPLE,
-    )?;
+    let ops = gfiles::parse_ops(&gfiles::json_text(args, "ops"), OPS_EXAMPLE)?;
     for op in &ops {
         check_op(op)?;
     }
@@ -229,9 +226,9 @@ static CREATE_ARGS: [Arg; 2] = [Arg::req("title"), Arg::opt("text")];
 static FROM_TEMPLATE_ARGS: [Arg; 3] = [
     Arg::req("template_id"),
     Arg::req("title"),
-    Arg::opt("fields"),
+    Arg::opt_json("fields"),
 ];
-static EDIT_ARGS: [Arg; 2] = [Arg::req("file_id"), Arg::req("ops")];
+static EDIT_ARGS: [Arg; 2] = [Arg::req("file_id"), Arg::req_json("ops")];
 
 pub(crate) fn tools() -> Vec<Tool> {
     let t = |name, description, args, mode, handler| Tool {
@@ -673,6 +670,56 @@ mod tests {
         );
         assert_eq!(out["result"]["unmatched"], json!([]), "{out}");
         assert!(out["result"].get("note").is_none(), "{out}");
+    }
+
+    #[test]
+    fn ops_and_fields_may_be_real_json_or_a_json_string() {
+        let fx = setup();
+        for (name, args) in [
+            (
+                "gdocs.edit",
+                json!({"file_id": "t1", "ops": [{"op": "append", "text": "More"}]}),
+            ),
+            (
+                "gdocs.create_from_template",
+                json!({"template_id": "t1", "title": "Acme", "fields": {"client": "Acme"}}),
+            ),
+        ] {
+            let out = run(&fx.env, name, &args.to_string(), "s1");
+            assert_eq!(out["status"], "pending_approval", "{name}: {out}");
+            let out = fx.approve(name, out["args"].clone());
+            assert!(out.get("error").is_none(), "{name}: {out}");
+        }
+        let calls = fx.calls();
+        assert_eq!(
+            calls[0],
+            json!(["edit", "t1", [{"op": "append", "text": "More"}]])
+        );
+        assert_eq!(calls[2], json!(["fill", "newcopy", [["client", "Acme"]]]));
+        // Real JSON is checked exactly like a string of it, before any card.
+        for (name, args) in [
+            (
+                "gdocs.edit",
+                json!({"file_id": "t1", "ops": [{"op": "delete", "find": "x"}]}),
+            ),
+            ("gdocs.edit", json!({"file_id": "t1", "ops": []})),
+            (
+                "gdocs.edit",
+                json!({"file_id": "t1", "ops": {"op": "append", "text": "x"}}),
+            ),
+            (
+                "gdocs.create_from_template",
+                json!({"template_id": "t1", "title": "x", "fields": {"a": {"b": 1}}}),
+            ),
+            (
+                "gdocs.create_from_template",
+                json!({"template_id": "t1", "title": "x", "fields": [1]}),
+            ),
+        ] {
+            let out = run(&fx.env, name, &args.to_string(), "s1");
+            assert!(out.get("error").is_some(), "{args} -> {out}");
+        }
+        assert_eq!(fx.pending_count(), 2);
     }
 
     #[test]

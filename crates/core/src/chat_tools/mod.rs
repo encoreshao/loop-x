@@ -103,6 +103,9 @@ pub type ToolResult = Result<Value, ToolError>;
 pub enum ArgKind {
     Str,
     Int,
+    /// Structured data: a JSON array or object, or a string holding one
+    /// (handlers read it with `gfiles::json_text`).
+    Json,
 }
 
 /// One declared argument of a tool.
@@ -143,6 +146,22 @@ impl Arg {
         Self {
             name,
             kind: ArgKind::Int,
+            required: false,
+            help: "",
+        }
+    }
+    pub const fn req_json(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ArgKind::Json,
+            required: true,
+            help: "",
+        }
+    }
+    pub const fn opt_json(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ArgKind::Json,
             required: false,
             help: "",
         }
@@ -548,6 +567,14 @@ fn validate(tool: &Tool, raw: &str) -> Result<Map<String, Value>, String> {
             ArgKind::Str => {
                 if !value.is_string() {
                     return Err(format!("{} must be a string", arg.name));
+                }
+            }
+            ArgKind::Json => {
+                if !(value.is_string() || value.is_array() || value.is_object()) {
+                    return Err(format!(
+                        "{} must be JSON: an array or object, or a string holding one",
+                        arg.name
+                    ));
                 }
             }
         }
@@ -1025,6 +1052,38 @@ mod tests {
                 "{raw}"
             );
         }
+    }
+
+    #[test]
+    fn json_args_take_a_real_array_or_object_or_a_json_string() {
+        static ARGS: [Arg; 1] = [Arg::req_json("ops")];
+        fn h(_: &Env, _: Option<&dyn Connector>, _: &Map<String, Value>) -> ToolResult {
+            Ok(json!({}))
+        }
+        let tool = Tool {
+            name: "x.y",
+            description: "",
+            args: &ARGS,
+            mode: Mode::Read,
+            connector_type: None,
+            handler: h,
+            select: None,
+        };
+        for ok in [
+            r#"{"ops": [{"op": "a"}]}"#,
+            r#"{"ops": {"a": 1}}"#,
+            r#"{"ops": "[1]"}"#,
+        ] {
+            assert!(validate(&tool, ok).is_ok(), "{ok}");
+        }
+        for bad in [r#"{"ops": 5}"#, r#"{"ops": true}"#] {
+            assert_eq!(
+                validate(&tool, bad).unwrap_err(),
+                "ops must be JSON: an array or object, or a string holding one",
+                "{bad}"
+            );
+        }
+        assert_eq!(validate(&tool, "{}").unwrap_err(), "ops is required");
     }
 
     #[test]

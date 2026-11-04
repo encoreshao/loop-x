@@ -1105,6 +1105,24 @@ expect: {{}}
     }
 
     #[test]
+    fn stub_takes_ops_and_fields_as_real_json_too() {
+        let fx = StubFx::new("Make a brief");
+        let out = fx.call(
+            "gdocs.create_from_template",
+            json!({"template_id": "tpl-doc", "title": "T", "fields": {"client": "Acme"}}),
+        );
+        assert_eq!(out["status"], "pending_approval", "{out}");
+        let out = fx.call(
+            "gdocs.edit",
+            json!({"file_id": "tpl-doc", "ops": [{"op": "append", "text": "More"}]}),
+        );
+        assert_eq!(out["status"], "pending_approval", "{out}");
+        for line in fx.log() {
+            assert_eq!(line["effects"], json!([]), "{line}");
+        }
+    }
+
+    #[test]
     fn stub_never_touches_the_real_home() {
         let fx = StubFx::new("Summarize https://docs.google.com/document/d/pasted-doc/edit");
         fx.call("gdocs.read", json!({"file_id": "pasted-doc"}));

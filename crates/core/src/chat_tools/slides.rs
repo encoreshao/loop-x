@@ -6,8 +6,8 @@
 //! template names are third-party text.
 
 use super::{
-    conn, connector_of, get, gfiles, or_empty, req_str, untrusted_value, Arg, Check, Env, Mode,
-    Tool, ToolError, ToolResult,
+    conn, connector_of, get, gfiles, req_str, untrusted_value, Arg, Check, Env, Mode, Tool,
+    ToolError, ToolResult,
 };
 use crate::connectors::{google_slides, Connector};
 use crate::slides_store as store;
@@ -76,7 +76,7 @@ fn create_deck(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) ->
     let template_id = req_str(args, "template_id")?.trim().to_string();
     let template = ticked(e, c, &template_id)?;
     let title = gfiles::title(args)?;
-    let fields = gfiles::parse_fields(&or_empty(args.get("fields").unwrap_or(&Value::Null)))?;
+    let fields = gfiles::parse_fields(&gfiles::json_text(args, "fields"))?;
     let made = conn(c.copy_deck(&template_id, &title))?;
     let deck_id = get(&made, "id").as_str().unwrap_or("").to_string();
     let link = get(&made, "web_link").clone();
@@ -142,10 +142,7 @@ fn prepare_edit(
 ) -> Result<(String, Vec<Value>), ToolError> {
     let id = gfiles::file_id(args, "deck_id")?;
     created_here(e, account, &id)?;
-    let ops = gfiles::parse_ops(
-        &or_empty(args.get("ops").unwrap_or(&Value::Null)),
-        OPS_EXAMPLE,
-    )?;
+    let ops = gfiles::parse_ops(&gfiles::json_text(args, "ops"), OPS_EXAMPLE)?;
     for op in &ops {
         gfiles::only_keys(op, &["op", "find", "with"])?;
         conn(google_slides::validate_op(&Value::Object(op.clone())))?;
@@ -183,10 +180,10 @@ static INFO_ARGS: [Arg; 1] = [Arg::req("template_id")];
 static CREATE_ARGS: [Arg; 3] = [
     Arg::req("template_id"),
     Arg::req("title"),
-    Arg::opt("fields"),
+    Arg::opt_json("fields"),
 ];
 static REVIEW_ARGS: [Arg; 1] = [Arg::req("deck_id")];
-static EDIT_ARGS: [Arg; 2] = [Arg::req("deck_id"), Arg::req("ops")];
+static EDIT_ARGS: [Arg; 2] = [Arg::req("deck_id"), Arg::req_json("ops")];
 
 pub(crate) fn tools() -> Vec<Tool> {
     let t = |name, description, args, mode, handler| Tool {
@@ -524,6 +521,45 @@ mod tests {
         let edit = log.iter().find(|c| c[0] == "edit").unwrap();
         assert_eq!(edit[1], "new1");
         assert_eq!(edit[2][1]["with"], "c");
+    }
+
+    #[test]
+    fn ops_and_fields_may_be_real_json_or_a_json_string() {
+        let (e, _d, log) = setup(false);
+        let out = run(
+            &e,
+            "slides.create_deck",
+            &json!({"template_id": "t1", "title": "x", "fields": {"client": "Acme"}}).to_string(),
+            "s1",
+        );
+        assert_eq!(out["status"], "pending_approval", "{out}");
+        let out = execute_tool(
+            &e.clone().with_session("s1"),
+            "slides.create_deck",
+            &out["args"],
+        );
+        assert_eq!(out["result"]["deck_id"], "new1", "{out}");
+        let ops = json!([{"op": "replace", "find": "Acme", "with": "Beta"}]);
+        let out = run(
+            &e,
+            "slides.edit_deck",
+            &json!({"deck_id": "new1", "ops": ops}).to_string(),
+            "s1",
+        );
+        assert_eq!(out["status"], "pending_approval", "{out}");
+        let out = execute_tool(
+            &e.clone().with_session("s1"),
+            "slides.edit_deck",
+            &out["args"],
+        );
+        assert_eq!(out["result"]["applied"], 1, "{out}");
+        let log = log.lock().unwrap();
+        assert_eq!(log[1], json!(["fill", "new1", [["client", "Acme"]]]));
+        assert_eq!(log[2], json!(["edit", "new1", ops]));
+        drop(log);
+        let bad = json!({"deck_id": "new1", "ops": [{"op": "append", "text": "x"}]});
+        let out = run(&e, "slides.edit_deck", &bad.to_string(), "s1");
+        assert!(out.get("error").is_some(), "{out}");
     }
 
     #[test]

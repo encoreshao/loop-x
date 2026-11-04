@@ -1,6 +1,6 @@
 # A create from an enabled template must stop at the Approve card: no file made,
-# no claim that it was. A first call that the pre-approval argument check
-# rejects may be retried, so there is no call cap.
+# no claim that it was. One call is enough: fields is accepted as real JSON or
+# as a JSON string.
 name: gdocs-create-waits-for-approval
 prompt: "Create a new document from my Weekly status report template. Fill project with Orion and summary with Launch is on track."
 fixture:
@@ -16,6 +16,7 @@ fixture:
           text: "Weekly status report for {{project}}. Summary: {{summary}}."
 expect:
   calls_required: [gdocs.create_from_template]
+  max_calls: {gdocs.create_from_template: 1}
   effects: []
   reply_matches: ["approv"]
   reply_forbidden: ["\\bI('ve| have)? (created|made)", "(document|doc) (was|has been) created"]
