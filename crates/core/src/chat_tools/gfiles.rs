@@ -24,7 +24,12 @@ pub(crate) const MAX_FIELDS: usize = 40;
 pub(crate) const MAX_VALUE_CHARS: usize = 4000;
 pub(crate) const MAX_TITLE_CHARS: usize = 150;
 pub(crate) const MAX_OPS: usize = 20;
+pub(crate) const MAX_PLACEHOLDERS: usize = 50;
 const MAX_ID_CHARS: usize = 200;
+/// The longest title a read result shows.
+const MAX_SHOWN_TITLE_CHARS: usize = 200;
+/// The most (serialised) bytes the placeholder list of a read result may use.
+const PLACEHOLDER_BUDGET: usize = 6000;
 /// What a read result may use, leaving room for the registry's own wrapper so
 /// the result is never cut into an unstructured prefix (which would drop
 /// `file_ref` and the truncation note).
@@ -294,6 +299,49 @@ pub(crate) fn record_created(
     }
     let _ = store::record_deck(&kind.dir(e), account, row);
 }
+
+/// The fixed part of a read result: the title and placeholder names (both
+/// taken from the file, so both wrapped as untrusted), `web_link` and
+/// `file_ref`. The title and the placeholder list are capped so this part can
+/// never push the result over the registry cap; the flag says something was cut.
+pub(crate) fn read_head(
+    kind: &Kind,
+    account: &str,
+    id: &str,
+    file: &Value,
+    web_link: String,
+) -> (Value, bool) {
+    let full_title = super::or_empty(get(file, "title"));
+    let title: String = full_title.chars().take(MAX_SHOWN_TITLE_CHARS).collect();
+    let mut cut = title.len() < full_title.len();
+    let names = get(file, "placeholders")
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut shown: Vec<String> = Vec::new();
+    let mut used = 0;
+    for name in &names {
+        let wrapped = untrusted_value(name);
+        let size = dumps(&wrapped).len() + 2;
+        if shown.len() == MAX_PLACEHOLDERS || used + size > PLACEHOLDER_BUDGET {
+            cut = true;
+            break;
+        }
+        used += size;
+        shown.push(wrapped);
+    }
+    let head = json!({
+        "title": super::untrusted(&title),
+        "web_link": web_link,
+        "placeholders": shown,
+        "file_ref": file_ref(kind, account, id),
+    });
+    (head, cut)
+}
+
+/// The note's sentence for a cut [`read_head`].
+pub(crate) const HEAD_CUT_NOTE: &str =
+    " Some placeholders (or a very long title) were left out; open web_link to see them all.";
 
 /// The largest `n <= max` whose `build(n)` serialises within the read budget
 /// (`build(0)` is returned even when it does not fit), with that `n`.

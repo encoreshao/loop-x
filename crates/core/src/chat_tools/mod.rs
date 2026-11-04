@@ -1224,6 +1224,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_google_file_write_tool_has_a_pre_approval_check() {
+        let writes: Vec<&Tool> = tools()
+            .iter()
+            .filter(|t| {
+                t.mode == Mode::Write
+                    && matches!(t.connector_type, Some("google_docs" | "google_sheets"))
+            })
+            .collect();
+        assert_eq!(writes.len(), 6);
+        for t in writes {
+            assert!(precheck(t.name).is_some(), "{}", t.name);
+        }
+    }
+
     fn write_tool(handler: Handler, kind: Option<&'static str>) -> Tool {
         tool("fake.write", Mode::Write, kind, &BODY_ARGS, handler)
     }
