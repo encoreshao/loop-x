@@ -10,6 +10,7 @@
 //! [`execute_tool`].
 
 pub mod calendar;
+pub mod creator;
 pub mod documents;
 pub mod gdocs;
 pub(crate) mod gfiles;
@@ -106,6 +107,8 @@ pub enum ArgKind {
     /// Structured data: a JSON array or object, or a string holding one
     /// (handlers read it with `gfiles::json_text`).
     Json,
+    /// A JSON `true`/`false` (a string is not accepted).
+    Bool,
 }
 
 /// One declared argument of a tool.
@@ -163,6 +166,14 @@ impl Arg {
             name,
             kind: ArgKind::Json,
             required: false,
+            help: "",
+        }
+    }
+    pub const fn req_bool(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: ArgKind::Bool,
+            required: true,
             help: "",
         }
     }
@@ -306,6 +317,15 @@ pub struct Env {
     /// The chat session a call runs in ("" outside a chat). Handlers use it to
     /// check [`crate::file_grants`].
     pub session: String,
+    /// The user's home (`~`): where the Creator skills keep their scout catalogs
+    /// and finished videos.
+    pub user_home: PathBuf,
+    /// Where `creator.*` reads video-scout catalogs and finished videos.
+    pub creator_scout_dir: PathBuf,
+    pub creator_videos_dir: PathBuf,
+    /// Starts an approved Creator agent job; `None` (the default) means this
+    /// process does not start agent jobs, like the dashboard's `spawn_processes`.
+    pub creator_spawn: Option<Arc<creator::CreatorSpawn>>,
 }
 
 impl Env {
@@ -319,10 +339,15 @@ impl Env {
             ..Paths::default()
         };
         let inbox_path = paths.inbox();
+        let user_home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         Self {
             repo_root,
             home_dir,
             session: String::new(),
+            creator_scout_dir: crate::creator::scout::scout_root(&user_home),
+            creator_videos_dir: crate::creator::videos::videos_root(&user_home),
+            user_home,
+            creator_spawn: None,
             provider: Arc::new(ConfigProvider::new(paths)),
             inbox_provider: Arc::new(move |id| {
                 crate::inbox_config::get_inbox(id, &inbox_path)
@@ -338,6 +363,21 @@ impl Env {
 
     pub fn with_session(mut self, session: &str) -> Self {
         self.session = session.to_string();
+        self
+    }
+
+    /// The user's home, with the Creator folders resolved under it the way the
+    /// Creator page resolves them.
+    pub fn with_user_home(mut self, user_home: impl Into<PathBuf>) -> Self {
+        self.user_home = user_home.into();
+        self.creator_scout_dir = crate::creator::scout::scout_root(&self.user_home);
+        self.creator_videos_dir = crate::creator::videos::videos_root(&self.user_home);
+        self
+    }
+
+    /// Lets approved `creator.*` writes start agent jobs (`None`: they refuse).
+    pub fn with_creator_spawn(mut self, spawn: Option<Arc<creator::CreatorSpawn>>) -> Self {
+        self.creator_spawn = spawn;
         self
     }
 
@@ -442,6 +482,7 @@ pub fn tools() -> &'static [Tool] {
     TOOLS.get_or_init(|| {
         let mut all = Vec::new();
         all.extend(calendar::tools());
+        all.extend(creator::tools());
         all.extend(documents::tools());
         all.extend(gdocs::tools());
         all.extend(github::tools());
@@ -465,6 +506,7 @@ fn precheck(name: &str) -> Option<Check> {
     CHECKS
         .get_or_init(|| {
             let mut all = gdocs::checks();
+            all.extend(creator::checks());
             all.extend(gsheets::checks());
             all.extend(slides::checks());
             all
@@ -575,6 +617,11 @@ fn validate(tool: &Tool, raw: &str) -> Result<Map<String, Value>, String> {
                         "{} must be JSON: an array or object, or a string holding one",
                         arg.name
                     ));
+                }
+            }
+            ArgKind::Bool => {
+                if !value.is_boolean() {
+                    return Err(format!("{} must be true or false", arg.name));
                 }
             }
         }
@@ -744,7 +791,13 @@ pub(crate) fn run_in(
             }
             args.insert("account".into(), Value::String(id)); // freeze the target for approve
         }
-        Ok(None) => {}
+        Ok(None) => {
+            if let Some(check) = precheck(tool.name) {
+                if let Err(e) = check(env, "", &args) {
+                    return failure(tool, e);
+                }
+            }
+        }
     }
     let summary: String = args
         .values()
@@ -1240,7 +1293,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 33);
+        assert_eq!(names.len(), 37);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1276,6 +1329,8 @@ mod tests {
             write_tool_names(),
             [
                 "calendar.create_event",
+                "creator.generate",
+                "creator.start_scout",
                 "gdocs.create",
                 "gdocs.create_from_template",
                 "gdocs.edit",
@@ -1296,7 +1351,8 @@ mod tests {
         let mut names: Vec<&str> = gdocs::checks().into_iter().map(|(n, _)| n).collect();
         names.extend(gsheets::checks().into_iter().map(|(n, _)| n));
         names.extend(slides::checks().into_iter().map(|(n, _)| n));
-        assert_eq!(names.len(), 7);
+        names.extend(creator::checks().into_iter().map(|(n, _)| n));
+        assert_eq!(names.len(), 9);
         for n in names {
             assert_eq!(tool_mode(n), Some(Mode::Write), "{n}");
             assert!(precheck(n).is_some(), "{n}");

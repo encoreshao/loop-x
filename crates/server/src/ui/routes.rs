@@ -186,6 +186,14 @@ impl UiResponse {
         )
     }
 
+    /// A binary body (media files): the status, its content type and extra headers.
+    pub fn bytes(status: u16, content_type: &str, headers: &[(&str, &str)], body: Vec<u8>) -> Self {
+        let mut r = Self::with(status, &[("Content-Type", content_type)], body);
+        r.headers
+            .extend(headers.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        r
+    }
+
     /// A body-less redirect (301 for the legacy table, 303 after a POST).
     pub fn redirect(status: u16, location: &str) -> Self {
         Self::with(

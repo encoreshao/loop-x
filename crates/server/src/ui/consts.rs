@@ -65,7 +65,7 @@ mod tests {
     fn constants_resolve_including_blobs() {
         assert!(ds("_STYLE").len() > 100_000);
         assert!(ds("_SPINNER_ICON").starts_with("<span class='md-spinner"));
-        assert_eq!(list("dashboard_server", "_NAV_ITEMS").len(), 7);
+        assert_eq!(list("dashboard_server", "_NAV_ITEMS").len(), 8);
         assert!(get_str("dashboard_server", "_NOPE").is_none());
     }
 

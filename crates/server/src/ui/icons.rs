@@ -79,6 +79,7 @@ pub const NAMES: &[&str] = &[
     "translate",
     "tune",
     "unfold_more",
+    "video",
     "videocam",
     "visibility",
     "warning",

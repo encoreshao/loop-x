@@ -11,7 +11,7 @@ import Testing
 
     @Test func everySidebarPageHasAnEntry() {
         let paths = Set(all.map(\.path))
-        for p in ["/loops", "/runs", "/insights", "/harness", "/connectors", "/settings"] { #expect(paths.contains(p), "missing \(p)") }
+        for p in ["/loops", "/creator", "/runs", "/insights", "/harness", "/connectors", "/settings"] { #expect(paths.contains(p), "missing \(p)") }
         #expect(DashboardMenu.home.path == "/")
     }
 

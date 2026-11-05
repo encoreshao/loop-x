@@ -56,7 +56,7 @@ fn store(state: &UiState) -> MessageStore {
 }
 
 fn tools_env(state: &UiState) -> ToolsEnv {
-    ToolsEnv::new(&state.repo_root, &state.home_dir)
+    crate::chat_tool::tools_env(state)
 }
 
 fn epoch(state: &UiState) -> f64 {
@@ -113,6 +113,10 @@ pub const TOOL_LABELS: &[(&str, &str)] = &[
     ("gdocs.edit", "Editing document"),
     ("gsheets.edit", "Editing spreadsheet"),
     ("slides.edit_deck", "Editing presentation"),
+    ("creator.list_sources", "Listing sources"),
+    ("creator.list_videos", "Listing videos"),
+    ("creator.start_scout", "Starting scout"),
+    ("creator.generate", "Making video"),
 ];
 
 /// `tool_label`: the translated label, or the tool name when it has none.
@@ -125,7 +129,8 @@ pub fn tool_label(lang: Lang, name: &str) -> String {
 
 /// `chat_pending_card_html`.
 pub fn pending_card_html(lang: Lang, pending_id: &str, session: &str, record: &Value) -> String {
-    let tool = pyfmt::escape(&text_of(record.get("tool")));
+    let tool_name = text_of(record.get("tool"));
+    let tool = pyfmt::escape(&tool_name);
     let summary = match record.get("summary") {
         Some(v) if loopx_core::loops_config::py_truthy(v) => pydumps::py_str(v),
         _ => String::new(),
@@ -134,6 +139,16 @@ pub fn pending_card_html(lang: Lang, pending_id: &str, session: &str, record: &V
         String::new()
     } else {
         format!("<div class='pending-card-summary'>{}</div>", pyfmt::escape(&summary))
+    };
+    // What approving a `creator.generate` card claims, stated on the card itself:
+    // the rights flag in its arguments was set by the model, not by the user.
+    let summary_html = if tool_name == "creator.generate" {
+        format!(
+            "{summary_html}<div class='pending-card-summary'>{}</div>",
+            esc_t(lang, "Approving confirms you own this video or have permission to reuse it.")
+        )
+    } else {
+        summary_html
     };
     let args = pyfmt::escape(
         &serde_json::to_string_pretty(record.get("args").unwrap_or(&json!({})))
@@ -455,7 +470,7 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
 // ----- the overview (chat) body -----
 
 /// (icon, label, hint, prompt) - the rows of the composer's "+" menu.
-const SUGGESTIONS: [(&str, &str, &str, &str); 4] = [
+const SUGGESTIONS: [(&str, &str, &str, &str); 6] = [
     ("monitoring", "Loop status", "See what the loop is doing", "What is the loop doing right now?"),
     ("history", "Latest run", "Summarize the last issue run", "Summarize the latest issue loop run."),
     ("bolt", "Run an issue", "Paste a GitLab or GitHub link", "Run this issue now (GitLab or GitHub link): "),
@@ -464,6 +479,18 @@ const SUGGESTIONS: [(&str, &str, &str, &str); 4] = [
         "Inbox triage",
         "Check for anything urgent",
         "Summarize my latest inbox triage - anything urgent?",
+    ),
+    (
+        "search",
+        "Find videos",
+        "Discover worthwhile videos to turn into shorts",
+        "Use video-scout to find worthwhile videos about: ",
+    ),
+    (
+        "video",
+        "Make a short video",
+        "Turn a scouted or pasted video into a bilingual short",
+        "Make a short video from the top pick of my latest video scout, or from this link: ",
     ),
 ];
 
@@ -919,7 +946,12 @@ fn approval_text(lang: Lang, tool: &str, summary: &str, result: &Value) -> Strin
     if let Some(error) = result.get("error") {
         return i18n::t(lang, "{tool} failed: {error}", &[("tool", tool), ("error", &pydumps::py_str(error))]);
     }
-    let mut text = i18n::t(lang, "Approved and done: {tool} {summary}", &[("tool", tool), ("summary", summary)]);
+    // A Creator write only starts a background job; it is not done yet.
+    let mut text = if chat_tools::creator::ALWAYS_REVIEW.contains(&tool) {
+        i18n::t(lang, "Approved, job started: {tool} {summary}", &[("tool", tool), ("summary", summary)])
+    } else {
+        i18n::t(lang, "Approved and done: {tool} {summary}", &[("tool", tool), ("summary", summary)])
+    };
     let finds: Vec<String> = result
         .pointer("/result/unmatched")
         .and_then(Value::as_array)
@@ -1246,6 +1278,91 @@ mod tests {
         assert!(html.contains("id='file-panel'"), "{html}");
         assert!(html.contains("data-file-tabs") && html.contains("data-file-close"), "{html}");
         assert!(html.contains("data-file-body"), "{html}");
+    }
+
+    #[test]
+    fn the_creator_generate_card_states_what_approving_confirms() {
+        let note = "Approving confirms you own this video or have permission to reuse it.";
+        let record = json!({"tool": "creator.generate", "summary": "https://example.com/v",
+                            "args": {"url": "https://example.com/v", "rights_confirmed": true}});
+        let html = pending_card_html(Lang::En, "p1", "s1", &record);
+        assert!(html.contains(note), "{html}");
+        let ja = pending_card_html(Lang::Ja, "p1", "s1", &record);
+        assert!(!ja.contains(note), "{ja}");
+        assert!(ja.contains(&pyfmt::escape(&t(Lang::Ja, note))), "{ja}");
+        let other = json!({"tool": "mail.send", "summary": "x", "args": {}});
+        assert!(!pending_card_html(Lang::En, "p1", "s1", &other).contains(note));
+        let scout = json!({"tool": "creator.start_scout", "summary": "x", "args": {}});
+        assert!(!pending_card_html(Lang::En, "p1", "s1", &scout).contains(note));
+    }
+
+    #[test]
+    fn an_approved_creator_job_says_started_not_done() {
+        let ok = json!({"tool": "creator.generate", "result": {"job_id": "j", "state": "running"}});
+        for tool in ["creator.generate", "creator.start_scout"] {
+            let text = approval_text(Lang::En, tool, "s", &ok);
+            assert_eq!(text, format!("Approved, job started: {tool} s"));
+            assert!(!text.contains("done"), "{text}");
+            let fr = approval_text(Lang::Fr, tool, "s", &ok);
+            assert!(!fr.starts_with("Approved"), "{fr}");
+        }
+        let failed = json!({"error": "nope"});
+        assert_eq!(
+            approval_text(Lang::En, "creator.generate", "s", &failed),
+            "creator.generate failed: nope"
+        );
+    }
+
+    #[test]
+    fn creator_tools_have_translated_labels() {
+        for (name, en) in [
+            ("creator.list_sources", "Listing sources"),
+            ("creator.list_videos", "Listing videos"),
+            ("creator.start_scout", "Starting scout"),
+            ("creator.generate", "Making video"),
+        ] {
+            assert_eq!(tool_label(Lang::En, name), en);
+            for lang in [Lang::Ja, Lang::Zh, Lang::Fr] {
+                assert_ne!(tool_label(lang, name), en, "{name} {lang:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn suggestions_include_find_and_make_video() {
+        let html = overview_for("claude", None);
+        assert_eq!(html.matches("data-chat-suggestion=").count(), 6, "{html}");
+        assert!(html.contains("Find videos") && html.contains("Make a short video"), "{html}");
+        assert!(html.contains("Use video-scout to find worthwhile videos about: "), "{html}");
+        assert!(html.contains("Make a short video from the top pick of my latest video scout, or from this link: "), "{html}");
+        assert!(html.contains("#i-video") && html.contains("#i-search"), "{html}");
+        let ja = overview_for("claude", Some("ja"));
+        assert!(!ja.contains(">Find videos<") && !ja.contains(">Make a short video<"), "{ja}");
+    }
+
+    #[test]
+    fn approving_a_creator_write_honours_the_spawn_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        assert!(!state.spawn_processes);
+        assert!(tools_env(&state).creator_spawn.is_none());
+        assert_eq!(tools_env(&state).user_home, state.user_home);
+        let env = tools_env(&state).with_session("s1");
+        let proposed = chat_tools::run(
+            &env,
+            "creator.generate",
+            r#"{"url": "https://example.com/v", "rights_confirmed": true}"#,
+            "s1",
+        );
+        assert_eq!(proposed["status"], "pending_approval", "{proposed}");
+        let out = chat_approve(&state, Lang::En, proposed["id"].as_str().unwrap(), "s1");
+        assert_eq!(out["ok"], false, "{out}");
+        assert!(out["error"].as_str().unwrap().contains("does not start agent jobs"), "{out}");
+        assert!(!loopx_core::creator::jobs::jobs_dir(&state.home_dir).exists());
+
+        let mut live = state;
+        live.spawn_processes = true;
+        assert!(tools_env(&live).creator_spawn.is_some());
     }
 
     const FILE_ID: &str = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";

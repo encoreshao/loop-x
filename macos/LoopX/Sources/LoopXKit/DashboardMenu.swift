@@ -39,6 +39,7 @@ public enum DashboardMenu {
             Entry("Issues", "/loops/issue-loop", Shortcut("2", [.command])),
             Entry("Topic Monitor", "/loops/topic-loop", Shortcut("3", [.command])),
             Entry("Inbox Triage", "/loops/inbox-triage-loop", Shortcut("4", [.command])),
+            Entry("Creator", "/creator", Shortcut("5", [.command])),
         ]),
         Section(title: "Observe", entries: [
             Entry("Runs", "/runs", Shortcut("1", [.command, .option])),
