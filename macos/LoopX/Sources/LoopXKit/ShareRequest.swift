@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// What the dashboard page asks the app to share (the Creator page's Share buttons): a finished video and/or its
@@ -7,6 +8,9 @@ import Foundation
 public struct ShareRequest: Equatable {
     public let fileURL: URL?
     public let text: String?
+    /// Where the clicked Share button is, in page coordinates (the web view's own, top-left origin), so the share
+    /// sheet opens next to it; nil when the page did not say or sent nonsense.
+    public let anchor: CGRect?
 
     public static let allowedExtensions: Set<String> = ["mp4", "png", "jpg", "jpeg"]
     public static let maxTextLength = 5000
@@ -40,6 +44,19 @@ public struct ShareRequest: Equatable {
             file = url
         }
         guard file != nil || text != nil else { return nil }
-        return ShareRequest(fileURL: file, text: text)
+        return ShareRequest(fileURL: file, text: text, anchor: anchor(dict))
+    }
+
+    /// The button rectangle from `x`, `y`, `width`, `height`: finite numbers, not negative in size, and within a
+    /// screen-sized range (a page cannot place the sheet anywhere odd).
+    private static func anchor(_ dict: [String: Any]) -> CGRect? {
+        func number(_ key: String) -> Double? {
+            guard let n = dict[key] as? NSNumber else { return nil }
+            let value = n.doubleValue
+            return value.isFinite && abs(value) <= 100_000 ? value : nil
+        }
+        guard let x = number("x"), let y = number("y"),
+              let w = number("width"), let h = number("height"), w >= 0, h >= 0 else { return nil }
+        return CGRect(x: x, y: y, width: w, height: h)
     }
 }

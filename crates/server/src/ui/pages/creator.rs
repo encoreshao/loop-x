@@ -23,13 +23,15 @@ use loopx_core::creator::videos::{self, PublishCopy, VideoProject};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-const TABS: [&str; 3] = ["discover", "videos", "jobs"];
+const TABS: [&str; 4] = ["discover", "library", "videos", "jobs"];
 /// A GET without `Range` larger than this is refused (players always send ranges).
 const MAX_FULL_BYTES: u64 = 64 * 1024 * 1024;
 /// The most one range response carries; an open or larger range is cut to this.
 const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 /// Rows on the Jobs tab (newest first); older records stay on disk until deleted.
 const JOBS_SHOWN: usize = 200;
+/// Rows on the Library tab; search and filters narrow the rest.
+const LIBRARY_SHOWN: usize = 200;
 /// What a scout job searches for when the topic field is left empty.
 const OPEN_SCOUT_QUERY: &str =
     "topic-free discovery: a few of the most worthwhile recent public talks and interviews";
@@ -91,7 +93,7 @@ fn https_link(url: &str) -> Option<&str> {
 fn generate(ctx: &UiCtx) -> UiResponse {
     let form = ctx.form();
     let url = form.first("url").unwrap_or("").trim().to_string();
-    let to = back("discover");
+    let to = back(form.first("tab").unwrap_or("discover"));
     let fail = |m: String| UiResponse::flash_redirect(false, &m, &to);
     if form.first("rights") != Some("1") {
         return fail(
@@ -331,8 +333,12 @@ fn job_status(ctx: &UiCtx) -> UiResponse {
                 "state": job.state,
                 "line": line,
                 "progress": progress_parts(ctx, &job).map(|(percent, text)| {
-                    let (stage, total) = jobs::progress(&dir, id)
-                        .map_or((0, loopx_core::creator::progress::STAGES.len()), |p| (p.stage, p.total));
+                    let none_yet = match job.kind {
+                        JobKind::Generate => loopx_core::creator::progress::STAGES.len(),
+                        JobKind::Scout => loopx_core::creator::progress::SCOUT_STAGES.len(),
+                    };
+                    let (stage, total) =
+                        jobs::progress(&dir, id).map_or((0, none_yet), |p| (p.stage, p.total));
                     serde_json::json!({"stage": stage, "total": total, "percent": percent, "text": text})
                 }),
             })
@@ -490,6 +496,28 @@ fn joined(parts: &[String]) -> String {
         .join(" · ")
 }
 
+/// Like [`joined`], without repeating a value (a channel that is also the platform).
+fn joined_unique(parts: &[String]) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for p in parts.iter().filter(|p| !p.is_empty()) {
+        if !seen.iter().any(|q| q.eq_ignore_ascii_case(p)) {
+            seen.push(p.clone());
+        }
+    }
+    seen.join(" · ")
+}
+
+/// The date part of a timestamp (`2026-11-04`); anything else as it is.
+fn day(stamp: &str) -> String {
+    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(stamp) {
+        return t.format("%Y-%m-%d").to_string();
+    }
+    match stamp.get(..10) {
+        Some(head) if stamp.as_bytes().get(10) == Some(&b'T') => head.to_string(),
+        _ => stamp.to_string(),
+    }
+}
+
 /// The page's own styles and its small dialog script (static files, no data).
 const CREATOR_CSS: &str = include_str!("../../../assets/creator/creator.css");
 const CREATOR_JS: &str = include_str!("../../../assets/creator/creator.js");
@@ -515,6 +543,7 @@ fn section(title: &str, aside: &str, body: &str) -> String {
 fn tabs_html(ctx: &UiCtx, active: &str) -> String {
     let labels = [
         ("discover", ctx.t("Discover")),
+        ("library", ctx.t("Library")),
         ("videos", ctx.t("Videos")),
         ("jobs", ctx.t("Jobs")),
     ];
@@ -548,6 +577,44 @@ fn state_pill(ctx: &UiCtx, state: &str) -> String {
         "stopped" => pill("neutral", &ctx.t("Stopped")),
         other => pill("neutral", other),
     }
+}
+
+/// The pill for a job: its state, where a clean exit that left nothing behind reads as
+/// what it is, not as Done.
+fn job_pill(ctx: &UiCtx, job: &JobRecord) -> String {
+    match (job.state.as_str(), job.kind) {
+        ("no_output", JobKind::Generate) => pill("error", &ctx.t("No video produced")),
+        ("no_output", JobKind::Scout) => pill("error", &ctx.t("No results")),
+        (state, _) => state_pill(ctx, state),
+    }
+}
+
+/// A job the record calls `done` (its process exited with status 0) but that wrote no
+/// video file (Generate) or catalog (Find videos) since it started did not do its
+/// work: it becomes `no_output`, so the page never calls it Done.
+fn settle(ctx: &UiCtx, mut jobs: Vec<JobRecord>) -> Vec<JobRecord> {
+    if !jobs.iter().any(|j| j.state == "done") {
+        return jobs;
+    }
+    let projects = videos::list_projects(&videos_root(ctx)).0;
+    let scout_root = scout::scout_root(&ctx.state.user_home);
+    for job in jobs.iter_mut().filter(|j| j.state == "done") {
+        let Some(since) = jobs::started_time(job) else {
+            continue;
+        };
+        // Only what was written while this job ran counts: a later job's video must
+        // not make an earlier empty run look successful. A few seconds of slack
+        // after the last log write covers the final file landing as the job exits.
+        let until = jobs::ended_time(job).map(|t| t + std::time::Duration::from_secs(5));
+        let produced = match job.kind {
+            JobKind::Generate => videos::any_video_between(&projects, since, until),
+            JobKind::Scout => scout::any_catalog_between(&scout_root, since, until),
+        };
+        if !produced {
+            job.state = "no_output".to_string();
+        }
+    }
+    jobs
 }
 
 fn stop_form(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
@@ -602,7 +669,15 @@ fn kind_label(ctx: &UiCtx, job: &JobRecord) -> String {
 
 /// The translated name of stage `n` (1-based) of a video; literal strings so the
 /// catalogs can be checked against the sources.
-fn stage_label(ctx: &UiCtx, n: usize) -> String {
+fn stage_label(ctx: &UiCtx, kind: JobKind, n: usize) -> String {
+    if kind == JobKind::Scout {
+        return match n {
+            1 => ctx.t("Check earlier results"),
+            2 => ctx.t("Search for candidates"),
+            3 => ctx.t("Inspect candidates"),
+            _ => ctx.t("Write the results"),
+        };
+    }
     match n {
         1 => ctx.t("Fetch the source"),
         2 => ctx.t("Probe and extract audio"),
@@ -616,12 +691,9 @@ fn stage_label(ctx: &UiCtx, n: usize) -> String {
     }
 }
 
-/// `(percent, text)` of a Generate job's progress: "Stage 3 of 9 · Transcribe", or
-/// "Getting started" before the first recognised step.
+/// `(percent, text)` of a job's progress: "Stage 3 of 9 · Transcribe", or "Getting
+/// started" before the first recognised step.
 fn progress_parts(ctx: &UiCtx, job: &JobRecord) -> Option<(u8, String)> {
-    if job.kind != JobKind::Generate {
-        return None;
-    }
     Some(match jobs::progress(&jobs_dir(ctx), &job.id) {
         Some(p) => (
             p.percent,
@@ -630,7 +702,7 @@ fn progress_parts(ctx: &UiCtx, job: &JobRecord) -> Option<(u8, String)> {
                 &[
                     ("stage", &p.stage.to_string()),
                     ("total", &p.total.to_string()),
-                    ("label", &stage_label(ctx, p.stage)),
+                    ("label", &stage_label(ctx, job.kind, p.stage)),
                 ],
             ),
         ),
@@ -694,7 +766,7 @@ fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
         "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>\
 <div class='cr-meta'>{}</div>{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
         h(&kind_label(ctx, job)),
-        state_pill(ctx, &job.state),
+        job_pill(ctx, job),
         h(&joined(&[job.key.clone(), when(&job.started_at)])),
         progress_html(ctx, job),
         live_status(ctx, job),
@@ -767,10 +839,10 @@ fn errors_card(ctx: &UiCtx, errors: &[String]) -> String {
 /// The rights checkbox and Generate button. The button looks disabled until the
 /// box is ticked (CSS `:has`), and `required` keeps the browser from posting
 /// without it; the server checks `rights=1` again.
-fn generate_form(ctx: &UiCtx, url: &str) -> String {
+fn generate_form(ctx: &UiCtx, url: &str, tab: &str) -> String {
     format!(
         "<form method='post' action='/creator/generate' class='cr-item-actions'>{}\
-<input type='hidden' name='url' value=\"{}\">\
+<input type='hidden' name='url' value=\"{}\"><input type='hidden' name='tab' value='{tab}'>\
 <label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
 <span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
 <button type='submit' class='cr-btn cr-btn-primary cr-generate'>{} {}</button></form>",
@@ -825,7 +897,75 @@ fn segments_html(ctx: &UiCtx, s: &Source) -> String {
     )
 }
 
-fn source_row(ctx: &UiCtx, s: &Source, jobs: &[JobRecord]) -> String {
+/// Video address -> slug of the newest finished video made from it, so a source that
+/// already has a video can show View and Regenerate instead of Generate.
+fn generated_map(projects: &[VideoProject]) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for p in projects.iter().filter(|p| p.mp4.is_some()) {
+        if let Some(u) = p.source_url.as_deref() {
+            let key = valid_source_url(u).unwrap_or_else(|_| u.to_string());
+            // The list is newest first: the first project for an address wins.
+            map.entry(key).or_insert_with(|| p.slug.clone());
+        }
+    }
+    map
+}
+
+/// What can be done with a source: stop its running job, see (and redo) the video it
+/// already made, or generate one. For a generated source the pair is
+/// `(buttons, regenerate form)`; the form sits behind the Regenerate disclosure.
+fn source_action(
+    ctx: &UiCtx,
+    url: Option<&str>,
+    jobs: &[JobRecord],
+    generated: &std::collections::HashMap<String, String>,
+    tab: &str,
+) -> (String, String) {
+    let Some(url) = url else {
+        return (String::new(), String::new());
+    };
+    if let Some(job) = jobs::running(jobs, JobKind::Generate, url) {
+        return (
+            format!(
+                "<div class='cr-item-actions'>{}{}</div>",
+                pill("accent", &ctx.t("Rendering")),
+                stop_form(ctx, job, tab)
+            ),
+            String::new(),
+        );
+    }
+    match generated.get(url) {
+        Some(slug) => (
+            format!(
+                "{}<a class='cr-btn cr-btn-primary cr-btn-small' href=\"{}\">{}</a>\
+<button type='button' class='cr-btn cr-btn-plain cr-btn-small' data-cr-regen aria-expanded='false'>{}</button>",
+                pill("ok", &ctx.t("Generated")),
+                h(&back_to_video(slug)),
+                h(&ctx.t("View")),
+                h(&ctx.t("Regenerate"))
+            ),
+            format!(
+                "<div class='cr-regen' hidden>{}</div>",
+                generate_form(ctx, url, tab)
+            ),
+        ),
+        None => (generate_form(ctx, url, tab), String::new()),
+    }
+}
+
+/// One discovered video. `detail` (the Discover tab) shows its rank, rationale and
+/// recommended segments; without it (the Library) the row is compact and says which
+/// run found it. A video that already has a finished short is folded to a single row
+/// with View and Regenerate.
+fn source_row(
+    ctx: &UiCtx,
+    s: &Source,
+    jobs: &[JobRecord],
+    generated: &std::collections::HashMap<String, String>,
+    tab: &str,
+    detail: bool,
+    from: Option<&str>,
+) -> String {
     let title = if s.title.is_empty() {
         ctx.t("Untitled")
     } else {
@@ -850,42 +990,58 @@ fn source_row(ctx: &UiCtx, s: &Source, jobs: &[JobRecord]) -> String {
     if s.handoff_ready {
         badges.push_str(&pill("ok", &ctx.t("Ready to generate")));
     }
-    let meta = joined(&[
+    let meta = joined_unique(&[
         s.channel.clone(),
         s.platform.clone(),
         s.published.clone().unwrap_or_default(),
         s.duration_s.map(clock).unwrap_or_default(),
     ]);
-    let rationale = if s.rationale.is_empty() {
-        String::new()
-    } else {
-        format!("<p class='cr-rationale'>{}</p>", h(&s.rationale))
-    };
     // Only a source whose address passes the job's own URL check can be generated.
     let usable = valid_source_url(&s.url).ok();
-    let running = usable
-        .as_deref()
-        .and_then(|u| jobs::running(jobs, JobKind::Generate, u));
-    let action = match (running, usable) {
-        (Some(job), _) => format!(
-            "<div class='cr-item-actions'>{}{}</div>",
-            pill("accent", &ctx.t("Rendering")),
-            stop_form(ctx, job, "discover")
-        ),
-        (None, Some(url)) => generate_form(ctx, &url),
-        (None, None) => String::new(),
+    let (buttons, regen) = source_action(ctx, usable.as_deref(), jobs, generated, tab);
+    let rank = if detail {
+        format!("<span class='cr-rank'>{}</span>", s.rank)
+    } else {
+        String::new()
+    };
+    let from_line = from
+        .map(|f| format!("<div class='cr-meta'>{}</div>", h(f)))
+        .unwrap_or_default();
+    let is_generated = !regen.is_empty();
+    if is_generated {
+        return format!(
+            "<li class='cr-item cr-item-done'><div class='cr-item-head'>{rank}\
+<div class='cr-item-main'><h3 class='cr-title'>{title_html}</h3><div class='cr-meta'>{}</div>{from_line}</div>\
+<div class='cr-row-actions'>{buttons}</div></div>{regen}</li>",
+            h(&meta)
+        );
+    }
+    let (rationale, segments) = if detail {
+        (
+            if s.rationale.is_empty() {
+                String::new()
+            } else {
+                format!("<p class='cr-rationale'>{}</p>", h(&s.rationale))
+            },
+            segments_html(ctx, s),
+        )
+    } else {
+        (String::new(), String::new())
     };
     format!(
-        "<li class='cr-item'><div class='cr-item-head'><span class='cr-rank'>{}</span>\
-<div class='cr-item-main'><h3 class='cr-title'>{title_html}</h3><div class='cr-meta'>{}</div>\
-<div class='cr-badges'>{badges}</div></div></div>{rationale}{}{action}</li>",
-        s.rank,
-        h(&meta),
-        segments_html(ctx, s)
+        "<li class='cr-item'><div class='cr-item-head'>{rank}\
+<div class='cr-item-main'><h3 class='cr-title'>{title_html}</h3><div class='cr-meta'>{}</div>{from_line}\
+<div class='cr-badges'>{badges}</div></div></div>{rationale}{segments}{buttons}</li>",
+        h(&meta)
     )
 }
 
-fn run_section(ctx: &UiCtx, run: &ScoutRun, jobs: &[JobRecord]) -> String {
+fn run_section(
+    ctx: &UiCtx,
+    run: &ScoutRun,
+    jobs: &[JobRecord],
+    generated: &std::collections::HashMap<String, String>,
+) -> String {
     let title = match run.query.as_deref() {
         Some(q) => ctx.tf("Search: {query}", &[("query", q)]),
         None => ctx.t("Topic-free discovery"),
@@ -903,7 +1059,7 @@ fn run_section(ctx: &UiCtx, run: &ScoutRun, jobs: &[JobRecord]) -> String {
         let items: String = run
             .sources
             .iter()
-            .map(|s| source_row(ctx, s, jobs))
+            .map(|s| source_row(ctx, s, jobs, generated, "discover", true, None))
             .collect();
         format!("<ol class='cr-list cr-results'>{items}</ol>")
     };
@@ -948,9 +1104,354 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             ),
         )
     } else {
-        runs.iter().map(|r| run_section(ctx, r, jobs)).collect()
+        // The latest run only; every earlier one is in the Library.
+        let projects = videos::list_projects(&videos_root(ctx)).0;
+        let generated = generated_map(&projects);
+        let more = format!(
+            "<p class='cr-muted'><a href='/creator?tab=library'>{}</a></p>",
+            h(&ctx.tf(
+                "All discovered videos ({count})",
+                &[("count", &library_entries(&runs).len().to_string())]
+            ))
+        );
+        format!("{}{more}", run_section(ctx, &runs[0], jobs, &generated))
     };
     format!("{find}{jobs_html}{}{runs_html}", errors_card(ctx, &errors))
+}
+
+/// One video of the Library with the run that found it.
+struct LibraryEntry<'a> {
+    source: &'a Source,
+    run: &'a ScoutRun,
+}
+
+/// Every discovered video once (the newest run's copy wins), newest run first.
+/// `runs` is newest first, as `scout::list_runs` returns it.
+fn library_entries(runs: &[ScoutRun]) -> Vec<LibraryEntry<'_>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for run in runs {
+        for source in &run.sources {
+            let key = valid_source_url(&source.url).unwrap_or_else(|_| source.url.clone());
+            if seen.insert(key) {
+                out.push(LibraryEntry { source, run });
+            }
+        }
+    }
+    out
+}
+
+/// The Library's filters, read from the query string.
+#[derive(Default)]
+struct LibraryFilter {
+    q: String,
+    platform: String,
+    grade: String,
+    state: String,
+}
+
+impl LibraryFilter {
+    fn from_query(ctx: &UiCtx) -> Self {
+        let get = |k: &str| ctx.query().first(k).unwrap_or("").trim().to_string();
+        LibraryFilter {
+            q: get("q"),
+            platform: get("platform"),
+            grade: get("grade"),
+            state: get("state"),
+        }
+    }
+
+    /// This filter's address with `state` swapped in, the other filters kept.
+    fn url_with_state(&self, state: &str) -> String {
+        let mut url = String::from("/creator?tab=library");
+        for (key, value) in [("q", &self.q), ("platform", &self.platform), ("grade", &self.grade)] {
+            if !value.is_empty() {
+                url.push_str(&format!("&{key}={}", pyfmt::quote(value, "")));
+            }
+        }
+        if !state.is_empty() {
+            url.push_str(&format!("&state={state}"));
+        }
+        url
+    }
+
+    fn active(&self) -> bool {
+        !(self.q.is_empty() && self.platform.is_empty() && self.grade.is_empty() && self.state.is_empty())
+    }
+
+    fn matches(&self, e: &LibraryEntry<'_>, generated: bool) -> bool {
+        let s = e.source;
+        if !self.platform.is_empty() && s.platform != self.platform {
+            return false;
+        }
+        if !self.grade.is_empty() && s.grade.as_deref() != Some(self.grade.as_str()) {
+            return false;
+        }
+        match self.state.as_str() {
+            "generated" if !generated => return false,
+            "new" if generated => return false,
+            _ => {}
+        }
+        if self.q.is_empty() {
+            return true;
+        }
+        let needle = self.q.to_lowercase();
+        [
+            s.title.as_str(),
+            s.channel.as_str(),
+            s.platform.as_str(),
+            s.rationale.as_str(),
+            e.run.query.as_deref().unwrap_or(""),
+        ]
+        .iter()
+        .any(|field| field.to_lowercase().contains(&needle))
+    }
+}
+
+fn option_html(value: &str, label: &str, current: &str) -> String {
+    format!(
+        "<option value=\"{}\"{}>{}</option>",
+        h(value),
+        if value == current { " selected" } else { "" },
+        h(label)
+    )
+}
+
+/// All previous discoveries, searchable and filterable, each with a quick Generate.
+fn library_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
+    let (runs, errors) = scout::list_runs(&scout::scout_root(&ctx.state.user_home));
+    let entries = library_entries(&runs);
+    if entries.is_empty() {
+        return format!(
+            "{}{}",
+            section(
+                &ctx.t("Library"),
+                "",
+                &format!(
+                    "<div class='cr-surface cr-empty'>{}</div>",
+                    subtitle(&ctx.t(
+                        "Nothing discovered yet. Find videos on the Discover tab and every result is kept here."
+                    ))
+                )
+            ),
+            errors_card(ctx, &errors)
+        );
+    }
+    let projects = videos::list_projects(&videos_root(ctx)).0;
+    let generated = generated_map(&projects);
+    let is_generated = |e: &LibraryEntry<'_>| {
+        valid_source_url(&e.source.url)
+            .ok()
+            .is_some_and(|u| generated.contains_key(&u))
+    };
+    let filter = LibraryFilter::from_query(ctx);
+    let shown: Vec<&LibraryEntry<'_>> = entries
+        .iter()
+        .filter(|e| filter.matches(e, is_generated(e)))
+        .collect();
+
+    let mut platforms: Vec<&str> = entries
+        .iter()
+        .map(|e| e.source.platform.as_str())
+        .filter(|p| !p.is_empty())
+        .collect();
+    platforms.sort_unstable();
+    platforms.dedup();
+    let mut grades: Vec<&str> = entries
+        .iter()
+        .filter_map(|e| e.source.grade.as_deref())
+        .filter(|g| !g.is_empty())
+        .collect();
+    grades.sort_unstable();
+    grades.dedup();
+    let platform_opts: String = std::iter::once(option_html("", &ctx.t("All platforms"), &filter.platform))
+        .chain(platforms.iter().map(|p| option_html(p, p, &filter.platform)))
+        .collect();
+    let grade_opts: String = std::iter::once(option_html("", &ctx.t("All grades"), &filter.grade))
+        .chain(grades.iter().map(|g| option_html(g, g, &filter.grade)))
+        .collect();
+    // The status filter: a segmented control of links that keep the other filters.
+    let state_links: String = [
+        ("", ctx.t("All")),
+        ("new", ctx.t("New")),
+        ("generated", ctx.t("Generated")),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        let on = filter.state == *value;
+        format!(
+            "<a class='cr-segment{}' href=\"{}\"{}>{}</a>",
+            if on { " is-active" } else { "" },
+            h(&filter.url_with_state(value)),
+            if on { " aria-current='true'" } else { "" },
+            h(label)
+        )
+    })
+    .collect();
+    let clear = if filter.active() {
+        format!(
+            "<a class='cr-link' href='/creator?tab=library'>{}</a>",
+            h(&ctx.t("Clear filters"))
+        )
+    } else {
+        String::new()
+    };
+    let count = ctx.tf(
+        "{shown} of {total} videos",
+        &[
+            ("shown", &shown.len().to_string()),
+            ("total", &entries.len().to_string()),
+        ],
+    );
+    let toolbar = format!(
+        "<form method='get' action='/creator' class='cr-toolbar' data-cr-autosubmit>\
+<input type='hidden' name='tab' value='library'><input type='hidden' name='state' value=\"{}\">\
+<label class='cr-search-field'>{}<input type='search' name='q' value=\"{}\" placeholder=\"{}\" aria-label=\"{}\"></label>\
+<select name='platform' class='cr-select' aria-label=\"{}\">{platform_opts}</select>\
+<select name='grade' class='cr-select' aria-label=\"{}\">{grade_opts}</select>\
+<button type='submit' class='cr-sr-only'>{}</button></form>\
+<div class='cr-toolbar-row'><nav class='cr-segmented' aria-label=\"{}\">{state_links}</nav>\
+<span class='cr-toolbar-count'>{clear}<span class='cr-meta'>{}</span></span></div>",
+        h(&filter.state),
+        icons::icon("search"),
+        h(&filter.q),
+        h(&ctx.t("Search title, channel or topic")),
+        h(&ctx.t("Search")),
+        h(&ctx.t("Platform")),
+        h(&ctx.t("Grade")),
+        h(&ctx.t("Search")),
+        h(&ctx.t("Status")),
+        h(&count),
+    );
+    // The first row of the list, like a Settings row: the rights confirmation and its switch.
+    let rights = format!(
+        "<li class='cr-lib-switch-row'><label class='cr-switch cr-switch-row'><span>{}</span>\
+<input type='checkbox' data-cr-rights-toggle><span class='cr-switch-track' aria-hidden='true'></span></label></li>",
+        h(&ctx.t("I own these videos or have permission to reuse them"))
+    );
+    let list = if shown.is_empty() {
+        format!(
+            "<div class='cr-surface cr-empty'>{}</div>",
+            subtitle(&ctx.t("No videos match these filters."))
+        )
+    } else {
+        let rows: String = shown
+            .iter()
+            .take(LIBRARY_SHOWN)
+            .map(|e| library_row(ctx, e, jobs, &generated))
+            .collect();
+        format!("<ul class='cr-list cr-lib'>{rights}{rows}</ul>")
+    };
+    format!("{toolbar}{list}{}", errors_card(ctx, &errors))
+}
+
+/// One row of the Library: title and quality, a quiet meta line, when and by which
+/// search it was found, and one action (Generate, View and Regenerate, or Stop).
+/// Generate and Regenerate stay disabled until the page's rights switch is on.
+fn library_row(
+    ctx: &UiCtx,
+    e: &LibraryEntry<'_>,
+    jobs: &[JobRecord],
+    generated: &std::collections::HashMap<String, String>,
+) -> String {
+    let s = e.source;
+    let title = if s.title.is_empty() {
+        ctx.t("Untitled")
+    } else {
+        s.title.clone()
+    };
+    let title_html = match https_link(&s.url) {
+        Some(u) => format!(
+            "<a href=\"{}\" target='_blank' rel='noopener noreferrer'>{}</a>",
+            h(u),
+            h(&title)
+        ),
+        None => h(&title),
+    };
+    let quality = s.grade.as_deref().filter(|g| !g.is_empty()).map(|g| {
+        let kind = match g {
+            "Excellent" => "ok",
+            "Good" => "accent",
+            _ => "neutral",
+        };
+        let label = match s.score {
+            Some(v) => format!("{g} {v:.0}"),
+            None => g.to_string(),
+        };
+        pill(kind, &label)
+    });
+    let meta = joined_unique(&[
+        s.channel.clone(),
+        s.platform.clone(),
+        s.published.clone().unwrap_or_default(),
+        s.duration_s.map(clock).unwrap_or_default(),
+    ]);
+    let found = ctx.tf(
+        "Found {when} · {run}",
+        &[
+            ("when", &day(&e.run.generated_at)),
+            (
+                "run",
+                &e.run
+                    .query
+                    .clone()
+                    .unwrap_or_else(|| ctx.t("Topic-free discovery")),
+            ),
+        ],
+    );
+    let usable = valid_source_url(&s.url).ok();
+    let action = match usable.as_deref() {
+        None => String::new(),
+        Some(url) => {
+            if let Some(job) = jobs::running(jobs, JobKind::Generate, url) {
+                format!(
+                    "{}{}",
+                    pill("accent", &ctx.t("Rendering")),
+                    stop_form(ctx, job, "library")
+                )
+            } else {
+                let button = |label: &str, primary: bool| {
+                    format!(
+                        "<form method='post' action='/creator/generate' class='cr-inline-form'>{}\
+<input type='hidden' name='url' value=\"{}\"><input type='hidden' name='tab' value='library'>\
+<input type='hidden' name='rights' value='1' data-cr-rights disabled>\
+<button type='submit' class='cr-btn {} cr-btn-small' data-cr-needs-rights disabled>{}</button></form>",
+                        ctx.csrf_input(),
+                        h(url),
+                        if primary { "cr-btn-primary" } else { "cr-btn-plain" },
+                        h(label)
+                    )
+                };
+                match generated.get(url) {
+                    Some(slug) => format!(
+                        "<a class='cr-btn cr-btn-primary cr-btn-small' href=\"{}\">{}</a>{}",
+                        h(&back_to_video(slug)),
+                        h(&ctx.t("View")),
+                        button(&ctx.t("Regenerate"), false)
+                    ),
+                    None => button(&ctx.t("Generate"), true),
+                }
+            }
+        }
+    };
+    let done = if usable.as_deref().is_some_and(|u| generated.contains_key(u)) {
+        format!(
+            "<span class='cr-lib-done'>{} {}</span>",
+            icons::icon("check_circle"),
+            h(&ctx.t("Generated"))
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<li class='cr-lib-row'><div class='cr-lib-main'>\
+<div class='cr-lib-title'><span class='cr-lib-name'>{title_html}</span>{}{done}</div>\
+<div class='cr-lib-meta'>{}</div><div class='cr-lib-found'>{}</div></div>\
+<div class='cr-lib-actions'>{action}</div></li>",
+        quality.unwrap_or_default(),
+        h(&meta),
+        h(&found)
+    )
 }
 
 fn media_url(slug: &str, path: &Path) -> String {
@@ -1414,10 +1915,11 @@ fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
 fn page(ctx: &UiCtx) -> UiResponse {
     let tab = tab_of(ctx.query().first("tab").unwrap_or(""));
     let (flash, ok) = ctx.flash();
-    let jobs = jobs::list_jobs(&jobs_dir(ctx));
+    let jobs = settle(ctx, jobs::list_jobs(&jobs_dir(ctx)));
     let body = match tab {
         "videos" => videos_tab(ctx, &jobs),
         "jobs" => jobs_tab(ctx, &jobs),
+        "library" => library_tab(ctx, &jobs),
         _ => discover_tab(ctx, &jobs),
     };
     let head = format!(
@@ -1444,7 +1946,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{finder_args, range_response, when, MAX_FULL_BYTES, MAX_RANGE_BYTES};
+    use super::{day, finder_args, joined_unique, range_response, when, MAX_FULL_BYTES, MAX_RANGE_BYTES};
     use crate::ui::routes::{UiRequest, UiResponse};
     use crate::ui::state::UiState;
     use axum::http::Method;
@@ -1537,7 +2039,7 @@ mod tests {
             std::fs::write(
                 self.jobs().join(format!("{id}.json")),
                 json!({"id": id, "kind": kind, "key": key, "state": "running",
-                       "pid": pid, "started_at": "2026-11-05T00:00:00Z"})
+                       "pid": pid, "started_at": "2020-01-01T00:00:00Z"})
                 .to_string(),
             )
             .unwrap();
@@ -2072,7 +2574,7 @@ mod tests {
         std::fs::write(
             fx.jobs().join(format!("{id}.json")),
             json!({"id": id, "kind": "generate", "key": "https://example.com/never",
-                   "state": "running", "pid": c.id(), "started_at": "2026-11-05T00:00:00Z"})
+                   "state": "running", "pid": c.id(), "started_at": "2020-01-01T00:00:00Z"})
             .to_string(),
         )
         .unwrap();
@@ -2090,6 +2592,7 @@ mod tests {
     #[test]
     fn the_jobs_tab_lists_every_job_with_stop_for_running_and_delete_for_finished() {
         let fx = Fx::new();
+        std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
         fx.job("20261105T000001-scout000", "scout", "leadership", false, "loopx-exit=0\n");
         fx.job("20261105T000002-genfail0", "generate", "https://example.com/talks/a", false, "boom\n");
         fx.job(
@@ -2137,9 +2640,17 @@ mod tests {
             // The step line is still there under the bar.
             assert!(body.contains("Step 2 · Bash: python scripts/transcribe.py a.wav"), "{tab}: {body}");
         }
-        // A Find videos job has no stages, so no bar.
+        // A Find videos job has its own four stages.
         let body = fx.get("/creator?tab=discover").body_text();
-        assert!(!body.contains("role='progressbar'"), "{body}");
+        assert!(body.contains("role='progressbar'"), "{body}");
+        assert!(body.contains("Getting started"), "{body}");
+        fx.job("20261105T000006-scoutgo0", "scout", "y", true, &format!(
+            "{}\n",
+            json!({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "WebSearch", "input": {"query": "talks"}}]}})
+        ));
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(body.contains("Stage 2 of 4 · Search for candidates"), "{body}");
     }
 
     #[test]
@@ -2152,7 +2663,7 @@ mod tests {
     }
 
     #[test]
-    fn the_status_endpoint_carries_progress_for_generate_jobs_only() {
+    fn the_status_endpoint_carries_progress_for_both_kinds_of_job() {
         let fx = Fx::new();
         let id = "20261105T000003-genlive0";
         fx.job(id, "generate", "k", true, &step_line("python scripts/render.py m.json"));
@@ -2167,7 +2678,8 @@ mod tests {
             &fx.get("/creator/jobs/20261105T000005-scoutrun/status").body_text(),
         )
         .unwrap();
-        assert!(v["progress"].is_null(), "{v}");
+        assert_eq!(v["progress"]["total"], 4, "{v}");
+        assert_eq!(v["progress"]["stage"], 0, "{v}");
     }
 
     #[test]
@@ -2230,6 +2742,244 @@ mod tests {
             vec!["-R".to_string(), file.display().to_string()]
         );
         assert_eq!(finder_args(d.path()), vec![d.path().display().to_string()]);
+    }
+
+    #[test]
+    fn a_run_that_exits_cleanly_but_produced_nothing_is_not_called_done() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-scout000", "scout", "q", false, "loopx-exit=0\n");
+        fx.job("20261105T000002-gen000000", "generate", "https://example.com/talks/a", false, "loopx-exit=0\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(!body.contains(">Done</span>"), "{body}");
+        assert!(body.contains("<span class='cr-pill cr-pill-error'>No results</span>"), "{body}");
+        assert!(body.contains("<span class='cr-pill cr-pill-error'>No video produced</span>"), "{body}");
+        // They are finished jobs all the same: deletable, not stoppable.
+        assert_eq!(body.matches("action='/creator/jobs/delete'").count(), 2, "{body}");
+        assert!(!body.contains("action='/creator/stop'"), "{body}");
+    }
+
+    #[test]
+    fn a_clean_run_that_left_its_output_behind_is_done() {
+        let fx = Fx::new();
+        std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
+        write_project(&fx, "T", true);
+        fx.job("20261105T000001-scout000", "scout", "q", false, "loopx-exit=0\n");
+        fx.job("20261105T000002-gen000000", "generate", "https://example.com/talks/a", false, "loopx-exit=0\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert_eq!(body.matches("<span class='cr-pill cr-pill-ok'>Done</span>").count(), 2, "{body}");
+        assert!(!body.contains("No video produced") && !body.contains("No results"), "{body}");
+    }
+
+    #[test]
+    fn a_later_jobs_video_does_not_make_an_earlier_empty_run_look_done() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-gen000000", "generate", "k", false, "loopx-exit=0\n");
+        // The earlier job's log was last written long ago; the video is newer than that.
+        let log = fx.jobs().join("20261105T000001-gen000000.log");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&log).unwrap().set_modified(old).unwrap();
+        write_project(&fx, "T", true);
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("No video produced"), "{body}");
+        assert!(!body.contains(">Done</span>"), "{body}");
+    }
+
+    #[test]
+    fn a_failed_exit_stays_failed_even_with_old_output() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        fx.job("20261105T000002-gen000000", "generate", "k", false, "boom\nloopx-exit=1\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("<span class='cr-pill cr-pill-error'>Failed</span>"), "{body}");
+    }
+
+    /// A catalog with one video per `(title, url, platform, grade)`.
+    fn catalog_of(generated_at: &str, query: &str, videos: &[(&str, &str, &str, &str)]) -> String {
+        let vids: Vec<serde_json::Value> = videos
+            .iter()
+            .enumerate()
+            .map(|(i, (title, url, platform, grade))| {
+                json!({"rank": i + 1, "title": title, "url": url, "platform": platform,
+                       "channel_or_publisher": "Chan", "duration_seconds": 600,
+                       "quality": {"total_score": 80.0, "grade": grade, "rationale": format!("why {title}")},
+                       "handoff_ready": true})
+            })
+            .collect();
+        json!({"schema_version": "1.1", "generated_at": generated_at, "discovery_mode": "topic_based",
+               "query": query, "videos": vids})
+        .to_string()
+    }
+
+    #[test]
+    fn a_source_already_generated_collapses_to_view_and_regenerate() {
+        let fx = Fx::new();
+        std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
+        write_project(&fx, "T", true); // demo, generated from SOURCE
+        let body = fx.get("/creator?tab=discover").body_text();
+        let item = &body[body.find("<li class='cr-item cr-item-done'").unwrap()..];
+        let item = &item[..item.find("</li>").unwrap()];
+        assert!(item.contains("Generated"), "{item}");
+        assert!(item.contains("open=demo"), "{item}");
+        assert!(item.contains(">View<") || item.contains("View</a>"), "{item}");
+        assert!(item.contains("Regenerate"), "{item}");
+        // The rationale and segments are folded away; Regenerate holds the usual form.
+        assert!(!item.contains("Solid &amp; clear."), "{item}");
+        assert!(item.contains("action='/creator/generate'"), "{item}");
+        assert!(item.contains("data-cr-regen") && item.contains("class='cr-regen' hidden"), "{item}");
+    }
+
+    #[test]
+    fn a_source_not_yet_generated_keeps_its_full_item() {
+        let fx = Fx::new();
+        std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(!body.contains("<li class='cr-item cr-item-done'"), "{body}");
+        assert!(body.contains("Solid &amp; clear."), "{body}");
+        assert!(body.contains("action='/creator/generate'"), "{body}");
+    }
+
+    #[test]
+    fn discover_shows_only_the_latest_run_and_links_to_the_library() {
+        let fx = Fx::new();
+        std::fs::write(
+            fx.scout().join("catalog-old.json"),
+            catalog_of("2026-11-01T08:00:00Z", "old topic", &[("Old talk", "https://example.com/talks/old", "TED", "Good")]),
+        )
+        .unwrap();
+        std::fs::write(
+            fx.scout().join("catalog-new.json"),
+            catalog_of("2026-11-05T08:00:00Z", "new topic", &[("New talk", "https://example.com/talks/new", "TED", "Excellent")]),
+        )
+        .unwrap();
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(body.contains("New talk"), "{body}");
+        assert!(!body.contains("Old talk"), "{body}");
+        assert!(body.contains("href='/creator?tab=library'"), "{body}");
+    }
+
+    fn library_fx() -> Fx {
+        let fx = Fx::new();
+        std::fs::write(
+            fx.scout().join("catalog-old.json"),
+            catalog_of("2026-11-01T08:00:00Z", "leadership", &[
+                ("Old leadership talk", "https://example.com/talks/old", "TED", "Good"),
+                ("Shared talk", "https://example.com/talks/shared", "YouTube", "Fair"),
+            ]),
+        )
+        .unwrap();
+        std::fs::write(
+            fx.scout().join("catalog-new.json"),
+            catalog_of("2026-11-05T08:00:00Z", "design", &[
+                ("New design talk", "https://example.com/talks/new", "YouTube", "Excellent"),
+                ("Shared talk", "https://example.com/talks/shared", "YouTube", "Excellent"),
+            ]),
+        )
+        .unwrap();
+        fx
+    }
+
+    #[test]
+    fn the_library_lists_every_discovered_video_once_newest_run_first() {
+        let fx = library_fx();
+        let body = fx.get("/creator?tab=library").body_text();
+        assert!(body.contains("href='/creator?tab=library' aria-current='page'"), "{body}");
+        for t in ["Old leadership talk", "New design talk", "Shared talk"] {
+            assert!(body.contains(t), "{t}");
+        }
+        assert_eq!(body.matches("Shared talk").count(), 1, "a video found twice is listed once");
+        assert!(body.contains("3 of 3"), "{body}");
+        // Each can be generated from here, coming back to the library afterwards.
+        assert_eq!(body.matches("action='/creator/generate'").count(), 3, "{body}");
+        assert!(body.contains("name='tab' value='library'"), "{body}");
+        assert!(body.find("New design talk").unwrap() < body.find("Old leadership talk").unwrap());
+    }
+
+    #[test]
+    fn the_library_searches_and_filters() {
+        let fx = library_fx();
+        let q = fx.get("/creator?tab=library&q=LEADERSHIP").body_text();
+        assert!(q.contains("Old leadership talk") && !q.contains("New design talk"), "{q}");
+        assert!(q.contains("1 of 3"), "{q}");
+        let platform = fx.get("/creator?tab=library&platform=TED").body_text();
+        assert!(platform.contains("Old leadership talk") && !platform.contains("Shared talk"), "{platform}");
+        let grade = fx.get("/creator?tab=library&grade=Excellent").body_text();
+        assert!(grade.contains("New design talk") && grade.contains("Shared talk"), "{grade}");
+        assert!(!grade.contains("Old leadership talk"), "{grade}");
+        let none = fx.get("/creator?tab=library&q=zzzz").body_text();
+        assert!(none.contains("No videos match"), "{none}");
+        // The query is echoed back escaped.
+        let xss = fx.get("/creator?tab=library&q=%22%3E%3Cscript%3E").body_text();
+        assert!(!xss.contains("\"><script>"), "{xss}");
+    }
+
+    #[test]
+    fn the_library_filters_by_generated_state_and_collapses_generated_ones() {
+        let fx = library_fx();
+        // demo's source is one of the library's videos.
+        std::fs::write(
+            fx.scout().join("catalog-extra.json"),
+            catalog_of("2026-11-06T08:00:00Z", "x", &[("Demo source", SOURCE, "TED", "Good")]),
+        )
+        .unwrap();
+        write_project(&fx, "T", true);
+        let generated = fx.get("/creator?tab=library&state=generated").body_text();
+        assert!(generated.contains("Demo source") && !generated.contains("Old leadership talk"), "{generated}");
+        assert!(generated.contains("open=demo") && generated.contains("Regenerate"), "{generated}");
+        let new = fx.get("/creator?tab=library&state=new").body_text();
+        assert!(!new.contains("Demo source") && new.contains("Old leadership talk"), "{new}");
+    }
+
+    #[test]
+    fn meta_lines_do_not_repeat_a_value_and_dates_are_short() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(joined_unique(&v(&["TED", "ted", "2015-03-13", "", "17:07"])), "TED · 2015-03-13 · 17:07");
+        assert_eq!(joined_unique(&v(&["A", "B"])), "A · B");
+        assert_eq!(day("2026-11-04T08:00:00Z"), "2026-11-04");
+        assert_eq!(day("2026-11-04T09:00:00+08:00"), "2026-11-04");
+        assert_eq!(day("yesterday"), "yesterday");
+    }
+
+    #[test]
+    fn library_rows_are_compact_with_one_rights_switch_for_the_page() {
+        let fx = library_fx();
+        let body = fx.get("/creator?tab=library").body_text();
+        assert!(body.contains("<li class='cr-lib-row'>"), "{body}");
+        // One switch confirms the rights for every Generate on the page; no row repeats a checkbox.
+        assert_eq!(body.matches("<input type='checkbox' data-cr-rights-toggle>").count(), 1, "{body}");
+        assert!(!body.contains("name='rights' value='1' required"), "{body}");
+        assert!(body.contains("I own these videos or have permission to reuse them"), "{body}");
+        // A row's Generate starts disabled (the switch enables it) and carries the rights value.
+        assert!(body.contains("name='rights' value='1' data-cr-rights disabled"), "{body}");
+        assert!(body.contains("data-cr-needs-rights disabled"), "{body}");
+        // One value once: channel and platform are both "Chan"/"TED" distinct here, dates are days.
+        assert!(body.contains("Found 2026-11-05 · design"), "{body}");
+        // The status filter is a segmented control that keeps the other filters.
+        let q = fx.get("/creator?tab=library&q=talk&platform=YouTube").body_text();
+        assert!(q.contains("href=\"/creator?tab=library&amp;q=talk&amp;platform=YouTube&amp;state=generated\""), "{q}");
+        assert!(q.contains("cr-segment is-active"), "{q}");
+        assert!(q.contains("cr-search-field"), "{q}");
+    }
+
+    #[test]
+    fn the_library_has_an_empty_state() {
+        let fx = Fx::new();
+        let body = fx.get("/creator?tab=library").body_text();
+        assert!(body.contains("Nothing discovered yet"), "{body}");
+    }
+
+    #[test]
+    fn generate_returns_to_the_tab_it_was_started_from() {
+        let fx = Fx::new();
+        let (loc, _) = flash_of(&fx.post(
+            "/creator/generate",
+            "csrf_token=tok&rights=1&tab=library&url=https%3A%2F%2Fexample.com%2Ftalks%2Fa",
+        ));
+        assert!(loc.starts_with("/creator?tab=library"), "{loc}");
+        let (loc, _) = flash_of(&fx.post(
+            "/creator/generate",
+            "csrf_token=tok&rights=1&tab=bogus&url=https%3A%2F%2Fexample.com%2Ftalks%2Fa",
+        ));
+        assert!(loc.starts_with("/creator?tab=discover"), "{loc}");
     }
 
     #[test]
@@ -2353,6 +3103,7 @@ mod tests {
         }
         let ok = "20261105T000001-success0";
         finished_job(&fx, ok, "loopx-exit=0\n");
+        write_project(&fx, "T", true);
         let body = fx.get("/creator?tab=jobs").body_text();
         assert!(
             body.contains("<span class='cr-pill cr-pill-ok'>Done</span>"),

@@ -312,6 +312,19 @@ pub fn log_view(dir: &Path, id: &str) -> Option<String> {
     Some(text)
 }
 
+/// When the job started, as a point in time; `None` when its record has no valid stamp.
+pub fn started_time(rec: &JobRecord) -> Option<std::time::SystemTime> {
+    chrono::DateTime::parse_from_rfc3339(&rec.started_at)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc).into())
+}
+
+/// When the job last wrote to its log: for a finished job, about when it ended.
+/// `None` without a log.
+pub fn ended_time(rec: &JobRecord) -> Option<std::time::SystemTime> {
+    std::fs::metadata(&rec.log_path).ok()?.modified().ok()
+}
+
 /// One job by id, settled against its pid; `None` for an unsafe or unknown id.
 pub fn get(dir: &Path, id: &str) -> Option<JobRecord> {
     if !is_safe_id(id) {
@@ -356,13 +369,11 @@ pub fn status_line(dir: &Path, id: &str) -> Option<String> {
     )
 }
 
-/// How far a Generate job has got (see [`super::progress`]); `None` for any other
-/// kind of job, an unknown id, or before the first recognised step.
+/// How far a job has got (see [`super::progress`]); `None` for an unknown id or
+/// before the first recognised step.
 pub fn progress(dir: &Path, id: &str) -> Option<super::progress::Progress> {
     let (rec, rendered) = recent_rendered(dir, id)?;
-    (rec.kind == JobKind::Generate)
-        .then(|| super::progress::of_rendered_log(&rendered))
-        .flatten()
+    super::progress::of_rendered_log(rec.kind, &rendered)
 }
 
 /// Remove a finished job's record and log. A running job must be stopped first. A
@@ -477,6 +488,19 @@ mod tests {
 
     fn fake(pid: i64) -> impl Fn(&Path) -> Result<i64, String> {
         move |_l| Ok(pid)
+    }
+
+    #[test]
+    fn started_time_parses_the_record_stamp() {
+        let d = tempfile::tempdir().unwrap();
+        dead_record(d.path(), "20261105T000060-started00", None);
+        let rec = get(d.path(), "20261105T000060-started00").unwrap();
+        let t = started_time(&rec).unwrap();
+        let secs = t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(secs, 1_793_836_800); // 2026-11-05T00:00:00Z
+        let mut bad = rec;
+        bad.started_at = "yesterday".into();
+        assert!(started_time(&bad).is_none());
     }
 
     #[test]
@@ -744,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_follows_a_generate_jobs_stages_and_ignores_find_jobs() {
+    fn progress_follows_each_kinds_own_stages() {
         let d = tempfile::tempdir().unwrap();
         let id = "20261105T000050-progress0";
         let log = [
@@ -754,14 +778,28 @@ mod tests {
         .concat();
         let mut c = live_record(d.path(), id, "generate", &log);
         let p = progress(d.path(), id).unwrap();
-        assert_eq!((p.stage, p.total, p.label()), (3, 9, "Transcribe"));
+        assert_eq!((p.stage, p.total, p.label), (3, 9, "Transcribe"));
         // No recognised step yet: no progress, not zero.
         std::fs::write(d.path().join(format!("{id}.log")), step("ls")).unwrap();
         assert_eq!(progress(d.path(), id), None);
-        // A Find videos job has no stages.
+        // A Find videos job has its own stages; a Generate command is not one of them.
         let scout = "20261105T000051-progress1";
         let mut c2 = live_record(d.path(), scout, "scout", &step("python scripts/fetch.py u"));
         assert_eq!(progress(d.path(), scout), None);
+        std::fs::write(
+            d.path().join(format!("{scout}.log")),
+            format!(
+                "{}\n",
+                json!({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "WebSearch", "input": {"query": "talks"}}]}})
+            ),
+        )
+        .unwrap();
+        let sp = progress(d.path(), scout).unwrap();
+        assert_eq!(
+            (sp.stage, sp.total, sp.label),
+            (2, 4, "Search for candidates")
+        );
         assert_eq!(progress(d.path(), "../x"), None);
         for ch in [&mut c, &mut c2] {
             ch.kill().unwrap();

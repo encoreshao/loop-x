@@ -208,6 +208,21 @@ fn read_project(root: &Path, slug: &str) -> Result<VideoProject, String> {
     Ok(p)
 }
 
+/// Whether any listed project has a video file written between `since` and `until`
+/// (`None`: no upper bound): what a Generate job that ran in that window produced,
+/// if it produced anything.
+pub fn any_video_between(
+    projects: &[VideoProject],
+    since: std::time::SystemTime,
+    until: Option<std::time::SystemTime>,
+) -> bool {
+    projects.iter().filter_map(|p| p.mp4.as_ref()).any(|mp4| {
+        std::fs::metadata(mp4)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t >= since && until.is_none_or(|u| t <= u))
+    })
+}
+
 /// All project folders under `root`, newest first (by `created_at`, else folder
 /// mtime), plus one error string per unreadable manifest.
 pub fn list_projects(root: &Path) -> (Vec<VideoProject>, Vec<String>) {
@@ -254,6 +269,39 @@ mod tests {
         for (n, c) in files {
             std::fs::write(d.join(n), c).unwrap();
         }
+    }
+
+    #[test]
+    fn any_video_between_looks_at_when_the_video_file_was_written() {
+        let d = tempfile::tempdir().unwrap();
+        let mp4 = d.path().join("a.mp4");
+        std::fs::write(&mp4, b"x").unwrap();
+        let project = |mp4: Option<PathBuf>| VideoProject {
+            slug: "a".into(),
+            title: "A".into(),
+            source_url: None,
+            created_at: None,
+            mp4,
+            cover: None,
+            wechat: None,
+            douyin: None,
+        };
+        let hour = std::time::Duration::from_secs(3600);
+        let now = std::time::SystemTime::now();
+        let p = [project(Some(mp4.clone()))];
+        assert!(any_video_between(&p, now - hour, None));
+        assert!(!any_video_between(&p, now + hour, None));
+        // A job that ended before the file was written did not write it.
+        assert!(any_video_between(&p, now - hour, Some(now + hour)));
+        assert!(!any_video_between(&p, now - 2 * hour, Some(now - hour)));
+        // A project without a video file, or a missing file, produced nothing.
+        assert!(!any_video_between(&[project(None)], now - hour, None));
+        assert!(!any_video_between(
+            &[project(Some(d.path().join("gone.mp4")))],
+            now - hour,
+            None
+        ));
+        assert!(!any_video_between(&[], now - hour, None));
     }
 
     #[test]

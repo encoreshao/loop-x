@@ -202,7 +202,9 @@
     var path = button.getAttribute('data-share-path') || '';
     var url = button.getAttribute('data-share-url') || '';
     if (nativeShare) {
-      nativeShare.postMessage({ path: path, text: text });
+      // Where the button is, so the share sheet opens right next to it.
+      var r = button.getBoundingClientRect();
+      nativeShare.postMessage({ path: path, text: text, x: r.left, y: r.top, width: r.width, height: r.height });
       return;
     }
     if (!webShare) return;
@@ -217,6 +219,34 @@
         return share({ text: text, title: text });
       })
       .catch(function () { share({ text: text }); });
+  });
+
+  // Regenerate: a generated source shows View and Regenerate; Regenerate reveals the
+  // usual rights checkbox and Generate button under that row.
+  document.addEventListener('click', function (ev) {
+    var button = ev.target.closest && ev.target.closest('[data-cr-regen]');
+    if (!button) return;
+    var item = button.closest('li');
+    var panel = item && item.querySelector('.cr-regen');
+    if (!panel) return;
+    var open = panel.hidden;
+    panel.hidden = !open;
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+
+  // Library: one switch confirms the rights for every Generate / Regenerate on the page
+  // (their buttons and hidden rights fields start disabled), and the filter selects
+  // apply as soon as they change.
+  var rightsToggle = document.querySelector('[data-cr-rights-toggle]');
+  if (rightsToggle) {
+    rightsToggle.addEventListener('change', function () {
+      document.querySelectorAll('[data-cr-rights], [data-cr-needs-rights]').forEach(function (el) {
+        el.disabled = !rightsToggle.checked;
+      });
+    });
+  }
+  document.querySelectorAll('form[data-cr-autosubmit] select').forEach(function (select) {
+    select.addEventListener('change', function () { select.form.requestSubmit(); });
   });
 
   // After Approve or a published toggle the page comes back with ?open=<slug>:

@@ -1,10 +1,12 @@
-//! How far along an inspire-video (Generate) job is, as "stage N of 9" and a
+//! How far along a Creator job is (a Find videos run, or an inspire-video Generate job), as "stage N of 9" and a
 //! percentage, worked out from the steps already in its log.
 //!
 //! The skill's workflow is fixed, so each tool call can be matched to the stage it
 //! belongs to (a download, the transcription, the render, ...). The job's stage is the
 //! furthest one seen, so a re-run of an earlier command never moves it back. It is an
 //! estimate: stages take very different times and the agent may skip or reorder some.
+
+use super::jobs::JobKind;
 
 /// The stages of one video, in order. The label is English; the page translates it.
 pub const STAGES: [&str; 9] = [
@@ -19,18 +21,41 @@ pub const STAGES: [&str; 9] = [
     "Write the publishing copy",
 ];
 
+/// The stages of one Find videos run (the video-scout skill), in order.
+pub const SCOUT_STAGES: [&str; 4] = [
+    "Check earlier results",
+    "Search for candidates",
+    "Inspect candidates",
+    "Write the results",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
-    /// 1-based index into [`STAGES`].
+    /// 1-based index into the job kind's stage list.
     pub stage: usize,
     pub total: usize,
     /// 0-100, the middle of the current stage's share of the bar.
     pub percent: u8,
+    /// The stage's English name (the page translates it by `stage`).
+    pub label: &'static str,
 }
 
-impl Progress {
-    pub fn label(&self) -> &'static str {
-        STAGES[self.stage - 1]
+/// The stage a Find videos step line belongs to (the scout job has web tools and
+/// file tools, no shell).
+fn scout_stage_of(line: &str) -> Option<usize> {
+    let rest = line.strip_prefix("Step ")?;
+    let (_, call) = rest.split_once(" · ")?;
+    let wrote = call.starts_with("Write:") || call.starts_with("Edit:");
+    if wrote && (call.contains("catalog") || call.contains("report")) {
+        Some(4)
+    } else if call.starts_with("WebFetch:") {
+        Some(3)
+    } else if call.starts_with("WebSearch:") {
+        Some(2)
+    } else if call.starts_with("Read:") && call.contains("catalog") {
+        Some(1)
+    } else {
+        None
     }
 }
 
@@ -73,16 +98,24 @@ fn stage_of(line: &str) -> Option<usize> {
     }
 }
 
-/// The furthest stage reached in `rendered` (see [`super::logfmt::render`]); `None`
-/// before the first recognised step.
-pub fn of_rendered_log(rendered: &str) -> Option<Progress> {
+/// Maps one rendered step line to its stage.
+type StageFn = fn(&str) -> Option<usize>;
+
+/// The furthest stage reached in `rendered` (see [`super::logfmt::render`]) for a
+/// job of `kind`; `None` before the first recognised step.
+pub fn of_rendered_log(kind: JobKind, rendered: &str) -> Option<Progress> {
+    let (stages, stage_of): (&[&'static str], StageFn) = match kind {
+        JobKind::Generate => (&STAGES, stage_of),
+        JobKind::Scout => (&SCOUT_STAGES, scout_stage_of),
+    };
     let stage = rendered.lines().filter_map(stage_of).max()?;
-    let total = STAGES.len();
+    let total = stages.len();
     let percent = ((2 * stage - 1) * 100 / (2 * total)) as u8;
     Some(Progress {
         stage,
         total,
         percent,
+        label: stages[stage - 1],
     })
 }
 
@@ -91,7 +124,43 @@ mod tests {
     use super::*;
 
     fn p(lines: &[&str]) -> Option<Progress> {
-        of_rendered_log(&lines.join("\n"))
+        of_rendered_log(JobKind::Generate, &lines.join("\n"))
+    }
+
+    fn sp(lines: &[&str]) -> Option<Progress> {
+        of_rendered_log(JobKind::Scout, &lines.join("\n"))
+    }
+
+    #[test]
+    fn a_scout_run_goes_from_history_to_search_to_inspection_to_results() {
+        let steps = [
+            ("Step 1 · Read: /h/.video-scout/catalog-index.json", 1),
+            ("Step 2 · WebSearch: leadership talks 2026", 2),
+            ("Step 3 · WebFetch: https://www.ted.com/talks/x", 3),
+            (
+                "Step 4 · Write: /h/.video-scout/catalog-2026-11-05-a.json",
+                4,
+            ),
+            ("Step 5 · Write: /h/.video-scout/report-2026-11-05-a.md", 4),
+        ];
+        for (line, stage) in steps {
+            assert_eq!(scout_stage_of(line), Some(stage), "{line}");
+        }
+        let now = sp(&[
+            "Step 1 · WebSearch: a",
+            "Step 2 · WebSearch: b",
+            "Step 3 · WebFetch: u",
+        ])
+        .unwrap();
+        assert_eq!((now.stage, now.total, now.percent), (3, 4, 62)); // (2*3-1)/8
+        assert_eq!(now.label, "Inspect candidates");
+        assert_eq!(
+            sp(&["Step 1 · Read: /h/.claude/skills/video-scout/SKILL.md"]),
+            None
+        );
+        // A Generate command means nothing to a scout run, and the other way round.
+        assert_eq!(sp(&["Step 1 · Bash: python scripts/fetch.py u"]), None);
+        assert_eq!(p(&["Step 1 · WebSearch: a"]), None);
     }
 
     #[test]
@@ -139,7 +208,7 @@ mod tests {
         .unwrap();
         assert_eq!((up_to_transcribe.stage, up_to_transcribe.total), (3, 9));
         assert_eq!(up_to_transcribe.percent, 27); // (2*3-1)/18
-        assert_eq!(up_to_transcribe.label(), "Transcribe");
+        assert_eq!(up_to_transcribe.label, "Transcribe");
         let first = p(&["Step 1 · Bash: python scripts/fetch.py u"]).unwrap();
         assert_eq!(first.percent, 5);
         let last = p(&["Step 1 · Bash: python scripts/publish_meta.py output/projects/s"]).unwrap();

@@ -167,12 +167,14 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    /// The system share sheet, anchored to the middle of the dashboard (the page cannot name a rect).
+    /// The system share sheet, opened next to the button the user clicked (the page sends its rectangle; the web
+    /// view is flipped, so page coordinates are view coordinates). Without one it opens at the middle.
     private func share(_ request: ShareRequest) {
         guard let wv = webView, !request.items.isEmpty else { return }
         let picker = NSSharingServicePicker(items: request.items)
-        let anchor = NSRect(x: wv.bounds.midX, y: wv.bounds.midY, width: 1, height: 1)
-        picker.show(relativeTo: anchor, of: wv, preferredEdge: .minY)
+        let fallback = NSRect(x: wv.bounds.midX, y: wv.bounds.midY, width: 1, height: 1)
+        let anchor = request.anchor.map { $0.intersection(wv.bounds) }.flatMap { $0.isNull || $0.isEmpty ? nil : $0 } ?? fallback
+        picker.show(relativeTo: anchor, of: wv, preferredEdge: .maxY)
     }
 
     private func saveExport(name: String, text: String) {

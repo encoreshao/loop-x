@@ -71,4 +71,19 @@ import Testing
         let req = ShareRequest.parse(["path": "", "text": long], root: try root())
         #expect(req?.text?.count == ShareRequest.maxTextLength)
     }
+
+    @Test func carriesTheClickedButtonsRectangleAsTheAnchor() throws {
+        let req = ShareRequest.parse(
+            ["path": "", "text": "x", "x": 120.5, "y": 48, "width": 96, "height": 28], root: try root())
+        #expect(req?.anchor == CGRect(x: 120.5, y: 48, width: 96, height: 28))
+    }
+
+    @Test func noAnchorWhenThePageSendsNoneOrNonsense() throws {
+        let root = try root()
+        #expect(ShareRequest.parse(["path": "", "text": "x"], root: root)?.anchor == nil)
+        #expect(ShareRequest.parse(["path": "", "text": "x", "x": "left", "y": 1, "width": 1, "height": 1], root: root)?.anchor == nil)
+        #expect(ShareRequest.parse(["path": "", "text": "x", "x": 1, "y": 1, "width": -5, "height": 1], root: root)?.anchor == nil)
+        #expect(ShareRequest.parse(["path": "", "text": "x", "x": 1e12, "y": 1, "width": 1, "height": 1], root: root)?.anchor == nil)
+        #expect(ShareRequest.parse(["path": "", "text": "x", "x": Double.nan, "y": 1, "width": 1, "height": 1], root: root)?.anchor == nil)
+    }
 }

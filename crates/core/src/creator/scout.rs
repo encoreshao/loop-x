@@ -127,6 +127,28 @@ fn read_run(path: &Path, id: &str) -> Result<ScoutRun, String> {
 }
 
 /// All readable catalogs under `root`, newest first, plus one error string per bad file.
+/// Whether a catalog file under `root` was written between `since` and `until`
+/// (`None`: no upper bound): what a Find videos job that ran in that window produced,
+/// if it produced anything.
+pub fn any_catalog_between(
+    root: &Path,
+    since: std::time::SystemTime,
+    until: Option<std::time::SystemTime>,
+) -> bool {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        name.starts_with("catalog-")
+            && name.ends_with(".json")
+            && name != "catalog-index.json"
+            && e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t >= since && until.is_none_or(|u| t <= u))
+    })
+}
+
 pub fn list_runs(root: &Path) -> (Vec<ScoutRun>, Vec<String>) {
     let mut runs = Vec::new();
     let mut errors = Vec::new();
@@ -173,6 +195,33 @@ mod tests {
 
     fn write(dir: &Path, name: &str, body: &str) {
         std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    #[test]
+    fn any_catalog_between_looks_at_catalog_files_written_during_the_run() {
+        let d = tempfile::tempdir().unwrap();
+        let hour = std::time::Duration::from_secs(3600);
+        let now = std::time::SystemTime::now();
+        assert!(!any_catalog_between(d.path(), now - hour, None));
+        std::fs::write(d.path().join("catalog-index.json"), "{}").unwrap();
+        std::fs::write(d.path().join("report.md"), "x").unwrap();
+        assert!(
+            !any_catalog_between(d.path(), now - hour, None),
+            "index and reports are not results"
+        );
+        std::fs::write(d.path().join("catalog-2026-11-05-a.json"), "{}").unwrap();
+        assert!(any_catalog_between(d.path(), now - hour, None));
+        assert!(!any_catalog_between(d.path(), now + hour, None));
+        assert!(any_catalog_between(d.path(), now - hour, Some(now + hour)));
+        assert!(
+            !any_catalog_between(d.path(), now - 2 * hour, Some(now - hour)),
+            "written after the job ended"
+        );
+        assert!(!any_catalog_between(
+            &d.path().join("missing"),
+            now - hour,
+            None
+        ));
     }
 
     #[test]
