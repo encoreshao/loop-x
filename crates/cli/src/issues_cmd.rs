@@ -1,6 +1,7 @@
 use loopx_core::config::{default_config_path, Config};
 use loopx_core::gitlab::{self, Client};
 use loopx_core::gitlab_cache;
+use loopx_core::issue_images;
 use loopx_core::pyjson;
 use serde_json::{Map, Value};
 use std::process::ExitCode;
@@ -178,6 +179,92 @@ fn filter_assigned_to(issues: Vec<Value>, username: &str) -> Vec<Value> {
                 })
         })
         .collect()
+}
+
+const IMAGES_USAGE: &str = "Usage: loopx issues images <instance> <project_id> <issue_iid>";
+
+/// `loopx issues images`: save the images in the issue's description and comments
+/// (from the synced local copy) under `outputs/issue-images/`, and print what was
+/// saved as JSON, so the agent can look at each file.
+pub fn images(args: &[String]) -> ExitCode {
+    match run_images(args) {
+        Ok(out) => {
+            println!("{out}");
+            ExitCode::SUCCESS
+        }
+        Err(msg) => {
+            eprintln!("{msg}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// The project's web URL from an issue's `web_url` (`.../-/issues/5`).
+fn project_web_url(issue: &Value) -> Option<String> {
+    let url = issue.get("web_url")?.as_str()?;
+    let cut = url.find("/-/issues/").or_else(|| url.find("/issues/"))?;
+    Some(url[..cut].to_string())
+}
+
+fn run_images(args: &[String]) -> Result<String, String> {
+    let [instance, project_id, iid, ..] = args else {
+        return Err(IMAGES_USAGE.to_string());
+    };
+    let issue = gitlab_cache::get_issue_cache(instance, project_id, iid).ok_or_else(|| {
+        format!("no synced copy of issue {iid}: run `loopx gitlab sync-issue <alias> {iid}` first")
+    })?;
+    let refs = issue_images::refs_of_issue(&issue);
+    let dir = issue_images::images_dir(
+        &loopx_core::runner_util::repo_root(),
+        &format!("{instance}-{project_id}-{iid}"),
+    );
+    let github = issue.get("provider").and_then(Value::as_str) == Some("github");
+    let report = if github {
+        // Public attachment hosts only, no token: a private repository's
+        // attachments are reported as skipped rather than guessed at.
+        issue_images::download_all(&refs, &dir, &|r| {
+            issue_images::github_allowed(&r.url)?;
+            issue_images::fetch_plain(&r.url)
+        })?
+    } else {
+        let web = project_web_url(&issue).ok_or("the synced issue has no web_url")?;
+        let config = gitlab::load_config();
+        let client = Client::from_config(config.as_ref(), Some(instance), None)
+            .map_err(|e| e.to_string())?;
+        issue_images::download_all(&refs, &dir, &|r| {
+            let target = issue_images::gitlab_target(&r.url, &web)?;
+            fetch_gitlab(&client, project_id, &r.url, &target)
+        })?
+    };
+    Ok(pyjson::to_string_pretty(&report.to_json()))
+}
+
+/// A GitLab upload: the API route first (`projects/:id/uploads/:secret/:file`),
+/// then the web address, both with the instance's token.
+fn fetch_gitlab(
+    client: &Client,
+    project_id: &str,
+    raw: &str,
+    target: &str,
+) -> Result<Vec<u8>, String> {
+    let limit = issue_images::MAX_BYTES;
+    let too_big = || format!("larger than {} MB", limit >> 20);
+    let mut parts = raw.trim_start_matches('/').splitn(3, '/');
+    if let (Some("uploads"), Some(secret), Some(file)) = (parts.next(), parts.next(), parts.next())
+    {
+        let api = format!(
+            "{}/projects/{}/uploads/{secret}/{file}",
+            client.api_base(),
+            gitlab::quote(project_id)
+        );
+        if let Ok(found) = client.download(&api, limit) {
+            return found.ok_or_else(too_big);
+        }
+    }
+    client
+        .download(target, limit)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(too_big)
 }
 
 #[cfg(test)]

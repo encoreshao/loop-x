@@ -18,6 +18,7 @@ mod metrics_cmd;
 mod notify_cmd;
 mod run_cmds;
 mod screenshot_cmd;
+mod screenshot_serve;
 mod secrets_cmd;
 mod serve_cmd;
 mod status_cmd;
@@ -316,6 +317,12 @@ enum IssuesCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Save the images in an issue's description and comments for the agent to look at
+    Images {
+        /// `<instance> <project_id> <issue_iid>`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -392,6 +399,9 @@ fn main() -> ExitCode {
         Command::Issues {
             command: IssuesCommand::Comments { args },
         } => issues_cmd::comments(&args),
+        Command::Issues {
+            command: IssuesCommand::Images { args },
+        } => issues_cmd::images(&args),
     }
 }
 

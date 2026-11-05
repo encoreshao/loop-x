@@ -86,6 +86,19 @@ pub(crate) const ASSET_BUILD_PATTERNS: [&str; 4] = [
     "Bash(RAILS_ENV=test bin/rails assets:precompile*)",
 ];
 
+/// The Claude in Chrome tools a run may use to open a local page and look at it,
+/// before `loopx screenshot --window` saves the picture. No `javascript_tool` (it
+/// runs script in the user's real, signed-in browser), no recording, no batching.
+const CHROME_TOOLS: [&str; 6] = [
+    "mcp__claude-in-chrome__tabs_context_mcp",
+    "mcp__claude-in-chrome__tabs_create_mcp",
+    "mcp__claude-in-chrome__tabs_close_mcp",
+    "mcp__claude-in-chrome__navigate",
+    "mcp__claude-in-chrome__read_page",
+    "mcp__claude-in-chrome__computer",
+];
+const CHROME_DENIED: &str = "mcp__claude-in-chrome__javascript_tool mcp__claude-in-chrome__gif_creator mcp__claude-in-chrome__browser_batch";
+
 fn tool_patterns(exe: &str, subs: &[&str]) -> Vec<String> {
     subs.iter()
         .flat_map(|s| [format!("Bash(loopx {s}*)"), format!("Bash({exe} {s}*)")])
@@ -124,6 +137,7 @@ pub fn allowed_tools(repo_root: &str, exe: &str, gate: bool, offline: bool) -> S
         // Asset builds a screenshot may need; the verify allowlist stays closed to them.
         t.extend(ASSET_BUILD_PATTERNS.iter().map(|s| s.to_string()));
         t.extend(tool_patterns(exe, &AGENT_SUBCOMMANDS));
+        t.extend(CHROME_TOOLS.iter().map(|s| s.to_string()));
         if !gate {
             t.extend(tool_patterns(exe, &["mr"]));
         }
@@ -144,6 +158,8 @@ pub fn disallowed_tools(exe: &str, gate: bool, offline: bool) -> String {
     }
     if offline {
         parts.extend(tool_patterns(exe, &OFFLINE_DENIED_SUBCOMMANDS));
+    } else {
+        parts.push(CHROME_DENIED.to_string());
     }
     parts.join(" ")
 }
@@ -216,6 +232,10 @@ fn claude_command(
     let mut cmd = vec![s("claude"), s("-p")];
     for root in roots {
         cmd.extend([s("--add-dir"), root.clone()]);
+    }
+    // The Claude in Chrome integration, only for a run that is allowed its tools.
+    if allowed.contains("mcp__claude-in-chrome__") {
+        cmd.push(s("--chrome"));
     }
     cmd.extend([
         s("--permission-mode"),
@@ -5483,6 +5503,76 @@ mod tests {
         assert!(normal.contains("Bash(git push origin loop/issue-*)"));
         assert!(normal.contains("Bash(loopx mr*)"));
         assert!(!normal.contains("handoffs"));
+    }
+
+    #[test]
+    fn the_issue_agent_may_use_the_chrome_plugin_to_look_at_local_pages_only_through_safe_tools() {
+        let allowed = allowed_tools("/r", "loopx", true, false);
+        let denied = disallowed_tools("loopx", true, false);
+        for tool in [
+            "tabs_context_mcp",
+            "tabs_create_mcp",
+            "tabs_close_mcp",
+            "navigate",
+            "read_page",
+            "computer",
+        ] {
+            assert!(
+                allowed.contains(&format!("mcp__claude-in-chrome__{tool}")),
+                "{tool}"
+            );
+        }
+        // No script execution in the user's real browser, no recording, no batching.
+        for tool in ["javascript_tool", "gif_creator", "browser_batch"] {
+            assert!(!allowed.contains(tool), "{tool} allowed");
+            assert!(
+                denied.contains(&format!("mcp__claude-in-chrome__{tool}")),
+                "{tool}"
+            );
+        }
+        // The command turns the integration on only when those tools are allowed.
+        let cmd = cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "loopx",
+            true,
+            None,
+            false,
+            &[],
+            None,
+        );
+        assert!(cmd.contains(&"--chrome".to_string()), "{cmd:?}");
+        // Offline (golden) runs and the MR-feedback phases never touch a browser.
+        assert!(!allowed_tools("/r", "loopx", true, true).contains("claude-in-chrome"));
+        assert!(!disallowed_tools("loopx", true, true).contains("claude-in-chrome"));
+        let offline = cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "loopx",
+            true,
+            None,
+            true,
+            &[],
+            None,
+        );
+        assert!(!offline.contains(&"--chrome".to_string()), "{offline:?}");
+        assert!(!phase_allowed_tools(Phase::Execute).contains("claude-in-chrome"));
+        let phase = phase_cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "loopx",
+            Phase::Execute,
+            None,
+            None,
+            &[],
+        );
+        assert!(!phase.contains(&"--chrome".to_string()), "{phase:?}");
     }
 
     #[test]

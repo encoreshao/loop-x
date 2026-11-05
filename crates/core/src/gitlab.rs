@@ -186,6 +186,42 @@ impl Client {
         }
     }
 
+    /// The raw bytes of `url` (at most `limit`, `None` when it is longer), with this
+    /// client's token. Only the instance's own host is ever contacted.
+    pub fn download(&self, url: &str, limit: usize) -> Result<Option<Vec<u8>>, GitlabError> {
+        let base = self.api_url.trim_end_matches("/api/v4");
+        let own = url
+            .strip_prefix(base)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+        if !own {
+            return Err(GitlabError::Transport(format!(
+                "{url} is not on the GitLab instance"
+            )));
+        }
+        match ureq::get(url).set("PRIVATE-TOKEN", &self.token).call() {
+            Ok(resp) => {
+                use std::io::Read;
+                let mut bytes = Vec::new();
+                resp.into_reader()
+                    .take(limit as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| GitlabError::Transport(e.to_string()))?;
+                Ok((bytes.len() <= limit).then_some(bytes))
+            }
+            Err(ureq::Error::Status(status, resp)) => Err(GitlabError::Http {
+                status,
+                url: url.to_string(),
+                body: resp.into_string().unwrap_or_default(),
+            }),
+            Err(e) => Err(GitlabError::Transport(e.to_string())),
+        }
+    }
+
+    /// The API base (`https://host/api/v4`) of this client.
+    pub fn api_base(&self) -> &str {
+        &self.api_url
+    }
+
     /// GET every page of a list endpoint (GitLab silently caps one page at 20).
     pub fn get_all(
         &self,

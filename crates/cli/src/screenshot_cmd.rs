@@ -10,24 +10,24 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: loopx screenshot --url URL --out FILE.png [--serve \"CMD\"] [--cwd DIR] [--selector CSS] [--full-page] [--viewport WxH] [--mock FILE] [--session FILE] [--wait-for CSS] [--timeout-s N] (--url must be on localhost; --timeout-s, default 90, covers starting the dev server and the capture together; closing Chrome and the server can add about 20 s)";
+const USAGE: &str = "usage: loopx screenshot --window --out FILE.png (the front Chrome window, a localhost page) | loopx screenshot --url URL --out FILE.png [--serve \"CMD\"] [--cwd DIR] [--selector CSS] [--full-page] [--viewport WxH] [--mock FILE] [--session FILE] [--wait-for CSS] [--timeout-s N] (--url must be on localhost; --timeout-s, default 90, covers starting the dev server and the capture together; closing Chrome and the server can add about 20 s)";
 
 /// Default overall budget: with teardown it stays under a 2-minute Bash timeout.
 const DEFAULT_TIMEOUT_S: u64 = 90;
 
 #[derive(Debug)]
-struct Args {
-    url: String,
-    out: PathBuf,
-    serve: Option<(String, ServeCommand)>,
-    cwd: PathBuf,
-    selector: Option<String>,
-    full_page: bool,
-    viewport: (u32, u32),
-    mock: Option<PathBuf>,
-    session: Option<PathBuf>,
-    wait_for: Option<String>,
-    timeout_s: u64,
+pub(crate) struct Args {
+    pub(crate) url: String,
+    pub(crate) out: PathBuf,
+    pub(crate) serve: Option<(String, ServeCommand)>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) selector: Option<String>,
+    pub(crate) full_page: bool,
+    pub(crate) viewport: (u32, u32),
+    pub(crate) mock: Option<PathBuf>,
+    pub(crate) session: Option<PathBuf>,
+    pub(crate) wait_for: Option<String>,
+    pub(crate) timeout_s: u64,
 }
 
 fn parse_viewport(raw: &str) -> Result<(u32, u32), String> {
@@ -41,7 +41,7 @@ fn parse_viewport(raw: &str) -> Result<(u32, u32), String> {
     Ok((w, h))
 }
 
-fn parse_args(argv: &[String]) -> Result<Args, String> {
+pub(crate) fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut a = Args {
         url: String::new(),
         out: PathBuf::new(),
@@ -167,7 +167,7 @@ fn host_port(url: &str) -> Option<String> {
 }
 
 /// True when something already accepts connections at the URL's host:port.
-fn already_served(url: &str) -> bool {
+pub(crate) fn already_served(url: &str) -> bool {
     let Some(addr) = host_port(url) else {
         return false;
     };
@@ -231,7 +231,42 @@ fn execute(a: &Args) -> Result<(), String> {
     capture(&opts)
 }
 
+/// `loopx screenshot --window --out FILE.png`: the front Chrome window, a localhost
+/// page the Claude in Chrome tools opened (see `loopx_core::window_capture`).
+fn run_window(argv: &[String]) -> ExitCode {
+    let out = match argv {
+        [w, flag, out] if w == "--window" && flag == "--out" => PathBuf::from(out),
+        _ => {
+            eprintln!("loopx screenshot: usage: loopx screenshot --window --out FILE.png");
+            return ExitCode::from(1);
+        }
+    };
+    let allowed = loopx_core::runner_util::repo_root()
+        .join("outputs")
+        .join("screens");
+    match loopx_core::window_capture::capture_front_window(
+        &out,
+        &allowed,
+        &loopx_core::window_capture::system_runner,
+    ) {
+        Ok(saved) => {
+            println!("{}", saved.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("loopx screenshot: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 pub fn run(argv: &[String]) -> ExitCode {
+    if argv.first().is_some_and(|a| a == "serve") {
+        return crate::screenshot_serve::run(&argv[1..]);
+    }
+    if argv.first().is_some_and(|a| a == "--window") {
+        return run_window(argv);
+    }
     // A Bash timeout's SIGTERM must not orphan the dev server or Chrome.
     clean_up_on_signals();
     let args = match parse_args(argv) {
