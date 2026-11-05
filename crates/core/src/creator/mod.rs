@@ -1,6 +1,8 @@
 //! Creator: video-scout catalogs, video files and agent jobs.
 
 pub mod jobs;
+pub mod logfmt;
+pub mod progress;
 pub mod scout;
 pub mod spawn;
 pub mod state;

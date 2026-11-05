@@ -265,8 +265,11 @@ fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<String> {
         fence.allowed.join(" "),
         s("--disallowedTools"),
         fence.denied.join(" "),
+        // One JSON event per step as it happens (`--verbose` is required with -p);
+        // the Job log panel renders them, see `logfmt`.
         s("--output-format"),
-        s("text"),
+        s("stream-json"),
+        s("--verbose"),
     ];
     argv.extend(crate::cost::budget_args(Some(fence.budget_usd)));
     argv.push(s(prompt));
@@ -558,6 +561,9 @@ mod tests {
     /// What both jobs share: no MCP, prompts for anything not allowed, no bare tool
     /// that reaches outside the job, and the credential/loopx denies.
     fn assert_fenced(argv: &[String], skill: &str, tools: &str, budget: &str) {
+        // A step-by-step stream for the Job log panel, not one text block at the end.
+        assert_eq!(flag(argv, "--output-format"), "stream-json");
+        assert!(argv.contains(&"--verbose".to_string()));
         assert_eq!(argv[0], "claude");
         // The user's own settings (bare Read/Write allows, hooks) never load, and
         // nothing persists the session; only the named built-ins exist at all.

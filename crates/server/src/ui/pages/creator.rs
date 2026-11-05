@@ -23,12 +23,13 @@ use loopx_core::creator::videos::{self, PublishCopy, VideoProject};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-const TABS: [&str; 2] = ["discover", "videos"];
+const TABS: [&str; 3] = ["discover", "videos", "jobs"];
 /// A GET without `Range` larger than this is refused (players always send ranges).
 const MAX_FULL_BYTES: u64 = 64 * 1024 * 1024;
 /// The most one range response carries; an open or larger range is cut to this.
 const MAX_RANGE_BYTES: u64 = 8 * 1024 * 1024;
-const JOBS_SHOWN: usize = 10;
+/// Rows on the Jobs tab (newest first); older records stay on disk until deleted.
+const JOBS_SHOWN: usize = 200;
 /// What a scout job searches for when the topic field is left empty.
 const OPEN_SCOUT_QUERY: &str =
     "topic-free discovery: a few of the most worthwhile recent public talks and interviews";
@@ -38,9 +39,13 @@ pub fn register(r: &mut Registry) {
     r.get("/creator", page);
     r.get("/creator/media/:slug/:file", media);
     r.get("/creator/jobs/:id/log", job_log);
+    r.get("/creator/jobs/:id/status", job_status);
+    r.post("/creator/jobs/delete", delete_job);
+    r.post("/creator/jobs/clear", clear_jobs);
     r.post("/creator/generate", generate);
     r.post("/creator/scout", start_scout);
     r.post("/creator/stop", stop);
+    r.post("/creator/folder", open_folder);
     r.post("/creator/approve", approve);
     r.post("/creator/published", published);
 }
@@ -165,6 +170,78 @@ fn stop(ctx: &UiCtx) -> UiResponse {
     }
 }
 
+fn delete_job(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let to = back("jobs");
+    match jobs::delete(&jobs_dir(ctx), form.first("id").unwrap_or("")) {
+        Ok(()) => UiResponse::flash_redirect(true, &ctx.t("Job deleted"), &to),
+        Err(e) => UiResponse::flash_redirect(
+            false,
+            &ctx.tf("Could not delete the job: {detail}", &[("detail", &e)]),
+            &to,
+        ),
+    }
+}
+
+fn clear_jobs(ctx: &UiCtx) -> UiResponse {
+    let n = jobs::delete_finished(&jobs_dir(ctx));
+    UiResponse::flash_redirect(
+        true,
+        &ctx.tf("Deleted {count} finished jobs", &[("count", &n.to_string())]),
+        &back("jobs"),
+    )
+}
+
+/// The arguments `open` takes to show `path` in Finder: a file is revealed, a
+/// folder is opened.
+fn finder_args(path: &Path) -> Vec<String> {
+    if path.is_dir() {
+        vec![path.display().to_string()]
+    } else {
+        vec!["-R".to_string(), path.display().to_string()]
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_in_finder(path: &Path) -> Result<(), String> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .args(finder_args(path))
+        .status()
+        .map_err(|e| e.to_string())?;
+    status.success().then_some(()).ok_or_else(|| format!("open exited with {status}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_in_finder(_path: &Path) -> Result<(), String> {
+    Err("this needs a Mac".to_string())
+}
+
+/// Show a video's file in Finder. The path comes from the listed project, never from
+/// the request.
+fn open_folder(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let slug = form.first("slug").unwrap_or("");
+    let to = back_to_video(slug);
+    let projects = videos::list_projects(&videos_root(ctx)).0;
+    let Some(p) = projects.iter().find(|p| p.slug == slug) else {
+        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &back("videos"));
+    };
+    if !ctx.state.spawn_processes {
+        return UiResponse::flash_redirect(false, &ctx.t("This server cannot open folders"), &to);
+    }
+    let Some(target) = p.mp4.as_ref().or(p.cover.as_ref()) else {
+        return UiResponse::flash_redirect(false, &ctx.t("Nothing to open yet"), &to);
+    };
+    match open_in_finder(target) {
+        Ok(()) => UiResponse::flash_redirect(true, &ctx.t("Opened in Finder"), &to),
+        Err(e) => UiResponse::flash_redirect(
+            false,
+            &ctx.tf("Could not open the folder: {detail}", &[("detail", &e)]),
+            &to,
+        ),
+    }
+}
+
 /// The slug from the form when it names a listed project.
 fn known_slug(ctx: &UiCtx, slug: &str) -> bool {
     videos::list_projects(&videos_root(ctx))
@@ -221,10 +298,10 @@ fn published(ctx: &UiCtx) -> UiResponse {
 
 // ---- job log ---------------------------------------------------------------------------
 
-/// The end of a job's log as plain text (never rendered as HTML); 404 for an unsafe
+/// A job's log, rendered step by step, as plain text (never rendered as HTML); 404 for an unsafe
 /// or unknown job id.
 fn job_log(ctx: &UiCtx) -> UiResponse {
-    match jobs::log_tail(&jobs_dir(ctx), ctx.param("id")) {
+    match jobs::log_view(&jobs_dir(ctx), ctx.param("id")) {
         Some(text) => UiResponse::bytes(
             200,
             "text/plain; charset=utf-8",
@@ -235,6 +312,34 @@ fn job_log(ctx: &UiCtx) -> UiResponse {
             text.into_bytes(),
         ),
         None => UiResponse::not_found(ctx.lang),
+    }
+}
+
+/// `{"state": ..., "line": ...}` for one job: what the live status rows poll.
+fn job_status(ctx: &UiCtx) -> UiResponse {
+    let dir = jobs_dir(ctx);
+    let id = ctx.param("id");
+    match (jobs::get(&dir, id), jobs::status_line(&dir, id)) {
+        (Some(job), Some(line)) => UiResponse::bytes(
+            200,
+            "application/json",
+            &[
+                ("X-Content-Type-Options", "nosniff"),
+                ("Cache-Control", "no-store"),
+            ],
+            serde_json::json!({
+                "state": job.state,
+                "line": line,
+                "progress": progress_parts(ctx, &job).map(|(percent, text)| {
+                    let (stage, total) = jobs::progress(&dir, id)
+                        .map_or((0, loopx_core::creator::progress::STAGES.len()), |p| (p.stage, p.total));
+                    serde_json::json!({"stage": stage, "total": total, "percent": percent, "text": text})
+                }),
+            })
+            .to_string()
+            .into_bytes(),
+        ),
+        _ => UiResponse::not_found(ctx.lang),
     }
 }
 
@@ -408,7 +513,11 @@ fn section(title: &str, aside: &str, body: &str) -> String {
 }
 
 fn tabs_html(ctx: &UiCtx, active: &str) -> String {
-    let labels = [("discover", ctx.t("Discover")), ("videos", ctx.t("Videos"))];
+    let labels = [
+        ("discover", ctx.t("Discover")),
+        ("videos", ctx.t("Videos")),
+        ("jobs", ctx.t("Jobs")),
+    ];
     let links: String = labels
         .iter()
         .map(|(key, label)| {
@@ -467,7 +576,7 @@ fn log_link(ctx: &UiCtx, job: &JobRecord) -> String {
 fn log_sheet(ctx: &UiCtx) -> String {
     format!(
         "<dialog class='cr-sheet' id='cr-sheet' aria-labelledby='cr-sheet-title' \
-data-failed-label=\"{}\" data-loading-label=\"{}\">\
+data-failed-label=\"{}\" data-loading-label=\"{}\" data-empty-label=\"{}\">\
 <div class='cr-sheet-inner'><header class='cr-sheet-head'><h2 id='cr-sheet-title'>{}</h2>\
 <div class='cr-sheet-tools'>\
 <button type='button' class='cr-icon-btn' data-cr-refresh aria-label=\"{}\">{}</button>\
@@ -475,6 +584,7 @@ data-failed-label=\"{}\" data-loading-label=\"{}\">\
 <pre class='cr-sheet-log' tabindex='0' aria-live='polite'></pre></div></dialog>",
         h(&ctx.t("Could not load the log.")),
         h(&ctx.t("Loading…")),
+        h(&ctx.t("Waiting for the first step…")),
         h(&ctx.t("Job log")),
         h(&ctx.t("Refresh")),
         icons::icon("autorenew"),
@@ -483,32 +593,167 @@ data-failed-label=\"{}\" data-loading-label=\"{}\">\
     )
 }
 
-fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
-    let kind = match job.kind {
+fn kind_label(ctx: &UiCtx, job: &JobRecord) -> String {
+    match job.kind {
         JobKind::Scout => ctx.t("Find videos"),
         JobKind::Generate => ctx.t("Generate"),
+    }
+}
+
+/// The translated name of stage `n` (1-based) of a video; literal strings so the
+/// catalogs can be checked against the sources.
+fn stage_label(ctx: &UiCtx, n: usize) -> String {
+    match n {
+        1 => ctx.t("Fetch the source"),
+        2 => ctx.t("Probe and extract audio"),
+        3 => ctx.t("Transcribe"),
+        4 => ctx.t("Choose a segment and write the copy"),
+        5 => ctx.t("Cut the clip"),
+        6 => ctx.t("Build the render manifest"),
+        7 => ctx.t("Render"),
+        8 => ctx.t("Quality check"),
+        _ => ctx.t("Write the publishing copy"),
+    }
+}
+
+/// `(percent, text)` of a Generate job's progress: "Stage 3 of 9 · Transcribe", or
+/// "Getting started" before the first recognised step.
+fn progress_parts(ctx: &UiCtx, job: &JobRecord) -> Option<(u8, String)> {
+    if job.kind != JobKind::Generate {
+        return None;
+    }
+    Some(match jobs::progress(&jobs_dir(ctx), &job.id) {
+        Some(p) => (
+            p.percent,
+            ctx.tf(
+                "Stage {stage} of {total} · {label}",
+                &[
+                    ("stage", &p.stage.to_string()),
+                    ("total", &p.total.to_string()),
+                    ("label", &stage_label(ctx, p.stage)),
+                ],
+            ),
+        ),
+        None => (0, ctx.t("Getting started")),
+    })
+}
+
+fn progress_html(ctx: &UiCtx, job: &JobRecord) -> String {
+    let Some((percent, text)) = progress_parts(ctx, job).filter(|_| job.state == "running") else {
+        return String::new();
     };
-    let stop = if job.state == "running" {
+    format!(
+        "<div class='cr-progress' data-cr-progress=\"{}\"><div class='cr-progress-head'>\
+<span class='cr-progress-text'>{}</span><span class='cr-progress-pct'>{percent}%</span></div>\
+<div class='cr-progress-bar' role='progressbar' aria-valuemin='0' aria-valuemax='100' aria-valuenow='{percent}' aria-label=\"{}\">\
+<span style='width:{percent}%'></span></div></div>",
+        h(&job.id),
+        h(&text),
+        h(&text)
+    )
+}
+
+/// The current step of a running job. `creator.js` asks `/creator/jobs/<id>/status`
+/// for it every couple of seconds and reloads the page when the job ends.
+fn live_status(ctx: &UiCtx, job: &JobRecord) -> String {
+    if job.state != "running" {
+        return String::new();
+    }
+    let line = jobs::status_line(&jobs_dir(ctx), &job.id).unwrap_or_default();
+    let empty = ctx.t("Starting…");
+    format!(
+        "<div class='cr-status' data-cr-status=\"{}\" data-empty-label=\"{}\" aria-live='polite'>{}</div>",
+        h(&job.id),
+        h(&empty),
+        h(if line.is_empty() { &empty } else { &line })
+    )
+}
+
+fn delete_form(ctx: &UiCtx, job: &JobRecord) -> String {
+    format!(
+        "<form method='post' action='/creator/jobs/delete' class='cr-inline-form'>{}\
+<input type='hidden' name='id' value=\"{}\">\
+<button type='submit' class='cr-btn cr-btn-plain' data-cr-confirm data-confirm-label=\"{}\">{} {}</button></form>",
+        ctx.csrf_input(),
+        h(&job.id),
+        h(&ctx.t("Click again to confirm")),
+        icons::icon("delete"),
+        h(&ctx.t("Delete"))
+    )
+}
+
+/// One job: its kind and state, what it ran on, its live step while it runs, and
+/// View log with Stop (running) or Delete (finished).
+fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
+    let action = if job.state == "running" {
         stop_form(ctx, job, tab)
     } else {
-        String::new()
+        delete_form(ctx, job)
     };
     format!(
         "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>\
-<div class='cr-meta'>{}</div></div><div class='cr-row-actions'>{}{stop}</div></li>",
-        h(&kind),
+<div class='cr-meta'>{}</div>{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
+        h(&kind_label(ctx, job)),
         state_pill(ctx, &job.state),
         h(&joined(&[job.key.clone(), when(&job.started_at)])),
+        progress_html(ctx, job),
+        live_status(ctx, job),
         log_link(ctx, job)
     )
 }
 
-fn jobs_list(ctx: &UiCtx, title: &str, jobs: &[&JobRecord], tab: &str) -> String {
+/// Running jobs only (a row each, with its live step and Stop); nothing when none.
+fn running_list(ctx: &UiCtx, title: &str, jobs: &[&JobRecord], tab: &str) -> String {
     if jobs.is_empty() {
         return String::new();
     }
     let rows: String = jobs.iter().map(|j| job_row(ctx, j, tab)).collect();
     section(title, "", &format!("<ul class='cr-list'>{rows}</ul>"))
+}
+
+/// The Jobs tab: every Find videos and Generate run, newest first.
+fn jobs_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
+    if jobs.is_empty() {
+        return section(
+            &ctx.t("Job history"),
+            "",
+            &format!(
+                "<div class='cr-surface cr-empty'>{}</div>",
+                subtitle(&ctx.t(
+                    "No jobs yet. Find videos or generate a video, and every run shows up here."
+                ))
+            ),
+        );
+    }
+    let rows: String = jobs
+        .iter()
+        .take(JOBS_SHOWN)
+        .map(|j| job_row(ctx, j, "jobs"))
+        .collect();
+    let finished = jobs.iter().any(|j| j.state != "running");
+    let clear = if finished {
+        format!(
+            "<form method='post' action='/creator/jobs/clear' class='cr-inline-form'>{}\
+<button type='submit' class='cr-btn cr-btn-plain cr-btn-small' data-cr-confirm data-confirm-label=\"{}\">{} {}</button></form>",
+            ctx.csrf_input(),
+            h(&ctx.t("Click again to confirm")),
+            icons::icon("delete"),
+            h(&ctx.t("Clear finished"))
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "{}{}",
+        subtitle(&ctx.t(
+            "Every Find videos and Generate run, newest first. Deleting a record also removes its log."
+        )),
+        section(
+            &ctx.t("Job history"),
+            &clear,
+            &format!("<ul class='cr-list'>{rows}</ul>")
+        )
+    )
 }
 
 fn errors_card(ctx: &UiCtx, errors: &[String]) -> String {
@@ -685,8 +930,11 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             h(&ctx.t("Find videos"))
         ),
     );
-    let recent: Vec<&JobRecord> = jobs.iter().take(JOBS_SHOWN).collect();
-    let jobs_html = jobs_list(ctx, &ctx.t("Jobs"), &recent, "discover");
+    let running: Vec<&JobRecord> = jobs
+        .iter()
+        .filter(|j| j.kind == JobKind::Scout && j.state == "running")
+        .collect();
+    let jobs_html = running_list(ctx, &ctx.t("Running jobs"), &running, "discover");
     let runs_html: String = if runs.is_empty() {
         section(
             &ctx.t("Scout runs"),
@@ -798,10 +1046,19 @@ fn poster_card(ctx: &UiCtx, v: &VideoView<'_>) -> String {
     } else {
         String::new()
     };
+    let tools = {
+        let share = video_share(ctx, v, true);
+        let folder = folder_form(ctx, v, true);
+        if share.is_empty() && folder.is_empty() {
+            String::new()
+        } else {
+            format!("<div class='cr-poster-tools'>{share}{folder}</div>")
+        }
+    };
     format!(
         "<li><button type='button' class='cr-poster' data-cr-open='{id}' aria-haspopup='dialog' aria-label=\"{}\">\
 <span class='cr-poster-media'>{image}{play}<span class='cr-poster-status'>{}</span></span>\
-<span class='cr-poster-title'>{}</span></button></li>",
+<span class='cr-poster-title'>{}</span></button>{tools}</li>",
         h(&ctx.tf("Open {title}", &[("title", &v.p.title)])),
         pill(v.status_kind, &v.status),
         h(&v.p.title),
@@ -827,6 +1084,83 @@ fn approve_form(ctx: &UiCtx, v: &VideoView<'_>) -> String {
         icons::icon(icon),
         h(&label)
     )
+}
+
+/// A Share button. Hidden until `creator.js` finds a way to share (the Mac app's
+/// share sheet, or the browser's): `path` is the video file for the native sheet,
+/// `url` the same file over HTTP for the browser, `text` the caption or title that
+/// goes with it. `kind` is `video` or `caption`.
+fn share_button(
+    ctx: &UiCtx,
+    kind: &str,
+    text: &str,
+    file: Option<(&Path, String)>,
+    icon_only: bool,
+) -> String {
+    let file_attrs = file
+        .map(|(path, url)| {
+            format!(
+                " data-share-path=\"{}\" data-share-url=\"{}\"",
+                h(&path.display().to_string()),
+                h(&url)
+            )
+        })
+        .unwrap_or_default();
+    let label = ctx.t("Share");
+    if icon_only {
+        format!(
+            "<button type='button' class='cr-icon-btn' data-cr-share data-share-kind='{kind}' data-share-text=\"{}\"{file_attrs} aria-label=\"{}\" title=\"{}\" hidden>{}</button>",
+            h(text),
+            h(&label),
+            h(&label),
+            icons::icon("send")
+        )
+    } else {
+        format!(
+            "<button type='button' class='cr-btn cr-btn-plain cr-btn-small' data-cr-share data-share-kind='{kind}' data-share-text=\"{}\"{file_attrs} hidden>{} {}</button>",
+            h(text),
+            icons::icon("send"),
+            h(&label)
+        )
+    }
+}
+
+/// Open the video's folder in Finder (a POST, so the page cannot be made to do it
+/// by a link).
+fn folder_form(ctx: &UiCtx, v: &VideoView<'_>, icon_only: bool) -> String {
+    if v.p.mp4.is_none() && v.p.cover.is_none() {
+        return String::new();
+    }
+    let label = ctx.t("Open folder");
+    let button = if icon_only {
+        format!(
+            "<button type='submit' class='cr-icon-btn' aria-label=\"{}\" title=\"{}\">{}</button>",
+            h(&label),
+            h(&label),
+            icons::icon("folder")
+        )
+    } else {
+        format!(
+            "<button type='submit' class='cr-btn cr-btn-plain cr-btn-small'>{} {}</button>",
+            icons::icon("folder"),
+            h(&label)
+        )
+    };
+    format!(
+        "<form method='post' action='/creator/folder' class='cr-inline-form'>{}\
+<input type='hidden' name='slug' value=\"{}\">{button}</form>",
+        ctx.csrf_input(),
+        h(&v.p.slug)
+    )
+}
+
+/// The video's Share button (a video file is needed to have anything to share).
+fn video_share(ctx: &UiCtx, v: &VideoView<'_>, icon_only: bool) -> String {
+    let Some(mp4) = v.p.mp4.as_deref() else {
+        return String::new();
+    };
+    let url = media_url(&v.p.slug, mp4);
+    share_button(ctx, "video", &v.p.title, Some((mp4, url)), icon_only)
 }
 
 fn copy_button(ctx: &UiCtx, value: &str, label: &str) -> String {
@@ -929,7 +1263,11 @@ fn platform_group(
     let copy_all = if all.is_empty() {
         String::new()
     } else {
-        copy_button(ctx, &all, &ctx.t("Copy all"))
+        format!(
+            "{}{}",
+            copy_button(ctx, &all, &ctx.t("Copy all")),
+            share_button(ctx, "caption", &all, None, false)
+        )
     };
     let (on, toggle) = if is_published {
         ("0", ctx.t("Mark as not published"))
@@ -1016,6 +1354,8 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
         None => String::new(),
     };
     let log = v.last_job.map(|j| log_link(ctx, j)).unwrap_or_default();
+    let share = video_share(ctx, v, false);
+    let folder = folder_form(ctx, v, false);
     let stop = v
         .rendering
         .map(|j| stop_form(ctx, j, "videos"))
@@ -1027,7 +1367,7 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
 <h2 id='{id}-title'>{}</h2><div class='cr-badges'>{}<span class='cr-meta'>{}</span></div></div>\
 <button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
 <div class='cr-dialog-body'><div class='cr-player'>{player}</div><div class='cr-details'>\
-<div class='cr-actions'>{}{source}{log}{stop}</div>{}</div></div></div></dialog>",
+<div class='cr-actions'>{}{share}{folder}{source}{log}{stop}</div>{}</div></div></div></dialog>",
         h(&v.p.slug),
         h(&v.p.title),
         pill(v.status_kind, &v.status),
@@ -1044,18 +1384,11 @@ fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     let root = videos_root(ctx);
     let (projects, errors) = videos::list_projects(&root);
     let st = cstate::load(&state_path(ctx));
-    let known: Vec<String> = projects
-        .iter()
-        .filter_map(|p| p.source_url.as_deref())
-        .map(|u| valid_source_url(u).unwrap_or_else(|_| u.to_string()))
-        .collect();
     let pending: Vec<&JobRecord> = jobs
         .iter()
-        .filter(|j| j.kind == JobKind::Generate && !known.contains(&j.key))
-        .filter(|j| j.state == "running" || j.state == "failed")
-        .take(JOBS_SHOWN)
+        .filter(|j| j.kind == JobKind::Generate && j.state == "running")
         .collect();
-    let pending = jobs_list(ctx, &ctx.t("Generating"), &pending, "videos");
+    let pending = running_list(ctx, &ctx.t("Generating"), &pending, "videos");
     let list = if projects.is_empty() {
         no_videos(ctx, &root)
     } else {
@@ -1084,6 +1417,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let jobs = jobs::list_jobs(&jobs_dir(ctx));
     let body = match tab {
         "videos" => videos_tab(ctx, &jobs),
+        "jobs" => jobs_tab(ctx, &jobs),
         _ => discover_tab(ctx, &jobs),
     };
     let head = format!(
@@ -1110,7 +1444,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{range_response, when, MAX_FULL_BYTES, MAX_RANGE_BYTES};
+    use super::{finder_args, range_response, when, MAX_FULL_BYTES, MAX_RANGE_BYTES};
     use crate::ui::routes::{UiRequest, UiResponse};
     use crate::ui::state::UiState;
     use axum::http::Method;
@@ -1188,6 +1522,26 @@ mod tests {
         }
         fn state_path(&self) -> PathBuf {
             self.st.home_dir.join("creator.json")
+        }
+        /// A job record: `alive` ones are held by this test process, others by a
+        /// process that has exited (their log decides done or failed).
+        fn job(&self, id: &str, kind: &str, key: &str, alive: bool, log: &str) {
+            let pid = if alive {
+                i64::from(std::process::id())
+            } else {
+                let mut c = std::process::Command::new("true").spawn().unwrap();
+                c.wait().unwrap();
+                i64::from(c.id())
+            };
+            std::fs::create_dir_all(self.jobs()).unwrap();
+            std::fs::write(
+                self.jobs().join(format!("{id}.json")),
+                json!({"id": id, "kind": kind, "key": key, "state": "running",
+                       "pid": pid, "started_at": "2026-11-05T00:00:00Z"})
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(self.jobs().join(format!("{id}.log")), log).unwrap();
         }
         /// A `running` generate record held by this (alive) test process.
         fn running_job(&self, key: &str) {
@@ -1725,27 +2079,281 @@ mod tests {
         std::fs::write(fx.jobs().join(format!("{id}.log")), log).unwrap();
     }
 
+    fn step_line(cmd: &str) -> String {
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": cmd}}]}})
+        )
+    }
+
     #[test]
-    fn a_failed_job_shows_failed_and_links_its_log() {
+    fn the_jobs_tab_lists_every_job_with_stop_for_running_and_delete_for_finished() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-scout000", "scout", "leadership", false, "loopx-exit=0\n");
+        fx.job("20261105T000002-genfail0", "generate", "https://example.com/talks/a", false, "boom\n");
+        fx.job(
+            "20261105T000003-genlive0",
+            "generate",
+            "https://example.com/talks/b",
+            true,
+            &step_line("python scripts/transcribe.py"),
+        );
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("href='/creator?tab=jobs' aria-current='page'"), "{body}");
+        for id in ["20261105T000001-scout000", "20261105T000002-genfail0", "20261105T000003-genlive0"] {
+            assert!(body.contains(&format!("/creator/jobs/{id}/log")), "{id}");
+        }
+        assert!(body.contains("Done</span>") && body.contains("Failed</span>"), "{body}");
+        // Finished jobs offer Delete (a confirm-on-second-click button), the running one Stop.
+        assert_eq!(body.matches("action='/creator/jobs/delete'").count(), 2, "{body}");
+        assert!(body.contains("data-cr-confirm"), "{body}");
+        assert_eq!(body.matches("action='/creator/stop'").count(), 1, "{body}");
+        assert!(body.contains("action='/creator/jobs/clear'"), "{body}");
+        // The running job shows its current step and is watched for live updates.
+        assert!(body.contains("Step 1 · Bash: python scripts/transcribe.py"), "{body}");
+        assert!(body.contains("data-cr-status=\"20261105T000003-genlive0\""), "{body}");
+        // Newest first.
+        assert!(body.find("genlive0").unwrap() < body.find("scout000").unwrap());
+    }
+
+    #[test]
+    fn a_running_generate_job_shows_its_stage_and_a_progress_bar() {
+        let fx = Fx::new();
+        let log = [
+            step_line("python scripts/fetch.py u"),
+            step_line("python scripts/transcribe.py a.wav"),
+        ]
+        .concat();
+        fx.job("20261105T000003-genlive0", "generate", "https://example.com/talks/b", true, &log);
+        fx.job("20261105T000005-scoutrun", "scout", "x", true, &step_line("WebSearch x"));
+        for tab in ["videos", "jobs"] {
+            let body = fx.get(&format!("/creator?tab={tab}")).body_text();
+            assert!(body.contains("role='progressbar'"), "{tab}: {body}");
+            assert!(body.contains("aria-valuenow='27'"), "{tab}: {body}");
+            assert!(body.contains("style='width:27%'"), "{tab}: {body}");
+            assert!(body.contains("Stage 3 of 9 · Transcribe"), "{tab}: {body}");
+            assert!(body.contains("data-cr-progress=\"20261105T000003-genlive0\""), "{tab}: {body}");
+            // The step line is still there under the bar.
+            assert!(body.contains("Step 2 · Bash: python scripts/transcribe.py a.wav"), "{tab}: {body}");
+        }
+        // A Find videos job has no stages, so no bar.
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(!body.contains("role='progressbar'"), "{body}");
+    }
+
+    #[test]
+    fn a_generate_job_that_has_not_reached_a_stage_starts_the_bar_at_zero() {
+        let fx = Fx::new();
+        fx.job("20261105T000003-genlive0", "generate", "k", true, "");
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(body.contains("aria-valuenow='0'"), "{body}");
+        assert!(body.contains("Getting started"), "{body}");
+    }
+
+    #[test]
+    fn the_status_endpoint_carries_progress_for_generate_jobs_only() {
+        let fx = Fx::new();
+        let id = "20261105T000003-genlive0";
+        fx.job(id, "generate", "k", true, &step_line("python scripts/render.py m.json"));
+        let v: serde_json::Value =
+            serde_json::from_str(&fx.get(&format!("/creator/jobs/{id}/status")).body_text()).unwrap();
+        assert_eq!(v["progress"]["stage"], 7);
+        assert_eq!(v["progress"]["total"], 9);
+        assert_eq!(v["progress"]["percent"], 72);
+        assert_eq!(v["progress"]["text"], "Stage 7 of 9 · Render");
+        fx.job("20261105T000005-scoutrun", "scout", "x", true, "");
+        let v: serde_json::Value = serde_json::from_str(
+            &fx.get("/creator/jobs/20261105T000005-scoutrun/status").body_text(),
+        )
+        .unwrap();
+        assert!(v["progress"].is_null(), "{v}");
+    }
+
+    #[test]
+    fn the_video_dialog_and_list_offer_share_and_open_folder() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let body = fx.get("/creator?tab=videos").body_text();
+        let dialog = &body[body.find("<dialog class='cr-dialog'").unwrap()..];
+        let dialog = &dialog[..dialog.find("</dialog>").unwrap()];
+        // The video: a Share button (shown by the script only where sharing works)
+        // carrying the file's path and the title, and an Open folder form.
+        assert!(dialog.contains("data-cr-share"), "{dialog}");
+        assert!(dialog.contains("data-share-path=\""), "{dialog}");
+        assert!(dialog.contains("demo.mp4\""), "{dialog}");
+        assert!(dialog.contains("data-share-text=\"Demo short\""), "{dialog}");
+        assert!(dialog.contains("data-share-url=\"/creator/media/demo/demo.mp4\""), "{dialog}");
+        assert!(dialog.contains("action='/creator/folder'"), "{dialog}");
+        assert!(dialog.contains("Open folder"), "{dialog}");
+        // Each platform's caption can be shared as text (no file path).
+        let groups = dialog.matches("data-share-kind='caption'").count();
+        assert_eq!(groups, 2, "WeChat and Douyin: {dialog}");
+        // The list cards carry the same two actions as icon buttons.
+        let list = &body[..body.find("<dialog class='cr-dialog'").unwrap()];
+        assert!(list.contains("cr-poster-tools"), "{list}");
+        assert!(list.contains("data-cr-share"), "{list}");
+        assert!(list.contains("action='/creator/folder'"), "{list}");
+    }
+
+    #[test]
+    fn share_text_is_escaped_in_its_attribute() {
+        let fx = Fx::new();
+        write_project(&fx, "\"><script>alert(1)</script>", true);
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(!body.contains("data-share-text=\"\"><script>"), "{body}");
+        assert!(body.contains("&quot;&gt;&lt;script&gt;"), "{body}");
+    }
+
+    #[test]
+    fn open_folder_needs_a_known_video_and_a_server_that_may_open_things() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let (loc, ok) = flash_of(&fx.post("/creator/folder", "csrf_token=tok&slug=ghost"));
+        assert_eq!(ok, "0", "{loc}");
+        assert!(loc.contains("No%20such%20video"), "{loc}");
+        // The test server does not spawn processes, so a real video is refused too
+        // (and nothing is opened).
+        let (loc, ok) = flash_of(&fx.post("/creator/folder", "csrf_token=tok&slug=demo"));
+        assert_eq!(ok, "0", "{loc}");
+        assert!(loc.contains("cannot%20open%20folders"), "{loc}");
+        assert_eq!(fx.post("/creator/folder", "slug=demo").status, 403);
+    }
+
+    #[test]
+    fn finder_reveals_a_file_and_opens_a_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("a.mp4");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(
+            finder_args(&file),
+            vec!["-R".to_string(), file.display().to_string()]
+        );
+        assert_eq!(finder_args(d.path()), vec![d.path().display().to_string()]);
+    }
+
+    #[test]
+    fn the_jobs_tab_has_an_empty_state() {
+        let fx = Fx::new();
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("No jobs yet"), "{body}");
+        assert!(!body.contains("/creator/jobs/clear"), "{body}");
+    }
+
+    #[test]
+    fn discover_shows_only_running_find_jobs_with_their_current_step() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-scoutrun", "scout", "leadership", true, &step_line("WebSearch leadership talks"));
+        fx.job("20261105T000002-scoutold", "scout", "old topic", false, "loopx-exit=0\n");
+        fx.job("20261105T000003-genlive0", "generate", "https://example.com/talks/b", true, "");
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(body.contains("Running jobs"), "{body}");
+        assert!(body.contains("data-cr-status=\"20261105T000001-scoutrun\""), "{body}");
+        assert!(body.contains("Step 1 · Bash: WebSearch leadership talks"), "{body}");
+        // Finished runs and generate jobs are not listed here.
+        assert!(!body.contains("20261105T000002-scoutold"), "{body}");
+        assert!(!body.contains("data-cr-status=\"20261105T000003-genlive0\""), "{body}");
+    }
+
+    #[test]
+    fn discover_shows_no_jobs_section_without_a_running_find_job() {
+        let fx = Fx::new();
+        fx.job("20261105T000002-scoutold", "scout", "old", false, "loopx-exit=0\n");
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(!body.contains("Running jobs"), "{body}");
+    }
+
+    #[test]
+    fn videos_shows_running_generate_jobs_with_a_status_message() {
+        let fx = Fx::new();
+        fx.job("20261105T000003-genlive0", "generate", "https://example.com/talks/b", true, "");
+        fx.job("20261105T000004-genfail0", "generate", "https://example.com/talks/c", false, "boom\n");
+        fx.job("20261105T000005-scoutrun", "scout", "x", true, "");
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(body.contains("data-cr-status=\"20261105T000003-genlive0\""), "{body}");
+        // Nothing yet: a starting message, not a blank row.
+        assert!(body.contains("Starting…"), "{body}");
+        assert!(!body.contains("20261105T000004-genfail0"), "failures live on the Jobs tab: {body}");
+        assert!(!body.contains("20261105T000005-scoutrun"), "{body}");
+    }
+
+    #[test]
+    fn the_status_endpoint_reports_state_and_latest_step() {
+        let fx = Fx::new();
+        let id = "20261105T000003-genlive0";
+        fx.job(id, "generate", "https://example.com/talks/b", true, &step_line("ls"));
+        let r = fx.get(&format!("/creator/jobs/{id}/status"));
+        assert_eq!(r.status, 200);
+        assert_eq!(r.content_type(), Some("application/json"));
+        let v: serde_json::Value = serde_json::from_str(&r.body_text()).unwrap();
+        assert_eq!(v["state"], "running");
+        assert_eq!(v["line"], "Step 1 · Bash: ls");
+        fx.job("20261105T000004-genfail0", "generate", "k", false, "loopx-exit=1\n");
+        let v: serde_json::Value =
+            serde_json::from_str(&fx.get("/creator/jobs/20261105T000004-genfail0/status").body_text()).unwrap();
+        assert_eq!(v["state"], "failed");
+        assert_eq!(fx.get("/creator/jobs/..%2Fx/status").status, 404);
+        assert_eq!(fx.get("/creator/jobs/20261105T999999-nothere0/status").status, 404);
+    }
+
+    #[test]
+    fn deleting_removes_a_finished_job_and_refuses_a_running_one() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-scout000", "scout", "q", false, "loopx-exit=0\n");
+        fx.job("20261105T000003-genlive0", "generate", "k", true, "");
+        let (loc, ok) = flash_of(&fx.post("/creator/jobs/delete", "csrf_token=tok&id=20261105T000001-scout000"));
+        assert_eq!(ok, "1", "{loc}");
+        assert!(loc.starts_with("/creator?tab=jobs"), "{loc}");
+        assert!(!fx.jobs().join("20261105T000001-scout000.json").exists());
+        assert!(!fx.jobs().join("20261105T000001-scout000.log").exists());
+        let (_, ok) = flash_of(&fx.post("/creator/jobs/delete", "csrf_token=tok&id=20261105T000003-genlive0"));
+        assert_eq!(ok, "0");
+        assert!(fx.jobs().join("20261105T000003-genlive0.json").exists());
+        let (_, ok) = flash_of(&fx.post("/creator/jobs/delete", "csrf_token=tok&id=nope"));
+        assert_eq!(ok, "0");
+    }
+
+    #[test]
+    fn clear_removes_every_finished_job_and_keeps_running_ones() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-scout000", "scout", "q", false, "loopx-exit=0\n");
+        fx.job("20261105T000002-genfail0", "generate", "k", false, "boom\n");
+        fx.job("20261105T000003-genlive0", "generate", "k2", true, "");
+        let (loc, ok) = flash_of(&fx.post("/creator/jobs/clear", "csrf_token=tok"));
+        assert_eq!(ok, "1");
+        assert!(loc.contains("Deleted%202%20finished%20jobs"), "{loc}");
+        assert_eq!(fx.job_files(), 1);
+    }
+
+    #[test]
+    fn the_new_post_routes_require_csrf() {
+        let fx = Fx::new();
+        for path in ["/creator/jobs/delete", "/creator/jobs/clear"] {
+            assert_eq!(fx.post(path, "id=20261105T000001-scout000").status, 403, "{path}");
+        }
+    }
+
+    #[test]
+    fn a_failed_job_shows_failed_and_links_its_log_on_the_jobs_tab() {
         let fx = Fx::new();
         let id = "20261105T000000-failed00";
         finished_job(&fx, id, "boom\nloopx-exit=3\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(
+            body.contains("<span class='cr-pill cr-pill-error'>Failed</span>"),
+            "{body}"
+        );
+        assert!(!body.contains(">Done</span>"), "{body}");
+        assert!(body.contains(&format!("href='/creator/jobs/{id}/log'")), "{body}");
+        assert!(body.contains("View log"), "{body}");
+        // Discover and Videos list running jobs only: a failure is not repeated there.
         for tab in ["discover", "videos"] {
-            let body = fx.get(&format!("/creator?tab={tab}")).body_text();
-            assert!(
-                body.contains("<span class='cr-pill cr-pill-error'>Failed</span>"),
-                "{tab}: {body}"
-            );
-            assert!(!body.contains(">Done</span>"), "{tab}: {body}");
-            assert!(
-                body.contains(&format!("href='/creator/jobs/{id}/log'")),
-                "{tab}: {body}"
-            );
-            assert!(body.contains("View log"), "{tab}: {body}");
+            let other = fx.get(&format!("/creator?tab={tab}")).body_text();
+            assert!(!other.contains(id), "{tab}: {other}");
         }
         let ok = "20261105T000001-success0";
         finished_job(&fx, ok, "loopx-exit=0\n");
-        let body = fx.get("/creator").body_text();
+        let body = fx.get("/creator?tab=jobs").body_text();
         assert!(
             body.contains("<span class='cr-pill cr-pill-ok'>Done</span>"),
             "{body}"
@@ -1757,7 +2365,7 @@ mod tests {
         let fx = Fx::new();
         let id = "20261105T000000-sheet000";
         finished_job(&fx, id, "sh: claude: command not found\nloopx-exit=127\n");
-        let body = fx.get("/creator?tab=discover").body_text();
+        let body = fx.get("/creator?tab=jobs").body_text();
         // The link still works without the script, and the script hooks it.
         assert!(
             body.contains(&format!(
@@ -1769,6 +2377,7 @@ mod tests {
         assert_eq!(body.matches("<dialog class='cr-sheet'").count(), 1, "{body}");
         assert!(body.contains("aria-labelledby='cr-sheet-title'"), "{body}");
         assert!(body.contains("data-failed-label=\"Could not load the log.\""), "{body}");
+        assert!(body.contains("data-empty-label=\"Waiting for the first step…\""), "{body}");
         assert!(body.contains("<pre class='cr-sheet-log'"), "{body}");
     }
 

@@ -124,6 +124,7 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
                                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
         cfg.userContentController.add(self, name: TitlebarChrome.messageName)
         cfg.userContentController.add(self, name: "loopxSave")
+        cfg.userContentController.add(self, name: "loopxShare")
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         wv.uiDelegate = self
@@ -152,12 +153,26 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
                let text = body["text"] as? String { saveExport(name: name, text: text) }
             return
         }
+        if message.name == "loopxShare" {
+            // The Creator page's Share buttons: a finished video and/or its caption to the native share sheet.
+            let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".inspire-video/output")
+            if let request = ShareRequest.parse(message.body, root: root) { share(request) }
+            return
+        }
         guard let w = window, let kind = message.body as? String else { return }
         switch kind {
         case "drag": if let e = NSApp.currentEvent { w.performDrag(with: e) }
         case "zoom": w.performZoom(nil)
         default: break
         }
+    }
+
+    /// The system share sheet, anchored to the middle of the dashboard (the page cannot name a rect).
+    private func share(_ request: ShareRequest) {
+        guard let wv = webView, !request.items.isEmpty else { return }
+        let picker = NSSharingServicePicker(items: request.items)
+        let anchor = NSRect(x: wv.bounds.midX, y: wv.bounds.midY, width: 1, height: 1)
+        picker.show(relativeTo: anchor, of: wv, preferredEdge: .minY)
     }
 
     private func saveExport(name: String, text: String) {

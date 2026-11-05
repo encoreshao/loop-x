@@ -169,3 +169,22 @@
   .cr-sheet[open]::backdrop { animation: cr-fade-in 220ms ease-out; }
 }
 @keyframes cr-sheet-in { from { opacity: 0.6; transform: translateX(32px); } to { opacity: 1; transform: none; } }
+
+/* Live status line of a running job and the armed (confirm) state of Delete. */
+.cr-status { margin-top: 0.3rem; font-size: 0.8125rem; line-height: 1.4; color: var(--md-primary); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.cr-btn.is-armed { background: var(--md-error-container); color: var(--md-on-error-container); }
+.cr-btn.is-armed:hover { background: var(--md-error-container); color: var(--md-on-error-container); filter: brightness(0.97); }
+
+/* Progress of a running video: stage text above a slim rounded bar. */
+.cr-progress { margin-top: 0.5rem; max-width: 34rem; }
+.cr-progress-head { display: flex; justify-content: space-between; gap: 0.75rem; font-size: 0.8125rem; line-height: 1.3; color: var(--md-on-surface); }
+.cr-progress-pct { color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
+.cr-progress-bar { margin-top: 0.35rem; height: 6px; border-radius: 999px; background: var(--md-surface-container-high); overflow: hidden; }
+.cr-progress-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--md-primary); transition: width 500ms cubic-bezier(0.32, 0.72, 0, 1); }
+@media (prefers-reduced-motion: reduce) { .cr-progress-bar > span { transition: none; } }
+
+/* Share and Open folder: icon buttons under each poster, and the Share button a
+   script reveals only where sharing works (display would otherwise beat [hidden]). */
+[data-cr-share][hidden] { display: none; }
+.cr-poster-tools { display: flex; gap: 0.4rem; margin-top: 0.4rem; }
+

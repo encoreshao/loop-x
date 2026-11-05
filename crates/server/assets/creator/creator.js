@@ -101,7 +101,7 @@
         if (url !== sheetUrl) return;
         var atEnd = sheetLog.scrollHeight - sheetLog.scrollTop - sheetLog.clientHeight < 24;
         sheet.classList.remove('is-loading');
-        sheetLog.textContent = text;
+        sheetLog.textContent = text.trim() ? text : sheet.getAttribute('data-empty-label');
         if (first || atEnd) sheetLog.scrollTop = sheetLog.scrollHeight;
         if (sheet.open && text.indexOf('loopx-exit=') === -1) {
           sheetTimer = setTimeout(function () { loadLog(url, false); }, 2000);
@@ -135,6 +135,89 @@
       if (t === sheet) sheet.close();
     });
   }
+
+  // Live job status: every [data-cr-status] row asks for its job's latest step every
+  // 2s (only while the tab is visible) and the page reloads once when a job is no
+  // longer running, so it moves to the right place (Videos, Jobs history, ...).
+  var statusRows = document.querySelectorAll('[data-cr-status]');
+  if (statusRows.length) {
+    var reloading = false;
+    var pollStatus = function () {
+      if (document.hidden || reloading) return;
+      statusRows.forEach(function (row) {
+        var id = row.getAttribute('data-cr-status');
+        fetch('/creator/jobs/' + encodeURIComponent(id) + '/status', { cache: 'no-store', credentials: 'same-origin' })
+          .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+          .then(function (v) {
+            if (v.state !== 'running') { reloading = true; window.location.reload(); return; }
+            var bar = document.querySelector('[data-cr-progress="' + id + '"]');
+            if (bar && v.progress) {
+              bar.querySelector('.cr-progress-text').textContent = v.progress.text;
+              bar.querySelector('.cr-progress-pct').textContent = v.progress.percent + '%';
+              var track = bar.querySelector('[role="progressbar"]');
+              track.setAttribute('aria-valuenow', String(v.progress.percent));
+              track.setAttribute('aria-label', v.progress.text);
+              track.firstElementChild.style.width = v.progress.percent + '%';
+            }
+            var text = v.line || row.getAttribute('data-empty-label');
+            if (row.textContent !== text) row.textContent = text;
+          })
+          .catch(function () {});
+      });
+    };
+    setInterval(pollStatus, 2000);
+  }
+
+  // Delete / Clear: the first click arms the button ("Click again to confirm"), the
+  // second submits; it disarms itself after 4s.
+  document.addEventListener('click', function (ev) {
+    var button = ev.target.closest && ev.target.closest('[data-cr-confirm]');
+    if (!button) return;
+    if (button.getAttribute('data-armed') === 'true') return;
+    ev.preventDefault();
+    var original = button.innerHTML;
+    button.setAttribute('data-armed', 'true');
+    button.classList.add('is-armed');
+    button.textContent = button.getAttribute('data-confirm-label');
+    setTimeout(function () {
+      button.removeAttribute('data-armed');
+      button.classList.remove('is-armed');
+      button.innerHTML = original;
+    }, 4000);
+  });
+
+  // Share: the Mac app hands the file and text to the native share sheet (AirDrop,
+  // Messages, Mail, ...); a plain browser uses the Web Share API, with the video as a
+  // file when the browser can share files. Share buttons stay hidden where neither
+  // exists, and Open folder (a form) works everywhere.
+  var nativeShare = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.loopxShare;
+  var webShare = typeof navigator.share === 'function';
+  if (nativeShare || webShare) {
+    document.querySelectorAll('[data-cr-share]').forEach(function (b) { b.hidden = false; });
+  }
+  document.addEventListener('click', function (ev) {
+    var button = ev.target.closest && ev.target.closest('[data-cr-share]');
+    if (!button) return;
+    var text = button.getAttribute('data-share-text') || '';
+    var path = button.getAttribute('data-share-path') || '';
+    var url = button.getAttribute('data-share-url') || '';
+    if (nativeShare) {
+      nativeShare.postMessage({ path: path, text: text });
+      return;
+    }
+    if (!webShare) return;
+    var share = function (data) { return navigator.share(data).catch(function () {}); };
+    if (!url) { share({ text: text }); return; }
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
+      .then(function (blob) {
+        var name = decodeURIComponent(url.split('/').pop() || 'video.mp4');
+        var file = new File([blob], name, { type: blob.type || 'video/mp4' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) return share({ files: [file], text: text, title: text });
+        return share({ text: text, title: text });
+      })
+      .catch(function () { share({ text: text }); });
+  });
 
   // After Approve or a published toggle the page comes back with ?open=<slug>:
   // reopen that video's dialog.
