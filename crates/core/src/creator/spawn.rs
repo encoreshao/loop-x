@@ -38,9 +38,17 @@ type SpawnFull<'a> = dyn Fn(&[String], &Path, &Path) -> Result<i64, String> + 'a
 /// `loopx-exit=<status>` line. Returns the wrapper's pid.
 #[cfg(unix)]
 pub fn spawn_agent(argv: &[String], cwd: &Path, log: &Path) -> Result<i64, String> {
-    let path = std::env::var("PATH").unwrap_or_default();
+    let current = std::env::var("PATH").unwrap_or_default();
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    spawn_agent_in(argv, cwd, log, &path, home.as_deref())
+    spawn_agent_in(argv, cwd, log, &job_path(&shell, &current), home.as_deref())
+}
+
+/// The `PATH` a job runs with: the user's login-shell `PATH` (pyenv shims, nvm,
+/// Homebrew, ~/.local/bin: where yt-dlp, python packages and node live, none of
+/// which a dashboard started by the Mac app or launchd has), then the server's own.
+fn job_path(shell: &str, current: &str) -> String {
+    crate::ai_cli_health::login_shell_path(shell, current)
 }
 
 /// Where a CLI usually lives that a GUI-launched server's `PATH` (the Mac app,
@@ -1018,6 +1026,31 @@ mod tests {
         wait_dead(pid);
         let text = std::fs::read_to_string(&log).unwrap();
         assert_eq!(text, "ran\n\nloopx-exit=0\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_job_sees_the_path_it_was_given_plus_the_user_bin_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("p.log");
+        let argv: Vec<String> = ["sh", "-c", "printf %s \"$PATH\""]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let pid =
+            spawn_agent_in(&argv, d.path(), &log, "/usr/bin:/bin:/pyenv/shims", None).unwrap();
+        wait_dead(pid);
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.starts_with("/usr/bin:/bin:/pyenv/shims"), "{text}");
+    }
+
+    #[test]
+    fn a_shell_that_cannot_answer_leaves_the_server_path_alone() {
+        // The login-shell lookup itself is tested in ai_cli_health.
+        assert_eq!(
+            job_path("/definitely/not/a/shell", "/usr/bin:/bin"),
+            "/usr/bin:/bin"
+        );
     }
 
     #[cfg(unix)]
