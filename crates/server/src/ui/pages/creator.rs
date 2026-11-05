@@ -18,7 +18,7 @@ use loopx_core::creator::jobs::{self, JobKind, JobRecord};
 use loopx_core::creator::scout::{self, ScoutRun, Source};
 use loopx_core::creator::spawn;
 use loopx_core::creator::state::{self as cstate, CreatorState};
-use loopx_core::creator::valid_source_url;
+use loopx_core::creator::{normalize_source_url, valid_source_url};
 use loopx_core::creator::videos::{self, PublishCopy, VideoProject};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -104,7 +104,7 @@ fn generate(ctx: &UiCtx) -> UiResponse {
             ),
         );
     }
-    let url = match valid_source_url(&url) {
+    let url = match valid_source_url(&normalize_source_url(&url)) {
         Ok(u) => u,
         // The common case (a playlist or timestamp parameter) gets a translated hint.
         Err(_) if url.contains('&') => {
@@ -1203,17 +1203,26 @@ fn source_row(
             if s.rationale.is_empty() {
                 String::new()
             } else {
-                format!("<p class='cr-rationale'>{}</p>", h(&s.rationale))
+                format!(
+                    "<div class='cr-why'><div class='cr-label'>{}</div><p class='cr-rationale'>{}</p></div>",
+                    h(&ctx.t("Why it's worth your time")),
+                    h(&s.rationale)
+                )
             },
             segments_html(ctx, s),
         )
     } else {
         (String::new(), String::new())
     };
+    let body = if rationale.is_empty() && segments.is_empty() {
+        String::new()
+    } else {
+        format!("<div class='cr-item-body'>{rationale}{segments}</div>")
+    };
     format!(
         "<li class='cr-item'><div class='cr-item-head'>{rank}\
 <div class='cr-item-main'><h3 class='cr-title'>{title_html}</h3><div class='cr-meta'>{}</div>{from_line}\
-<div class='cr-badges'>{badges}</div></div></div>{rationale}{segments}{buttons}</li>",
+<div class='cr-badges'>{badges}</div></div></div>{body}{buttons}</li>",
         h(&meta)
     )
 }
@@ -1248,6 +1257,34 @@ fn run_section(
     section(&title, &meta, &body)
 }
 
+/// Paste a video address (YouTube, TED, X, ...) and generate a short from it
+/// directly, without a scout run first.
+fn link_panel(ctx: &UiCtx) -> String {
+    section(
+        &ctx.t("Generate from a link"),
+        "",
+        &format!(
+            "<div class='cr-surface'>{}<form method='post' action='/creator/generate' class='cr-link-form'>{}\
+<input type='hidden' name='tab' value='discover'>\
+<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>\
+<div class='cr-item-actions cr-link-actions'>\
+<label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
+<span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
+<button type='submit' class='cr-btn cr-btn-primary cr-generate'>{} {}</button></div></form></div>",
+            subtitle(&ctx.t(
+                "Works with YouTube, TED, X, Vimeo and most other public video pages. Playback and tracking parameters are removed for you."
+            )),
+            ctx.csrf_input(),
+            icons::icon("link"),
+            h(&ctx.t("Paste a video link, for example https://www.youtube.com/watch?v=...")),
+            h(&ctx.t("Video link")),
+            h(&ctx.t("I own this video or have permission to reuse it")),
+            icons::icon("video"),
+            h(&ctx.t("Generate"))
+        ),
+    )
+}
+
 fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     let root = scout::scout_root(&ctx.state.user_home);
     let (runs, errors) = scout::list_runs(&root);
@@ -1268,6 +1305,7 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             h(&ctx.t("Find videos"))
         ),
     );
+    let link = link_panel(ctx);
     let running: Vec<&JobRecord> = jobs
         .iter()
         .filter(|j| j.kind == JobKind::Scout && j.state == "running")
@@ -1298,7 +1336,7 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         );
         format!("{}{more}", run_section(ctx, &runs[0], jobs, &generated))
     };
-    format!("{find}{jobs_html}{}{runs_html}", errors_card(ctx, &errors))
+    format!("{find}{link}{jobs_html}{}{runs_html}", errors_card(ctx, &errors))
 }
 
 /// One video of the Library with the run that found it.
@@ -2452,6 +2490,28 @@ mod tests {
     }
 
     #[test]
+    fn discover_has_a_from_a_link_panel_that_posts_to_generate() {
+        let fx = Fx::new();
+        let body = fx.get("/creator?tab=discover").body_text();
+        assert!(body.contains("Generate from a link"), "{body}");
+        assert!(body.contains("name='url'") && body.contains("cr-link-form"), "{body}");
+        assert!(body.contains("action='/creator/generate'"), "{body}");
+        assert!(body.contains("name='rights' value='1' required"), "{body}");
+    }
+
+    #[test]
+    fn a_share_link_with_playback_parameters_is_cleaned_before_it_is_checked() {
+        let fx = Fx::new();
+        let r = fx.post(
+            "/creator/generate",
+            "csrf_token=tok&rights=1&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc%26t%3D4s",
+        );
+        let (loc, _) = flash_of(&r);
+        // Past the URL check: it fails only because no agent may be spawned here.
+        assert!(!loc.contains("remove+the+parameters") && !loc.contains("remove%20the%20parameters"), "{loc}");
+    }
+
+    #[test]
     fn generate_requires_rights_checkbox() {
         let fx = Fx::new();
         let r = fx.post(
@@ -2849,7 +2909,7 @@ mod tests {
             page.contains("Shady") && page.contains("Plain http"),
             "{page}"
         );
-        assert!(!page.contains("action='/creator/generate'"), "{page}");
+        assert!(!page.contains("action='/creator/generate' class='cr-item-actions'"), "{page}");
     }
 
     /// A job record whose process has exited, with `log` as its log.
@@ -3678,7 +3738,7 @@ mod tests {
     fn an_ampersand_link_is_refused_with_a_translated_hint() {
         let fx = Fx::new();
         let body =
-            "csrf_token=tok&rights=1&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Da%26list%3Db";
+            "csrf_token=tok&rights=1&url=https%3A%2F%2Fexample.com%2Fwatch%3Fv%3Da%26list%3Db";
         let (loc, ok) = flash_of(&fx.post("/creator/generate", body));
         assert_eq!(ok, "0");
         assert!(loc.contains("video%20id"), "{loc}");
@@ -3728,7 +3788,7 @@ mod tests {
         std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
         let body = fx.get("/creator").body_text();
         let form = &body[body
-            .find("<form method='post' action='/creator/generate'")
+            .find("<form method='post' action='/creator/generate' class='cr-item-actions'")
             .unwrap()..];
         let form = &form[..form.find("</form>").unwrap()];
         assert!(form.contains("class='cr-item-actions'"), "{form}");

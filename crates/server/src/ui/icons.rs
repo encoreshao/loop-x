@@ -57,6 +57,7 @@ pub const NAMES: &[&str] = &[
     "merge",
     "monitoring",
     "newspaper",
+    "link",
     "open_in_new",
     "palette",
     "payments",

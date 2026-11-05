@@ -1607,5 +1607,10 @@
   "{cost} total": "{cost} au total",
   "No successful runs yet": "Aucune exécution réussie pour l’instant",
   "Generate video": "Générer une vidéo",
-  "{count} run": "{count} exécution"
+  "{count} run": "{count} exécution",
+  "Generate from a link": "Générer à partir d'un lien",
+  "Works with YouTube, TED, X, Vimeo and most other public video pages. Playback and tracking parameters are removed for you.": "Compatible avec YouTube, TED, X, Vimeo et la plupart des pages vidéo publiques. Les paramètres de lecture et de suivi sont retirés automatiquement.",
+  "Paste a video link, for example https://www.youtube.com/watch?v=...": "Collez un lien vidéo, par exemple https://www.youtube.com/watch?v=...",
+  "Video link": "Lien vidéo",
+  "Why it's worth your time": "Pourquoi ça vaut le coup"
 }

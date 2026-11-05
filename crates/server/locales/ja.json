@@ -1607,5 +1607,10 @@
   "{cost} total": "合計 {cost}",
   "No successful runs yet": "成功した実行はまだありません",
   "Generate video": "動画を生成",
-  "{count} run": "{count}回実行"
+  "{count} run": "{count}回実行",
+  "Generate from a link": "リンクから生成",
+  "Works with YouTube, TED, X, Vimeo and most other public video pages. Playback and tracking parameters are removed for you.": "YouTube、TED、X、Vimeo など、ほとんどの公開動画ページに対応しています。再生位置や追跡用のパラメータは自動的に取り除かれます。",
+  "Paste a video link, for example https://www.youtube.com/watch?v=...": "動画のリンクを貼り付け（例：https://www.youtube.com/watch?v=...）",
+  "Video link": "動画のリンク",
+  "Why it's worth your time": "見る価値がある理由"
 }

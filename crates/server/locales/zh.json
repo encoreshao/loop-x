@@ -1607,5 +1607,10 @@
   "{cost} total": "共 {cost}",
   "No successful runs yet": "还没有成功的运行",
   "Generate video": "生成视频",
-  "{count} run": "共 {count} 次运行"
+  "{count} run": "共 {count} 次运行",
+  "Generate from a link": "从链接生成",
+  "Works with YouTube, TED, X, Vimeo and most other public video pages. Playback and tracking parameters are removed for you.": "支持 YouTube、TED、X、Vimeo 等大多数公开视频页面。播放进度和跟踪参数会自动去除。",
+  "Paste a video link, for example https://www.youtube.com/watch?v=...": "粘贴视频链接，例如 https://www.youtube.com/watch?v=...",
+  "Video link": "视频链接",
+  "Why it's worth your time": "为什么值得一看"
 }

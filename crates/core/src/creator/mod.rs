@@ -66,8 +66,105 @@ pub fn valid_source_url(url: &str) -> Result<String, String> {
     Ok(format!("https://{}{tail}", host.to_ascii_lowercase()))
 }
 
+/// Tidy a pasted video link before it is validated: share links carry tracking
+/// and playback parameters (`&t=`, `&list=`, `?si=`, `?utm_source=`) that the strict
+/// check refuses. YouTube keeps only its video id, the other known video hosts lose
+/// their query string, and an address that is not `https://` is returned untouched
+/// for [`valid_source_url`] to refuse.
+pub fn normalize_source_url(url: &str) -> String {
+    let url = url.trim();
+    let Some(rest) = url
+        .get(..8)
+        .filter(|s| s.eq_ignore_ascii_case("https://"))
+        .map(|_| &url[8..])
+    else {
+        return url.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (host, tail) = rest.split_at(end);
+    let bare = host.to_ascii_lowercase();
+    let bare = bare.trim_start_matches("www.").trim_start_matches("m.");
+    let tail = tail.split('#').next().unwrap_or("");
+    let (path, query) = tail.split_once('?').unwrap_or((tail, ""));
+    let youtube = matches!(bare, "youtube.com" | "music.youtube.com");
+    let keep = if youtube && path == "/watch" {
+        query
+            .split('&')
+            .find(|kv| kv.starts_with("v=") && kv.len() > 2)
+            .map(|kv| format!("?{kv}"))
+    } else {
+        None
+    };
+    let known = youtube
+        || matches!(
+            bare,
+            "youtu.be"
+                | "ted.com"
+                | "x.com"
+                | "twitter.com"
+                | "vimeo.com"
+                | "bilibili.com"
+                | "b23.tv"
+                | "tiktok.com"
+                | "instagram.com"
+                | "facebook.com"
+                | "fb.watch"
+                | "twitch.tv"
+                | "dailymotion.com"
+                | "reddit.com"
+                | "linkedin.com"
+        );
+    match (keep, known) {
+        (Some(q), _) => format!("https://{host}{path}{q}"),
+        (None, true) => format!("https://{host}{path}"),
+        (None, false) => {
+            // Any other host: only drop the well-known tracking parameters.
+            let kept: Vec<&str> = query
+                .split('&')
+                .filter(|kv| !kv.is_empty())
+                .filter(|kv| {
+                    let k = kv.split('=').next().unwrap_or("");
+                    !(k.starts_with("utm_")
+                        || matches!(k, "si" | "fbclid" | "gclid" | "feature" | "ref"))
+                })
+                .collect();
+            if kept.is_empty() {
+                format!("https://{host}{path}")
+            } else {
+                format!("https://{host}{path}?{}", kept.join("&"))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn normalize_trims_share_links_down_to_the_video() {
+        use super::normalize_source_url as n;
+        assert_eq!(
+            n("https://www.youtube.com/watch?v=abc123&t=42s&list=PL1"),
+            "https://www.youtube.com/watch?v=abc123"
+        );
+        assert_eq!(
+            n("https://youtu.be/abc123?si=xyz&t=9"),
+            "https://youtu.be/abc123"
+        );
+        assert_eq!(
+            n("https://x.com/user/status/1?s=20&t=q"),
+            "https://x.com/user/status/1"
+        );
+        assert_eq!(
+            n("https://www.ted.com/talks/a_b?utm_source=x&language=en"),
+            "https://www.ted.com/talks/a_b"
+        );
+        assert_eq!(
+            n("https://example.com/v?utm_source=a&id=7"),
+            "https://example.com/v?id=7"
+        );
+        assert_eq!(n("  http://x.com/a?b=1&c=2 "), "http://x.com/a?b=1&c=2");
+    }
+
     use super::*;
 
     #[test]

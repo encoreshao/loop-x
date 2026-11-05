@@ -41,9 +41,11 @@
 .cr-title a:hover { color: var(--md-primary); text-decoration: underline; }
 .cr-badges { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .cr-badge { display: inline-flex; align-items: center; height: 1.375rem; padding: 0 0.55rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--md-on-surface); background: var(--md-surface-container-high); }
-.cr-rationale { max-width: 68ch; font-size: 0.9375rem; line-height: 1.55; color: var(--md-on-surface); padding-left: 2.65rem; }
-.cr-segments-block { display: flex; flex-direction: column; gap: 0.4rem; padding-left: 2.65rem; }
-.cr-segments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; max-width: 68ch; }
+.cr-item-body { display: grid; gap: 1rem 1.5rem; padding-left: 2.65rem; align-items: start; }
+.cr-why, .cr-segments-block { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; padding: 0.85rem 1rem; border-radius: 12px; background: var(--md-surface-container); }
+.cr-rationale { max-width: 72ch; font-size: 1rem; line-height: 1.65; color: var(--md-on-surface); text-wrap: pretty; }
+@media (min-width: 900px) { .cr-item-body:has(.cr-why):has(.cr-segments-block) { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); } }
+.cr-segments { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .cr-segments li { display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.875rem; line-height: 1.45; }
 .cr-chip { flex: 0 0 auto; padding: 0.05rem 0.45rem; border-radius: 6px; font-size: 0.75rem; font-variant-numeric: tabular-nums; color: var(--md-on-surface-variant); background: var(--md-surface-container-high); }
 .cr-more > summary { cursor: pointer; font-size: 0.8125rem; color: var(--md-primary); width: fit-content; }
@@ -138,7 +140,7 @@
   .cr-dialog-head { padding: 0.9rem 1rem; }
   .cr-player video { width: 100%; height: auto; max-height: 70vh; }
   .cr-player-empty { width: 100%; height: auto; max-height: 50vh; }
-  .cr-rationale, .cr-segments-block { padding-left: 0; }
+  .cr-item-body { padding-left: 0; }
   .cr-item-actions { margin-left: 0; }
 }
 
@@ -263,3 +265,6 @@
 /* With a play button over the middle, the placeholder's icon and caption sit higher. */
 .cr-poster-media:has(.cr-play) .cr-poster-blank { justify-content: flex-start; padding-top: 22%; }
 
+
+.cr-link-form { display: flex; flex-direction: column; gap: 0.75rem; margin: 0; }
+.cr-link-actions { margin-left: 0; }
