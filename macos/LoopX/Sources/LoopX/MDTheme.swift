@@ -100,16 +100,63 @@ struct MDNote: View {
     }
 }
 
-/// Rounded-rect buttons like the dashboard's: filled for the main action, tonal for the rest.
+/// Apple-style pill buttons: filled accent for the main action, quiet translucent fill for the rest.
 struct MDButtonStyle: ButtonStyle {
     var filled = false
+    @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
-            .padding(.horizontal, 16).padding(.vertical, 7)
+            .padding(.horizontal, 16).padding(.vertical, 6)
             .foregroundStyle(filled ? MD.onPrimary : MD.onSurface)
-            .background(filled ? MD.primary : MD.surfaceHighest,
-                        in: RoundedRectangle(cornerRadius: MD.controlRadius, style: .continuous))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .background(filled ? AnyShapeStyle(MD.primary) : AnyShapeStyle(Color.primary.opacity(configuration.isPressed ? 0.16 : 0.08)), in: Capsule())
+            .overlay(Capsule().stroke(Color.primary.opacity(filled ? 0 : 0.06), lineWidth: 0.5))
+            .opacity(enabled ? (filled && configuration.isPressed ? 0.85 : 1) : 0.45)
+            .animation(.timingCurve(0.32, 0.72, 0, 1, duration: 0.2), value: configuration.isPressed)
     }
+}
+
+/// A label on the left and an iOS/macOS-style switch on the right, like System Settings.
+struct MDSwitchRow: View {
+    @Environment(\.accent) private var accent
+    let title: String
+    @Binding var isOn: Bool
+    init(_ title: String, isOn: Binding<Bool>) { self.title = title; self._isOn = isOn }
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title).font(.system(size: 13)).foregroundStyle(MD.cardText(accent))
+            Spacer(minLength: 12)
+            Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(.switch)
+        }
+    }
+}
+
+/// A label on the left and a native pop-up menu on the right.
+struct MDMenuRow<V: Hashable, Options: View>: View {
+    @Environment(\.accent) private var accent
+    let title: String
+    @Binding var selection: V
+    let options: Options
+    init(_ title: String, selection: Binding<V>, @ViewBuilder options: () -> Options) {
+        self.title = title; self._selection = selection; self.options = options()
+    }
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title).font(.system(size: 13)).foregroundStyle(MD.cardText(accent))
+            Spacer(minLength: 12)
+            Picker(title, selection: $selection) { options }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+        }
+    }
+}
+
+/// Translucent behind-window material, like a Mac app's sidebar.
+struct MDVisualEffect: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .sidebar
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material; v.blendingMode = .behindWindow; v.state = .active
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
 }

@@ -280,8 +280,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dashboard.readTheme()
         if settingsWindow == nil {
             let w = NSWindow(contentRect: NSRect(origin: .zero, size: SettingsView.windowSize),
-                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                             styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
             w.title = "LoopX Settings"
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isMovableByWindowBackground = true
             w.contentView = NSHostingView(rootView: SettingsView(settings: settingsModel, app: model))
             w.isReleasedWhenClosed = false
             w.center()

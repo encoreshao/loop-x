@@ -131,12 +131,14 @@ struct SettingsView: View {
                     Text(tab.rawValue).font(.system(size: 22, weight: .medium)).foregroundStyle(MD.onSurface)
                     page
                 }
-                .padding(24)
+                .padding(.horizontal, 24).padding(.bottom, 24).padding(.top, 44)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .background(MD.surface)
+            .background(MD.surface.opacity(0.82))
+            .background(MDVisualEffect(material: .windowBackground))
         }
         .environment(\.accent, settings.accent)
+        .ignoresSafeArea()
         .frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
         .tint(MD.primary)
         .onAppear {
@@ -165,7 +167,7 @@ struct SettingsView: View {
             }
             Spacer()
         }
-        .padding(.top, 20).padding(.horizontal, 12)
+        .padding(.top, 48).padding(.horizontal, 12)
         .frame(width: 190)
         .frame(maxHeight: .infinity)
         .background { sidebarBackground }
@@ -173,7 +175,7 @@ struct SettingsView: View {
 
     /// System material for the neutral accent (like the dashboard's translucent sidebar); tinted accents keep their wash.
     @ViewBuilder private var sidebarBackground: some View {
-        if settings.accent == .default { Rectangle().fill(.regularMaterial) } else { MD.sidebar(settings.accent) }
+        if settings.accent == .default { MDVisualEffect(material: .sidebar) } else { MD.sidebar(settings.accent).opacity(0.85).background(MDVisualEffect(material: .sidebar)) }
     }
 
     @ViewBuilder private var page: some View {
@@ -190,7 +192,7 @@ struct SettingsView: View {
     private var general: some View {
         VStack(alignment: .leading, spacing: 16) {
             MDCard("Startup") {
-                Toggle("Launch LoopX at login", isOn: Binding(get: { settings.launchAtLogin }, set: settings.setLaunchAtLogin))
+                MDSwitchRow("Launch LoopX at login", isOn: Binding(get: { settings.launchAtLogin }, set: settings.setLaunchAtLogin))
                 if settings.loginNeedsApproval {
                     Text("Approve LoopX in System Settings > General > Login Items.").font(.system(size: 12)).foregroundStyle(MD.warning)
                 }
@@ -198,26 +200,25 @@ struct SettingsView: View {
                 MDNote("The dashboard window opens when you start LoopX yourself, but stays closed when it starts at login.")
             }
             MDCard("Scheduled loops") {
-                Toggle("Run scheduled loops while LoopX is open", isOn: $settings.runScheduler)
-                Toggle("Skip on low battery or in Low Power Mode", isOn: $settings.pauseOnLowPower)
+                MDSwitchRow("Run scheduled loops while LoopX is open", isOn: $settings.runScheduler)
+                MDSwitchRow("Skip on low battery or in Low Power Mode", isOn: $settings.pauseOnLowPower)
                     .disabled(!settings.runScheduler)
                 MDNote("Checks every 15 minutes and starts any loop that is due. Due loops act on your real GitLab and Slack, so this is off until you turn it on. Each loop's own schedule is under Loops in the dashboard. With the skip option on, a check is passed over in Low Power Mode or on battery below 20%, and the next one picks up whatever is still due.")
             }
             MDCard("Power") {
-                Toggle("Keep my Mac awake while a loop is running", isOn: $settings.keepAwake)
+                MDSwitchRow("Keep my Mac awake while a loop is running", isOn: $settings.keepAwake)
                 MDNote("Prevents idle sleep only while a loop or topic is running, so a long run is not cut off. The screen can still turn off, and closing the lid still sleeps the Mac.")
             }
             MDCard("Notifications") {
-                Toggle("Notify when a task starts, completes or fails", isOn: $settings.notifyTasks)
+                MDSwitchRow("Notify when a task starts, completes or fails", isOn: $settings.notifyTasks)
                 MDNote("Posts to the macOS Notification Center, including when an approval is waiting for you.")
             }
             MDCard("Dashboard window") {
-                Picker("Opens", selection: $settings.dashboardWindow) {
+                MDMenuRow("Opens", selection: $settings.dashboardWindow) {
                     Text("Fit the screen").tag(DashboardWindowMode.maximized)
                     Text("Full screen").tag(DashboardWindowMode.fullScreen)
                     Text("Standard window").tag(DashboardWindowMode.standard)
                 }
-                .pickerStyle(.menu)
                 MDNote("Applies the first time the window opens after LoopX starts; after that your own sizing is kept.")
             }
         }
@@ -226,20 +227,18 @@ struct SettingsView: View {
     private var display: some View {
         VStack(alignment: .leading, spacing: 16) {
             MDCard("Status display") {
-                Picker("Show status as", selection: $settings.displayMode) {
+                MDMenuRow("Show status as", selection: $settings.displayMode) {
                     Text("Notch").tag(DisplayMode.notch)
                     Text("Floating HUD").tag(DisplayMode.hud)
                     Text("Menu bar only").tag(DisplayMode.off)
                 }
-                .pickerStyle(.menu)
                 MDNote("Notch pins to the camera housing and falls back to a draggable HUD on screens without one. The menu bar icon is always there.")
             }
             MDCard("Hotkey") {
-                Picker("Hide / show", selection: $settings.hotkey) {
+                MDMenuRow("Hide / show", selection: $settings.hotkey) {
                     ForEach(HotkeyPreset.presets) { Text($0.label).tag($0) }
                     Text("None").tag(HotkeyPreset.none)
                 }
-                .pickerStyle(.menu)
                 MDNote("A global shortcut that hides or shows the notch or HUD from any app.")
             }
         }

@@ -51,6 +51,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- The Mac app's Settings window now follows Mac conventions: a transparent title bar with a translucent sidebar under it, on/off switches instead of checkboxes, native pop-up menus, and pill-shaped buttons.
 - Office: at night the cars' headlights light up the road ahead, with a soft beam, a lit patch on the road and a glow at each lamp, and the tail lights glow red.
 
 - Settings → AI CLI → Claude account & usage: once more than one Claude account is registered, a switcher at the top of the card shows each account's email, plan and session/week usage. The Claude accounts card has a cleaner layout, with the automatic-switch toggle, the signed-in accounts and the add form in separate, evenly spaced sections.
