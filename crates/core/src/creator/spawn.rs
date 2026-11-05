@@ -203,20 +203,16 @@ fn denied_tools(f: &Fence<'_>) -> Vec<String> {
     // Shell start-up files and ssh: a write there runs later, outside the job.
     for p in [".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".ssh/**"] {
         t.push(format!("Edit(/{h}/{p})"));
-        t.push(format!("Write(/{h}/{p})"));
     }
     // Project settings in the job's own folder would load on its next run.
     t.push(format!("Edit(/{}/.claude/**)", f.cwd.display()));
-    t.push(format!("Write(/{}/.claude/**)", f.cwd.display()));
     // So would its project memory and MCP server config.
     for p in ["CLAUDE.md", "CLAUDE.local.md", ".mcp.json"] {
         t.push(format!("Edit(/{}/{p})", f.cwd.display()));
-        t.push(format!("Write(/{}/{p})", f.cwd.display()));
     }
     // Readable (the skills live under ~/.claude/skills), never writable.
     for p in [".claude/**", "Library/**"] {
         t.push(format!("Edit(/{h}/{p})"));
-        t.push(format!("Write(/{h}/{p})"));
     }
     t
 }
@@ -301,7 +297,9 @@ pub fn generate_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<Strin
         "Bash(cd *)",
     ]);
     allowed.push(format!("Read({skill}/**)"));
-    allowed.push(format!("Write(/{c}/output/**)"));
+    // Claude checks a symlink's resolved path too, and the skill dir under
+    // ~/.claude/skills is a symlink to the job's own folder.
+    allowed.push(format!("Read(/{c}/**)"));
     allowed.push(format!("Edit(/{c}/output/**)"));
     let mut denied = denied_tools(f);
     denied.extend(strs(&[
@@ -316,7 +314,6 @@ pub fn generate_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<Strin
         denied.push(format!("Read({root}/**/*cookies*)"));
     }
     for ext in ["py", "js", "ts"] {
-        denied.push(format!("Write(/{c}/output/**/*.{ext})"));
         denied.push(format!("Edit(/{c}/output/**/*.{ext})"));
     }
     Ok(claude_argv(
@@ -341,7 +338,6 @@ pub fn scout_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>,
     let h = f.user_home.display();
     let mut allowed = strs(&["WebSearch", "WebFetch"]);
     allowed.push(format!("Read(/{h}/.claude/skills/video-scout/**)"));
-    allowed.push(format!("Write(/{c}/**)"));
     allowed.push(format!("Edit(/{c}/**)"));
     let mut denied = denied_tools(f);
     // Courtesy only, not a boundary: WebFetch can still reach other local names.
@@ -628,20 +624,16 @@ mod tests {
             must.push(format!("Read(/{HOME}/{p})"));
         }
         for p in [".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".ssh/**"] {
-            must.push(format!("Write(/{HOME}/{p})"));
             must.push(format!("Edit(/{HOME}/{p})"));
         }
         // The job's own project settings would load on its next run.
         let cwd = flag(argv, "--add-dir");
-        must.push(format!("Write(/{cwd}/.claude/**)"));
         // Nor its project memory or MCP config.
         for f in ["CLAUDE.md", "CLAUDE.local.md", ".mcp.json"] {
-            must.push(format!("Write(/{cwd}/{f})"));
             must.push(format!("Edit(/{cwd}/{f})"));
         }
         must.push(format!("Edit(/{cwd}/.claude/**)"));
         must.push(format!("Read(/{LOOPX_HOME}/**)"));
-        must.push(format!("Write(/{HOME}/.claude/**)"));
         must.push(format!("Edit(/{HOME}/.claude/**)"));
         assert_has(&deny, &must);
         // The skills themselves are read from ~/.claude/skills.
@@ -686,13 +678,11 @@ mod tests {
         );
         assert_has(
             &allow,
-            &[
-                format!("Write(/{c}/output/**)"),
-                format!("Edit(/{c}/output/**)"),
-            ],
+            &[format!("Edit(/{c}/output/**)"), format!("Read(/{c}/**)")],
         );
         for rule in &allow {
-            if rule.starts_with("Write(") || rule.starts_with("Edit(") {
+            assert!(!rule.starts_with("Write("), "unmatched Write rule: {rule}");
+            if rule.starts_with("Edit(") {
                 assert!(
                     rule.starts_with(&format!(
                         "{}(/{c}/output/",
@@ -713,10 +703,7 @@ mod tests {
                 "Bash(python* *--cookies*)".to_string(),
                 format!("Read(/{c}/cookies.json)"),
                 format!("Read(/{c}/**/*cookies*)"),
-                format!("Write(/{c}/output/**/*.py)"),
                 format!("Edit(/{c}/output/**/*.py)"),
-                format!("Write(/{c}/output/**/*.js)"),
-                format!("Write(/{c}/output/**/*.ts)"),
             ],
         );
         assert!(!deny.iter().any(|r| r.contains("ffprobe")));
@@ -757,7 +744,6 @@ mod tests {
             &[
                 "WebFetch".to_string(),
                 "WebSearch".to_string(),
-                format!("Write(/{c}/**)"),
                 format!("Edit(/{c}/**)"),
             ],
         );
