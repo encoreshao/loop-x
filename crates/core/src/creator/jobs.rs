@@ -325,6 +325,34 @@ pub fn ended_time(rec: &JobRecord) -> Option<std::time::SystemTime> {
     std::fs::metadata(&rec.log_path).ok()?.modified().ok()
 }
 
+/// A job the record calls `done` (its process exited with status 0) but that wrote no
+/// video file (Generate) or catalog (Find videos) while it ran did not do its work: it
+/// becomes `no_output`, so nothing calls it Done. Only what was written between its
+/// start and its last log write (plus a few seconds of slack) counts, so a later job's
+/// output never makes an earlier empty run look successful.
+pub fn settle_outputs(mut jobs: Vec<JobRecord>, user_home: &Path) -> Vec<JobRecord> {
+    use super::{scout, videos};
+    if !jobs.iter().any(|j| j.state == "done") {
+        return jobs;
+    }
+    let projects = videos::list_projects(&videos::videos_root(user_home)).0;
+    let scout_root = scout::scout_root(user_home);
+    for job in jobs.iter_mut().filter(|j| j.state == "done") {
+        let Some(since) = started_time(job) else {
+            continue;
+        };
+        let until = ended_time(job).map(|t| t + Duration::from_secs(5));
+        let produced = match job.kind {
+            JobKind::Generate => videos::any_video_between(&projects, since, until),
+            JobKind::Scout => scout::any_catalog_between(&scout_root, since, until),
+        };
+        if !produced {
+            job.state = "no_output".to_string();
+        }
+    }
+    jobs
+}
+
 /// One job by id, settled against its pid; `None` for an unsafe or unknown id.
 pub fn get(dir: &Path, id: &str) -> Option<JobRecord> {
     if !is_safe_id(id) {

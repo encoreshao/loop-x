@@ -12,12 +12,18 @@ public enum LoopNames {
         "inbox-triage-loop": "Inbox Triage",
         "stale-sweeper-loop": "Stale Work Sweeper",
         "linkedin-autopilot-loop": "LinkedIn",
+        // The Creator page's jobs, shown beside the loops while they run (see the snapshot's creator entries).
+        "creator-find-videos": "Find Videos",
+        "creator-generate-video": "Generate Video",
     ]
 
     private static let words: [String: String] = [
         "gitlab": "GitLab", "github": "GitHub", "linkedin": "LinkedIn",
         "mr": "MR", "rss": "RSS", "ai": "AI", "ci": "CI", "pr": "PR",
     ]
+
+    /// The Creator page's jobs (Find videos, Generate video), listed beside the loops but not runnable as loops.
+    public static func isCreatorJob(_ id: String) -> Bool { id.hasPrefix("creator-") }
 
     public static func display(_ id: String) -> String {
         if let name = named[id] { return name }
@@ -51,6 +57,8 @@ public enum LoopNames {
         "linkedin-autopilot-loop": "person.2.wave.2",
         "meeting-prep-loop": "calendar.badge.clock",
         "stale-sweeper-loop": "wind",
+        "creator-find-videos": "magnifyingglass",
+        "creator-generate-video": "film",
     ]
 
     /// The SF Symbol a loop's tile shows on the island; any other loop gets a generic one.

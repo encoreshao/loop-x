@@ -47,7 +47,7 @@ public struct IslandDetail: Equatable, Sendable {
             case .failed: result = a.reason ?? "Run failed"
             }
         }
-        if task.state != .running { chips.append(.runAgain(loop: loopName(for: task))) }
+        if task.state != .running, !LoopNames.isCreatorJob(task.name) { chips.append(.runAgain(loop: loopName(for: task))) }
         chips.append(.openDashboard)
         return IslandDetail(rows: Array(rows), result: result, chips: chips)
     }

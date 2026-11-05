@@ -2,6 +2,7 @@
 
 pub mod jobs;
 pub mod logfmt;
+pub mod notify;
 pub mod progress;
 pub mod scout;
 pub mod spawn;

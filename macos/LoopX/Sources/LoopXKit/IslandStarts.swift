@@ -18,7 +18,7 @@ public enum IslandStarts {
     /// The loop a row's Run button starts: any loop row that is idle or failed. Running and queued
     /// rows are already on their way; topics have no button of their own (Topic Monitor runs them all).
     public static func runnableLoop(for t: NotchTask) -> String? {
-        guard t.id.hasPrefix("loop:"), t.state == .idle || t.state == .failed else { return nil }
+        guard t.id.hasPrefix("loop:"), !LoopNames.isCreatorJob(t.name), t.state == .idle || t.state == .failed else { return nil }
         return t.name
     }
 

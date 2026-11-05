@@ -37,6 +37,11 @@ pub struct Paths {
     pub dismissed: PathBuf,
     /// Task memory, which holds each issue's review-thread state.
     pub memory_root: PathBuf,
+    /// The Creator page's job records (`~/.loopx/creator/jobs`), shown as loops.
+    pub creator_jobs_dir: PathBuf,
+    /// Where the Creator's skills keep their output (`~`): a clean run that wrote
+    /// nothing there is not a success.
+    pub user_home: PathBuf,
 }
 
 impl Paths {
@@ -49,6 +54,8 @@ impl Paths {
             auth_state: loopx_core::auth_health::default_state_path(),
             dismissed: loopx_core::needs_you::default_dismissed_path(),
             memory_root: loopx_core::memory_store::default_memory_root(),
+            creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&loopx_core::config::home_dir()),
+            user_home: PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),
             outputs,
         }
     }
@@ -242,9 +249,22 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         .rev()
         .map(compact_event)
         .collect();
-    let state = app_state(&loops, pending.len());
     let queue = queue_view(&paths.queue_path, &loops);
     let waiting = needs_you(paths, &loops, now);
+    // The Creator's Find videos and Generate video runs show up beside the loops (the
+    // island, the Mac notifications, the menu-bar state); a failure there is reported
+    // by its own notification and on the Jobs tab, not in Needs you.
+    let mut loops = loops;
+    let settled = loopx_core::creator::jobs::settle_outputs(
+        loopx_core::creator::jobs::list_jobs(&paths.creator_jobs_dir),
+        &paths.user_home,
+    );
+    for (name, doc) in
+        loopx_core::creator::notify::loop_statuses(&paths.creator_jobs_dir, &settled, now)
+    {
+        loops.insert(name, doc);
+    }
+    let state = app_state(&loops, pending.len());
 
     json!({
         "version": 1,
@@ -277,7 +297,60 @@ mod tests {
             auth_state: root.join("auth_health.json"),
             dismissed: root.join("needs_you_dismissed.json"),
             memory_root: root.join("memory"),
+            creator_jobs_dir: root.join("creator/jobs"),
+            user_home: root.join("home"),
         }
+    }
+
+    fn creator_job(p: &Paths, id: &str, kind: &str, alive: bool, log: &str) {
+        let pid = if alive {
+            i64::from(std::process::id())
+        } else {
+            let mut c = std::process::Command::new("true").spawn().unwrap();
+            c.wait().unwrap();
+            i64::from(c.id())
+        };
+        std::fs::create_dir_all(&p.creator_jobs_dir).unwrap();
+        std::fs::write(
+            p.creator_jobs_dir.join(format!("{id}.json")),
+            json!({"id": id, "kind": kind, "key": "https://www.ted.com/talks/x", "state": "running",
+                   "pid": pid, "started_at": "2026-10-22T11:58:00+00:00"})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(p.creator_jobs_dir.join(format!("{id}.log")), log).unwrap();
+    }
+
+    #[test]
+    fn a_running_creator_job_is_a_running_loop_with_its_stage_for_the_island_and_notifications() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        assert!(build_snapshot(&p, now())["loops"]
+            .get("creator-generate-video")
+            .is_none());
+        let step = format!(
+            "{}\n",
+            json!({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "python scripts/render.py m.json"}}]}})
+        );
+        creator_job(&p, "20261022T115800-gen000000", "generate", true, &step);
+        let s = build_snapshot(&p, now());
+        let l = &s["loops"]["creator-generate-video"];
+        assert_eq!(l["state"], "running", "{s}");
+        assert_eq!(l["current_step"], "Stage 7 of 9 · Render");
+        assert_eq!(l["current_issue"], "www.ted.com/talks/x");
+        assert_eq!(s["app_state"], "running");
+        assert!(s["loops"].get("creator-find-videos").is_none());
+    }
+
+    #[test]
+    fn a_failed_creator_job_does_not_join_needs_you() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        creator_job(&p, "20261022T115800-scout000", "scout", false, "boom\n");
+        let s = build_snapshot(&p, now());
+        assert_eq!(s["loops"]["creator-find-videos"]["state"], "failed");
+        assert_eq!(s["needs_you"]["count"], 0, "{s}");
     }
 
     #[test]

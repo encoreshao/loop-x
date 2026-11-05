@@ -29,4 +29,15 @@ import Testing
         #expect(row("queue:q1", "issue-loop", .queued) == nil, "already waiting its turn")
         #expect(row("topic:ai-agents", "ai-agents", .idle) == nil, "topics run together, from Topic Monitor")
     }
+
+    @Test func creatorJobsHaveNoRunButton() {
+        // A search needs a topic and a generation a source: neither can be run from the island.
+        for (id, name) in [("loop:creator-find-videos", "creator-find-videos"), ("loop:creator-generate-video", "creator-generate-video")] {
+            for state in [NotchTask.State.idle, .failed] {
+                #expect(IslandStarts.runnableLoop(for: NotchTask(id: id, name: name, state: state, detail: nil)) == nil)
+            }
+        }
+        let failed = NotchTask(id: "loop:creator-generate-video", name: "creator-generate-video", state: .failed, detail: nil)
+        #expect(IslandDetail.make(task: failed, events: [], attention: nil).chips == [.openDashboard])
+    }
 }

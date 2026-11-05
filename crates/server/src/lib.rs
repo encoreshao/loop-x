@@ -150,8 +150,33 @@ pub async fn serve(opts: ServeOptions, on_ready: impl FnOnce(u16)) -> Result<(),
     lock::spawn_keeper(opts.lock_path.clone(), info.clone());
 
     let state = AppState::new(opts.root.clone(), token);
+    start_creator_slack_notifier(&state);
     on_ready(port);
     run_on(listener, state, termination()).await
+}
+
+/// How often finished Creator jobs are looked for.
+const CREATOR_NOTIFY_EVERY: Duration = Duration::from_secs(15);
+
+/// A Slack message for every Creator job that finishes (done, failed, or nothing
+/// produced), from the dashboard server, which is always running, so it covers jobs
+/// started from the page and from chat alike. Best effort: with no Slack webhook
+/// configured the jobs are simply recorded as seen.
+fn start_creator_slack_notifier(state: &AppState) {
+    let dir = state.paths.creator_jobs_dir.clone();
+    let notified = dir.join("..").join("notified.json");
+    let user_home = state.paths.user_home.clone();
+    std::thread::spawn(move || loop {
+        loopx_core::creator::notify::notify_finished(&dir, &notified, &user_home, &|report| {
+            let configured = loopx_core::slack::load_webhook_url(
+                &loopx_core::slack::default_config_path(),
+                None,
+            )
+            .is_ok();
+            configured && loopx_core::slack_report::send(report, None)
+        });
+        std::thread::sleep(CREATOR_NOTIFY_EVERY);
+    });
 }
 
 pub fn crate_name() -> &'static str {
@@ -170,7 +195,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_does_not_wait_for_an_open_event_stream() {
         let d = tempfile::tempdir().unwrap();
-        let state = AppState::new(d.path().to_path_buf(), "t".into());
+        let state = AppState::with_home(d.path().to_path_buf(), "t".into(), d.path().join("home"));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -208,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn a_status_change_reaches_an_open_event_stream() {
         let d = tempfile::tempdir().unwrap();
-        let state = AppState::new(d.path().to_path_buf(), "t".into());
+        let state = AppState::with_home(d.path().to_path_buf(), "t".into(), d.path().join("home"));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();

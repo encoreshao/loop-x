@@ -43,10 +43,18 @@ pub type Shared = Arc<AppState>;
 
 impl AppState {
     pub fn new(root: PathBuf, token: String) -> Shared {
+        Self::with_home(root, token, loopx_core::config::home_dir())
+    }
+
+    /// [`AppState::new`] with the per-machine home (`~/.loopx`) named, where the Creator's
+    /// job records live; tests give it a temporary one.
+    pub fn with_home(root: PathBuf, token: String, home: PathBuf) -> Shared {
         let (tx, _) = broadcast::channel(16);
         let root_for_ui = root.clone();
+        let mut paths = Paths::for_root(&root);
+        paths.creator_jobs_dir = loopx_core::creator::jobs::jobs_dir(&home);
         Arc::new(Self {
-            paths: Paths::for_root(&root),
+            paths,
             root,
             token,
             version: loopx_core::VERSION.to_string(),
@@ -296,7 +304,7 @@ mod tests {
     use tower::ServiceExt;
 
     fn state(dir: &std::path::Path) -> Shared {
-        AppState::new(dir.to_path_buf(), "secret-token".into())
+        AppState::with_home(dir.to_path_buf(), "secret-token".into(), dir.join("home"))
     }
 
     async fn call(app: Router, req: Request<Body>) -> (StatusCode, Value, HeaderMap) {

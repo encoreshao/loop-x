@@ -589,32 +589,9 @@ fn job_pill(ctx: &UiCtx, job: &JobRecord) -> String {
     }
 }
 
-/// A job the record calls `done` (its process exited with status 0) but that wrote no
-/// video file (Generate) or catalog (Find videos) since it started did not do its
-/// work: it becomes `no_output`, so the page never calls it Done.
-fn settle(ctx: &UiCtx, mut jobs: Vec<JobRecord>) -> Vec<JobRecord> {
-    if !jobs.iter().any(|j| j.state == "done") {
-        return jobs;
-    }
-    let projects = videos::list_projects(&videos_root(ctx)).0;
-    let scout_root = scout::scout_root(&ctx.state.user_home);
-    for job in jobs.iter_mut().filter(|j| j.state == "done") {
-        let Some(since) = jobs::started_time(job) else {
-            continue;
-        };
-        // Only what was written while this job ran counts: a later job's video must
-        // not make an earlier empty run look successful. A few seconds of slack
-        // after the last log write covers the final file landing as the job exits.
-        let until = jobs::ended_time(job).map(|t| t + std::time::Duration::from_secs(5));
-        let produced = match job.kind {
-            JobKind::Generate => videos::any_video_between(&projects, since, until),
-            JobKind::Scout => scout::any_catalog_between(&scout_root, since, until),
-        };
-        if !produced {
-            job.state = "no_output".to_string();
-        }
-    }
-    jobs
+/// See [`jobs::settle_outputs`]: a clean exit that left nothing behind is `no_output`.
+fn settle(ctx: &UiCtx, jobs: Vec<JobRecord>) -> Vec<JobRecord> {
+    jobs::settle_outputs(jobs, &ctx.state.user_home)
 }
 
 fn stop_form(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {

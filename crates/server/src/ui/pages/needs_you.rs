@@ -45,6 +45,8 @@ fn paths(state: &UiState) -> Paths {
         auth_state: state.home_dir.join("auth_health.json"),
         dismissed: state.home_dir.join("needs_you_dismissed.json"),
         memory_root: memory_root(state),
+        creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&state.home_dir),
+        user_home: state.user_home.clone(),
         outputs,
     }
 }

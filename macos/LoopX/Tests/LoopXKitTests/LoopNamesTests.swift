@@ -48,4 +48,23 @@ import Testing
         let after = Snapshot(loops: ["mr-review-loop": LoopStatus(state: "running")])
         #expect(TaskNotifications.changes(from: before, to: after).map(\.title) == ["MR Review started"])
     }
+
+    @Test func creatorJobsReadAsTheirNamesAndNotifyLikeLoops() {
+        #expect(LoopNames.display("creator-find-videos") == "Find Videos")
+        #expect(LoopNames.display("creator-generate-video") == "Generate Video")
+        #expect(LoopNames.symbol("creator-find-videos") == "magnifyingglass")
+        #expect(LoopNames.symbol("creator-generate-video") == "film")
+        func snap(_ state: String, step: String? = nil) -> Snapshot {
+            Snapshot(appState: state == "running" ? .running : .idle,
+                     loops: ["creator-generate-video": LoopStatus(state: state, currentIssue: "www.ted.com/talks/x", currentStep: step)])
+        }
+        let started = TaskNotifications.changes(from: snap("idle"), to: snap("running", step: "Stage 3 of 9 · Transcribe"))
+        #expect(started.map(\.title) == ["Generate Video started"])
+        #expect(started.first?.body == "www.ted.com/talks/x · Stage 3 of 9 · Transcribe")
+        let done = TaskNotifications.changes(from: snap("running"), to: snap("idle"))
+        #expect(done.map(\.title) == ["Generate Video completed"])
+        let failed = TaskNotifications.changes(from: snap("running"), to: snap("failed", step: "No video produced"))
+        #expect(failed.map(\.title) == ["Generate Video failed"])
+        #expect(failed.first?.body == "www.ted.com/talks/x · No video produced")
+    }
 }
