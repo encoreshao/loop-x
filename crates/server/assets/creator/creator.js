@@ -249,6 +249,22 @@
     select.addEventListener('change', function () { select.form.requestSubmit(); });
   });
 
+  // Elapsed time of running jobs: every [data-cr-since] ticks once a second.
+  var elapsedRows = document.querySelectorAll('[data-cr-since]');
+  if (elapsedRows.length) {
+    var fmt = function (secs) {
+      if (secs >= 3600) return Math.floor(secs / 3600) + 'h ' + String(Math.floor((secs % 3600) / 60)).padStart(2, '0') + 'm';
+      if (secs >= 60) return Math.floor(secs / 60) + 'm ' + String(secs % 60).padStart(2, '0') + 's';
+      return secs + 's';
+    };
+    setInterval(function () {
+      elapsedRows.forEach(function (row) {
+        var secs = Math.max(0, Math.floor((Date.now() - Number(row.getAttribute('data-cr-since'))) / 1000));
+        row.textContent = row.getAttribute('data-label').replace('{time}', fmt(secs));
+      });
+    }, 1000);
+  }
+
   // After Approve or a published toggle the page comes back with ?open=<slug>:
   // reopen that video's dialog.
   var wanted = new URLSearchParams(window.location.search).get('open');

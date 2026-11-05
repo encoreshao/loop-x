@@ -50,6 +50,8 @@ pub fn register(r: &mut Registry) {
     r.post("/creator/folder", open_folder);
     r.post("/creator/approve", approve);
     r.post("/creator/published", published);
+    r.post("/creator/published-all", published_all);
+    r.post("/creator/videos/delete", delete_video);
 }
 
 fn jobs_dir(ctx: &UiCtx) -> PathBuf {
@@ -270,6 +272,83 @@ fn approve(ctx: &UiCtx) -> UiResponse {
             UiResponse::flash_redirect(true, &msg, &to)
         }
         Err(e) => UiResponse::flash_redirect(false, &e, &to),
+    }
+}
+
+/// Mark a video published on all its platforms, or clear the marks.
+fn published_all(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let slug = form.first("slug").unwrap_or("");
+    let on = form.first("on") == Some("1");
+    let projects = videos::list_projects(&videos_root(ctx)).0;
+    let Some(p) = projects.iter().find(|p| p.slug == slug) else {
+        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &back("videos"));
+    };
+    let to = if form.first("from") == Some("dialog") {
+        back_to_video(slug)
+    } else {
+        back("videos")
+    };
+    // A video with no publish text still gets marked, on every platform.
+    let mut platforms = available_platforms(p);
+    if platforms.is_empty() {
+        platforms = PLATFORMS.iter().map(|(k, _)| *k).collect();
+    }
+    match cstate::set_published_all(&state_path(ctx), slug, &platforms, on) {
+        Ok(()) => {
+            let msg = if on {
+                ctx.t("Marked as published")
+            } else {
+                ctx.t("Marked as not published")
+            };
+            UiResponse::flash_redirect(true, &msg, &to)
+        }
+        Err(e) => UiResponse::flash_redirect(false, &e, &to),
+    }
+}
+
+/// Delete a video's files and LoopX's record of it; for a record whose files are
+/// already gone, just the record. Refused while a job is still making the video.
+fn delete_video(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let slug = form.first("slug").unwrap_or("");
+    let to = back("videos");
+    let projects = videos::list_projects(&videos_root(ctx)).0;
+    let project = projects.iter().find(|p| p.slug == slug);
+    let st = cstate::load(&state_path(ctx));
+    if project.is_none() && !st.records.contains_key(slug) {
+        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &to);
+    }
+    let source = project
+        .and_then(|p| p.source_url.as_deref())
+        .or_else(|| st.records.get(slug).and_then(|r| r.source_url.as_deref()))
+        .and_then(|u| valid_source_url(u).ok());
+    if let Some(url) = source {
+        if jobs::running(&jobs::list_jobs(&jobs_dir(ctx)), JobKind::Generate, &url).is_some() {
+            return UiResponse::flash_redirect(
+                false,
+                &ctx.t("A job is still running for this video; stop it first"),
+                &to,
+            );
+        }
+    }
+    match videos::delete_project_files(&ctx.state.user_home, slug) {
+        Ok(removed) => match cstate::forget(&state_path(ctx), slug) {
+            Ok(()) => {
+                let msg = if removed.is_empty() {
+                    ctx.t("Record removed")
+                } else {
+                    ctx.t("Video deleted")
+                };
+                UiResponse::flash_redirect(true, &msg, &to)
+            }
+            Err(e) => UiResponse::flash_redirect(false, &e, &to),
+        },
+        Err(e) => UiResponse::flash_redirect(
+            false,
+            &ctx.tf("Could not delete the video: {detail}", &[("detail", &e)]),
+            &to,
+        ),
     }
 }
 
@@ -637,6 +716,58 @@ data-failed-label=\"{}\" data-loading-label=\"{}\" data-empty-label=\"{}\">\
     )
 }
 
+/// `45s`, `3m 20s`, `1h 05m`.
+fn fmt_duration(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+fn fmt_cost(usd: f64) -> String {
+    format!("${usd:.2}")
+}
+
+/// What a finished job took and cost, for its meta line ("Took 3m 20s · $0.43 · 7 turns").
+fn metrics_text(ctx: &UiCtx, job: &JobRecord) -> String {
+    if job.state == "running" {
+        return String::new();
+    }
+    let m = jobs::metrics(job);
+    joined(&[
+        m.duration_secs
+            .map(|s| ctx.tf("Took {time}", &[("time", &fmt_duration(s))]))
+            .unwrap_or_default(),
+        m.cost_usd.map(fmt_cost).unwrap_or_default(),
+        m.turns
+            .map(|n| ctx.tf("{count} turns", &[("count", &n.to_string())]))
+            .unwrap_or_default(),
+    ])
+}
+
+/// A running job's elapsed time; `creator.js` keeps it ticking from `data-cr-since`.
+fn elapsed_html(ctx: &UiCtx, job: &JobRecord) -> String {
+    if job.state != "running" {
+        return String::new();
+    }
+    let Some(started) = jobs::started_time(job) else {
+        return String::new();
+    };
+    let since_ms = started
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let secs = jobs::metrics(job).duration_secs.unwrap_or(0);
+    let template = ctx.t("Running for {time}");
+    format!(
+        "<div class='cr-elapsed' data-cr-since=\"{since_ms}\" data-label=\"{}\">{}</div>",
+        h(&template),
+        h(&template.replace("{time}", &fmt_duration(secs)))
+    )
+}
+
 fn kind_label(ctx: &UiCtx, job: &JobRecord) -> String {
     match job.kind {
         JobKind::Scout => ctx.t("Find videos"),
@@ -741,10 +872,11 @@ fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
     };
     format!(
         "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>\
-<div class='cr-meta'>{}</div>{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
+<div class='cr-meta'>{}</div>{}{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
         h(&kind_label(ctx, job)),
         job_pill(ctx, job),
-        h(&joined(&[job.key.clone(), when(&job.started_at)])),
+        h(&joined(&[job.key.clone(), when(&job.started_at), metrics_text(ctx, job)])),
+        elapsed_html(ctx, job),
         progress_html(ctx, job),
         live_status(ctx, job),
         log_link(ctx, job)
@@ -758,6 +890,78 @@ fn running_list(ctx: &UiCtx, title: &str, jobs: &[&JobRecord], tab: &str) -> Str
     }
     let rows: String = jobs.iter().map(|j| job_row(ctx, j, tab)).collect();
     section(title, "", &format!("<ul class='cr-list'>{rows}</ul>"))
+}
+
+/// Time and cost per kind of job over its finished runs: how many ran, the average
+/// time of the successful ones and the total API cost.
+fn stats_html(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
+    let cards: String = [JobKind::Generate, JobKind::Scout]
+        .iter()
+        .filter_map(|kind| {
+            let finished: Vec<&JobRecord> = jobs
+                .iter()
+                .filter(|j| j.kind == *kind && j.state != "running" && j.state != "stopped")
+                .collect();
+            if finished.is_empty() {
+                return None;
+            }
+            let done: Vec<&&JobRecord> = finished.iter().filter(|j| j.state == "done").collect();
+            let times: Vec<u64> = done
+                .iter()
+                .filter_map(|j| jobs::metrics(j).duration_secs)
+                .collect();
+            let total_cost: f64 = finished
+                .iter()
+                .filter_map(|j| jobs::metrics(j).cost_usd)
+                .sum();
+            let (value, note) = if times.is_empty() {
+                (
+                    "—".to_string(),
+                    ctx.t("No successful runs yet"),
+                )
+            } else {
+                let avg = times.iter().sum::<u64>() / times.len() as u64;
+                let n = times.len().to_string();
+                (
+                    fmt_duration(avg),
+                    if times.len() == 1 {
+                        ctx.tf("{count} successful run", &[("count", &n)])
+                    } else {
+                        ctx.tf("{count} successful runs", &[("count", &n)])
+                    },
+                )
+            };
+            let label = match kind {
+                JobKind::Generate => ctx.t("Generate video"),
+                JobKind::Scout => ctx.t("Find videos"),
+            };
+            let count = finished.len().to_string();
+            let runs = if finished.len() == 1 {
+                ctx.tf("{count} run", &[("count", &count)])
+            } else {
+                ctx.tf("{count} runs", &[("count", &count)])
+            };
+            let cost = if total_cost > 0.0 {
+                ctx.tf("{cost} total", &[("cost", &fmt_cost(total_cost))])
+            } else {
+                String::new()
+            };
+            Some(format!(
+                "<div class='cr-stat'><div class='cr-stat-label'>{}</div>\
+<div class='cr-stat-value'>{}</div><div class='cr-stat-caption'>{}</div>\
+<div class='cr-stat-note'>{}</div></div>",
+                h(&label),
+                h(&value),
+                h(&ctx.t("Average time")),
+                h(&joined(&[runs, note, cost]))
+            ))
+        })
+        .collect();
+    if cards.is_empty() {
+        String::new()
+    } else {
+        format!("<div class='cr-stats'>{cards}</div>")
+    }
 }
 
 /// The Jobs tab: every Find videos and Generate run, newest first.
@@ -793,10 +997,11 @@ fn jobs_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         String::new()
     };
     format!(
-        "{}{}",
+        "{}{}{}",
         subtitle(&ctx.t(
             "Every Find videos and Generate run, newest first. Deleting a record also removes its log."
         )),
+        stats_html(ctx, jobs),
         section(
             &ctx.t("Job history"),
             &clear,
@@ -1467,6 +1672,19 @@ struct VideoView<'a> {
     last_job: Option<&'a JobRecord>,
     status: String,
     status_kind: &'static str,
+    level: cstate::PublishLevel,
+}
+
+/// The platforms a video has publish text for.
+fn available_platforms(p: &VideoProject) -> Vec<&'static str> {
+    PLATFORMS
+        .iter()
+        .filter(|(key, _)| match *key {
+            "wechat" => p.wechat.is_some(),
+            _ => p.douyin.is_some(),
+        })
+        .map(|(key, _)| *key)
+        .collect()
 }
 
 fn video_view<'a>(
@@ -1488,8 +1706,13 @@ fn video_view<'a>(
             .find(|j| j.kind == JobKind::Generate && j.key == u)
     });
     let approved = st.approved.contains(&p.slug);
+    let level = cstate::publish_level(st, &p.slug, &available_platforms(p));
     let (status_kind, status) = if rendering.is_some() {
         ("accent", ctx.t("Rendering"))
+    } else if level == cstate::PublishLevel::All {
+        ("ok", ctx.t("Published"))
+    } else if level == cstate::PublishLevel::Partly {
+        ("accent", ctx.t("Partly published"))
     } else if approved {
         ("ok", ctx.t("Approved"))
     } else if p.mp4.is_some() {
@@ -1505,7 +1728,55 @@ fn video_view<'a>(
         last_job,
         status,
         status_kind,
+        level,
     }
+}
+
+/// Mark a video published on every platform it has text for (or take the marks back).
+/// `from` is where to return to: the list, or the video's popup.
+fn publish_form(ctx: &UiCtx, v: &VideoView<'_>, icon_only: bool, from: &str) -> String {
+    let all = v.level == cstate::PublishLevel::All;
+    let (on, label) = if all {
+        ("0", ctx.t("Mark as not published"))
+    } else {
+        ("1", ctx.t("Mark as published"))
+    };
+    let button = if icon_only {
+        format!(
+            "<button type='submit' class='cr-icon-btn{}' aria-label=\"{}\" title=\"{}\" aria-pressed='{all}'>{}</button>",
+            if all { " is-on" } else { "" },
+            h(&label),
+            h(&label),
+            icons::icon("check_circle")
+        )
+    } else {
+        format!(
+            "<button type='submit' class='cr-btn cr-btn-plain cr-btn-small'>{} {}</button>",
+            icons::icon("check_circle"),
+            h(&label)
+        )
+    };
+    format!(
+        "<form method='post' action='/creator/published-all' class='cr-inline-form'>{}\
+<input type='hidden' name='slug' value=\"{}\"><input type='hidden' name='on' value='{on}'>\
+<input type='hidden' name='from' value='{from}'>{button}</form>",
+        ctx.csrf_input(),
+        h(&v.p.slug)
+    )
+}
+
+/// Delete a video's files and LoopX's record of it; asks for a second click.
+fn delete_video_form(ctx: &UiCtx, slug: &str, label: &str) -> String {
+    format!(
+        "<form method='post' action='/creator/videos/delete' class='cr-inline-form'>{}\
+<input type='hidden' name='slug' value=\"{}\">\
+<button type='submit' class='cr-btn cr-btn-plain cr-btn-small' data-cr-confirm data-confirm-label=\"{}\">{} {}</button></form>",
+        ctx.csrf_input(),
+        h(slug),
+        h(&ctx.t("Click again to confirm")),
+        icons::icon("delete"),
+        h(label)
+    )
 }
 
 fn poster_card(ctx: &UiCtx, v: &VideoView<'_>) -> String {
@@ -1515,9 +1786,15 @@ fn poster_card(ctx: &UiCtx, v: &VideoView<'_>) -> String {
             media_url(&v.p.slug, c)
         ),
         None => format!(
-            "<span class='cr-poster-blank'>{}</span>",
-            icons::icon("video")
+            "<span class='cr-poster-blank'>{}<small>{}</small></span>",
+            icons::icon("video"),
+            h(&ctx.t("No cover"))
         ),
+    };
+    let check = if v.level == cstate::PublishLevel::All {
+        format!("<span class='cr-poster-check'>{}</span>", icons::icon("check_circle"))
+    } else {
+        String::new()
     };
     let play = if v.p.mp4.is_some() {
         format!("<span class='cr-play'>{PLAY_GLYPH}</span>")
@@ -1525,18 +1802,16 @@ fn poster_card(ctx: &UiCtx, v: &VideoView<'_>) -> String {
         String::new()
     };
     let tools = {
+        let publish = publish_form(ctx, v, true, "list");
         let share = video_share(ctx, v, true);
         let folder = folder_form(ctx, v, true);
-        if share.is_empty() && folder.is_empty() {
-            String::new()
-        } else {
-            format!("<div class='cr-poster-tools'>{share}{folder}</div>")
-        }
+        format!("<div class='cr-poster-tools'>{publish}{share}{folder}</div>")
     };
     format!(
-        "<li><button type='button' class='cr-poster' data-cr-open='{id}' aria-haspopup='dialog' aria-label=\"{}\">\
-<span class='cr-poster-media'>{image}{play}<span class='cr-poster-status'>{}</span></span>\
+        "<li{}><button type='button' class='cr-poster' data-cr-open='{id}' aria-haspopup='dialog' aria-label=\"{}\">\
+<span class='cr-poster-media'>{image}{play}{check}<span class='cr-poster-status'>{}</span></span>\
 <span class='cr-poster-title'>{}</span></button>{tools}</li>",
+        if v.level == cstate::PublishLevel::All { " class='is-published'" } else { "" },
         h(&ctx.tf("Open {title}", &[("title", &v.p.title)])),
         pill(v.status_kind, &v.status),
         h(&v.p.title),
@@ -1834,6 +2109,8 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
     let log = v.last_job.map(|j| log_link(ctx, j)).unwrap_or_default();
     let share = video_share(ctx, v, false);
     let folder = folder_form(ctx, v, false);
+    let publish = publish_form(ctx, v, false, "dialog");
+    let delete = delete_video_form(ctx, &v.p.slug, &ctx.t("Delete video"));
     let stop = v
         .rendering
         .map(|j| stop_form(ctx, j, "videos"))
@@ -1845,7 +2122,7 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
 <h2 id='{id}-title'>{}</h2><div class='cr-badges'>{}<span class='cr-meta'>{}</span></div></div>\
 <button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
 <div class='cr-dialog-body'><div class='cr-player'>{player}</div><div class='cr-details'>\
-<div class='cr-actions'>{}{share}{folder}{source}{log}{stop}</div>{}</div></div></div></dialog>",
+<div class='cr-actions'>{}{publish}{share}{folder}{source}{log}{stop}{delete}</div>{}</div></div></div></dialog>",
         h(&v.p.slug),
         h(&v.p.title),
         pill(v.status_kind, &v.status),
@@ -1858,16 +2135,47 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
     )
 }
 
+/// A video whose files are gone from the skill's folder: LoopX's own record keeps it
+/// in the list, with a placeholder, its published mark and a way to remove the record.
+fn missing_card(ctx: &UiCtx, slug: &str, rec: &cstate::Record, st: &CreatorState) -> String {
+    let published = cstate::publish_level(st, slug, &[]) != cstate::PublishLevel::None;
+    let status = if published {
+        pill("ok", &ctx.t("Published"))
+    } else {
+        pill("neutral", &ctx.t("Files removed"))
+    };
+    let title = if rec.title.is_empty() { slug } else { &rec.title };
+    format!(
+        "<li class='is-missing{}'><div class='cr-poster-static'>\
+<span class='cr-poster-media'><span class='cr-poster-blank'>{}<small>{}</small></span><span class='cr-poster-status'>{status}</span></span>\
+<span class='cr-poster-title'>{}</span></div><div class='cr-poster-tools'>{}</div></li>",
+        if published { " is-published" } else { "" },
+        icons::icon("video"),
+        h(&ctx.t("Files removed")),
+        h(title),
+        delete_video_form(ctx, slug, &ctx.t("Remove record"))
+    )
+}
+
 fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     let root = videos_root(ctx);
     let (projects, errors) = videos::list_projects(&root);
+    // LoopX remembers every video it lists, so one whose files are later deleted
+    // outside LoopX can still be shown. A corrupt state file is left alone.
+    let _ = cstate::sync_records(&state_path(ctx), &projects);
     let st = cstate::load(&state_path(ctx));
+    let mut gone: Vec<(&String, &cstate::Record)> = st
+        .records
+        .iter()
+        .filter(|(slug, r)| r.had_video && !projects.iter().any(|p| &p.slug == *slug))
+        .collect();
+    gone.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at).then(a.0.cmp(b.0)));
     let pending: Vec<&JobRecord> = jobs
         .iter()
         .filter(|j| j.kind == JobKind::Generate && j.state == "running")
         .collect();
     let pending = running_list(ctx, &ctx.t("Generating"), &pending, "videos");
-    let list = if projects.is_empty() {
+    let list = if projects.is_empty() && gone.is_empty() {
         no_videos(ctx, &root)
     } else {
         let views: Vec<VideoView<'_>> = projects
@@ -1875,7 +2183,8 @@ fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             .enumerate()
             .map(|(i, p)| video_view(ctx, i, p, &st, jobs))
             .collect();
-        let posters: String = views.iter().map(|v| poster_card(ctx, v)).collect();
+        let mut posters: String = views.iter().map(|v| poster_card(ctx, v)).collect();
+        posters.extend(gone.iter().map(|(slug, rec)| missing_card(ctx, slug, rec, &st)));
         let dialogs: String = views.iter().map(|v| video_dialog(ctx, v, &st)).collect();
         format!(
             "{}{dialogs}",
@@ -1923,7 +2232,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{day, finder_args, joined_unique, range_response, when, MAX_FULL_BYTES, MAX_RANGE_BYTES};
+    use super::{day, finder_args, fmt_cost, fmt_duration, joined_unique, range_response, when, MAX_FULL_BYTES, MAX_RANGE_BYTES};
     use crate::ui::routes::{UiRequest, UiResponse};
     use crate::ui::state::UiState;
     use axum::http::Method;
@@ -2957,6 +3266,223 @@ mod tests {
             "csrf_token=tok&rights=1&tab=bogus&url=https%3A%2F%2Fexample.com%2Ftalks%2Fa",
         ));
         assert!(loc.starts_with("/creator?tab=discover"), "{loc}");
+    }
+
+    #[test]
+    fn the_list_has_a_quick_published_action_and_published_videos_look_different() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let body = fx.get("/creator?tab=videos").body_text();
+        let list = &body[..body.find("<dialog class='cr-dialog'").unwrap()];
+        // An icon button in the card's actions marks it published everywhere.
+        assert!(list.contains("action='/creator/published-all'"), "{list}");
+        assert!(list.contains("name='on' value='1'"), "{list}");
+        assert!(!list.contains("<li class='is-published'>"), "{list}");
+        let (_, ok) = flash_of(&fx.post("/creator/published-all", "csrf_token=tok&slug=demo&on=1&from=list"));
+        assert_eq!(ok, "1");
+        let body = fx.get("/creator?tab=videos").body_text();
+        let list = &body[..body.find("<dialog class='cr-dialog'").unwrap()];
+        assert!(list.contains("<li class='is-published'>"), "{list}");
+        assert!(list.contains("<span class='cr-pill cr-pill-ok'>Published</span>"), "{list}");
+        assert!(list.contains("cr-poster-check"), "{list}");
+        // The same button now takes the mark back.
+        assert!(list.contains("name='on' value='0'"), "{list}");
+        let state = cstate::load(&fx.st.home_dir.join("creator.json"));
+        assert_eq!(state.published["demo"].len(), 2, "WeChat and Douyin both marked");
+        let (_, ok) = flash_of(&fx.post("/creator/published-all", "csrf_token=tok&slug=demo&on=0&from=list"));
+        assert_eq!(ok, "1");
+        assert!(!fx.get("/creator?tab=videos").body_text().contains("<li class='is-published'>"));
+    }
+
+    #[test]
+    fn a_video_published_on_one_platform_only_reads_partly_published() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        flash_of(&fx.post("/creator/published", "csrf_token=tok&slug=demo&platform=wechat&on=1"));
+        let body = fx.get("/creator?tab=videos").body_text();
+        let list = &body[..body.find("<dialog class='cr-dialog'").unwrap()];
+        assert!(list.contains("Partly published"), "{list}");
+    }
+
+    #[test]
+    fn the_dialog_has_the_publish_toggle_and_a_delete_that_asks_twice() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let body = fx.get("/creator?tab=videos").body_text();
+        let dialog = &body[body.find("<dialog class='cr-dialog'").unwrap()..];
+        let dialog = &dialog[..dialog.find("</dialog>").unwrap()];
+        assert!(dialog.contains("action='/creator/published-all'") && dialog.contains("name='from' value='dialog'"), "{dialog}");
+        assert!(dialog.contains("action='/creator/videos/delete'"), "{dialog}");
+        assert!(dialog.contains("data-cr-confirm"), "{dialog}");
+        assert!(dialog.contains("Delete video"), "{dialog}");
+    }
+
+    #[test]
+    fn a_video_without_a_cover_shows_a_placeholder_image() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        std::fs::remove_file(fx.project().join("cover.png")).unwrap();
+        // The manifest still names a cover that is not there.
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(body.contains("cr-poster-blank"), "{body}");
+        assert!(body.contains("No cover"), "{body}");
+    }
+
+    #[test]
+    fn a_video_whose_files_were_deleted_stays_listed_as_a_placeholder_with_its_published_mark() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        flash_of(&fx.post("/creator/published-all", "csrf_token=tok&slug=demo&on=1&from=list"));
+        // Listing it once makes LoopX remember it.
+        fx.get("/creator?tab=videos");
+        std::fs::remove_dir_all(fx.project()).unwrap();
+        let body = fx.get("/creator?tab=videos").body_text();
+        let list = &body[..body.find("</ul>").unwrap_or(body.len())];
+        assert!(body.contains("<li class='is-missing is-published'>"), "{body}");
+        assert!(body.contains("Demo short"), "{list}");
+        assert!(body.contains("<span class='cr-pill cr-pill-ok'>Published</span>"), "{body}");
+        assert!(body.contains("action='/creator/videos/delete'") && body.contains("Remove record"), "{body}");
+        assert!(!body.contains("No videos yet"), "a recorded video is not an empty list");
+        // No dialog, no media, for what no longer exists.
+        assert!(!body.contains("<dialog class='cr-dialog'"), "{body}");
+    }
+
+    #[test]
+    fn deleting_a_video_removes_its_files_record_and_marks() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        flash_of(&fx.post("/creator/published-all", "csrf_token=tok&slug=demo&on=1&from=list"));
+        fx.get("/creator?tab=videos");
+        let work = fx.user().join(".inspire-video/output/projects/demo");
+        std::fs::create_dir_all(&work).unwrap();
+        let (loc, ok) = flash_of(&fx.post("/creator/videos/delete", "csrf_token=tok&slug=demo"));
+        assert_eq!(ok, "1", "{loc}");
+        assert!(loc.contains("Video%20deleted"), "{loc}");
+        let final_dir = fx.user().join(".inspire-video/output/final/demo");
+        assert!(!final_dir.exists() && !work.exists());
+        let state = cstate::load(&fx.st.home_dir.join("creator.json"));
+        assert!(!state.records.contains_key("demo") && !state.published.contains_key("demo"));
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(!body.contains("Demo short") && body.contains("No videos yet"), "{body}");
+    }
+
+    #[test]
+    fn removing_a_record_whose_files_are_gone_says_so() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        fx.get("/creator?tab=videos");
+        std::fs::remove_dir_all(fx.project()).unwrap();
+        let (loc, ok) = flash_of(&fx.post("/creator/videos/delete", "csrf_token=tok&slug=demo"));
+        assert_eq!(ok, "1");
+        assert!(loc.contains("Record%20removed"), "{loc}");
+        assert!(!fx.get("/creator?tab=videos").body_text().contains("<li class='is-missing"));
+    }
+
+    #[test]
+    fn delete_refuses_unknown_names_traversal_and_a_video_that_is_rendering() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        for slug in ["ghost", "..", "../x", ""] {
+            let (_, ok) = flash_of(&fx.post("/creator/videos/delete", &format!("csrf_token=tok&slug={slug}")));
+            assert_eq!(ok, "0", "{slug}");
+        }
+        let final_dir = fx.user().join(".inspire-video/output/final/demo");
+        assert!(final_dir.exists());
+        fx.running_job(SOURCE);
+        let (loc, ok) = flash_of(&fx.post("/creator/videos/delete", "csrf_token=tok&slug=demo"));
+        assert_eq!(ok, "0");
+        assert!(loc.contains("running"), "{loc}");
+        assert!(final_dir.exists());
+        for path in ["/creator/videos/delete", "/creator/published-all"] {
+            assert_eq!(fx.post(path, "slug=demo&on=1").status, 403, "{path}");
+        }
+    }
+
+    /// Sets a file's modified time to `secs` after the epoch.
+    fn set_mtime(path: &std::path::Path, secs: u64) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    /// Fixture jobs start 2020-01-01T00:00:00Z.
+    const T0: u64 = 1_577_836_800;
+
+    fn result_event(turns: u64, cost: f64) -> String {
+        format!(
+            "{}\nloopx-exit=0\n",
+            json!({"type": "result", "subtype": "success", "num_turns": turns,
+                   "duration_ms": 1, "total_cost_usd": cost, "result": "ok"})
+        )
+    }
+
+    #[test]
+    fn a_finished_job_shows_how_long_it_took_and_what_it_cost() {
+        let fx = Fx::new();
+        std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
+        set_mtime(&fx.scout().join("catalog-x.json"), T0 + 100);
+        fx.job("20261105T000001-scout000", "scout", "q", false, &result_event(7, 0.4321));
+        set_mtime(&fx.jobs().join("20261105T000001-scout000.log"), T0 + 200);
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("Took 3m 20s"), "{body}");
+        assert!(body.contains("$0.43"), "{body}");
+        assert!(body.contains("7 turns"), "{body}");
+    }
+
+    #[test]
+    fn a_running_job_shows_a_live_elapsed_timer() {
+        let fx = Fx::new();
+        fx.job("20261105T000003-genlive0", "generate", "k", true, "");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("data-cr-since=\""), "{body}");
+        assert!(body.contains("data-label=\"Running for {time}\""), "{body}");
+        assert!(body.contains("Running for "), "{body}");
+    }
+
+    #[test]
+    fn the_jobs_tab_summarises_time_and_cost_per_kind_over_successful_runs() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        set_mtime(&fx.project().join("demo.mp4"), T0 + 100);
+        for (id, secs, cost) in [("20261105T000001-gen000001", 200u64, 0.40), ("20261105T000002-gen000002", 400, 0.46)] {
+            fx.job(id, "generate", "https://example.com/talks/a", false, &result_event(5, cost));
+            set_mtime(&fx.jobs().join(format!("{id}.log")), T0 + secs);
+        }
+        // The video was written while both runs were going (they end at 200s and 400s).
+        set_mtime(&fx.project().join("demo.mp4"), T0 + 150);
+        fx.job("20261105T000003-genfail0", "generate", "k", false, "boom\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("class='cr-stats'"), "{body}");
+        assert!(body.contains("Generate video"), "{body}");
+        assert!(body.contains("3 runs"), "{body}");
+        assert!(body.contains("2 successful runs"), "{body}");
+        assert!(body.contains("5m 00s"), "average of 200s and 400s: {body}");
+        assert!(body.contains("$0.86"), "total cost: {body}");
+        assert!(body.contains("Average time"), "{body}");
+        // Find videos has not run: no card for it.
+        assert!(!body.contains("Find videos</div>"), "{body}");
+    }
+
+    #[test]
+    fn the_summary_says_so_when_nothing_has_succeeded_yet() {
+        let fx = Fx::new();
+        fx.job("20261105T000003-genfail0", "generate", "k", false, "boom\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("No successful runs yet"), "{body}");
+        assert!(body.contains("1 run ·") && !body.contains("1 runs"), "{body}");
+    }
+
+    #[test]
+    fn durations_and_costs_are_formatted_for_reading() {
+        assert_eq!(fmt_duration(0), "0s");
+        assert_eq!(fmt_duration(45), "45s");
+        assert_eq!(fmt_duration(200), "3m 20s");
+        assert_eq!(fmt_duration(3900), "1h 05m");
+        assert_eq!(fmt_cost(0.4321), "$0.43");
+        assert_eq!(fmt_cost(12.0), "$12.00");
     }
 
     #[test]

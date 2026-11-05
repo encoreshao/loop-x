@@ -236,3 +236,30 @@
 :root[data-theme="dark"] .cr-lib-done { color: #30d158; }
 @media (max-width: 760px) { .cr-lib-row { flex-direction: column; align-items: stretch; } .cr-lib-actions { justify-content: flex-start; } }
 
+/* Published videos: a softer cover with a green check; a video whose files are gone keeps
+   its place as a quiet dashed placeholder. */
+.cr-grid > li.is-published .cr-poster-media > img,
+.cr-grid > li.is-published .cr-poster-blank { opacity: 0.55; }
+.cr-grid > li.is-published .cr-poster-title { color: var(--md-on-surface-variant); }
+.cr-poster-check { position: absolute; top: 0.5rem; right: 0.5rem; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: #34c759; color: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.cr-poster-check .icon { font-size: 16px; }
+.cr-icon-btn.is-on { background: color-mix(in srgb, #34c759 22%, transparent); color: #248a3d; }
+.cr-poster-blank { flex-direction: column; gap: 0.4rem; background: linear-gradient(160deg, var(--md-surface-container-high), var(--md-surface-container)); }
+.cr-poster-blank small { font-size: 0.75rem; color: var(--md-on-surface-variant); }
+.cr-poster-static { display: flex; flex-direction: column; gap: 0.5rem; width: 100%; }
+.cr-grid > li.is-missing .cr-poster-media { border-style: dashed; }
+.cr-grid > li.is-missing .cr-poster-title { color: var(--md-on-surface-variant); }
+
+/* Time and cost: a stat card per kind of job, and the live elapsed time of a running one. */
+.cr-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 0.75rem; }
+.cr-stat { padding: 1rem 1.1rem; border: 1px solid var(--md-outline-variant); border-radius: 14px; background: var(--md-surface); }
+.cr-stat-label { font-size: 0.8125rem; font-weight: 600; color: var(--md-on-surface-variant); }
+.cr-stat-value { margin-top: 0.35rem; font-size: 1.75rem; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.cr-stat-caption { font-size: 0.75rem; color: var(--md-on-surface-variant); }
+.cr-stat-note { margin-top: 0.5rem; font-size: 0.8125rem; color: var(--md-on-surface-variant); }
+.cr-elapsed { margin-top: 0.3rem; font-size: 0.8125rem; color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
+.cr-stat-value { color: var(--md-on-surface); }
+.cr-row-title strong { color: var(--md-on-surface); font-weight: 600; }
+/* With a play button over the middle, the placeholder's icon and caption sit higher. */
+.cr-poster-media:has(.cr-play) .cr-poster-blank { justify-content: flex-start; padding-top: 22%; }
+

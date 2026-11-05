@@ -353,6 +353,51 @@ pub fn settle_outputs(mut jobs: Vec<JobRecord>, user_home: &Path) -> Vec<JobReco
     jobs
 }
 
+/// What a job cost: how long it ran and, when the agent reported it, its API cost and
+/// number of turns.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Metrics {
+    /// Wall-clock seconds: start to its last log write (still running: start to now).
+    pub duration_secs: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub turns: Option<u64>,
+}
+
+/// How much of a log's end is searched for the agent's closing `result` event.
+const RESULT_SCAN_BYTES: u64 = 128 * 1024;
+
+/// The job's metrics. The cost and turns come from the closing `result` event of the
+/// agent's stream; a job that never got that far has none.
+pub fn metrics(rec: &JobRecord) -> Metrics {
+    let start = started_time(rec);
+    let end = if rec.state == "running" {
+        Some(std::time::SystemTime::now())
+    } else {
+        ended_time(rec)
+    };
+    let duration_secs = match (start, end) {
+        (Some(a), Some(b)) => Some(b.duration_since(a).map_or(0, |d| d.as_secs())),
+        _ => None,
+    };
+    let mut m = Metrics {
+        duration_secs,
+        ..Metrics::default()
+    };
+    if let Some(tail) = read_tail(&rec.log_path, RESULT_SCAN_BYTES) {
+        let result = tail
+            .lines()
+            .rev()
+            .filter(|l| l.trim_start().starts_with('{'))
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|v| v.get("type").and_then(Value::as_str) == Some("result"));
+        if let Some(v) = result {
+            m.cost_usd = v.get("total_cost_usd").and_then(Value::as_f64);
+            m.turns = v.get("num_turns").and_then(Value::as_u64);
+        }
+    }
+    m
+}
+
 /// One job by id, settled against its pid; `None` for an unsafe or unknown id.
 pub fn get(dir: &Path, id: &str) -> Option<JobRecord> {
     if !is_safe_id(id) {
@@ -516,6 +561,54 @@ mod tests {
 
     fn fake(pid: i64) -> impl Fn(&Path) -> Result<i64, String> {
         move |_l| Ok(pid)
+    }
+
+    #[test]
+    fn metrics_give_the_wall_time_and_the_agents_reported_cost() {
+        let d = tempfile::tempdir().unwrap();
+        let id = "20261105T000070-metrics00";
+        let result = json!({"type": "result", "subtype": "success", "num_turns": 7,
+                            "duration_ms": 1000, "total_cost_usd": 0.4321, "result": "ok"});
+        dead_record(d.path(), id, Some(&format!("{}\nloopx-exit=0\n", result)));
+        // started 2026-11-05T00:00:00Z; the log was last written 3m 20s later.
+        let log = d.path().join(format!("{id}.log"));
+        let start = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_793_836_800);
+        std::fs::File::options()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_modified(start + std::time::Duration::from_secs(200))
+            .unwrap();
+        let m = metrics(&get(d.path(), id).unwrap());
+        assert_eq!(m.duration_secs, Some(200));
+        assert_eq!(m.turns, Some(7));
+        assert!((m.cost_usd.unwrap() - 0.4321).abs() < 1e-9);
+        // No result event (a killed job, plain text): time only.
+        let id2 = "20261105T000071-metrics01";
+        dead_record(d.path(), id2, Some("boom\n"));
+        let m2 = metrics(&get(d.path(), id2).unwrap());
+        assert!(m2.duration_secs.is_some());
+        assert_eq!((m2.cost_usd, m2.turns), (None, None));
+        // A log that is not there: nothing to report for it.
+        let id3 = "20261105T000072-metrics02";
+        dead_record(d.path(), id3, None);
+        assert_eq!(metrics(&get(d.path(), id3).unwrap()).cost_usd, None);
+    }
+
+    #[test]
+    fn a_running_jobs_time_is_how_long_it_has_been_running() {
+        let d = tempfile::tempdir().unwrap();
+        let id = "20261105T000073-metrics03";
+        let mut c = live_record(d.path(), id, "generate", "");
+        let mut rec = get(d.path(), id).unwrap();
+        rec.started_at = (chrono::Utc::now() - chrono::Duration::seconds(90)).to_rfc3339();
+        let m = metrics(&rec);
+        assert!(
+            matches!(m.duration_secs, Some(s) if (89..=95).contains(&s)),
+            "{m:?}"
+        );
+        c.kill().unwrap();
+        c.wait().unwrap();
     }
 
     #[test]

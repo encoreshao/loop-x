@@ -223,6 +223,46 @@ pub fn any_video_between(
     })
 }
 
+/// Delete a video's folders: its deliverables (`output/final/<slug>`) and its working
+/// folder (`output/projects/<slug>`), when they exist. The downloaded source is shared
+/// by other videos and is left alone. `slug` must be one plain folder name, a folder
+/// that is a symlink is refused rather than followed, and each folder must resolve
+/// inside its own root. Returns the folders removed (none when the files are already
+/// gone).
+pub fn delete_project_files(user_home: &Path, slug: &str) -> Result<Vec<PathBuf>, String> {
+    if !safe_component(slug) || slug.starts_with('.') {
+        return Err("not a valid video name".to_string());
+    }
+    let skill = super::spawn::generate_dir(user_home);
+    let roots = [videos_root(user_home), skill.join("output/projects")];
+    let mut removed = Vec::new();
+    for root in roots {
+        let dir = root.join(slug);
+        let Ok(meta) = std::fs::symlink_metadata(&dir) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(format!(
+                "{} is not a plain folder; not deleting it",
+                dir.display()
+            ));
+        }
+        let inside = match (root.canonicalize(), dir.canonicalize()) {
+            (Ok(r), Ok(d)) => d.starts_with(r),
+            _ => false,
+        };
+        if !inside {
+            return Err(format!(
+                "{} resolves outside its folder; not deleting it",
+                dir.display()
+            ));
+        }
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        removed.push(dir);
+    }
+    Ok(removed)
+}
+
 /// All project folders under `root`, newest first (by `created_at`, else folder
 /// mtime), plus one error string per unreadable manifest.
 pub fn list_projects(root: &Path) -> (Vec<VideoProject>, Vec<String>) {
@@ -269,6 +309,51 @@ mod tests {
         for (n, c) in files {
             std::fs::write(d.join(n), c).unwrap();
         }
+    }
+
+    #[test]
+    fn deleting_a_video_removes_its_deliverables_and_working_folder_only() {
+        let home = tempfile::tempdir().unwrap();
+        let skill = crate::creator::spawn::generate_dir(home.path());
+        for dir in [
+            "output/final/demo",
+            "output/projects/demo",
+            "output/final/other",
+            "output/cache/x",
+        ] {
+            std::fs::create_dir_all(skill.join(dir)).unwrap();
+            std::fs::write(skill.join(dir).join("f.txt"), "x").unwrap();
+        }
+        let removed = delete_project_files(home.path(), "demo").unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(!skill.join("output/final/demo").exists());
+        assert!(!skill.join("output/projects/demo").exists());
+        // Another video and the shared download cache are untouched.
+        assert!(skill.join("output/final/other/f.txt").exists());
+        assert!(skill.join("output/cache/x/f.txt").exists());
+        // Already gone: nothing to do, not an error.
+        assert!(delete_project_files(home.path(), "demo")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn deleting_refuses_unsafe_names_and_symlinked_folders() {
+        let home = tempfile::tempdir().unwrap();
+        let skill = crate::creator::spawn::generate_dir(home.path());
+        std::fs::create_dir_all(skill.join("output/final")).unwrap();
+        std::fs::create_dir_all(skill.join("output/keep")).unwrap();
+        std::fs::write(skill.join("output/keep/precious.txt"), "x").unwrap();
+        for bad in ["", ".", "..", "../keep", "a/b", ".hidden"] {
+            assert!(delete_project_files(home.path(), bad).is_err(), "{bad}");
+        }
+        std::os::unix::fs::symlink(skill.join("output/keep"), skill.join("output/final/linked"))
+            .unwrap();
+        assert!(delete_project_files(home.path(), "linked").is_err());
+        assert!(
+            skill.join("output/keep/precious.txt").exists(),
+            "the link's target survives"
+        );
     }
 
     #[test]
