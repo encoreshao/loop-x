@@ -38,6 +38,70 @@ type SpawnFull<'a> = dyn Fn(&[String], &Path, &Path) -> Result<i64, String> + 'a
 /// `loopx-exit=<status>` line. Returns the wrapper's pid.
 #[cfg(unix)]
 pub fn spawn_agent(argv: &[String], cwd: &Path, log: &Path) -> Result<i64, String> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    spawn_agent_in(argv, cwd, log, &path, home.as_deref())
+}
+
+/// Where a CLI usually lives that a GUI-launched server's `PATH` (the Mac app,
+/// launchd) does not list, relative to the user's home or absolute.
+const EXTRA_BIN_DIRS: [&str; 6] = [
+    ".local/bin",
+    ".claude/local",
+    ".npm-global/bin",
+    ".bun/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+];
+
+fn extra_bin_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+    EXTRA_BIN_DIRS
+        .iter()
+        .filter_map(|d| match (d.starts_with('/'), home) {
+            (true, _) => Some(PathBuf::from(d)),
+            (false, Some(h)) => Some(h.join(d)),
+            (false, None) => None,
+        })
+        .collect()
+}
+
+/// `path` plus every [`EXTRA_BIN_DIRS`] entry that exists and is not listed yet.
+fn launch_path(path: &str, home: Option<&Path>) -> String {
+    let mut parts: Vec<String> = path
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
+        .collect();
+    for d in extra_bin_dirs(home) {
+        let d = d.display().to_string();
+        if Path::new(&d).is_dir() && !parts.contains(&d) {
+            parts.push(d);
+        }
+    }
+    parts.join(":")
+}
+
+/// A bare `name` found only outside `path` becomes its absolute path; anything
+/// else (already on `path`, an explicit path, not found) is returned unchanged.
+fn resolve_program(name: &str, path: &str, home: Option<&Path>) -> String {
+    if name.contains('/') || crate::doctor::find_on_path(name, path).is_some() {
+        return name.to_string();
+    }
+    extra_bin_dirs(home)
+        .into_iter()
+        .find_map(|d| crate::doctor::find_on_path(name, &d.display().to_string()))
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| name.to_string())
+}
+
+#[cfg(unix)]
+fn spawn_agent_in(
+    argv: &[String],
+    cwd: &Path,
+    log: &Path,
+    path: &str,
+    home: Option<&Path>,
+) -> Result<i64, String> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -57,7 +121,9 @@ pub fn spawn_agent(argv: &[String], cwd: &Path, log: &Path) -> Result<i64, Strin
     let mut command = Command::new("/bin/sh");
     command
         .args(["-c", EXIT_WRAPPER, "sh"])
-        .args(argv)
+        .arg(resolve_program(program, path, home))
+        .args(&argv[1..])
+        .env("PATH", launch_path(path, home))
         .env("LOOPX_JOB_LOG", log)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -911,6 +977,61 @@ mod tests {
         while crate::run_control::process_alive(pid) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_program_is_found_in_the_user_bin_dirs_the_server_path_lacks() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("fakeagent");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Not on the server's PATH, found through ~/.local/bin.
+        assert_eq!(
+            resolve_program("fakeagent", "/usr/bin:/bin", Some(home.path())),
+            exe.display().to_string()
+        );
+        let lp = launch_path("/usr/bin:/bin", Some(home.path()));
+        assert!(
+            lp.starts_with(&format!("/usr/bin:/bin:{}", bin.display())),
+            "{lp}"
+        );
+        // A name nowhere to be found, and an explicit path, are left alone.
+        assert_eq!(
+            resolve_program("nope-x", "/usr/bin", Some(home.path())),
+            "nope-x"
+        );
+        assert_eq!(
+            resolve_program("/abs/claude", "/usr/bin", Some(home.path())),
+            "/abs/claude"
+        );
+        // On the PATH already: untouched.
+        assert_eq!(
+            resolve_program("sh", "/bin:/usr/bin", Some(home.path())),
+            "sh"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_agent_runs_a_program_that_only_lives_in_a_user_bin_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let exe = bin.join("loopx-fake-agent");
+        std::fs::write(&exe, "#!/bin/sh\necho ran\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let log = home.path().join("j.log");
+        let argv = vec!["loopx-fake-agent".to_string()];
+        let pid =
+            spawn_agent_in(&argv, home.path(), &log, "/usr/bin:/bin", Some(home.path())).unwrap();
+        wait_dead(pid);
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(text, "ran\n\nloopx-exit=0\n");
     }
 
     #[cfg(unix)]

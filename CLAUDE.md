@@ -167,6 +167,18 @@ contain apostrophes (French), so anything placed inside an HTML attribute must b
 escaped. Never translate at import/static time — translate at render time, since the
 language is per request.
 
+## UI changes use Apple App and Website styles
+
+Every UI change (dashboard pages, `crates/server/assets/*`, the macOS app) must look
+like Apple's apps and website: system font stack (`-apple-system`, `SF Pro`,
+`ui-monospace` for code), hairline separators, 12-16px rounded corners, soft shadows,
+translucent blurred material for sheets/sidebars/inspectors, one system-blue accent
+with neutral grays, pill buttons and segmented controls, eased 200-350ms transitions
+(`cubic-bezier(0.32, 0.72, 0, 1)`), full light/dark parity. Prefer a sheet or right-hand
+inspector panel over a new tab or a browser popup. Keep the dashboard's `--md-*` tokens
+as the color source, and keep functional motion (the loading spinner) under reduced
+motion. The `impeccable` and `ui-ux-pro-max` skills carry the same rule.
+
 ## Adding an icon
 
 Icons are an inline SVG sprite (`crates/server/assets/icons/sprite.svg`, Lucide, ISC

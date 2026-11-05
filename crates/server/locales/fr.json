@@ -1526,5 +1526,13 @@
   "View log": "Voir le journal",
   "Approving confirms you own this video or have permission to reuse it.": "En approuvant, vous confirmez posséder cette vidéo ou avoir l’autorisation de la réutiliser.",
   "Approved, job started: {tool} {summary}": "Approuvé, tâche lancée : {tool} {summary}",
-  "Nothing started: remove the parameters after the video id from the link (for example &list= or &t=)": "Rien n’a été lancé : retirez du lien les paramètres après l’identifiant de la vidéo (par exemple &list= ou &t=)"
+  "Nothing started: remove the parameters after the video id from the link (for example &list= or &t=)": "Rien n’a été lancé : retirez du lien les paramètres après l’identifiant de la vidéo (par exemple &list= ou &t=)",
+  "More segments ({count})": "Autres segments ({count})",
+  "Open {title}": "Ouvrir {title}",
+  "Show more": "Afficher plus",
+  "Show less": "Afficher moins",
+  "This platform has no text for this video yet.": "Cette plateforme n’a pas encore de texte pour cette vidéo.",
+  "No publish text yet. When inspire-video writes a WeChat or Douyin title, caption and hashtags for this video, they show up here.": "Pas encore de texte de publication. Quand inspire-video rédige un titre, une légende et des hashtags WeChat ou Douyin pour cette vidéo, ils s’affichent ici.",
+  "Job log": "Journal de la tâche",
+  "Could not load the log.": "Impossible de charger le journal."
 }

@@ -1526,5 +1526,13 @@
   "View log": "ログを表示",
   "Approving confirms you own this video or have permission to reuse it.": "承認すると、この動画の権利を持っているか、再利用の許可を得ていることを確認したことになります。",
   "Approved, job started: {tool} {summary}": "承認済み、ジョブを開始しました: {tool} {summary}",
-  "Nothing started: remove the parameters after the video id from the link (for example &list= or &t=)": "開始しませんでした: リンクから動画 ID の後のパラメーター（例: &list= や &t=）を削除してください"
+  "Nothing started: remove the parameters after the video id from the link (for example &list= or &t=)": "開始しませんでした: リンクから動画 ID の後のパラメーター（例: &list= や &t=）を削除してください",
+  "More segments ({count})": "ほかのセグメント（{count}）",
+  "Open {title}": "{title} を開く",
+  "Show more": "さらに表示",
+  "Show less": "表示を減らす",
+  "This platform has no text for this video yet.": "このプラットフォーム向けのテキストはまだありません。",
+  "No publish text yet. When inspire-video writes a WeChat or Douyin title, caption and hashtags for this video, they show up here.": "公開用テキストはまだありません。inspire-video がこの動画の WeChat または Douyin 向けのタイトル、キャプション、ハッシュタグを書くと、ここに表示されます。",
+  "Job log": "ジョブのログ",
+  "Could not load the log.": "ログを読み込めませんでした。"
 }

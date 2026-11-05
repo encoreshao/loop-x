@@ -123,6 +123,44 @@ fn read_capped(path: &Path, cap: u64) -> Result<String, String> {
     Ok(raw)
 }
 
+/// Older projects have no `publish` block in `project.json`, only the plain
+/// `publish_<platform>.txt` files: the title on the first line, a blank line,
+/// the caption, and a last line of `#tags`.
+fn copy_from_txt(root: &Path, slug: &str, name: &str) -> Option<PublishCopy> {
+    let path = project_file(root, slug, name)?;
+    let raw = read_capped(&path, MAX_MANIFEST_BYTES).ok()?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let (title, rest) = raw.split_once('\n').unwrap_or((raw, ""));
+    let mut lines: Vec<&str> = rest.trim().lines().collect();
+    let mut hashtags = Vec::new();
+    while let Some(last) = lines.last().map(|l| l.trim()) {
+        if last.is_empty() {
+            lines.pop();
+        } else if last
+            .split_whitespace()
+            .all(|w| w.starts_with('#') && w.len() > 1)
+        {
+            let mut tags: Vec<String> = last
+                .split_whitespace()
+                .map(|w| w.trim_start_matches('#').to_string())
+                .collect();
+            tags.append(&mut hashtags);
+            hashtags = tags;
+            lines.pop();
+        } else {
+            break;
+        }
+    }
+    Some(PublishCopy {
+        title: title.trim().to_string(),
+        caption: lines.join("\n").trim().to_string(),
+        hashtags,
+    })
+}
+
 fn read_project(root: &Path, slug: &str) -> Result<VideoProject, String> {
     let manifest = root.join(slug).join("project.json");
     let mut p = VideoProject {
@@ -154,6 +192,12 @@ fn read_project(root: &Path, slug: &str) -> Result<VideoProject, String> {
             p.wechat = publish.get("wechat").and_then(copy_of);
             p.douyin = publish.get("douyin").and_then(copy_of);
         }
+    }
+    if p.wechat.is_none() {
+        p.wechat = copy_from_txt(root, slug, "publish_wechat.txt");
+    }
+    if p.douyin.is_none() {
+        p.douyin = copy_from_txt(root, slug, "publish_douyin.txt");
     }
     p.mp4 = video
         .and_then(|n| existing(root, slug, &n))
@@ -260,6 +304,34 @@ mod tests {
         assert_eq!(ps[0].title, "old");
         assert!(ps[0].mp4.is_some() && ps[0].cover.is_some());
         assert!(ps[0].wechat.is_none() && ps[0].douyin.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_publish_txt_files() {
+        let d = tempfile::tempdir().unwrap();
+        project(
+            d.path(),
+            "old",
+            &[
+                ("old.mp4", "x"),
+                (
+                    "publish_wechat.txt",
+                    "短标题\n\n正文一\n\n来源行\n\n#拖延症 #TED演讲\n",
+                ),
+                ("publish_douyin.txt", "抖音标题\n\n只有正文\n"),
+            ],
+        );
+        let (ps, _) = list_projects(d.path());
+        let w = ps[0].wechat.as_ref().unwrap();
+        assert_eq!(w.title, "短标题");
+        assert_eq!(w.caption, "正文一\n\n来源行");
+        assert_eq!(w.hashtags, vec!["拖延症", "TED演讲"]);
+        let dy = ps[0].douyin.as_ref().unwrap();
+        assert_eq!(
+            (dy.title.as_str(), dy.caption.as_str()),
+            ("抖音标题", "只有正文")
+        );
+        assert!(dy.hashtags.is_empty());
     }
 
     #[test]

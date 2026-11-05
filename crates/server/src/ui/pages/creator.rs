@@ -23,7 +23,7 @@ use loopx_core::creator::videos::{self, PublishCopy, VideoProject};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-const TABS: [&str; 3] = ["discover", "videos", "publish"];
+const TABS: [&str; 2] = ["discover", "videos"];
 /// A GET without `Range` larger than this is refused (players always send ranges).
 const MAX_FULL_BYTES: u64 = 64 * 1024 * 1024;
 /// The most one range response carries; an open or larger range is cut to this.
@@ -58,6 +58,10 @@ fn videos_root(ctx: &UiCtx) -> PathBuf {
 }
 
 fn tab_of(requested: &str) -> &'static str {
+    // The publish copy moved into each video's dialog on Videos.
+    if requested == "publish" {
+        return "videos";
+    }
     TABS.iter()
         .find(|t| **t == requested)
         .copied()
@@ -66,6 +70,11 @@ fn tab_of(requested: &str) -> &'static str {
 
 fn back(tab: &str) -> String {
     format!("/creator?tab={}", tab_of(tab))
+}
+
+/// Videos, with `slug`'s dialog reopened by the page script.
+fn back_to_video(slug: &str) -> String {
+    format!("/creator?tab=videos&open={}", pyfmt::quote(slug, ""))
 }
 
 fn https_link(url: &str) -> Option<&str> {
@@ -168,10 +177,10 @@ fn approve(ctx: &UiCtx) -> UiResponse {
     let form = ctx.form();
     let slug = form.first("slug").unwrap_or("");
     let on = form.first("on") == Some("1");
-    let to = back("videos");
     if !known_slug(ctx, slug) {
-        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &to);
+        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &back("videos"));
     }
+    let to = back_to_video(slug);
     match cstate::set_approved(&state_path(ctx), slug, on) {
         Ok(()) => {
             let msg = if on {
@@ -190,10 +199,10 @@ fn published(ctx: &UiCtx) -> UiResponse {
     let slug = form.first("slug").unwrap_or("");
     let platform = form.first("platform").unwrap_or("");
     let on = form.first("on") == Some("1");
-    let to = back("publish");
     if !known_slug(ctx, slug) {
-        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &to);
+        return UiResponse::flash_redirect(false, &ctx.t("No such video"), &back("videos"));
     }
+    let to = back_to_video(slug);
     if !PLATFORMS.iter().any(|(k, _)| *k == platform) {
         return UiResponse::flash_redirect(false, &ctx.t("Unknown platform"), &to);
     }
@@ -376,62 +385,101 @@ fn joined(parts: &[String]) -> String {
         .join(" · ")
 }
 
-fn card(icon: &str, title: &str, body: &str) -> String {
+/// The page's own styles and its small dialog script (static files, no data).
+const CREATOR_CSS: &str = include_str!("../../../assets/creator/creator.css");
+const CREATOR_JS: &str = include_str!("../../../assets/creator/creator.js");
+/// A caption longer than this is clamped with a Show more control.
+const CLAMP_CHARS: usize = 160;
+/// Segments shown before the rest fold into a disclosure.
+const SEGMENTS_SHOWN: usize = 2;
+const PLAY_GLYPH: &str =
+    "<svg viewBox='0 0 24 24' aria-hidden='true' focusable='false'><path d='M8 5.5v13l11-6.5z'/></svg>";
+
+fn subtitle(text: &str) -> String {
+    format!("<p class='cr-muted'>{}</p>", h(text))
+}
+
+/// A titled group of the page: a heading row and a rounded surface below it.
+fn section(title: &str, aside: &str, body: &str) -> String {
     format!(
-        "<div class='card'><div class='section-header'>{}<h2>{}</h2></div>{body}</div>",
-        icons::icon(icon),
+        "<section class='cr-section'><div class='cr-section-head'><h2>{}</h2>{aside}</div>{body}</section>",
         h(title)
     )
 }
 
-fn subtitle(text: &str) -> String {
-    format!("<p class='section-subtitle'>{}</p>", h(text))
-}
-
 fn tabs_html(ctx: &UiCtx, active: &str) -> String {
-    let labels = [
-        ("discover", ctx.t("Discover")),
-        ("videos", ctx.t("Videos")),
-        ("publish", ctx.t("Publish")),
-    ];
+    let labels = [("discover", ctx.t("Discover")), ("videos", ctx.t("Videos"))];
     let links: String = labels
         .iter()
         .map(|(key, label)| {
             let on = *key == active;
             format!(
-                "<a class='{}' href='/creator?tab={key}'{}>{}</a>",
-                if on { "hub-tab active" } else { "hub-tab" },
+                "<a class='cr-segment{}' href='/creator?tab={key}'{}>{}</a>",
+                if on { " is-active" } else { "" },
                 if on { " aria-current='page'" } else { "" },
                 h(label)
             )
         })
         .collect();
     format!(
-        "<nav class='hub-tabs' aria-label='{}'>{links}</nav>",
+        "<nav class='cr-segmented' aria-label='{}'>{links}</nav>",
         h(&ctx.t("Page sections"))
     )
 }
 
+fn pill(kind: &str, label: &str) -> String {
+    format!("<span class='cr-pill cr-pill-{kind}'>{}</span>", h(label))
+}
+
 fn state_pill(ctx: &UiCtx, state: &str) -> String {
-    let (class, label) = match state {
-        "running" => ("pill-grey", ctx.t("Running")),
-        "done" => ("pill-green", ctx.t("Done")),
-        "failed" => ("pill-red", ctx.t("Failed")),
-        "stopped" => ("pill-grey", ctx.t("Stopped")),
-        other => ("pill-grey", other.to_string()),
-    };
-    format!("<span class='pill {class}'>{}</span>", h(&label))
+    match state {
+        "running" => pill("accent", &ctx.t("Running")),
+        "done" => pill("ok", &ctx.t("Done")),
+        "failed" => pill("error", &ctx.t("Failed")),
+        "stopped" => pill("neutral", &ctx.t("Stopped")),
+        other => pill("neutral", other),
+    }
 }
 
 fn stop_form(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
     format!(
-        "<form method='post' action='/creator/stop' class='daemon-action-form'>{}\
+        "<form method='post' action='/creator/stop' class='cr-inline-form'>{}\
 <input type='hidden' name='id' value=\"{}\"><input type='hidden' name='tab' value='{tab}'>\
-<button type='submit' class='btn btn-neutral'>{} {}</button></form>",
+<button type='submit' class='cr-btn cr-btn-plain'>{} {}</button></form>",
         ctx.csrf_input(),
         h(&job.id),
         icons::icon("stop"),
         h(&ctx.t("Stop"))
+    )
+}
+
+fn log_link(ctx: &UiCtx, job: &JobRecord) -> String {
+    format!(
+        "<a class='cr-btn cr-btn-plain' href='/creator/jobs/{}/log' data-cr-log target='_blank' rel='noopener noreferrer'>{} {}</a>",
+        h(&job.id),
+        icons::icon("description"),
+        h(&ctx.t("View log"))
+    )
+}
+
+/// The one right-hand sheet that shows a job's log in the page; creator.js fills it
+/// from the link's own href, so the link keeps working as a new-tab fallback.
+fn log_sheet(ctx: &UiCtx) -> String {
+    format!(
+        "<dialog class='cr-sheet' id='cr-sheet' aria-labelledby='cr-sheet-title' \
+data-failed-label=\"{}\" data-loading-label=\"{}\">\
+<div class='cr-sheet-inner'><header class='cr-sheet-head'><h2 id='cr-sheet-title'>{}</h2>\
+<div class='cr-sheet-tools'>\
+<button type='button' class='cr-icon-btn' data-cr-refresh aria-label=\"{}\">{}</button>\
+<button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></div></header>\
+<pre class='cr-sheet-log' tabindex='0' aria-live='polite'></pre></div></dialog>",
+        h(&ctx.t("Could not load the log.")),
+        h(&ctx.t("Loading…")),
+        h(&ctx.t("Job log")),
+        h(&ctx.t("Refresh")),
+        icons::icon("autorenew"),
+        h(&ctx.t("Close")),
+        icons::icon("close"),
     )
 }
 
@@ -445,19 +493,22 @@ fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
     } else {
         String::new()
     };
-    let action = format!(
-        "<a class='btn btn-neutral' href='/creator/jobs/{}/log' target='_blank' rel='noopener noreferrer'>{} {}</a>{stop}",
-        h(&job.id),
-        icons::icon("description"),
-        h(&ctx.t("View log"))
-    );
     format!(
-        "<div class='project-block account-row'><div class='account-main'><strong>{}</strong> {}\
-<div class='section-subtitle'>{}</div></div><div class='account-actions'>{action}</div></div>",
+        "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>\
+<div class='cr-meta'>{}</div></div><div class='cr-row-actions'>{}{stop}</div></li>",
         h(&kind),
         state_pill(ctx, &job.state),
-        h(&joined(&[job.key.clone(), when(&job.started_at)]))
+        h(&joined(&[job.key.clone(), when(&job.started_at)])),
+        log_link(ctx, job)
     )
+}
+
+fn jobs_list(ctx: &UiCtx, title: &str, jobs: &[&JobRecord], tab: &str) -> String {
+    if jobs.is_empty() {
+        return String::new();
+    }
+    let rows: String = jobs.iter().map(|j| job_row(ctx, j, tab)).collect();
+    section(title, "", &format!("<ul class='cr-list'>{rows}</ul>"))
 }
 
 fn errors_card(ctx: &UiCtx, errors: &[String]) -> String {
@@ -465,20 +516,67 @@ fn errors_card(ctx: &UiCtx, errors: &[String]) -> String {
         return String::new();
     }
     let rows: String = errors.iter().map(|e| flash_html(Some(e), false)).collect();
-    card("warning", &ctx.t("Some files could not be read"), &rows)
+    section(&ctx.t("Some files could not be read"), "", &rows)
 }
 
+/// The rights checkbox and Generate button. The button looks disabled until the
+/// box is ticked (CSS `:has`), and `required` keeps the browser from posting
+/// without it; the server checks `rights=1` again.
 fn generate_form(ctx: &UiCtx, url: &str) -> String {
     format!(
-        "<form method='post' action='/creator/generate'>{}\
+        "<form method='post' action='/creator/generate' class='cr-item-actions'>{}\
 <input type='hidden' name='url' value=\"{}\">\
-<label class='section-subtitle'><input type='checkbox' name='rights' value='1' required> {}</label> \
-<button type='submit' class='btn btn-primary'>{} {}</button></form>",
+<label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
+<span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
+<button type='submit' class='cr-btn cr-btn-primary cr-generate'>{} {}</button></form>",
         ctx.csrf_input(),
         h(url),
         h(&ctx.t("I own this video or have permission to reuse it")),
         icons::icon("video"),
         h(&ctx.t("Generate"))
+    )
+}
+
+fn segment_li(seg: &scout::Segment) -> String {
+    let span = match (&seg.start, &seg.end) {
+        (Some(a), Some(b)) => format!("{a}–{b}"),
+        (Some(a), None) => a.clone(),
+        _ => String::new(),
+    };
+    let chip = if span.is_empty() {
+        String::new()
+    } else {
+        format!("<span class='cr-chip'>{}</span>", h(&span))
+    };
+    format!("<li>{chip}<span>{}</span></li>", h(&seg.idea))
+}
+
+fn segments_html(ctx: &UiCtx, s: &Source) -> String {
+    if s.segments.is_empty() {
+        return String::new();
+    }
+    let first: String = s
+        .segments
+        .iter()
+        .take(SEGMENTS_SHOWN)
+        .map(segment_li)
+        .collect();
+    let rest: Vec<_> = s.segments.iter().skip(SEGMENTS_SHOWN).collect();
+    let more = if rest.is_empty() {
+        String::new()
+    } else {
+        let items: String = rest.iter().map(|seg| segment_li(seg)).collect();
+        format!(
+            "<details class='cr-more'><summary>{}</summary><ul class='cr-segments'>{items}</ul></details>",
+            h(&ctx.tf(
+                "More segments ({count})",
+                &[("count", &rest.len().to_string())]
+            ))
+        )
+    };
+    format!(
+        "<div class='cr-segments-block'><div class='cr-label'>{}</div><ul class='cr-segments'>{first}</ul>{more}</div>",
+        h(&ctx.t("Suggested segments"))
     )
 }
 
@@ -490,54 +588,33 @@ fn source_row(ctx: &UiCtx, s: &Source, jobs: &[JobRecord]) -> String {
     };
     let title_html = match https_link(&s.url) {
         Some(u) => format!(
-            "<a href=\"{}\" target='_blank' rel='noopener noreferrer'><strong>{}</strong></a>",
+            "<a href=\"{}\" target='_blank' rel='noopener noreferrer'>{}</a>",
             h(u),
             h(&title)
         ),
-        None => format!("<strong>{}</strong>", h(&title)),
+        None => h(&title),
     };
     let quality = joined(&[
         s.grade.clone().unwrap_or_default(),
         s.score.map(|v| format!("{v:.1}")).unwrap_or_default(),
     ]);
-    let quality = if quality.is_empty() {
-        String::new()
-    } else {
-        format!(" <span class='pill pill-grey'>{}</span>", h(&quality))
-    };
-    let ready = if s.handoff_ready {
-        format!(
-            " <span class='pill pill-green'>{}</span>",
-            h(&ctx.t("Ready to generate"))
-        )
-    } else {
-        String::new()
-    };
+    let mut badges = String::new();
+    if !quality.is_empty() {
+        badges.push_str(&format!("<span class='cr-badge'>{}</span>", h(&quality)));
+    }
+    if s.handoff_ready {
+        badges.push_str(&pill("ok", &ctx.t("Ready to generate")));
+    }
     let meta = joined(&[
         s.channel.clone(),
         s.platform.clone(),
         s.published.clone().unwrap_or_default(),
         s.duration_s.map(clock).unwrap_or_default(),
     ]);
-    let segments: String = s
-        .segments
-        .iter()
-        .map(|seg| {
-            let span = match (&seg.start, &seg.end) {
-                (Some(a), Some(b)) => format!("{a}–{b} "),
-                (Some(a), None) => format!("{a} "),
-                _ => String::new(),
-            };
-            format!("<li>{}{}</li>", h(&span), h(&seg.idea))
-        })
-        .collect();
-    let segments = if segments.is_empty() {
+    let rationale = if s.rationale.is_empty() {
         String::new()
     } else {
-        format!(
-            "<div class='section-subtitle'>{}</div><ul>{segments}</ul>",
-            h(&ctx.t("Suggested segments"))
-        )
+        format!("<p class='cr-rationale'>{}</p>", h(&s.rationale))
     };
     // Only a source whose address passes the job's own URL check can be generated.
     let usable = valid_source_url(&s.url).ok();
@@ -546,51 +623,58 @@ fn source_row(ctx: &UiCtx, s: &Source, jobs: &[JobRecord]) -> String {
         .and_then(|u| jobs::running(jobs, JobKind::Generate, u));
     let action = match (running, usable) {
         (Some(job), _) => format!(
-            "<span class='pill pill-grey'>{}</span>{}",
-            h(&ctx.t("Rendering")),
+            "<div class='cr-item-actions'>{}{}</div>",
+            pill("accent", &ctx.t("Rendering")),
             stop_form(ctx, job, "discover")
         ),
         (None, Some(url)) => generate_form(ctx, &url),
         (None, None) => String::new(),
     };
     format!(
-        "<div class='project-block account-row'><div class='account-main'>\
-<span class='section-subtitle'>#{}</span> {title_html}{quality}{ready}\
-<div class='section-subtitle'>{}</div><p>{}</p>{segments}</div>\
-<div class='account-actions'>{action}</div></div>",
+        "<li class='cr-item'><div class='cr-item-head'><span class='cr-rank'>{}</span>\
+<div class='cr-item-main'><h3 class='cr-title'>{title_html}</h3><div class='cr-meta'>{}</div>\
+<div class='cr-badges'>{badges}</div></div></div>{rationale}{}{action}</li>",
         s.rank,
         h(&meta),
-        h(&s.rationale)
+        segments_html(ctx, s)
     )
 }
 
-fn run_card(ctx: &UiCtx, run: &ScoutRun, jobs: &[JobRecord]) -> String {
+fn run_section(ctx: &UiCtx, run: &ScoutRun, jobs: &[JobRecord]) -> String {
     let title = match run.query.as_deref() {
         Some(q) => ctx.tf("Search: {query}", &[("query", q)]),
         None => ctx.t("Topic-free discovery"),
     };
-    let rows: String = if run.sources.is_empty() {
-        subtitle(&ctx.t("This run found no videos."))
+    let meta = format!(
+        "<span class='cr-meta'>{}</span>",
+        h(&joined(&[when(&run.generated_at), run.mode.clone()]))
+    );
+    let body = if run.sources.is_empty() {
+        format!(
+            "<div class='cr-surface cr-empty'>{}</div>",
+            subtitle(&ctx.t("This run found no videos."))
+        )
     } else {
-        run.sources
+        let items: String = run
+            .sources
             .iter()
             .map(|s| source_row(ctx, s, jobs))
-            .collect()
+            .collect();
+        format!("<ol class='cr-list cr-results'>{items}</ol>")
     };
-    let meta = joined(&[when(&run.generated_at), run.mode.clone()]);
-    card("search", &title, &format!("{}{rows}", subtitle(&meta)))
+    section(&title, &meta, &body)
 }
 
 fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     let root = scout::scout_root(&ctx.state.user_home);
     let (runs, errors) = scout::list_runs(&root);
-    let find = card(
-        "search",
+    let find = section(
         &ctx.t("Find videos"),
+        "",
         &format!(
-            "{}<form method='post' action='/creator/scout' class='daemon-action-form'>{}\
-<input type='text' name='query' placeholder=\"{}\" aria-label=\"{}\"> \
-<button type='submit' class='btn btn-primary'>{} {}</button></form>",
+            "<div class='cr-surface'>{}<form method='post' action='/creator/scout' class='cr-search'>{}\
+<input type='text' name='query' class='cr-input' placeholder=\"{}\" aria-label=\"{}\">\
+<button type='submit' class='cr-btn cr-btn-primary'>{} {}</button></form></div>",
             subtitle(&ctx.t(
                 "Runs the video-scout skill in the background. Leave the topic empty to let it pick worthwhile videos."
             )),
@@ -601,29 +685,24 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             h(&ctx.t("Find videos"))
         ),
     );
-    let jobs_card = if jobs.is_empty() {
-        String::new()
-    } else {
-        let rows: String = jobs
-            .iter()
-            .take(JOBS_SHOWN)
-            .map(|j| job_row(ctx, j, "discover"))
-            .collect();
-        card("schedule", &ctx.t("Jobs"), &rows)
-    };
+    let recent: Vec<&JobRecord> = jobs.iter().take(JOBS_SHOWN).collect();
+    let jobs_html = jobs_list(ctx, &ctx.t("Jobs"), &recent, "discover");
     let runs_html: String = if runs.is_empty() {
-        card(
-            "video",
+        section(
             &ctx.t("Scout runs"),
-            &subtitle(&ctx.tf(
-                "No video-scout catalogs yet. Find videos above, or run the video-scout skill in Claude Code; catalogs in {path} show up here.",
-                &[("path", &root.display().to_string())],
-            )),
+            "",
+            &format!(
+                "<div class='cr-surface cr-empty'>{}</div>",
+                subtitle(&ctx.tf(
+                    "No video-scout catalogs yet. Find videos above, or run the video-scout skill in Claude Code; catalogs in {path} show up here.",
+                    &[("path", &root.display().to_string())],
+                ))
+            ),
         )
     } else {
-        runs.iter().map(|r| run_card(ctx, r, jobs)).collect()
+        runs.iter().map(|r| run_section(ctx, r, jobs)).collect()
     };
-    format!("{find}{jobs_card}{}{runs_html}", errors_card(ctx, &errors))
+    format!("{find}{jobs_html}{}{runs_html}", errors_card(ctx, &errors))
 }
 
 fn media_url(slug: &str, path: &Path) -> String {
@@ -639,126 +718,120 @@ fn media_url(slug: &str, path: &Path) -> String {
 }
 
 fn no_videos(ctx: &UiCtx, root: &Path) -> String {
-    card(
-        "video",
+    section(
         &ctx.t("Videos"),
-        &subtitle(&ctx.tf(
-            "No videos yet. Generate one from a source under Discover; finished videos in {path} show up here.",
-            &[("path", &root.display().to_string())],
-        )),
+        "",
+        &format!(
+            "<div class='cr-surface cr-empty'>{}</div>",
+            subtitle(&ctx.tf(
+                "No videos yet. Generate one from a source under Discover; finished videos in {path} show up here.",
+                &[("path", &root.display().to_string())],
+            ))
+        ),
     )
 }
 
-fn video_card(ctx: &UiCtx, p: &VideoProject, st: &CreatorState, jobs: &[JobRecord]) -> String {
-    let source_key = p
+/// Everything one video's poster and dialog need.
+struct VideoView<'a> {
+    p: &'a VideoProject,
+    dom_id: String,
+    approved: bool,
+    rendering: Option<&'a JobRecord>,
+    /// The newest generate job for this video's source, for its log.
+    last_job: Option<&'a JobRecord>,
+    status: String,
+    status_kind: &'static str,
+}
+
+fn video_view<'a>(
+    ctx: &UiCtx,
+    i: usize,
+    p: &'a VideoProject,
+    st: &CreatorState,
+    jobs: &'a [JobRecord],
+) -> VideoView<'a> {
+    let key = p
         .source_url
         .as_deref()
         .and_then(|u| valid_source_url(u).ok());
-    let rendering = source_key
+    let rendering = key
         .as_deref()
         .and_then(|u| jobs::running(jobs, JobKind::Generate, u));
+    let last_job = key.as_deref().and_then(|u| {
+        jobs.iter()
+            .find(|j| j.kind == JobKind::Generate && j.key == u)
+    });
     let approved = st.approved.contains(&p.slug);
-    let (class, status) = if rendering.is_some() {
-        ("pill-grey", ctx.t("Rendering"))
+    let (status_kind, status) = if rendering.is_some() {
+        ("accent", ctx.t("Rendering"))
     } else if approved {
-        ("pill-green", ctx.t("Approved"))
+        ("ok", ctx.t("Approved"))
     } else if p.mp4.is_some() {
-        ("pill-grey", ctx.t("Ready for review"))
+        ("neutral", ctx.t("Ready for review"))
     } else {
-        ("pill-red", ctx.t("No video file"))
+        ("warn", ctx.t("No video file"))
     };
-    let player = match &p.mp4 {
-        Some(mp4) => {
-            let poster = p
-                .cover
-                .as_deref()
-                .map(|c| format!(" poster=\"{}\"", media_url(&p.slug, c)))
-                .unwrap_or_default();
-            format!(
-                "<video controls preload='metadata' src=\"{}\"{poster} \
-style='display:block;width:100%;max-height:540px;background:#000;border-radius:8px;'></video>",
-                media_url(&p.slug, mp4)
-            )
-        }
-        None => String::new(),
-    };
-    let source = match p.source_url.as_deref().and_then(https_link) {
-        Some(u) => format!(
-            "<a class='btn btn-neutral' href=\"{}\" target='_blank' rel='noopener noreferrer'>{} {}</a>",
-            h(u),
-            icons::icon("open_in_new"),
-            h(&ctx.t("Source"))
+    VideoView {
+        p,
+        dom_id: format!("cr-video-{i}"),
+        approved,
+        rendering,
+        last_job,
+        status,
+        status_kind,
+    }
+}
+
+fn poster_card(ctx: &UiCtx, v: &VideoView<'_>) -> String {
+    let image = match &v.p.cover {
+        Some(c) => format!(
+            "<img src=\"{}\" alt='' loading='lazy' decoding='async'>",
+            media_url(&v.p.slug, c)
         ),
-        None => String::new(),
+        None => format!(
+            "<span class='cr-poster-blank'>{}</span>",
+            icons::icon("video")
+        ),
     };
-    let toggle = if approved || (rendering.is_none() && p.mp4.is_some()) {
-        let (on, label, icon) = if approved {
-            ("0", ctx.t("Remove approval"), "close")
-        } else {
-            ("1", ctx.t("Approve"), "check_circle")
-        };
-        format!(
-            "<form method='post' action='/creator/approve' class='daemon-action-form'>{}\
-<input type='hidden' name='slug' value=\"{}\"><input type='hidden' name='on' value='{on}'>\
-<button type='submit' class='btn btn-primary'>{} {}</button></form>",
-            ctx.csrf_input(),
-            h(&p.slug),
-            icons::icon(icon),
-            h(&label)
-        )
+    let play = if v.p.mp4.is_some() {
+        format!("<span class='cr-play'>{PLAY_GLYPH}</span>")
     } else {
         String::new()
     };
-    let stop = rendering
-        .map(|j| stop_form(ctx, j, "videos"))
-        .unwrap_or_default();
     format!(
-        "<div class='card'><div class='section-header'>{}<h2>{}</h2></div>\
-<div class='pill-row'><span class='pill {class}'>{}</span></div>{}{player}\
-<div class='account-actions'>{toggle}{source}{stop}</div></div>",
-        icons::icon("video"),
-        h(&p.title),
-        h(&status),
-        subtitle(&when(p.created_at.as_deref().unwrap_or("")))
+        "<li><button type='button' class='cr-poster' data-cr-open='{id}' aria-haspopup='dialog' aria-label=\"{}\">\
+<span class='cr-poster-media'>{image}{play}<span class='cr-poster-status'>{}</span></span>\
+<span class='cr-poster-title'>{}</span></button></li>",
+        h(&ctx.tf("Open {title}", &[("title", &v.p.title)])),
+        pill(v.status_kind, &v.status),
+        h(&v.p.title),
+        id = v.dom_id
     )
 }
 
-fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
-    let root = videos_root(ctx);
-    let (projects, errors) = videos::list_projects(&root);
-    let st = cstate::load(&state_path(ctx));
-    let known: Vec<String> = projects
-        .iter()
-        .filter_map(|p| p.source_url.as_deref())
-        .map(|u| valid_source_url(u).unwrap_or_else(|_| u.to_string()))
-        .collect();
-    let pending: String = jobs
-        .iter()
-        .filter(|j| j.kind == JobKind::Generate && !known.contains(&j.key))
-        .filter(|j| j.state == "running" || j.state == "failed")
-        .take(JOBS_SHOWN)
-        .map(|j| job_row(ctx, j, "videos"))
-        .collect();
-    let pending = if pending.is_empty() {
-        String::new()
+fn approve_form(ctx: &UiCtx, v: &VideoView<'_>) -> String {
+    if !(v.approved || (v.rendering.is_none() && v.p.mp4.is_some())) {
+        return String::new();
+    }
+    let (on, label, icon, class) = if v.approved {
+        ("0", ctx.t("Remove approval"), "close", "cr-btn-plain")
     } else {
-        card("schedule", &ctx.t("Generating"), &pending)
+        ("1", ctx.t("Approve"), "check_circle", "cr-btn-primary")
     };
-    let list = if projects.is_empty() {
-        no_videos(ctx, &root)
-    } else {
-        let cards: String = projects
-            .iter()
-            .map(|p| video_card(ctx, p, &st, jobs))
-            .collect();
-        format!("<div class='grid'>{cards}</div>")
-    };
-    format!("{pending}{}{list}", errors_card(ctx, &errors))
+    format!(
+        "<form method='post' action='/creator/approve' class='cr-inline-form'>{}\
+<input type='hidden' name='slug' value=\"{}\"><input type='hidden' name='on' value='{on}'>\
+<button type='submit' class='cr-btn {class}'>{} {}</button></form>",
+        ctx.csrf_input(),
+        h(&v.p.slug),
+        icons::icon(icon),
+        h(&label)
+    )
 }
 
 fn copy_button(ctx: &UiCtx, value: &str, label: &str) -> String {
     format!(
-        "<button type='button' class='btn btn-neutral' data-copy=\"{}\" data-copied-label=\"{}\">{} <span data-copy-label>{}</span></button>",
+        "<button type='button' class='cr-btn cr-btn-plain cr-btn-small' data-copy=\"{}\" data-copied-label=\"{}\">{} <span data-copy-label>{}</span></button>",
         h(value),
         h(&ctx.t("Copied")),
         icons::icon("content_copy"),
@@ -766,34 +839,30 @@ fn copy_button(ctx: &UiCtx, value: &str, label: &str) -> String {
     )
 }
 
-/// A labelled read-only field with its Copy button; "Not available" and no button
-/// when there is nothing to copy.
-fn copy_field(ctx: &UiCtx, label: &str, value: &str, multiline: bool) -> String {
+/// One copyable field; nothing at all when it is blank. A long multi-line value is
+/// clamped with a Show more control.
+fn copy_field(ctx: &UiCtx, id: &str, label: &str, value: &str, clamp: bool) -> String {
     if value.trim().is_empty() {
-        return format!(
-            "<div class='section-subtitle'>{}</div>{}",
-            h(label),
-            subtitle(&ctx.t("Not available"))
-        );
+        return String::new();
     }
-    let field = if multiline {
+    let long = clamp && value.chars().count() > CLAMP_CHARS;
+    let expand = if long {
         format!(
-            "<textarea readonly rows='4' aria-label=\"{}\" style='flex:1;'>{}</textarea>",
-            h(label),
-            h(value)
+            "<button type='button' class='cr-link' data-cr-expand aria-controls='{id}' aria-expanded='false' \
+data-more=\"{more}\" data-less=\"{}\">{more}</button>",
+            h(&ctx.t("Show less")),
+            more = h(&ctx.t("Show more"))
         )
     } else {
-        format!(
-            "<input type='text' readonly value=\"{}\" aria-label=\"{}\" style='flex:1;'>",
-            h(value),
-            h(label)
-        )
+        String::new()
     };
     format!(
-        "<div class='section-subtitle'>{}</div>\
-<div style='display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.5rem;'>{field}{}</div>",
+        "<div class='cr-field'><div class='cr-field-head'><span class='cr-label'>{}</span>{}</div>\
+<p class='cr-field-text{}' id='{id}'>{}</p>{expand}</div>",
         h(label),
-        copy_button(ctx, value, &ctx.t("Copy"))
+        copy_button(ctx, value, &ctx.t("Copy")),
+        if long { " cr-clamp" } else { "" },
+        h(value)
     )
 }
 
@@ -813,93 +882,200 @@ fn hashtags(c: &PublishCopy) -> String {
         .join(" ")
 }
 
-fn platform_block(
+fn platform_group(
     ctx: &UiCtx,
-    slug: &str,
+    v: &VideoView<'_>,
     (key, label): (&str, &str),
-    copy: Option<&PublishCopy>,
+    c: &PublishCopy,
     is_published: bool,
+    open: bool,
 ) -> String {
-    let pill = if is_published {
+    let base = format!("{}-{key}", v.dom_id);
+    let tags = hashtags(c);
+    let all = [c.title.as_str(), c.caption.as_str(), tags.as_str()]
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let fields = if all.is_empty() {
+        subtitle(&ctx.t("This platform has no text for this video yet."))
+    } else {
         format!(
-            " <span class='pill pill-green'>{}</span>",
-            h(&ctx.t("Published"))
+            "{}{}{}",
+            copy_field(
+                ctx,
+                &format!("{base}-title"),
+                &ctx.t("Title"),
+                &c.title,
+                false
+            ),
+            copy_field(
+                ctx,
+                &format!("{base}-caption"),
+                &ctx.t("Caption"),
+                &c.caption,
+                true
+            ),
+            copy_field(
+                ctx,
+                &format!("{base}-tags"),
+                &ctx.t("Hashtags"),
+                &tags,
+                false
+            ),
         )
+    };
+    let copy_all = if all.is_empty() {
+        String::new()
+    } else {
+        copy_button(ctx, &all, &ctx.t("Copy all"))
+    };
+    let (on, toggle) = if is_published {
+        ("0", ctx.t("Mark as not published"))
+    } else {
+        ("1", ctx.t("Mark as published"))
+    };
+    let badge = if is_published {
+        pill("ok", &ctx.t("Published"))
     } else {
         String::new()
     };
-    let body = match copy {
-        None => subtitle(&ctx.t("Not available")),
-        Some(c) => {
-            let tags = hashtags(c);
-            let all = [c.title.as_str(), c.caption.as_str(), tags.as_str()]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            let (on, toggle) = if is_published {
-                ("0", ctx.t("Mark as not published"))
-            } else {
-                ("1", ctx.t("Mark as published"))
-            };
-            let copy_all = if all.trim().is_empty() {
-                String::new()
-            } else {
-                copy_button(ctx, &all, &ctx.t("Copy all"))
-            };
-            format!(
-                "{}{}{}<div class='account-actions'>{copy_all}\
-<form method='post' action='/creator/published' class='daemon-action-form'>{}\
-<input type='hidden' name='slug' value=\"{}\"><input type='hidden' name='platform' value='{key}'>\
-<input type='hidden' name='on' value='{on}'><button type='submit' class='btn btn-primary'>{} {}</button></form></div>",
-                copy_field(ctx, &ctx.t("Title"), &c.title, false),
-                copy_field(ctx, &ctx.t("Caption"), &c.caption, true),
-                copy_field(ctx, &ctx.t("Hashtags"), &tags, false),
-                ctx.csrf_input(),
-                h(slug),
-                icons::icon("send"),
-                h(&toggle)
-            )
-        }
-    };
     format!(
-        "<div class='project-block'><h3>{}{pill}</h3>{body}</div>",
-        h(label)
+        "<details class='cr-group'{}><summary><span class='cr-group-title'>{}</span>{badge}\
+<span class='cr-chevron' aria-hidden='true'></span></summary><div class='cr-group-body'>{fields}\
+<div class='cr-group-actions'>{copy_all}<form method='post' action='/creator/published' class='cr-inline-form'>{}\
+<input type='hidden' name='slug' value=\"{}\"><input type='hidden' name='platform' value='{key}'>\
+<input type='hidden' name='on' value='{on}'><button type='submit' class='cr-btn cr-btn-plain cr-btn-small'>{} {}</button></form></div></div></details>",
+        if open { " open" } else { "" },
+        h(label),
+        ctx.csrf_input(),
+        h(&v.p.slug),
+        icons::icon("send"),
+        h(&toggle)
     )
 }
 
-fn publish_tab(ctx: &UiCtx) -> String {
+fn publish_html(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
+    let done = st.published.get(&v.p.slug);
+    let groups: Vec<String> = PLATFORMS
+        .iter()
+        .filter_map(|(key, label)| {
+            let copy = match *key {
+                "wechat" => v.p.wechat.as_ref(),
+                _ => v.p.douyin.as_ref(),
+            }?;
+            let is_published = done.is_some_and(|d| d.iter().any(|x| x == key));
+            Some((*key, *label, copy, is_published))
+        })
+        .enumerate()
+        .map(|(i, (key, label, copy, is_published))| {
+            platform_group(ctx, v, (key, label), copy, is_published, i == 0)
+        })
+        .collect();
+    let body = if groups.is_empty() {
+        format!(
+            "<p class='cr-muted cr-publish-empty'>{}</p>",
+            h(&ctx.t("No publish text yet. When inspire-video writes a WeChat or Douyin title, caption and hashtags for this video, they show up here."))
+        )
+    } else {
+        groups.concat()
+    };
+    format!(
+        "<div class='cr-publish'><div class='cr-label'>{}</div>{body}</div>",
+        h(&ctx.t("Publish"))
+    )
+}
+
+fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
+    let player = match &v.p.mp4 {
+        Some(mp4) => {
+            let poster =
+                v.p.cover
+                    .as_deref()
+                    .map(|c| format!(" poster=\"{}\"", media_url(&v.p.slug, c)))
+                    .unwrap_or_default();
+            // `data-src`: the video loads only when the dialog opens.
+            format!(
+                "<video controls playsinline preload='none' data-src=\"{}\"{poster}></video>",
+                media_url(&v.p.slug, mp4)
+            )
+        }
+        None => format!(
+            "<div class='cr-player-empty'>{}</div>",
+            h(&ctx.t("No video file"))
+        ),
+    };
+    let source = match v.p.source_url.as_deref().and_then(https_link) {
+        Some(u) => format!(
+            "<a class='cr-btn cr-btn-plain' href=\"{}\" target='_blank' rel='noopener noreferrer'>{} {}</a>",
+            h(u),
+            icons::icon("open_in_new"),
+            h(&ctx.t("Source"))
+        ),
+        None => String::new(),
+    };
+    let log = v.last_job.map(|j| log_link(ctx, j)).unwrap_or_default();
+    let stop = v
+        .rendering
+        .map(|j| stop_form(ctx, j, "videos"))
+        .unwrap_or_default();
+    let created = v.p.created_at.as_deref().map(when).unwrap_or_default();
+    format!(
+        "<dialog class='cr-dialog' id='{id}' data-slug=\"{}\" aria-labelledby='{id}-title'>\
+<div class='cr-dialog-inner'><header class='cr-dialog-head'><div class='cr-dialog-titles'>\
+<h2 id='{id}-title'>{}</h2><div class='cr-badges'>{}<span class='cr-meta'>{}</span></div></div>\
+<button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
+<div class='cr-dialog-body'><div class='cr-player'>{player}</div><div class='cr-details'>\
+<div class='cr-actions'>{}{source}{log}{stop}</div>{}</div></div></div></dialog>",
+        h(&v.p.slug),
+        h(&v.p.title),
+        pill(v.status_kind, &v.status),
+        h(&created),
+        h(&ctx.t("Close")),
+        icons::icon("close"),
+        approve_form(ctx, v),
+        publish_html(ctx, v, st),
+        id = v.dom_id
+    )
+}
+
+fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     let root = videos_root(ctx);
     let (projects, errors) = videos::list_projects(&root);
     let st = cstate::load(&state_path(ctx));
-    let list: String = if projects.is_empty() {
+    let known: Vec<String> = projects
+        .iter()
+        .filter_map(|p| p.source_url.as_deref())
+        .map(|u| valid_source_url(u).unwrap_or_else(|_| u.to_string()))
+        .collect();
+    let pending: Vec<&JobRecord> = jobs
+        .iter()
+        .filter(|j| j.kind == JobKind::Generate && !known.contains(&j.key))
+        .filter(|j| j.state == "running" || j.state == "failed")
+        .take(JOBS_SHOWN)
+        .collect();
+    let pending = jobs_list(ctx, &ctx.t("Generating"), &pending, "videos");
+    let list = if projects.is_empty() {
         no_videos(ctx, &root)
     } else {
-        projects
+        let views: Vec<VideoView<'_>> = projects
             .iter()
-            .map(|p| {
-                let done = st.published.get(&p.slug);
-                let blocks: String = PLATFORMS
-                    .iter()
-                    .map(|(key, label)| {
-                        let copy = match *key {
-                            "wechat" => p.wechat.as_ref(),
-                            _ => p.douyin.as_ref(),
-                        };
-                        let is_published = done.is_some_and(|d| d.iter().any(|x| x == key));
-                        platform_block(ctx, &p.slug, (key, label), copy, is_published)
-                    })
-                    .collect();
-                card(
-                    "send",
-                    &p.title,
-                    &format!("<div class='grid'>{blocks}</div>"),
-                )
-            })
-            .collect()
+            .enumerate()
+            .map(|(i, p)| video_view(ctx, i, p, &st, jobs))
+            .collect();
+        let posters: String = views.iter().map(|v| poster_card(ctx, v)).collect();
+        let dialogs: String = views.iter().map(|v| video_dialog(ctx, v, &st)).collect();
+        format!(
+            "{}{dialogs}",
+            section(
+                &ctx.t("Videos"),
+                "",
+                &format!("<ul class='cr-grid'>{posters}</ul>")
+            )
+        )
     };
-    format!("{}{list}", errors_card(ctx, &errors))
+    format!("{pending}{}{list}", errors_card(ctx, &errors))
 }
 
 fn page(ctx: &UiCtx) -> UiResponse {
@@ -908,7 +1084,6 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let jobs = jobs::list_jobs(&jobs_dir(ctx));
     let body = match tab {
         "videos" => videos_tab(ctx, &jobs),
-        "publish" => publish_tab(ctx),
         _ => discover_tab(ctx, &jobs),
     };
     let head = format!(
@@ -925,7 +1100,10 @@ fn page(ctx: &UiCtx) -> UiResponse {
         "Creator · LoopX Engineering",
         "creator",
         &default_badge(ctx),
-        &format!("{head}{body}"),
+        &format!(
+            "<style>{CREATOR_CSS}</style><div class='cr'>{head}{body}</div>{}<script>{CREATOR_JS}</script>",
+            log_sheet(ctx)
+        ),
         ShellOpts::default(),
     ))
 }
@@ -1079,8 +1257,15 @@ mod tests {
         assert!(body.contains("href='/creator?tab=videos'"), "{body}");
         let videos = fx.get("/creator?tab=videos").body_text();
         assert!(videos.contains("No videos yet"), "{videos}");
+        // The old Publish tab is gone; its links land on Videos.
+        assert!(!body.contains("tab=publish"), "{body}");
+        assert!(!body.contains(">Publish</a>"), "{body}");
         let publish = fx.get("/creator?tab=publish").body_text();
         assert!(publish.contains("No videos yet"), "{publish}");
+        assert!(
+            publish.contains("href='/creator?tab=videos' aria-current='page'"),
+            "{publish}"
+        );
     }
 
     #[test]
@@ -1106,6 +1291,18 @@ mod tests {
         assert!(body.contains("I own this video or have permission to reuse it"));
         assert!(body.contains("name='rights' value='1' required"), "{body}");
         assert!(body.contains("action='/creator/generate'"));
+        // Apple-style item: rank, muted meta, badge, small pill, segments, footer form.
+        assert!(body.contains("<span class='cr-rank'>1</span>"), "{body}");
+        assert!(
+            body.contains("<span class='cr-badge'>Excellent · 81.2</span>"),
+            "{body}"
+        );
+        assert!(
+            body.contains("<span class='cr-pill cr-pill-ok'>Ready to generate</span>"),
+            "{body}"
+        );
+        assert!(body.contains("<span class='cr-chip'>"), "{body}");
+        assert!(!body.contains("class='card"), "{body}");
         assert!(
             body.contains("flash flash-danger") && body.contains("catalog-bad.json"),
             "{body}"
@@ -1286,63 +1483,145 @@ mod tests {
     }
 
     #[test]
-    fn videos_tab_shows_player_cover_and_status() {
+    fn videos_tab_shows_poster_cards_and_a_dialog_per_video() {
         let fx = Fx::new();
         write_project(&fx, "T", true);
         let body = fx.get("/creator?tab=videos").body_text();
+        // A poster card that opens its dialog; no inline player on the page.
         assert!(
-            body.contains("<video controls preload='metadata'"),
+            body.contains("<button type='button' class='cr-poster' data-cr-open='cr-video-0' aria-haspopup='dialog'"),
             "{body}"
         );
         assert!(
-            body.contains("src=\"/creator/media/demo/demo.mp4\""),
+            body.contains("<img src=\"/creator/media/demo/cover.png\""),
             "{body}"
         );
         assert!(
-            body.contains("poster=\"/creator/media/demo/cover.png\""),
+            body.contains("<span class='cr-poster-title'>Demo short</span>"),
             "{body}"
         );
         assert!(
-            body.contains("<span class='pill pill-grey'>Ready for review</span>"),
+            body.contains("<dialog class='cr-dialog' id='cr-video-0' data-slug=\"demo\" aria-labelledby='cr-video-0-title'>"),
+            "{body}"
+        );
+        // The video URL waits in data-src until the dialog opens.
+        assert!(
+            body.contains("<video controls playsinline preload='none' data-src=\"/creator/media/demo/demo.mp4\" poster=\"/creator/media/demo/cover.png\"></video>"),
+            "{body}"
+        );
+        assert!(
+            !body.contains(" src=\"/creator/media/demo/demo.mp4\""),
+            "{body}"
+        );
+        assert_eq!(body.matches("<video").count(), 1, "{body}");
+        assert!(body.contains("data-cr-close"), "{body}");
+        assert!(
+            body.contains("<span class='cr-pill cr-pill-neutral'>Ready for review</span>"),
             "{body}"
         );
         assert!(body.contains("action='/creator/approve'"));
         fx.running_job(SOURCE);
         let body = fx.get("/creator?tab=videos").body_text();
         assert!(
-            body.contains("<span class='pill pill-grey'>Rendering</span>"),
+            body.contains("<span class='cr-pill cr-pill-accent'>Rendering</span>"),
             "{body}"
         );
         assert!(!body.contains("action='/creator/approve'"), "{body}");
+        // The dialog carries the job's log link and Stop while it renders.
+        assert!(
+            body.contains("href='/creator/jobs/20261104T000000-aaaaaaaa/log'"),
+            "{body}"
+        );
+        assert!(body.contains("action='/creator/stop'"), "{body}");
     }
 
     #[test]
-    fn publish_tab_escapes_hostile_copy() {
+    fn the_dialog_holds_the_publish_groups_with_escaped_copy() {
         let fx = Fx::new();
         write_project(&fx, "\"><script>alert(1)</script>", true);
-        let body = fx.get("/creator?tab=publish").body_text();
+        let body = fx.get("/creator?tab=videos").body_text();
+        let dialog = &body[body.find("<dialog class='cr-dialog'").unwrap()..];
+        let dialog = &dialog[..dialog.find("</dialog>").unwrap()];
         assert!(!body.contains("<script>alert(1)"), "{body}");
         assert!(!body.contains("\"><script>"), "{body}");
         assert!(
-            body.contains("data-copy=\"&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;\""),
-            "{body}"
+            dialog.contains("data-copy=\"&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;\""),
+            "{dialog}"
         );
-        assert!(body.contains("it&#x27;s a caption"), "{body}");
-        assert!(body.contains("#grow #learn"), "{body}");
-        assert!(body.contains("Copy all"));
-        assert!(body.contains("action='/creator/published'"));
+        assert!(dialog.contains("it&#x27;s a caption"), "{dialog}");
+        assert!(dialog.contains("#grow #learn"), "{dialog}");
+        assert!(dialog.contains("Copy all"), "{dialog}");
+        assert!(dialog.contains("data-copied-label=\"Copied\""), "{dialog}");
+        assert!(dialog.contains("action='/creator/published'"), "{dialog}");
+        assert!(dialog.contains("name='csrf_token'"), "{dialog}");
+        // Two disclosure groups, the first one open.
+        assert!(
+            dialog.contains("<details class='cr-group' open><summary><span class='cr-group-title'>WeChat</span>"),
+            "{dialog}"
+        );
+        assert!(
+            dialog.contains(
+                "<details class='cr-group'><summary><span class='cr-group-title'>Douyin</span>"
+            ),
+            "{dialog}"
+        );
+        assert!(!dialog.contains("Not available"), "{dialog}");
     }
 
     #[test]
-    fn publish_missing_platform_shows_not_available() {
+    fn a_long_caption_gets_a_show_more_control() {
         let fx = Fx::new();
-        write_project(&fx, "T", false);
-        let body = fx.get("/creator?tab=publish").body_text();
+        let p = fx.project();
+        std::fs::write(p.join("demo.mp4"), b"x").unwrap();
+        let long = "word ".repeat(60);
+        std::fs::write(
+            p.join("project.json"),
+            json!({"title": "Demo", "video": "demo.mp4", "publish": {
+                "wechat": {"title": "t", "caption": long, "hashtags": []},
+                "douyin": {"title": "t", "caption": "short", "hashtags": []}}})
+            .to_string(),
+        )
+        .unwrap();
+        let body = fx.get("/creator?tab=videos").body_text();
         assert!(
-            body.contains("Douyin") && body.contains("Not available"),
+            body.contains("<p class='cr-field-text cr-clamp' id='cr-video-0-wechat-caption'>"),
             "{body}"
         );
-        assert!(body.contains("WeChat"));
+        assert!(
+            body.contains("aria-controls='cr-video-0-wechat-caption' aria-expanded='false'"),
+            "{body}"
+        );
+        assert!(body.contains("Show more"), "{body}");
+        assert_eq!(
+            body.matches("data-cr-expand aria-controls").count(),
+            1,
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_video_without_publish_text_shows_one_calm_sentence() {
+        let fx = Fx::new();
+        let p = fx.project();
+        std::fs::write(p.join("demo.mp4"), b"x").unwrap();
+        std::fs::write(
+            p.join("project.json"),
+            json!({"title": "Demo", "video": "demo.mp4"}).to_string(),
+        )
+        .unwrap();
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert_eq!(body.matches("No publish text yet.").count(), 1, "{body}");
+        assert!(!body.contains("Not available"), "{body}");
+        assert!(!body.contains("<details class='cr-group'"), "{body}");
+        assert!(!body.contains("action='/creator/published'"), "{body}");
+        // One platform missing: only the other one is shown.
+        write_project(&fx, "T", false);
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(
+            body.contains("WeChat") && !body.contains("Douyin"),
+            "{body}"
+        );
+        assert!(!body.contains("No publish text yet."), "{body}");
     }
 
     #[test]
@@ -1350,7 +1629,11 @@ mod tests {
         let fx = Fx::new();
         write_project(&fx, "T", true);
         let (loc, ok) = flash_of(&fx.post("/creator/approve", "csrf_token=tok&slug=demo&on=1"));
-        assert!(loc.starts_with("/creator?tab=videos&flash="), "{loc}");
+        // Back on Videos with the video's dialog reopened.
+        assert!(
+            loc.starts_with("/creator?tab=videos&open=demo&flash="),
+            "{loc}"
+        );
         assert_eq!(ok, "1");
         assert!(cstate::load(&fx.state_path()).approved.contains("demo"));
         assert!(fx
@@ -1364,16 +1647,19 @@ mod tests {
             "/creator/published",
             "csrf_token=tok&slug=demo&platform=wechat&on=1",
         ));
-        assert!(loc.starts_with("/creator?tab=publish&flash="), "{loc}");
+        assert!(
+            loc.starts_with("/creator?tab=videos&open=demo&flash="),
+            "{loc}"
+        );
         assert_eq!(ok, "1");
         assert_eq!(
             cstate::load(&fx.state_path()).published.get("demo"),
             Some(&vec!["wechat".to_string()])
         );
         assert!(fx
-            .get("/creator?tab=publish")
+            .get("/creator?tab=videos")
             .body_text()
-            .contains("Published"));
+            .contains("<span class='cr-pill cr-pill-ok'>Published</span>"));
 
         // Unknown projects and platforms change nothing.
         let (_, ok) = flash_of(&fx.post("/creator/approve", "csrf_token=tok&slug=ghost&on=1"));
@@ -1447,7 +1733,7 @@ mod tests {
         for tab in ["discover", "videos"] {
             let body = fx.get(&format!("/creator?tab={tab}")).body_text();
             assert!(
-                body.contains("<span class='pill pill-red'>Failed</span>"),
+                body.contains("<span class='cr-pill cr-pill-error'>Failed</span>"),
                 "{tab}: {body}"
             );
             assert!(!body.contains(">Done</span>"), "{tab}: {body}");
@@ -1461,9 +1747,29 @@ mod tests {
         finished_job(&fx, ok, "loopx-exit=0\n");
         let body = fx.get("/creator").body_text();
         assert!(
-            body.contains("<span class='pill pill-green'>Done</span>"),
+            body.contains("<span class='cr-pill cr-pill-ok'>Done</span>"),
             "{body}"
         );
+    }
+
+    #[test]
+    fn view_log_opens_an_in_page_sheet_and_keeps_the_link_as_a_fallback() {
+        let fx = Fx::new();
+        let id = "20261105T000000-sheet000";
+        finished_job(&fx, id, "sh: claude: command not found\nloopx-exit=127\n");
+        let body = fx.get("/creator?tab=discover").body_text();
+        // The link still works without the script, and the script hooks it.
+        assert!(
+            body.contains(&format!(
+                "<a class='cr-btn cr-btn-plain' href='/creator/jobs/{id}/log' data-cr-log"
+            )),
+            "{body}"
+        );
+        // One right-hand sheet per page, labelled in the request's language.
+        assert_eq!(body.matches("<dialog class='cr-sheet'").count(), 1, "{body}");
+        assert!(body.contains("aria-labelledby='cr-sheet-title'"), "{body}");
+        assert!(body.contains("data-failed-label=\"Could not load the log.\""), "{body}");
+        assert!(body.contains("<pre class='cr-sheet-log'"), "{body}");
     }
 
     #[test]
@@ -1527,7 +1833,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_publish_fields_say_not_available_without_a_copy_button() {
+    fn empty_publish_fields_have_no_copy_button() {
         let fx = Fx::new();
         let p = fx.project();
         std::fs::write(p.join("demo.mp4"), b"x").unwrap();
@@ -1539,12 +1845,59 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let body = fx.get("/creator?tab=publish").body_text();
+        let body = fx.get("/creator?tab=videos").body_text();
         // Only Douyin's title and its Copy all have anything to copy.
         assert_eq!(body.matches("data-copy=").count(), 2, "{body}");
         assert!(body.contains("data-copy=\"Only a title\""), "{body}");
         assert!(!body.contains("data-copy=\"\""), "{body}");
-        assert!(body.matches("Not available").count() >= 5, "{body}");
+        assert_eq!(
+            body.matches("This platform has no text for this video yet.")
+                .count(),
+            1,
+            "{body}"
+        );
+        assert!(!body.contains("Not available"), "{body}");
+    }
+
+    #[test]
+    fn the_generate_form_posts_rights_and_csrf_from_the_item_footer() {
+        let fx = Fx::new();
+        std::fs::write(fx.scout().join("catalog-x.json"), catalog()).unwrap();
+        let body = fx.get("/creator").body_text();
+        let form = &body[body
+            .find("<form method='post' action='/creator/generate'")
+            .unwrap()..];
+        let form = &form[..form.find("</form>").unwrap()];
+        assert!(form.contains("class='cr-item-actions'"), "{form}");
+        assert!(form.contains("name='csrf_token' value=\"tok\""), "{form}");
+        assert!(
+            form.contains(&format!(
+                "<input type='hidden' name='url' value=\"{SOURCE}\">"
+            )),
+            "{form}"
+        );
+        assert!(
+            form.contains(
+                "<label class='cr-check'><input type='checkbox' name='rights' value='1' required>"
+            ),
+            "{form}"
+        );
+        assert!(
+            form.contains("<button type='submit' class='cr-btn cr-btn-primary cr-generate'>"),
+            "{form}"
+        );
+        // More than two segments fold into a disclosure.
+        let three = json!({"generated_at": "2026-11-04T08:00:00Z", "videos": [
+            {"rank": 1, "title": "Many", "url": SOURCE, "recommended_segments": [
+                {"start_seconds": 1, "end_seconds": 2, "description": "one"},
+                {"start_seconds": 3, "end_seconds": 4, "description": "two"},
+                {"start_seconds": 5, "end_seconds": 6, "description": "three"}]}]});
+        std::fs::write(fx.scout().join("catalog-y.json"), three.to_string()).unwrap();
+        let body = fx.get("/creator").body_text();
+        assert!(
+            body.contains("<details class='cr-more'><summary>More segments (1)</summary>"),
+            "{body}"
+        );
     }
 
     #[test]

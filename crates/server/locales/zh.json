@@ -1526,5 +1526,13 @@
   "View log": "查看日志",
   "Approving confirms you own this video or have permission to reuse it.": "批准即表示你确认拥有此视频或已获准重新使用。",
   "Approved, job started: {tool} {summary}": "已批准，任务已启动：{tool} {summary}",
-  "Nothing started: remove the parameters after the video id from the link (for example &list= or &t=)": "未启动：请从链接中删除视频 ID 之后的参数（例如 &list= 或 &t=）"
+  "Nothing started: remove the parameters after the video id from the link (for example &list= or &t=)": "未启动：请从链接中删除视频 ID 之后的参数（例如 &list= 或 &t=）",
+  "More segments ({count})": "更多片段（{count}）",
+  "Open {title}": "打开 {title}",
+  "Show more": "显示更多",
+  "Show less": "收起",
+  "This platform has no text for this video yet.": "此平台还没有这个视频的文案。",
+  "No publish text yet. When inspire-video writes a WeChat or Douyin title, caption and hashtags for this video, they show up here.": "还没有发布文案。inspire-video 为这个视频写好微信或抖音的标题、文案和话题标签后，会显示在这里。",
+  "Job log": "任务日志",
+  "Could not load the log.": "无法加载日志。"
 }
