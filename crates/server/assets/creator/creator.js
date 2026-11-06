@@ -40,8 +40,21 @@
       video.removeAttribute('src');
       video.load();
     }
+    dialog.querySelectorAll('details.cr-menu[open]').forEach(function (m) { m.removeAttribute('open'); });
     if (dialog.__opener && document.contains(dialog.__opener)) dialog.__opener.focus();
   }
+
+  // The More menu closes on an outside click and on Escape (before the dialog does).
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details.cr-menu[open]').forEach(function (m) {
+      if (!m.contains(e.target)) m.removeAttribute('open');
+    });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var m = document.querySelector('details.cr-menu[open]');
+    if (m) { m.removeAttribute('open'); e.preventDefault(); e.stopPropagation(); }
+  }, true);
 
   // One publish group open at a time. The `name` attribute does this in
   // current browsers; this covers the rest.

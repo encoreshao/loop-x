@@ -20,7 +20,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
-- Creator → Videos: the video popup is larger, with the player filling its height, a sticky actions bar (Share, Open folder, Source, Log on the left; publish state, Stop and Delete on the right), and a publish panel where opening WeChat or Douyin closes the other.
+- Creator → Videos: the video popup is larger, with the player filling its height, a sticky actions bar that keeps only Approve, Share and Stop in view and puts Open folder, Source, View log, the published toggle and Delete in a More menu, and a publish panel where opening WeChat or Douyin closes the other.
 - A Generate job whose agent ends with `Result: incomplete — <reason>` (a required check skipped, something unverified) now shows Incomplete with that reason and counts as failed, instead of Done.
 - The Office now has five colleagues around a bigger round desk: three share the loops, a video colleague (E4) works on the Creator's Find videos and Generate video jobs, and a chat colleague (E5) answers the chat.
 - When chat can't use a connector because no account exists (or it is turned off), the error now says where to add or enable it, and that each Google service (Calendar, Docs, Sheets, Slides) needs its own sign-in.

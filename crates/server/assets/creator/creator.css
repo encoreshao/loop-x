@@ -340,3 +340,17 @@
 .cr-latest-topic { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--md-outline-variant); font-size: 0.875rem; min-width: 0; }
 .cr-latest-label { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-on-surface-variant); }
 .cr-latest-topic strong { font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Actions bar: the must-do actions stay out; the rest wait in a More menu. */
+.cr-toolbar { justify-content: flex-start; }
+.cr-menu { position: relative; margin-left: auto; }
+.cr-menu > summary { list-style: none; }
+.cr-menu > summary::-webkit-details-marker { display: none; }
+.cr-menu[open] > summary { background: var(--md-surface-container-high); }
+.cr-menu-list { position: absolute; right: 0; top: calc(100% + 0.4rem); z-index: 5; min-width: 13.5rem; display: flex; flex-direction: column; gap: 0.1rem; padding: 0.35rem; border-radius: 14px; border: 1px solid var(--md-outline-variant); background: color-mix(in srgb, var(--md-surface) 92%, transparent); -webkit-backdrop-filter: saturate(1.6) blur(18px); backdrop-filter: saturate(1.6) blur(18px); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22); }
+.cr-menu-list .cr-inline-form, .cr-menu-list form { display: block; margin: 0; }
+.cr-menu-list .cr-btn { width: 100%; height: 2.125rem; justify-content: flex-start; border-radius: 9px; padding: 0 0.7rem; }
+.cr-menu-list .cr-btn:hover { background: var(--md-surface-container-high); }
+.cr-menu-sep { height: 1px; margin: 0.25rem 0.35rem; background: var(--md-outline-variant); }
+.cr-menu-sep:last-child, .cr-menu-sep:empty:first-child { display: none; }
+@media (prefers-reduced-motion: no-preference) { .cr-menu[open] .cr-menu-list { animation: cr-fade-in 160ms cubic-bezier(0.32, 0.72, 0, 1); } }

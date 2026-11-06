@@ -2334,8 +2334,9 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
 <h2 id='{id}-title'>{}</h2><div class='cr-badges'>{}<span class='cr-meta'>{}</span></div></div>\
 <button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
 <div class='cr-dialog-body'><div class='cr-player'>{player}</div><div class='cr-details'>\
-<div class='cr-toolbar'><div class='cr-actions'>{}{share}{folder}{source}{log}</div>\
-<div class='cr-actions cr-actions-end'>{publish}{stop}{delete}</div></div>{}</div></div></div></dialog>",
+<div class='cr-toolbar'><div class='cr-actions'>{}{share}{stop}</div>\
+<details class='cr-menu'><summary class='cr-btn cr-btn-plain' aria-label=\"{more}\" title=\"{more}\">{} {more}</summary>\
+<div class='cr-menu-list'>{folder}{source}{log}{publish}<div class='cr-menu-sep'></div>{delete}</div></details></div>{}</div></div></div></dialog>",
         h(&v.p.slug),
         h(&v.p.title),
         pill(v.status_kind, &v.status),
@@ -2343,8 +2344,10 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
         h(&ctx.t("Close")),
         icons::icon("close"),
         approve_form(ctx, v),
+        icons::icon("more_horiz"),
         publish_html(ctx, v, st),
-        id = v.dom_id
+        id = v.dom_id,
+        more = h(&ctx.t("More"))
     )
 }
 

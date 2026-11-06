@@ -1638,5 +1638,6 @@
   "The agent says it is not finished: {reason}": "智能体表示尚未完成：{reason}",
   "Retrying the video. Steps that already finished are reused.": "正在重试该视频，已完成的步骤会被复用。",
   "Could not retry the job: {detail}": "无法重试任务：{detail}",
-  "Latest topic": "最近的主题"
+  "Latest topic": "最近的主题",
+  "More": "更多"
 }
