@@ -13,6 +13,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Creator → Jobs: a **Retry** button on finished video jobs runs the job again under the same record, and the agent reuses the steps the first run completed. Generating from a link you already ran restarts that job instead of adding a new one.
+
 - Creator → Jobs shows the title of the video each finished Generate job made, and the Job log sheet has a Copy button for the whole log.
 
 ### Changed

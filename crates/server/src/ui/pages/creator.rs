@@ -44,6 +44,7 @@ pub fn register(r: &mut Registry) {
     r.get("/creator/jobs/:id/log", job_log);
     r.get("/creator/jobs/:id/status", job_status);
     r.post("/creator/jobs/delete", delete_job);
+    r.post("/creator/jobs/retry", retry_job);
     r.post("/creator/jobs/clear", clear_jobs);
     r.post("/creator/generate", generate);
     r.post("/creator/scout", start_scout);
@@ -183,6 +184,35 @@ fn delete_job(ctx: &UiCtx) -> UiResponse {
         Err(e) => UiResponse::flash_redirect(
             false,
             &ctx.tf("Could not delete the job: {detail}", &[("detail", &e)]),
+            &to,
+        ),
+    }
+}
+
+/// Run a finished video job again; the agent reuses the steps the first run completed.
+fn retry_job(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let to = back("jobs");
+    if !ctx.state.spawn_processes {
+        return UiResponse::flash_redirect(
+            false,
+            &ctx.t("This server does not start agent jobs"),
+            &to,
+        );
+    }
+    match spawn::retry_generate(
+        &jobs_dir(ctx),
+        &ctx.state.user_home,
+        form.first("id").unwrap_or(""),
+    ) {
+        Ok(_) => UiResponse::flash_redirect(
+            true,
+            &ctx.t("Retrying the video. Steps that already finished are reused."),
+            &to,
+        ),
+        Err(e) => UiResponse::flash_redirect(
+            false,
+            &ctx.tf("Could not retry the job: {detail}", &[("detail", &e)]),
             &to,
         ),
     }
@@ -869,6 +899,19 @@ fn delete_form(ctx: &UiCtx, job: &JobRecord) -> String {
     )
 }
 
+/// Retry for a finished video job: it runs again under the same record.
+fn retry_form(ctx: &UiCtx, job: &JobRecord) -> String {
+    format!(
+        "<form method='post' action='/creator/jobs/retry' class='cr-inline-form'>{}\
+<input type='hidden' name='id' value=\"{}\">\
+<button type='submit' class='cr-btn cr-btn-plain'>{} {}</button></form>",
+        ctx.csrf_input(),
+        h(&job.id),
+        icons::icon("refresh"),
+        h(&ctx.t("Retry"))
+    )
+}
+
 /// Why the agent called a finished run incomplete (what it still needs), if it did.
 fn incomplete_note(ctx: &UiCtx, job: &JobRecord) -> String {
     if job.state != "incomplete" {
@@ -888,6 +931,8 @@ fn incomplete_note(ctx: &UiCtx, job: &JobRecord) -> String {
 fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, String>) -> String {
     let action = if job.state == "running" {
         stop_form(ctx, job, tab)
+    } else if job.kind == JobKind::Generate {
+        format!("{}{}", retry_form(ctx, job), delete_form(ctx, job))
     } else {
         delete_form(ctx, job)
     };
@@ -3668,6 +3713,27 @@ mod tests {
         assert!(fx.jobs().join("20261105T000003-genlive0.json").exists());
         let (_, ok) = flash_of(&fx.post("/creator/jobs/delete", "csrf_token=tok&id=nope"));
         assert_eq!(ok, "0");
+    }
+
+    #[test]
+    fn a_finished_video_job_offers_retry_but_a_running_or_scout_job_does_not() {
+        let fx = Fx::new();
+        fx.job("20261105T000001-scout000", "scout", "q", false, "boom\n");
+        fx.job("20261105T000002-genfail0", "generate", "https://example.com/talks/a", false, "boom\n");
+        fx.job("20261105T000003-genlive0", "generate", "https://example.com/talks/b", true, "");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert_eq!(body.matches("action='/creator/jobs/retry'").count(), 1, "{body}");
+        assert!(body.contains("value=\"20261105T000002-genfail0\""), "{body}");
+    }
+
+    #[test]
+    fn retry_is_refused_when_this_server_does_not_spawn_and_needs_csrf() {
+        let fx = Fx::new();
+        fx.job("20261105T000002-genfail0", "generate", "https://example.com/talks/a", false, "boom\n");
+        let (loc, ok) = flash_of(&fx.post("/creator/jobs/retry", "csrf_token=tok&id=20261105T000002-genfail0"));
+        assert_eq!(ok, "0");
+        assert!(loc.starts_with("/creator?tab=jobs"), "{loc}");
+        assert_eq!(fx.post("/creator/jobs/retry", "id=20261105T000002-genfail0").status, 403);
     }
 
     #[test]

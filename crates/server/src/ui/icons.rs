@@ -33,6 +33,7 @@ pub const NAMES: &[&str] = &[
     "code",
     "content_copy",
     "delete",
+    "refresh",
     "description",
     "dns",
     "download",

@@ -1635,5 +1635,7 @@
   "Posting draft notes": "Publication des notes de brouillon",
   "Incomplete": "Incomplet",
   "The agent says the video still needs work.": "L'agent indique que la vidéo nécessite encore du travail.",
-  "The agent says it is not finished: {reason}": "L'agent indique qu'elle n'est pas terminée : {reason}"
+  "The agent says it is not finished: {reason}": "L'agent indique qu'elle n'est pas terminée : {reason}",
+  "Retrying the video. Steps that already finished are reused.": "Nouvelle tentative de la vidéo. Les étapes déjà terminées sont réutilisées.",
+  "Could not retry the job: {detail}": "Impossible de relancer la tâche : {detail}"
 }

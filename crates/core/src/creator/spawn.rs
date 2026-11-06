@@ -459,7 +459,48 @@ fn start_generate_with(
         return Err("confirm you hold the rights to use this video first".to_string());
     }
     let url = super::valid_source_url(url)?;
-    let url = url.as_str();
+    // A link run before restarts that job (its files are reused) rather than adding a record.
+    let earlier = jobs::latest_finished(jobs_dir, JobKind::Generate, &url).map(|j| j.id);
+    launch_generate(jobs_dir, env, &url, earlier.as_deref(), spawn)
+}
+
+/// Run a finished Generate job again from the Jobs list; its earlier work is reused.
+pub fn retry_generate(jobs_dir: &Path, user_home: &Path, id: &str) -> Result<JobRecord, String> {
+    let (cli, loopx_home, exe) = (
+        crate::ai_cli_config::selected_cli(),
+        crate::config::home_dir(),
+        current_exe(),
+    );
+    let env = JobEnv {
+        cli: &cli,
+        user_home,
+        loopx_home: &loopx_home,
+        exe: &exe,
+    };
+    retry_generate_with(jobs_dir, &env, id, &spawn_agent)
+}
+
+fn retry_generate_with(
+    jobs_dir: &Path,
+    env: &JobEnv<'_>,
+    id: &str,
+    spawn: &SpawnFull<'_>,
+) -> Result<JobRecord, String> {
+    let job = jobs::get(jobs_dir, id).ok_or_else(|| "unknown job".to_string())?;
+    if job.kind != JobKind::Generate {
+        return Err("only a video generation job can be retried".to_string());
+    }
+    launch_generate(jobs_dir, env, &job.key, Some(id), spawn)
+}
+
+/// Start `url`'s Generate run: a new record, or `restart_id`'s record run again.
+fn launch_generate(
+    jobs_dir: &Path,
+    env: &JobEnv<'_>,
+    url: &str,
+    restart_id: Option<&str>,
+    spawn: &SpawnFull<'_>,
+) -> Result<JobRecord, String> {
     let cwd = generate_dir(env.user_home);
     if !cwd.is_dir() {
         return Err(format!(
@@ -467,7 +508,7 @@ fn start_generate_with(
             cwd.display()
         ));
     }
-    let prompt = jobs::generate_prompt(url, true);
+    let prompt = jobs::generate_prompt(url, true, restart_id.is_some());
     let fence = Fence {
         cwd: &cwd,
         user_home: env.user_home,
@@ -476,9 +517,11 @@ fn start_generate_with(
     };
     // Built up front so an unsupported CLI is refused before any job is recorded.
     let argv = generate_argv(env.cli, &prompt, &fence)?;
-    jobs::start(jobs_dir, JobKind::Generate, url, &|log| {
-        spawn(&argv, &cwd, log)
-    })
+    let run = |log: &Path| spawn(&argv, &cwd, log);
+    match restart_id {
+        Some(id) => jobs::restart(jobs_dir, id, &run),
+        None => jobs::start(jobs_dir, JobKind::Generate, url, &run),
+    }
 }
 
 fn start_scout_with(
@@ -865,7 +908,7 @@ mod tests {
         assert_eq!(argv[0], "claude");
         assert_eq!(
             argv.last().unwrap(),
-            &jobs::generate_prompt("https://example.com/v", true)
+            &jobs::generate_prompt("https://example.com/v", true, false)
         );
         assert!(denied(argv).contains(&format!("Bash({EXE}*)").as_str()));
         assert_eq!(cwd, &generate_dir(&home));
@@ -1192,5 +1235,99 @@ mod tests {
     fn empty_argv_is_error() {
         let d = tempfile::tempdir().unwrap();
         assert!(spawn_agent(&[], d.path(), &d.path().join("l.log")).is_err());
+    }
+
+    fn finished_generate(jobs_dir: &Path, id: &str, url: &str, state: &str) {
+        std::fs::create_dir_all(jobs_dir).unwrap();
+        std::fs::write(
+            jobs_dir.join(format!("{id}.json")),
+            serde_json::json!({"id": id, "kind": "generate", "key": url, "state": state,
+                               "pid": null, "started_at": "2026-11-05T00:00:00Z"})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(jobs_dir.join(format!("{id}.log")), "old\n").unwrap();
+    }
+
+    #[test]
+    fn a_duplicate_link_restarts_its_earlier_job_instead_of_adding_a_record() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        let jobs_dir = d.path().join("jobs");
+        finished_generate(
+            &jobs_dir,
+            "20261105T000000-prev0000",
+            "https://example.com/v",
+            "done",
+        );
+        let calls = Calls::default();
+        let rec = start_generate_with(
+            &jobs_dir,
+            &env("claude", &home),
+            "https://example.com/v",
+            true,
+            &recorder(&calls),
+        )
+        .unwrap();
+        assert_eq!(rec.id, "20261105T000000-prev0000");
+        assert_eq!(jobs::list_jobs(&jobs_dir).len(), 1);
+        let calls = calls.borrow();
+        assert_eq!(
+            calls[0].0.last().unwrap(),
+            &jobs::generate_prompt("https://example.com/v", true, true)
+        );
+        assert_eq!(std::fs::read_to_string(&rec.log_path).unwrap(), "");
+    }
+
+    #[test]
+    fn retrying_a_job_restarts_that_record_with_the_resume_prompt() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        let jobs_dir = d.path().join("jobs");
+        finished_generate(
+            &jobs_dir,
+            "20261105T000000-older000",
+            "https://example.com/v",
+            "failed",
+        );
+        finished_generate(
+            &jobs_dir,
+            "20261105T000001-newer000",
+            "https://example.com/v",
+            "failed",
+        );
+        let calls = Calls::default();
+        let rec = retry_generate_with(
+            &jobs_dir,
+            &env("claude", &home),
+            "20261105T000000-older000",
+            &recorder(&calls),
+        )
+        .unwrap();
+        assert_eq!(rec.id, "20261105T000000-older000");
+        assert_eq!(jobs::list_jobs(&jobs_dir).len(), 2);
+        assert!(calls.borrow()[0]
+            .0
+            .last()
+            .unwrap()
+            .contains("previous attempt"));
+        // not a generate job, not finished, or unknown: refused, nothing launched
+        assert!(
+            retry_generate_with(&jobs_dir, &env("claude", &home), "nope", &recorder(&calls))
+                .is_err()
+        );
+        assert!(
+            retry_generate_with(
+                &jobs_dir,
+                &env("claude", &home),
+                "20261105T000000-older000",
+                &recorder(&calls)
+            )
+            .is_err(),
+            "already running"
+        );
+        assert_eq!(calls.borrow().len(), 1);
     }
 }
