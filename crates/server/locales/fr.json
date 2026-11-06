@@ -1639,5 +1639,12 @@
   "Retrying the video. Steps that already finished are reused.": "Nouvelle tentative de la vidéo. Les étapes déjà terminées sont réutilisées.",
   "Could not retry the job: {detail}": "Impossible de relancer la tâche : {detail}",
   "Latest topic": "Dernier sujet",
-  "More": "Plus"
+  "More": "Plus",
+  "Custom instructions": "Instructions personnalisées",
+  "Conventions, style, areas to avoid or extra checks for this project": "Conventions, style, zones à éviter ou vérifications supplémentaires pour ce projet",
+  "Guidance only: they never override the loop's safety rules.": "Simple guide : elle ne remplace jamais les règles de sécurité de la boucle.",
+  "Save instructions": "Enregistrer les instructions",
+  "Custom instructions are limited to {max} characters": "Les instructions personnalisées sont limitées à {max} caractères",
+  "Cleared custom instructions for {name}": "Instructions personnalisées supprimées pour {name}",
+  "Saved custom instructions for {name}": "Instructions personnalisées enregistrées pour {name}"
 }

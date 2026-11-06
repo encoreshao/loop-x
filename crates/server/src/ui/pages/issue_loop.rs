@@ -103,6 +103,9 @@ pub fn register(r: &mut Registry) {
             )
         })
     });
+    r.post("/settings/loop-projects/:alias/instructions", |c| {
+        flash_post(c, |c, f| save_instructions(c, c.param("alias"), f.first("custom_instructions").unwrap_or("")))
+    });
     r.post("/settings/loop-projects/connected", |c| {
         flash_post(c, |c, f| {
             add_connected_project(
@@ -1458,6 +1461,29 @@ fn table(headers: &[String], rows: &[String]) -> String {
 /// The Track-on / edit form for `alias`, prefilled from its projects.json entry.
 /// Both checkout fields left empty tracks the project for issues only.
 fn track_form(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
+    let form = track_fields(ctx, alias, project, csrf);
+    match project {
+        Some(project) => format!("{form}{}", instructions_form(ctx, alias, project, csrf)),
+        None => form,
+    }
+}
+
+/// The per-project custom instructions the agent follows for that project only.
+fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
+    format!(
+        "<form method='post' action='/settings/loop-projects/{}/instructions' class='project-instructions'>{csrf}<label for='ci-{alias_attr}'>{}</label><textarea id='ci-{alias_attr}' name='custom_instructions' rows='4' maxlength='{}' placeholder='{}'>{}</textarea><div class='project-instructions-foot'><span class='loop-meta-item'>{}</span><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
+        pyfmt::quote(alias, ""),
+        esc_t(ctx, "Custom instructions"),
+        loopx_core::prompt::MAX_PROJECT_INSTRUCTIONS,
+        esc_t(ctx, "Conventions, style, areas to avoid or extra checks for this project"),
+        pyfmt::escape(&text(project, "custom_instructions")),
+        esc_t(ctx, "Guidance only: they never override the loop's safety rules."),
+        esc_t(ctx, "Save instructions"),
+        alias_attr = pyfmt::quote(alias, "")
+    )
+}
+
+fn track_fields(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
     let empty = json!({});
     let label = esc_t(ctx, if project.is_some() { "Save" } else { "Track" });
     let project = project.unwrap_or(&empty);
@@ -2633,6 +2659,42 @@ fn save_tracked(ctx: &UiCtx, alias: &str, path: &Path, config: &mut Value, updat
     )
 }
 
+/// Save (or, when empty, clear) a tracked project's custom instructions.
+fn save_instructions(ctx: &UiCtx, alias: &str, instructions: &str) -> (bool, String) {
+    let path = projects_path(ctx);
+    let mut config = read_json_or_empty(&path);
+    if !has_key(&config, "projects", alias) {
+        return (false, name_msg(ctx, "Unknown project: {name}", alias));
+    }
+    let text = instructions.trim();
+    if text.chars().count() > loopx_core::prompt::MAX_PROJECT_INSTRUCTIONS {
+        return (
+            false,
+            ctx.tf(
+                "Custom instructions are limited to {max} characters",
+                &[("max", &loopx_core::prompt::MAX_PROJECT_INSTRUCTIONS.to_string())],
+            ),
+        );
+    }
+    let entry = &mut config["projects"][alias];
+    if text.is_empty() {
+        if let Some(obj) = entry.as_object_mut() {
+            obj.shift_remove("custom_instructions");
+        }
+    } else {
+        entry["custom_instructions"] = json!(text);
+    }
+    tryw!(save(ctx, &config, &path));
+    (
+        true,
+        name_msg(
+            ctx,
+            if text.is_empty() { "Cleared custom instructions for {name}" } else { "Saved custom instructions for {name}" },
+            alias,
+        ),
+    )
+}
+
 fn set_project_worktree(ctx: &UiCtx, alias: &str, on: bool) -> (bool, String) {
     let path = projects_path(ctx);
     let mut config = read_json_or_empty(&path);
@@ -2741,6 +2803,24 @@ mod tests {
         assert!(sb.saved().get("projects").is_none(), "nothing saved after rejections");
         assert_eq!(sb.project(&repo, "main"), (true, "Tracking project app".to_string()));
         assert_eq!(sb.saved()["projects"]["app"]["local_path"], repo);
+    }
+
+    #[test]
+    fn custom_instructions_are_saved_cleared_and_only_for_tracked_projects() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        assert!(!save_instructions(&sb.ctx(), "app", "x").0, "untracked project");
+        assert!(sb.project(&repo, "main").0);
+        let (ok, msg) = save_instructions(&sb.ctx(), "app", "  Prefer small diffs.\n ");
+        assert!(ok, "{msg}");
+        assert_eq!(sb.saved()["projects"]["app"]["custom_instructions"], "Prefer small diffs.");
+        // Re-tracking keeps them.
+        assert!(sb.project(&repo, "main").0);
+        assert_eq!(sb.saved()["projects"]["app"]["custom_instructions"], "Prefer small diffs.");
+        let too_long = "a".repeat(loopx_core::prompt::MAX_PROJECT_INSTRUCTIONS + 1);
+        assert!(!save_instructions(&sb.ctx(), "app", &too_long).0);
+        assert!(save_instructions(&sb.ctx(), "app", "  ").0);
+        assert!(sb.saved()["projects"]["app"].get("custom_instructions").is_none());
     }
 
     #[test]

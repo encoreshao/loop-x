@@ -1639,5 +1639,12 @@
   "Retrying the video. Steps that already finished are reused.": "動画を再試行しています。完了済みのステップは再利用されます。",
   "Could not retry the job: {detail}": "ジョブを再試行できませんでした: {detail}",
   "Latest topic": "最新のトピック",
-  "More": "その他"
+  "More": "その他",
+  "Custom instructions": "カスタム指示",
+  "Conventions, style, areas to avoid or extra checks for this project": "このプロジェクトの規約、スタイル、避ける領域、追加のチェック",
+  "Guidance only: they never override the loop's safety rules.": "あくまで指針です。ループの安全ルールを上書きすることはありません。",
+  "Save instructions": "指示を保存",
+  "Custom instructions are limited to {max} characters": "カスタム指示は{max}文字までです",
+  "Cleared custom instructions for {name}": "{name}のカスタム指示を削除しました",
+  "Saved custom instructions for {name}": "{name}のカスタム指示を保存しました"
 }

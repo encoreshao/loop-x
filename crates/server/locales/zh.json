@@ -1639,5 +1639,12 @@
   "Retrying the video. Steps that already finished are reused.": "正在重试该视频，已完成的步骤会被复用。",
   "Could not retry the job: {detail}": "无法重试任务：{detail}",
   "Latest topic": "最近的主题",
-  "More": "更多"
+  "More": "更多",
+  "Custom instructions": "自定义指令",
+  "Conventions, style, areas to avoid or extra checks for this project": "此项目的约定、风格、需避开的区域或额外检查",
+  "Guidance only: they never override the loop's safety rules.": "仅作为指引：不会覆盖循环的安全规则。",
+  "Save instructions": "保存指令",
+  "Custom instructions are limited to {max} characters": "自定义指令最多 {max} 个字符",
+  "Cleared custom instructions for {name}": "已清除 {name} 的自定义指令",
+  "Saved custom instructions for {name}": "已保存 {name} 的自定义指令"
 }

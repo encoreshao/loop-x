@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Settings → Loop projects: each tracked project can carry **Custom instructions** (saved as `custom_instructions` in projects.json). The issue loop adds them to that project's agent prompt as guidance only; they never override the loop's safety rules.
 - Creator → Discover shows the latest Find videos topic under the search box; Jobs history rows get a kind icon tinted by state and a cleaner layout.
 - Creator → Jobs: a **Retry** button on video jobs that did not succeed runs the job again under the same record, and the agent reuses the steps the first run completed. Generating from a link you already ran restarts that job instead of adding a new one.
 

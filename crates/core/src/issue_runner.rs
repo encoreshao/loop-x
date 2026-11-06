@@ -542,6 +542,10 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
                 .map_err(fail)?
         }
     };
+    let base = prompt::with_project_instructions(
+        base,
+        project_instructions(&project_config_path(ctx), &req.alias).as_deref(),
+    );
     let mut text = with_feedback(base, req.feedback.as_deref());
     let offline = matches!(req.mode, InvokeMode::IssueFile(_));
     // The golden eval always runs in gate mode.
@@ -688,6 +692,16 @@ pub fn invoke_batch_end_of_run(
 /// run sends one report at the end instead (`loopx notify` reads this).
 fn hold_slack() -> (String, String) {
     (crate::slack_report::HOLD_ENV.to_string(), "1".to_string())
+}
+
+/// The project's own `custom_instructions` from projects.json, if it has any.
+fn project_instructions(config_path: &Path, alias: &str) -> Option<String> {
+    Config::load(config_path)
+        .and_then(|c| c.project(alias))
+        .ok()?
+        .get("custom_instructions")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 /// The checkout of `alias` when it works in place (`use_worktree: false`):
@@ -3663,6 +3677,23 @@ mod tests {
                 .push((method.into(), endpoint.into(), body.clone()));
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_projects_custom_instructions_are_read_from_its_entry() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("projects.json");
+        std::fs::write(
+            &path,
+            r#"{"projects": {"a": {"project_id": "g/a", "custom_instructions": "Prefer small diffs."}, "b": {"project_id": "g/b"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            project_instructions(&path, "a").as_deref(),
+            Some("Prefer small diffs.")
+        );
+        assert_eq!(project_instructions(&path, "b"), None);
+        assert_eq!(project_instructions(&path, "missing"), None);
     }
 
     #[test]
