@@ -73,6 +73,8 @@ pub struct CommandVerifier {
     pub timeout_seconds: Option<f64>,
     /// Where to look for installed Node versions (default: this user's).
     pub toolchains: Option<Toolchains>,
+    /// Inherited environment variables the command must not see.
+    pub env_remove: Vec<String>,
 }
 
 impl CommandVerifier {
@@ -83,11 +85,17 @@ impl CommandVerifier {
             cwd: None,
             timeout_seconds: None,
             toolchains: None,
+            env_remove: Vec::new(),
         }
     }
 
     pub fn with_toolchains(mut self, toolchains: Toolchains) -> Self {
         self.toolchains = Some(toolchains);
+        self
+    }
+
+    pub fn with_env_removed(mut self, names: &[&str]) -> Self {
+        self.env_remove = names.iter().map(|n| n.to_string()).collect();
         self
     }
 
@@ -148,6 +156,9 @@ impl CommandVerifier {
             let path = std::env::var("PATH").unwrap_or_default();
             cmd.env("PATH", crate::node_env::path_for(cwd, &path, &tc));
         }
+        for k in &self.env_remove {
+            cmd.env_remove(k);
+        }
         for (k, v) in env.iter().filter_map(|a| a.split_once('=')) {
             cmd.env(k, v);
         }
@@ -186,6 +197,14 @@ impl CommandVerifier {
             output: format!("{}{}", out.stdout, out.stderr),
             evidence: Value::Object(evidence),
         })
+    }
+}
+
+impl CommandVerifier {
+    /// Run once outside a loop (no `LoopContext`); an error becomes a failed result.
+    pub(crate) fn run_once(&self) -> VerificationResult {
+        self.run()
+            .unwrap_or_else(|raised| error_result(&self.name, &raised))
     }
 }
 

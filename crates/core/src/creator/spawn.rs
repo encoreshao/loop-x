@@ -171,13 +171,21 @@ pub struct Fence<'a> {
 /// loopx state, and any write to Claude's own config, skills or hooks. Absolute
 /// rules are `/` + an absolute path, Claude's `//abs` form.
 fn denied_tools(f: &Fence<'_>) -> Vec<String> {
+    let mut t = strs(&["Bash(loopx*)", "Bash(git *)"]);
+    t.push(format!("Bash({}*)", f.exe));
+    t.extend(common_denied(f));
+    t
+}
+
+/// [`denied_tools`] without the blanket `loopx` and `git` denies, for a job
+/// (the MR fix agent) that is allowed a few named git and loopx commands; such a
+/// job must deny the rest of git and loopx itself.
+pub(crate) fn common_denied(f: &Fence<'_>) -> Vec<String> {
     let mut t = strs(&[
         "Bash(yt-dlp*)",
         "Bash(jq*)",
-        "Bash(loopx*)",
         "Bash(curl *)",
         "Bash(wget *)",
-        "Bash(git *)",
         "Bash(glab *)",
         "Bash(gh *)",
         "Bash(osascript *)",
@@ -188,7 +196,6 @@ fn denied_tools(f: &Fence<'_>) -> Vec<String> {
         "Read(**/*.key)",
         "Read(**/id_rsa*)",
     ]);
-    t.push(format!("Bash({}*)", f.exe));
     let h = f.user_home.display();
     for p in [
         ".gitlab/**",
@@ -226,11 +233,13 @@ fn denied_tools(f: &Fence<'_>) -> Vec<String> {
 }
 
 /// What one job may use: its built-in tool set, allow and deny rules, spend cap.
-struct JobFence {
-    tools: &'static str,
-    allowed: Vec<String>,
-    denied: Vec<String>,
-    budget_usd: f64,
+pub(crate) struct JobFence {
+    pub tools: &'static str,
+    pub allowed: Vec<String>,
+    pub denied: Vec<String>,
+    pub budget_usd: f64,
+    /// Directories besides the working directory the job's tools may reach.
+    pub extra_dirs: Vec<PathBuf>,
 }
 
 /// `claude -p` sealed like `agents::sealed`'s command, but with tools:
@@ -242,7 +251,7 @@ struct JobFence {
 ///   `allowed-tools` frontmatter can widen them), narrowed by the allow / deny rules;
 /// - `default` permission mode (in -p mode whatever is not allowed is refused);
 /// - the prompt last.
-fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<String> {
+pub(crate) fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<String> {
     let s = |v: &str| v.to_string();
     let mut argv = vec![
         crate::runner_util::resolved_program("claude"),
@@ -259,6 +268,11 @@ fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<String> {
         s(fence.tools),
         s("--add-dir"),
         cwd.display().to_string(),
+    ];
+    for d in &fence.extra_dirs {
+        argv.extend([s("--add-dir"), d.display().to_string()]);
+    }
+    argv.extend([
         s("--permission-mode"),
         s("default"),
         s("--allowedTools"),
@@ -270,7 +284,7 @@ fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<String> {
         s("--output-format"),
         s("stream-json"),
         s("--verbose"),
-    ];
+    ]);
     argv.extend(crate::cost::budget_args(Some(fence.budget_usd)));
     argv.push(s(prompt));
     argv
@@ -335,6 +349,7 @@ pub fn generate_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<Strin
             allowed,
             denied,
             budget_usd: GENERATE_BUDGET_USD,
+            extra_dirs: Vec::new(),
         },
     ))
 }
@@ -366,6 +381,7 @@ pub fn scout_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>,
             allowed,
             denied,
             budget_usd: SCOUT_BUDGET_USD,
+            extra_dirs: Vec::new(),
         },
     ))
 }

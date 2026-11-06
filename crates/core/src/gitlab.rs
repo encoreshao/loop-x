@@ -154,6 +154,17 @@ impl Client {
         Ok(Self::new(url.trim_end_matches('/'), token))
     }
 
+    /// A client for `base_url` with an explicit token (a connector account's).
+    pub fn with_token(base_url: &str, token: String) -> Self {
+        Self::new(base_url.trim_end_matches('/'), token)
+    }
+
+    /// Whether this client holds `token` (tests only: the token is never exposed).
+    #[cfg(test)]
+    pub(crate) fn token_is(&self, token: &str) -> bool {
+        self.token == token
+    }
+
     fn new(base_url: &str, token: String) -> Self {
         Self {
             api_url: format!("{base_url}/api/v4"),

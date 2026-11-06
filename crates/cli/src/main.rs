@@ -15,6 +15,7 @@ mod loops_cmd;
 mod memory_cmd;
 mod messages_cmd;
 mod metrics_cmd;
+mod mr_fix_cmd;
 mod notify_cmd;
 mod run_cmds;
 mod screenshot_cmd;
@@ -241,6 +242,11 @@ enum Command {
         #[command(subcommand)]
         command: MrCommand,
     },
+    /// Fix an open merge request's review feedback (`run <account:project!iid>`, `announce <plan-file>`)
+    MrFix {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Inbox Triage loop
     Inbox {
         /// `run <run_id>`
@@ -373,6 +379,7 @@ fn main() -> ExitCode {
         Command::Mr {
             command: MrCommand::Open { args },
         } => git_cmds::mr_open(&args),
+        Command::MrFix { args } => mr_fix_cmd::run(&args),
         Command::Notify { args } => notify_cmd::run(&args),
         Command::Inbox { args } => match args.split_first() {
             Some((sub, rest)) if sub == "run" => inbox_cmd::run(rest),

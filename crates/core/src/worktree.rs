@@ -249,10 +249,19 @@ fn new_worktree_locked(
 /// What every issue worktree gets after `git worktree add`, on every run:
 /// the gitignored per-developer files and initialised submodules.
 fn prepare_worktree(repo_path: &str, wt: &str) -> Result<(), Failure> {
+    prepare_worktree_with(repo_path, wt, false)
+}
+
+/// [`prepare_worktree`]; with `skip_tracked`, a per-developer file the
+/// worktree's HEAD tracks is left alone (copying over it would dirty the tree).
+fn prepare_worktree_with(repo_path: &str, wt: &str, skip_tracked: bool) -> Result<(), Failure> {
     // Gitignored per-developer files `git worktree add` never brings along;
     // copied on every run so later changes are picked up too.
     for rel in [".ruby-version", "config/database.yml"] {
         let src = Path::new(repo_path).join(rel);
+        if skip_tracked && git_succeeds(wt, &["cat-file", "-e", &format!("HEAD:{rel}")]) {
+            continue;
+        }
         if src.is_file() {
             std::fs::copy(&src, Path::new(&wt).join(rel))
                 .map_err(|e| Failure::new(format!("cannot copy {rel} into {wt}: {e}")))?;
@@ -714,6 +723,209 @@ pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<(), Failure> {
     git_ok(repo_path, &["branch", "-D", &branch])
 }
 
+/// Local branch an MR's worktree works on; tracks `origin/<source_branch>`.
+fn mr_branch_name(mr_iid: &str) -> String {
+    format!("loop/mr-{mr_iid}")
+}
+
+/// `<worktree_root>/<repo>-mr-<iid>`.
+pub fn mr_worktree_path(repo_path: &str, mr_iid: &str, worktree_root: &str) -> String {
+    let name = Path::new(repo_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    format!("{worktree_root}/{name}-mr-{mr_iid}")
+}
+
+fn check_mr_iid(mr_iid: &str) -> Result<(), Failure> {
+    if mr_iid.is_empty() || !mr_iid.chars().all(|c| c.is_ascii_digit()) {
+        return Err(Failure::new(format!(
+            "not a merge request number: {mr_iid}"
+        )));
+    }
+    Ok(())
+}
+
+/// The source branch comes from an untrusted MR, so it is checked before any
+/// git call: no option lookalikes, `..`, whitespace or control characters, no
+/// `refs/` prefix, and it must be a valid branch name to git itself.
+pub(crate) fn check_source_branch(branch: &str) -> Result<(), Failure> {
+    let bad = |why: &str| Failure::new(format!("refusing source branch {branch:?}: {why}"));
+    if branch.is_empty() {
+        return Err(bad("empty"));
+    }
+    if branch.starts_with('-') {
+        return Err(bad("starts with `-`"));
+    }
+    // Not a branch name: git would resolve these to HEAD.
+    if branch == "@" || branch == "HEAD" {
+        return Err(bad("not a branch name"));
+    }
+    if branch.contains("..") || branch.contains("@{") {
+        return Err(bad("contains `..` or `@{`"));
+    }
+    if branch.starts_with("refs/") {
+        return Err(bad("starts with `refs/`"));
+    }
+    if branch.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(bad("contains whitespace or control characters"));
+    }
+    let ok = Command::new("git")
+        .args(["check-ref-format", "--branch", branch])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        return Err(bad("not a valid git branch name"));
+    }
+    Ok(())
+}
+
+/// Create (or fast-forward, when clean) the worktree of an MR's source branch
+/// and return its path. The worktree is on local branch `loop/mr-<iid>`
+/// tracking `origin/<source_branch>`. A dirty existing worktree is an error and
+/// is never reset; a source branch that can't fast-forward is an error too.
+pub fn new_mr_worktree(
+    repo_path: &str,
+    mr_iid: &str,
+    source_branch: &str,
+    worktree_root: &str,
+) -> Result<String, Failure> {
+    check_mr_iid(mr_iid)?;
+    check_source_branch(source_branch)?;
+    usable_checkout(repo_path)?;
+    let _lock = checkout_lock(repo_path)?;
+    if !Path::new(worktree_root).is_absolute() {
+        return Err(Failure::new(format!(
+            "worktree_root must be an absolute path: {worktree_root}"
+        )));
+    }
+    let branch = mr_branch_name(mr_iid);
+    let wt = mr_worktree_path(repo_path, mr_iid, worktree_root);
+    let origin_ref = format!("origin/{source_branch}");
+    let ref_name = format!("refs/heads/{branch}");
+    let remote_ref = format!("refs/remotes/{origin_ref}");
+
+    // Before fetching: is every local commit already on origin (as last seen)?
+    // Then a later rebase or force push by the author may be followed.
+    let nothing_unpushed = git(repo_path, &["show-ref", "--verify", "--quiet", &ref_name])?
+        && git(repo_path, &["show-ref", "--verify", "--quiet", &remote_ref])?
+        && git(
+            repo_path,
+            &["merge-base", "--is-ancestor", &ref_name, &remote_ref],
+        )?;
+
+    git_ok(repo_path, &["fetch", "origin", "--", source_branch])?;
+    if !git(
+        repo_path,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{origin_ref}"),
+        ],
+    )? {
+        return Err(Failure::new(format!(
+            "origin has no branch {source_branch} to fetch"
+        )));
+    }
+
+    if git(repo_path, &["show-ref", "--verify", "--quiet", &ref_name])? {
+        if !Path::new(&wt).is_dir() {
+            std::fs::create_dir_all(worktree_root)
+                .map_err(|e| Failure::new(format!("cannot create {worktree_root}: {e}")))?;
+            // A worktree whose directory was deleted is still registered.
+            git_ok(repo_path, &["worktree", "prune"])?;
+            git_ok(repo_path, &["worktree", "add", &wt, &branch])?;
+        }
+        if head_branch(&wt)? != branch {
+            return Err(Failure::new(format!(
+                "Worktree {wt} is not on {branch}, refusing to reuse it"
+            )));
+        }
+        if is_dirty(&wt)? {
+            return Err(Failure::new(format!(
+                "Worktree has uncommitted changes, refusing to sync: {wt}"
+            )));
+        }
+        if !git(&wt, &["merge", "--ff-only", &origin_ref])? {
+            // Rewritten on origin, and nothing of ours is lost: follow it.
+            // The tree is clean (checked above), so the hard reset drops nothing.
+            if nothing_unpushed {
+                git_ok(&wt, &["reset", "--hard", &origin_ref])?;
+                prepare_worktree_with(repo_path, &wt, true)?;
+                return Ok(wt);
+            }
+            return Err(Failure::new(format!(
+                "Cannot fast-forward {branch} to {origin_ref} (diverged or force-pushed): {wt}"
+            )));
+        }
+    } else {
+        std::fs::create_dir_all(worktree_root)
+            .map_err(|e| Failure::new(format!("cannot create {worktree_root}: {e}")))?;
+        git_ok(
+            repo_path,
+            &[
+                "worktree",
+                "add",
+                "--track",
+                "-b",
+                &branch,
+                &wt,
+                &origin_ref,
+            ],
+        )?;
+    }
+
+    prepare_worktree_with(repo_path, &wt, true)?;
+    Ok(wt)
+}
+
+fn head_branch(wt: &str) -> Result<String, Failure> {
+    Ok(git_stdout(wt, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string())
+}
+
+/// Remove an MR's worktree and its local `loop/mr-<iid>` branch. A worktree
+/// with uncommitted changes is refused (nothing is forced); one already gone
+/// is fine. The remote branch is left alone.
+///
+/// Unpushed commits on `loop/mr-<iid>` are discarded with the branch
+/// (`branch -D`); the worktree is refused only for uncommitted or untracked
+/// changes.
+pub fn remove_mr_worktree(
+    repo_path: &str,
+    mr_iid: &str,
+    worktree_root: &str,
+) -> Result<(), Failure> {
+    check_mr_iid(mr_iid)?;
+    usable_checkout(repo_path)?;
+    let _lock = checkout_lock(repo_path)?;
+    let branch = mr_branch_name(mr_iid);
+    let wt = mr_worktree_path(repo_path, mr_iid, worktree_root);
+    if Path::new(&wt).is_dir() {
+        if is_dirty(&wt)? {
+            return Err(Failure::new(format!(
+                "Worktree has uncommitted changes, refusing to remove: {wt}"
+            )));
+        }
+        git_ok(repo_path, &["worktree", "remove", &wt])?;
+    }
+    git_ok(repo_path, &["worktree", "prune"])?;
+    if git(
+        repo_path,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )? {
+        git_ok(repo_path, &["branch", "-D", &branch])?;
+    }
+    Ok(())
+}
+
 /// `<git-dir>/loopx-restore-branch`: the branch to return an in-place checkout to.
 fn restore_marker(repo_path: &str) -> Result<std::path::PathBuf, Failure> {
     let git_dir = git_stdout(repo_path, &["rev-parse", "--absolute-git-dir"])?;
@@ -1130,6 +1342,273 @@ mod tests {
         assert_eq!(read("config/credentials/test.key"), None);
         assert_eq!(read("config/credentials/production.key"), None);
         assert_eq!(sh(Path::new(&wt), &["status", "--porcelain"]), "");
+    }
+
+    /// `clone_on_feature` plus an MR source branch `fix/mr-src` pushed to origin
+    /// with one extra commit (`mr.txt`). Returns the repo path.
+    fn repo_with_mr_branch(d: &Path) -> String {
+        let repo = clone_on_feature(d);
+        let local = Path::new(&repo);
+        sh(local, &["checkout", "-q", "-b", "fix/mr-src", "main"]);
+        std::fs::write(local.join("mr.txt"), "1").unwrap();
+        sh(local, &["add", "mr.txt"]);
+        sh(local, &["commit", "-qm", "mr"]);
+        sh(local, &["push", "-q", "origin", "fix/mr-src"]);
+        sh(local, &["checkout", "-q", "feature-x"]);
+        repo
+    }
+
+    #[test]
+    fn mr_path_is_repo_name_mr_iid() {
+        assert_eq!(
+            mr_worktree_path("/src/kurrant.web", "42", "/wt"),
+            "/wt/kurrant.web-mr-42"
+        );
+    }
+
+    #[test]
+    fn creates_a_worktree_on_the_source_branch() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        assert_eq!(wt, mr_worktree_path(&repo, "9", &root));
+        assert_eq!(head(&wt), "loop/mr-9");
+        assert!(Path::new(&wt).join("mr.txt").is_file());
+        assert_eq!(
+            sh(
+                Path::new(&wt),
+                &["rev-parse", "--abbrev-ref", "@{upstream}"]
+            ),
+            "origin/fix/mr-src"
+        );
+    }
+
+    #[test]
+    fn reuses_a_clean_worktree_and_fast_forwards() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let local = Path::new(&repo);
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        // The author pushes another commit to the source branch.
+        sh(local, &["checkout", "-q", "fix/mr-src"]);
+        std::fs::write(local.join("more.txt"), "2").unwrap();
+        sh(local, &["add", "more.txt"]);
+        sh(local, &["commit", "-qm", "more"]);
+        sh(local, &["push", "-q", "origin", "fix/mr-src"]);
+        sh(local, &["checkout", "-q", "feature-x"]);
+        let again = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        assert_eq!(again, wt);
+        assert!(Path::new(&wt).join("more.txt").is_file());
+        // Directory deleted by hand: re-added on the same branch.
+        std::fs::remove_dir_all(&wt).unwrap();
+        let third = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        assert_eq!(head(&third), "loop/mr-9");
+        assert!(Path::new(&third).join("more.txt").is_file());
+    }
+
+    #[test]
+    fn refuses_a_dirty_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        std::fs::write(Path::new(&wt).join("mr.txt"), "edited").unwrap();
+        std::fs::write(Path::new(&wt).join("new.txt"), "n").unwrap();
+        let err = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap_err();
+        assert!(err.message.contains("uncommitted"), "{}", err.message);
+        // Nothing was reset or discarded.
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&wt).join("mr.txt")).unwrap(),
+            "edited"
+        );
+        assert!(Path::new(&wt).join("new.txt").is_file());
+    }
+
+    #[test]
+    fn copies_the_untracked_config_files() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let local = Path::new(&repo);
+        // Like a Rails app: config/ is tracked, the two files are gitignored.
+        sh(local, &["checkout", "-q", "fix/mr-src"]);
+        std::fs::create_dir_all(local.join("config")).unwrap();
+        std::fs::write(local.join("config/application.rb"), "app").unwrap();
+        std::fs::write(
+            local.join(".gitignore"),
+            "/.ruby-version\n/config/database.yml\n",
+        )
+        .unwrap();
+        sh(local, &["add", ".gitignore", "config/application.rb"]);
+        sh(local, &["commit", "-qm", "rails"]);
+        sh(local, &["push", "-q", "origin", "fix/mr-src"]);
+        sh(local, &["checkout", "-q", "feature-x"]);
+        std::fs::create_dir_all(local.join("config")).unwrap();
+        std::fs::write(local.join(".ruby-version"), "3.3.0").unwrap();
+        std::fs::write(local.join("config/database.yml"), "test: {}").unwrap();
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&wt).join(".ruby-version")).unwrap(),
+            "3.3.0"
+        );
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&wt).join("config/database.yml")).unwrap(),
+            "test: {}"
+        );
+        assert_eq!(sh(Path::new(&wt), &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn tracked_config_files_are_not_overwritten_but_untracked_ones_are_copied() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let local = Path::new(&repo);
+        // The MR branch tracks .ruby-version; database.yml stays untracked.
+        sh(local, &["checkout", "-q", "fix/mr-src"]);
+        std::fs::create_dir_all(local.join("config")).unwrap();
+        std::fs::write(local.join("config/application.rb"), "app").unwrap();
+        std::fs::write(local.join(".ruby-version"), "3.2.0").unwrap();
+        std::fs::write(local.join(".gitignore"), "/config/database.yml\n").unwrap();
+        sh(
+            local,
+            &[
+                "add",
+                ".gitignore",
+                ".ruby-version",
+                "config/application.rb",
+            ],
+        );
+        sh(local, &["commit", "-qm", "track ruby-version"]);
+        sh(local, &["push", "-q", "origin", "fix/mr-src"]);
+        sh(local, &["checkout", "-q", "feature-x"]);
+        // The checkout's own copies differ from the tracked content.
+        std::fs::create_dir_all(local.join("config")).unwrap();
+        std::fs::write(local.join(".ruby-version"), "3.3.0").unwrap();
+        std::fs::write(local.join("config/database.yml"), "test: {}").unwrap();
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        let w = Path::new(&wt);
+        assert_eq!(
+            std::fs::read_to_string(w.join(".ruby-version")).unwrap(),
+            "3.2.0"
+        );
+        assert_eq!(
+            std::fs::read_to_string(w.join("config/database.yml")).unwrap(),
+            "test: {}"
+        );
+        assert_eq!(sh(w, &["status", "--porcelain"]), "");
+        // Reuse still works: the worktree stayed clean.
+        new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        assert_eq!(sh(w, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn refuses_a_diverged_remote_and_keeps_the_local_commit() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let local = Path::new(&repo);
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        let w = Path::new(&wt);
+        std::fs::write(w.join("mine.txt"), "m").unwrap();
+        sh(w, &["add", "mine.txt"]);
+        sh(w, &["commit", "-qm", "unpushed"]);
+        let mine = sh(w, &["rev-parse", "HEAD"]);
+        // The author force-pushes a different history to the source branch.
+        sh(local, &["checkout", "-q", "fix/mr-src"]);
+        sh(local, &["reset", "-q", "--hard", "main"]);
+        std::fs::write(local.join("other.txt"), "o").unwrap();
+        sh(local, &["add", "other.txt"]);
+        sh(local, &["commit", "-qm", "rewritten"]);
+        sh(local, &["push", "-q", "--force", "origin", "fix/mr-src"]);
+        sh(local, &["checkout", "-q", "feature-x"]);
+        let err = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap_err();
+        assert!(err.message.contains("fast-forward"), "{}", err.message);
+        assert_eq!(sh(w, &["rev-parse", "HEAD"]), mine);
+        assert!(w.join("mine.txt").is_file());
+        assert!(!w.join("other.txt").exists());
+    }
+
+    #[test]
+    fn remove_deletes_it() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        remove_mr_worktree(&repo, "9", &root).unwrap();
+        assert!(!Path::new(&wt).exists());
+        assert!(!branches(&repo).contains("loop/mr-9"));
+        // Removing again is fine.
+        remove_mr_worktree(&repo, "9", &root).unwrap();
+    }
+
+    #[test]
+    fn remove_refuses_a_dirty_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        std::fs::write(Path::new(&wt).join("new.txt"), "n").unwrap();
+        assert!(remove_mr_worktree(&repo, "9", &root).is_err());
+        assert!(Path::new(&wt).join("new.txt").is_file());
+    }
+
+    #[test]
+    fn untrusted_branch_and_iid_are_refused_before_any_git_call() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let marker = d.path().join("pwned");
+        for bad in [
+            "",
+            "-x",
+            &format!("--upload-pack=touch {}", marker.display()),
+            "a..b",
+            "a b",
+            "a\tb",
+            "a\nb",
+            "refs/heads/x",
+            "refs/../x",
+            "a:b",
+            "a~1",
+            "a^",
+            "a?",
+            "a*",
+            "a[",
+            "a\\b",
+            "a@{u}",
+            "x.lock",
+            "/x",
+            "x/",
+            "a//b",
+            "@",
+            "x\u{7f}",
+        ] {
+            let err = new_mr_worktree(&repo, "9", bad, &root).unwrap_err();
+            assert!(
+                err.message.contains("refusing source branch"),
+                "{bad:?}: {}",
+                err.message
+            );
+        }
+        // Validation fired before git: origin was never contacted.
+        assert!(!marker.exists());
+        assert!(!Path::new(&repo).join(".git/FETCH_HEAD").exists());
+        for bad in ["", "-1", "1; rm", "1/../2", "a", "1 2", "../1"] {
+            for err in [
+                new_mr_worktree(&repo, bad, "fix/mr-src", &root).unwrap_err(),
+                remove_mr_worktree(&repo, bad, &root).unwrap_err(),
+            ] {
+                assert!(
+                    err.message.contains("not a merge request number"),
+                    "{bad:?}: {}",
+                    err.message
+                );
+            }
+        }
+        assert!(!Path::new(&root).exists(), "nothing was created");
     }
 
     #[test]

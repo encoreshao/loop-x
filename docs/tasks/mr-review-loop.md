@@ -45,6 +45,9 @@ reviewed. Both choices live in
 `outputs/loops/mr-review-loop/mr-prefs.json` (`skip`, `requested`); a run
 clears the requests it read.
 
+**Fix now** on an MR is a separate manual run (see
+[`mr-fix-now.md`](mr-fix-now.md)); this review loop stays draft-note-only.
+
 ## Safety boundary
 
 - Writes only `POST /projects/:id/merge_requests/:iid/draft_notes`. It never

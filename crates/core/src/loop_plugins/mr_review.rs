@@ -119,12 +119,12 @@ fn is_word(c: char) -> bool {
 
 /// Draft notes are Markdown on GitLab: break word-start @mentions so a
 /// model-echoed @all / @group cannot notify anyone.
-fn defuse(text: &str) -> String {
+pub(crate) fn defuse(text: &str) -> String {
     let mut out = String::new();
     let mut prev: Option<char> = None;
     for c in text.chars() {
         out.push(c);
-        if c == '@' && !prev.is_some_and(|p| is_word(p) || p == '@') {
+        if c == '@' && !prev.is_some_and(is_word) {
             out.push('\u{200b}');
         }
         prev = Some(c);
@@ -649,6 +649,10 @@ pub struct MyMr {
     pub author_username: String,
     pub created_at: String,
     pub sha: String,
+    /// The branch the MR merges from (GitLab `source_branch`, GitHub head branch).
+    pub source_branch: String,
+    /// The project the source branch lives in; differs from `project_id` for a fork.
+    pub source_project_id: String,
     pub draft: bool,
     pub authored: bool,
     pub assignee: bool,
@@ -778,6 +782,8 @@ fn my_mrs(conn: &dyn Connector, account_id: &str) -> Result<Vec<MyMr>, Connector
                         author_username: author.get("username").map_or(String::new(), py_str),
                         created_at: s("created_at"),
                         sha: s("sha"),
+                        source_branch: s("source_branch"),
+                        source_project_id: s("source_project_id"),
                         draft: is_draft(row),
                         ..MyMr::default()
                     });
@@ -877,6 +883,11 @@ fn hosted_my_mrs(
                         author_username: cr.author.clone(),
                         created_at: cr.raw.get("created_at").map_or(String::new(), py_str),
                         sha: cr.head_sha.clone(),
+                        source_branch: cr.source_branch.clone(),
+                        source_project_id: cr
+                            .raw
+                            .pointer("/head/repo/full_name")
+                            .map_or(String::new(), py_str),
                         draft: cr.draft || is_draft(&json!({"title": cr.title})),
                         ..MyMr::default()
                     });
@@ -1352,6 +1363,33 @@ impl LoopPlugin for MrReview {
         &["summary", "verdict", "overview", "risks", "findings"]
     }
 
+    /// "<reference> — <title>" (title on one line, at most 80 characters) for
+    /// the dashboard's "Processing ..." line; the item's own meta carries both.
+    fn item_label(&self, item: &WorkItem) -> Option<String> {
+        let reference = item.meta.get("ref").and_then(Value::as_str)?.trim();
+        if reference.is_empty() {
+            return None;
+        }
+        let title = item
+            .meta
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if title.is_empty() {
+            return Some(reference.to_string());
+        }
+        let clipped: String = title.chars().take(80).collect();
+        let ellipsis = if title.chars().count() > 80 {
+            "…"
+        } else {
+            ""
+        };
+        Some(format!("{reference} — {clipped}{ellipsis}"))
+    }
+
     fn discover(&self, ctx: &LoopContext) -> Result<Vec<WorkItem>, PluginError> {
         let state_root = ctx
             .state_dir
@@ -1663,6 +1701,14 @@ impl LoopPlugin for MrReview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defuse_neutralises_doubled_at_and_keeps_emails() {
+        assert!(!defuse("@@all").contains("@all"));
+        assert!(!defuse("x@@all").contains("@all"));
+        assert!(!defuse("@all").contains("@all"));
+        assert_eq!(defuse("a@b.com"), "a@b.com");
+    }
     use crate::connectors::http::HttpError;
     use crate::connectors::{gitlab, Account, LoadFailure, TypeInfo};
     use crate::loop_definition::LoopDefinition;
@@ -1975,6 +2021,25 @@ mod tests {
         payload["diff"] = json!(build_diff_text(&diff(), DIFF_CAP_BYTES).0);
         payload["changed_paths"] = json!(["app/a.rb"]);
         WorkItem::new("k", "t", payload)
+    }
+
+    #[test]
+    fn item_label_is_the_reference_and_a_short_one_line_title() {
+        let plugin = plugin_with(ok_conn());
+        let mut it = item();
+        it.meta = json!({"ref": "g/p!7", "title": "Fix the\n  login   bug"});
+        assert_eq!(
+            plugin.item_label(&it).as_deref(),
+            Some("g/p!7 — Fix the login bug")
+        );
+        it.meta = json!({"ref": "o/r#3", "title": "x".repeat(200)});
+        let label = plugin.item_label(&it).unwrap();
+        assert_eq!(label, format!("o/r#3 — {}…", "x".repeat(80)));
+        // No reference in the meta: nothing to say.
+        it.meta = json!({"title": "t"});
+        assert_eq!(plugin.item_label(&it), None);
+        it.meta = json!({"ref": "g/p!7", "title": "  "});
+        assert_eq!(plugin.item_label(&it).as_deref(), Some("g/p!7"));
     }
 
     #[test]
@@ -2894,6 +2959,29 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         );
         assert!(mine.authored && mine.assignee && !mine.reviewable());
         assert_eq!(mine.reference, "g/p!1");
+    }
+
+    #[test]
+    fn my_mr_carries_source_branch_and_project_from_the_listing() {
+        let conn = Conn::new(|_, p, _| {
+            if p == "/user" {
+                return Ok(json!({"id": 1}));
+            }
+            Ok(if p.contains("author_id=1") {
+                json!([{"project_id": 9, "iid": 1, "title": "Mine", "author": {"id": 1},
+                        "source_branch": "feat/x", "source_project_id": 12}])
+            } else {
+                json!([])
+            })
+        });
+        let out = list_my_mrs(&Source {
+            accounts: vec![Account::new("work", "gitlab")],
+            conn,
+        });
+        let mr = &out[0].mrs[0];
+        assert_eq!(mr.source_branch, "feat/x");
+        assert_eq!(mr.source_project_id, "12");
+        assert_eq!(mr.project_id, "9");
     }
 
     #[test]

@@ -599,20 +599,14 @@ pub fn delete_account(
 
 // ---- opening a connector ----------------------------------------------------------
 
-/// `load_connector`: the live connector for `account_id`, with its secret from
-/// the Keychain (native accounts) or the external config file.
-pub fn load_connector(
-    account_id: &str,
+/// The account's token or URL secret: the Keychain for native accounts, the
+/// owning skill's config file for external ones.
+fn account_secret(
+    account: &Account,
     store: &dyn SecretStore,
     paths: &Paths,
-    http: Arc<dyn HttpClient>,
-) -> Result<Box<dyn Connector>, LoadFailure> {
-    let account = get_account(account_id, paths)
-        .map_err(|e| LoadFailure::Config(e.0))?
-        .ok_or(LoadFailure::Unknown)?;
-    if get_type(&account.kind).is_none() {
-        return Err(LoadFailure::Unknown);
-    }
+) -> Result<Option<String>, LoadFailure> {
+    let account_id = account.id.as_str();
     let resolve = |raw: Option<&str>| -> Result<Option<String>, LoadFailure> {
         match raw {
             None => Ok(None),
@@ -621,7 +615,7 @@ pub fn load_connector(
                 .map_err(|_| LoadFailure::Other("KeychainError".into())),
         }
     };
-    let secret = match account.managed_by.as_str() {
+    Ok(match account.managed_by.as_str() {
         NATIVE => store
             .get(account_id)
             .map_err(|_| LoadFailure::Other("KeychainError".into()))?,
@@ -646,7 +640,24 @@ pub fn load_connector(
             resolve(url)?
         }
         _ => None,
-    };
+    })
+}
+
+/// `load_connector`: the live connector for `account_id`, with its secret from
+/// the Keychain (native accounts) or the external config file.
+pub fn load_connector(
+    account_id: &str,
+    store: &dyn SecretStore,
+    paths: &Paths,
+    http: Arc<dyn HttpClient>,
+) -> Result<Box<dyn Connector>, LoadFailure> {
+    let account = get_account(account_id, paths)
+        .map_err(|e| LoadFailure::Config(e.0))?
+        .ok_or(LoadFailure::Unknown)?;
+    if get_type(&account.kind).is_none() {
+        return Err(LoadFailure::Unknown);
+    }
+    let secret = account_secret(&account, store, paths)?;
     build(account, secret, http).ok_or(LoadFailure::Unknown)
 }
 
@@ -680,6 +691,28 @@ impl ConfigConnectors {
     pub fn with_http(mut self, http: Arc<dyn HttpClient>) -> Self {
         self.http = http;
         self
+    }
+
+    /// A GitLab API client with the account's own token (never the environment's).
+    pub fn gitlab_client(&self, account_id: &str) -> Result<crate::gitlab::Client, String> {
+        let store = self
+            .store()
+            .map_err(|_| "could not open the Keychain".to_string())?;
+        let account = get_account(account_id, &self.paths)
+            .map_err(|e| e.0)?
+            .ok_or_else(|| format!("unknown connector account {account_id}"))?;
+        if account.kind != "gitlab" {
+            return Err(format!("{account_id} is not a GitLab account"));
+        }
+        let token = account_secret(&account, store.as_ref(), &self.paths)
+            .map_err(|_| format!("could not read the token of {account_id}"))?
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| format!("{account_id} has no token"))?;
+        let url = account.setting("url");
+        if url.is_empty() {
+            return Err(format!("{account_id} has no URL"));
+        }
+        Ok(crate::gitlab::Client::with_token(url, token))
     }
 
     fn store(&self) -> Result<Arc<dyn SecretStore>, LoadFailure> {
@@ -1486,5 +1519,61 @@ mod tests {
         let (ok, msg) = run_connector_test("ghost", &store(), &e.paths, http, &results);
         assert!(!ok && msg == "No connector with id ghost");
         assert!(!read_test_results(&results).contains_key("ghost"));
+    }
+
+    fn gitlab_paths(d: &Path, body: Value) -> Paths {
+        let gl = d.join("gitlab.json");
+        std::fs::write(&gl, body.to_string()).unwrap();
+        Paths {
+            config_path: Some(d.join("connectors.json")),
+            gitlab_config_path: Some(gl),
+            slack_config_path: Some(d.join("slack.json")),
+            inbox_config_path: Some(d.join("inboxes.json")),
+        }
+    }
+
+    fn gitlab_source(paths: Paths) -> ConfigConnectors {
+        ConfigConnectors::real()
+            .with_paths(paths)
+            .with_store(Arc::new(store()))
+    }
+
+    #[test]
+    fn gitlab_client_uses_the_accounts_own_token() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = gitlab_paths(
+            d.path(),
+            json!({"instances": {"work": {"url": "https://gl.example/", "token": "tok-123"}}}),
+        );
+        let client = gitlab_source(paths).gitlab_client("work").unwrap();
+        assert_eq!(client.api_base(), "https://gl.example/api/v4");
+        assert!(client.token_is("tok-123"));
+        assert!(!client.token_is("other"));
+    }
+
+    #[test]
+    fn gitlab_client_refuses_unknown_non_gitlab_and_incomplete_accounts() {
+        let d = tempfile::tempdir().unwrap();
+        let paths = gitlab_paths(
+            d.path(),
+            json!({"instances": {
+                "notoken": {"url": "https://gl.example", "token": ""},
+                "nourl": {"url": "", "token": "tok-123"}}}),
+        );
+        let s = store();
+        upsert_account(&gh("hub", "Hub"), Some("ghp"), "", &paths, &s);
+        let source = ConfigConnectors::real()
+            .with_paths(paths)
+            .with_store(Arc::new(s));
+        for (id, want) in [
+            ("ghost", "unknown connector account"),
+            ("hub", "not a GitLab account"),
+            ("notoken", "has no token"),
+            ("nourl", "has no URL"),
+        ] {
+            let e = source.gitlab_client(id).err().unwrap_or_default();
+            assert!(e.contains(want), "{id}: {e}");
+            assert!(!e.contains("tok-123") && !e.contains("ghp"), "{e}");
+        }
     }
 }

@@ -1616,5 +1616,20 @@
   "Track all issues": "跟踪所有议题",
   "Stop tracking all issues": "停止跟踪所有议题",
   "Tracking all issues": "正在跟踪所有议题",
-  "Stopped tracking all issues": "已停止跟踪所有议题"
+  "Stopped tracking all issues": "已停止跟踪所有议题",
+  "Fix now": "立即修复",
+  "Fixing…": "修复中…",
+  "Fixed": "已修复",
+  "Nothing to fix": "没有需要修复的内容",
+  "Fix failed": "修复失败",
+  "Fix stopped": "修复已停止",
+  "A fix for this merge request is already running": "此合并请求的修复已在运行",
+  "Fix started - the agent posts its plan on the merge request first": "修复已开始：智能体会先在合并请求上发布其计划",
+  "This merge request comes from a fork, so its branch cannot be pushed to.": "此合并请求来自复刻仓库，无法向其分支推送。",
+  "This merge request's project is not configured in Projects.": "此合并请求的项目尚未在“项目”中配置。",
+  "Fix now only works on GitLab merge requests.": "“立即修复”仅适用于 GitLab 合并请求。",
+  "This merge request is a draft.": "此合并请求是草稿。",
+  "Fixed {fixed} of {total}": "已修复 {fixed}/{total}",
+  "Reviewing": "审查中",
+  "Posting draft notes": "正在发布草稿备注"
 }

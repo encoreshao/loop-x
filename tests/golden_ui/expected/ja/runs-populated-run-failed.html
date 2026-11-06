@@ -208,7 +208,7 @@
       pill.className = 'topbar-agents ' + d.class + (location.pathname === '/queue' ? ' is-active' : '');
       pill.innerHTML = d.icon + '<span></span>';
       pill.lastChild.textContent = d.label;
-      pill.title = d.label;
+      pill.title = d.title || d.label;
     }).catch(function() {});
   }
   setInterval(refresh, 3000);

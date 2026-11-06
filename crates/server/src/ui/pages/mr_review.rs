@@ -10,10 +10,14 @@ use crate::ui::pyfmt::escape as h;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use chrono::Local;
 use loopx_core::connectors_config::ConfigConnectors;
+use loopx_core::config::Config;
 use loopx_core::loop_plugins::mr_review::{self, AccountMrs, MrPrefs, MyMr, ReviewState};
+use loopx_core::mr_fix::eligibility::{self, FixTarget, Ineligible};
+use loopx_core::mr_fix::jobs::{self, FixJob};
 use loopx_core::pydumps::py_str;
 use loopx_core::seen_store::SeenStore;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub const LOOP: &str = "mr-review-loop";
@@ -25,6 +29,7 @@ pub fn register(r: &mut Registry) {
     r.get("/loops/mr-review-loop/mrs/fragment", mrs_fragment);
     r.post("/loops/mr-review-loop/mrs/auto", set_auto);
     r.post("/loops/mr-review-loop/mrs/review", review_now);
+    r.post("/loops/mr-review-loop/mrs/fix", fix_now);
 }
 
 fn state_root(ctx: &UiCtx) -> PathBuf {
@@ -166,9 +171,111 @@ fn hidden_mr(mr: &MyMr) -> String {
     format!("<input type='hidden' name='mr' value='{}'>", h(&mr.mr_ref()))
 }
 
-fn actions_html(ctx: &UiCtx, mr: &MyMr, state: ReviewState) -> String {
+/// What the Fix now button needs, loaded once per render: the projects config, each
+/// account's kind and every fix job.
+struct FixEnv {
+    config: Option<Config>,
+    kinds: HashMap<String, String>,
+    jobs: Vec<FixJob>,
+}
+
+impl FixEnv {
+    fn load(ctx: &UiCtx) -> Self {
+        let kinds = loopx_core::connectors_config::list_accounts(&conn::paths(ctx.state))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| (a.id, a.kind))
+            .collect();
+        FixEnv {
+            config: Config::load(&ctx.state.home_dir.join("projects.json")).ok(),
+            kinds,
+            jobs: jobs::list(&jobs::jobs_dir(&ctx.state.home_dir)),
+        }
+    }
+
+    /// Whether Fix now may touch `mr`, and where its checkout lives.
+    fn check(&self, mr: &MyMr) -> Result<FixTarget, Ineligible> {
+        let kind = self.kinds.get(&mr.account).map_or("", String::as_str);
+        match &self.config {
+            Some(config) => eligibility::resolve(mr, kind, config),
+            None if kind != "gitlab" => Err(Ineligible::NotGitlab),
+            None if mr.draft => Err(Ineligible::Draft),
+            None => Err(Ineligible::ProjectNotConfigured),
+        }
+    }
+}
+
+/// The reason text, translated; literal arguments so the catalog test sees them.
+fn ineligible_reason(ctx: &UiCtx, why: Ineligible) -> String {
+    match why {
+        Ineligible::Fork => ctx.t("This merge request comes from a fork, so its branch cannot be pushed to."),
+        Ineligible::ProjectNotConfigured => ctx.t("This merge request's project is not configured in Projects."),
+        Ineligible::NotGitlab => ctx.t("Fix now only works on GitLab merge requests."),
+        Ineligible::Draft => ctx.t("This merge request is a draft."),
+    }
+}
+
+/// `("5", "7", rest)` from a done summary shaped `Fixed 5 of 7[ ...]`, as the runner writes it.
+fn fixed_counts(summary: &str) -> Option<(&str, &str, &str)> {
+    let rest = summary.strip_prefix("Fixed ")?;
+    let (a, rest) = rest.split_once(" of ")?;
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let (b, tail) = rest.split_at(end);
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    (digits(a) && digits(b)).then_some((a, b, tail))
+}
+
+/// The Fix now button (or its disabled state) plus the last job's result pill.
+fn fix_html(ctx: &UiCtx, mr: &MyMr, fix: &FixEnv) -> String {
+    // A draft shows the button disabled, with the reason on hover.
+    let mr_ref = mr.mr_ref();
+    let label = h(&ctx.t("Fix now"));
+    let button = if jobs::running(&fix.jobs, &mr_ref).is_some() {
+        format!(
+            "<button type='button' class='btn btn-tonal' disabled>{}{}</button>",
+            icon("bolt"),
+            h(&ctx.t("Fixing\u{2026}"))
+        )
+    } else if let Err(why) = fix.check(mr) {
+        format!(
+            "<button type='button' class='btn btn-tonal' disabled title='{}'>{}{label}</button>",
+            h(&ineligible_reason(ctx, why)),
+            icon("bolt")
+        )
+    } else {
+        format!(
+            "<form method='post' action='/loops/mr-review-loop/mrs/fix' class='daemon-action-form'>{}{}\
+<button type='submit' class='btn btn-tonal'>{}{label}</button></form>",
+            ctx.csrf_input(),
+            hidden_mr(mr),
+            icon("bolt")
+        )
+    };
+    let result = jobs::latest_for(&fix.jobs, &mr_ref).and_then(|j| {
+        let (kind, text, title) = match j.state.as_str() {
+            "done" => match fixed_counts(&j.summary) {
+                Some((a, b, rest)) => (
+                    "done",
+                    ctx.tf("Fixed {fixed} of {total}", &[("fixed", a), ("total", b)]),
+                    rest.trim().to_string(),
+                ),
+                None => ("done", ctx.t("Fixed"), j.summary.clone()),
+            },
+            "nothing" => ("skipped", ctx.t("Nothing to fix"), j.summary.clone()),
+            "failed" => ("failed", ctx.t("Fix failed"), j.summary.clone()),
+            "stopped" => ("skipped", ctx.t("Fix stopped"), String::new()),
+            _ => return None,
+        };
+        let title = if title.is_empty() { String::new() } else { format!(" title='{}'", h(&title)) };
+        Some(format!("<span class='pill history-pill history-{kind}'{title}>{}</span>", h(&text)))
+    });
+    format!("{button}{}", result.unwrap_or_default())
+}
+
+fn actions_html(ctx: &UiCtx, mr: &MyMr, state: ReviewState, fix: &FixEnv) -> String {
+    let fix = fix_html(ctx, mr, fix);
     if !mr.reviewable() || mr.draft {
-        return String::new();
+        return if fix.is_empty() { String::new() } else { format!("<div class='mr-actions'>{fix}</div>") };
     }
     let csrf = ctx.csrf_input();
     let auto = state != ReviewState::Skipped;
@@ -188,10 +295,10 @@ fn actions_html(ctx: &UiCtx, mr: &MyMr, state: ReviewState) -> String {
         icon("bolt"),
         h(&ctx.t("Review now"))
     );
-    format!("<div class='mr-actions'>{toggle}{review}</div>")
+    format!("<div class='mr-actions'>{toggle}{review}{fix}</div>")
 }
 
-fn mr_row(ctx: &UiCtx, mr: &MyMr, prefs: &MrPrefs, seen: &dyn Fn(&str) -> bool, account: Option<&str>) -> String {
+fn mr_row(ctx: &UiCtx, mr: &MyMr, prefs: &MrPrefs, seen: &dyn Fn(&str) -> bool, account: Option<&str>, fix: &FixEnv) -> String {
     let state = mr_review::review_state(mr, prefs, seen);
     let title = if is_http(&mr.web_url) {
         format!("<a href='{}' target='_blank' rel='noopener'>{}</a>", h(&mr.web_url), h(&mr.title))
@@ -224,7 +331,7 @@ fn mr_row(ctx: &UiCtx, mr: &MyMr, prefs: &MrPrefs, seen: &dyn Fn(&str) -> bool, 
         "<li class='result-row result-{kind}'><div class='result-head'><span class='result-title'>{title}</span>{}</div>{}{}</li>",
         state_pill(ctx, state, failure),
         meta_line(ctx, &mr.reference, &mr.web_url, &mr.author, &mr.created_at, &extra),
-        actions_html(ctx, mr, state)
+        actions_html(ctx, mr, state, fix)
     )
 }
 
@@ -261,6 +368,7 @@ pub fn mrs_html(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>) -> String 
     let prefs = MrPrefs::load(&root);
     let store = SeenStore::open(LOOP, Some(&root), None).ok();
     let seen = |k: &str| store.as_ref().is_some_and(|s| s.has(k));
+    let fix = FixEnv::load(ctx);
     let several = accounts.len() > 1;
     let mut errors = String::new();
     let (mut assigned, mut created) = (Vec::new(), Vec::new());
@@ -273,7 +381,7 @@ pub fn mrs_html(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>) -> String 
         }
         let label = several.then_some(a.account_label.as_str());
         for mr in &a.mrs {
-            let row = mr_row(ctx, mr, &prefs, &seen, label);
+            let row = mr_row(ctx, mr, &prefs, &seen, label, &fix);
             if mr.reviewable() {
                 assigned.push(row);
             } else {
@@ -397,6 +505,44 @@ fn review_now(ctx: &UiCtx) -> UiResponse {
     )
 }
 
+/// `POST /loops/mr-review-loop/mrs/fix`: the form's `mr` is only a key into the live
+/// list. Eligibility is re-resolved here, never taken from what the page showed.
+fn fix_now(ctx: &UiCtx) -> UiResponse {
+    let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_else(|_| "loopx".to_string());
+    // Only fetch the live list for a well-formed ref.
+    let listed = if form_ref(ctx).is_some() { list_mrs(ctx) } else { Ok(Vec::new()) };
+    let r = form_ref(ctx).unwrap_or_default();
+    fix_now_with(ctx, listed, &|log| jobs::spawn_runner(log, &exe, &r))
+}
+
+fn fix_now_with(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>, spawn: &jobs::Spawn<'_>) -> UiResponse {
+    let fail = |m: String| UiResponse::flash_redirect(false, &m, BACK);
+    let Some(r) = ctx.form().first("mr").map(str::to_string).filter(|r| loopx_core::mr_fix::valid_mr_ref(r)) else {
+        return fail(ctx.t("Unknown merge request"));
+    };
+    let accounts = match listed {
+        Ok(a) => a,
+        Err(m) => return fail(m),
+    };
+    let Some(mr) = accounts.iter().flat_map(|a| a.mrs.iter()).find(|m| m.mr_ref() == r) else {
+        return fail(ctx.t("Unknown merge request"));
+    };
+    let fix = FixEnv::load(ctx);
+    if jobs::running(&fix.jobs, &r).is_some() {
+        return fail(ctx.t("A fix for this merge request is already running"));
+    }
+    if let Err(why) = fix.check(mr) {
+        return fail(ineligible_reason(ctx, why));
+    }
+    if !ctx.state.spawn_processes {
+        return fail(ctx.t("This server does not start agent jobs"));
+    }
+    match jobs::start(&jobs::jobs_dir(&ctx.state.home_dir), &r, &mr.title, spawn) {
+        Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Fix started - the agent posts its plan on the merge request first"), BACK),
+        Err(e) => fail(ctx.tf("Could not start the job: {detail}", &[("detail", &e)])),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,6 +571,7 @@ mod tests {
             created_at: "2026-10-01T09:00:00Z".into(),
             sha: "h".into(),
             reviewer: true,
+            source_project_id: "9".into(),
             ..MyMr::default()
         };
         f(&mut m);
@@ -608,6 +755,231 @@ mod tests {
         for path in ["/loops/mr-review-loop/mrs/auto", "/loops/mr-review-loop/mrs/review"] {
             assert_eq!(st.registry.dispatch(&st, &UiRequest::new(Method::POST, path)).unwrap().status, 403);
         }
+    }
+
+    fn fix_setup(d: &std::path::Path) {
+        std::fs::write(
+            d.join("connectors.json"),
+            r#"[{"id":"work","type":"gitlab"},{"id":"gh","type":"github"}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("projects.json"),
+            r#"{"gitlab_instance":"g.example.com","worktree_root":"/wt","projects":{
+                "web":{"local_path":"/code/web","project_id":"9"}}}"#,
+        )
+        .unwrap();
+    }
+
+    fn jobs_in(d: &std::path::Path) -> Vec<loopx_core::mr_fix::jobs::FixJob> {
+        loopx_core::mr_fix::jobs::list(&loopx_core::mr_fix::jobs::jobs_dir(d))
+    }
+
+    fn fix_post(
+        st: &UiState,
+        body: &str,
+        listed: Vec<AccountMrs>,
+    ) -> UiResponse {
+        let req = UiRequest::new(Method::POST, "/loops/mr-review-loop/mrs/fix").with_body(body);
+        let ctx = UiCtx::new(st, &req);
+        fix_now_with(&ctx, Ok(listed), &|_| Ok(i64::from(std::process::id())))
+    }
+
+    #[test]
+    fn fix_now_button_shows_on_assigned_and_created_mrs() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let html = render(
+            &st,
+            Ok(vec![account(vec![
+                mr("1", |_| {}),
+                mr("3", |m| m.draft = true),
+                mr("4", |m| {
+                    m.authored = true;
+                    m.reviewer = false;
+                }),
+            ])]),
+        );
+        let (assigned, created) = html.split_once("Created by you").unwrap();
+        assert!(assigned.contains("action='/loops/mr-review-loop/mrs/fix'"), "{assigned}");
+        assert!(assigned.contains("Fix now") && assigned.contains("Review now"));
+        assert!(created.contains("Fix now") && created.contains("value='work:9!4'"), "{created}");
+        assert!(!created.contains("Review now"));
+        // A draft gets the button too, disabled, with the reason on hover.
+        assert_eq!(html.matches("Fix now").count(), 3, "{html}");
+        assert!(!html.contains("value='work:9!3'"), "no live form on the draft");
+        assert!(
+            html.contains("disabled title='This merge request is a draft.'"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn fix_now_is_disabled_with_a_reason_for_a_fork_mr() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let html = render(
+            &st,
+            Ok(vec![account(vec![
+                mr("1", |m| m.source_project_id = "10".into()),
+                mr("2", |m| {
+                    m.project_id = "77".into();
+                    m.source_project_id = "77".into();
+                }),
+                mr("3", |m| m.account = "gh".into()),
+            ])]),
+        );
+        assert!(html.contains("cannot be pushed to"), "fork reason on hover: {html}");
+        assert!(html.contains("is not configured in Projects"), "{html}");
+        assert!(html.contains("only works on GitLab"), "{html}");
+        assert!(!html.contains("action='/loops/mr-review-loop/mrs/fix'"), "no live form: {html}");
+        assert!(html.contains("disabled"));
+    }
+
+    #[test]
+    fn fix_now_post_starts_a_job_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let r = st
+            .registry
+            .dispatch(&st, &UiRequest::new(Method::POST, "/loops/mr-review-loop/mrs/fix"))
+            .unwrap();
+        assert_eq!(r.status, 403);
+        let mut st = state(d.path());
+        st.spawn_processes = false;
+        let r = fix_post(&st, "csrf_token=tok&mr=work%3A9%211", vec![account(vec![mr("1", |_| {})])]);
+        assert!(r.header("Location").unwrap().contains("ok=0"), "no spawn when the server forbids it");
+        assert!(jobs_in(d.path()).is_empty());
+        st.spawn_processes = true;
+        let r = fix_post(&st, "csrf_token=tok&mr=work%3A9%211", vec![account(vec![mr("1", |_| {})])]);
+        assert_eq!(r.status, 303);
+        let loc = r.header("Location").unwrap();
+        assert!(loc.starts_with("/loops/mr-review-loop?view=mrs&flash=") && loc.contains("ok=1"), "{loc}");
+        let jobs = jobs_in(d.path());
+        assert_eq!(jobs.len(), 1);
+        assert_eq!((jobs[0].mr_ref.as_str(), jobs[0].state.as_str()), ("work:9!1", "running"));
+        assert_eq!(jobs[0].title, "MR <1>");
+    }
+
+    #[test]
+    fn fix_now_post_refuses_an_ineligible_or_running_mr_even_with_a_forged_form() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let mut st = state(d.path());
+        st.spawn_processes = true;
+        let listed = || {
+            vec![account(vec![
+                mr("2", |m| m.source_project_id = "10".into()),
+                mr("3", |m| m.draft = true),
+                mr("5", |m| {
+                    m.project_id = "77".into();
+                    m.source_project_id = "77".into();
+                }),
+                mr("6", |m| m.account = "gh".into()),
+            ])]
+        };
+        for bad in [
+            "work%3A9%212",   // fork
+            "work%3A9%213",   // draft
+            "work%3A77%215",  // project not configured
+            "gh%3A9%216",     // not GitLab
+            "work%3A9%2199",  // not in the live list
+            "-x%3A1%212",     // malformed
+            "",
+        ] {
+            let r = fix_post(&st, &format!("csrf_token=tok&mr={bad}"), listed());
+            assert!(r.header("Location").unwrap().contains("ok=0"), "{bad}");
+        }
+        assert!(jobs_in(d.path()).is_empty());
+        let ok = vec![account(vec![mr("1", |_| {})])];
+        assert!(fix_post(&st, "csrf_token=tok&mr=work%3A9%211", ok.clone()).header("Location").unwrap().contains("ok=1"));
+        let again = fix_post(&st, "csrf_token=tok&mr=work%3A9%211", ok);
+        assert!(again.header("Location").unwrap().contains("ok=0"), "already running");
+        assert_eq!(jobs_in(d.path()).len(), 1);
+    }
+
+    #[test]
+    fn a_running_fix_shows_fixing_and_disables_the_button() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let dir = loopx_core::mr_fix::jobs::jobs_dir(d.path());
+        loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
+        assert!(html.contains("Fixing\u{2026}"), "{html}");
+        assert!(!html.contains("action='/loops/mr-review-loop/mrs/fix'"), "{html}");
+    }
+
+    #[test]
+    fn a_finished_fix_shows_its_result_pill() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let dir = loopx_core::mr_fix::jobs::jobs_dir(d.path());
+        let job = loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "done", "Fixed 5 of 7").unwrap();
+        let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
+        assert!(html.contains("Fixed 5 of 7") && html.contains("action='/loops/mr-review-loop/mrs/fix'"), "{html}");
+        let job = loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "failed", "build <broke>").unwrap();
+        let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
+        assert!(html.contains("Fix failed") && html.contains("title='build &lt;broke&gt;'"), "{html}");
+    }
+
+    fn render_in(st: &UiState, lang: &str, listed: Vec<AccountMrs>) -> String {
+        let req = UiRequest::get("/loops/mr-review-loop?view=mrs")
+            .with_header("cookie", &format!("loop_lang={lang}"));
+        mrs_html(&UiCtx::new(st, &req), Ok(listed))
+    }
+
+    #[test]
+    fn a_done_fix_is_translated_with_its_counts_and_odd_summaries_are_escaped() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let dir = loopx_core::mr_fix::jobs::jobs_dir(d.path());
+        let job = loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "done", "Fixed 5 of 7").unwrap();
+        let listed = || vec![account(vec![mr("1", |_| {})])];
+        let en = render_in(&st, "en", listed());
+        assert!(en.contains("Fixed 5 of 7"));
+        for lang in ["fr", "ja", "zh"] {
+            let html = render_in(&st, lang, listed());
+            assert!(!html.contains("Fixed 5 of 7"), "{lang}: {html}");
+            assert!(html.contains('5') && html.contains('7'));
+        }
+        assert!(render_in(&st, "fr", listed()).contains("5 corrig"));
+        let job = loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "done", "Fixed 2 of 3 (finish note not posted)").unwrap();
+        let html = render_in(&st, "en", listed());
+        assert!(html.contains("Fixed 2 of 3") && html.contains("title='(finish note not posted)'"), "{html}");
+        let job = loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "done", "weird <b>'x'").unwrap();
+        let html = render_in(&st, "fr", listed());
+        assert!(html.contains("title='weird &lt;b&gt;&#x27;x&#x27;'") || html.contains("title='weird &lt;b&gt;&#39;x&#39;'"), "{html}");
+    }
+
+    #[test]
+    fn the_fix_controls_render_translated_and_attribute_safe_in_fr_and_ja() {
+        let d = tempfile::tempdir().unwrap();
+        fix_setup(d.path());
+        let st = state(d.path());
+        let listed = || vec![account(vec![mr("1", |_| {}), mr("2", |m| m.source_project_id = "10".into())])];
+        let fr = render_in(&st, "fr", listed());
+        assert!(fr.contains("Corriger maintenant") && !fr.contains(">Fix now<"), "{fr}");
+        assert!(fr.contains("n\u{2019}est pas") || fr.contains("peut pas recevoir"), "{fr}");
+        // A French apostrophe (U+2019) is fine; a raw ' would end the title attribute early.
+        let title = fr.split("disabled title='").nth(1).unwrap().split('\'').next().unwrap();
+        assert!(title.contains("fork") && !title.contains('<'), "{title}");
+        let ja = render_in(&st, "ja", listed());
+        assert!(ja.contains("今すぐ修正") && ja.contains("フォーク由来"), "{ja}");
+        let dir = loopx_core::mr_fix::jobs::jobs_dir(d.path());
+        loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        assert!(render_in(&st, "fr", listed()).contains("Correction en cours\u{2026}"));
+        assert!(render_in(&st, "ja", listed()).contains("修正中\u{2026}"));
     }
 
     #[test]

@@ -1616,5 +1616,20 @@
   "Track all issues": "すべてのIssueを追跡",
   "Stop tracking all issues": "すべてのIssueの追跡を停止",
   "Tracking all issues": "すべてのIssueを追跡中",
-  "Stopped tracking all issues": "すべてのIssueの追跡を停止しました"
+  "Stopped tracking all issues": "すべてのIssueの追跡を停止しました",
+  "Fix now": "今すぐ修正",
+  "Fixing…": "修正中…",
+  "Fixed": "修正済み",
+  "Nothing to fix": "修正するものはありません",
+  "Fix failed": "修正に失敗しました",
+  "Fix stopped": "修正を停止しました",
+  "A fix for this merge request is already running": "このマージリクエストの修正はすでに実行中です",
+  "Fix started - the agent posts its plan on the merge request first": "修正を開始しました。エージェントはまずマージリクエストに計画を投稿します",
+  "This merge request comes from a fork, so its branch cannot be pushed to.": "このマージリクエストはフォーク由来のため、ブランチにプッシュできません。",
+  "This merge request's project is not configured in Projects.": "このマージリクエストのプロジェクトは「プロジェクト」で設定されていません。",
+  "Fix now only works on GitLab merge requests.": "「今すぐ修正」は GitLab のマージリクエストでのみ使えます。",
+  "This merge request is a draft.": "このマージリクエストはドラフトです。",
+  "Fixed {fixed} of {total}": "{total} 件中 {fixed} 件を修正",
+  "Reviewing": "レビュー中",
+  "Posting draft notes": "ドラフトノートを投稿中"
 }

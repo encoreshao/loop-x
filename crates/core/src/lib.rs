@@ -78,6 +78,7 @@ pub mod messages;
 pub mod metrics;
 pub mod mr;
 pub mod mr_feedback;
+pub mod mr_fix;
 pub mod mr_plan;
 pub mod mr_precheck;
 pub mod mr_screenshots;

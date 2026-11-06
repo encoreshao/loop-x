@@ -239,6 +239,13 @@ pub trait LoopPlugin: Send + Sync {
 
     fn discover(&self, ctx: &LoopContext) -> Result<Vec<WorkItem>, PluginError>;
 
+    /// A short name for the item being processed, shown on the dashboard as
+    /// "Processing <label>" plus the current step while it runs. `None` (the
+    /// default) leaves the loop's status file alone.
+    fn item_label(&self, _item: &WorkItem) -> Option<String> {
+        None
+    }
+
     /// Default: `loops/<definition_dir>/prompt.md` with `{{item_json}}` and
     /// `{{settings_json}}` substituted.
     fn build_prompt(&self, item: &WorkItem, ctx: &LoopContext) -> Result<String, PluginError> {
@@ -595,8 +602,48 @@ struct ItemEnv<'a> {
     repo_root: &'a Path,
 }
 
+/// Step names written to the status file (translated at render time).
+const STEP_REVIEWING: &str = "Reviewing";
+const STEP_POSTING: &str = "Posting draft notes";
+
+/// Keep the run's own status file (`running`, pid, ...) and set or, for
+/// `None`, drop `current_issue`/`current_step`. Does nothing unless the
+/// wrapper has the run marked `running`, so a stopped or never-started run is
+/// never rewritten. Best effort: a failed write must not fail the item.
+fn set_progress(repo_root: &Path, loop_name: &str, progress: Option<(&str, &str)>) {
+    let path = crate::loop_scheduler::status_path_for_loop(loop_name, Some(repo_root));
+    let current = crate::status::read_status(&path);
+    if current.get("state").and_then(Value::as_str) != Some("running") {
+        return;
+    }
+    let mut extra: Vec<(&str, Value)> = current
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "state" | "updated_at" | "current_issue" | "current_step"
+            )
+        })
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+    if let Some((issue, step)) = progress {
+        extra.push(("current_issue", json!(issue)));
+        extra.push(("current_step", json!(step)));
+    }
+    let _ = crate::status::write_status(&path, "running", &extra);
+}
+
 fn run_item(env: &ItemEnv, item: &WorkItem) -> Outcome {
     let (plugin, ctx) = (env.plugin, env.ctx);
+    let label = plugin.item_label(item);
+    let step = |step: &str| {
+        if let Some(label) = &label {
+            set_progress(env.repo_root, plugin.loop_name(), Some((label, step)));
+        }
+    };
+    step(STEP_REVIEWING);
     let holder = Arc::new(Mutex::new(Holder::default()));
     let max_cost = ctx.definition.stop_conditions.max_cost_usd;
     let spent = Arc::new(Mutex::new(0.0f64));
@@ -703,7 +750,10 @@ fn run_item(env: &ItemEnv, item: &WorkItem) -> Outcome {
             .clone();
         let outcome = parse_answer(text.as_deref(), &keys)
             .map_err(|m| PluginError::new("ValueError", m))
-            .and_then(|answer| plugin.after_item(item, &answer, ctx));
+            .and_then(|answer| {
+                step(STEP_POSTING);
+                plugin.after_item(item, &answer, ctx)
+            });
         return match outcome {
             Ok(mut o) => {
                 if o.url.is_empty() {
@@ -1053,6 +1103,9 @@ pub fn run_plugin(
         ));
         outcomes.push(outcome);
     }
+    if items.iter().any(|i| plugin.item_label(i).is_some()) {
+        set_progress(&repo_root, &loop_name, None);
+    }
     let last_run = loop_dir.join("last-run.json");
     if interrupted {
         let _ = seen.save();
@@ -1217,6 +1270,9 @@ retry: {enabled: true, max_attempts: 2}
         after: Option<After>,
         max: usize,
         discover_error: bool,
+        labelled: bool,
+        /// The loop's status file as seen from inside each model call and after_item.
+        seen_status: Mutex<Vec<(&'static str, Value)>>,
     }
 
     impl Demo {
@@ -1230,7 +1286,16 @@ retry: {enabled: true, max_attempts: 2}
                 after: None,
                 max: 20,
                 discover_error: false,
+                labelled: false,
+                seen_status: Mutex::new(Vec::new()),
             }
+        }
+        fn snap_status(&self, at: &'static str, c: &LoopContext) {
+            let path = crate::loop_scheduler::status_path_for_loop("demo-loop", Some(&c.repo_root));
+            self.seen_status
+                .lock()
+                .unwrap()
+                .push((at, crate::status::read_status(&path)));
         }
         fn with_answers(mut self, answers: Vec<Result<String, String>>) -> Self {
             self.answers = Mutex::new(answers.into());
@@ -1264,10 +1329,14 @@ retry: {enabled: true, max_attempts: 2}
             }
             Ok(self.items.clone())
         }
+        fn item_label(&self, item: &WorkItem) -> Option<String> {
+            self.labelled.then(|| format!("label of {}", item.key))
+        }
         fn build_prompt(&self, item: &WorkItem, _c: &LoopContext) -> Result<String, PluginError> {
             Ok(format!("judge {}", item.key))
         }
         fn call_model(&self, prompt: &str, ctx: &LoopContext) -> Result<ModelAnswer, ModelError> {
+            self.snap_status("model", ctx);
             self.prompts.lock().unwrap().push(prompt.to_string());
             self.caps.lock().unwrap().push(ctx.call_budget_usd);
             let a = self
@@ -1289,8 +1358,9 @@ retry: {enabled: true, max_attempts: 2}
             &self,
             item: &WorkItem,
             answer: &Value,
-            _c: &LoopContext,
+            c: &LoopContext,
         ) -> Result<Outcome, PluginError> {
+            self.snap_status("after", c);
             match &self.after {
                 Some(f) => f(item, answer),
                 None => Ok(Outcome::new(
@@ -1355,6 +1425,77 @@ retry: {enabled: true, max_attempts: 2}
     }
 
     const OK: &str = r#"{"verdict": "ok"}"#;
+
+    fn status_file(w: &World) -> std::path::PathBuf {
+        crate::loop_scheduler::status_path_for_loop("demo-loop", Some(w.dir.path()))
+    }
+
+    #[test]
+    fn a_labelled_item_shows_in_the_status_file_while_it_runs_and_is_cleared_after() {
+        let w = world();
+        // run_loop has already written "running" with the pid.
+        crate::status::write_status(
+            &status_file(&w),
+            "running",
+            &[("pid", json!(4242)), ("last_exit_code", json!(0))],
+        )
+        .unwrap();
+        let mut demo = Demo::new(vec![item("a"), item("b")], &[OK, OK]);
+        demo.labelled = true;
+        let p = Arc::new(demo);
+        assert_eq!(statuses(&run(&w, &p, "run_1")), ["done", "done"]);
+        let seen = p.seen_status.lock().unwrap();
+        let expect = [
+            ("model", "label of a", "Reviewing"),
+            ("after", "label of a", "Posting draft notes"),
+            ("model", "label of b", "Reviewing"),
+            ("after", "label of b", "Posting draft notes"),
+        ];
+        assert_eq!(seen.len(), expect.len(), "{seen:?}");
+        for ((at, st), (eat, issue, step)) in seen.iter().zip(expect) {
+            assert_eq!(*at, eat);
+            assert_eq!(st["state"], "running", "{st}");
+            assert_eq!(st["current_issue"], issue, "{st}");
+            assert_eq!(st["current_step"], step, "{st}");
+            assert_eq!(st["pid"], 4242, "the run-control pid survives: {st}");
+            assert_eq!(st["last_exit_code"], 0, "{st}");
+        }
+        let after = crate::status::read_status(&status_file(&w));
+        assert_eq!(
+            after["state"], "running",
+            "the wrapper ends the run: {after}"
+        );
+        assert_eq!(after["pid"], 4242);
+        assert!(
+            after.get("current_issue").is_none() && after.get("current_step").is_none(),
+            "{after}"
+        );
+    }
+
+    #[test]
+    fn an_unlabelled_plugin_never_touches_the_status_file() {
+        let w = world();
+        let p = Arc::new(Demo::new(vec![item("a")], &[OK]));
+        run(&w, &p, "run_1");
+        assert!(!status_file(&w).exists());
+        crate::status::write_status(&status_file(&w), "running", &[("pid", json!(1))]).unwrap();
+        let before = std::fs::read_to_string(status_file(&w)).unwrap();
+        run(&w, &Arc::new(Demo::new(vec![item("b")], &[OK])), "run_2");
+        assert_eq!(std::fs::read_to_string(status_file(&w)).unwrap(), before);
+    }
+
+    #[test]
+    fn a_stopped_run_is_not_resurrected_by_a_progress_write() {
+        let w = world();
+        crate::status::write_status(&status_file(&w), "stopped", &[]).unwrap();
+        let mut demo = Demo::new(vec![item("a")], &[OK]);
+        demo.labelled = true;
+        run(&w, &Arc::new(demo), "run_1");
+        assert_eq!(
+            crate::status::read_status(&status_file(&w))["state"],
+            "stopped"
+        );
+    }
 
     #[test]
     fn happy_path_processes_items_and_digests() {

@@ -137,9 +137,31 @@ fn creator_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
         loopx_core::creator::jobs::list_jobs(&dir),
         &ctx.state.user_home,
     );
-    loopx_core::creator::notify::loop_statuses(&dir, &settled, chrono::Utc::now())
+    let mut out: Vec<(String, serde_json::Value)> =
+        loopx_core::creator::notify::loop_statuses(&dir, &settled, chrono::Utc::now())
+            .into_iter()
+            .filter(|(_, doc)| {
+                doc.get("state").and_then(serde_json::Value::as_str) == Some("running")
+            })
+            .collect();
+    out.extend(mr_fix_running(ctx));
+    out
+}
+
+/// Running "Fix now" jobs from the Merge requests view, as `("mr-fix", status)`.
+fn mr_fix_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
+    loopx_core::mr_fix::jobs::list(&loopx_core::mr_fix::jobs::jobs_dir(&ctx.state.home_dir))
         .into_iter()
-        .filter(|(_, doc)| doc.get("state").and_then(serde_json::Value::as_str) == Some("running"))
+        .filter(|j| j.state == "running")
+        .map(|j| {
+            let doc = json!({
+                "state": "running",
+                "updated_at": j.started_at,
+                "current_issue": j.mr_ref,
+                "current_step": ctx.t("Fixing\u{2026}"),
+            });
+            ("mr-fix".to_string(), doc)
+        })
         .collect()
 }
 
@@ -181,6 +203,17 @@ fn pill_parts(ctx: &UiCtx, snap: &Snapshot) -> (&'static str, String, bool) {
     ("pill pill-outline", ctx.t("Agents"), false)
 }
 
+/// The widest the header pill's text gets; the full text stays in its tooltip.
+const PILL_MAX_CHARS: usize = 60;
+
+fn clip_pill(label: &str) -> String {
+    if label.chars().count() <= PILL_MAX_CHARS {
+        return label.to_string();
+    }
+    let head: String = label.chars().take(PILL_MAX_CHARS - 1).collect();
+    format!("{}\u{2026}", head.trim_end())
+}
+
 fn pill_icon(busy: bool) -> String {
     if busy {
         consts::ds("_SPINNER_ICON").to_string()
@@ -193,19 +226,23 @@ fn pill_icon(busy: bool) -> String {
 /// `JS in shell.tpl` keeps it current.
 pub fn pill_html(ctx: &UiCtx) -> String {
     let snap = queue_for(ctx.state).snapshot(1);
-    let (class, label, busy) = pill_parts(ctx, &snap);
-    let label = pyfmt::escape(&label);
+    let (class, full, busy) = pill_parts(ctx, &snap);
+    let label = pyfmt::escape(&clip_pill(&full));
+    let title = pyfmt::escape(&full);
     let active = if ctx.req.path == "/queue" { " is-active" } else { "" };
     format!(
-        "<a class='topbar-agents {class}{active}' id='queue-pill' href='/queue' title='{label}'>{}<span>{label}</span></a>",
+        "<a class='topbar-agents {class}{active}' id='queue-pill' href='/queue' title='{title}'>{}<span>{label}</span></a>",
         pill_icon(busy),
     )
 }
 
 fn pill(ctx: &UiCtx) -> UiResponse {
     let snap = queue_for(ctx.state).snapshot(1);
-    let (class, label, busy) = pill_parts(ctx, &snap);
-    UiResponse::json(200, &json!({"class": class, "label": label, "icon": pill_icon(busy)}))
+    let (class, full, busy) = pill_parts(ctx, &snap);
+    UiResponse::json(
+        200,
+        &json!({"class": class, "label": clip_pill(&full), "title": full, "icon": pill_icon(busy)}),
+    )
 }
 
 // ----- the page -----
@@ -530,6 +567,19 @@ mod tests {
     }
 
     #[test]
+    fn the_agents_pill_lists_a_running_mr_fix() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let dir = loopx_core::mr_fix::jobs::jobs_dir(d.path());
+        loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "Fix <login>", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        assert!(pill.contains("work:9!1") && pill.contains("pill-blue"), "{pill}");
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("mr-fix") && html.contains("running for") && html.contains("work:9!1"), "{html}");
+        assert!(!html.contains("Nothing is running"), "{html}");
+    }
+
+    #[test]
     fn the_pill_carries_a_running_loops_progress_with_a_spinner() {
         let d = tempfile::tempdir().unwrap();
         let st = state(d.path());
@@ -548,6 +598,61 @@ mod tests {
         let tag = &shell[start..start + shell[start..].find("</a>").unwrap()];
         assert!(tag.contains("md-spinner") && tag.contains("Processing web #1362 — Analyzing"), "{tag}");
         assert_eq!(shell.matches("Processing web #1362").count(), 2, "only the pill and its title");
+    }
+
+    fn mr_review_running(d: &std::path::Path, issue: &str) -> UiState {
+        let st = state(d);
+        let q = RunQueue::new(d.join("run_queue.json"));
+        q.enqueue("mr-review-loop", Reason::Scheduled, "2026-10-27T10:00:00").unwrap();
+        q.claim_next("2026-10-27T10:00:05", 1).unwrap();
+        write_status(
+            d,
+            "status/mr-review-loop.json",
+            &serde_json::json!({"state": "running", "current_issue": issue, "current_step": "Reviewing"}).to_string(),
+        );
+        st
+    }
+
+    #[test]
+    fn a_running_mr_review_names_the_merge_request_in_the_pill_and_on_the_page() {
+        let d = tempfile::tempdir().unwrap();
+        let st = mr_review_running(d.path(), "g/p!7 \u{2014} Fix login");
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        let pill: serde_json::Value = serde_json::from_str(&pill).unwrap();
+        assert_eq!(pill["label"], "Processing g/p!7 \u{2014} Fix login \u{2014} Reviewing");
+        assert!(pill["icon"].as_str().unwrap().contains("md-spinner"), "{pill}");
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(
+            html.contains("mr-review-loop") && html.contains("Processing g/p!7 \u{2014} Fix login \u{2014} Reviewing \u{b7} running for"),
+            "{html}"
+        );
+        assert!(!html.contains("Starting up"), "{html}");
+    }
+
+    #[test]
+    fn an_untrusted_mr_title_is_escaped_in_the_pill_and_the_row_and_the_pill_is_clipped() {
+        let d = tempfile::tempdir().unwrap();
+        let title = "g/p!7 \u{2014} <img src=x onerror=1> & more";
+        let st = mr_review_running(d.path(), title);
+        let shell = st.registry.dispatch(&st, &UiRequest::get("/runs")).unwrap().body_text();
+        assert!(!shell.contains("<img src=x"), "raw tag in the shell: {shell}");
+        assert!(shell.contains("&lt;img src=x onerror=1&gt; &amp; more"), "{shell}");
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(!html.contains("<img src=x"), "{html}");
+        assert!(html.contains("&lt;img src=x onerror=1&gt; &amp; more"), "{html}");
+        // JSON carries plain text (the page sets it with textContent), clipped for the header;
+        // the title attribute and the Agents row keep the full text.
+        let long = format!("g/p!7 \u{2014} {}", "w".repeat(120));
+        let d2 = tempfile::tempdir().unwrap();
+        let st = mr_review_running(d2.path(), &long);
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        let pill: serde_json::Value = serde_json::from_str(&pill).unwrap();
+        let label = pill["label"].as_str().unwrap();
+        assert_eq!(label.chars().count(), 60, "{label}");
+        assert!(label.ends_with('\u{2026}'), "{label}");
+        assert!(pill["title"].as_str().unwrap().contains(&"w".repeat(120)), "{pill}");
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains(&"w".repeat(120)), "the Agents row shows the full text");
     }
 
     #[test]

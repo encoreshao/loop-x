@@ -16,6 +16,7 @@ loop(s) are due — there is no longer a separate `launchd/*.plist` per task.
 | Inbox Triage loop | [docs/tasks/inbox-triage-loop.md](docs/tasks/inbox-triage-loop.md) | Weekdays 09:00 once enabled, from its loops.json entry (disabled by default) |
 | Daily Digest loop | [`docs/tasks/daily-digest-loop.md`](docs/tasks/daily-digest-loop.md) | Weekdays 09:30 once enabled, from its `loops.json` entry (disabled by default) |
 | MR Review loop | [`docs/tasks/mr-review-loop.md`](docs/tasks/mr-review-loop.md) | Every 2 hours once enabled, from its `loops.json` entry (disabled by default) |
+| MR Fix now | [`docs/tasks/mr-fix-now.md`](docs/tasks/mr-fix-now.md) | Manual only: the Fix now button on the MR Review page |
 | Pipeline Doctor loop | [`docs/tasks/pipeline-doctor-loop.md`](docs/tasks/pipeline-doctor-loop.md) | Hourly once enabled, from its `loops.json` entry (disabled by default) |
 | RSS Watch loop | [`docs/tasks/rss-watch-loop.md`](docs/tasks/rss-watch-loop.md) | Daily 08:00 once enabled, from its `loops.json` entry (disabled by default) |
 | LinkedIn Autopilot loop | [`docs/tasks/linkedin-autopilot-loop.md`](docs/tasks/linkedin-autopilot-loop.md) | Daily 09:00 once enabled, from its `loops.json` entry (disabled by default) |

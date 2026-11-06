@@ -1616,5 +1616,20 @@
   "Track all issues": "Suivre toutes les issues",
   "Stop tracking all issues": "Ne plus suivre aucune issue",
   "Tracking all issues": "Suivi de toutes les issues activé",
-  "Stopped tracking all issues": "Suivi de toutes les issues arrêté"
+  "Stopped tracking all issues": "Suivi de toutes les issues arrêté",
+  "Fix now": "Corriger maintenant",
+  "Fixing…": "Correction en cours…",
+  "Fixed": "Corrigé",
+  "Nothing to fix": "Rien à corriger",
+  "Fix failed": "Échec de la correction",
+  "Fix stopped": "Correction arrêtée",
+  "A fix for this merge request is already running": "Une correction est déjà en cours pour cette merge request",
+  "Fix started - the agent posts its plan on the merge request first": "Correction lancée : l’agent publie d’abord son plan sur la merge request",
+  "This merge request comes from a fork, so its branch cannot be pushed to.": "Cette merge request provient d’un fork : sa branche ne peut pas recevoir de push.",
+  "This merge request's project is not configured in Projects.": "Le projet de cette merge request n’est pas configuré dans Projets.",
+  "Fix now only works on GitLab merge requests.": "Corriger maintenant ne fonctionne que sur les merge requests GitLab.",
+  "This merge request is a draft.": "Cette merge request est un brouillon.",
+  "Fixed {fixed} of {total}": "{fixed} corrigé(s) sur {total}",
+  "Reviewing": "Relecture en cours",
+  "Posting draft notes": "Publication des notes de brouillon"
 }
