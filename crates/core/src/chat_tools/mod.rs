@@ -629,6 +629,27 @@ fn validate(tool: &Tool, raw: &str) -> Result<Map<String, Value>, String> {
     Ok(args)
 }
 
+/// What to tell the user when a connector type has no usable account. Only
+/// registered types get a hint; Google services are separate accounts, each
+/// with its own sign-in, so a Calendar or Gmail sign-in does not cover Docs.
+fn setup_hint(kind: &str, has_disabled: bool) -> String {
+    let Some(info) = crate::connectors::get_type(kind) else {
+        return String::new();
+    };
+    let label = info.label;
+    let mut hint = if has_disabled {
+        format!(". A {label} account exists but is turned off: enable it on the Connectors page")
+    } else {
+        format!(". Add a {label} account on the Connectors page and sign in with Google there")
+    };
+    if kind.starts_with("google_") {
+        hint.push_str(
+            "; each Google service (Calendar, Docs, Sheets, Slides) is a separate connector with its own sign-in, so signing in to another one does not cover this",
+        );
+    }
+    hint
+}
+
 enum SelectError {
     /// A hand-written user-facing message.
     User(String),
@@ -646,13 +667,15 @@ fn select_account(
     let Some(kind) = tool.connector_type else {
         return Ok(None);
     };
-    let mut candidates: Vec<Account> = env
+    let of_kind: Vec<Account> = env
         .provider
         .list_accounts()
         .map_err(SelectError::Exc)?
         .into_iter()
-        .filter(|a| a.kind == kind && a.enabled)
+        .filter(|a| a.kind == kind)
         .collect();
+    let any_disabled = of_kind.iter().any(|a| !a.enabled);
+    let mut candidates: Vec<Account> = of_kind.into_iter().filter(|a| a.enabled).collect();
     let wanted = args.get("account").filter(|v| truthy(v));
     if let Some(w) = wanted {
         candidates.retain(|a| w.as_str() == Some(a.id.as_str()));
@@ -660,7 +683,8 @@ fn select_account(
     if candidates.is_empty() {
         let suffix = wanted.map_or(String::new(), |w| format!(" with id {}", py_str(w)));
         return Err(SelectError::User(format!(
-            "No {kind} connector account configured{suffix}"
+            "No {kind} connector account configured{suffix}{}",
+            setup_hint(kind, any_disabled)
         )));
     }
     if let Some(select) = tool.select {
@@ -1178,6 +1202,43 @@ mod tests {
         );
         let r = run_t(&t, &fixture(), "fake.local", "{}");
         assert_eq!(r["result"]["account"], Value::Null);
+    }
+
+    #[test]
+    fn missing_google_account_says_each_google_service_needs_its_own() {
+        let t = setup(accts(&[]));
+        let f = vec![tool(
+            "gdocs.read",
+            Mode::Read,
+            Some("google_docs"),
+            &ECHO_ARGS,
+            echo,
+        )];
+        let msg = run_t(&t, &f, "gdocs.read", r#"{"text": "x"}"#)["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            msg.starts_with("No google_docs connector account configured"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("Connectors") && msg.contains("Google Docs"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("Calendar") && msg.contains("separate"),
+            "{msg}"
+        );
+
+        let mut off = account("gd", "google_docs");
+        off.enabled = false;
+        let t = setup(vec![off]);
+        let msg = run_t(&t, &f, "gdocs.read", r#"{"text": "x"}"#)["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(msg.contains("turned off"), "{msg}");
     }
 
     #[test]

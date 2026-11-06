@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- When chat can't use a connector because no account exists (or it is turned off), the error now says where to add or enable it, and that each Google service (Calendar, Docs, Sheets, Slides) needs its own sign-in.
+
 ## [0.17.0] - 2026-11-06
 
 ### Added
