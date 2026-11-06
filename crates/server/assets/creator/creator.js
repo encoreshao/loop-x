@@ -77,7 +77,7 @@
   });
 
   // Job log sheet: a [data-cr-log] link opens the one right-hand sheet and loads
-  // the link's own href into it as text (never HTML). While the job is still
+  // the link's own href (as server-sanitized HTML via ?format=html) into it. While the job is still
   // running (no loopx-exit line yet) the log refreshes every 2s. Without script
   // the link just opens the log in a new tab.
   var sheet = document.getElementById('cr-sheet');
@@ -95,13 +95,14 @@
       sheetLog.textContent = sheet.getAttribute('data-loading-label');
       sheet.classList.add('is-loading');
     }
-    fetch(url, { cache: 'no-store', credentials: 'same-origin' })
+    fetch(url + (url.indexOf('?') < 0 ? '?' : '&') + 'format=html', { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
       .then(function (text) {
         if (url !== sheetUrl) return;
         var atEnd = sheetLog.scrollHeight - sheetLog.scrollTop - sheetLog.clientHeight < 24;
         sheet.classList.remove('is-loading');
-        sheetLog.textContent = text.trim() ? text : sheet.getAttribute('data-empty-label');
+        if (text.trim()) sheetLog.innerHTML = text;
+        else sheetLog.textContent = sheet.getAttribute('data-empty-label');
         if (first || atEnd) sheetLog.scrollTop = sheetLog.scrollHeight;
         if (sheet.open && text.indexOf('loopx-exit=') === -1) {
           sheetTimer = setTimeout(function () { loadLog(url, false); }, 2000);

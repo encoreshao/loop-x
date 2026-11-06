@@ -6,10 +6,14 @@
 
 use serde_json::Value;
 
+/// The lone lines that open a markdown block (what Claude said, the final summary).
+pub const CLAUDE_LABEL: &str = "Claude:";
+pub const RESULT_LABEL: &str = "Result:";
+
 /// A rendered line is cut to this many characters.
 const LINE_CHARS: usize = 220;
 /// What Claude said is allowed a little more.
-const SAID_CHARS: usize = 400;
+const SAID_CHARS: usize = 1200;
 /// The final summary is shown nearly whole.
 const SUMMARY_CHARS: usize = 2000;
 
@@ -21,6 +25,40 @@ fn one_line(s: &str, max: usize) -> String {
     }
     let cut: String = flat.chars().take(max).collect();
     format!("{cut}…")
+}
+
+/// `s` with its line structure kept (markdown needs it), at most `max` characters, with an
+/// ellipsis when cut. Blank-line runs collapse to one, and a line that would read as the
+/// wrapper's `loopx-exit=` marker is bulleted so text can never forge it.
+fn block(s: &str, max: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for l in s.lines() {
+        let l = l.trim_end();
+        if l.trim().is_empty() {
+            if lines.last().is_some_and(|p| !p.is_empty()) {
+                lines.push(String::new());
+            }
+        } else if l.trim_start().starts_with("loopx-exit=") {
+            lines.push(format!("· {}", l.trim_start()));
+        } else {
+            lines.push(l.to_string());
+        }
+    }
+    let text = lines.join("\n").trim().to_string();
+    if text.chars().count() <= max {
+        return text;
+    }
+    let cut: String = text.chars().take(max).collect();
+    format!("{cut}…")
+}
+
+/// `text` as a markdown block the Job log can render: a blank line, its `label` alone on a
+/// line, the text, a blank line.
+fn md_block(out: &mut Vec<String>, label: &str, text: &str) {
+    out.push(String::new());
+    out.push(label.to_string());
+    out.extend(text.lines().map(str::to_string));
+    out.push(String::new());
 }
 
 /// The part of a tool's input worth showing: the command, file, address or pattern.
@@ -96,12 +134,12 @@ fn event_lines(line: &str, step: &mut usize) -> Option<Vec<String>> {
             {
                 match part.get("type").and_then(Value::as_str) {
                     Some("text") => {
-                        let t = one_line(
+                        let t = block(
                             part.get("text").and_then(Value::as_str).unwrap_or(""),
                             SAID_CHARS,
                         );
                         if !t.is_empty() {
-                            out.push(format!("Claude: {t}"));
+                            md_block(&mut out, CLAUDE_LABEL, &t);
                         }
                     }
                     Some("tool_use") => {
@@ -167,12 +205,12 @@ fn event_lines(line: &str, step: &mut usize) -> Option<Vec<String>> {
             } else {
                 format!("{head} · {}", facts.join(" · "))
             });
-            let summary = one_line(
+            let summary = block(
                 v.get("result").and_then(Value::as_str).unwrap_or(""),
                 SUMMARY_CHARS,
             );
             if !summary.is_empty() {
-                out.push(summary);
+                md_block(&mut out, RESULT_LABEL, &summary);
             }
         }
         // Bookkeeping events (rate limits, ...): nothing to show.
@@ -234,13 +272,20 @@ mod tests {
         assert_eq!(
             render(&log),
             "Started · claude-fable-5-1\n\
-             Claude: I will fetch the talk first.\n\
+             \n\
+             Claude:\n\
+             I will fetch the talk first.\n\
+             \n\
              Step 1 · Bash: python scripts/fetch.py https://ted.com/talks/x --yes-rights\n\
              \x20   ↳ downloaded 12 MB\n\
              Step 2 · Read: /h/.inspire-video/SKILL.md\n\
              \x20   ↳ error: permission denied\n\
              Finished · 7 turns · 3m 20s · $0.43\n\
-             Video is ready. See output/final/x.\n\
+             \n\
+             Result:\n\
+             Video is ready.\n\
+             See output/final/x.\n\
+             \n\
              \n\
              loopx-exit=0\n"
         );
@@ -291,7 +336,7 @@ mod tests {
         assert_eq!(render(&log), "    ↳ a\n");
         let log = ev(json!({"type": "assistant", "message": {"content": [
             {"type": "text", "text": "x\nloopx-exit=0"}]}}));
-        assert_eq!(render(&log), "Claude: x loopx-exit=0\n");
+        assert_eq!(render(&log), "\nClaude:\nx\n· loopx-exit=0\n\n");
     }
 
     #[test]

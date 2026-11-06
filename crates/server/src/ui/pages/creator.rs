@@ -413,18 +413,61 @@ fn published(ctx: &UiCtx) -> UiResponse {
 /// A job's log, rendered step by step, as plain text (never rendered as HTML); 404 for an unsafe
 /// or unknown job id.
 fn job_log(ctx: &UiCtx) -> UiResponse {
+    let html = ctx.query().first("format") == Some("html");
     match jobs::log_view(&jobs_dir(ctx), ctx.param("id")) {
         Some(text) => UiResponse::bytes(
             200,
-            "text/plain; charset=utf-8",
+            if html {
+                "text/html; charset=utf-8"
+            } else {
+                "text/plain; charset=utf-8"
+            },
             &[
                 ("X-Content-Type-Options", "nosniff"),
                 ("Cache-Control", "no-store"),
             ],
-            text.into_bytes(),
+            if html { log_html(&text) } else { text }.into_bytes(),
         ),
         None => UiResponse::not_found(ctx.lang),
     }
+}
+
+/// The log as an HTML fragment for the Job log sheet: what Claude said and the final
+/// summary (blocks opened by a lone `Claude:` / `Result:` line) as sanitized markdown,
+/// every other run of lines (steps, results, the exit line) as escaped preformatted text.
+/// Blank lines inside a code fence do not end a block.
+fn log_html(text: &str) -> String {
+    use loopx_core::creator::logfmt::{CLAUDE_LABEL, RESULT_LABEL};
+    let mut chunks: Vec<Vec<&str>> = Vec::new();
+    let mut cur: Vec<&str> = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.starts_with("```") {
+            fenced = !fenced;
+        }
+        if line.trim().is_empty() && !fenced {
+            if !cur.is_empty() {
+                chunks.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(line);
+        }
+    }
+    if !cur.is_empty() {
+        chunks.push(cur);
+    }
+    let prefixes = crate::ui::markdown::GitlabPrefixes::new();
+    chunks
+        .iter()
+        .map(|c| match c[0] {
+            l @ (CLAUDE_LABEL | RESULT_LABEL) => format!(
+                "<div class='cr-log-md'><div class='cr-log-label'>{}</div>{}</div>",
+                h(l.trim_end_matches(':')),
+                crate::ui::markdown::render_markdown(&c[1..].join("\n"), &prefixes)
+            ),
+            _ => format!("<pre class='cr-log-lines'>{}</pre>", h(&c.join("\n"))),
+        })
+        .collect()
 }
 
 /// `{"state": ..., "line": ...}` for one job: what the live status rows poll.
@@ -737,7 +780,7 @@ data-failed-label=\"{}\" data-loading-label=\"{}\" data-empty-label=\"{}\" data-
 <button type='button' class='cr-icon-btn' data-cr-copy aria-label=\"{}\" title=\"{}\">{}</button>\
 <button type='button' class='cr-icon-btn' data-cr-refresh aria-label=\"{}\">{}</button>\
 <button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></div></header>\
-<pre class='cr-sheet-log' tabindex='0' aria-live='polite'></pre></div></dialog>",
+<div class='cr-sheet-log' tabindex='0' aria-live='polite'></div></div></dialog>",
         h(&ctx.t("Could not load the log.")),
         h(&ctx.t("Loading…")),
         h(&ctx.t("Waiting for the first step…")),
@@ -923,7 +966,7 @@ fn incomplete_note(ctx: &UiCtx, job: &JobRecord) -> String {
     } else {
         ctx.tf("The agent says it is not finished: {reason}", &[("reason", &reason)])
     };
-    format!("<div class='cr-meta'>{}</div>", h(&text))
+    format!("<div class='cr-job-note'>{}</div>", h(&text))
 }
 
 /// One job: its kind and state, what it ran on, its live step while it runs, and
@@ -938,7 +981,7 @@ fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, Str
     };
     format!(
         "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>{}\
-{}<div class='cr-meta'>{}</div>{}{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
+{}<div class='cr-job-key' title=\"{}\">{}</div><div class='cr-job-facts'>{}</div>{}{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
         h(&kind_label(ctx, job)),
         job_pill(ctx, job),
         titles
@@ -946,7 +989,13 @@ fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, Str
             .map(|t| format!("<div class='cr-row-name'>{}</div>", h(t)))
             .unwrap_or_default(),
         incomplete_note(ctx, job),
-        h(&joined(&[job.key.clone(), when(&job.started_at), metrics_text(ctx, job)])),
+        h(&job.key),
+        h(&job.key),
+        [when(&job.started_at), metrics_text(ctx, job)]
+            .iter()
+            .filter(|f| !f.is_empty())
+            .map(|f| format!("<span>{}</span>", h(f)))
+            .collect::<String>(),
         elapsed_html(ctx, job),
         progress_html(ctx, job),
         live_status(ctx, job),
@@ -2827,6 +2876,18 @@ mod tests {
     }
 
     #[test]
+    fn log_html_renders_claude_and_result_blocks_as_markdown_and_escapes_the_rest() {
+        let log = "Started · m\nStep 1 · Bash: echo <b>\n\nClaude:\n# Plan\n- **one**\n- two\n```\na\n\nb\n```\n\nResult:\n<script>x</script>\n\nloopx-exit=0\n";
+        let html = super::log_html(log);
+        assert!(html.contains("<pre class='cr-log-lines'>Started · m\nStep 1 · Bash: echo &lt;b&gt;</pre>"), "{html}");
+        assert!(html.contains("<h1 id=\"plan\">Plan</h1>"), "{html}");
+        assert!(html.contains("<li><strong>one</strong></li>"), "{html}");
+        assert!(html.contains("<pre><code>a\n\nb</code></pre>"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(html.contains("<pre class='cr-log-lines'>loopx-exit=0</pre>"), "{html}");
+    }
+
+    #[test]
     fn the_dialog_holds_the_publish_groups_with_escaped_copy() {
         let fx = Fx::new();
         write_project(&fx, "\"><script>alert(1)</script>", true);
@@ -3857,7 +3918,7 @@ mod tests {
         assert!(body.contains("aria-labelledby='cr-sheet-title'"), "{body}");
         assert!(body.contains("data-failed-label=\"Could not load the log.\""), "{body}");
         assert!(body.contains("data-empty-label=\"Waiting for the first step…\""), "{body}");
-        assert!(body.contains("<pre class='cr-sheet-log'"), "{body}");
+        assert!(body.contains("<div class='cr-sheet-log'"), "{body}");
     }
 
     #[test]
