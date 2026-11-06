@@ -135,17 +135,23 @@
 .cr-poster:hover .cr-poster-title { color: var(--md-primary); }
 
 /* Video dialog */
-.cr-dialog { width: min(980px, calc(100vw - 2rem)); max-width: none; max-height: calc(100vh - 2rem); padding: 0; border: 0; border-radius: 16px; background: var(--md-surface); color: var(--md-on-surface); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32), 0 0 0 1px var(--md-outline-variant); overflow: hidden; }
+.cr-dialog { width: min(1240px, calc(100vw - 2rem)); height: min(900px, calc(100vh - 2rem)); max-width: none; max-height: calc(100vh - 2rem); padding: 0; border: 0; border-radius: 16px; background: var(--md-surface); color: var(--md-on-surface); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32), 0 0 0 1px var(--md-outline-variant); overflow: hidden; }
 .cr-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
-.cr-dialog-inner { display: flex; flex-direction: column; max-height: calc(100vh - 2rem); }
+.cr-dialog-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .cr-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--md-outline-variant); }
 .cr-dialog-titles { min-width: 0; display: flex; flex-direction: column; gap: 0.4rem; }
 .cr-dialog-titles h2 { font-size: 1.0625rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
-.cr-dialog-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1.5rem; padding: 1.25rem; overflow: auto; }
+.cr-dialog-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1.5rem; padding: 1.25rem 1.25rem 0; overflow: hidden; }
 .cr-player { display: flex; justify-content: center; align-items: flex-start; }
-.cr-player video { display: block; height: min(70vh, 640px); width: auto; max-width: 100%; aspect-ratio: 9 / 16; object-fit: contain; border-radius: 12px; background: #000; }
+.cr-player video { display: block; height: calc(min(900px, 100vh - 2rem) - 7rem); width: auto; max-width: 100%; aspect-ratio: 9 / 16; object-fit: contain; border-radius: 12px; background: #000; }
 .cr-player-empty { display: flex; align-items: center; justify-content: center; height: min(50vh, 420px); aspect-ratio: 9 / 16; border-radius: 12px; background: var(--md-surface-container-high); color: var(--md-on-surface-variant); font-size: 0.875rem; padding: 1rem; text-align: center; }
-.cr-details { min-width: 0; display: flex; flex-direction: column; gap: 1.1rem; }
+.cr-details { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 1rem; overflow-y: auto; padding-bottom: 1.25rem; scrollbar-gutter: stable; }
+/* Actions bar: what you do with the video on the left, state and destructive actions on the right. */
+.cr-toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 0.6rem 1rem; flex-wrap: wrap; padding: 0.6rem 0.75rem; border-radius: 14px; border: 1px solid var(--md-outline-variant); background: color-mix(in srgb, var(--md-surface) 82%, transparent); -webkit-backdrop-filter: saturate(1.6) blur(14px); backdrop-filter: saturate(1.6) blur(14px); }
+.cr-toolbar .cr-btn { height: 2.125rem; }
+.cr-actions-end { margin-left: auto; }
+.cr-group[open] { box-shadow: var(--shadow-1); }
+.cr-group > summary { padding: 0.85rem 1rem; }
 .cr-publish { display: flex; flex-direction: column; gap: 0.6rem; }
 .cr-publish-empty { padding: 0.25rem 0; }
 .cr-group { border: 1px solid var(--md-outline-variant); border-radius: 12px; background: var(--md-surface-container-lowest); }
@@ -163,7 +169,10 @@
 .cr-group-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding-top: 0.75rem; border-top: 1px solid var(--md-outline-variant); }
 
 @media (max-width: 760px) {
-  .cr-dialog-body { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
+  .cr-dialog { height: calc(100vh - 1rem); width: calc(100vw - 1rem); }
+  .cr-dialog-body { grid-template-columns: minmax(0, 1fr); padding: 1rem; overflow: auto; }
+  .cr-details { overflow: visible; }
+  .cr-toolbar { position: static; }
   .cr-dialog-head { padding: 0.9rem 1rem; }
   .cr-player video { width: 100%; height: auto; max-height: 70vh; }
   .cr-player-empty { width: 100%; height: auto; max-height: 50vh; }

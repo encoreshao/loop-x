@@ -2244,11 +2244,12 @@ fn platform_group(
         String::new()
     };
     format!(
-        "<details class='cr-group'{}><summary><span class='cr-group-title'>{}</span>{badge}\
+        "<details class='cr-group' name=\"{}-publish\"{}><summary><span class='cr-group-title'>{}</span>{badge}\
 <span class='cr-chevron' aria-hidden='true'></span></summary><div class='cr-group-body'>{fields}\
 <div class='cr-group-actions'>{copy_all}<form method='post' action='/creator/published' class='cr-inline-form'>{}\
 <input type='hidden' name='slug' value=\"{}\"><input type='hidden' name='platform' value='{key}'>\
 <input type='hidden' name='on' value='{on}'><button type='submit' class='cr-btn cr-btn-plain cr-btn-small'>{} {}</button></form></div></div></details>",
+        h(&v.dom_id),
         if open { " open" } else { "" },
         h(label),
         ctx.csrf_input(),
@@ -2333,7 +2334,8 @@ fn video_dialog(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
 <h2 id='{id}-title'>{}</h2><div class='cr-badges'>{}<span class='cr-meta'>{}</span></div></div>\
 <button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
 <div class='cr-dialog-body'><div class='cr-player'>{player}</div><div class='cr-details'>\
-<div class='cr-actions'>{}{publish}{share}{folder}{source}{log}{stop}{delete}</div>{}</div></div></div></dialog>",
+<div class='cr-toolbar'><div class='cr-actions'>{}{share}{folder}{source}{log}</div>\
+<div class='cr-actions cr-actions-end'>{publish}{stop}{delete}</div></div>{}</div></div></div></dialog>",
         h(&v.p.slug),
         h(&v.p.title),
         pill(v.status_kind, &v.status),
@@ -2944,12 +2946,12 @@ mod tests {
         assert!(dialog.contains("name='csrf_token'"), "{dialog}");
         // Two disclosure groups, the first one open.
         assert!(
-            dialog.contains("<details class='cr-group' open><summary><span class='cr-group-title'>WeChat</span>"),
+            dialog.contains("name=\"cr-video-0-publish\" open><summary><span class='cr-group-title'>WeChat</span>"),
             "{dialog}"
         );
         assert!(
             dialog.contains(
-                "<details class='cr-group'><summary><span class='cr-group-title'>Douyin</span>"
+                "name=\"cr-video-0-publish\"><summary><span class='cr-group-title'>Douyin</span>"
             ),
             "{dialog}"
         );

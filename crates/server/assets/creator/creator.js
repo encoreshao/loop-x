@@ -43,6 +43,18 @@
     if (dialog.__opener && document.contains(dialog.__opener)) dialog.__opener.focus();
   }
 
+  // One publish group open at a time. The `name` attribute does this in
+  // current browsers; this covers the rest.
+  document.addEventListener('toggle', function (e) {
+    var d = e.target;
+    if (!d || !d.matches || !d.matches('details.cr-group[open]')) return;
+    var name = d.getAttribute('name');
+    if (!name) return;
+    document.querySelectorAll('details.cr-group[open]').forEach(function (o) {
+      if (o !== d && o.getAttribute('name') === name) o.removeAttribute('open');
+    });
+  }, true);
+
   document.querySelectorAll('dialog.cr-dialog').forEach(function (dialog) {
     dialog.addEventListener('close', function () { onClose(dialog); });
   });
