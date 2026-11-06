@@ -223,6 +223,24 @@ pub fn any_video_between(
     })
 }
 
+/// The video made from `key` (its source URL) whose file was written between `since` and
+/// `until`: the one a Generate job that ran in that window produced.
+pub fn project_between<'a>(
+    projects: &'a [VideoProject],
+    key: &str,
+    since: std::time::SystemTime,
+    until: Option<std::time::SystemTime>,
+) -> Option<&'a VideoProject> {
+    projects.iter().find(|p| {
+        p.source_url.as_deref() == Some(key)
+            && p.mp4.as_ref().is_some_and(|mp4| {
+                std::fs::metadata(mp4)
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t >= since && until.is_none_or(|u| t <= u))
+            })
+    })
+}
+
 /// Delete a video's folders: its deliverables (`output/final/<slug>`) and its working
 /// folder (`output/projects/<slug>`), when they exist. The downloaded source is shared
 /// by other videos and is left alone. `slug` must be one plain folder name, a folder

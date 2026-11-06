@@ -20,6 +20,7 @@ use loopx_core::creator::spawn;
 use loopx_core::creator::state::{self as cstate, CreatorState};
 use loopx_core::creator::{normalize_source_url, valid_source_url};
 use loopx_core::creator::videos::{self, PublishCopy, VideoProject};
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -664,6 +665,7 @@ fn job_pill(ctx: &UiCtx, job: &JobRecord) -> String {
     match (job.state.as_str(), job.kind) {
         ("no_output", JobKind::Generate) => pill("error", &ctx.t("No video produced")),
         ("no_output", JobKind::Scout) => pill("error", &ctx.t("No results")),
+        ("incomplete", _) => pill("error", &ctx.t("Incomplete")),
         (state, _) => state_pill(ctx, state),
     }
 }
@@ -699,16 +701,21 @@ fn log_link(ctx: &UiCtx, job: &JobRecord) -> String {
 fn log_sheet(ctx: &UiCtx) -> String {
     format!(
         "<dialog class='cr-sheet' id='cr-sheet' aria-labelledby='cr-sheet-title' \
-data-failed-label=\"{}\" data-loading-label=\"{}\" data-empty-label=\"{}\">\
+data-failed-label=\"{}\" data-loading-label=\"{}\" data-empty-label=\"{}\" data-copied-label=\"{}\">\
 <div class='cr-sheet-inner'><header class='cr-sheet-head'><h2 id='cr-sheet-title'>{}</h2>\
 <div class='cr-sheet-tools'>\
+<button type='button' class='cr-icon-btn' data-cr-copy aria-label=\"{}\" title=\"{}\">{}</button>\
 <button type='button' class='cr-icon-btn' data-cr-refresh aria-label=\"{}\">{}</button>\
 <button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></div></header>\
 <pre class='cr-sheet-log' tabindex='0' aria-live='polite'></pre></div></dialog>",
         h(&ctx.t("Could not load the log.")),
         h(&ctx.t("Loading…")),
         h(&ctx.t("Waiting for the first step…")),
+        h(&ctx.t("Copied")),
         h(&ctx.t("Job log")),
+        h(&ctx.t("Copy")),
+        h(&ctx.t("Copy")),
+        icons::icon("content_copy"),
         h(&ctx.t("Refresh")),
         icons::icon("autorenew"),
         h(&ctx.t("Close")),
@@ -862,19 +869,38 @@ fn delete_form(ctx: &UiCtx, job: &JobRecord) -> String {
     )
 }
 
+/// Why the agent called a finished run incomplete (what it still needs), if it did.
+fn incomplete_note(ctx: &UiCtx, job: &JobRecord) -> String {
+    if job.state != "incomplete" {
+        return String::new();
+    }
+    let reason = jobs::incomplete_reason(job).unwrap_or_default();
+    let text = if reason.is_empty() {
+        ctx.t("The agent says the video still needs work.")
+    } else {
+        ctx.tf("The agent says it is not finished: {reason}", &[("reason", &reason)])
+    };
+    format!("<div class='cr-meta'>{}</div>", h(&text))
+}
+
 /// One job: its kind and state, what it ran on, its live step while it runs, and
 /// View log with Stop (running) or Delete (finished).
-fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str) -> String {
+fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, String>) -> String {
     let action = if job.state == "running" {
         stop_form(ctx, job, tab)
     } else {
         delete_form(ctx, job)
     };
     format!(
-        "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>\
-<div class='cr-meta'>{}</div>{}{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
+        "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>{}\
+{}<div class='cr-meta'>{}</div>{}{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
         h(&kind_label(ctx, job)),
         job_pill(ctx, job),
+        titles
+            .get(&job.id)
+            .map(|t| format!("<div class='cr-row-name'>{}</div>", h(t)))
+            .unwrap_or_default(),
+        incomplete_note(ctx, job),
         h(&joined(&[job.key.clone(), when(&job.started_at), metrics_text(ctx, job)])),
         elapsed_html(ctx, job),
         progress_html(ctx, job),
@@ -888,7 +914,9 @@ fn running_list(ctx: &UiCtx, title: &str, jobs: &[&JobRecord], tab: &str) -> Str
     if jobs.is_empty() {
         return String::new();
     }
-    let rows: String = jobs.iter().map(|j| job_row(ctx, j, tab)).collect();
+    // A running job has made no video yet, so there is no title to show.
+    let none = HashMap::new();
+    let rows: String = jobs.iter().map(|j| job_row(ctx, j, tab, &none)).collect();
     section(title, "", &format!("<ul class='cr-list'>{rows}</ul>"))
 }
 
@@ -964,6 +992,21 @@ fn stats_html(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     }
 }
 
+/// The title of the video each finished Generate job made, by job id: the video whose
+/// source is the job's URL and that was written while the job ran.
+fn job_titles(ctx: &UiCtx, jobs: &[JobRecord]) -> HashMap<String, String> {
+    let projects = videos::list_projects(&videos::videos_root(&ctx.state.user_home)).0;
+    jobs.iter()
+        .filter(|j| j.kind == JobKind::Generate && j.state == "done")
+        .filter_map(|j| {
+            let since = jobs::started_time(j)?;
+            let until = jobs::ended_time(j).map(|t| t + std::time::Duration::from_secs(5));
+            let p = videos::project_between(&projects, &j.key, since, until)?;
+            Some((j.id.clone(), p.title.clone()))
+        })
+        .collect()
+}
+
 /// The Jobs tab: every Find videos and Generate run, newest first.
 fn jobs_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     if jobs.is_empty() {
@@ -978,10 +1021,11 @@ fn jobs_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             ),
         );
     }
+    let titles = job_titles(ctx, &jobs[..jobs.len().min(JOBS_SHOWN)]);
     let rows: String = jobs
         .iter()
         .take(JOBS_SHOWN)
-        .map(|j| job_row(ctx, j, "jobs"))
+        .map(|j| job_row(ctx, j, "jobs", &titles))
         .collect();
     let finished = jobs.iter().any(|j| j.state != "running");
     let clear = if finished {
@@ -3672,6 +3716,51 @@ mod tests {
             body.contains("<span class='cr-pill cr-pill-ok'>Done</span>"),
             "{body}"
         );
+    }
+
+    #[test]
+    fn the_jobs_tab_shows_the_title_of_the_video_a_generate_job_made() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let id = "20261105T000000-titled000";
+        finished_job(&fx, id, "loopx-exit=0\n");
+        let rec = fx.jobs().join(format!("{id}.json"));
+        let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+        v["key"] = json!(SOURCE);
+        std::fs::write(&rec, v.to_string()).unwrap();
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("<div class='cr-row-name'>Demo short</div>"), "{body}");
+        // A job that made nothing has no title line.
+        let other = "20261105T000001-untitled0";
+        finished_job(&fx, other, "boom\nloopx-exit=3\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert_eq!(body.matches("class='cr-row-name'").count(), 1, "{body}");
+    }
+
+    #[test]
+    fn a_run_that_reports_itself_incomplete_shows_incomplete_with_the_reason_not_done() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let id = "20261105T000000-incompl00";
+        let result = json!({"type": "result", "result": "Draft.\nResult: incomplete — one cue is unverified"});
+        finished_job(&fx, id, &format!("{result}\nloopx-exit=0\n"));
+        let rec = fx.jobs().join(format!("{id}.json"));
+        let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&rec).unwrap()).unwrap();
+        v["key"] = json!(SOURCE);
+        std::fs::write(&rec, v.to_string()).unwrap();
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("<span class='cr-pill cr-pill-error'>Incomplete</span>"), "{body}");
+        assert!(body.contains("one cue is unverified"), "{body}");
+        assert!(!body.contains(">Done</span>"), "{body}");
+    }
+
+    #[test]
+    fn the_log_sheet_has_a_copy_button_for_the_whole_log() {
+        let fx = Fx::new();
+        finished_job(&fx, "20261105T000000-copy00000", "loopx-exit=0\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("data-cr-copy"), "{body}");
+        assert!(body.contains("data-copied-label=\"Copied\""), "{body}");
     }
 
     #[test]

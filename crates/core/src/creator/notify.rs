@@ -50,6 +50,7 @@ fn reason(rec: &JobRecord) -> &'static str {
     match (rec.state.as_str(), rec.kind) {
         ("no_output", JobKind::Generate) => "No video produced",
         ("no_output", JobKind::Scout) => "No results",
+        ("incomplete", _) => "Incomplete",
         _ => "Failed",
     }
 }
@@ -88,7 +89,7 @@ pub fn loop_statuses(
             })
         } else {
             let at = finished_at(newest).unwrap_or(now);
-            let failed = matches!(newest.state.as_str(), "failed" | "no_output")
+            let failed = matches!(newest.state.as_str(), "failed" | "no_output" | "incomplete")
                 && now - at < chrono::Duration::hours(FAILURE_HOURS);
             if failed {
                 json!({
@@ -139,6 +140,12 @@ pub fn finished_report(dir: &Path, rec: &JobRecord) -> Report {
             State::Failed,
             "No video produced",
             "The run ended without error but no video file was written. Open its log under Creator → Jobs.",
+        ),
+        ("incomplete", _) => (
+            "Video generation incomplete",
+            State::Failed,
+            "Incomplete",
+            "The agent finished but says the video still needs work. Open its log under Creator → Jobs.",
         ),
         ("no_output", false) => (
             "Video search found nothing",
@@ -228,7 +235,12 @@ pub fn notify_finished(
     let settled = jobs::settle_outputs(jobs::list_jobs(dir), user_home);
     let finished: Vec<&JobRecord> = settled
         .iter()
-        .filter(|j| matches!(j.state.as_str(), "done" | "failed" | "no_output"))
+        .filter(|j| {
+            matches!(
+                j.state.as_str(),
+                "done" | "failed" | "no_output" | "incomplete"
+            )
+        })
         .collect();
     let Some(mut known) = read_notified(notified_path) else {
         let ids: Vec<String> = finished.iter().rev().map(|j| j.id.clone()).collect();
@@ -380,6 +392,69 @@ mod tests {
         let out = loop_statuses(d.path(), &settled, now());
         assert_eq!(out[0].1["state"], "failed");
         assert_eq!(out[0].1["current_step"], "No video produced");
+    }
+
+    fn result_line(text: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"type": "result", "subtype": "success", "is_error": false, "result": text})
+        )
+    }
+
+    #[test]
+    fn a_clean_exit_whose_closing_result_says_incomplete_reads_failed_with_the_reason() {
+        let d = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let log = [
+            result_line(
+                "Rendered a draft.\nResult: incomplete — the 864 px crop check was not done",
+            ),
+            "loopx-exit=0\n".to_string(),
+        ]
+        .concat();
+        record(
+            d.path(),
+            "20261105T000001-gen000000",
+            "generate",
+            "https://x.io/a",
+            false,
+            &stamp(5),
+            &log,
+        );
+        let settled = jobs::settle_outputs(jobs::list_jobs(d.path()), home.path());
+        assert_eq!(settled[0].state, "incomplete");
+        assert_eq!(
+            jobs::incomplete_reason(&settled[0]).as_deref(),
+            Some("the 864 px crop check was not done")
+        );
+        let out = loop_statuses(d.path(), &settled, now());
+        assert_eq!(out[0].1["state"], "failed");
+        assert_eq!(out[0].1["current_step"], "Incomplete");
+        let r = finished_report(d.path(), &settled[0]);
+        assert_eq!(r.title, "Video generation incomplete");
+        assert_eq!(r.status.as_ref().unwrap().state, State::Failed);
+        // A "Result: complete" closing line, or none (older runs), changes nothing.
+        let ok = [
+            result_line("All good.\nResult: complete"),
+            "loopx-exit=0\n".to_string(),
+        ]
+        .concat();
+        record(
+            d.path(),
+            "20261105T000002-gen000000",
+            "generate",
+            "https://x.io/b",
+            false,
+            &stamp(4),
+            &ok,
+        );
+        let settled = jobs::settle_outputs(jobs::list_jobs(d.path()), home.path());
+        let second = settled
+            .iter()
+            .find(|j| j.id.ends_with("000002-gen000000"))
+            .unwrap();
+        assert_ne!(second.state, "incomplete");
+        assert!(jobs::incomplete_reason(second).is_none());
     }
 
     #[test]

@@ -98,6 +98,7 @@
 .cr-btn:focus-visible, .cr-segment:focus-visible, .cr-poster:focus-visible, .cr-icon-btn:focus-visible, .cr-link:focus-visible, .cr-group > summary:focus-visible, .cr-more > summary:focus-visible, .cr-input:focus-visible { outline: 3px solid color-mix(in srgb, var(--md-primary) 55%, transparent); outline-offset: 2px; }
 .cr-inline-form { display: inline-flex; margin: 0; }
 .cr-icon-btn { flex: 0 0 auto; width: 1.875rem; height: 1.875rem; border-radius: 999px; border: 0; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--md-on-surface-variant); background: var(--md-surface-container-high); }
+.cr-icon-btn.is-copied { color: var(--md-primary); }
 .cr-icon-btn:hover { color: var(--md-on-surface); background: var(--md-surface-container-highest); }
 .cr-link { border: 0; padding: 0; background: none; font: inherit; font-size: 0.8125rem; color: var(--md-primary); cursor: pointer; width: fit-content; }
 
@@ -294,3 +295,5 @@
 
 .cr-link-form { display: flex; flex-direction: column; gap: 0.75rem; margin: 0; }
 .cr-link-actions { margin-left: 0; }
+
+.cr-row-name { margin-top: 0.125rem; font-size: 0.9375rem; color: var(--md-on-surface); overflow-wrap: anywhere; }

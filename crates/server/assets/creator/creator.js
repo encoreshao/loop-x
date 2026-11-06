@@ -114,6 +114,39 @@
       });
   }
 
+  // Copy the whole log (what is shown, as plain text); the button says "Copied" for a moment.
+  function copyLog(button) {
+    var text = sheetLog.textContent;
+    if (sheet.classList.contains('is-loading') || !text) return;
+    var done = function () {
+      var label = button.getAttribute('aria-label');
+      button.classList.add('is-copied');
+      button.setAttribute('aria-label', sheet.getAttribute('data-copied-label'));
+      button.title = sheet.getAttribute('data-copied-label');
+      setTimeout(function () {
+        button.classList.remove('is-copied');
+        button.setAttribute('aria-label', label);
+        button.title = label;
+      }, 1600);
+    };
+    var fallback = function () {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      sheet.appendChild(area);
+      area.select();
+      try { if (document.execCommand('copy')) done(); } catch (e) { /* nothing to do */ }
+      area.remove();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+  }
+
   if (sheet) {
     sheet.addEventListener('close', function () {
       stopPolling();
@@ -132,6 +165,8 @@
         return;
       }
       if (t.closest && t.closest('[data-cr-refresh]') && sheetUrl) { loadLog(sheetUrl, true); return; }
+      var copy = t.closest && t.closest('[data-cr-copy]');
+      if (copy) { copyLog(copy); return; }
       if (t === sheet) sheet.close();
     });
   }

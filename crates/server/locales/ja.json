@@ -1632,5 +1632,8 @@
   "This merge request is a draft.": "このマージリクエストはドラフトです。",
   "Fixed {fixed} of {total}": "{total} 件中 {fixed} 件を修正",
   "Reviewing": "レビュー中",
-  "Posting draft notes": "ドラフトノートを投稿中"
+  "Posting draft notes": "ドラフトノートを投稿中",
+  "Incomplete": "不完全",
+  "The agent says the video still needs work.": "エージェントは、動画にまだ作業が必要だと報告しています。",
+  "The agent says it is not finished: {reason}": "エージェントは未完了と報告しています: {reason}"
 }

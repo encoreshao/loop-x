@@ -1632,5 +1632,8 @@
   "This merge request is a draft.": "此合并请求是草稿。",
   "Fixed {fixed} of {total}": "已修复 {fixed}/{total}",
   "Reviewing": "审查中",
-  "Posting draft notes": "正在发布草稿备注"
+  "Posting draft notes": "正在发布草稿备注",
+  "Incomplete": "未完成",
+  "The agent says the video still needs work.": "智能体表示视频仍需处理。",
+  "The agent says it is not finished: {reason}": "智能体表示尚未完成：{reason}"
 }
