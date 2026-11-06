@@ -128,12 +128,29 @@ fn outside_gitlab_run(ctx: &UiCtx, snap: &Snapshot) -> Option<serde_json::Value>
     live_status(ctx, "issue-loop")
 }
 
+/// The Creator's running Find videos / Generate video jobs (started from the Creator
+/// page or the chat), as `(loop name, status)` with the job's current stage. They run
+/// outside the queue, so the pill and the page add them here.
+fn creator_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
+    let dir = loopx_core::creator::jobs::jobs_dir(&ctx.state.home_dir);
+    let settled = loopx_core::creator::jobs::settle_outputs(
+        loopx_core::creator::jobs::list_jobs(&dir),
+        &ctx.state.user_home,
+    );
+    loopx_core::creator::notify::loop_statuses(&dir, &settled, chrono::Utc::now())
+        .into_iter()
+        .filter(|(_, doc)| doc.get("state").and_then(serde_json::Value::as_str) == Some("running"))
+        .collect()
+}
+
 /// What a running loop is doing right now, from its status file: the GitLab loop
-/// first (it also runs outside the queue), then each running queue entry.
+/// first (it also runs outside the queue), then each running queue entry, then a
+/// running Creator job.
 fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
     std::iter::once("issue-loop")
         .chain(snap.running.iter().map(|e| e.loop_name.as_str()))
         .find_map(|name| live_status(ctx, name))
+        .or_else(|| creator_running(ctx).into_iter().next().map(|(_, doc)| doc))
         .map(|status| progress_text(ctx.lang, &status))
 }
 
@@ -271,8 +288,36 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
         let progress = with_agent_activity(ctx, "issue-loop", progress_text(ctx.lang, &status));
         row(ctx, &e, &progress, "")
     });
+    let creator = creator_running(ctx).into_iter().map(|(name, status)| {
+        let e = Entry {
+            id: String::new(),
+            loop_name: name,
+            reason: "manual".into(),
+            priority: 0,
+            enqueued_at: String::new(),
+            state: "running".into(),
+            started_at: None,
+            finished_at: None,
+            pid: None,
+            exit_code: None,
+            note: None,
+            cancel_requested: false,
+        };
+        let progress = progress_text(ctx.lang, &status);
+        let since = status
+            .get("updated_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0));
+        let detail = match since {
+            Some(secs) => format!("{progress} · {}", ctx.tf("running for {time}", &[("time", &short_age(secs))])),
+            None => progress,
+        };
+        row(ctx, &e, &detail, "")
+    });
     let running = outside
         .into_iter()
+        .chain(creator)
         .chain(snap.running.iter().map(|e| {
             let progress = live_status(ctx, &e.loop_name)
                 .map(|s| with_agent_activity(ctx, &e.loop_name, progress_text(ctx.lang, &s)));
@@ -459,6 +504,29 @@ mod tests {
         let path = dir.join("outputs").join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn a_running_creator_job_shows_its_stage_in_the_pill_and_on_the_page() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let jobs = d.path().join("creator/jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        let id = "20261022T115800-gen000000";
+        let started = chrono::Utc::now().to_rfc3339();
+        std::fs::write(
+            jobs.join(format!("{id}.json")),
+            serde_json::json!({"id": id, "kind": "generate", "key": "https://www.ted.com/talks/x", "state": "running",
+                   "pid": i64::from(std::process::id()), "started_at": started})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(jobs.join(format!("{id}.log")), "").unwrap();
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        assert!(pill.contains("Processing") && pill.contains("pill-blue"), "{pill}");
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("creator-generate-video") && html.contains("running for"), "{html}");
+        assert!(!html.contains("Nothing is running"), "{html}");
     }
 
     #[test]
