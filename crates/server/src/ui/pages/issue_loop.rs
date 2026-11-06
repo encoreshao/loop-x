@@ -1036,6 +1036,47 @@ fn tracking_toggle_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
     )
 }
 
+/// The switch at the top of the Tasks list: one click enables or disables tracking
+/// for every issue in My Queue (the ones that carry a per-issue switch). It is on
+/// only while all of them are tracked; the form lists the issues it applies to.
+fn tracking_all_html(ctx: &UiCtx, groups: &[(String, Vec<&Value>)]) -> String {
+    let path = ctx.state.home_dir.join("issue_tracking.json");
+    let mut refs = String::new();
+    let mut all_on = true;
+    let mut count = 0;
+    for (alias, items) in groups {
+        for item in items {
+            let Some(iid) = item.get("iid").filter(|v| !v.is_null()) else { continue };
+            let iid = pydumps::py_str(iid);
+            count += 1;
+            all_on &= issue_tracking_config::is_issue_enabled(alias, &iid, &path).unwrap_or(true);
+            refs.push_str(&format!(
+                "<input type='hidden' name='issue' value='{}'>",
+                pyfmt::escape(&format!("{alias}#{iid}"))
+            ));
+        }
+    }
+    if count == 0 {
+        return String::new();
+    }
+    let (action, class, checked, label) = if all_on {
+        ("disable", "is-on", "true", ctx.t("Stop tracking all issues"))
+    } else {
+        ("enable", "is-off", "false", ctx.t("Track all issues"))
+    };
+    let safe_label = pyfmt::escape(&label);
+    let on_msg = pyfmt::escape(&ctx.t("Tracking all issues"));
+    let off_msg = pyfmt::escape(&ctx.t("Stopped tracking all issues"));
+    let fail_msg = pyfmt::escape(&ctx.t("Something went wrong - try again."));
+    format!(
+        "<div class='tracking-all'><span class='tracking-all-label'>{}</span><form method='post' action='/gitlab/issues/bulk/{action}' data-toast-on='{on_msg}' data-toast-off='{off_msg}' data-toast-fail='{fail_msg}' data-label-on='{}' data-label-off='{}' class='daemon-action-form issue-tracking-all'>{}{refs}<button type='submit' class='switch {class}' role='switch' aria-checked='{checked}' aria-label='{safe_label}' title='{safe_label}'><span class='switch-thumb'></span></button></form></div>",
+        esc_t(ctx, "Track all issues"),
+        pyfmt::escape(&ctx.t("Stop tracking all issues")),
+        pyfmt::escape(&ctx.t("Track all issues")),
+        ctx.csrf_input()
+    )
+}
+
 /// "Run now" for one tracked issue: starts the loop on just this issue. Hidden by
 /// CSS while the row's tracking switch is off (the route refuses it then too).
 fn issue_run_html(ctx: &UiCtx, alias: &str, issue_iid: &Value) -> String {
@@ -1256,11 +1297,16 @@ pub fn live_fragment_html(ctx: &UiCtx, live: &[(String, AliasState)]) -> String 
             ))
         );
     }
-    let mut out = format!(
+    let mut out = tracking_all_html(ctx, &groups);
+    out.push_str(&format!(
         "<div class='project-block'><h3>{}</h3>{priority_subtitle}{priority_body}</div>",
         esc_t(ctx, "My Queue")
-    );
+    ));
     for (alias, entry) in live {
+        // A project with no issues, no MRs and nothing to report has nothing to show.
+        if entry.issues.is_empty() && entry.mrs.is_empty() && entry.issues_error.is_none() && entry.mrs_error.is_none() {
+            continue;
+        }
         let backlog: Vec<&Value> = entry.issues.iter().filter(|i| !is_mine(i)).collect();
         let none_item = format!("<li>{}</li>", esc_t(ctx, "(none)"));
         let issue_items: String = backlog
@@ -1306,6 +1352,22 @@ fn issue_tracking_toggle(ctx: &UiCtx) -> UiResponse {
     } else {
         return UiResponse::not_found(ctx.lang);
     };
+    if middle == "bulk" {
+        let issues: Vec<(String, String)> = ctx
+            .form()
+            .all("issue")
+            .iter()
+            .filter_map(|v| v.rsplit_once('#'))
+            .filter(|(a, i)| !a.is_empty() && py_int(i).is_some())
+            .map(|(a, i)| (a.to_string(), i.to_string()))
+            .collect();
+        let path = ctx.state.home_dir.join("issue_tracking.json");
+        let (ok, message) = match issue_tracking_config::set_issues_enabled(&issues, enabled, &path) {
+            Ok(()) => (true, format!("{} tracking for {} issues", if enabled { "Enabled" } else { "Disabled" }, issues.len())),
+            Err(e) => (false, e),
+        };
+        return UiResponse::json(200, &json!({"ok": ok, "enabled": enabled, "message": message}));
+    }
     let (alias, iid_part) = middle.rsplit_once('/').unwrap_or(("", middle));
     let Some(iid) = py_int(iid_part) else {
         return UiResponse::not_found(ctx.lang);
@@ -3154,6 +3216,54 @@ mod tests {
         assert!(html.contains("<h3>hub <span class='pill pill-grey'>GitHub</span></h3>"), "{html}");
         assert!(html.contains("<h3>app</h3>"), "{html}");
         assert!(html.contains("Crash on save"), "{html}");
+    }
+
+    #[test]
+    fn projects_with_no_issues_and_no_mrs_are_hidden_from_the_tasks_list() {
+        let sb = Sandbox::new();
+        let state = |issues: Vec<Value>, mrs: Vec<Value>| AliasState { issues, mrs, issues_error: None, mrs_error: None };
+        let mr = json!({"id": 9, "iid": 9, "title": "Only MR", "web_url": "https://g.example/m/9", "labels": [], "assignees": [], "updated_at": "2026-10-01T00:00:00Z"});
+        let mut broken = state(vec![], vec![]);
+        broken.issues_error = Some("boom".into());
+        let html = live_fragment_html(
+            &sb.ctx(),
+            &[("quiet".into(), state(vec![], vec![])), ("busy".into(), state(vec![], vec![mr])), ("broken".into(), broken)],
+        );
+        assert!(!html.contains("<h3>quiet</h3>"), "{html}");
+        assert!(html.contains("<h3>busy</h3>"), "{html}");
+        assert!(html.contains("<h3>broken</h3>"), "{html}");
+    }
+
+    #[test]
+    fn the_tasks_list_has_one_switch_that_tracks_every_my_queue_issue() {
+        let sb = Sandbox::new();
+        let mine = |iid: i64| json!({"id": iid, "iid": iid, "title": "T", "web_url": "https://g.example/i", "labels": [], "assignees": [], "updated_at": "2026-10-02T00:00:00Z", "_assigned_to_me": true});
+        let live = vec![("app".to_string(), AliasState { issues: vec![mine(1), mine(2)], mrs: vec![], issues_error: None, mrs_error: None })];
+        let html = live_fragment_html(&sb.ctx(), &live);
+        assert!(html.contains("action='/gitlab/issues/bulk/disable'"), "{html}");
+        assert!(html.contains("name='issue' value='app#1'") && html.contains("name='issue' value='app#2'"), "{html}");
+        issue_tracking_config::set_issue_enabled("app", 2, false, &sb.state.home_dir.join("issue_tracking.json")).unwrap();
+        let html = live_fragment_html(&sb.ctx(), &live);
+        assert!(html.contains("action='/gitlab/issues/bulk/enable'"), "{html}");
+        let none = live_fragment_html(&sb.ctx(), &[("app".to_string(), AliasState { issues: vec![], mrs: vec![], issues_error: None, mrs_error: None })]);
+        assert!(!none.contains("issue-tracking-all"), "{none}");
+    }
+
+    #[test]
+    fn the_bulk_route_disables_and_enables_the_listed_issues() {
+        let sb = Sandbox::new();
+        let path = sb.state.home_dir.join("issue_tracking.json");
+        let go = |action: &str| {
+            let req = UiRequest::new(axum::http::Method::POST, &format!("/gitlab/issues/bulk/{action}"))
+                .with_header("content-type", "application/x-www-form-urlencoded")
+                .with_body("csrf_token=tok&issue=app%231&issue=lib%237");
+            Registry::with_pages().dispatch(&sb.state, &req).expect("route")
+        };
+        go("disable");
+        assert!(!issue_tracking_config::is_issue_enabled("app", 1, &path).unwrap());
+        assert!(!issue_tracking_config::is_issue_enabled("lib", 7, &path).unwrap());
+        go("enable");
+        assert!(issue_tracking_config::is_issue_enabled("app", 1, &path).unwrap());
     }
 
     #[test]

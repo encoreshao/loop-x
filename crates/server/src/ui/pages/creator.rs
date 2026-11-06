@@ -1524,14 +1524,14 @@ fn library_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         ],
     );
     let toolbar = format!(
-        "<form method='get' action='/creator' class='cr-toolbar' data-cr-autosubmit>\
+        "<div class='cr-surface'><form method='get' action='/creator' class='cr-toolbar' data-cr-autosubmit>\
 <input type='hidden' name='tab' value='library'><input type='hidden' name='state' value=\"{}\">\
 <label class='cr-search-field'>{}<input type='search' name='q' value=\"{}\" placeholder=\"{}\" aria-label=\"{}\"></label>\
 <select name='platform' class='cr-select' aria-label=\"{}\">{platform_opts}</select>\
 <select name='grade' class='cr-select' aria-label=\"{}\">{grade_opts}</select>\
 <button type='submit' class='cr-sr-only'>{}</button></form>\
 <div class='cr-toolbar-row'><nav class='cr-segmented' aria-label=\"{}\">{state_links}</nav>\
-<span class='cr-toolbar-count'>{clear}<span class='cr-meta'>{}</span></span></div>",
+<span class='cr-toolbar-count'>{clear}<span class='cr-meta'>{}</span></span></div></div>",
         h(&filter.state),
         icons::icon("search"),
         h(&filter.q),

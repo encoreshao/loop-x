@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Issues → Tasks has a switch at the top that starts or stops tracking for every issue in My Queue in one click, and projects with no issues and no merge requests are no longer listed.
 - Creator → Discover has a "Generate from a link" panel: paste a YouTube, TED, X, Vimeo or other public video link, tick the rights box and generate a short from it directly. Share-link extras (`&t=`, `&list=`, `?si=`, `utm_*`) are removed before the link is checked. Discovered videos now show "Why it's worth your time" and the suggested segments side by side on wide screens, in softer readable cards.
 - The issue loop now looks at images in GitLab and GitHub issues: `loopx issues images <instance> <project_id> <issue_iid>` saves up to 5 small png/jpeg/gif/webp images from the description and comments (only from the tracker's own host; the GitLab token goes to the GitLab instance only), and the agent reads each one and notes what it shows before deciding. Private GitHub attachments that cannot be fetched without a browser session are skipped with a note.
 - Merge request screenshots can come from your own Chrome through the Claude in Chrome extension: the agent starts the dev server with `loopx screenshot serve start`, opens the localhost page with the plugin, and `loopx screenshot --window` saves that Chrome window (it refuses any tab that is not a localhost page; needs Screen Recording permission for LoopX), then `serve stop`. When the extension is not connected, the headless capture is used as before.
@@ -52,6 +53,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Creator page panels, rows, stat cards, buttons, pills, inputs and the Discover/Library switcher now use the selected theme's colors, the same fill, radius and shadow as the other pages' cards.
 - The Mac app's Settings window now follows Mac conventions: a transparent title bar with a translucent sidebar under it, on/off switches instead of checkboxes, native pop-up menus, and pill-shaped buttons.
 - Office: at night the cars' headlights light up the road ahead, with a soft beam, a lit patch on the road and a glow at each lamp, and the tail lights glow red.
 

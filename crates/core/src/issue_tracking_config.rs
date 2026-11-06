@@ -83,9 +83,44 @@ pub fn set_issue_enabled(
     Ok(format!("{verb} tracking for #{issue_iid}"))
 }
 
+/// Set tracking for many `(alias, iid)` issues with one read and one write.
+pub fn set_issues_enabled(
+    issues: &[(String, String)],
+    enabled: bool,
+    path: &Path,
+) -> Result<(), String> {
+    let mut entries = read(path)?;
+    for (alias, iid) in issues {
+        let k = key(alias, iid);
+        if enabled {
+            entries.shift_remove(&k);
+        } else {
+            entries.insert(k, json!({ "enabled": false }));
+        }
+    }
+    write(&entries, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bulk_set_disables_and_re_enables_many_issues_at_once() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("issue_tracking.json");
+        let issues = vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+        ];
+        set_issues_enabled(&issues, false, &p).unwrap();
+        assert!(!is_issue_enabled("a", 1, &p).unwrap());
+        assert!(!is_issue_enabled("b", 2, &p).unwrap());
+        assert!(is_issue_enabled("a", 3, &p).unwrap());
+        set_issues_enabled(&issues, true, &p).unwrap();
+        assert!(is_issue_enabled("a", 1, &p).unwrap());
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "{}");
+    }
 
     #[test]
     fn enabled_by_default_when_file_or_entry_missing() {

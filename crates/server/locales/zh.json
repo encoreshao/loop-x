@@ -1612,5 +1612,9 @@
   "Works with YouTube, TED, X, Vimeo and most other public video pages. Playback and tracking parameters are removed for you.": "支持 YouTube、TED、X、Vimeo 等大多数公开视频页面。播放进度和跟踪参数会自动去除。",
   "Paste a video link, for example https://www.youtube.com/watch?v=...": "粘贴视频链接，例如 https://www.youtube.com/watch?v=...",
   "Video link": "视频链接",
-  "Why it's worth your time": "为什么值得一看"
+  "Why it's worth your time": "为什么值得一看",
+  "Track all issues": "跟踪所有议题",
+  "Stop tracking all issues": "停止跟踪所有议题",
+  "Tracking all issues": "正在跟踪所有议题",
+  "Stopped tracking all issues": "已停止跟踪所有议题"
 }

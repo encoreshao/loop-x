@@ -1872,6 +1872,9 @@ ul.plain li { font-size: 0.9rem; }
 .issue-run-now .btn { padding: 0.2rem 0.7rem; font-size: 0.75rem; }
 /* Only a tracked issue can be run: follows the row's switch, which flips without a reload. */
 .gitlab-item-row:has(.issue-tracking-toggle .is-off) .issue-run-now { display: none; }
+.tracking-all { display: flex; align-items: center; justify-content: flex-end; gap: 0.6rem; margin-bottom: 0.75rem; }
+.tracking-all-label { font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.tracking-all form { margin: 0; }
 /* A project's Backlog and MRs are separate sub-sections split by a divider line
    (My Queue and each project are split by the shared .project-block rule). */
 .gitlab-subsection + .gitlab-subsection { margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed color-mix(in srgb, var(--md-outline) 35%, transparent); }

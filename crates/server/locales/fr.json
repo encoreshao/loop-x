@@ -1612,5 +1612,9 @@
   "Works with YouTube, TED, X, Vimeo and most other public video pages. Playback and tracking parameters are removed for you.": "Compatible avec YouTube, TED, X, Vimeo et la plupart des pages vidéo publiques. Les paramètres de lecture et de suivi sont retirés automatiquement.",
   "Paste a video link, for example https://www.youtube.com/watch?v=...": "Collez un lien vidéo, par exemple https://www.youtube.com/watch?v=...",
   "Video link": "Lien vidéo",
-  "Why it's worth your time": "Pourquoi ça vaut le coup"
+  "Why it's worth your time": "Pourquoi ça vaut le coup",
+  "Track all issues": "Suivre toutes les issues",
+  "Stop tracking all issues": "Ne plus suivre aucune issue",
+  "Tracking all issues": "Suivi de toutes les issues activé",
+  "Stopped tracking all issues": "Suivi de toutes les issues arrêté"
 }

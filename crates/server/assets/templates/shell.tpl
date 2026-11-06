@@ -1199,6 +1199,42 @@
       .catch(function() { if (window.loopxToast) window.loopxToast(form.getAttribute('data-toast-fail'), false); })
       .then(function() { if (button) button.disabled = false; });
   });
+  // The master switch above the Tasks list: one POST flips every issue it lists,
+  // then each per-issue switch on the page is brought in line without a reload.
+  function setSwitch(button, enabled, label) {
+    button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
+    button.setAttribute('aria-checked', enabled ? 'true' : 'false');
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+  }
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target;
+    if (!form.matches || !form.matches('.issue-tracking-all')) return;
+    ev.preventDefault();
+    var button = form.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    fetch(form.getAttribute('action'), {
+      method: 'POST',
+      body: new URLSearchParams(new FormData(form)),
+    })
+      .then(function(response) { return response.json(); })
+      .then(function(result) {
+        if (!result.ok) throw new Error('toggle failed');
+        var enabled = result.enabled;
+        if (window.loopxToast) window.loopxToast(form.getAttribute(enabled ? 'data-toast-on' : 'data-toast-off'), true);
+        form.setAttribute('action', form.getAttribute('action').replace(/\/(enable|disable)$/, '/' + (enabled ? 'disable' : 'enable')));
+        if (button) setSwitch(button, enabled, form.getAttribute(enabled ? 'data-label-on' : 'data-label-off'));
+        var perIssue = ⟦json.dumps(_t('Stop tracking #{iid}'))⟧, perIssueOff = ⟦json.dumps(_t('Track #{iid} again'))⟧;
+        document.querySelectorAll('.issue-tracking-toggle').forEach(function(f) {
+          var b = f.querySelector('button[type="submit"]');
+          var iid = f.getAttribute('data-issue-iid');
+          f.setAttribute('action', f.getAttribute('action').replace(/\/(enable|disable)$/, '/' + (enabled ? 'disable' : 'enable')));
+          if (b) setSwitch(b, enabled, (enabled ? perIssue : perIssueOff).replace('{iid}', iid));
+        });
+      })
+      .catch(function() { if (window.loopxToast) window.loopxToast(form.getAttribute('data-toast-fail'), false); })
+      .then(function() { if (button) button.disabled = false; });
+  });
 })();
 </script>
 </head>
