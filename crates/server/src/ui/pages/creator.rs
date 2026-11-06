@@ -931,7 +931,7 @@ fn incomplete_note(ctx: &UiCtx, job: &JobRecord) -> String {
 fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, String>) -> String {
     let action = if job.state == "running" {
         stop_form(ctx, job, tab)
-    } else if job.kind == JobKind::Generate {
+    } else if job.kind == JobKind::Generate && job.state != "done" {
         format!("{}{}", retry_form(ctx, job), delete_form(ctx, job))
     } else {
         delete_form(ctx, job)
@@ -3724,6 +3724,16 @@ mod tests {
         let body = fx.get("/creator?tab=jobs").body_text();
         assert_eq!(body.matches("action='/creator/jobs/retry'").count(), 1, "{body}");
         assert!(body.contains("value=\"20261105T000002-genfail0\""), "{body}");
+    }
+
+    #[test]
+    fn a_video_job_that_succeeded_offers_no_retry() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        fx.job("20261105T000002-gen000000", "generate", "https://example.com/talks/a", false, "loopx-exit=0\n");
+        let body = fx.get("/creator?tab=jobs").body_text();
+        assert!(body.contains("<span class='cr-pill cr-pill-ok'>Done</span>"), "{body}");
+        assert!(!body.contains("/creator/jobs/retry"), "{body}");
     }
 
     #[test]
