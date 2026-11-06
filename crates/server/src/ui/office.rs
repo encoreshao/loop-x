@@ -74,6 +74,47 @@ fn run_now_url(name: &str) -> String {
     }
 }
 
+/// The Creator's Find videos and Generate video jobs as office entries (`kind: "creator"`).
+/// They have no schedule, Run now or toggle; the office hands them to its video colleague.
+fn creator_entries(ctx: &UiCtx) -> Vec<Value> {
+    let state = ctx.state;
+    let dir = loopx_core::creator::jobs::jobs_dir(&state.home_dir);
+    let settled = loopx_core::creator::jobs::settle_outputs(
+        loopx_core::creator::jobs::list_jobs(&dir),
+        &state.user_home,
+    );
+    loopx_core::creator::notify::loop_statuses(&dir, &settled, chrono::Utc::now())
+        .into_iter()
+        .map(|(name, doc)| {
+            let run_state = doc.get("state").and_then(Value::as_str).unwrap_or("idle");
+            let os = office_state(true, run_state, 0);
+            let title = if name == loopx_core::creator::notify::FIND_LOOP {
+                ctx.t("Find videos")
+            } else {
+                ctx.t("Generate video")
+            };
+            json!({
+                "name": name,
+                "title": title,
+                "enabled": true,
+                "state": os.as_str(),
+                "reason": reason(ctx, os),
+                "last_run": doc.get("updated_at").and_then(Value::as_str),
+                "step": (os == OfficeState::Working)
+                    .then(|| doc.get("current_step").and_then(Value::as_str).filter(|s| !s.is_empty()))
+                    .flatten(),
+                "next_run": Value::Null,
+                "history": [],
+                "run_now_url": Value::Null,
+                "toggle_url": Value::Null,
+                "pending_approvals": 0,
+                "kind": "creator",
+                "href": "/creator",
+            })
+        })
+        .collect()
+}
+
 /// The `/office/state` document: one entry per registered loop.
 pub fn build_office_state(ctx: &UiCtx) -> Value {
     let state = ctx.state;
@@ -122,8 +163,10 @@ pub fn build_office_state(ctx: &UiCtx) -> Value {
             "run_now_url": run_now_url(&name),
             "toggle_url": format!("/daemons/loops/{}/{toggle}", pyfmt::quote(&name, "")),
             "pending_approvals": pending,
+            "kind": "loop",
         }));
     }
+    entries.extend(creator_entries(ctx));
     json!({
         "loops": entries,
         "pending_approvals": pending_total,

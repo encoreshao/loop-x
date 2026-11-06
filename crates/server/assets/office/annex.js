@@ -11,7 +11,7 @@ export const FLOOR = { x0: -23.2, x1: 23.2, z0: -9.0, z1: 12.2 };
 /// Circles `[x, z, radius]` a walk goes round: the round desk with its chairs, the plants, the
 /// lounge furniture, the racks and everything the wings add.
 export const OBSTACLES = [
-  [-8, 1, 4.5],
+  [-8, 1, 5.4],
   // plants
   [-14, -9.7, 0.9], [-14, 2.5, 0.8], [-14, 11.7, 0.9], [-1.2, 11.7, 0.8], [-2.8, -9.7, 0.8], [2.4, 11.7, 0.8], [14, 11.7, 0.9], [14.3, -8.3, 0.8], [14.3, 0, 0.9],
   // the back wall: AI racks, bookshelf, coffee bar, water cooler

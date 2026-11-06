@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- The Office now has five colleagues around a bigger round desk: three share the loops, a video colleague (E4) works on the Creator's Find videos and Generate video jobs, and a chat colleague (E5) answers the chat.
 - When chat can't use a connector because no account exists (or it is turned off), the error now says where to add or enable it, and that each Google service (Calendar, Docs, Sheets, Slides) needs its own sign-in.
 
 ## [0.17.0] - 2026-11-06

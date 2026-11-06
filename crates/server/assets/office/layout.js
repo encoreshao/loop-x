@@ -1,16 +1,17 @@
-// Where the three colleagues sit: one round desk with a hollow centre holding a
+// Where the colleagues sit: one round desk with a hollow centre holding a
 // plant, the seats spaced evenly around it. `buildLayout` is plain data; `furnish`
 // draws the desk, the plant, the chairs and a small screen in front of each seat.
 
 const { rng } = await import("./world.js" + new URL(import.meta.url).search);
 
-/// How many colleagues the office has, whatever the number of loops.
-export const SEATS = 3;
+/// How many colleagues the office has, whatever the number of loops: three who share the
+/// loops, one for the Creator's video jobs and one for the chat.
+export const SEATS = 5;
 /// The desk's centre on the carpet, its outer and inner radius, and how far out the seats are.
-export const DESK = { x: -8, z: 1, outer: 3.0, inner: 1.1, seat: 3.6 };
+export const DESK = { x: -8, z: 1, outer: 3.9, inner: 1.5, seat: 4.7 };
 
 /// Seat `i` of `SEATS`: at (x, z), facing the desk centre (`face`). Seat 0 is at the far
-/// side so it faces the default camera; the others follow at 120 degrees.
+/// side so it faces the default camera; the others follow at 72 degrees.
 export function buildLayout() {
   const seats = [];
   for (let i = 0; i < SEATS; i++) {
@@ -53,7 +54,7 @@ export function furnish(scene, THREE, layout, seed = 11) {
   }
   const { x: cx, z: cz, outer, inner } = layout.desk;
 
-  // The desk: a flat ring (a lathed rectangle), three legs between the seats, a brace ring.
+  // The desk: a flat ring (a lathed rectangle), a leg between each pair of seats, a brace ring.
   const steel = M(0x4a4f5a);
   const ring = (r0, r1, y0, y1) =>
     new THREE.LatheGeometry([[r0, y0], [r1, y0], [r1, y1], [r0, y1], [r0, y0]].map(([x, y]) => new THREE.Vector2(x, y)), 64);
@@ -71,17 +72,22 @@ export function furnish(scene, THREE, layout, seed = 11) {
   brace.position.set(cx, 0, cz);
   group.add(brace);
 
-  // The plant in the hollow centre: a planter on the floor and a leafy bush that rises above the desk.
-  cyl(0.55, 0.45, 0.6, M(0xb5651d), cx, 0.3, cz, group, 20);
-  cyl(0.5, 0.5, 0.04, M(0x3b2a1a), cx, 0.6, cz, group, 20);
-  cyl(0.06, 0.08, 0.9, M(0x6b4a2b), cx, 1.05, cz, group, 8);
+  // The plant in the hollow centre: a planter on the floor and a leafy bush that rises above the desk,
+  // scaled with the hole so a bigger desk keeps a plant that fills it.
+  const plant = new THREE.Group();
+  plant.position.set(cx, 0, cz);
+  plant.scale.setScalar(inner / 1.1);
+  group.add(plant);
+  cyl(0.55, 0.45, 0.6, M(0xb5651d), 0, 0.3, 0, plant, 20);
+  cyl(0.5, 0.5, 0.04, M(0x3b2a1a), 0, 0.6, 0, plant, 20);
+  cyl(0.06, 0.08, 0.9, M(0x6b4a2b), 0, 1.05, 0, plant, 8);
   const greens = [0x2f8f4e, 0x3d9f55, 0x4faa62, 0x2a7f46];
   for (let i = 0; i < 14; i++) {
     const a = R() * Math.PI * 2, rr = R() * 0.38, y = 1.35 + R() * 0.65;
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.2 + R() * 0.12, 12, 9), leafM(greens[i % greens.length]));
-    m.position.set(cx + Math.cos(a) * rr, y, cz + Math.sin(a) * rr);
+    m.position.set(Math.cos(a) * rr, y, Math.sin(a) * rr);
     m.castShadow = true;
-    group.add(m);
+    plant.add(m);
   }
 
   // Each seat: a screen on the desk facing the person, a keyboard, and a chair whose back is outward.

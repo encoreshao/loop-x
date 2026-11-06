@@ -1460,6 +1460,7 @@
   "Warning: {warning}": "警告：{warning}",
   "Creator page": "创作者页面",
   "Chat": "聊天",
+  "Video": "视频",
   "Requires": "依赖",
   "Web search and fetch (no extra tools)": "网页搜索和抓取（无需额外工具）",
   "python 3, node + npm, ffmpeg/ffprobe, yt-dlp, Remotion (installed by its install.sh)": "python 3、node + npm、ffmpeg/ffprobe、yt-dlp、Remotion（由其 install.sh 安装）",

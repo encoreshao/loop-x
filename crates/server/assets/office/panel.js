@@ -27,7 +27,7 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     li.className = "office-panel-loop";
     li.dataset.loop = name;
     const a = document.createElement("a");
-    a.href = "/loops/" + enc(name);
+    a.href = typeof loop.href === "string" && loop.href.startsWith("/") ? loop.href : "/loops/" + enc(name);
     a.textContent = loop.title ? String(loop.title) : name;
     const chip = document.createElement("span");
     chip.className = "office-panel-state";
@@ -49,7 +49,9 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     actions.className = "office-panel-actions";
     actions.append(run, toggle);
     for (const b of [run, toggle]) b.addEventListener("click", () => act(b.dataset.act, loop, b));
-    li.append(a, chip, actions);
+    // Creator jobs have no Run now or toggle: they start from the Creator page or the chat.
+    li.append(a, chip);
+    if (loop.kind !== "creator") li.append(actions);
     return li;
   }
 

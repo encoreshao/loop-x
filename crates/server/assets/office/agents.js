@@ -1,8 +1,9 @@
-// The office's three colleagues, seated around the round desk. Every loop belongs to one
-// of them (sorted by name, dealt out in turn): while one of their loops runs they type at
-// their screen, while one waits for approval they raise a hand, while one failed they hold
-// their head. A question asked in the chat sends a randomly picked colleague to work until
-// the answer is done. People with nothing to do now and then turn to each other and talk
+// The office's five colleagues, seated around the round desk. Three share the loops (sorted
+// by name, dealt out in turn); the fourth owns the Creator's video jobs (Find videos, Generate
+// video: the `creator` entries of the state feed) and the fifth answers the chat. While one of
+// their loops or jobs runs they type at their screen, while one waits for approval they raise a
+// hand, while one failed they hold their head. A question asked in the chat sends the chat
+// colleague to work until the answer is done. People with nothing to do now and then turn to each other and talk
 // about something worth discussing (a speech bubble). During the workday (09:00-17:00 on the
 // scene's clock) an idle colleague now and then walks out along the street in front of the office,
 // to the coffee shop (mostly in the morning) or the bookstore (mostly in the evening), stays a
@@ -23,8 +24,10 @@ const [{ rng, freezeStatic }, { buildLayout, furnish, SEATS, DESK }, { appearanc
   import("./annex.js" + V),
 ]);
 
-/// The colleagues, in seat order. Names are fixed.
-export const NAMES = ["E1", "E2", "E3"];
+/// The colleagues, in seat order. Names are fixed. The first `LOOP_STAFF` share the loops; then
+/// come the video colleague and the chat colleague, who are shown under their role.
+export const NAMES = ["E1", "E2", "E3", "E4", "E5"];
+const LOOP_STAFF = 3, VIDEO = 3, CHAT = 4;
 
 const COLORS = { working: 0x3ddc84, waiting: 0xffb020, idle: 0x7d8590, failed: 0xff5252 };
 const GLYPHS = { working: "⌨️", waiting: "✋", failed: "⚠️" };
@@ -185,6 +188,7 @@ export function createAgents(ctx) {
 
   // ---------- people ----------
   function create(name, i) {
+    const role = i === VIDEO ? strings.staff_video : i === CHAT ? strings.staff_chat : "";
     const p = buildPerson(THREE, appearanceFor(name));
     p.group.userData.agent = name;
     scene.add(p.group);
@@ -208,7 +212,7 @@ export function createAgents(ctx) {
     scene.add(beam);
     const seat = layout.seats[i];
     const a = {
-      name, title: name, idx: i, seat, state: null, loops: [], ...p, label, bubble, speech, beam,
+      name, title: role ? `${name} · ${role}` : name, idx: i, seat, state: null, loops: [], ...p, label, bubble, speech, beam,
       said: null, glyph: null, chat: false, pendingUntil: 0, t0: phaseOf(name), sit: 1, wantSit: true, trip: null, roam: null, path: [],
       speed: 0, goal: WALK_SPEED, gait: 0, hold: 0, strollT: 3, nextRoam: between(FIRST_ROAM_S),
       yaw: 0, yawT: 0, pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
@@ -641,9 +645,12 @@ export function createAgents(ctx) {
         seen.add(l.name);
         return true;
       });
-      const sorted = [...loops].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+      const byName = (x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0);
       for (const a of people) a.loops = [];
-      sorted.forEach((l, i) => people[i % SEATS].loops.push(l));
+      // Creator jobs go to the video colleague; the other loops are dealt out to the first three.
+      const jobs = loops.filter((l) => l.kind === "creator");
+      people[VIDEO].loops.push(...jobs.sort(byName));
+      loops.filter((l) => l.kind !== "creator").sort(byName).forEach((l, i) => people[i % LOOP_STAFF].loops.push(l));
       refreshStates();
     },
     tick(dt, t) {
@@ -705,16 +712,12 @@ export function createAgents(ctx) {
       if (!a || still) return;
       a.pendingUntil = clock + PENDING_RUN_S;
     },
-    /// The chat started (`busy`) or finished answering. `name` (tests) picks who; otherwise a
-    /// random colleague, preferring one who is not busy (with a loop or an earlier answer).
+    /// The chat started (`busy`) or finished answering. The chat colleague takes it, wherever
+    /// they are (a stroll or a trip ends at once); `name` (tests) picks someone else.
     chatBusy(busy, name) {
       if (busy) {
         if (chatter) return;
-        // Free first; else anyone not running a loop (still finishing an answer); else anyone.
-        const noLoop = people.filter((a) => !a.loops.some((l) => l.state === "working") && !a.trip && !a.roam);
-        const free = noLoop.filter((a) => a.pendingUntil <= clock);
-        const pool = free.length ? free : noLoop.length ? noLoop : people;
-        chatter = people.find((a) => a.name === name) || pool[Math.floor(Math.random() * pool.length)];
+        chatter = people.find((a) => a.name === name) || people[CHAT];
         chatter.chat = true;
       } else if (chatter) {
         chatter.chat = false;

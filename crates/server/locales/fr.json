@@ -1460,6 +1460,7 @@
   "Warning: {warning}": "Avertissement : {warning}",
   "Creator page": "Page Créateur",
   "Chat": "Chat",
+  "Video": "Vidéo",
   "Requires": "Prérequis",
   "Web search and fetch (no extra tools)": "Recherche et récupération web (aucun outil supplémentaire)",
   "python 3, node + npm, ffmpeg/ffprobe, yt-dlp, Remotion (installed by its install.sh)": "python 3, node + npm, ffmpeg/ffprobe, yt-dlp, Remotion (installés par son install.sh)",

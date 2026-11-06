@@ -1460,6 +1460,7 @@
   "Warning: {warning}": "警告: {warning}",
   "Creator page": "クリエイターページ",
   "Chat": "チャット",
+  "Video": "動画",
   "Requires": "必要なもの",
   "Web search and fetch (no extra tools)": "Web検索と取得（追加ツール不要）",
   "python 3, node + npm, ffmpeg/ffprobe, yt-dlp, Remotion (installed by its install.sh)": "python 3、node + npm、ffmpeg/ffprobe、yt-dlp、Remotion（install.sh がインストール）",

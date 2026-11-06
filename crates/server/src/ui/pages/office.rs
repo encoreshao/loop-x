@@ -259,6 +259,8 @@ fn toast_strings(ctx: &UiCtx) -> Value {
 /// The colleague card's send-out and conversation controls, and the lines of an assigned chat.
 fn assign_strings(ctx: &UiCtx) -> Value {
     json!({
+        "staff_video": ctx.t("Video"),
+        "staff_chat": ctx.t("Chat"),
         "send_out": ctx.t("Send out"),
         "call_back": ctx.t("Call back to desk"),
         "talk_about": ctx.t("Talk with a colleague"),
@@ -504,6 +506,31 @@ mod tests {
         assert_eq!(by(&doc, "busy-loop")["toggle_url"], "/daemons/loops/busy-loop/disable");
         assert_eq!(by(&doc, "off-loop")["toggle_url"], "/daemons/loops/off-loop/enable");
         assert!(doc["generated_at"].is_string());
+    }
+
+    #[test]
+    fn a_running_creator_job_is_listed_as_a_creator_entry_for_the_video_colleague() {
+        let f = fx(four());
+        let jobs = f.dir.path().join("home/creator/jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        let id = "20261022T115800-gen000000";
+        std::fs::write(
+            jobs.join(format!("{id}.json")),
+            json!({"id": id, "kind": "generate", "key": "https://www.ted.com/talks/x", "state": "running",
+                   "pid": i64::from(std::process::id()), "started_at": chrono::Utc::now().to_rfc3339()})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(jobs.join(format!("{id}.log")), "").unwrap();
+        let doc = f.get(None);
+        let e = by(&doc, "creator-generate-video");
+        assert_eq!(e["state"], "working");
+        assert_eq!(e["kind"], "creator");
+        assert_eq!(e["title"], "Generate video");
+        assert_eq!(e["href"], "/creator");
+        assert!(e["run_now_url"].is_null() && e["toggle_url"].is_null());
+        assert_eq!(by(&doc, "busy-loop")["kind"], "loop");
+        assert!(doc["loops"].as_array().unwrap().iter().all(|l| l["name"] != "creator-find-videos"));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Checks the Office colleagues: always exactly three (E1, E2, E3) seated 120 degrees
-# apart around the round desk whatever the loop count, every loop dealt to exactly one of
-# them, their state following their loops (working > waiting > failed > idle), a chat
-# question putting one randomly picked colleague to work until it is answered, idle
+# Checks the Office colleagues: always exactly five (E1-E3 share the loops, E4 owns the
+# Creator's video jobs, E5 answers the chat) seated 72 degrees apart around the round desk
+# whatever the loop count, every loop dealt to exactly one of them, their state following their loops (working > waiting > failed > idle), a chat
+# question putting the chat colleague to work until it is answered, idle
 # colleagues talking to each other (and stopping when one gets work), the details card
 # listing a colleague's loops, a hostile loop name staying canvas text, and nobody talking
 # under reduced motion; during the workday (09-17h) one idle colleague at a time walks to the
@@ -47,13 +47,32 @@ from cdp import Chrome
 
 url, out = sys.argv[2], sys.argv[3]
 fails = []
-NAMES = ["E1", "E2", "E3"]
-DESK = (-8.0, 1.0, 3.6)
+NAMES = ["E1", "E2", "E3", "E4", "E5"]
+LOOP_NAMES = NAMES[:3]
+DESK = (-8.0, 1.0, 4.7)
+
+def job(name, state):
+    d = loop(name, state)
+    d.update(kind="creator", href="/creator", run_now_url=None, toggle_url=None)
+    return d
 
 def loop(name, state):
     return {"name": name, "title": name, "enabled": state != "disabled", "state": state, "reason": "",
             "last_run": None, "next_run": "", "history": [], "run_now_url": "", "toggle_url": "",
             "pending_approvals": 1 if state == "waiting" else 0}
+
+def give_work(c, who, others=("a-loop", "b-loop", "c-loop")):
+    """Puts `who` (a debug() entry) to work: a loop for E1-E3, a Creator job for E4, the chat for E5."""
+    if who["name"] == "E4":
+        set_loops(c, [loop(n, "idle") for n in others] + [job("creator-generate-video", "working")])
+    elif who["name"] == "E5":
+        set_loops(c, [loop(n, "idle") for n in others])
+        c.evaluate("window.__office.chatBusy(true, 'E5')")
+    else:
+        set_loops(c, [loop(n, "working" if n in who["loops"] else "idle") for n in others])
+
+def release_work(c):
+    c.evaluate("window.__office.chatBusy(false)")
 
 def debug(c):
     return c.evaluate("window.__office.debug()")
@@ -75,8 +94,8 @@ def check_three(d, label):
         if abs(r - DESK[2]) > 0.05 or not a["seated"] or a["walking"]:
             fails.append(f"{label}: {a['name']} is not seated at the desk: {a}")
     angles = sorted(math.degrees(math.atan2(a["z"] - DESK[1], a["x"] - DESK[0])) % 360 for a in d)
-    gaps = [(angles[(i + 1) % 3] - angles[i]) % 360 for i in range(3)]
-    if any(abs(g - 120) > 1 for g in gaps):
+    gaps = [(angles[(i + 1) % 5] - angles[i]) % 360 for i in range(5)]
+    if any(abs(g - 72) > 1 for g in gaps):
         fails.append(f"{label}: seats are not spaced evenly around the desk: gaps {gaps}")
 
 def expected_state(loops):
@@ -122,8 +141,8 @@ with Chrome() as c:
     d = debug(c)
     check_three(d, "40 loops")
     sizes = sorted(len(a["loops"]) for a in d)
-    if sizes != [13, 13, 14]:
-        fails.append(f"40 loops: loops dealt {sizes}, expected [13, 13, 14]")
+    if sizes != [0, 0, 13, 13, 14]:
+        fails.append(f"40 loops: loops dealt {sizes}, expected [0, 0, 13, 13, 14]")
     if c.evaluate("window.__office.overflow") != 0:
         fails.append("40 loops: nothing should overflow")
     owner = next(a for a in d if "loop-07" in a["loops"])
@@ -143,20 +162,16 @@ with Chrome() as c:
 
     set_loops(c, [loop("a-loop", "idle"), loop("b-loop", "idle"), loop("c-loop", "idle")])
     all_idle("chat")
-    seen = set()
-    for _ in range(40):
+    for _ in range(10):
         c.evaluate("document.dispatchEvent(new CustomEvent('loopx:chat', {detail: {busy: true}}))")
         who = asked()
-        if len(who) != 1 or next(a for a in debug(c) if a["name"] == who[0])["state"] != "working":
-            fails.append(f"chat: expected exactly one person working on the question, got {who}: {debug(c)}")
+        if who != ["E5"] or next(a for a in debug(c) if a["name"] == "E5")["state"] != "working":
+            fails.append(f"chat: expected only the chat colleague E5 working on the question, got {who}: {debug(c)}")
             break
-        seen.add(who[0])
         c.evaluate("document.dispatchEvent(new CustomEvent('loopx:chat', {detail: {busy: false}}))")
         if asked():
             fails.append("chat: the question is still assigned after the answer")
             break
-    if len(seen) < 2:
-        fails.append(f"chat: the picked colleague is not random: always {seen}")
     all_idle("chat answered")
     c.evaluate("document.dispatchEvent(new CustomEvent('loopx:chat', {detail: {busy: true}}))")
     first = asked()
@@ -165,16 +180,25 @@ with Chrome() as c:
         fails.append("chat: a tool call must not put a second colleague to work")
     c.evaluate("document.dispatchEvent(new CustomEvent('loopx:chat', {detail: {busy: false}}))")
     all_idle("chat tool call")
-    # The question goes to a free colleague, not the one already running a loop (E1 owns a-loop).
+    # The chat colleague takes the question even while E1 runs a loop.
     set_loops(c, [loop("a-loop", "working"), loop("b-loop", "idle"), loop("c-loop", "idle")])
-    for _ in range(12):
-        c.evaluate("window.__office.chatBusy(true)")
-        if asked() == ["E1"] or len(asked()) != 1:
-            fails.append(f"chat: the question should go to a free colleague, not E1 who runs a loop: {asked()}")
-            break
-        c.evaluate("window.__office.chatBusy(false)")
+    c.evaluate("window.__office.chatBusy(true)")
+    if asked() != ["E5"] or next(a for a in debug(c) if a["name"] == "E1")["state"] != "working":
+        fails.append(f"chat: E5 should answer while E1 keeps its loop: {debug(c)}")
+    c.evaluate("window.__office.chatBusy(false)")
     set_loops(c, [loop("a-loop", "idle"), loop("b-loop", "idle"), loop("c-loop", "idle")])
     all_idle("chat free colleague")
+
+    # 3b. Creator video jobs belong to the video colleague E4, not to the loop colleagues.
+    set_loops(c, [loop("a-loop", "idle"), job("creator-find-videos", "idle"), job("creator-generate-video", "working")])
+    d = debug(c)
+    e4 = next(a for a in d if a["name"] == "E4")
+    if sorted(e4["loops"]) != ["creator-find-videos", "creator-generate-video"] or e4["state"] != "working":
+        fails.append(f"video: E4 should own and work on the Creator jobs: {d}")
+    if [a["name"] for a in d if a["state"] == "working"] != ["E4"]:
+        fails.append(f"video: only E4 should be working: {d}")
+    set_loops(c, [loop("a-loop", "idle")])
+    all_idle("video job finished")
 
     # 4. Idle colleagues talk to each other, and stop when one gets work.
     set_loops(c, [loop("a-loop", "idle"), loop("b-loop", "idle"), loop("c-loop", "idle")])
@@ -187,14 +211,15 @@ with Chrome() as c:
     c.screenshot(f"{out}/talking-13h.png")
     names = [a["name"] for a in talkers] or ["E1"]
     busy = [l for l in ("a-loop", "b-loop", "c-loop")]
-    owner = next(a for a in debug(c) if a["name"] == names[0])["loops"]
-    set_loops(c, [loop(n, "working" if n in owner else "idle") for n in busy])
+    give_work(c, next(a for a in debug(c) if a["name"] == names[0]))
     c.pump(0.5)
     if any(a["talking"] for a in debug(c)):
         fails.append("talk: the conversation went on after a participant got work")
     for a in debug(c):
         if a["state"] != "idle" and a["said"]:
             fails.append(f"talk: {a['name']} still shows a speech bubble while working")
+
+    release_work(c)
 
     # 5. The details card: the colleague's name, state and a row per loop.
     set_loops(c, [loop("a-loop", "idle"), loop("b-loop", "failed"), loop("c-loop", "waiting"), loop("d-loop", "idle")])
@@ -261,13 +286,13 @@ with Chrome() as c:
     c.evaluate("window.__office.select(null)")
     c.screenshot(f"{out}/shop-visit-10h.png")
     # Work calls them back at once: they walk home and sit down, and the trip is over.
-    owner = me["loops"] if me else []
-    set_loops(c, [loop(n, "working" if n in owner else "idle") for n in ("a-loop", "b-loop", "c-loop")])
+    give_work(c, me)
     try:
         c.wait_for(f"window.__office.debug().some(a => a.name === {json.dumps(who)} && a.walking)", timeout=5, interval=0.2)
         c.wait_for(f"window.__office.debug().some(a => a.name === {json.dumps(who)} && a.seated && !a.walking && !a.away)", timeout=90, interval=0.5)
     except TimeoutError:
         fails.append(f"trips: {who} did not walk back to the desk when given work: {debug(c)}")
+    release_work(c)
     set_loops(c, idle_loops())
     # A bookstore visit ends by itself (stay 12-20 s) and the colleague sits back down.
     try:
@@ -379,7 +404,7 @@ with Chrome() as c:
         out = [p for p in pts if not (-23.4 < p[0] < 23.4 and -9.2 < p[1] < 12.4)]
         if out:
             fails.append(f"roam: someone left the office: {out[:3]}")
-        if any(math.hypot(x - DESK[0], z - DESK[1]) < 3.3 for x, z in pts if abs(math.hypot(x - DESK[0], z - DESK[1]) - DESK[2]) > 0.3 and math.hypot(x - DESK[0], z - DESK[1]) < 4.3):
+        if any(math.hypot(x - DESK[0], z - DESK[1]) < 4.0 for x, z in pts):
             fails.append("roam: someone walked through the desk")
         if most < 2:
             fails.append("roam: never more than one colleague strolled at a time")
@@ -389,7 +414,7 @@ with Chrome() as c:
         if who:
             if who["away"]:
                 fails.append(f"roam: a stroll should not count as a shop trip: {who}")
-            set_loops(c, [loop(n, "working" if n in who["loops"] else "idle") for n in ("a-loop", "b-loop", "c-loop")])
+            give_work(c, who)
             try:
                 c.wait_for(f"window.__office.debug().some(a => a.name === {json.dumps(who['name'])} && a.seated && !a.walking && a.at === 'desk')", timeout=60, interval=0.5)
             except TimeoutError:
@@ -419,6 +444,6 @@ if fails:
     for f in fails:
         print("  - " + f)
     sys.exit(1)
-print("PASS: three seats around the round desk, loops dealt out, states from loops, random chat worker, talking, details card, hostile name, shop trips in the workday only, reduced motion")
+print("PASS: five seats around the round desk, loops dealt out, states from loops, video and chat colleagues, talking, details card, hostile name, shop trips in the workday only, reduced motion")
 PY
 echo "screenshots in $OUT"
