@@ -438,36 +438,41 @@ fn job_log(ctx: &UiCtx) -> UiResponse {
 /// Blank lines inside a code fence do not end a block.
 fn log_html(text: &str) -> String {
     use loopx_core::creator::logfmt::{CLAUDE_LABEL, RESULT_LABEL};
-    let mut chunks: Vec<Vec<&str>> = Vec::new();
-    let mut cur: Vec<&str> = Vec::new();
-    let mut fenced = false;
-    for line in text.lines() {
-        if line.starts_with("```") {
-            fenced = !fenced;
-        }
-        if line.trim().is_empty() && !fenced {
-            if !cur.is_empty() {
-                chunks.push(std::mem::take(&mut cur));
-            }
-        } else {
-            cur.push(line);
-        }
-    }
-    if !cur.is_empty() {
-        chunks.push(cur);
-    }
     let prefixes = crate::ui::markdown::GitlabPrefixes::new();
-    chunks
-        .iter()
-        .map(|c| match c[0] {
-            l @ (CLAUDE_LABEL | RESULT_LABEL) => format!(
+    let lines: Vec<&str> = text.lines().collect();
+    let plain = |out: &mut String, chunk: &mut Vec<&str>| {
+        if !chunk.is_empty() {
+            out.push_str(&format!("<pre class='cr-log-lines'>{}</pre>", h(&chunk.join("\n"))));
+            chunk.clear();
+        }
+    };
+    let mut out = String::new();
+    let mut chunk: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if line == CLAUDE_LABEL || line == RESULT_LABEL {
+            plain(&mut out, &mut chunk);
+            // The block runs to two blank lines in a row (or the end of the log).
+            let mut j = i + 1;
+            while j < lines.len() && !(lines[j].trim().is_empty() && lines.get(j + 1).is_some_and(|n| n.trim().is_empty())) {
+                j += 1;
+            }
+            out.push_str(&format!(
                 "<div class='cr-log-md'><div class='cr-log-label'>{}</div>{}</div>",
-                h(l.trim_end_matches(':')),
-                crate::ui::markdown::render_markdown(&c[1..].join("\n"), &prefixes)
-            ),
-            _ => format!("<pre class='cr-log-lines'>{}</pre>", h(&c.join("\n"))),
-        })
-        .collect()
+                h(line.trim_end_matches(':')),
+                crate::ui::markdown::render_markdown(&lines[i + 1..j].join("\n"), &prefixes)
+            ));
+            i = j;
+        } else if line.trim().is_empty() {
+            plain(&mut out, &mut chunk);
+        } else {
+            chunk.push(line);
+        }
+        i += 1;
+    }
+    plain(&mut out, &mut chunk);
+    out
 }
 
 /// `{"state": ..., "line": ...}` for one job: what the live status rows poll.
@@ -2877,9 +2882,10 @@ mod tests {
 
     #[test]
     fn log_html_renders_claude_and_result_blocks_as_markdown_and_escapes_the_rest() {
-        let log = "Started · m\nStep 1 · Bash: echo <b>\n\nClaude:\n# Plan\n- **one**\n- two\n```\na\n\nb\n```\n\nResult:\n<script>x</script>\n\nloopx-exit=0\n";
+        let log = "Started · m\nStep 1 · Bash: echo <b>\n\nClaude:\nIntro para\n\n# Plan\n- **one**\n- two\n```\na\n\nb\n```\n\n\nResult:\n<script>x</script>\n\n\nloopx-exit=0\n";
         let html = super::log_html(log);
         assert!(html.contains("<pre class='cr-log-lines'>Started · m\nStep 1 · Bash: echo &lt;b&gt;</pre>"), "{html}");
+        assert!(html.contains("<p>Intro para</p>"), "{html}");
         assert!(html.contains("<h1 id=\"plan\">Plan</h1>"), "{html}");
         assert!(html.contains("<li><strong>one</strong></li>"), "{html}");
         assert!(html.contains("<pre><code>a\n\nb</code></pre>"), "{html}");

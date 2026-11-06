@@ -13,7 +13,7 @@ pub const RESULT_LABEL: &str = "Result:";
 /// A rendered line is cut to this many characters.
 const LINE_CHARS: usize = 220;
 /// What Claude said is allowed a little more.
-const SAID_CHARS: usize = 1200;
+const SAID_CHARS: usize = 3000;
 /// The final summary is shown nearly whole.
 const SUMMARY_CHARS: usize = 2000;
 
@@ -53,11 +53,12 @@ fn block(s: &str, max: usize) -> String {
 }
 
 /// `text` as a markdown block the Job log can render: a blank line, its `label` alone on a
-/// line, the text, a blank line.
+/// line, the text (its own blank lines are single), then two blank lines, which end the block.
 fn md_block(out: &mut Vec<String>, label: &str, text: &str) {
     out.push(String::new());
     out.push(label.to_string());
     out.extend(text.lines().map(str::to_string));
+    out.push(String::new());
     out.push(String::new());
 }
 
@@ -276,6 +277,7 @@ mod tests {
              Claude:\n\
              I will fetch the talk first.\n\
              \n\
+             \n\
              Step 1 · Bash: python scripts/fetch.py https://ted.com/talks/x --yes-rights\n\
              \x20   ↳ downloaded 12 MB\n\
              Step 2 · Read: /h/.inspire-video/SKILL.md\n\
@@ -285,6 +287,7 @@ mod tests {
              Result:\n\
              Video is ready.\n\
              See output/final/x.\n\
+             \n\
              \n\
              \n\
              loopx-exit=0\n"
@@ -336,7 +339,7 @@ mod tests {
         assert_eq!(render(&log), "    ↳ a\n");
         let log = ev(json!({"type": "assistant", "message": {"content": [
             {"type": "text", "text": "x\nloopx-exit=0"}]}}));
-        assert_eq!(render(&log), "\nClaude:\nx\n· loopx-exit=0\n\n");
+        assert_eq!(render(&log), "\nClaude:\nx\n· loopx-exit=0\n\n\n");
     }
 
     #[test]
