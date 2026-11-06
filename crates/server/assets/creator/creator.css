@@ -314,3 +314,20 @@
 .cr-job-facts { display: flex; flex-wrap: wrap; margin-top: 0.1rem; font-size: 0.75rem; line-height: 1.5; color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
 .cr-job-facts > span + span::before { content: '·'; margin: 0 0.45rem; opacity: 0.6; }
 .cr-job-note { margin: 0.45rem 0 0.2rem; padding: 0.5rem 0.75rem; border-radius: 10px; border-left: 3px solid var(--md-error); background: color-mix(in srgb, var(--md-error) 8%, transparent); font-size: 0.8125rem; line-height: 1.45; color: var(--md-on-surface); overflow-wrap: anywhere; }
+
+/* Job history: a leading kind icon tinted by state, then the details, then actions. */
+.cr-job { align-items: flex-start; gap: 0.85rem; }
+.cr-job-ico { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; border-radius: 10px; color: var(--md-primary); background: color-mix(in srgb, var(--md-primary) 12%, transparent); }
+.cr-job-ico svg { width: 1.125rem; height: 1.125rem; }
+.cr-job[data-state="done"] .cr-job-ico { color: var(--md-on-success-container); background: var(--md-success-container); }
+.cr-job:is([data-state="failed"], [data-state="incomplete"], [data-state="no_output"]) .cr-job-ico { color: var(--md-on-error-container); background: var(--md-error-container); }
+.cr-job[data-state="stopped"] .cr-job-ico { color: var(--md-on-surface-variant); background: var(--md-surface-container-high); }
+.cr-job .cr-row-main { flex: 1 1 18rem; }
+.cr-job .cr-row-title { flex-wrap: wrap; }
+.cr-job .cr-row-name { font-weight: 500; }
+@media (max-width: 640px) { .cr-job { flex-wrap: wrap; } .cr-job .cr-row-actions { margin-left: 3.1rem; } }
+
+/* Discover: the latest topic under the Find videos form. */
+.cr-latest-topic { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--md-outline-variant); font-size: 0.875rem; min-width: 0; }
+.cr-latest-label { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-on-surface-variant); }
+.cr-latest-topic strong { font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

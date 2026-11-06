@@ -1637,5 +1637,6 @@
   "The agent says the video still needs work.": "エージェントは、動画にまだ作業が必要だと報告しています。",
   "The agent says it is not finished: {reason}": "エージェントは未完了と報告しています: {reason}",
   "Retrying the video. Steps that already finished are reused.": "動画を再試行しています。完了済みのステップは再利用されます。",
-  "Could not retry the job: {detail}": "ジョブを再試行できませんでした: {detail}"
+  "Could not retry the job: {detail}": "ジョブを再試行できませんでした: {detail}",
+  "Latest topic": "最新のトピック"
 }

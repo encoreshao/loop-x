@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Creator → Discover shows the latest Find videos topic under the search box; Jobs history rows get a kind icon tinted by state and a cleaner layout.
 - Creator → Jobs: a **Retry** button on video jobs that did not succeed runs the job again under the same record, and the agent reuses the steps the first run completed. Generating from a link you already ran restarts that job instead of adding a new one.
 
 - Creator → Jobs shows the title of the video each finished Generate job made, and the Job log sheet has a Copy button for the whole log.

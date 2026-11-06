@@ -985,8 +985,10 @@ fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, Str
         delete_form(ctx, job)
     };
     format!(
-        "<li class='cr-row'><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>{}\
+        "<li class='cr-row cr-job' data-state=\"{}\"><span class='cr-job-ico' aria-hidden='true'>{}</span><div class='cr-row-main'><div class='cr-row-title'><strong>{}</strong> {}</div>{}\
 {}<div class='cr-job-key' title=\"{}\">{}</div><div class='cr-job-facts'>{}</div>{}{}{}</div><div class='cr-row-actions'>{}{action}</div></li>",
+        h(&job.state),
+        icons::icon(if job.kind == JobKind::Scout { "search" } else { "video" }),
         h(&kind_label(ctx, job)),
         job_pill(ctx, job),
         titles
@@ -1428,6 +1430,33 @@ fn link_panel(ctx: &UiCtx) -> String {
     )
 }
 
+/// The most recent Find videos topic: the newest Find videos job (running or finished), else
+/// the newest catalog's search. Empty when nothing was ever searched.
+fn latest_topic(ctx: &UiCtx, jobs: &[JobRecord], run: Option<&ScoutRun>) -> String {
+    let newest = jobs
+        .iter()
+        .filter(|j| j.kind == JobKind::Scout)
+        .max_by(|a, b| (&a.started_at, &a.id).cmp(&(&b.started_at, &b.id)));
+    let (topic, state, stamp) = match (newest, run) {
+        (Some(j), _) => (j.key.clone(), Some(job_pill(ctx, j)), when(&j.started_at)),
+        (None, Some(r)) => (r.query.clone().unwrap_or_default(), None, when(&r.generated_at)),
+        (None, None) => return String::new(),
+    };
+    let name = if topic.trim().is_empty() {
+        ctx.t("Topic-free discovery")
+    } else {
+        topic
+    };
+    format!(
+        "<div class='cr-latest-topic'><span class='cr-latest-label'>{}</span><strong title=\"{}\">{}</strong>{}<span class='cr-meta'>{}</span></div>",
+        h(&ctx.t("Latest topic")),
+        h(&name),
+        h(&name),
+        state.unwrap_or_default(),
+        h(&stamp)
+    )
+}
+
 fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     let root = scout::scout_root(&ctx.state.user_home);
     let (runs, errors) = scout::list_runs(&root);
@@ -1446,7 +1475,8 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             h(&ctx.t("Topic")),
             icons::icon("search"),
             h(&ctx.t("Find videos"))
-        ),
+        )
+        .replacen("</form></div>", &format!("</form>{}</div>", latest_topic(ctx, jobs, runs.first())), 1),
     );
     let link = link_panel(ctx);
     let running: Vec<&JobRecord> = jobs
@@ -3722,6 +3752,20 @@ mod tests {
         // Finished runs and generate jobs are not listed here.
         assert!(!body.contains("20261105T000002-scoutold"), "{body}");
         assert!(!body.contains("data-cr-status=\"20261105T000003-genlive0\""), "{body}");
+    }
+
+    #[test]
+    fn discover_shows_the_latest_find_videos_topic() {
+        let fx = Fx::new();
+        assert!(!fx.get("/creator?tab=discover").body_text().contains("class='cr-latest-topic'"));
+        fx.job("20261105T000001-scoutold", "scout", "old topic", false, "loopx-exit=0\n");
+        fx.job("20261105T000009-scoutnew", "scout", "how humanity responds to AI", false, "loopx-exit=0\n");
+        fx.job("20261105T000010-genlast0", "generate", "https://example.com/v", false, "");
+        let body = fx.get("/creator?tab=discover").body_text();
+        let at = body.find("class='cr-latest-topic'").expect(&body);
+        let panel = &body[at..at + 400];
+        assert!(panel.contains("how humanity responds to AI"), "{panel}");
+        assert!(!panel.contains("old topic"), "{panel}");
     }
 
     #[test]
