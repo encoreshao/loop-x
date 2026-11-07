@@ -101,6 +101,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Notification pop-ups follow the selected theme (themed surface tinted by kind), use a lighter, easier-to-read title, and are no longer clipped at the edges.
 - Creator → Jobs: the job log sheet now renders what Claude said and the final summary as formatted markdown (headings, lists, code, bold) instead of showing the raw markup.
 - The header Agents pill and the Agents page now show a running Creator Find videos or Generate video job (started from the Creator page or the chat) with its current stage and elapsed time.
 - Google Slides (and the new Google Docs and Sheets connectors): a file your Google account cannot open now says to ask its owner to share it with that account, and a missing file says it was not found, instead of asking you to reconnect; reconnecting is asked for only when the sign-in itself has expired or lacks a permission.
