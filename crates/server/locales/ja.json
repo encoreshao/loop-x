@@ -1646,5 +1646,7 @@
   "Save instructions": "指示を保存",
   "Custom instructions are limited to {max} characters": "カスタム指示は{max}文字までです",
   "Cleared custom instructions for {name}": "{name}のカスタム指示を削除しました",
-  "Saved custom instructions for {name}": "{name}のカスタム指示を保存しました"
+  "Saved custom instructions for {name}": "{name}のカスタム指示を保存しました",
+  "Project settings": "プロジェクト設定",
+  "None set": "未設定"
 }

@@ -1461,17 +1461,13 @@ fn table(headers: &[String], rows: &[String]) -> String {
 /// The Track-on / edit form for `alias`, prefilled from its projects.json entry.
 /// Both checkout fields left empty tracks the project for issues only.
 fn track_form(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
-    let form = track_fields(ctx, alias, project, csrf);
-    match project {
-        Some(project) => format!("{form}{}", instructions_form(ctx, alias, project, csrf)),
-        None => form,
-    }
+    track_fields(ctx, alias, project, csrf)
 }
 
 /// The per-project custom instructions the agent follows for that project only.
 fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
     format!(
-        "<form method='post' action='/settings/loop-projects/{}/instructions' class='project-instructions'>{csrf}<label for='ci-{alias_attr}'>{}</label><textarea id='ci-{alias_attr}' name='custom_instructions' rows='4' maxlength='{}' placeholder='{}'>{}</textarea><div class='project-instructions-foot'><span class='loop-meta-item'>{}</span><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
+        "<form method='post' action='/settings/loop-projects/{}/instructions' class='project-instructions'>{csrf}<textarea name='custom_instructions' aria-label=\"{}\" rows='5' maxlength='{}' placeholder='{}'>{}</textarea><div class='project-instructions-foot'><span class='loop-meta-item'>{}</span><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
         pyfmt::quote(alias, ""),
         esc_t(ctx, "Custom instructions"),
         loopx_core::prompt::MAX_PROJECT_INSTRUCTIONS,
@@ -1479,7 +1475,6 @@ fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> S
         pyfmt::escape(&text(project, "custom_instructions")),
         esc_t(ctx, "Guidance only: they never override the loop's safety rules."),
         esc_t(ctx, "Save instructions"),
-        alias_attr = pyfmt::quote(alias, "")
     )
 }
 
@@ -1508,41 +1503,93 @@ fn untrack_switch(ctx: &UiCtx, alias: &str, csrf: &str) -> String {
     )
 }
 
-/// The Track column for one GitLab alias: a collapsed Track form when it is
-/// not tracked; otherwise the untrack switch, where it lives, its worktree
-/// switch and an edit form (an issues-only project has no checkout, so no
-/// worktree switch either).
-fn track_cell(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
-    let Some(project) = project else {
-        return format!(
-            "<details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</summary><div class='loop-settings-body'>{}</div></details>",
-            esc_t(ctx, "Track"),
-            track_form(ctx, alias, None, csrf)
-        );
-    };
-    if is_issues_only(project) {
-        return format!(
-            "<div class='loop-toggle'>{}<span class='loop-toggle-text'>{}</span></div><div class='loop-meta'><span class='pill'>{}</span></div><details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}</summary><div class='loop-settings-body'>{}</div></details>",
-            untrack_switch(ctx, alias, csrf),
-            esc_t(ctx, "Tracked"),
-            esc_t(ctx, "Issues only"),
-            esc_t(ctx, "Edit"),
-            track_form(ctx, alias, Some(project), csrf)
-        );
-    }
+/// What one project card shows. `tracked` is the project's projects.json entry when the
+/// loop tracks it; `settings` is the collapsed Project settings body (may be empty).
+struct ProjectCard<'a> {
+    alias: &'a str,
+    /// HTML under the alias: the repository, its account or instance.
+    subtitle: String,
+    tracked: Option<&'a Value>,
+    settings: String,
+}
+
+/// The worktree on/off switch of a tracked project that has a checkout.
+fn worktree_switch(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
     let on = use_worktree(project);
     let (state, class, checked) = if on { ("off", "is-on", "true") } else { ("on", "is-off", "false") };
     let label = esc_t(ctx, "Use worktree");
     format!(
-        "<div class='loop-toggle'>{}<span class='loop-toggle-text'>{}</span></div><div class='loop-meta'><span class='loop-meta-item'><code>{}</code></span><span class='loop-meta-item'><code>{}</code></span></div><div class='loop-toggle'><form method='post' action='/settings/loop-projects/{}/worktree/{state}' class='daemon-action-form'>{csrf}<button type='submit' class='switch {class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button></form><span class='loop-toggle-text'>{label}</span></div><details class='loop-settings'><summary><svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}</summary><div class='loop-settings-body'>{}</div></details>",
-        untrack_switch(ctx, alias, csrf),
-        esc_t(ctx, "Tracked"),
-        pyfmt::escape(&text(project, "target_branch")),
-        pyfmt::escape(&text(project, "local_path")),
-        pyfmt::quote(alias, ""),
-        esc_t(ctx, "Edit"),
-        track_form(ctx, alias, Some(project), csrf)
+        "<div class='loop-toggle'><form method='post' action='/settings/loop-projects/{}/worktree/{state}' class='daemon-action-form'>{csrf}<button type='submit' class='switch {class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button></form><span class='loop-toggle-text'>{label}</span></div>",
+        pyfmt::quote(alias, "")
     )
+}
+
+/// The Custom instructions section: always visible as a one-line preview, it opens to the
+/// editor.
+fn instructions_section(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
+    let current = text(project, "custom_instructions");
+    let flat: String = current.split_whitespace().collect::<Vec<_>>().join(" ");
+    let preview = if flat.is_empty() {
+        format!("<span class='proj-preview is-empty'>{}</span>", esc_t(ctx, "None set"))
+    } else {
+        let short: String = flat.chars().take(160).collect();
+        let more = if flat.chars().count() > 160 { "\u{2026}" } else { "" };
+        format!("<span class='proj-preview'>{}{more}</span>", pyfmt::escape(&short))
+    };
+    format!(
+        "<details class='proj-section'><summary><span class='proj-section-title'>{}</span>{preview}<span class='proj-chevron' aria-hidden='true'></span></summary><div class='proj-section-body'>{}</div></details>",
+        esc_t(ctx, "Custom instructions"),
+        instructions_form(ctx, alias, project, csrf)
+    )
+}
+
+/// One project as a card: who it is and whether it is tracked, where it works, its custom
+/// instructions, and its settings tucked away.
+fn project_card(ctx: &UiCtx, c: &ProjectCard<'_>, csrf: &str) -> String {
+    let (state, body) = match c.tracked {
+        Some(project) => {
+            let works = if is_issues_only(project) {
+                format!("<span class='pill'>{}</span>", esc_t(ctx, "Issues only"))
+            } else {
+                format!(
+                    "<span class='proj-where'><code>{}</code><span class='proj-arrow' aria-hidden='true'>&rarr;</span><code>{}</code></span>{}",
+                    pyfmt::escape(&text(project, "local_path")),
+                    pyfmt::escape(&text(project, "target_branch")),
+                    worktree_switch(ctx, c.alias, project, csrf)
+                )
+            };
+            (
+                format!(
+                    "<div class='loop-toggle'>{}<span class='loop-toggle-text'>{}</span></div>",
+                    untrack_switch(ctx, c.alias, csrf),
+                    esc_t(ctx, "Tracked")
+                ),
+                format!(
+                    "<div class='proj-meta'>{works}</div>{}",
+                    instructions_section(ctx, c.alias, project, csrf)
+                ),
+            )
+        }
+        None => (format!("<span class='pill'>{}</span>", esc_t(ctx, "Not tracked")), String::new()),
+    };
+    let settings = if c.settings.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<details class='proj-section'><summary><span class='proj-section-title'>{}</span><span class='proj-chevron' aria-hidden='true'></span></summary><div class='proj-section-body'>{}</div></details>",
+            esc_t(ctx, "Project settings"),
+            c.settings
+        )
+    };
+    format!(
+        "<li class='proj-card'><div class='proj-head'><div class='proj-id'><span class='proj-alias'>{}</span><span class='proj-sub'>{}</span></div><div class='proj-state'>{state}</div></div>{body}{settings}</li>",
+        pyfmt::escape(c.alias),
+        c.subtitle
+    )
+}
+
+fn project_list(cards: &[String]) -> String {
+    format!("<ul class='proj-list'>{}</ul>", cards.concat())
 }
 
 /// A tracked project with no local checkout: the loop reads, analyzes and
@@ -1614,20 +1661,37 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         let safe = pyfmt::escape(alias);
         let url_safe = pyfmt::quote(alias, "");
         let confirm = ctx.tf("Delete project alias {alias}?", &[("alias", alias)]);
-        rows.push(format!(
-            "<tr><td>{safe}</td><td><form method='post' action='/settings/gitlab/projects' class='daemon-action-form'>{csrf}<input type='hidden' name='alias' value='{safe}'><input type='text' name='project_id' value='{}' placeholder='namespace/project'>{}{}<button type='submit' class='btn btn-neutral'>{}</button></form></td><td>{}</td><td>{}</td></tr>",
+        let tracked_entry = tracked.get(alias.as_str());
+        let connection = format!(
+            "<form method='post' action='/settings/gitlab/projects' class='daemon-action-form'>{csrf}<input type='hidden' name='alias' value='{safe}'><input type='text' name='project_id' value='{}' placeholder='namespace/project'>{}{}<button type='submit' class='btn btn-neutral'>{}</button></form>",
             pyfmt::escape(&text(project, "project_id")),
             custom_select_plain("instance", &instance_names, Some(&text(project, "instance")), None),
             custom_select_plain("bundle", &bundle_names, Some(&text(project, "bundle")), Some(&t("(use instance default)"))),
-            et("Save"),
-            track_cell(ctx, alias, tracked.get(alias.as_str()), &csrf),
+            et("Save")
+        );
+        let settings = format!(
+            "<div class='proj-settings'><section><h4>{}</h4>{connection}</section><section><h4>{}</h4>{}</section><div class='proj-danger'>{}</div></div>",
+            et("Connection"),
+            et("Checkout"),
+            track_form(ctx, alias, tracked_entry, &csrf),
             delete_form(ctx, &format!("/settings/gitlab/projects/{url_safe}/delete"), &confirm, &csrf)
+        );
+        let instance = text(project, "instance");
+        let subtitle = format!(
+            "<span class='proj-repo'>{}</span>{}",
+            pyfmt::escape(&text(project, "project_id")),
+            if instance.is_empty() { String::new() } else { format!(" <span class='pill pill-grey'>{}</span>", pyfmt::escape(&instance)) }
+        );
+        rows.push(project_card(
+            ctx,
+            &ProjectCard { alias, subtitle, tracked: tracked_entry, settings },
+            &csrf,
         ));
     }
     let mut projects_html = if rows.is_empty() {
         format!("<p>{}</p>", et("(no project aliases configured)"))
     } else {
-        table(&[et("Alias"), et("Edit"), et("Track"), et("Delete")], &rows)
+        project_list(&rows)
     };
     // Tracked in projects.json but no longer a GitLab alias: only untrack.
     // GitHub projects are listed in their own card.
@@ -2594,26 +2658,17 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
             None => pyfmt::escape(&repo),
         };
         let tag = account.map_or_else(|| account_id.clone(), |a| format!("{} \u{b7} {}", a.id, a.provider.label()));
-        let checkout = if is_issues_only(project) {
-            format!("<span class='pill'>{}</span>", et("Issues only"))
-        } else {
-            format!(
-                "<code>{}</code> &rarr; <code>{}</code>",
-                pyfmt::escape(&text(project, "local_path")),
-                pyfmt::escape(&text(project, "target_branch"))
-            )
-        };
-        rows.push(format!(
-            "<tr><td>{}</td><td>{repo_html} <span class='pill pill-grey'>{}</span></td><td>{checkout}</td><td>{}</td></tr>",
-            pyfmt::escape(alias),
-            pyfmt::escape(&tag),
-            untrack_switch(ctx, alias, csrf)
+        let subtitle = format!("{repo_html} <span class='pill pill-grey'>{}</span>", pyfmt::escape(&tag));
+        rows.push(project_card(
+            ctx,
+            &ProjectCard { alias, subtitle, tracked: Some(project), settings: String::new() },
+            csrf,
         ));
     }
     let list = if rows.is_empty() {
         format!("<p>{}</p>", et("(no connected projects yet)"))
     } else {
-        table(&[et("Alias"), et("Repository"), et("Checkout"), et("Tracked")], &rows)
+        project_list(&rows)
     };
     let options: Vec<(String, String)> = accounts.iter().map(|a| (a.id.clone(), a.label.clone())).collect();
     let manage = format!(

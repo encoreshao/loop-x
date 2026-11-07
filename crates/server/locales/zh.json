@@ -1646,5 +1646,7 @@
   "Save instructions": "保存指令",
   "Custom instructions are limited to {max} characters": "自定义指令最多 {max} 个字符",
   "Cleared custom instructions for {name}": "已清除 {name} 的自定义指令",
-  "Saved custom instructions for {name}": "已保存 {name} 的自定义指令"
+  "Saved custom instructions for {name}": "已保存 {name} 的自定义指令",
+  "Project settings": "项目设置",
+  "None set": "未设置"
 }

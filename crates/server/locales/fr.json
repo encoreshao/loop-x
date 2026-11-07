@@ -1646,5 +1646,7 @@
   "Save instructions": "Enregistrer les instructions",
   "Custom instructions are limited to {max} characters": "Les instructions personnalisées sont limitées à {max} caractères",
   "Cleared custom instructions for {name}": "Instructions personnalisées supprimées pour {name}",
-  "Saved custom instructions for {name}": "Instructions personnalisées enregistrées pour {name}"
+  "Saved custom instructions for {name}": "Instructions personnalisées enregistrées pour {name}",
+  "Project settings": "Paramètres du projet",
+  "None set": "Aucune"
 }
