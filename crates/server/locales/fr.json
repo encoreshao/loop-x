@@ -1650,5 +1650,6 @@
   "Project settings": "Paramètres du projet",
   "None set": "Aucune",
   "Local checkout": "Dépôt local",
-  "Target branch": "Branche cible"
+  "Target branch": "Branche cible",
+  "Stopped tracking project {name}": "Suivi du projet {name} arrêté"
 }

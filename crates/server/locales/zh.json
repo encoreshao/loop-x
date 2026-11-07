@@ -1650,5 +1650,6 @@
   "Project settings": "项目设置",
   "None set": "未设置",
   "Local checkout": "本地检出目录",
-  "Target branch": "目标分支"
+  "Target branch": "目标分支",
+  "Stopped tracking project {name}": "已停止跟踪项目 {name}"
 }

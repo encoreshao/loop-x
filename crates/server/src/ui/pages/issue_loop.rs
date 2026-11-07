@@ -2818,7 +2818,7 @@ fn delete_tracked_project(ctx: &UiCtx, alias: &str) -> (bool, String) {
     }
     obj_mut(&mut config, "projects").shift_remove(alias);
     tryw!(save(ctx, &config, &path));
-    (true, name_msg(ctx, "Deleted project {name}", alias))
+    (true, name_msg(ctx, "Stopped tracking project {name}", alias))
 }
 
 #[allow(dead_code)]
@@ -2975,6 +2975,12 @@ mod tests {
     fn track_off_then_on_keeps_no_stale_entry() {
         let sb = Sandbox::new();
         let repo = sb.repo("repo", true);
+        assert!(sb.project(&repo, "dev").0);
+        // Untracking says so; it is not a delete (the GitLab alias stays).
+        assert_eq!(
+            delete_tracked_project(&sb.ctx(), "app"),
+            (true, "Stopped tracking project app".to_string())
+        );
         assert!(sb.project(&repo, "dev").0);
         assert!(delete_tracked_project(&sb.ctx(), "app").0);
         assert!(sb.saved()["projects"].get("app").is_none());

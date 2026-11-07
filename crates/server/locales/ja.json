@@ -1650,5 +1650,6 @@
   "Project settings": "プロジェクト設定",
   "None set": "未設定",
   "Local checkout": "ローカルチェックアウト",
-  "Target branch": "ターゲットブランチ"
+  "Target branch": "ターゲットブランチ",
+  "Stopped tracking project {name}": "プロジェクト{name}の追跡を停止しました"
 }
