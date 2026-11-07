@@ -3130,7 +3130,9 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .proj-id { min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
 .proj-alias { font-size: 1.0625rem; font-weight: 600; color: var(--md-on-surface); overflow-wrap: anywhere; }
 .proj-sub { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; font-size: 0.8125rem; color: var(--md-on-surface-variant); }
-.proj-state { display: flex; align-items: center; gap: 0.6rem; }
+.proj-state { display: flex; align-items: center; gap: 0.75rem; }
+.proj-state .daemon-action-form { margin: 0; }
+.proj-state .btn-warning { height: 2rem; }
 .proj-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem 1rem; flex-wrap: wrap; }
 .proj-where { display: inline-flex; align-items: center; gap: 0.45rem; min-width: 0; flex-wrap: wrap; }
 .proj-where code { font-size: 0.8125rem; padding: 0.15rem 0.45rem; border-radius: 6px; background: var(--md-surface-container-high); overflow-wrap: anywhere; }
@@ -3151,16 +3153,44 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
    .daemon-action-form (whose row flex sizing turns into a height in a column). */
 .proj-settings { display: flex; flex-direction: column; gap: 1rem; }
 .proj-form { display: flex; flex-direction: column; gap: 1rem; margin: 0; }
-.proj-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem 1rem; }
+.proj-fields { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.85rem 1rem; }
 .proj-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
-.proj-field.is-wide { grid-column: 1 / -1; }
+.proj-field { grid-column: span 6; }
+.proj-field.span-2 { grid-column: span 2; }
+.proj-field.span-3 { grid-column: span 3; }
+.proj-field.span-4 { grid-column: span 4; }
+.proj-input-row { display: flex; gap: 0.5rem; }
+.proj-input-row input[type='text'] { flex: 1 1 auto; min-width: 0; }
+.proj-browse { flex: none; height: 2.25rem; }
 .proj-field-label { font-size: 0.75rem; font-weight: 600; color: var(--md-on-surface-variant); }
 .proj-field input[type='text'] { width: 100%; height: 2.25rem; box-sizing: border-box; padding: 0 0.75rem; border-radius: 10px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container-lowest); color: var(--md-on-surface); font: inherit; font-size: 0.8125rem; }
 .proj-field input[type='text']:focus-visible { outline: 3px solid color-mix(in srgb, var(--md-primary) 45%, transparent); outline-offset: 1px; }
 .proj-field .custom-select { width: 100%; min-width: 0; flex: none; }
 .proj-field .custom-select-trigger { min-height: 2.25rem; box-sizing: border-box; }
 .proj-form-foot { display: flex; justify-content: flex-end; }
-.proj-danger { display: flex; justify-content: flex-start; padding-top: 0.85rem; border-top: 1px solid var(--md-outline-variant); }
 .proj-track { margin: 0; }
-@media (max-width: 640px) { .proj-fields { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .proj-field.span-2, .proj-field.span-3, .proj-field.span-4 { grid-column: span 3; } }
+@media (max-width: 640px) { .proj-fields { grid-template-columns: minmax(0, 1fr); } .proj-field, .proj-field.span-2, .proj-field.span-3, .proj-field.span-4 { grid-column: 1 / -1; } }
 @media (prefers-reduced-motion: reduce) { .proj-card, .proj-chevron { transition: none; } }
+
+/* Folder picker (Project settings -> Browse): a sheet that walks the folder tree. */
+.folder-picker { width: min(34rem, calc(100vw - 2rem)); max-height: min(34rem, calc(100vh - 2rem)); padding: 0; border: 0; border-radius: 16px; background: var(--md-surface); color: var(--md-on-surface); box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32), 0 0 0 1px var(--md-outline-variant); overflow: hidden; }
+.folder-picker::backdrop { background: rgba(0, 0, 0, 0.45); }
+.fp-inner { display: flex; flex-direction: column; max-height: inherit; }
+.fp-head { display: flex; align-items: center; justify-content: space-between; padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--md-outline-variant); }
+.fp-head h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+.fp-x { width: 28px; height: 28px; border: 0; border-radius: 50%; background: none; color: var(--md-on-surface-variant); font-size: 1.1rem; cursor: pointer; }
+.fp-x:hover { background: var(--md-surface-container-high); }
+.fp-path { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 1.1rem; border-bottom: 1px solid var(--md-outline-variant); min-width: 0; }
+.fp-up { flex: none; height: 1.9rem; padding: 0 0.7rem; border: 1px solid var(--md-outline-variant); border-radius: 999px; background: var(--md-surface-container-lowest); color: var(--md-on-surface); font: inherit; font-size: 0.8125rem; cursor: pointer; }
+.fp-up:disabled { opacity: 0.45; cursor: default; }
+.fp-cur { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: 0.8125rem; }
+.fp-list { list-style: none; margin: 0; padding: 0.4rem; overflow-y: auto; min-height: 12rem; flex: 1 1 auto; }
+.fp-dir { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; width: 100%; height: 2.25rem; padding: 0 0.75rem; border: 0; border-radius: 9px; background: none; color: var(--md-on-surface); font: inherit; font-size: 0.875rem; text-align: left; cursor: pointer; }
+.fp-dir:hover, .fp-dir:focus-visible { background: var(--md-surface-container-high); outline: none; }
+.fp-dir.is-git .fp-name { font-weight: 600; }
+.fp-badge { flex: none; padding: 0.1rem 0.45rem; border-radius: 999px; background: color-mix(in srgb, var(--md-primary) 14%, transparent); color: var(--md-primary); font-size: 0.6875rem; font-weight: 600; }
+.fp-note { padding: 1rem 0.75rem; color: var(--md-on-surface-variant); font-size: 0.875rem; }
+.fp-foot { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0.8rem 1.1rem; border-top: 1px solid var(--md-outline-variant); }
+.fp-use { background: var(--md-primary); color: var(--md-on-primary); border-color: transparent; }
+@media (prefers-reduced-motion: no-preference) { .folder-picker[open] { animation: cr-dialog-in 180ms cubic-bezier(0.32, 0.72, 0, 1); } }

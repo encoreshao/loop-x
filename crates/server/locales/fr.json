@@ -1651,5 +1651,14 @@
   "None set": "Aucune",
   "Local checkout": "Dépôt local",
   "Target branch": "Branche cible",
-  "Stopped tracking project {name}": "Suivi du projet {name} arrêté"
+  "Stopped tracking project {name}": "Suivi du projet {name} arrêté",
+  "Choose a folder": "Choisir un dossier",
+  "Use this folder": "Utiliser ce dossier",
+  "Up one level": "Dossier parent",
+  "No folders here": "Aucun dossier ici",
+  "Could not read this folder": "Impossible de lire ce dossier",
+  "Browse": "Parcourir",
+  "Login": "Identifiant",
+  "That folder does not exist": "Ce dossier n'existe pas",
+  "No origin remote found in that folder, so the repository was left as it was": "Aucun remote origin dans ce dossier : le dépôt est inchangé"
 }

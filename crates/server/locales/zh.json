@@ -1651,5 +1651,14 @@
   "None set": "未设置",
   "Local checkout": "本地检出目录",
   "Target branch": "目标分支",
-  "Stopped tracking project {name}": "已停止跟踪项目 {name}"
+  "Stopped tracking project {name}": "已停止跟踪项目 {name}",
+  "Choose a folder": "选择文件夹",
+  "Use this folder": "使用此文件夹",
+  "Up one level": "上一级",
+  "No folders here": "这里没有文件夹",
+  "Could not read this folder": "无法读取此文件夹",
+  "Browse": "浏览",
+  "Login": "登录名",
+  "That folder does not exist": "该文件夹不存在",
+  "No origin remote found in that folder, so the repository was left as it was": "该文件夹中没有 origin 远程，因此未更改仓库"
 }

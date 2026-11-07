@@ -103,6 +103,8 @@ pub fn register(r: &mut Registry) {
             )
         })
     });
+    r.post("/settings/folders", folder_list);
+    r.post("/settings/folder-info", folder_info);
     r.post("/settings/loop-projects/:alias/settings", |c| {
         flash_post(c, |c, f| save_project_settings(c, c.param("alias"), f))
     });
@@ -1464,7 +1466,7 @@ fn table(headers: &[String], rows: &[String]) -> String {
 /// The per-project custom instructions the agent follows for that project only.
 fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
     format!(
-        "<form method='post' action='/settings/loop-projects/{}/instructions' class='project-instructions'>{csrf}<textarea name='custom_instructions' aria-label=\"{}\" rows='5' maxlength='{}' placeholder='{}'>{}</textarea><div class='project-instructions-foot'><span class='loop-meta-item'>{}</span><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
+        "<form method='post' action='/settings/loop-projects/{}/instructions' class='project-instructions' data-ajax-card>{csrf}<textarea name='custom_instructions' aria-label=\"{}\" rows='5' maxlength='{}' placeholder='{}'>{}</textarea><div class='project-instructions-foot'><span class='loop-meta-item'>{}</span><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
         pyfmt::quote(alias, ""),
         esc_t(ctx, "Custom instructions"),
         loopx_core::prompt::MAX_PROJECT_INSTRUCTIONS,
@@ -1475,8 +1477,27 @@ fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> S
     )
 }
 
+/// One labelled field of a settings form, `span` of the six columns wide.
+fn proj_field(ctx: &UiCtx, label: &str, span: u8, input: String) -> String {
+    format!(
+        "<div class='proj-field span-{span}'><span class='proj-field-label'>{}</span>{input}</div>",
+        esc_t(ctx, label)
+    )
+}
+
+/// The checkout input with its Browse button (opens the folder picker, which fills the
+/// checkout, the repository and the branch of the folder you pick).
+fn checkout_input(ctx: &UiCtx, value: &str) -> String {
+    format!(
+        "<div class='proj-input-row'>{}<button type='button' class='btn btn-neutral proj-browse' data-pick-folder>{} {}</button></div>",
+        input_text("local_path", value, "/abs/path/to/checkout", ""),
+        icon("folder"),
+        esc_t(ctx, "Browse")
+    )
+}
+
 /// A GitLab project's one settings form: where it lives (repository, instance, access
-/// bundle) and, once tracked, where the loop works on it (checkout, target branch).
+/// bundle) and where the loop works on it (checkout, target branch), on as few lines as fit.
 /// Whether it uses a worktree is the switch on the card, not a field here.
 fn project_settings_form(
     ctx: &UiCtx,
@@ -1487,42 +1508,69 @@ fn project_settings_form(
     bundles: &[String],
     csrf: &str,
 ) -> String {
-    let field = |label: &str, input: String, wide: bool| {
-        format!(
-            "<div class='proj-field{}'><span class='proj-field-label'>{}</span>{input}</div>",
-            if wide { " is-wide" } else { "" },
-            esc_t(ctx, label)
-        )
-    };
     let none = ctx.t("(use instance default)");
-    let mut fields = format!(
-        "{}{}{}",
-        field("Repository", input_text("project_id", &text(project, "project_id"), "namespace/project", " aria-label='Repository'"), true),
-        field("Instance", custom_select_plain("instance", instances, Some(&text(project, "instance")), None), false),
-        field("Bundle", custom_select_plain("bundle", bundles, Some(&text(project, "bundle")), Some(&none)), false),
-    );
-    if let Some(entry) = tracked {
-        fields.push_str(&field(
-            "Local checkout",
-            input_text("local_path", &text(entry, "local_path"), "/abs/path/to/checkout", ""),
-            true,
-        ));
-        fields.push_str(&field(
+    let entry = tracked.unwrap_or(&Value::Null);
+    let fields = format!(
+        "{}{}{}{}{}",
+        proj_field(ctx, "Repository", 3, input_text("project_id", &text(project, "project_id"), "namespace/project", "")),
+        proj_field(ctx, "Local checkout", 3, checkout_input(ctx, &text(entry, "local_path"))),
+        proj_field(ctx, "Instance", 2, custom_select_plain("instance", instances, Some(&text(project, "instance")), None)),
+        proj_field(ctx, "Bundle", 2, custom_select_plain("bundle", bundles, Some(&text(project, "bundle")), Some(&none))),
+        proj_field(
+            ctx,
             "Target branch",
-            input_text("target_branch", &text(entry, "target_branch"), &esc_t(ctx, "target branch"), ""),
-            false,
-        ));
-    }
+            2,
+            input_text("target_branch", &text(entry, "target_branch"), &esc_t(ctx, "target branch"), "")
+        ),
+    );
     format!(
-        "<form method='post' action='/settings/loop-projects/{}/settings' class='proj-form'>{csrf}<div class='proj-fields'>{fields}</div><div class='proj-form-foot'><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
+        "<form method='post' action='/settings/loop-projects/{}/settings' class='proj-form' data-ajax-card>{csrf}<div class='proj-fields'>{fields}</div><div class='proj-form-foot'><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
         pyfmt::quote(alias, ""),
         esc_t(ctx, "Save")
     )
 }
 
-/// Save a GitLab project's settings form: the alias (repository, instance, bundle) and,
-/// when the loop already tracks it, its checkout and target branch (both empty means
-/// issues only). A project that is not tracked stays untracked.
+/// The same settings form for a project tracked through a connector account (GitHub...):
+/// repository, account, login, checkout and target branch. It posts to the add handler,
+/// which updates an existing alias.
+fn connected_settings_form(
+    ctx: &UiCtx,
+    alias: &str,
+    project: &Value,
+    accounts: &[(String, String)],
+    csrf: &str,
+) -> String {
+    let host = &project["code_host"];
+    let fields = format!(
+        "{}{}{}{}{}",
+        proj_field(ctx, "Repository", 2, input_text("repo", &text(host, "repo"), "owner/name", "")),
+        proj_field(ctx, "Account", 2, super::loops_common::custom_select("account", accounts, Some(&text(host, "account")), None)),
+        proj_field(
+            ctx,
+            "Login",
+            2,
+            input_text("assignee_username", &text(project, "assignee_username"), &esc_t(ctx, "Login there (optional)"), "")
+        ),
+        proj_field(ctx, "Local checkout", 4, checkout_input(ctx, &text(project, "local_path"))),
+        proj_field(
+            ctx,
+            "Target branch",
+            2,
+            input_text("target_branch", &text(project, "target_branch"), &esc_t(ctx, "target branch"), "")
+        ),
+    );
+    // The worktree choice has its own switch on the card; the form keeps whatever it is.
+    let keep_worktree = if use_worktree(project) { "<input type='hidden' name='use_worktree' value='1'>" } else { "" };
+    format!(
+        "<form method='post' action='/settings/loop-projects/connected' class='proj-form' data-ajax-card>{csrf}<input type='hidden' name='alias' value=\"{}\">{keep_worktree}<div class='proj-fields'>{fields}</div><div class='proj-form-foot'><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
+        pyfmt::escape(alias),
+        esc_t(ctx, "Save")
+    )
+}
+
+/// Save a GitLab project's settings form: the alias (repository, instance, bundle) and its
+/// checkout and target branch (both empty means issues only for a tracked project). An
+/// untracked project stays untracked unless a checkout is given, which starts tracking it.
 fn save_project_settings(ctx: &UiCtx, alias: &str, f: &Form) -> (bool, String) {
     let first = |k: &str| f.first(k).unwrap_or("");
     let (ok, message) = upsert_project(ctx, alias, first("project_id"), first("instance"), first("bundle"));
@@ -1530,11 +1578,15 @@ fn save_project_settings(ctx: &UiCtx, alias: &str, f: &Form) -> (bool, String) {
         return (ok, message);
     }
     let config = read_json_or_empty(&projects_path(ctx));
+    let (local_path, branch) = (first("local_path").trim(), first("target_branch").trim());
     if !has_key(&config, "projects", alias) {
-        return (ok, message);
+        if local_path.is_empty() && branch.is_empty() {
+            return (ok, message);
+        }
+        return track_project(ctx, alias, local_path, branch, true);
     }
     let worktree = use_worktree(&config["projects"][alias]);
-    track_project(ctx, alias, first("local_path"), first("target_branch"), worktree)
+    track_project(ctx, alias, local_path, branch, worktree)
 }
 
 /// An on switch that stops tracking `alias` (removes its projects.json entry).
@@ -1555,6 +1607,9 @@ struct ProjectCard<'a> {
     subtitle: String,
     tracked: Option<&'a Value>,
     settings: String,
+    /// The Delete button shown beside the Tracked switch (empty when the switch is the
+    /// only way to remove the project).
+    delete: String,
 }
 
 /// The worktree on/off switch of a tracked project that has a checkout.
@@ -1635,9 +1690,11 @@ fn project_card(ctx: &UiCtx, c: &ProjectCard<'_>, csrf: &str) -> String {
         ),
     };
     format!(
-        "<li class='proj-card'><div class='proj-head'><div class='proj-id'><span class='proj-alias'>{}</span><span class='proj-sub'>{}</span></div><div class='proj-state'>{state}</div></div>{meta}{settings}{instructions}</li>",
+        "<li class='proj-card' data-alias=\"{alias_attr}\"><div class='proj-head'><div class='proj-id'><span class='proj-alias'>{}</span><span class='proj-sub'>{}</span></div><div class='proj-state'>{state}{}</div></div>{meta}{settings}{instructions}</li>",
         pyfmt::escape(c.alias),
-        c.subtitle
+        c.subtitle,
+        c.delete,
+        alias_attr = pyfmt::escape(c.alias)
     )
 }
 
@@ -1714,11 +1771,8 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         let url_safe = pyfmt::quote(alias, "");
         let confirm = ctx.tf("Delete project alias {alias}?", &[("alias", alias)]);
         let tracked_entry = tracked.get(alias.as_str());
-        let settings = format!(
-            "<div class='proj-settings'>{}<div class='proj-danger'>{}</div></div>",
-            project_settings_form(ctx, alias, project, tracked_entry, &instance_names, &bundle_names, &csrf),
-            delete_form(ctx, &format!("/settings/gitlab/projects/{url_safe}/delete"), &confirm, &csrf)
-        );
+        let settings = project_settings_form(ctx, alias, project, tracked_entry, &instance_names, &bundle_names, &csrf);
+        let delete = delete_form(ctx, &format!("/settings/gitlab/projects/{url_safe}/delete"), &confirm, &csrf);
         let instance = text(project, "instance");
         let subtitle = format!(
             "<span class='proj-repo'>{}</span>{}",
@@ -1727,7 +1781,7 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
         );
         rows.push(project_card(
             ctx,
-            &ProjectCard { alias, subtitle, tracked: tracked_entry, settings },
+            &ProjectCard { alias, subtitle, tracked: tracked_entry, settings, delete },
             &csrf,
         ));
     }
@@ -2071,11 +2125,97 @@ fn all_projects_table(ctx: &UiCtx, aliases: &Value, tracked: &Map<String, Value>
 // ---------------------------------------------------------------------------
 // configuration mutations (`set_default_gitlab_instance` & co); every message is translated
 
+/// The `owner/name` (or `group/sub/name`) a git remote URL points at, whatever its form
+/// (`git@host:ns/p.git`, `https://host/ns/p`, `ssh://git@host:22/ns/p.git`).
+fn remote_repo_path(url: &str) -> Option<String> {
+    let url = url.trim();
+    let rest = match url.split_once("://") {
+        Some((_, after)) => after.split_once('/')?.1,
+        None => url.split_once(':')?.1,
+    };
+    let path = rest.trim_matches('/').trim_end_matches(".git").trim_end_matches('/');
+    (path.contains('/') && !path.contains(char::is_whitespace)).then(|| path.to_string())
+}
+
+/// Stdout of `git -C dir args`, trimmed; `None` when git fails or prints nothing.
+fn git_text(dir: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !text.is_empty()).then_some(text)
+}
+
+/// `POST /settings/folders`: the sub-folders of `path` (home when empty) for the folder
+/// picker, hidden ones left out, git checkouts marked.
+fn folder_list(ctx: &UiCtx) -> UiResponse {
+    let home = ctx.state.user_home.clone();
+    let asked = ctx.form().first("path").unwrap_or("").trim().to_string();
+    let start = if asked.is_empty() { home.display().to_string() } else { worktree::expand_home(&asked, &home) };
+    let dir = std::fs::canonicalize(&start)
+        .ok()
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| home.clone());
+    let mut dirs: Vec<(String, String, bool)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) || e.path().is_dir())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            (!name.starts_with('.')).then(|| {
+                let path = e.path();
+                let git = path.join(".git").exists();
+                (name, path.display().to_string(), git)
+            })
+        })
+        .collect();
+    dirs.sort_by_key(|(name, _, _)| name.to_lowercase());
+    dirs.truncate(500);
+    let parent = dir.parent().map(|p| p.display().to_string());
+    UiResponse::json(
+        200,
+        &json!({
+            "path": dir.display().to_string(),
+            "parent": parent,
+            "home": home.display().to_string(),
+            "git": dir.join(".git").exists(),
+            "dirs": dirs.iter().map(|(n, p, g)| json!({"name": n, "path": p, "git": g})).collect::<Vec<_>>(),
+        }),
+    )
+}
+
+/// `POST /settings/folder-info`: what picking `path` fills in: its repository (from the
+/// `origin` remote) and its default branch.
+fn folder_info(ctx: &UiCtx) -> UiResponse {
+    let asked = ctx.form().first("path").unwrap_or("").trim().to_string();
+    let path = worktree::expand_home(&asked, &ctx.state.user_home);
+    if !Path::new(&path).is_dir() {
+        return UiResponse::json(200, &json!({"ok": false, "message": ctx.t("That folder does not exist")}));
+    }
+    let repo = git_text(&path, &["remote", "get-url", "origin"]).and_then(|u| remote_repo_path(&u));
+    let branch = git_text(&path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string())
+        .or_else(|| git_text(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD"));
+    let message = if repo.is_none() {
+        ctx.t("No origin remote found in that folder, so the repository was left as it was")
+    } else {
+        String::new()
+    };
+    UiResponse::json(
+        200,
+        &json!({"ok": true, "path": path, "repo": repo, "branch": branch, "message": message}),
+    )
+}
+
 /// Every Projects form posts here and returns to the tab it came from.
 fn flash_post(ctx: &UiCtx, f: impl Fn(&UiCtx, &Form) -> (bool, String)) -> UiResponse {
     // Worked out first: a delete removes the project it is about.
     let source = post_source(ctx);
     let (ok, message) = f(ctx, &ctx.form());
+    // A form saved in place by the page script (the project cards) wants the outcome, not a
+    // redirect that would reload the page and fold the card.
+    if ctx.req.header("x-requested-with") == Some("fetch") {
+        return UiResponse::json(200, &json!({"ok": ok, "message": message}));
+    }
     UiResponse::flash_redirect(ok, &message, &projects_url(&source))
 }
 
@@ -2689,6 +2829,7 @@ fn add_connected_project(ctx: &UiCtx, f: &ConnectedProjectForm<'_>) -> (bool, St
 fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, provider: Provider) -> String {
     let et = |s: &str| esc_t(ctx, s);
     let accounts: Vec<ConnectedAccount> = connected_accounts(ctx).into_iter().filter(|a| a.provider == provider).collect();
+    let options: Vec<(String, String)> = accounts.iter().map(|a| (a.id.clone(), a.label.clone())).collect();
     let mut rows = Vec::new();
     for (alias, project) in tracked.iter().filter(|(_, p)| loopx_core::hosted::is_hosted(p)) {
         let repo = text(&project["code_host"], "repo");
@@ -2709,7 +2850,13 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
         let subtitle = format!("{repo_html} <span class='pill pill-grey'>{}</span>", pyfmt::escape(&tag));
         rows.push(project_card(
             ctx,
-            &ProjectCard { alias, subtitle, tracked: Some(project), settings: String::new() },
+            &ProjectCard {
+                alias,
+                subtitle,
+                tracked: Some(project),
+                settings: connected_settings_form(ctx, alias, project, &options, csrf),
+                delete: String::new(),
+            },
             csrf,
         ));
     }
@@ -2718,7 +2865,6 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
     } else {
         project_list(&rows)
     };
-    let options: Vec<(String, String)> = accounts.iter().map(|a| (a.id.clone(), a.label.clone())).collect();
     let manage = format!(
         " <a href='/connectors'>{}</a>",
         pyfmt::escape(&ctx.tf("Manage {provider} accounts under Connectors", &[("provider", provider.label())]))
@@ -2909,27 +3055,146 @@ mod tests {
     }
 
     #[test]
-    fn project_settings_save_the_alias_and_the_checkout_in_one_go_and_never_start_tracking() {
+    fn project_settings_save_the_alias_and_the_checkout_in_one_go() {
         let sb = Sandbox::new();
         let repo = sb.repo("repo", true);
-        let form = |branch: &str| {
+        let form = |path: &str, branch: &str| {
             Form::parse(&format!(
                 "project_id=g%2Fapp2&instance=g&bundle=&local_path={}&target_branch={branch}",
-                pyfmt::quote(&repo, "")
+                pyfmt::quote(path, "")
             ))
         };
-        // Untracked: only the alias is saved, nothing starts tracking.
-        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form("main"));
+        // Untracked with no checkout: only the alias is saved, nothing starts tracking.
+        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form("", ""));
         assert!(ok, "{msg}");
         assert!(sb.saved().get("projects").is_none(), "{}", sb.saved());
+        // Untracked with a checkout (picked with Browse): it starts tracking.
+        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form(&repo, "dev"));
+        assert!(ok, "{msg}");
+        assert_eq!(sb.saved()["projects"]["app"]["target_branch"], "dev");
         // Tracked: the checkout is saved too, and the worktree choice is kept.
-        assert!(sb.project(&repo, "dev").0);
         assert!(set_project_worktree(&sb.ctx(), "app", false).0);
-        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form("main"));
+        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form(&repo, "main"));
         assert!(ok, "{msg}");
         let app = &sb.saved()["projects"]["app"];
         assert_eq!(app["target_branch"], "main");
         assert_eq!(app["use_worktree"], false);
+    }
+
+    #[test]
+    fn a_remote_url_names_its_repository_in_every_form() {
+        for (url, want) in [
+            ("git@gitlab.example.com:ekohe/kurrant/kurrant.web.git", Some("ekohe/kurrant/kurrant.web")),
+            ("https://github.com/encoreshao/loop-x.git", Some("encoreshao/loop-x")),
+            ("https://github.com/encoreshao/loop-x", Some("encoreshao/loop-x")),
+            ("ssh://git@host.example:2222/group/sub/proj.git", Some("group/sub/proj")),
+            ("https://host.example/", None),
+            ("not a url", None),
+            ("", None),
+        ] {
+            assert_eq!(remote_repo_path(url).as_deref(), want, "{url}");
+        }
+    }
+
+    #[test]
+    fn the_folder_picker_lists_folders_and_reads_a_checkouts_repository() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("code/repo", true);
+        std::fs::create_dir_all(sb.path("code/.hidden")).unwrap();
+        std::fs::create_dir_all(sb.path("code/plain")).unwrap();
+        let post = |path: &str, body: &str| {
+            let req = UiRequest::new(Method::POST, path).with_body(format!("csrf_token=tok&{body}").as_str());
+            sb.state.registry.dispatch(&sb.state, &req).unwrap()
+        };
+        let listed = post("/settings/folders", &format!("path={}", pyfmt::quote(&sb.path("code"), "")));
+        let v: Value = serde_json::from_str(&listed.body_text()).unwrap();
+        let names: Vec<&str> = v["dirs"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["plain", "repo"], "hidden folders are left out: {v}");
+        let git: Vec<bool> = v["dirs"].as_array().unwrap().iter().map(|d| d["git"].as_bool().unwrap()).collect();
+        assert_eq!(git, [false, true]);
+        // A checkout with a commit and an origin remote: the picker reads both.
+        let dir = sb.path("code/real");
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C", &dir])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "trunk"]);
+        git(&["remote", "add", "origin", "git@gitlab.example.com:ekohe/app.git"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        let info = post("/settings/folder-info", &format!("path={}", pyfmt::quote(&dir, "")));
+        let v: Value = serde_json::from_str(&info.body_text()).unwrap();
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["path"], dir);
+        assert_eq!(v["repo"], "ekohe/app", "{v}");
+        assert_eq!(v["branch"], "trunk", "{v}");
+        // No origin: the repository is left alone and the message says so.
+        let none = post("/settings/folder-info", &format!("path={}", pyfmt::quote(&repo, "")));
+        let v: Value = serde_json::from_str(&none.body_text()).unwrap();
+        assert!(v["message"].as_str().unwrap().contains("No origin remote") || v["repo"].is_string(), "{v}");
+        let missing = post("/settings/folder-info", "path=%2Fno%2Fsuch%2Ffolder");
+        let v: Value = serde_json::from_str(&missing.body_text()).unwrap();
+        assert_eq!(v["ok"], false, "{v}");
+    }
+
+    #[test]
+    fn a_form_saved_in_place_gets_json_instead_of_a_redirect() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        assert!(sb.project(&repo, "main").0);
+        let body = "csrf_token=tok&custom_instructions=Be+brief";
+        let plain = UiRequest::new(Method::POST, "/settings/loop-projects/app/instructions").with_body(body);
+        let r = sb.state.registry.dispatch(&sb.state, &plain).unwrap();
+        assert_eq!(r.status, 303, "a normal form still redirects");
+        let mut ajax = UiRequest::new(Method::POST, "/settings/loop-projects/app/instructions").with_body(body);
+        ajax.headers.insert("x-requested-with", "fetch".parse().unwrap());
+        let r = sb.state.registry.dispatch(&sb.state, &ajax).unwrap();
+        assert_eq!(r.status, 200);
+        let v: Value = serde_json::from_str(&r.body_text()).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["message"], "Saved custom instructions for app");
+    }
+
+    #[test]
+    fn a_connected_projects_settings_update_it_and_keep_its_worktree_choice() {
+        let sb = Sandbox::new();
+        github_account(&sb);
+        let repo = sb.repo("repo", true);
+        let (ok, msg) = add_github(
+            &sb,
+            &[("alias", "hub"), ("account", "gh-work"), ("repo", "octo/web"), ("local_path", &repo), ("target_branch", "main")],
+        );
+        assert!(ok, "{msg}");
+        assert!(set_project_worktree(&sb.ctx(), "hub", false).0);
+        let html = settings_fragment_html(&sb.ctx());
+        // The card has the same settings form, posting to the add handler with the alias.
+        assert!(html.contains("<input type='hidden' name='alias' value=\"hub\">"), "{html}");
+        assert!(!html.contains("<input type='hidden' name='use_worktree'"), "worktree is off, so it is not kept on: {html}");
+        let (ok, msg) = save_connected(&sb, "hub", "octo/web2", &repo, "dev", false);
+        assert!(ok, "{msg}");
+        let hub = &sb.saved()["projects"]["hub"];
+        assert_eq!(hub["code_host"]["repo"], "octo/web2");
+        assert_eq!(hub["target_branch"], "dev");
+        assert_eq!(hub["use_worktree"], false);
+    }
+
+    fn save_connected(sb: &Sandbox, alias: &str, repo: &str, path: &str, branch: &str, wt: bool) -> (bool, String) {
+        add_connected_project(
+            &sb.ctx(),
+            &ConnectedProjectForm {
+                alias,
+                account: "gh-work",
+                repo,
+                local_path: path,
+                target_branch: branch,
+                assignee: "",
+                use_worktree: wt,
+            },
+        )
     }
 
     #[test]

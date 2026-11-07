@@ -1236,6 +1236,152 @@
       .then(function() { if (button) button.disabled = false; });
   });
 })();
+(function() {
+  // Project cards (Settings -> Projects). A card form marked data-ajax-card (Project settings,
+  // Custom instructions) saves in place: it posts with fetch, shows the server's message as
+  // a toast, then swaps in the card's fresh markup with the same sections open - no reload,
+  // nothing folds. A [data-pick-folder] button opens a folder picker that fills the card's
+  // checkout, repository and branch.
+  var cardFailed = ⟦json.dumps(_t('Could not save'))⟧;
+  var T = {
+    title: ⟦json.dumps(_t('Choose a folder'))⟧, use: ⟦json.dumps(_t('Use this folder'))⟧,
+    up: ⟦json.dumps(_t('Up one level'))⟧, cancel: ⟦json.dumps(_t('Cancel'))⟧,
+    loading: ⟦json.dumps(_t('Loading…'))⟧, none: ⟦json.dumps(_t('No folders here'))⟧,
+    failed: ⟦json.dumps(_t('Could not read this folder'))⟧
+  };
+  function toast(message, ok) { if (window.loopxToast && message) window.loopxToast(message, ok); }
+  function post(url, data) {
+    return fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: new URLSearchParams(data) })
+      .then(function(r) { return r.json(); });
+  }
+  function refreshCard(card) {
+    var alias = card.getAttribute('data-alias');
+    var open = [];
+    card.querySelectorAll('details.proj-section').forEach(function(d, i) { if (d.open) open.push(i); });
+    return fetch('/settings/fragment', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function(r) { return r.text(); })
+      .then(function(html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var fresh = null;
+        doc.querySelectorAll('li.proj-card').forEach(function(li) {
+          if (!fresh && li.getAttribute('data-alias') === alias) fresh = li;
+        });
+        if (!fresh) return;
+        fresh.querySelectorAll('details.proj-section').forEach(function(d, i) { if (open.indexOf(i) >= 0) d.open = true; });
+        card.replaceWith(document.importNode(fresh, true));
+      });
+  }
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target;
+    if (!form.matches || !form.matches('form[data-ajax-card]')) return;
+    ev.preventDefault();
+    var button = form.querySelector('button[type="submit"]');
+    var card = form.closest('.proj-card');
+    if (button) button.disabled = true;
+    post(form.getAttribute('action'), new FormData(form))
+      .then(function(res) {
+        toast(res.message, !!res.ok);
+        if (res.ok && card) return refreshCard(card);
+      })
+      .catch(function() { toast(cardFailed, false); })
+      .then(function() { if (button) button.disabled = false; });
+  });
+
+  var picker = null, pickerForm = null, pickerPath = '';
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  }
+  function csrf() {
+    var i = pickerForm && pickerForm.querySelector('input[name="csrf_token"]');
+    return i ? i.value : '';
+  }
+  function ensurePicker() {
+    if (picker) return picker;
+    picker = el('dialog', 'folder-picker');
+    var inner = el('div', 'fp-inner');
+    var head = el('header', 'fp-head');
+    head.appendChild(el('h2', '', T.title));
+    var x = el('button', 'fp-x', '×'); x.type = 'button'; x.setAttribute('aria-label', T.cancel);
+    head.appendChild(x);
+    var bar = el('div', 'fp-path');
+    var up = el('button', 'fp-up', '↑ ' + T.up); up.type = 'button';
+    bar.appendChild(up); bar.appendChild(el('code', 'fp-cur'));
+    var list = el('ul', 'fp-list');
+    var foot = el('footer', 'fp-foot');
+    var cancel = el('button', 'btn btn-neutral', T.cancel); cancel.type = 'button';
+    var use = el('button', 'btn btn-neutral fp-use', T.use); use.type = 'button';
+    foot.appendChild(cancel); foot.appendChild(use);
+    [head, bar, list, foot].forEach(function(n) { inner.appendChild(n); });
+    picker.appendChild(inner);
+    document.body.appendChild(picker);
+    x.addEventListener('click', function() { picker.close(); });
+    cancel.addEventListener('click', function() { picker.close(); });
+    up.addEventListener('click', function() { if (up.__parent) load(up.__parent); });
+    use.addEventListener('click', useFolder);
+    picker.addEventListener('click', function(e) { if (e.target === picker) picker.close(); });
+    return picker;
+  }
+  function load(path) {
+    var list = picker.querySelector('.fp-list');
+    list.innerHTML = '';
+    list.appendChild(el('li', 'fp-note', T.loading));
+    post('/settings/folders', { csrf_token: csrf(), path: path })
+      .then(function(res) {
+        pickerPath = res.path;
+        picker.querySelector('.fp-cur').textContent = '\u200e' + res.path;
+        var up = picker.querySelector('.fp-up');
+        up.__parent = res.parent || '';
+        up.disabled = !res.parent;
+        list.innerHTML = '';
+        if (!res.dirs.length) list.appendChild(el('li', 'fp-note', T.none));
+        res.dirs.forEach(function(d) {
+          var li = el('li');
+          var b = el('button', 'fp-dir' + (d.git ? ' is-git' : ''));
+          b.type = 'button';
+          b.appendChild(el('span', 'fp-name', d.name));
+          if (d.git) b.appendChild(el('span', 'fp-badge', 'git'));
+          b.addEventListener('click', function() { load(d.path); });
+          li.appendChild(b);
+          list.appendChild(li);
+        });
+        list.scrollTop = 0;
+      })
+      .catch(function() { list.innerHTML = ''; list.appendChild(el('li', 'fp-note', T.failed)); });
+  }
+  function fill(form, name, value) {
+    var input = form.querySelector('[name="' + name + '"]');
+    if (!input || !value) return;
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function useFolder() {
+    var form = pickerForm;
+    post('/settings/folder-info', { csrf_token: csrf(), path: pickerPath })
+      .then(function(res) {
+        if (!res.ok) { toast(res.message, false); return; }
+        fill(form, 'local_path', res.path);
+        fill(form, 'project_id', res.repo);
+        fill(form, 'repo', res.repo);
+        fill(form, 'target_branch', res.branch);
+        if (res.message) toast(res.message, false);
+        picker.close();
+      })
+      .catch(function() { toast(T.failed, false); });
+  }
+  document.addEventListener('click', function(ev) {
+    var btn = ev.target.closest && ev.target.closest('[data-pick-folder]');
+    if (!btn) return;
+    ev.preventDefault();
+    pickerForm = btn.closest('form');
+    var current = pickerForm.querySelector('input[name="local_path"]');
+    ensurePicker();
+    picker.showModal();
+    load(current ? current.value.trim() : '');
+  });
+})();
 </script>
 </head>
 <body>

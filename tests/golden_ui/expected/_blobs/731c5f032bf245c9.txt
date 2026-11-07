@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Lecture du ticket", "gitlab.list_issues": "Liste des tickets", "gitlab.list_users": "Liste des utilisateurs", "gitlab.comment": "Commentaire sur le ticket", "github.read_issue": "Lecture du ticket", "github.read_pr": "Lecture de la pull request", "github.comment": "Commentaire en cours", "rss.read_feed": "Lecture du flux", "calendar.list_events": "Lecture de l'agenda", "calendar.free_busy": "Lecture de l'agenda", "mail.search": "Recherche de courriels", "mail.read": "Lecture du courriel", "mail.send": "Envoi du courriel", "calendar.create_event": "Cr\u00e9ation de l'\u00e9v\u00e9nement", "docs.save": "Enregistrement du document", "web.search": "Recherche sur le web", "gdocs.list_templates": "Liste des mod\u00e8les", "gsheets.list_templates": "Liste des mod\u00e8les", "gdocs.template_info": "Lecture du mod\u00e8le", "gsheets.template_info": "Lecture du mod\u00e8le", "gdocs.read": "Lecture du document", "gsheets.read": "Lecture de la feuille de calcul", "gdocs.create": "Cr\u00e9ation du document", "gdocs.create_from_template": "Cr\u00e9ation du document", "gsheets.create": "Cr\u00e9ation de la feuille de calcul", "gsheets.create_from_template": "Cr\u00e9ation de la feuille de calcul", "gdocs.edit": "Modification du document", "gsheets.edit": "Modification de la feuille de calcul", "slides.edit_deck": "Modification de la pr\u00e9sentation", "creator.list_sources": "Liste des sources", "creator.list_videos": "Liste des vid\u00e9os", "creator.start_scout": "Lancement de la recherche", "creator.generate": "Cr\u00e9ation de la vid\u00e9o"};
-window.__loopToolStatusText = "Analyse des r\u00e9sultats\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.list_users": "Listing users", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "calendar.free_busy": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document", "web.search": "Searching the web", "gdocs.list_templates": "Listing templates", "gsheets.list_templates": "Listing templates", "gdocs.template_info": "Reading template", "gsheets.template_info": "Reading template", "gdocs.read": "Reading document", "gsheets.read": "Reading spreadsheet", "gdocs.create": "Creating document", "gdocs.create_from_template": "Creating document", "gsheets.create": "Creating spreadsheet", "gsheets.create_from_template": "Creating spreadsheet", "gdocs.edit": "Editing document", "gsheets.edit": "Editing spreadsheet", "slides.edit_deck": "Editing presentation", "creator.list_sources": "Listing sources", "creator.list_videos": "Listing videos", "creator.start_scout": "Starting scout", "creator.generate": "Making video"};
+window.__loopToolStatusText = "Analyzing results\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -142,23 +142,23 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "En attente de votre approbation"));
+  head.appendChild(el('span', '', "Waiting for your approval"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
-  if (String(ev.tool || '') === 'creator.generate') card.appendChild(el('div', 'pending-card-summary', "En approuvant, vous confirmez poss\u00e9der cette vid\u00e9o ou avoir l\u2019autorisation de la r\u00e9utiliser."));
+  if (String(ev.tool || '') === 'creator.generate') card.appendChild(el('div', 'pending-card-summary', "Approving confirms you own this video or have permission to reuse it."));
   card.appendChild(el('pre', 'pending-card-args', JSON.stringify(ev.args || {}, null, 2)));
   var actions = el('div', 'pending-card-actions');
   var approve = el('button', 'btn btn-primary');
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("Approuver"));
+  approve.appendChild(document.createTextNode("Approve"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("Rejeter"));
+  reject.appendChild(document.createTextNode("Reject"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -189,7 +189,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "Approuv\u00e9." : "Rejet\u00e9.") : ((data && data.error) || "Une erreur s'est produite - r\u00e9essayez.");
+        if (status) status.textContent = ok ? (approving ? "Approved." : "Rejected.") : ((data && data.error) || "Something went wrong - try again.");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
@@ -203,7 +203,7 @@ if (!window.__loopPendingCardClicks) {
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "Une erreur s'est produite - r\u00e9essayez.";
+        if (status) status.textContent = "Something went wrong - try again.";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -261,7 +261,7 @@ if (!window.__loopPendingCardClicks) {
     var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
     var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
     var el = document.getElementById('refresh-note-text');
-    if (el) el.textContent = "actualisation auto toutes les {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
+    if (el) el.textContent = "auto-refreshes every {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
   });
 })();
 (function() {
@@ -493,12 +493,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "Impossible de charger le document.";
+      var docFailed = "Could not load the document.";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "Copi\u00e9";
+      var docCopiedText = "Copied";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -569,9 +569,9 @@ if (!window.__loopPendingCardClicks) {
       var fileRoot = document.documentElement;
       var fileTabs = filePanel.querySelector('[data-file-tabs]');
       var fileBody = filePanel.querySelector('[data-file-body]');
-      var fileLoading = "Chargement\u2026";
-      var fileFailed = "Impossible de charger l'aper\u00e7u.";
-      var fileNouns = { doc: "Document", sheet: "Feuille de calcul", deck: "Pr\u00e9sentation" };
+      var fileLoading = "Loading\u2026";
+      var fileFailed = "Could not load the preview.";
+      var fileNouns = { doc: "Document", sheet: "Spreadsheet", deck: "Presentation" };
       var files = [];
       var activeFile = null;
       var fileSeq = 0;
@@ -759,7 +759,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u00e0 l&#x27;instant" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "just now" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -860,10 +860,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "Modifier le message" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "Edit message" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Annuler" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "Envoyer" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Cancel" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "Send" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -900,7 +900,7 @@ if (!window.__loopPendingCardClicks) {
       var copyBtn = ev.target.closest('[data-copy-message]');
       if (copyBtn) {
         var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
-        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("Copi\u00e9", true); }, function() { flashIcon(copyBtn, 'error'); });
+        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("Copied", true); }, function() { flashIcon(copyBtn, 'error'); });
         return;
       }
       var editBtn = ev.target.closest('[data-edit-message]');
@@ -924,7 +924,7 @@ if (!window.__loopPendingCardClicks) {
     // While a reply is being written the send button is the stop button.
     var activeStop = null;
     function setSendMode(button, stop) {
-      var label = stop ? "Arr\u00eater" : "Envoyer";
+      var label = stop ? "Stop" : "Send";
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       var use = button.querySelector('svg.icon use');
@@ -943,7 +943,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "Vous" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "You" + "</span>", text);
       input.value = '';
       autoGrow();
       setSendMode(button, true);
@@ -962,7 +962,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "R\u00e9flexion\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -1037,7 +1037,7 @@ if (!window.__loopPendingCardClicks) {
         if (source) source.close();
         if (activeKey) postStop(activeKey);
         reveal.stop();
-        var stopped = "(r\u00e9ponse arr\u00eat\u00e9e)";
+        var stopped = "(reply stopped)";
         pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
         resetSendButton();
         stopStreamingFlag();
@@ -1074,7 +1074,7 @@ if (!window.__loopPendingCardClicks) {
         });
         source.addEventListener('error', function(ev) {
           if (aborted) return;
-          var message = "Une erreur s'est produite - r\u00e9essayez.";
+          var message = "Something went wrong - try again.";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -1085,7 +1085,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "(r\u00e9ponse interrompue)", false);
+            pending.show(accumulated + ' ' + "(reply interrupted)", false);
           }
           resetSendButton();
           stopStreamingFlag();
@@ -1102,7 +1102,7 @@ if (!window.__loopPendingCardClicks) {
             return;
           }
           if (!result.ok) {
-            pending.show(result.data.error || "Une erreur s'est produite.", false);
+            pending.show(result.data.error || "Something went wrong.", false);
             resetSendButton();
             stopStreamingFlag();
             return;
@@ -1129,7 +1129,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("Une erreur s'est produite - r\u00e9essayez.", false);
+          pending.show("Something went wrong - try again.", false);
           if (aborted) return;
           resetSendButton();
           stopStreamingFlag();
@@ -1180,7 +1180,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "Veuillez remplir ce champ.";
+    if (text) text.textContent = field.validationMessage || "Please fill out this field.";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -1258,7 +1258,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Impossible de charger cette section." + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Couldn't load this section." + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1411,7 +1411,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "Arr\u00eater le suivi de #{iid}" : "Suivre \u00e0 nouveau #{iid}").replace('{iid}', issueIid);
+          var label = (enabled ? "Stop tracking #{iid}" : "Track #{iid} again").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }
@@ -1444,7 +1444,7 @@ if (!window.__loopPendingCardClicks) {
         if (window.loopxToast) window.loopxToast(form.getAttribute(enabled ? 'data-toast-on' : 'data-toast-off'), true);
         form.setAttribute('action', form.getAttribute('action').replace(/\/(enable|disable)$/, '/' + (enabled ? 'disable' : 'enable')));
         if (button) setSwitch(button, enabled, form.getAttribute(enabled ? 'data-label-on' : 'data-label-off'));
-        var perIssue = "Arr\u00eater le suivi de #{iid}", perIssueOff = "Suivre \u00e0 nouveau #{iid}";
+        var perIssue = "Stop tracking #{iid}", perIssueOff = "Track #{iid} again";
         document.querySelectorAll('.issue-tracking-toggle').forEach(function(f) {
           var b = f.querySelector('button[type="submit"]');
           var iid = f.getAttribute('data-issue-iid');
@@ -1454,5 +1454,151 @@ if (!window.__loopPendingCardClicks) {
       })
       .catch(function() { if (window.loopxToast) window.loopxToast(form.getAttribute('data-toast-fail'), false); })
       .then(function() { if (button) button.disabled = false; });
+  });
+})();
+(function() {
+  // Project cards (Settings -> Projects). A card form marked data-ajax-card (Project settings,
+  // Custom instructions) saves in place: it posts with fetch, shows the server's message as
+  // a toast, then swaps in the card's fresh markup with the same sections open - no reload,
+  // nothing folds. A [data-pick-folder] button opens a folder picker that fills the card's
+  // checkout, repository and branch.
+  var cardFailed = "Could not save";
+  var T = {
+    title: "Choose a folder", use: "Use this folder",
+    up: "Up one level", cancel: "Cancel",
+    loading: "Loading\u2026", none: "No folders here",
+    failed: "Could not read this folder"
+  };
+  function toast(message, ok) { if (window.loopxToast && message) window.loopxToast(message, ok); }
+  function post(url, data) {
+    return fetch(url, { method: 'POST', headers: { 'X-Requested-With': 'fetch' }, body: new URLSearchParams(data) })
+      .then(function(r) { return r.json(); });
+  }
+  function refreshCard(card) {
+    var alias = card.getAttribute('data-alias');
+    var open = [];
+    card.querySelectorAll('details.proj-section').forEach(function(d, i) { if (d.open) open.push(i); });
+    return fetch('/settings/fragment', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function(r) { return r.text(); })
+      .then(function(html) {
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var fresh = null;
+        doc.querySelectorAll('li.proj-card').forEach(function(li) {
+          if (!fresh && li.getAttribute('data-alias') === alias) fresh = li;
+        });
+        if (!fresh) return;
+        fresh.querySelectorAll('details.proj-section').forEach(function(d, i) { if (open.indexOf(i) >= 0) d.open = true; });
+        card.replaceWith(document.importNode(fresh, true));
+      });
+  }
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target;
+    if (!form.matches || !form.matches('form[data-ajax-card]')) return;
+    ev.preventDefault();
+    var button = form.querySelector('button[type="submit"]');
+    var card = form.closest('.proj-card');
+    if (button) button.disabled = true;
+    post(form.getAttribute('action'), new FormData(form))
+      .then(function(res) {
+        toast(res.message, !!res.ok);
+        if (res.ok && card) return refreshCard(card);
+      })
+      .catch(function() { toast(cardFailed, false); })
+      .then(function() { if (button) button.disabled = false; });
+  });
+
+  var picker = null, pickerForm = null, pickerPath = '';
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  }
+  function csrf() {
+    var i = pickerForm && pickerForm.querySelector('input[name="csrf_token"]');
+    return i ? i.value : '';
+  }
+  function ensurePicker() {
+    if (picker) return picker;
+    picker = el('dialog', 'folder-picker');
+    var inner = el('div', 'fp-inner');
+    var head = el('header', 'fp-head');
+    head.appendChild(el('h2', '', T.title));
+    var x = el('button', 'fp-x', '×'); x.type = 'button'; x.setAttribute('aria-label', T.cancel);
+    head.appendChild(x);
+    var bar = el('div', 'fp-path');
+    var up = el('button', 'fp-up', '↑ ' + T.up); up.type = 'button';
+    bar.appendChild(up); bar.appendChild(el('code', 'fp-cur'));
+    var list = el('ul', 'fp-list');
+    var foot = el('footer', 'fp-foot');
+    var cancel = el('button', 'btn btn-neutral', T.cancel); cancel.type = 'button';
+    var use = el('button', 'btn btn-neutral fp-use', T.use); use.type = 'button';
+    foot.appendChild(cancel); foot.appendChild(use);
+    [head, bar, list, foot].forEach(function(n) { inner.appendChild(n); });
+    picker.appendChild(inner);
+    document.body.appendChild(picker);
+    x.addEventListener('click', function() { picker.close(); });
+    cancel.addEventListener('click', function() { picker.close(); });
+    up.addEventListener('click', function() { if (up.__parent) load(up.__parent); });
+    use.addEventListener('click', useFolder);
+    picker.addEventListener('click', function(e) { if (e.target === picker) picker.close(); });
+    return picker;
+  }
+  function load(path) {
+    var list = picker.querySelector('.fp-list');
+    list.innerHTML = '';
+    list.appendChild(el('li', 'fp-note', T.loading));
+    post('/settings/folders', { csrf_token: csrf(), path: path })
+      .then(function(res) {
+        pickerPath = res.path;
+        picker.querySelector('.fp-cur').textContent = '\u200e' + res.path;
+        var up = picker.querySelector('.fp-up');
+        up.__parent = res.parent || '';
+        up.disabled = !res.parent;
+        list.innerHTML = '';
+        if (!res.dirs.length) list.appendChild(el('li', 'fp-note', T.none));
+        res.dirs.forEach(function(d) {
+          var li = el('li');
+          var b = el('button', 'fp-dir' + (d.git ? ' is-git' : ''));
+          b.type = 'button';
+          b.appendChild(el('span', 'fp-name', d.name));
+          if (d.git) b.appendChild(el('span', 'fp-badge', 'git'));
+          b.addEventListener('click', function() { load(d.path); });
+          li.appendChild(b);
+          list.appendChild(li);
+        });
+        list.scrollTop = 0;
+      })
+      .catch(function() { list.innerHTML = ''; list.appendChild(el('li', 'fp-note', T.failed)); });
+  }
+  function fill(form, name, value) {
+    var input = form.querySelector('[name="' + name + '"]');
+    if (!input || !value) return;
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function useFolder() {
+    var form = pickerForm;
+    post('/settings/folder-info', { csrf_token: csrf(), path: pickerPath })
+      .then(function(res) {
+        if (!res.ok) { toast(res.message, false); return; }
+        fill(form, 'local_path', res.path);
+        fill(form, 'project_id', res.repo);
+        fill(form, 'repo', res.repo);
+        fill(form, 'target_branch', res.branch);
+        if (res.message) toast(res.message, false);
+        picker.close();
+      })
+      .catch(function() { toast(T.failed, false); });
+  }
+  document.addEventListener('click', function(ev) {
+    var btn = ev.target.closest && ev.target.closest('[data-pick-folder]');
+    if (!btn) return;
+    ev.preventDefault();
+    pickerForm = btn.closest('form');
+    var current = pickerForm.querySelector('input[name="local_path"]');
+    ensurePicker();
+    picker.showModal();
+    load(current ? current.value.trim() : '');
   });
 })();
