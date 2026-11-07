@@ -2106,6 +2106,11 @@ fn post_source(ctx: &UiCtx) -> String {
         if let Some(project) = config.get("projects").and_then(|p| p.get(ctx.param("alias"))) {
             return project_provider(ctx, project).map_or(ALL_SOURCES.into(), |p| p.kind().into());
         }
+        // Not tracked yet (the Track button): a GitLab alias still belongs on the GitLab tab.
+        let gitlab = read_json_or_empty(&gitlab_config_path(ctx));
+        if has_key(&gitlab, "projects", ctx.param("alias")) {
+            return Provider::Gitlab.kind().into();
+        }
     }
     ALL_SOURCES.into()
 }
@@ -3371,6 +3376,16 @@ mod tests {
         assert!(r.header("Location").unwrap().contains("source=gitlab"), "{:?}", r.header("Location"));
         let r = post("/settings/loop-projects/hub/delete", "");
         assert!(r.header("Location").unwrap().contains("source=github"), "{:?}", r.header("Location"));
+        // The Track button on a GitLab alias that is not tracked yet stays on the GitLab tab,
+        // and so do the card's other forms.
+        for path in [
+            "/settings/loop-projects/web/track",
+            "/settings/loop-projects/web/settings",
+            "/settings/loop-projects/web/instructions",
+        ] {
+            let r = post(path, "local_path=&target_branch=&project_id=g%2Fweb&instance=g");
+            assert!(r.header("Location").unwrap().contains("source=gitlab"), "{path}: {:?}", r.header("Location"));
+        }
     }
 
     #[test]

@@ -101,6 +101,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Settings → Loop projects: clicking Track on a GitLab project now stays on the GitLab tab instead of jumping to All, so you can keep setting it up.
 - Settings → Loop projects: turning Tracked off now says "Stopped tracking project …" instead of "Deleted project …" (the project and its GitLab alias are kept).
 - Notification pop-ups follow the selected theme (themed surface tinted by kind), use a lighter, easier-to-read title, and are no longer clipped at the edges.
 - Creator → Jobs: the job log sheet now renders what Claude said and the final summary as formatted markdown (headings, lists, code, bold) instead of showing the raw markup.
