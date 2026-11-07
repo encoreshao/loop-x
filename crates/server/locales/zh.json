@@ -1648,5 +1648,7 @@
   "Cleared custom instructions for {name}": "已清除 {name} 的自定义指令",
   "Saved custom instructions for {name}": "已保存 {name} 的自定义指令",
   "Project settings": "项目设置",
-  "None set": "未设置"
+  "None set": "未设置",
+  "Local checkout": "本地检出目录",
+  "Target branch": "目标分支"
 }

@@ -3146,9 +3146,21 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .proj-chevron { flex: 0 0 auto; align-self: center; margin-left: auto; width: 8px; height: 8px; border: solid var(--md-on-surface-variant); border-width: 0 2px 2px 0; transform: rotate(-45deg); transition: transform 200ms cubic-bezier(0.32, 0.72, 0, 1); }
 .proj-section[open] > summary .proj-chevron { transform: rotate(45deg); }
 .proj-section-body { padding: 0.5rem 0 0.25rem; }
-.proj-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1.25rem 1.5rem; }
-.proj-settings h4 { margin: 0 0 0.5rem; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-on-surface-variant); }
-.proj-settings .daemon-action-form { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0.45rem; }
-.proj-danger { grid-column: 1 / -1; display: flex; justify-content: flex-end; padding-top: 0.75rem; border-top: 1px solid var(--md-outline-variant); }
 .project-instructions textarea { min-height: 7.5rem; }
+/* Project settings: one labelled form, one Save. These fields are laid out here, not by
+   .daemon-action-form (whose row flex sizing turns into a height in a column). */
+.proj-settings { display: flex; flex-direction: column; gap: 1rem; }
+.proj-form { display: flex; flex-direction: column; gap: 1rem; margin: 0; }
+.proj-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem 1rem; }
+.proj-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.proj-field.is-wide { grid-column: 1 / -1; }
+.proj-field-label { font-size: 0.75rem; font-weight: 600; color: var(--md-on-surface-variant); }
+.proj-field input[type='text'] { width: 100%; height: 2.25rem; box-sizing: border-box; padding: 0 0.75rem; border-radius: 10px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container-lowest); color: var(--md-on-surface); font: inherit; font-size: 0.8125rem; }
+.proj-field input[type='text']:focus-visible { outline: 3px solid color-mix(in srgb, var(--md-primary) 45%, transparent); outline-offset: 1px; }
+.proj-field .custom-select { width: 100%; min-width: 0; flex: none; }
+.proj-field .custom-select-trigger { min-height: 2.25rem; box-sizing: border-box; }
+.proj-form-foot { display: flex; justify-content: flex-end; }
+.proj-danger { display: flex; justify-content: flex-start; padding-top: 0.85rem; border-top: 1px solid var(--md-outline-variant); }
+.proj-track { margin: 0; }
+@media (max-width: 640px) { .proj-fields { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .proj-card, .proj-chevron { transition: none; } }

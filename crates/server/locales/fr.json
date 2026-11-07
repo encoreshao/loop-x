@@ -1648,5 +1648,7 @@
   "Cleared custom instructions for {name}": "Instructions personnalisées supprimées pour {name}",
   "Saved custom instructions for {name}": "Instructions personnalisées enregistrées pour {name}",
   "Project settings": "Paramètres du projet",
-  "None set": "Aucune"
+  "None set": "Aucune",
+  "Local checkout": "Dépôt local",
+  "Target branch": "Branche cible"
 }

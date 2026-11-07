@@ -103,6 +103,9 @@ pub fn register(r: &mut Registry) {
             )
         })
     });
+    r.post("/settings/loop-projects/:alias/settings", |c| {
+        flash_post(c, |c, f| save_project_settings(c, c.param("alias"), f))
+    });
     r.post("/settings/loop-projects/:alias/instructions", |c| {
         flash_post(c, |c, f| save_instructions(c, c.param("alias"), f.first("custom_instructions").unwrap_or("")))
     });
@@ -1458,12 +1461,6 @@ fn table(headers: &[String], rows: &[String]) -> String {
     )
 }
 
-/// The Track-on / edit form for `alias`, prefilled from its projects.json entry.
-/// Both checkout fields left empty tracks the project for issues only.
-fn track_form(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
-    track_fields(ctx, alias, project, csrf)
-}
-
 /// The per-project custom instructions the agent follows for that project only.
 fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
     format!(
@@ -1478,19 +1475,66 @@ fn instructions_form(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> S
     )
 }
 
-fn track_fields(ctx: &UiCtx, alias: &str, project: Option<&Value>, csrf: &str) -> String {
-    let empty = json!({});
-    let label = esc_t(ctx, if project.is_some() { "Save" } else { "Track" });
-    let project = project.unwrap_or(&empty);
-    let checked = if use_worktree(project) { " checked" } else { "" };
+/// A GitLab project's one settings form: where it lives (repository, instance, access
+/// bundle) and, once tracked, where the loop works on it (checkout, target branch).
+/// Whether it uses a worktree is the switch on the card, not a field here.
+fn project_settings_form(
+    ctx: &UiCtx,
+    alias: &str,
+    project: &Value,
+    tracked: Option<&Value>,
+    instances: &[String],
+    bundles: &[String],
+    csrf: &str,
+) -> String {
+    let field = |label: &str, input: String, wide: bool| {
+        format!(
+            "<div class='proj-field{}'><span class='proj-field-label'>{}</span>{input}</div>",
+            if wide { " is-wide" } else { "" },
+            esc_t(ctx, label)
+        )
+    };
+    let none = ctx.t("(use instance default)");
+    let mut fields = format!(
+        "{}{}{}",
+        field("Repository", input_text("project_id", &text(project, "project_id"), "namespace/project", " aria-label='Repository'"), true),
+        field("Instance", custom_select_plain("instance", instances, Some(&text(project, "instance")), None), false),
+        field("Bundle", custom_select_plain("bundle", bundles, Some(&text(project, "bundle")), Some(&none)), false),
+    );
+    if let Some(entry) = tracked {
+        fields.push_str(&field(
+            "Local checkout",
+            input_text("local_path", &text(entry, "local_path"), "/abs/path/to/checkout", ""),
+            true,
+        ));
+        fields.push_str(&field(
+            "Target branch",
+            input_text("target_branch", &text(entry, "target_branch"), &esc_t(ctx, "target branch"), ""),
+            false,
+        ));
+    }
     format!(
-        "<form method='post' action='/settings/loop-projects/{}/track' class='daemon-action-form'>{csrf}{}{}<label><input type='checkbox' name='use_worktree' value='1'{checked}> {}</label><button type='submit' class='btn btn-neutral'>{}</button></form>",
+        "<form method='post' action='/settings/loop-projects/{}/settings' class='proj-form'>{csrf}<div class='proj-fields'>{fields}</div><div class='proj-form-foot'><button type='submit' class='btn btn-neutral'>{}</button></div></form>",
         pyfmt::quote(alias, ""),
-        input_text("local_path", &text(project, "local_path"), "/abs/path/to/checkout", ""),
-        input_text("target_branch", &text(project, "target_branch"), &esc_t(ctx, "target branch"), ""),
-        esc_t(ctx, "Use worktree"),
-        label
+        esc_t(ctx, "Save")
     )
+}
+
+/// Save a GitLab project's settings form: the alias (repository, instance, bundle) and,
+/// when the loop already tracks it, its checkout and target branch (both empty means
+/// issues only). A project that is not tracked stays untracked.
+fn save_project_settings(ctx: &UiCtx, alias: &str, f: &Form) -> (bool, String) {
+    let first = |k: &str| f.first(k).unwrap_or("");
+    let (ok, message) = upsert_project(ctx, alias, first("project_id"), first("instance"), first("bundle"));
+    if !ok {
+        return (ok, message);
+    }
+    let config = read_json_or_empty(&projects_path(ctx));
+    if !has_key(&config, "projects", alias) {
+        return (ok, message);
+    }
+    let worktree = use_worktree(&config["projects"][alias]);
+    track_project(ctx, alias, first("local_path"), first("target_branch"), worktree)
 }
 
 /// An on switch that stops tracking `alias` (removes its projects.json entry).
@@ -1526,7 +1570,7 @@ fn worktree_switch(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> Str
 
 /// The Custom instructions section: always visible as a one-line preview, it opens to the
 /// editor.
-fn instructions_section(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -> String {
+fn instructions_section(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str, group: &str) -> String {
     let current = text(project, "custom_instructions");
     let flat: String = current.split_whitespace().collect::<Vec<_>>().join(" ");
     let preview = if flat.is_empty() {
@@ -1537,16 +1581,27 @@ fn instructions_section(ctx: &UiCtx, alias: &str, project: &Value, csrf: &str) -
         format!("<span class='proj-preview'>{}{more}</span>", pyfmt::escape(&short))
     };
     format!(
-        "<details class='proj-section'><summary><span class='proj-section-title'>{}</span>{preview}<span class='proj-chevron' aria-hidden='true'></span></summary><div class='proj-section-body'>{}</div></details>",
+        "<details class='proj-section' name=\"{group}\"><summary><span class='proj-section-title'>{}</span>{preview}<span class='proj-chevron' aria-hidden='true'></span></summary><div class='proj-section-body'>{}</div></details>",
         esc_t(ctx, "Custom instructions"),
         instructions_form(ctx, alias, project, csrf)
     )
 }
 
-/// One project as a card: who it is and whether it is tracked, where it works, its custom
-/// instructions, and its settings tucked away.
+/// One project as a card: who it is and whether it is tracked, where it works, its
+/// settings and its custom instructions (one section open at a time).
 fn project_card(ctx: &UiCtx, c: &ProjectCard<'_>, csrf: &str) -> String {
-    let (state, body) = match c.tracked {
+    let group = format!("proj-{}", pyfmt::escape(c.alias));
+    let section = |title: &str, preview: &str, body: &str| {
+        format!(
+            "<details class='proj-section' name=\"{group}\"><summary><span class='proj-section-title'>{title}</span>{preview}<span class='proj-chevron' aria-hidden='true'></span></summary><div class='proj-section-body'>{body}</div></details>"
+        )
+    };
+    let settings = if c.settings.is_empty() {
+        String::new()
+    } else {
+        section(&esc_t(ctx, "Project settings"), "", &c.settings)
+    };
+    let (state, meta, instructions) = match c.tracked {
         Some(project) => {
             let works = if is_issues_only(project) {
                 format!("<span class='pill'>{}</span>", esc_t(ctx, "Issues only"))
@@ -1564,25 +1619,23 @@ fn project_card(ctx: &UiCtx, c: &ProjectCard<'_>, csrf: &str) -> String {
                     untrack_switch(ctx, c.alias, csrf),
                     esc_t(ctx, "Tracked")
                 ),
-                format!(
-                    "<div class='proj-meta'>{works}</div>{}",
-                    instructions_section(ctx, c.alias, project, csrf)
-                ),
+                format!("<div class='proj-meta'>{works}</div>"),
+                instructions_section(ctx, c.alias, project, csrf, &group),
             )
         }
-        None => (format!("<span class='pill'>{}</span>", esc_t(ctx, "Not tracked")), String::new()),
-    };
-    let settings = if c.settings.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "<details class='proj-section'><summary><span class='proj-section-title'>{}</span><span class='proj-chevron' aria-hidden='true'></span></summary><div class='proj-section-body'>{}</div></details>",
-            esc_t(ctx, "Project settings"),
-            c.settings
-        )
+        None => (
+            // Tracking from here starts issues-only; the checkout is set in Project settings.
+            format!(
+                "<form method='post' action='/settings/loop-projects/{}/track' class='proj-track'>{csrf}<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button></form>",
+                pyfmt::quote(c.alias, ""),
+                esc_t(ctx, "Track")
+            ),
+            String::new(),
+            String::new(),
+        ),
     };
     format!(
-        "<li class='proj-card'><div class='proj-head'><div class='proj-id'><span class='proj-alias'>{}</span><span class='proj-sub'>{}</span></div><div class='proj-state'>{state}</div></div>{body}{settings}</li>",
+        "<li class='proj-card'><div class='proj-head'><div class='proj-id'><span class='proj-alias'>{}</span><span class='proj-sub'>{}</span></div><div class='proj-state'>{state}</div></div>{meta}{settings}{instructions}</li>",
         pyfmt::escape(c.alias),
         c.subtitle
     )
@@ -1658,22 +1711,12 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
 
     let mut rows = Vec::new();
     for (alias, project) in projects.as_object().into_iter().flatten() {
-        let safe = pyfmt::escape(alias);
         let url_safe = pyfmt::quote(alias, "");
         let confirm = ctx.tf("Delete project alias {alias}?", &[("alias", alias)]);
         let tracked_entry = tracked.get(alias.as_str());
-        let connection = format!(
-            "<form method='post' action='/settings/gitlab/projects' class='daemon-action-form'>{csrf}<input type='hidden' name='alias' value='{safe}'><input type='text' name='project_id' value='{}' placeholder='namespace/project'>{}{}<button type='submit' class='btn btn-neutral'>{}</button></form>",
-            pyfmt::escape(&text(project, "project_id")),
-            custom_select_plain("instance", &instance_names, Some(&text(project, "instance")), None),
-            custom_select_plain("bundle", &bundle_names, Some(&text(project, "bundle")), Some(&t("(use instance default)"))),
-            et("Save")
-        );
         let settings = format!(
-            "<div class='proj-settings'><section><h4>{}</h4>{connection}</section><section><h4>{}</h4>{}</section><div class='proj-danger'>{}</div></div>",
-            et("Connection"),
-            et("Checkout"),
-            track_form(ctx, alias, tracked_entry, &csrf),
+            "<div class='proj-settings'>{}<div class='proj-danger'>{}</div></div>",
+            project_settings_form(ctx, alias, project, tracked_entry, &instance_names, &bundle_names, &csrf),
             delete_form(ctx, &format!("/settings/gitlab/projects/{url_safe}/delete"), &confirm, &csrf)
         );
         let instance = text(project, "instance");
@@ -2861,6 +2904,30 @@ mod tests {
     }
 
     #[test]
+    fn project_settings_save_the_alias_and_the_checkout_in_one_go_and_never_start_tracking() {
+        let sb = Sandbox::new();
+        let repo = sb.repo("repo", true);
+        let form = |branch: &str| {
+            Form::parse(&format!(
+                "project_id=g%2Fapp2&instance=g&bundle=&local_path={}&target_branch={branch}",
+                pyfmt::quote(&repo, "")
+            ))
+        };
+        // Untracked: only the alias is saved, nothing starts tracking.
+        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form("main"));
+        assert!(ok, "{msg}");
+        assert!(sb.saved().get("projects").is_none(), "{}", sb.saved());
+        // Tracked: the checkout is saved too, and the worktree choice is kept.
+        assert!(sb.project(&repo, "dev").0);
+        assert!(set_project_worktree(&sb.ctx(), "app", false).0);
+        let (ok, msg) = save_project_settings(&sb.ctx(), "app", &form("main"));
+        assert!(ok, "{msg}");
+        let app = &sb.saved()["projects"]["app"];
+        assert_eq!(app["target_branch"], "main");
+        assert_eq!(app["use_worktree"], false);
+    }
+
+    #[test]
     fn custom_instructions_are_saved_cleared_and_only_for_tracked_projects() {
         let sb = Sandbox::new();
         let repo = sb.repo("repo", true);
@@ -2974,7 +3041,9 @@ mod tests {
         let sb = Sandbox::new();
         let html = settings_fragment_html(&sb.ctx());
         assert!(html.contains("action='/settings/loop-projects/app/track'"), "{html}");
-        assert!(html.contains("name='use_worktree'"), "{html}");
+        // One worktree control (the switch on a tracked card), never a checkbox in the form.
+        assert!(!html.contains("name='use_worktree'"), "{html}");
+        assert!(html.contains("action='/settings/loop-projects/app/settings'"), "{html}");
         assert!(!html.contains("Tracked Projects"), "{html}");
         assert!(!html.contains("install command"), "{html}");
         assert!(!html.contains("name='lint_cmd'"), "{html}");
@@ -2985,6 +3054,8 @@ mod tests {
         let html = settings_fragment_html(&sb.ctx());
         assert!(html.contains("action='/settings/loop-projects/app/worktree/off'"), "{html}");
         assert!(html.contains("action='/settings/loop-projects/app/delete'"), "{html}");
+        assert!(!html.contains("name='use_worktree'"), "{html}");
+        assert_eq!(html.matches("class='proj-form'").count(), 1, "one settings form per project");
     }
 
     #[test]

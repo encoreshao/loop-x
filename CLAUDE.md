@@ -179,6 +179,28 @@ inspector panel over a new tab or a browser popup. Keep the dashboard's `--md-*`
 as the color source, and keep functional motion (the loading spinner) under reduced
 motion. The `impeccable` and `ui-ux-pro-max` skills carry the same rule.
 
+## Never ship UI you have not rendered: forms, inputs and reused classes
+
+A UI change is not done until you have looked at it rendered, in every state it can be in
+(collapsed and expanded sections, tracked and untracked, empty and filled, light and dark).
+`cargo test` and the golden snapshots only prove the markup did not change unexpectedly; they
+cannot see a 270px-tall text box. Render it for real: build, run the sandbox from
+"Development mode" with seeded config, fetch the page or its lazy fragment
+(`/settings/fragment`, `/gitlab/live`), open the `<details>` you changed, and take a headless
+Chrome screenshot (`--headless=new --screenshot=...`). Read the screenshot before saying done.
+
+Layout-coupled classes must not be reused in a different layout. `.daemon-action-form` sizes
+its inputs with `flex: 1 1 160px`, which is a *width* in a row and a *160px+ height* in a
+column; the Projects cards once shipped with giant inputs for exactly this reason. For a new
+layout, write that layout's own classes (`.proj-form`, `.proj-field`: explicit `height`,
+`width: 100%`, `box-sizing`, border, radius, font) instead of overriding a row form's CSS, and
+reset `flex` on every child if you must reuse one. Every input, select, textarea and button
+has an explicit height and the dashboard's `--md-*` tokens.
+
+Forms follow one rule: one form, one Save. Do not give a card two Save buttons or two controls
+for the same setting (a switch and a checkbox for `use_worktree`); put the immediate-effect
+toggle where it is used and keep the rest in a single labelled form.
+
 ## Adding an icon
 
 Icons are an inline SVG sprite (`crates/server/assets/icons/sprite.svg`, Lucide, ISC
