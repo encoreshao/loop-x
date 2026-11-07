@@ -1660,5 +1660,13 @@
   "Browse": "Parcourir",
   "Login": "Identifiant",
   "That folder does not exist": "Ce dossier n'existe pas",
-  "No origin remote found in that folder, so the repository was left as it was": "Aucun remote origin dans ce dossier : le dépôt est inchangé"
+  "No origin remote found in that folder, so the repository was left as it was": "Aucun remote origin dans ce dossier : le dépôt est inchangé",
+  "Choose": "Choisir",
+  "Favorites": "Favoris",
+  "Filter": "Filtrer",
+  "Git repository": "Dépôt Git",
+  "Home": "Dossier personnel",
+  "Desktop": "Bureau",
+  "Downloads": "Téléchargements",
+  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "Commencez par Parcourir : le dossier choisi remplit l'alias, le dépôt et la branche."
 }

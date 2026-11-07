@@ -1660,5 +1660,13 @@
   "Browse": "浏览",
   "Login": "登录名",
   "That folder does not exist": "该文件夹不存在",
-  "No origin remote found in that folder, so the repository was left as it was": "该文件夹中没有 origin 远程，因此未更改仓库"
+  "No origin remote found in that folder, so the repository was left as it was": "该文件夹中没有 origin 远程，因此未更改仓库",
+  "Choose": "选择",
+  "Favorites": "个人收藏",
+  "Filter": "筛选",
+  "Git repository": "Git 仓库",
+  "Home": "主目录",
+  "Desktop": "桌面",
+  "Downloads": "下载",
+  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "先点“浏览”:所选文件夹会自动填入别名、仓库和分支。"
 }

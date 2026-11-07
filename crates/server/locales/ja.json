@@ -1660,5 +1660,13 @@
   "Browse": "参照",
   "Login": "ログイン",
   "That folder does not exist": "そのフォルダは存在しません",
-  "No origin remote found in that folder, so the repository was left as it was": "そのフォルダにはoriginリモートがないため、リポジトリは変更しませんでした"
+  "No origin remote found in that folder, so the repository was left as it was": "そのフォルダにはoriginリモートがないため、リポジトリは変更しませんでした",
+  "Choose": "選択",
+  "Favorites": "よく使う項目",
+  "Filter": "絞り込み",
+  "Git repository": "Gitリポジトリ",
+  "Home": "ホーム",
+  "Desktop": "デスクトップ",
+  "Downloads": "ダウンロード",
+  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "まず「参照」から:選んだフォルダからエイリアス、リポジトリ、ブランチが入力されます。"
 }

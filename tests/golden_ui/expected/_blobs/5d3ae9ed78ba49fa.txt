@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Reading issue", "gitlab.list_issues": "Listing issues", "gitlab.list_users": "Listing users", "gitlab.comment": "Commenting on issue", "github.read_issue": "Reading issue", "github.read_pr": "Reading pull request", "github.comment": "Commenting", "rss.read_feed": "Reading feed", "calendar.list_events": "Reading calendar", "calendar.free_busy": "Reading calendar", "mail.search": "Searching mail", "mail.read": "Reading email", "mail.send": "Sending email", "calendar.create_event": "Creating event", "docs.save": "Saving document", "web.search": "Searching the web", "gdocs.list_templates": "Listing templates", "gsheets.list_templates": "Listing templates", "gdocs.template_info": "Reading template", "gsheets.template_info": "Reading template", "gdocs.read": "Reading document", "gsheets.read": "Reading spreadsheet", "gdocs.create": "Creating document", "gdocs.create_from_template": "Creating document", "gsheets.create": "Creating spreadsheet", "gsheets.create_from_template": "Creating spreadsheet", "gdocs.edit": "Editing document", "gsheets.edit": "Editing spreadsheet", "slides.edit_deck": "Editing presentation", "creator.list_sources": "Listing sources", "creator.list_videos": "Listing videos", "creator.start_scout": "Starting scout", "creator.generate": "Making video"};
-window.__loopToolStatusText = "Analyzing results\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "Issue \u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gitlab.list_issues": "Issue \u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gitlab.list_users": "\u30e6\u30fc\u30b6\u30fc\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gitlab.comment": "Issue \u306b\u30b3\u30e1\u30f3\u30c8\u4e2d", "github.read_issue": "Issue \u3092\u8aad\u307f\u53d6\u308a\u4e2d", "github.read_pr": "\u30d7\u30eb\u30ea\u30af\u30a8\u30b9\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "github.comment": "\u30b3\u30e1\u30f3\u30c8\u4e2d", "rss.read_feed": "\u30d5\u30a3\u30fc\u30c9\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "calendar.list_events": "\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "calendar.free_busy": "\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "mail.search": "\u30e1\u30fc\u30eb\u3092\u691c\u7d22\u4e2d", "mail.read": "\u30e1\u30fc\u30eb\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "mail.send": "\u30e1\u30fc\u30eb\u3092\u9001\u4fe1\u4e2d", "calendar.create_event": "\u4e88\u5b9a\u3092\u4f5c\u6210\u4e2d", "docs.save": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4fdd\u5b58\u4e2d", "web.search": "\u30a6\u30a7\u30d6\u3092\u691c\u7d22\u4e2d", "gdocs.list_templates": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gsheets.list_templates": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "gdocs.template_info": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gsheets.template_info": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gdocs.read": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gsheets.read": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u8aad\u307f\u53d6\u308a\u4e2d", "gdocs.create": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4f5c\u6210\u4e2d", "gdocs.create_from_template": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u4f5c\u6210\u4e2d", "gsheets.create": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u4f5c\u6210\u4e2d", "gsheets.create_from_template": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u4f5c\u6210\u4e2d", "gdocs.edit": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u7de8\u96c6\u4e2d", "gsheets.edit": "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8\u3092\u7de8\u96c6\u4e2d", "slides.edit_deck": "\u30d7\u30ec\u30bc\u30f3\u30c6\u30fc\u30b7\u30e7\u30f3\u3092\u7de8\u96c6\u4e2d", "creator.list_sources": "\u30bd\u30fc\u30b9\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "creator.list_videos": "\u52d5\u753b\u3092\u4e00\u89a7\u8868\u793a\u4e2d", "creator.start_scout": "\u30b9\u30ab\u30a6\u30c8\u3092\u958b\u59cb\u4e2d", "creator.generate": "\u52d5\u753b\u3092\u4f5c\u6210\u4e2d"};
+window.__loopToolStatusText = "\u7d50\u679c\u3092\u5206\u6790\u4e2d\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -142,23 +142,23 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "Waiting for your approval"));
+  head.appendChild(el('span', '', "\u627f\u8a8d\u5f85\u3061\u3067\u3059"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
-  if (String(ev.tool || '') === 'creator.generate') card.appendChild(el('div', 'pending-card-summary', "Approving confirms you own this video or have permission to reuse it."));
+  if (String(ev.tool || '') === 'creator.generate') card.appendChild(el('div', 'pending-card-summary', "\u627f\u8a8d\u3059\u308b\u3068\u3001\u3053\u306e\u52d5\u753b\u306e\u6a29\u5229\u3092\u6301\u3063\u3066\u3044\u308b\u304b\u3001\u518d\u5229\u7528\u306e\u8a31\u53ef\u3092\u5f97\u3066\u3044\u308b\u3053\u3068\u3092\u78ba\u8a8d\u3057\u305f\u3053\u3068\u306b\u306a\u308a\u307e\u3059\u3002"));
   card.appendChild(el('pre', 'pending-card-args', JSON.stringify(ev.args || {}, null, 2)));
   var actions = el('div', 'pending-card-actions');
   var approve = el('button', 'btn btn-primary');
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("Approve"));
+  approve.appendChild(document.createTextNode("\u627f\u8a8d"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("Reject"));
+  reject.appendChild(document.createTextNode("\u5374\u4e0b"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -189,7 +189,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "Approved." : "Rejected.") : ((data && data.error) || "Something went wrong - try again.");
+        if (status) status.textContent = ok ? (approving ? "\u627f\u8a8d\u3057\u307e\u3057\u305f\u3002" : "\u5374\u4e0b\u3057\u307e\u3057\u305f\u3002") : ((data && data.error) || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
@@ -203,7 +203,7 @@ if (!window.__loopPendingCardClicks) {
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "Something went wrong - try again.";
+        if (status) status.textContent = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -471,12 +471,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "Could not load the document.";
+      var docFailed = "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "Copied";
+      var docCopiedText = "\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -547,9 +547,9 @@ if (!window.__loopPendingCardClicks) {
       var fileRoot = document.documentElement;
       var fileTabs = filePanel.querySelector('[data-file-tabs]');
       var fileBody = filePanel.querySelector('[data-file-body]');
-      var fileLoading = "Loading\u2026";
-      var fileFailed = "Could not load the preview.";
-      var fileNouns = { doc: "Document", sheet: "Spreadsheet", deck: "Presentation" };
+      var fileLoading = "\u8aad\u307f\u8fbc\u307f\u4e2d\u2026";
+      var fileFailed = "\u30d7\u30ec\u30d3\u30e5\u30fc\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002";
+      var fileNouns = { doc: "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8", sheet: "\u30b9\u30d7\u30ec\u30c3\u30c9\u30b7\u30fc\u30c8", deck: "\u30d7\u30ec\u30bc\u30f3\u30c6\u30fc\u30b7\u30e7\u30f3" };
       var files = [];
       var activeFile = null;
       var fileSeq = 0;
@@ -737,7 +737,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "just now" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u305f\u3063\u305f\u4eca" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -838,10 +838,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "Edit message" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "\u30e1\u30c3\u30bb\u30fc\u30b8\u3092\u7de8\u96c6" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Cancel" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "Send" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "\u30ad\u30e3\u30f3\u30bb\u30eb" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "\u9001\u4fe1" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -878,7 +878,7 @@ if (!window.__loopPendingCardClicks) {
       var copyBtn = ev.target.closest('[data-copy-message]');
       if (copyBtn) {
         var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
-        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("Copied", true); }, function() { flashIcon(copyBtn, 'error'); });
+        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f", true); }, function() { flashIcon(copyBtn, 'error'); });
         return;
       }
       var editBtn = ev.target.closest('[data-edit-message]');
@@ -902,7 +902,7 @@ if (!window.__loopPendingCardClicks) {
     // While a reply is being written the send button is the stop button.
     var activeStop = null;
     function setSendMode(button, stop) {
-      var label = stop ? "Stop" : "Send";
+      var label = stop ? "\u505c\u6b62" : "\u9001\u4fe1";
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       var use = button.querySelector('svg.icon use');
@@ -921,7 +921,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "You" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "\u3042\u306a\u305f" + "</span>", text);
       input.value = '';
       autoGrow();
       setSendMode(button, true);
@@ -940,7 +940,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "Thinking\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "\u8003\u3048\u4e2d\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -1015,7 +1015,7 @@ if (!window.__loopPendingCardClicks) {
         if (source) source.close();
         if (activeKey) postStop(activeKey);
         reveal.stop();
-        var stopped = "(reply stopped)";
+        var stopped = "\uff08\u8fd4\u4fe1\u3092\u505c\u6b62\u3057\u307e\u3057\u305f\uff09";
         pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
         resetSendButton();
         stopStreamingFlag();
@@ -1052,7 +1052,7 @@ if (!window.__loopPendingCardClicks) {
         });
         source.addEventListener('error', function(ev) {
           if (aborted) return;
-          var message = "Something went wrong - try again.";
+          var message = "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -1063,7 +1063,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "(reply interrupted)", false);
+            pending.show(accumulated + ' ' + "\uff08\u8fd4\u4fe1\u304c\u4e2d\u65ad\u3055\u308c\u307e\u3057\u305f\uff09", false);
           }
           resetSendButton();
           stopStreamingFlag();
@@ -1080,7 +1080,7 @@ if (!window.__loopPendingCardClicks) {
             return;
           }
           if (!result.ok) {
-            pending.show(result.data.error || "Something went wrong.", false);
+            pending.show(result.data.error || "\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002", false);
             resetSendButton();
             stopStreamingFlag();
             return;
@@ -1107,7 +1107,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("Something went wrong - try again.", false);
+          pending.show("\u554f\u984c\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002", false);
           if (aborted) return;
           resetSendButton();
           stopStreamingFlag();
@@ -1158,7 +1158,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "Please fill out this field.";
+    if (text) text.textContent = field.validationMessage || "\u3053\u306e\u9805\u76ee\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -1236,7 +1236,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Couldn't load this section." + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "\u3053\u306e\u30bb\u30af\u30b7\u30e7\u30f3\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f\u3002" + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1389,7 +1389,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "Stop tracking #{iid}" : "Track #{iid} again").replace('{iid}', issueIid);
+          var label = (enabled ? "#{iid} \u306e\u8ffd\u8de1\u3092\u505c\u6b62" : "#{iid} \u306e\u8ffd\u8de1\u3092\u518d\u958b").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }
@@ -1422,7 +1422,7 @@ if (!window.__loopPendingCardClicks) {
         if (window.loopxToast) window.loopxToast(form.getAttribute(enabled ? 'data-toast-on' : 'data-toast-off'), true);
         form.setAttribute('action', form.getAttribute('action').replace(/\/(enable|disable)$/, '/' + (enabled ? 'disable' : 'enable')));
         if (button) setSwitch(button, enabled, form.getAttribute(enabled ? 'data-label-on' : 'data-label-off'));
-        var perIssue = "Stop tracking #{iid}", perIssueOff = "Track #{iid} again";
+        var perIssue = "#{iid} \u306e\u8ffd\u8de1\u3092\u505c\u6b62", perIssueOff = "#{iid} \u306e\u8ffd\u8de1\u3092\u518d\u958b";
         document.querySelectorAll('.issue-tracking-toggle').forEach(function(f) {
           var b = f.querySelector('button[type="submit"]');
           var iid = f.getAttribute('data-issue-iid');
@@ -1440,12 +1440,13 @@ if (!window.__loopPendingCardClicks) {
   // a toast, then swaps in the card's fresh markup with the same sections open - no reload,
   // nothing folds. A [data-pick-folder] button opens a folder picker that fills the card's
   // checkout, repository and branch.
-  var cardFailed = "Could not save";
+  var cardFailed = "\u4fdd\u5b58\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f";
   var T = {
-    title: "Choose a folder", use: "Use this folder",
-    up: "Up one level", cancel: "Cancel",
-    loading: "Loading\u2026", none: "No folders here",
-    failed: "Could not read this folder"
+    title: "\u30d5\u30a9\u30eb\u30c0\u3092\u9078\u629e", use: "\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u4f7f\u3046",
+    up: "1\u3064\u4e0a\u3078", cancel: "\u30ad\u30e3\u30f3\u30bb\u30eb",
+    loading: "\u8aad\u307f\u8fbc\u307f\u4e2d\u2026", none: "\u30d5\u30a9\u30eb\u30c0\u304c\u3042\u308a\u307e\u305b\u3093",
+    failed: "\u3053\u306e\u30d5\u30a9\u30eb\u30c0\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f", choose: "\u9078\u629e",
+    favorites: "\u3088\u304f\u4f7f\u3046\u9805\u76ee", filter: "\u7d5e\u308a\u8fbc\u307f", git: "Git\u30ea\u30dd\u30b8\u30c8\u30ea"
   };
   function toast(message, ok) { if (window.loopxToast && message) window.loopxToast(message, ok); }
   function post(url, data) {
@@ -1485,13 +1486,24 @@ if (!window.__loopPendingCardClicks) {
       .then(function() { if (button) button.disabled = false; });
   });
 
-  var picker = null, pickerForm = null, pickerPath = '';
+  // The folder picker: a Finder-style sheet. Favorites on the left, a path bar and filter on
+  // top, folders in the middle (click selects, double-click opens, Enter opens), Choose at
+  // the bottom picks the selected folder, or the open one when none is selected.
+  var picker = null, pickerForm = null, cur = '', sel = '', dirs = [];
+  var ICONS = {
+    folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .71-1.53l7-6a2 2 0 0 1 2.58 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    git: '<svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
+    chev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
+    up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>'
+  };
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
     if (text) e.textContent = text;
     return e;
   }
+  function glyph(name, cls) { var s = el('span', 'fp-ico ' + (cls || '')); s.innerHTML = ICONS[name]; return s; }
   function csrf() {
     var i = pickerForm && pickerForm.querySelector('input[name="csrf_token"]');
     return i ? i.value : '';
@@ -1499,28 +1511,79 @@ if (!window.__loopPendingCardClicks) {
   function ensurePicker() {
     if (picker) return picker;
     picker = el('dialog', 'folder-picker');
-    var inner = el('div', 'fp-inner');
-    var head = el('header', 'fp-head');
-    head.appendChild(el('h2', '', T.title));
-    var x = el('button', 'fp-x', '×'); x.type = 'button'; x.setAttribute('aria-label', T.cancel);
-    head.appendChild(x);
-    var bar = el('div', 'fp-path');
-    var up = el('button', 'fp-up', '↑ ' + T.up); up.type = 'button';
-    bar.appendChild(up); bar.appendChild(el('code', 'fp-cur'));
-    var list = el('ul', 'fp-list');
-    var foot = el('footer', 'fp-foot');
-    var cancel = el('button', 'btn btn-neutral', T.cancel); cancel.type = 'button';
-    var use = el('button', 'btn btn-neutral fp-use', T.use); use.type = 'button';
-    foot.appendChild(cancel); foot.appendChild(use);
-    [head, bar, list, foot].forEach(function(n) { inner.appendChild(n); });
-    picker.appendChild(inner);
+    picker.innerHTML =
+      '<div class="fp-inner">' +
+      '<header class="fp-bar"><button type="button" class="fp-back"></button><nav class="fp-crumbs"></nav>' +
+      '<input type="search" class="fp-filter" autocomplete="off" spellcheck="false"></header>' +
+      '<div class="fp-main"><aside class="fp-side"><div class="fp-side-title"></div><ul class="fp-places"></ul></aside>' +
+      '<ul class="fp-list" role="listbox" tabindex="0"></ul></div>' +
+      '<footer class="fp-foot"><span class="fp-sel"></span><button type="button" class="btn btn-neutral fp-cancel"></button>' +
+      '<button type="button" class="btn btn-neutral fp-use"></button></footer></div>';
     document.body.appendChild(picker);
-    x.addEventListener('click', function() { picker.close(); });
-    cancel.addEventListener('click', function() { picker.close(); });
-    up.addEventListener('click', function() { if (up.__parent) load(up.__parent); });
-    use.addEventListener('click', useFolder);
+    var back = picker.querySelector('.fp-back');
+    back.setAttribute('aria-label', T.up); back.title = T.up; back.appendChild(glyph('up'));
+    picker.querySelector('.fp-filter').placeholder = T.filter;
+    picker.querySelector('.fp-side-title').textContent = T.favorites;
+    picker.querySelector('.fp-cancel').textContent = T.cancel;
+    picker.querySelector('.fp-use').textContent = T.choose;
+    back.addEventListener('click', function() { if (back.__parent) load(back.__parent); });
+    picker.querySelector('.fp-cancel').addEventListener('click', function() { picker.close(); });
+    picker.querySelector('.fp-use').addEventListener('click', function() { useFolder(sel || cur); });
+    picker.querySelector('.fp-filter').addEventListener('input', renderList);
     picker.addEventListener('click', function(e) { if (e.target === picker) picker.close(); });
+    picker.addEventListener('keydown', function(e) {
+      var list = picker.querySelector('.fp-list');
+      if (e.target.matches && e.target.matches('.fp-filter') && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+      var rows = Array.prototype.slice.call(list.querySelectorAll('.fp-row'));
+      var at = rows.findIndex(function(r) { return r.getAttribute('data-path') === sel; });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))];
+        if (next) { select(next.getAttribute('data-path')); next.scrollIntoView({ block: 'nearest' }); }
+      } else if (e.key === 'Enter' && sel) { e.preventDefault(); load(sel); }
+      else if (e.key === 'Backspace' && !(e.target.matches && e.target.matches('.fp-filter')) && back.__parent) { e.preventDefault(); load(back.__parent); }
+    });
     return picker;
+  }
+  function select(path) {
+    sel = path;
+    picker.querySelectorAll('.fp-row').forEach(function(r) { r.classList.toggle('is-selected', r.getAttribute('data-path') === path); });
+    picker.querySelector('.fp-sel').textContent = '\u200e' + (path || cur);
+  }
+  function renderCrumbs() {
+    var nav = picker.querySelector('.fp-crumbs');
+    nav.innerHTML = '';
+    var parts = cur.split('/').filter(Boolean), acc = '';
+    var root = el('button', 'fp-crumb', '/'); root.type = 'button';
+    root.addEventListener('click', function() { load('/'); });
+    nav.appendChild(root);
+    parts.forEach(function(part, i) {
+      acc += '/' + part;
+      var here = acc;
+      nav.appendChild(glyph('chev', 'fp-sep'));
+      var b = el('button', 'fp-crumb' + (i === parts.length - 1 ? ' is-last' : ''), part); b.type = 'button';
+      b.addEventListener('click', function() { load(here); });
+      nav.appendChild(b);
+    });
+    nav.scrollLeft = nav.scrollWidth;
+  }
+  function renderList() {
+    var list = picker.querySelector('.fp-list');
+    var q = picker.querySelector('.fp-filter').value.trim().toLowerCase();
+    list.innerHTML = '';
+    var shown = dirs.filter(function(d) { return !q || d.name.toLowerCase().indexOf(q) >= 0; });
+    if (!shown.length) list.appendChild(el('li', 'fp-note', T.none));
+    shown.forEach(function(d) {
+      var li = el('li', 'fp-row' + (d.path === sel ? ' is-selected' : ''));
+      li.setAttribute('role', 'option'); li.setAttribute('data-path', d.path);
+      li.appendChild(glyph('folder', 'fp-folder'));
+      li.appendChild(el('span', 'fp-name', d.name));
+      if (d.git) { var g = el('span', 'fp-badge'); g.appendChild(glyph('git')); g.appendChild(document.createTextNode(T.git)); li.appendChild(g); }
+      li.appendChild(glyph('chev', 'fp-go'));
+      li.addEventListener('click', function() { select(d.path); });
+      li.addEventListener('dblclick', function() { load(d.path); });
+      list.appendChild(li);
+    });
   }
   function load(path) {
     var list = picker.querySelector('.fp-list');
@@ -1528,42 +1591,43 @@ if (!window.__loopPendingCardClicks) {
     list.appendChild(el('li', 'fp-note', T.loading));
     post('/settings/folders', { csrf_token: csrf(), path: path })
       .then(function(res) {
-        pickerPath = res.path;
-        picker.querySelector('.fp-cur').textContent = '\u200e' + res.path;
-        var up = picker.querySelector('.fp-up');
-        up.__parent = res.parent || '';
-        up.disabled = !res.parent;
-        list.innerHTML = '';
-        if (!res.dirs.length) list.appendChild(el('li', 'fp-note', T.none));
-        res.dirs.forEach(function(d) {
+        cur = res.path; sel = ''; dirs = res.dirs;
+        picker.querySelector('.fp-filter').value = '';
+        var back = picker.querySelector('.fp-back');
+        back.__parent = res.parent || ''; back.disabled = !res.parent;
+        var places = picker.querySelector('.fp-places');
+        places.innerHTML = '';
+        res.places.forEach(function(p) {
           var li = el('li');
-          var b = el('button', 'fp-dir' + (d.git ? ' is-git' : ''));
-          b.type = 'button';
-          b.appendChild(el('span', 'fp-name', d.name));
-          if (d.git) b.appendChild(el('span', 'fp-badge', 'git'));
-          b.addEventListener('click', function() { load(d.path); });
-          li.appendChild(b);
-          list.appendChild(li);
+          var b = el('button', 'fp-place' + (p.path === cur ? ' is-active' : '')); b.type = 'button';
+          b.appendChild(glyph(p.kind === 'home' ? 'home' : 'folder'));
+          b.appendChild(el('span', '', p.name));
+          b.addEventListener('click', function() { load(p.path); });
+          li.appendChild(b); places.appendChild(li);
         });
+        renderCrumbs(); renderList(); select('');
         list.scrollTop = 0;
       })
       .catch(function() { list.innerHTML = ''; list.appendChild(el('li', 'fp-note', T.failed)); });
   }
   function fill(form, name, value) {
     var input = form.querySelector('[name="' + name + '"]');
-    if (!input || !value) return;
+    if (!input || !value || input.type === 'hidden') return;
     input.value = value;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  function useFolder() {
+  function useFolder(path) {
     var form = pickerForm;
-    post('/settings/folder-info', { csrf_token: csrf(), path: pickerPath })
+    post('/settings/folder-info', { csrf_token: csrf(), path: path })
       .then(function(res) {
         if (!res.ok) { toast(res.message, false); return; }
         fill(form, 'local_path', res.path);
         fill(form, 'project_id', res.repo);
         fill(form, 'repo', res.repo);
         fill(form, 'target_branch', res.branch);
+        // A new project's alias starts as the folder's name (only while it is still empty).
+        var alias = form.querySelector('input[name="alias"][type="text"]');
+        if (alias && !alias.value) fill(form, 'alias', res.path.split('/').filter(Boolean).pop().replace(/[^A-Za-z0-9._-]+/g, '-'));
         if (res.message) toast(res.message, false);
         picker.close();
       })
@@ -1578,5 +1642,6 @@ if (!window.__loopPendingCardClicks) {
     ensurePicker();
     picker.showModal();
     load(current ? current.value.trim() : '');
+    picker.querySelector('.fp-list').focus();
   });
 })();

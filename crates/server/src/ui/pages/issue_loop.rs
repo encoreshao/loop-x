@@ -52,15 +52,7 @@ pub fn register(r: &mut Registry) {
         flash_post(c, |c, _| delete_instance(c, c.param("alias")))
     });
     r.post("/settings/gitlab/projects", |c| {
-        flash_post(c, |c, f| {
-            upsert_project(
-                c,
-                f.first("alias").unwrap_or(""),
-                f.first("project_id").unwrap_or(""),
-                f.first("instance").unwrap_or(""),
-                f.first("bundle").unwrap_or(""),
-            )
-        })
+        flash_post(c, |c, f| save_project_settings(c, f.first("alias").unwrap_or(""), f))
     });
     r.post("/settings/gitlab/projects/:alias/delete", |c| {
         flash_post(c, |c, _| delete_project(c, c.param("alias")))
@@ -1599,6 +1591,18 @@ fn untrack_switch(ctx: &UiCtx, alias: &str, csrf: &str) -> String {
     )
 }
 
+/// The Add project panel under a source's cards: it starts with the checkout and Browse
+/// (the folder you pick fills in the alias, repository and branch), then the rest.
+fn add_project_panel(ctx: &UiCtx, csrf: &str, action: &str, fields: String) -> String {
+    format!(
+        "<form method='post' action='{action}' class='proj-form proj-add'>{csrf}<div class='proj-add-head'><h3>{}</h3><p>{}</p></div><div class='proj-fields'>{fields}</div><div class='proj-form-foot'><button type='submit' class='btn btn-neutral'>{} {}</button></div></form>",
+        esc_t(ctx, "Add project"),
+        esc_t(ctx, "Start with Browse: the folder you pick fills in the alias, repository and branch."),
+        icon("add"),
+        esc_t(ctx, "Add project")
+    )
+}
+
 /// What one project card shows. `tracked` is the project's projects.json entry when the
 /// loop tracks it; `settings` is the collapsed Project settings body (may be empty).
 struct ProjectCard<'a> {
@@ -1803,12 +1807,19 @@ fn settings_fragment_html(ctx: &UiCtx) -> String {
             pyfmt::escape(&ctx.tf("{alias}: no matching GitLab alias", &[("alias", alias)]))
         ));
     }
-    let add_project_form = format!(
-        "\n<form method='post' action='/settings/gitlab/projects' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n<input type='text' name='project_id' placeholder='namespace/project' required>\n{}\n{}\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
-        et("project alias"),
-        custom_select_plain("instance", &instance_names, None, None),
-        custom_select_plain("bundle", &bundle_names, None, Some(&t("(use instance default)"))),
-        et("Add project")
+    let add_project_form = add_project_panel(
+        ctx,
+        &csrf,
+        "/settings/gitlab/projects",
+        format!(
+            "{}{}{}{}{}{}",
+            proj_field(ctx, "Local checkout", 6, checkout_input(ctx, "")),
+            proj_field(ctx, "Alias", 2, input_text("alias", "", &esc_t(ctx, "project alias"), " required")),
+            proj_field(ctx, "Repository", 4, input_text("project_id", "", "namespace/project", " required")),
+            proj_field(ctx, "Instance", 2, custom_select_plain("instance", &instance_names, None, None)),
+            proj_field(ctx, "Bundle", 2, custom_select_plain("bundle", &bundle_names, None, Some(&t("(use instance default)")))),
+            proj_field(ctx, "Target branch", 2, input_text("target_branch", "", &esc_t(ctx, "target branch"), "")),
+        ),
     );
 
     let field = |label: &str, hint: &str, input: String| {
@@ -2171,9 +2182,26 @@ fn folder_list(ctx: &UiCtx) -> UiResponse {
     dirs.sort_by_key(|(name, _, _)| name.to_lowercase());
     dirs.truncate(500);
     let parent = dir.parent().map(|p| p.display().to_string());
+    // The sidebar: home plus the usual places that exist on this machine.
+    let mut places = vec![json!({"name": ctx.t("Home"), "path": home.display().to_string(), "kind": "home"})];
+    for (key, label) in [
+        ("Desktop", ctx.t("Desktop")),
+        ("Documents", ctx.t("Documents")),
+        ("Downloads", ctx.t("Downloads")),
+    ] {
+        if home.join(key).is_dir() {
+            places.push(json!({"name": label, "path": home.join(key).display().to_string(), "kind": "folder"}));
+        }
+    }
+    for key in ["Developer", "Projects", "Code", "dev", "src", "Work"] {
+        if home.join(key).is_dir() {
+            places.push(json!({"name": key, "path": home.join(key).display().to_string(), "kind": "code"}));
+        }
+    }
     UiResponse::json(
         200,
         &json!({
+            "places": places,
             "path": dir.display().to_string(),
             "parent": parent,
             "home": home.display().to_string(),
@@ -2876,14 +2904,19 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
             et("Connectors")
         )
     } else {
-        format!(
-            "\n<form method='post' action='/settings/loop-projects/connected' class='daemon-action-form add-row-form'>\n{csrf}\n<input type='text' name='alias' placeholder='{}' required>\n{}\n<input type='text' name='repo' placeholder='owner/name' required>\n<input type='text' name='local_path' placeholder='/abs/path/to/checkout'>\n<input type='text' name='target_branch' placeholder='{}'>\n<input type='text' name='assignee_username' placeholder='{}'>\n<label><input type='checkbox' name='use_worktree' value='1' checked> {}</label>\n<button type='submit' class='btn btn-neutral'><svg class='icon' aria-hidden='true'><use href='#i-add'/></svg> {}</button>\n</form>\n",
-            et("project alias"),
-            super::loops_common::custom_select("account", &options, None, None),
-            et("target branch"),
-            et("Login there (optional)"),
-            et("Use worktree"),
-            et("Add project")
+        add_project_panel(
+            ctx,
+            csrf,
+            "/settings/loop-projects/connected",
+            format!(
+                "{}{}{}{}{}{}<input type='hidden' name='use_worktree' value='1'>",
+                proj_field(ctx, "Local checkout", 6, checkout_input(ctx, "")),
+                proj_field(ctx, "Alias", 2, input_text("alias", "", &esc_t(ctx, "project alias"), " required")),
+                proj_field(ctx, "Repository", 4, input_text("repo", "", "owner/name", " required")),
+                proj_field(ctx, "Account", 2, super::loops_common::custom_select("account", &options, None, None)),
+                proj_field(ctx, "Login", 2, input_text("assignee_username", "", &esc_t(ctx, "Login there (optional)"), "")),
+                proj_field(ctx, "Target branch", 2, input_text("target_branch", "", &esc_t(ctx, "target branch"), "")),
+            ),
         )
     };
     format!(
@@ -3108,6 +3141,8 @@ mod tests {
         };
         let listed = post("/settings/folders", &format!("path={}", pyfmt::quote(&sb.path("code"), "")));
         let v: Value = serde_json::from_str(&listed.body_text()).unwrap();
+        let places: Vec<&str> = v["places"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
+        assert_eq!(places[0], "Home", "{v}");
         let names: Vec<&str> = v["dirs"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["plain", "repo"], "hidden folders are left out: {v}");
         let git: Vec<bool> = v["dirs"].as_array().unwrap().iter().map(|d| d["git"].as_bool().unwrap()).collect();
@@ -3173,7 +3208,8 @@ mod tests {
         let html = settings_fragment_html(&sb.ctx());
         // The card has the same settings form, posting to the add handler with the alias.
         assert!(html.contains("<input type='hidden' name='alias' value=\"hub\">"), "{html}");
-        assert!(!html.contains("<input type='hidden' name='use_worktree'"), "worktree is off, so it is not kept on: {html}");
+        // Only the Add project panel carries the hidden default; the card's form keeps "off".
+        assert_eq!(html.matches("<input type='hidden' name='use_worktree'").count(), 1, "{html}");
         let (ok, msg) = save_connected(&sb, "hub", "octo/web2", &repo, "dev", false);
         assert!(ok, "{msg}");
         let hub = &sb.saved()["projects"]["hub"];

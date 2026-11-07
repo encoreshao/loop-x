@@ -245,8 +245,14 @@ if (!window.__loopPendingCardClicks) {
   (function __loopScheduleRefresh() {
     setTimeout(function() {
       if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      if (document.documentElement.classList.contains('ai-panel-open')) { __loopScheduleRefresh(); return; }
-      location.reload();
+      var indicator = document.getElementById('gitlab-refresh-indicator');
+      if (indicator) { indicator.style.display = ''; }
+      Promise.all(Array.prototype.map.call(
+        document.querySelectorAll('[data-lazy-load]'), window.__loopLoadLazyContent
+      )).then(function() {
+        if (indicator) { indicator.style.display = 'none'; }
+        __loopScheduleRefresh();
+      });
     }, refreshSeconds * 1000);
   })();
 })();
@@ -1461,7 +1467,8 @@ if (!window.__loopPendingCardClicks) {
     title: "Choisir un dossier", use: "Utiliser ce dossier",
     up: "Dossier parent", cancel: "Annuler",
     loading: "Chargement\u2026", none: "Aucun dossier ici",
-    failed: "Impossible de lire ce dossier"
+    failed: "Impossible de lire ce dossier", choose: "Choisir",
+    favorites: "Favoris", filter: "Filtrer", git: "D\u00e9p\u00f4t Git"
   };
   function toast(message, ok) { if (window.loopxToast && message) window.loopxToast(message, ok); }
   function post(url, data) {
@@ -1501,13 +1508,24 @@ if (!window.__loopPendingCardClicks) {
       .then(function() { if (button) button.disabled = false; });
   });
 
-  var picker = null, pickerForm = null, pickerPath = '';
+  // The folder picker: a Finder-style sheet. Favorites on the left, a path bar and filter on
+  // top, folders in the middle (click selects, double-click opens, Enter opens), Choose at
+  // the bottom picks the selected folder, or the open one when none is selected.
+  var picker = null, pickerForm = null, cur = '', sel = '', dirs = [];
+  var ICONS = {
+    folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .71-1.53l7-6a2 2 0 0 1 2.58 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+    git: '<svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
+    chev: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
+    up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>'
+  };
   function el(tag, cls, text) {
     var e = document.createElement(tag);
     if (cls) e.className = cls;
     if (text) e.textContent = text;
     return e;
   }
+  function glyph(name, cls) { var s = el('span', 'fp-ico ' + (cls || '')); s.innerHTML = ICONS[name]; return s; }
   function csrf() {
     var i = pickerForm && pickerForm.querySelector('input[name="csrf_token"]');
     return i ? i.value : '';
@@ -1515,28 +1533,79 @@ if (!window.__loopPendingCardClicks) {
   function ensurePicker() {
     if (picker) return picker;
     picker = el('dialog', 'folder-picker');
-    var inner = el('div', 'fp-inner');
-    var head = el('header', 'fp-head');
-    head.appendChild(el('h2', '', T.title));
-    var x = el('button', 'fp-x', '×'); x.type = 'button'; x.setAttribute('aria-label', T.cancel);
-    head.appendChild(x);
-    var bar = el('div', 'fp-path');
-    var up = el('button', 'fp-up', '↑ ' + T.up); up.type = 'button';
-    bar.appendChild(up); bar.appendChild(el('code', 'fp-cur'));
-    var list = el('ul', 'fp-list');
-    var foot = el('footer', 'fp-foot');
-    var cancel = el('button', 'btn btn-neutral', T.cancel); cancel.type = 'button';
-    var use = el('button', 'btn btn-neutral fp-use', T.use); use.type = 'button';
-    foot.appendChild(cancel); foot.appendChild(use);
-    [head, bar, list, foot].forEach(function(n) { inner.appendChild(n); });
-    picker.appendChild(inner);
+    picker.innerHTML =
+      '<div class="fp-inner">' +
+      '<header class="fp-bar"><button type="button" class="fp-back"></button><nav class="fp-crumbs"></nav>' +
+      '<input type="search" class="fp-filter" autocomplete="off" spellcheck="false"></header>' +
+      '<div class="fp-main"><aside class="fp-side"><div class="fp-side-title"></div><ul class="fp-places"></ul></aside>' +
+      '<ul class="fp-list" role="listbox" tabindex="0"></ul></div>' +
+      '<footer class="fp-foot"><span class="fp-sel"></span><button type="button" class="btn btn-neutral fp-cancel"></button>' +
+      '<button type="button" class="btn btn-neutral fp-use"></button></footer></div>';
     document.body.appendChild(picker);
-    x.addEventListener('click', function() { picker.close(); });
-    cancel.addEventListener('click', function() { picker.close(); });
-    up.addEventListener('click', function() { if (up.__parent) load(up.__parent); });
-    use.addEventListener('click', useFolder);
+    var back = picker.querySelector('.fp-back');
+    back.setAttribute('aria-label', T.up); back.title = T.up; back.appendChild(glyph('up'));
+    picker.querySelector('.fp-filter').placeholder = T.filter;
+    picker.querySelector('.fp-side-title').textContent = T.favorites;
+    picker.querySelector('.fp-cancel').textContent = T.cancel;
+    picker.querySelector('.fp-use').textContent = T.choose;
+    back.addEventListener('click', function() { if (back.__parent) load(back.__parent); });
+    picker.querySelector('.fp-cancel').addEventListener('click', function() { picker.close(); });
+    picker.querySelector('.fp-use').addEventListener('click', function() { useFolder(sel || cur); });
+    picker.querySelector('.fp-filter').addEventListener('input', renderList);
     picker.addEventListener('click', function(e) { if (e.target === picker) picker.close(); });
+    picker.addEventListener('keydown', function(e) {
+      var list = picker.querySelector('.fp-list');
+      if (e.target.matches && e.target.matches('.fp-filter') && e.key !== 'ArrowDown' && e.key !== 'Enter') return;
+      var rows = Array.prototype.slice.call(list.querySelectorAll('.fp-row'));
+      var at = rows.findIndex(function(r) { return r.getAttribute('data-path') === sel; });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))];
+        if (next) { select(next.getAttribute('data-path')); next.scrollIntoView({ block: 'nearest' }); }
+      } else if (e.key === 'Enter' && sel) { e.preventDefault(); load(sel); }
+      else if (e.key === 'Backspace' && !(e.target.matches && e.target.matches('.fp-filter')) && back.__parent) { e.preventDefault(); load(back.__parent); }
+    });
     return picker;
+  }
+  function select(path) {
+    sel = path;
+    picker.querySelectorAll('.fp-row').forEach(function(r) { r.classList.toggle('is-selected', r.getAttribute('data-path') === path); });
+    picker.querySelector('.fp-sel').textContent = '\u200e' + (path || cur);
+  }
+  function renderCrumbs() {
+    var nav = picker.querySelector('.fp-crumbs');
+    nav.innerHTML = '';
+    var parts = cur.split('/').filter(Boolean), acc = '';
+    var root = el('button', 'fp-crumb', '/'); root.type = 'button';
+    root.addEventListener('click', function() { load('/'); });
+    nav.appendChild(root);
+    parts.forEach(function(part, i) {
+      acc += '/' + part;
+      var here = acc;
+      nav.appendChild(glyph('chev', 'fp-sep'));
+      var b = el('button', 'fp-crumb' + (i === parts.length - 1 ? ' is-last' : ''), part); b.type = 'button';
+      b.addEventListener('click', function() { load(here); });
+      nav.appendChild(b);
+    });
+    nav.scrollLeft = nav.scrollWidth;
+  }
+  function renderList() {
+    var list = picker.querySelector('.fp-list');
+    var q = picker.querySelector('.fp-filter').value.trim().toLowerCase();
+    list.innerHTML = '';
+    var shown = dirs.filter(function(d) { return !q || d.name.toLowerCase().indexOf(q) >= 0; });
+    if (!shown.length) list.appendChild(el('li', 'fp-note', T.none));
+    shown.forEach(function(d) {
+      var li = el('li', 'fp-row' + (d.path === sel ? ' is-selected' : ''));
+      li.setAttribute('role', 'option'); li.setAttribute('data-path', d.path);
+      li.appendChild(glyph('folder', 'fp-folder'));
+      li.appendChild(el('span', 'fp-name', d.name));
+      if (d.git) { var g = el('span', 'fp-badge'); g.appendChild(glyph('git')); g.appendChild(document.createTextNode(T.git)); li.appendChild(g); }
+      li.appendChild(glyph('chev', 'fp-go'));
+      li.addEventListener('click', function() { select(d.path); });
+      li.addEventListener('dblclick', function() { load(d.path); });
+      list.appendChild(li);
+    });
   }
   function load(path) {
     var list = picker.querySelector('.fp-list');
@@ -1544,42 +1613,43 @@ if (!window.__loopPendingCardClicks) {
     list.appendChild(el('li', 'fp-note', T.loading));
     post('/settings/folders', { csrf_token: csrf(), path: path })
       .then(function(res) {
-        pickerPath = res.path;
-        picker.querySelector('.fp-cur').textContent = '\u200e' + res.path;
-        var up = picker.querySelector('.fp-up');
-        up.__parent = res.parent || '';
-        up.disabled = !res.parent;
-        list.innerHTML = '';
-        if (!res.dirs.length) list.appendChild(el('li', 'fp-note', T.none));
-        res.dirs.forEach(function(d) {
+        cur = res.path; sel = ''; dirs = res.dirs;
+        picker.querySelector('.fp-filter').value = '';
+        var back = picker.querySelector('.fp-back');
+        back.__parent = res.parent || ''; back.disabled = !res.parent;
+        var places = picker.querySelector('.fp-places');
+        places.innerHTML = '';
+        res.places.forEach(function(p) {
           var li = el('li');
-          var b = el('button', 'fp-dir' + (d.git ? ' is-git' : ''));
-          b.type = 'button';
-          b.appendChild(el('span', 'fp-name', d.name));
-          if (d.git) b.appendChild(el('span', 'fp-badge', 'git'));
-          b.addEventListener('click', function() { load(d.path); });
-          li.appendChild(b);
-          list.appendChild(li);
+          var b = el('button', 'fp-place' + (p.path === cur ? ' is-active' : '')); b.type = 'button';
+          b.appendChild(glyph(p.kind === 'home' ? 'home' : 'folder'));
+          b.appendChild(el('span', '', p.name));
+          b.addEventListener('click', function() { load(p.path); });
+          li.appendChild(b); places.appendChild(li);
         });
+        renderCrumbs(); renderList(); select('');
         list.scrollTop = 0;
       })
       .catch(function() { list.innerHTML = ''; list.appendChild(el('li', 'fp-note', T.failed)); });
   }
   function fill(form, name, value) {
     var input = form.querySelector('[name="' + name + '"]');
-    if (!input || !value) return;
+    if (!input || !value || input.type === 'hidden') return;
     input.value = value;
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
-  function useFolder() {
+  function useFolder(path) {
     var form = pickerForm;
-    post('/settings/folder-info', { csrf_token: csrf(), path: pickerPath })
+    post('/settings/folder-info', { csrf_token: csrf(), path: path })
       .then(function(res) {
         if (!res.ok) { toast(res.message, false); return; }
         fill(form, 'local_path', res.path);
         fill(form, 'project_id', res.repo);
         fill(form, 'repo', res.repo);
         fill(form, 'target_branch', res.branch);
+        // A new project's alias starts as the folder's name (only while it is still empty).
+        var alias = form.querySelector('input[name="alias"][type="text"]');
+        if (alias && !alias.value) fill(form, 'alias', res.path.split('/').filter(Boolean).pop().replace(/[^A-Za-z0-9._-]+/g, '-'));
         if (res.message) toast(res.message, false);
         picker.close();
       })
@@ -1594,5 +1664,6 @@ if (!window.__loopPendingCardClicks) {
     ensurePicker();
     picker.showModal();
     load(current ? current.value.trim() : '');
+    picker.querySelector('.fp-list').focus();
   });
 })();

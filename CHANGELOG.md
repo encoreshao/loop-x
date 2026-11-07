@@ -23,6 +23,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Settings → Loop projects: Add project (GitLab and GitHub) starts with Local checkout and Browse; the picked folder fills the alias, repository and branch, and a checkout given there is tracked on save. The folder picker is now a Finder-style sheet with a Favorites sidebar, a clickable path bar, a filter, single-click select / double-click open, and a Choose button.
 - Settings → Loop projects: GitLab and connected (GitHub) projects are cards instead of table rows: alias and repository with a Tracked switch, the checkout and worktree switch, one Project settings form with labelled fields and a single Save (repository, instance, bundle, checkout, target branch; Delete at its foot), one Use worktree switch, a Custom instructions row that previews the text and opens to edit it, and one section open at a time. Untracked projects get a Track button.
 - Creator → Videos: the video popup is larger, with the player filling its height, a sticky actions bar that keeps only Approve, Share and Stop in view and puts Open folder, Source, View log, the published toggle and Delete in a More menu, and a publish panel where opening WeChat or Douyin closes the other.
 - A Generate job whose agent ends with `Result: incomplete — <reason>` (a required check skipped, something unverified) now shows Incomplete with that reason and counts as failed, instead of Done.
