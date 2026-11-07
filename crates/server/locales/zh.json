@@ -1668,5 +1668,6 @@
   "Home": "主目录",
   "Desktop": "桌面",
   "Downloads": "下载",
-  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "先点“浏览”:所选文件夹会自动填入别名、仓库和分支。"
+  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "先点“浏览”:所选文件夹会自动填入别名、仓库和分支。",
+  "Delete project {alias}?": "删除项目 {alias}?"
 }

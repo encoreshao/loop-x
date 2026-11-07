@@ -1668,5 +1668,6 @@
   "Home": "ホーム",
   "Desktop": "デスクトップ",
   "Downloads": "ダウンロード",
-  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "まず「参照」から:選んだフォルダからエイリアス、リポジトリ、ブランチが入力されます。"
+  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "まず「参照」から:選んだフォルダからエイリアス、リポジトリ、ブランチが入力されます。",
+  "Delete project {alias}?": "プロジェクト{alias}を削除しますか?"
 }

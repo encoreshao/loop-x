@@ -129,6 +129,9 @@ pub fn register(r: &mut Registry) {
     r.post("/settings/loop-projects/:alias/delete", |c| {
         flash_post(c, |c, _| delete_tracked_project(c, c.param("alias")))
     });
+    r.post("/settings/loop-projects/:alias/remove", |c| {
+        flash_post(c, |c, _| remove_connected_project(c, c.param("alias")))
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -2883,7 +2886,12 @@ fn connected_section(ctx: &UiCtx, tracked: &Map<String, Value>, csrf: &str, prov
                 subtitle,
                 tracked: Some(project),
                 settings: connected_settings_form(ctx, alias, project, &options, csrf),
-                delete: String::new(),
+                delete: delete_form(
+                    ctx,
+                    &format!("/settings/loop-projects/{}/remove", pyfmt::quote(alias, "")),
+                    &ctx.tf("Delete project {alias}?", &[("alias", alias)]),
+                    csrf,
+                ),
             },
             csrf,
         ));
@@ -3003,6 +3011,19 @@ fn delete_tracked_project(ctx: &UiCtx, alias: &str) -> (bool, String) {
     obj_mut(&mut config, "projects").shift_remove(alias);
     tryw!(save(ctx, &config, &path));
     (true, name_msg(ctx, "Stopped tracking project {name}", alias))
+}
+
+/// Delete a connected (GitHub...) project: its projects.json entry is the whole project,
+/// so this is the same removal as turning Tracked off, said as a delete.
+fn remove_connected_project(ctx: &UiCtx, alias: &str) -> (bool, String) {
+    let path = projects_path(ctx);
+    let mut config = read_json_or_empty(&path);
+    if !config.get("projects").and_then(|p| p.get(alias)).is_some_and(loopx_core::hosted::is_hosted) {
+        return (false, name_msg(ctx, "Unknown project: {name}", alias));
+    }
+    obj_mut(&mut config, "projects").shift_remove(alias);
+    tryw!(save(ctx, &config, &path));
+    (true, name_msg(ctx, "Deleted project {name}", alias))
 }
 
 #[allow(dead_code)]
@@ -3216,6 +3237,21 @@ mod tests {
         assert_eq!(hub["code_host"]["repo"], "octo/web2");
         assert_eq!(hub["target_branch"], "dev");
         assert_eq!(hub["use_worktree"], false);
+    }
+
+    #[test]
+    fn a_github_card_has_a_delete_button_that_removes_only_connected_projects() {
+        let sb = Sandbox::new();
+        two_sources(&sb);
+        let html = settings_fragment_html(&sb.ctx());
+        assert!(html.contains("action='/settings/loop-projects/hub/remove'"), "{html}");
+        assert!(html.contains("data-confirm=\"Delete project hub?\""), "{html}");
+        // A GitLab project is not removed through the connected route.
+        assert!(!remove_connected_project(&sb.ctx(), "app").0);
+        assert!(sb.saved()["projects"].get("app").is_some());
+        assert_eq!(remove_connected_project(&sb.ctx(), "hub"), (true, "Deleted project hub".to_string()));
+        assert!(sb.saved()["projects"].get("hub").is_none());
+        assert!(!remove_connected_project(&sb.ctx(), "hub").0, "already gone");
     }
 
     fn save_connected(sb: &Sandbox, alias: &str, repo: &str, path: &str, branch: &str, wt: bool) -> (bool, String) {

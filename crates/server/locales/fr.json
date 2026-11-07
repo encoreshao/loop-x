@@ -1668,5 +1668,6 @@
   "Home": "Dossier personnel",
   "Desktop": "Bureau",
   "Downloads": "Téléchargements",
-  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "Commencez par Parcourir : le dossier choisi remplit l'alias, le dépôt et la branche."
+  "Start with Browse: the folder you pick fills in the alias, repository and branch.": "Commencez par Parcourir : le dossier choisi remplit l'alias, le dépôt et la branche.",
+  "Delete project {alias}?": "Supprimer le projet {alias} ?"
 }
