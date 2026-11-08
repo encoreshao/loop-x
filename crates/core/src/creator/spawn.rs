@@ -45,6 +45,9 @@ pub fn spawn_agent(argv: &[String], cwd: &Path, log: &Path) -> Result<i64, Strin
     spawn_agent_in(argv, cwd, log, &job_path(&shell, &current), home.as_deref())
 }
 
+/// How long (milliseconds) the agent's shell may run one command: half an hour.
+const SHELL_TIMEOUT_MS: &str = "1800000";
+
 /// The `PATH` a job runs with: the user's login-shell `PATH` (pyenv shims, nvm,
 /// Homebrew, ~/.local/bin: where yt-dlp, python packages and node live, none of
 /// which a dashboard started by the Mac app or launchd has), then the server's own.
@@ -134,6 +137,10 @@ fn spawn_agent_in(
         .args(&argv[1..])
         .env("PATH", launch_path(path, home))
         .env("LOOPX_JOB_LOG", log)
+        // A 2 to 5 minute video takes ten minutes or more to render, and the agent's shell tool kills a
+        // command after two by default: let one command run for up to half an hour.
+        .env("BASH_DEFAULT_TIMEOUT_MS", SHELL_TIMEOUT_MS)
+        .env("BASH_MAX_TIMEOUT_MS", SHELL_TIMEOUT_MS)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
@@ -1693,6 +1700,27 @@ mod tests {
         wait_dead(pid);
         let text = std::fs::read_to_string(&log).unwrap();
         assert!(text.starts_with("/usr/bin:/bin:/pyenv/shims"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_agents_shell_waits_long_enough_for_a_long_render() {
+        // Claude's shell tool kills a command after 2 minutes unless told otherwise; a 2 to 5 minute video
+        // takes longer than that to render, and the first long showcase died at exactly that point.
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("t.log");
+        let argv: Vec<String> = [
+            "sh",
+            "-c",
+            "printf '%s %s' \"$BASH_DEFAULT_TIMEOUT_MS\" \"$BASH_MAX_TIMEOUT_MS\"",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let pid = spawn_agent_in(&argv, d.path(), &log, "/usr/bin:/bin", None).unwrap();
+        wait_dead(pid);
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.starts_with("1800000 1800000"), "{text}");
     }
 
     #[test]

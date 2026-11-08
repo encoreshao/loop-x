@@ -687,7 +687,11 @@ const SESSION_RULES: &str = "Shell rules for this session: run exactly one simpl
     write `Result: incomplete` only because review_status is still `pending` (that is \
     always left for a human) or because a Chinese transliteration is marked for checking: \
     report incomplete only for a required check that failed or that you could have run \
-    and did not.";
+    and did not. A render of a 2 to 5 minute video takes ten minutes or more and the shell \
+    waits up to 30 minutes for one command, so start it once and wait for it to finish; the \
+    render prints only errors, so a silent run is a running one. If it fails, read the error \
+    it printed and fix that cause; never edit files under video/ and never start a second \
+    render while one is running.";
 
 /// How a Generate run reports whether it really finished; `incomplete_reason` reads it.
 /// What the picked platforms mean for a run: the skill's ids, and which language and credit
@@ -1497,6 +1501,10 @@ mod tests {
         assert!(p.contains("untrusted"));
         assert!(p.contains("```"));
         assert!(p.contains("one simple command per Bash call"), "{p}");
+        assert!(
+            p.contains("start it once and wait") && p.contains("never edit files under video/"),
+            "{p}"
+        );
         // The skill now keeps its workflow in skills/inspire-video/ and asks which platforms
         // to write for; a headless run cannot ask, so the prompt answers both.
         assert!(p.contains("skills/inspire-video/SKILL.md"), "{p}");
