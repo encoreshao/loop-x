@@ -729,7 +729,8 @@ fn skill_layout(platforms: &[String]) -> String {
         "If that SKILL.md only points at skills/inspire-video/SKILL.md, read that file \
          (under ~/.inspire-video) and follow it. Do not ask which platforms to write for: render \
          with `--platform {ids}` (the final render and the cover) and write the publishing copy \
-         for exactly these platforms and no others: {ids}{credit}.",
+         for exactly these platforms and no others: {ids}{credit}. The clip must be 2 to 5 minutes \
+         (120 to 300 seconds) long.",
         ids = n.ids
     )
 }
@@ -846,14 +847,19 @@ fn showcase_rules(platforms: &[String], narration: Option<&Narration>) -> String
 /// recipe to the letter (a text-only hook and call to action, one capture shared by every
 /// beat, small targets) and the site was hard to see; these rules keep the site on screen.
 const WEBSITE_RULES: &str = "Make the website itself the star of the video, so a viewer sees \
-    the real site from the first second to the last. Capture at least three different pages \
-    (the home page and the pages its navigation or brief.json points to, such as services, \
-    work or about) with capture_page.py, one page per command, look at every capture and its \
-    element list, and spread the beats over them: no more than two beats on the same capture. \
+    the real site from the first second to the last. Capture the home page and the pages its \
+    header navigation links to with one command, `python3 scripts/showcase/capture_page.py <url> \
+    --project output/projects/<slug> --nav 8`, look at every capture and its element list, and \
+    give each page its own topic of two to four beats: no more than three beats in a row on the \
+    same capture. \
     The first beat is a camera shot on the home page's hero, never a statement. Use at most one \
     statement beat, as the closing call to action. Aim each camera at a large block a viewer can \
     read on a phone (a heading or a whole section); skip tiny targets such as a button, a logo \
-    or a menu item. Each caption must describe something visible on screen while it plays.";
+    or a menu item. Each caption must describe something visible on screen while it plays. The \
+    video runs 2 to 5 minutes (10 to 40 beats, about 16 to 24 is right for a site with a header \
+    of five or more pages). Write the narration as one continuous talk: the first beat of each \
+    new topic bridges from the previous one (\"Next, ...\", \"That is also why ...\"), neighbouring \
+    beats use different connecting words, and each beat carries the `topic` name of its page.";
 
 /// `key` is the job's key: an https address, or `folder:<name>` for screenshots alone.
 pub fn showcase_prompt(
@@ -1633,8 +1639,11 @@ mod tests {
         let site = showcase_prompt("https://ekohe.com", true, false, &VideoOptions::default());
         assert!(site.contains("the website itself the star"), "{site}");
         assert!(
-            site.contains("at least three different pages")
-                && site.contains("at most one statement beat"),
+            site.contains("--nav 8") && site.contains("at most one statement beat"),
+            "{site}"
+        );
+        assert!(
+            site.contains("2 to 5 minutes") && site.contains("bridges from the previous one"),
             "{site}"
         );
         assert!(site.contains("never a statement"), "{site}");

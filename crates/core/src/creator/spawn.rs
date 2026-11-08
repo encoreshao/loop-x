@@ -13,7 +13,7 @@ pub const MAX_QUERY_CHARS: usize = 500;
 /// Per-job spend caps (`claude --max-budget-usd`). There is no Creator budget
 /// setting; these are conservative fixed limits so a runaway or prompt-injected
 /// job stops on its own. A video render does far more turns than a search.
-pub const GENERATE_BUDGET_USD: f64 = 5.0;
+pub const GENERATE_BUDGET_USD: f64 = 8.0;
 pub const SCOUT_BUDGET_USD: f64 = 2.0;
 
 /// The only built-in tools each job has at all (`--tools`); permission rules then
@@ -920,7 +920,7 @@ mod tests {
     fn generate_argv_allows_bash_but_denies_gitlab_and_slack_tools() {
         let cwd = generate_dir(Path::new(HOME));
         let argv = generate_argv("claude", "THE PROMPT", &fence(&cwd)).unwrap();
-        assert_fenced(&argv, "inspire-video", "Bash,Read,Write,Edit", "5.00");
+        assert_fenced(&argv, "inspire-video", "Bash,Read,Write,Edit", "8.00");
         let allow = allowed(&argv);
         let c = cwd.display();
         let bash: Vec<&str> = allow
