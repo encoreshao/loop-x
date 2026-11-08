@@ -354,3 +354,17 @@
 .cr-menu-sep { height: 1px; margin: 0.25rem 0.35rem; background: var(--md-outline-variant); }
 .cr-menu-sep:last-child, .cr-menu-sep:empty:first-child { display: none; }
 @media (prefers-reduced-motion: no-preference) { .cr-menu[open] .cr-menu-list { animation: cr-fade-in 160ms cubic-bezier(0.32, 0.72, 0, 1); } }
+
+/* Showcase tab and the platform picker (a column layout of its own, not the row form's classes) */
+.cr-showcase-form { display: flex; flex-direction: column; gap: 1rem; margin: 0; }
+.cr-field { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.cr-field .cr-search { flex-wrap: nowrap; }
+.cr-field-row { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.cr-field-row .cr-search-field { flex: 1 1 auto; }
+.cr-field-row .cr-btn { flex: 0 0 auto; height: 2.25rem; }
+.cr-platforms { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cr-chip { position: relative; display: inline-flex; align-items: center; height: 2rem; padding: 0 0.95rem; border-radius: 999px; border: 1px solid var(--md-outline-variant); background: var(--md-surface-container-high); color: var(--md-on-surface); font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: background-color 200ms cubic-bezier(0.32, 0.72, 0, 1), border-color 200ms cubic-bezier(0.32, 0.72, 0, 1), color 200ms cubic-bezier(0.32, 0.72, 0, 1); }
+.cr-chip input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.cr-chip:hover { border-color: var(--md-primary); }
+.cr-chip:has(input:checked) { background: var(--md-primary); border-color: var(--md-primary); color: var(--md-on-primary); }
+.cr-chip:has(input:focus-visible) { outline: 3px solid color-mix(in srgb, var(--md-primary) 55%, transparent); outline-offset: 2px; }

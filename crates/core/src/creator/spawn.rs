@@ -4,6 +4,7 @@
 //! refused rather than started with its full tool access.
 
 use super::jobs::{self, JobKind, JobRecord};
+use super::VideoOptions;
 use std::path::{Path, PathBuf};
 
 /// The longest search request a scout job accepts (the page and chat rely on it).
@@ -432,6 +433,7 @@ pub fn start_generate(
     user_home: &Path,
     url: &str,
     rights_confirmed: bool,
+    options: &VideoOptions,
 ) -> Result<JobRecord, String> {
     let (cli, loopx_home, exe) = (
         crate::ai_cli_config::selected_cli(),
@@ -444,15 +446,18 @@ pub fn start_generate(
         loopx_home: &loopx_home,
         exe: &exe,
     };
-    start_generate_with(jobs_dir, &env, url, rights_confirmed, &spawn_agent)
+    start_generate_with(jobs_dir, &env, url, rights_confirmed, options, &spawn_agent)
 }
 
-/// Start an inspire-showcase job for the website or repository at `url`. Refuses
-/// (creating no job) unless the user confirmed they own it or may make a video about it.
+/// Start an inspire-showcase job for the website or repository at `url`, for the images
+/// in `folder`, or for both. Refuses (creating no job) unless the user confirmed they own
+/// the project or may make a video about it.
 pub fn start_showcase(
     jobs_dir: &Path,
     user_home: &Path,
-    url: &str,
+    url: Option<&str>,
+    folder: Option<&str>,
+    platforms: &[String],
     rights_confirmed: bool,
 ) -> Result<JobRecord, String> {
     let (cli, loopx_home, exe) = (
@@ -466,29 +471,98 @@ pub fn start_showcase(
         loopx_home: &loopx_home,
         exe: &exe,
     };
-    start_showcase_with(jobs_dir, &env, url, rights_confirmed, &spawn_agent)
+    start_showcase_with(
+        jobs_dir,
+        &env,
+        url,
+        folder,
+        platforms,
+        rights_confirmed,
+        &spawn_agent,
+    )
+}
+
+/// A key for a showcase made from screenshots alone: `folder:` and the folder's name.
+fn folder_key(folder: &Path) -> String {
+    let name = folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("screenshots");
+    let clean: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(60)
+        .collect();
+    format!("folder:{clean}")
 }
 
 fn start_showcase_with(
     jobs_dir: &Path,
     env: &JobEnv<'_>,
-    url: &str,
+    url: Option<&str>,
+    folder: Option<&str>,
+    platforms: &[String],
     rights_confirmed: bool,
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
     if !rights_confirmed {
         return Err("confirm you own this project or may make a video about it first".to_string());
     }
-    let url = super::valid_source_url(url)?;
-    let earlier = jobs::latest_finished(jobs_dir, JobKind::Showcase, &url).map(|j| j.id);
-    launch_video(
+    let url = url.map(str::trim).filter(|u| !u.is_empty());
+    let folder = folder.map(str::trim).filter(|f| !f.is_empty());
+    if url.is_none() && folder.is_none() {
+        return Err("give a website or repository link, a screenshots folder, or both".to_string());
+    }
+    let url = url.map(super::valid_source_url).transpose()?;
+    let platforms = super::parse_platforms(platforms)?;
+    let skill = generate_dir(env.user_home);
+    check_installed(&skill, JobKind::Showcase)?;
+    let Some(folder) = folder else {
+        // Link only: a link run before restarts that job, with the platforms now picked.
+        let url = url.unwrap_or_default();
+        let earlier = jobs::latest_finished(jobs_dir, JobKind::Showcase, &url).map(|j| j.id);
+        let options = VideoOptions {
+            platforms,
+            screenshots: None,
+        };
+        return launch_video(
+            jobs_dir,
+            env,
+            JobKind::Showcase,
+            &url,
+            &options,
+            earlier.as_deref(),
+            spawn,
+        );
+    };
+    // Screenshots are copied under the skill folder first: the agent may read nothing else.
+    let folder = PathBuf::from(crate::worktree::expand_home(folder, env.user_home));
+    let staged = super::uploads::stage(&skill, &folder)?;
+    let key = url.clone().unwrap_or_else(|| folder_key(&folder));
+    let options = VideoOptions {
+        platforms,
+        screenshots: Some(staged.clone()),
+    };
+    // New screenshots always make a new video, never a restart of an earlier one.
+    let started = launch_video(
         jobs_dir,
         env,
         JobKind::Showcase,
-        &url,
-        earlier.as_deref(),
+        &key,
+        &options,
+        None,
         spawn,
-    )
+    );
+    if started.is_err() {
+        let _ = std::fs::remove_dir_all(skill.join(&staged));
+    }
+    started
 }
 
 /// Start a video-scout job for `query`.
@@ -512,15 +586,28 @@ fn start_generate_with(
     env: &JobEnv<'_>,
     url: &str,
     rights_confirmed: bool,
+    options: &VideoOptions,
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
     if !rights_confirmed {
         return Err("confirm you hold the rights to use this video first".to_string());
     }
     let url = super::valid_source_url(url)?;
+    let options = VideoOptions {
+        platforms: super::parse_platforms(&options.platforms)?,
+        screenshots: None,
+    };
     // A link run before restarts that job (its files are reused) rather than adding a record.
     let earlier = jobs::latest_finished(jobs_dir, JobKind::Generate, &url).map(|j| j.id);
-    launch_generate(jobs_dir, env, &url, earlier.as_deref(), spawn)
+    launch_video(
+        jobs_dir,
+        env,
+        JobKind::Generate,
+        &url,
+        &options,
+        earlier.as_deref(),
+        spawn,
+    )
 }
 
 /// Run a finished Generate job again from the Jobs list; its earlier work is reused.
@@ -549,18 +636,16 @@ fn retry_generate_with(
     if !job.kind.makes_video() {
         return Err("only a video generation job can be retried".to_string());
     }
-    launch_video(jobs_dir, env, job.kind, &job.key, Some(id), spawn)
-}
-
-/// Start `url`'s Generate run: a new record, or `restart_id`'s record run again.
-fn launch_generate(
-    jobs_dir: &Path,
-    env: &JobEnv<'_>,
-    url: &str,
-    restart_id: Option<&str>,
-    spawn: &SpawnFull<'_>,
-) -> Result<JobRecord, String> {
-    launch_video(jobs_dir, env, JobKind::Generate, url, restart_id, spawn)
+    // The record keeps what the video was made for, so a retry makes the same one.
+    launch_video(
+        jobs_dir,
+        env,
+        job.kind,
+        &job.key,
+        &job.options,
+        Some(id),
+        spawn,
+    )
 }
 
 /// Start a video job (`Generate` or `Showcase`) for `url`: a new record, or
@@ -569,29 +654,19 @@ fn launch_video(
     jobs_dir: &Path,
     env: &JobEnv<'_>,
     kind: JobKind,
-    url: &str,
+    key: &str,
+    options: &VideoOptions,
     restart_id: Option<&str>,
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
     let cwd = generate_dir(env.user_home);
-    if !cwd.is_dir() {
-        return Err(format!(
-            "the inspire-video skill is not installed ({} is missing)",
-            cwd.display()
-        ));
-    }
+    check_installed(&cwd, kind)?;
     let showcase = kind == JobKind::Showcase;
-    if showcase && !cwd.join("skills/inspire-showcase/SKILL.md").is_file() {
-        return Err(format!(
-            "the inspire-showcase skill is not installed ({} is missing); update ~/.inspire-video",
-            cwd.join("skills/inspire-showcase").display()
-        ));
-    }
     let resume = restart_id.is_some();
     let prompt = if showcase {
-        jobs::showcase_prompt(url, true, resume)
+        jobs::showcase_prompt(key, true, resume, options)
     } else {
-        jobs::generate_prompt(url, true, resume)
+        jobs::generate_prompt(key, true, resume, options)
     };
     let fence = Fence {
         cwd: &cwd,
@@ -607,9 +682,26 @@ fn launch_video(
     };
     let run = |log: &Path| spawn(&argv, &cwd, log);
     match restart_id {
-        Some(id) => jobs::restart(jobs_dir, id, &run),
-        None => jobs::start(jobs_dir, kind, url, &run),
+        Some(id) => jobs::restart_with(jobs_dir, id, Some(options), &run),
+        None => jobs::start_with(jobs_dir, kind, key, options, &run),
     }
+}
+
+/// The skill a video job runs is on disk (inspire-showcase ships inside the same clone).
+fn check_installed(skill_dir: &Path, kind: JobKind) -> Result<(), String> {
+    if !skill_dir.is_dir() {
+        return Err(format!(
+            "the inspire-video skill is not installed ({} is missing)",
+            skill_dir.display()
+        ));
+    }
+    if kind == JobKind::Showcase && !skill_dir.join("skills/inspire-showcase/SKILL.md").is_file() {
+        return Err(format!(
+            "the inspire-showcase skill is not installed ({} is missing); update ~/.inspire-video",
+            skill_dir.join("skills/inspire-showcase").display()
+        ));
+    }
+    Ok(())
 }
 
 fn start_scout_with(
@@ -644,6 +736,7 @@ fn start_scout_with(
 
 #[cfg(test)]
 mod tests {
+    use super::super::default_platforms;
     use super::*;
     use std::cell::RefCell;
 
@@ -966,6 +1059,7 @@ mod tests {
             &env("claude", &home),
             "https://example.com/v",
             false,
+            &VideoOptions::default(),
             &recorder(&calls),
         )
         .unwrap_err();
@@ -986,6 +1080,7 @@ mod tests {
             &env("claude", &home),
             "https://example.com/v",
             true,
+            &VideoOptions::default(),
             &recorder(&calls),
         )
         .unwrap();
@@ -996,7 +1091,12 @@ mod tests {
         assert_eq!(argv[0], "claude");
         assert_eq!(
             argv.last().unwrap(),
-            &jobs::generate_prompt("https://example.com/v", true, false)
+            &jobs::generate_prompt(
+                "https://example.com/v",
+                true,
+                false,
+                &VideoOptions::default()
+            )
         );
         assert!(denied(argv).contains(&format!("Bash({EXE}*)").as_str()));
         assert_eq!(cwd, &generate_dir(&home));
@@ -1020,7 +1120,9 @@ mod tests {
         let rec = start_showcase_with(
             &jobs_dir,
             &env("claude", &home),
-            "https://example.com/app",
+            Some("https://example.com/app"),
+            None,
+            &default_platforms(),
             true,
             &recorder(&calls),
         )
@@ -1030,7 +1132,12 @@ mod tests {
         let (argv, cwd, _) = &calls[0];
         assert_eq!(
             argv.last().unwrap(),
-            &jobs::showcase_prompt("https://example.com/app", true, false)
+            &jobs::showcase_prompt(
+                "https://example.com/app",
+                true,
+                false,
+                &VideoOptions::default()
+            )
         );
         assert_eq!(cwd, &generate_dir(&home));
         let joined = argv.join(" ");
@@ -1080,7 +1187,9 @@ mod tests {
             start_showcase_with(
                 &jobs_dir,
                 &env("claude", &home),
-                url,
+                Some(url),
+                None,
+                &default_platforms(),
                 rights,
                 &recorder(&calls),
             )
@@ -1095,6 +1204,204 @@ mod tests {
         assert!(jobs::list_jobs(&jobs_dir).is_empty());
     }
 
+    fn shots_folder(d: &Path) -> PathBuf {
+        let f = d.join("My Shots");
+        std::fs::create_dir_all(&f).unwrap();
+        std::fs::write(f.join("home.png"), b"x").unwrap();
+        std::fs::write(f.join("pricing.jpg"), b"x").unwrap();
+        f
+    }
+
+    #[test]
+    fn a_showcase_from_screenshots_stages_them_under_the_skill_and_keys_the_job_by_folder_name() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_showcase(&home);
+        let folder = shots_folder(d.path());
+        let calls = Calls::default();
+        let rec = start_showcase_with(
+            &jobs_dir,
+            &env("claude", &home),
+            None,
+            Some(folder.to_str().unwrap()),
+            &["linkedin".to_string(), "wechat".to_string()],
+            true,
+            &recorder(&calls),
+        )
+        .unwrap();
+        assert_eq!(rec.key, "folder:My-Shots");
+        assert_eq!(rec.options.platforms, ["wechat", "linkedin"]);
+        let staged = rec.options.screenshots.clone().unwrap();
+        assert!(staged.starts_with("output/uploads/"), "{staged}");
+        assert!(generate_dir(&home)
+            .join(&staged)
+            .join("01-home.png")
+            .is_file());
+        let prompt = calls.borrow()[0].0.last().unwrap().clone();
+        assert!(
+            prompt.contains(&format!("ingest.py {staged} --screenshots {staged}")),
+            "{prompt}"
+        );
+        // The agent is never given the folder's own location.
+        assert!(!prompt.contains(folder.to_str().unwrap()), "{prompt}");
+        assert!(
+            prompt.contains("\"wechat\": {...}, \"linkedin\": {...}"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_link_and_screenshots_together_make_a_new_job_each_time() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_showcase(&home);
+        let folder = shots_folder(d.path());
+        let calls = Calls::default();
+        let go = |url: Option<&str>, folder: Option<&str>| {
+            start_showcase_with(
+                &jobs_dir,
+                &env("claude", &home),
+                url,
+                folder,
+                &default_platforms(),
+                true,
+                &recorder(&calls),
+            )
+        };
+        let first = go(
+            Some("https://example.com/app"),
+            Some(folder.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(first.key, "https://example.com/app");
+        assert!(first.options.screenshots.is_some());
+        // Finish it; the same link with other screenshots must not restart that record.
+        std::fs::write(&first.log_path, "x\nloopx-exit=0\n").unwrap();
+        let mut done = jobs::get(&jobs_dir, &first.id).unwrap();
+        done.state = "done".into();
+        std::fs::write(
+            jobs_dir.join(format!("{}.json", first.id)),
+            serde_json::json!({"id": done.id, "kind": "showcase", "key": done.key,
+                               "state": "done", "pid": null, "started_at": done.started_at})
+            .to_string(),
+        )
+        .unwrap();
+        let second = go(
+            Some("https://example.com/app"),
+            Some(folder.to_str().unwrap()),
+        )
+        .unwrap();
+        assert_ne!(second.id, first.id);
+        assert_ne!(second.options.screenshots, first.options.screenshots);
+    }
+
+    #[test]
+    fn a_showcase_needs_a_link_or_a_folder_and_a_usable_folder_and_cleans_up_when_it_cannot_start()
+    {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_showcase(&home);
+        let calls = Calls::default();
+        let go = |url: Option<&str>, folder: Option<&str>, cli: &str, platforms: &[String]| {
+            start_showcase_with(
+                &jobs_dir,
+                &env(cli, &home),
+                url,
+                folder,
+                platforms,
+                true,
+                &recorder(&calls),
+            )
+        };
+        let p = default_platforms();
+        assert!(go(None, None, "claude", &p)
+            .unwrap_err()
+            .contains("or both"));
+        assert!(go(Some("  "), Some(" "), "claude", &p).is_err());
+        let missing = d.path().join("nope");
+        assert!(go(None, Some(missing.to_str().unwrap()), "claude", &p)
+            .unwrap_err()
+            .contains("does not exist"));
+        let empty = d.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(go(None, Some(empty.to_str().unwrap()), "claude", &p)
+            .unwrap_err()
+            .contains("no png"));
+        let folder = shots_folder(d.path());
+        assert!(go(None, Some(folder.to_str().unwrap()), "claude", &[])
+            .unwrap_err()
+            .contains("at least one"));
+        // An unsupported CLI is refused after staging: the copy is removed again.
+        assert!(go(None, Some(folder.to_str().unwrap()), "gemini", &p).is_err());
+        let uploads = generate_dir(&home).join("output/uploads");
+        assert!(!uploads.exists() || uploads.read_dir().unwrap().next().is_none());
+        assert!(calls.borrow().is_empty());
+        assert!(jobs::list_jobs(&jobs_dir).is_empty());
+    }
+
+    #[test]
+    fn generating_with_picked_platforms_keeps_them_and_a_retry_makes_the_same_video() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        let calls = Calls::default();
+        let opts = VideoOptions {
+            platforms: vec!["douyin".into(), "facebook".into()],
+            screenshots: None,
+        };
+        let rec = start_generate_with(
+            &jobs_dir,
+            &env("claude", &home),
+            "https://example.com/v",
+            true,
+            &opts,
+            &recorder(&calls),
+        )
+        .unwrap();
+        assert_eq!(rec.options.platforms, ["douyin", "facebook"]);
+        let first = calls.borrow()[0].0.last().unwrap().clone();
+        assert!(
+            first.contains("--platform douyin,facebook") && !first.contains("wechat_channels"),
+            "{first}"
+        );
+        std::fs::write(&rec.log_path, "x\nloopx-exit=0\n").unwrap();
+        std::fs::write(
+            jobs_dir.join(format!("{}.json", rec.id)),
+            serde_json::json!({"id": rec.id, "kind": "generate", "key": rec.key, "state": "failed",
+                               "pid": null, "started_at": rec.started_at,
+                               "platforms": ["douyin", "facebook"]})
+            .to_string(),
+        )
+        .unwrap();
+        let again =
+            retry_generate_with(&jobs_dir, &env("claude", &home), &rec.id, &recorder(&calls))
+                .unwrap();
+        assert_eq!(again.options.platforms, ["douyin", "facebook"]);
+        let retry = calls.borrow()[1].0.last().unwrap().clone();
+        assert!(retry.contains("--platform douyin,facebook"), "{retry}");
+        // An empty or unknown pick is refused before any job.
+        let none = VideoOptions {
+            platforms: vec![],
+            screenshots: None,
+        };
+        assert!(start_generate_with(
+            &jobs_dir,
+            &env("claude", &home),
+            "https://example.com/w",
+            true,
+            &none,
+            &recorder(&calls)
+        )
+        .is_err());
+    }
+
     #[test]
     fn start_generate_needs_the_skill_installed() {
         let d = tempfile::tempdir().unwrap();
@@ -1105,6 +1412,7 @@ mod tests {
             &env("claude", d.path()),
             "https://example.com/v",
             true,
+            &VideoOptions::default(),
             &recorder(&calls),
         )
         .unwrap_err();
@@ -1147,11 +1455,20 @@ mod tests {
             &env("gemini", &home),
             "https://x/v",
             true,
+            &VideoOptions::default(),
             &spawn
         )
         .is_err());
         assert!(start_scout_with(&jobs_dir, &env("claude", &home), "  ", &spawn).is_err());
-        assert!(start_generate_with(&jobs_dir, &env("claude", &home), " ", true, &spawn).is_err());
+        assert!(start_generate_with(
+            &jobs_dir,
+            &env("claude", &home),
+            " ",
+            true,
+            &VideoOptions::default(),
+            &spawn
+        )
+        .is_err());
         assert!(calls.borrow().is_empty());
         assert!(jobs::list_jobs(&jobs_dir).is_empty());
     }
@@ -1175,6 +1492,7 @@ mod tests {
                 &env("claude", &home),
                 url,
                 true,
+                &VideoOptions::default(),
                 &recorder(&calls),
             )
             .unwrap_err();
@@ -1188,6 +1506,7 @@ mod tests {
             &env("claude", &home),
             " HTTPS://Example.com/v ",
             true,
+            &VideoOptions::default(),
             &recorder(&calls),
         )
         .unwrap();
@@ -1447,6 +1766,7 @@ mod tests {
             &env("claude", &home),
             "https://example.com/v",
             true,
+            &VideoOptions::default(),
             &recorder(&calls),
         )
         .unwrap();
@@ -1455,7 +1775,12 @@ mod tests {
         let calls = calls.borrow();
         assert_eq!(
             calls[0].0.last().unwrap(),
-            &jobs::generate_prompt("https://example.com/v", true, true)
+            &jobs::generate_prompt(
+                "https://example.com/v",
+                true,
+                true,
+                &VideoOptions::default()
+            )
         );
         assert_eq!(std::fs::read_to_string(&rec.log_path).unwrap(), "");
     }

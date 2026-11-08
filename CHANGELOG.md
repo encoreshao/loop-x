@@ -13,9 +13,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
-- Creator → Discover: **Make a showcase video** turns a website or a GitHub or GitLab repository into a short bilingual promo with the new inspire-showcase skill. It appears under Videos like any other video; its jobs show up in Jobs with their own stages, Retry and Slack/Mac notifications.
-- Creator → Videos: publish text for **LinkedIn** and **Facebook** (English) next to WeChat and Douyin, each with Copy, Share and a Published mark. Generate now asks the skill for all four platforms and its 4:5 feed render.
-- Settings → Skills lists the inspire-showcase skill with its install steps.
+- Creator → **Showcase** tab: make a promo video from a website or repository link, from a folder of your own screenshots (pick it with Browse; up to 20 PNG/JPG/WebP images, copied for the job), or from both. It appears under Videos like any other video; its jobs show up in Jobs with their own stages, Retry and Slack/Mac notifications.
+- Creator: choose which platforms a video is made for, on the Showcase form and on Generate from a link. WeChat and Douyin are ticked by default, LinkedIn and Facebook are not; the choice is kept with the job, so Retry makes the same video. LinkedIn and Facebook also get a 4:5 render and English text.
+- Creator → Videos: publish text for **LinkedIn** and **Facebook** (English) next to WeChat and Douyin, each with Copy, Share and a Published mark.- Settings → Skills lists the inspire-showcase skill with its install steps.
 
 ### Changed
 

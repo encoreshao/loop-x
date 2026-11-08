@@ -7,7 +7,63 @@ pub mod progress;
 pub mod scout;
 pub mod spawn;
 pub mod state;
+pub mod uploads;
 pub mod videos;
+
+/// The platforms a video can carry publish text for: the page's key, the skill's id
+/// (`config/platforms.yaml`) and whether the copy is English.
+pub const PLATFORMS: [(&str, &str, bool); 4] = [
+    ("wechat", "wechat_channels", false),
+    ("douyin", "douyin", false),
+    ("linkedin", "linkedin", true),
+    ("facebook", "facebook", true),
+];
+
+/// What a new video job is made for unless the user picks: the two Chinese platforms.
+pub fn default_platforms() -> Vec<String> {
+    vec!["wechat".to_string(), "douyin".to_string()]
+}
+
+/// The picked platform keys, de-duplicated and in the page's order. An unknown key or an
+/// empty pick is an error.
+pub fn parse_platforms<S: AsRef<str>>(picked: &[S]) -> Result<Vec<String>, String> {
+    if let Some(bad) = picked
+        .iter()
+        .map(AsRef::as_ref)
+        .find(|p| !PLATFORMS.iter().any(|(k, _, _)| k == p))
+    {
+        return Err(format!("unknown platform: {bad}"));
+    }
+    let chosen: Vec<String> = PLATFORMS
+        .iter()
+        .filter(|(k, _, _)| picked.iter().any(|p| p.as_ref() == *k))
+        .map(|(k, _, _)| k.to_string())
+        .collect();
+    if chosen.is_empty() {
+        return Err("pick at least one platform".to_string());
+    }
+    Ok(chosen)
+}
+
+/// Choices that ride with a video job and are kept in its record, so a retry makes the
+/// same video.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoOptions {
+    /// Platform keys (see [`PLATFORMS`]) the video gets publish text for.
+    pub platforms: Vec<String>,
+    /// Showcase only: the user's screenshots, staged under the skill's `output/uploads/`
+    /// (a path relative to the skill directory; see [`uploads`]).
+    pub screenshots: Option<String>,
+}
+
+impl Default for VideoOptions {
+    fn default() -> Self {
+        VideoOptions {
+            platforms: default_platforms(),
+            screenshots: None,
+        }
+    }
+}
 
 /// The longest source URL a Creator job accepts.
 pub const MAX_SOURCE_URL_CHARS: usize = 2048;
@@ -166,6 +222,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn platforms_are_parsed_in_the_pages_order_without_duplicates_and_never_empty() {
+        assert_eq!(default_platforms(), ["wechat", "douyin"]);
+        assert_eq!(
+            parse_platforms(&["facebook", "wechat", "facebook"]).unwrap(),
+            ["wechat", "facebook"]
+        );
+        assert!(parse_platforms::<&str>(&[])
+            .unwrap_err()
+            .contains("at least one"));
+        assert!(parse_platforms(&["wechat", "tiktok"])
+            .unwrap_err()
+            .contains("tiktok"));
+        assert_eq!(VideoOptions::default().platforms, default_platforms());
+    }
 
     #[test]
     fn valid_source_url_accepts_plain_https_and_normalizes() {

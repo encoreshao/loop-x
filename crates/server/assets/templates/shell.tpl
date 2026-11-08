@@ -1430,7 +1430,9 @@
         // A new project's alias starts as the folder's name (only while it is still empty).
         var alias = form.querySelector('input[name="alias"][type="text"]');
         if (alias && !alias.value) fill(form, 'alias', res.path.split('/').filter(Boolean).pop().replace(/[^A-Za-z0-9._-]+/g, '-'));
-        if (res.message) toast(res.message, false);
+        // The "no origin remote" note is about a repository field; a form without one (the
+        // Showcase screenshots folder) has nothing to explain.
+        if (res.message && form.querySelector('[name="repo"]')) toast(res.message, false);
         picker.close();
       })
       .catch(function() { toast(T.failed, false); });

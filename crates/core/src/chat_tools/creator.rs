@@ -46,7 +46,13 @@ pub fn real_spawn() -> Arc<CreatorSpawn> {
             CreatorJob::Generate {
                 url,
                 rights_confirmed,
-            } => spawn::start_generate(jobs_dir, user_home, url, *rights_confirmed),
+            } => spawn::start_generate(
+                jobs_dir,
+                user_home,
+                url,
+                *rights_confirmed,
+                &crate::creator::VideoOptions::default(),
+            ),
         },
     )
 }
@@ -393,6 +399,7 @@ mod tests {
                         pid: Some(1),
                         started_at: "2026-11-05T00:00:00Z".into(),
                         log_path: jobs.join("x.log"),
+                        options: Default::default(),
                     })
                 });
             self.env.clone().with_creator_spawn(Some(spawn))

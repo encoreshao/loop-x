@@ -18,13 +18,15 @@ use loopx_core::creator::jobs::{self, JobKind, JobRecord};
 use loopx_core::creator::scout::{self, ScoutRun, Source};
 use loopx_core::creator::spawn;
 use loopx_core::creator::state::{self as cstate, CreatorState};
-use loopx_core::creator::{normalize_source_url, valid_source_url};
+use loopx_core::creator::{
+    default_platforms, normalize_source_url, parse_platforms, valid_source_url, VideoOptions,
+};
 use loopx_core::creator::videos::{self, PublishCopy, VideoProject};
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-const TABS: [&str; 4] = ["discover", "library", "videos", "jobs"];
+const TABS: [&str; 5] = ["discover", "library", "showcase", "videos", "jobs"];
 /// A GET without `Range` larger than this is refused (players always send ranges).
 const MAX_FULL_BYTES: u64 = 64 * 1024 * 1024;
 /// The most one range response carries; an open or larger range is cut to this.
@@ -122,6 +124,10 @@ fn generate(ctx: &UiCtx) -> UiResponse {
         }
         Err(e) => return fail(ctx.tf("Nothing started: {detail}", &[("detail", &e)])),
     };
+    let platforms = match picked_platforms(ctx, &form) {
+        Ok(p) => p,
+        Err(m) => return fail(m),
+    };
     let dir = jobs_dir(ctx);
     if jobs::running(&jobs::list_jobs(&dir), JobKind::Generate, &url).is_some() {
         return fail(ctx.t("A job for this video is already running"));
@@ -129,7 +135,11 @@ fn generate(ctx: &UiCtx) -> UiResponse {
     if !ctx.state.spawn_processes {
         return fail(ctx.t("This server does not start agent jobs"));
     }
-    match spawn::start_generate(&dir, &ctx.state.user_home, &url, true) {
+    let options = VideoOptions {
+        platforms,
+        screenshots: None,
+    };
+    match spawn::start_generate(&dir, &ctx.state.user_home, &url, true, &options) {
         Ok(_) => UiResponse::flash_redirect(
             true,
             &ctx.t("Started generating the video. It appears under Videos when it is ready."),
@@ -139,32 +149,68 @@ fn generate(ctx: &UiCtx) -> UiResponse {
     }
 }
 
-/// Start an inspire-showcase job: a promo for the website or repository at the pasted link.
+/// The platforms a video form picked. A form that shows the picker sends `platform_choice`,
+/// so an empty pick is an error; a form without it (a source row's Generate button) gets the
+/// default.
+fn picked_platforms(ctx: &UiCtx, form: &pyfmt::Form) -> Result<Vec<String>, String> {
+    if form.first("platform_choice") != Some("1") {
+        return Ok(default_platforms());
+    }
+    parse_platforms(form.all("platforms"))
+        .map_err(|_| ctx.t("Nothing started: pick at least one platform"))
+}
+
+/// Start an inspire-showcase job: a promo for a website or repository link, for the images
+/// in a folder, or for both.
 fn showcase(ctx: &UiCtx) -> UiResponse {
     let form = ctx.form();
-    let to = back("videos");
-    let fail = |m: String| UiResponse::flash_redirect(false, &m, &back("discover"));
+    let fail = |m: String| UiResponse::flash_redirect(false, &m, &back("showcase"));
     if form.first("rights") != Some("1") {
         return fail(ctx.t(
             "Nothing started: tick \"I own this project or have permission to make a video about it\" first",
         ));
     }
-    let url = match valid_source_url(form.first("url").unwrap_or("")) {
-        Ok(u) => u,
-        Err(e) => return fail(ctx.tf("Nothing started: {detail}", &[("detail", &e)])),
+    let link = form.first("url").unwrap_or("").trim().to_string();
+    let folder = form.first("local_path").unwrap_or("").trim().to_string();
+    if link.is_empty() && folder.is_empty() {
+        return fail(ctx.t(
+            "Nothing started: give a website or repository link, a screenshots folder, or both",
+        ));
+    }
+    let url = if link.is_empty() {
+        None
+    } else {
+        match valid_source_url(&link) {
+            Ok(u) => Some(u),
+            Err(e) => return fail(ctx.tf("Nothing started: {detail}", &[("detail", &e)])),
+        }
+    };
+    let platforms = match picked_platforms(ctx, &form) {
+        Ok(p) => p,
+        Err(m) => return fail(m),
     };
     let dir = jobs_dir(ctx);
-    if jobs::running(&jobs::list_jobs(&dir), JobKind::Showcase, &url).is_some() {
-        return fail(ctx.t("A job for this video is already running"));
+    if let Some(u) = &url {
+        if jobs::running(&jobs::list_jobs(&dir), JobKind::Showcase, u).is_some() {
+            return fail(ctx.t("A job for this video is already running"));
+        }
     }
     if !ctx.state.spawn_processes {
         return fail(ctx.t("This server does not start agent jobs"));
     }
-    match spawn::start_showcase(&dir, &ctx.state.user_home, &url, true) {
+    let folder = (!folder.is_empty()).then_some(folder);
+    match spawn::start_showcase(
+        &dir,
+        &ctx.state.user_home,
+        url.as_deref(),
+        folder.as_deref(),
+        &platforms,
+        true,
+    ) {
         Ok(_) => UiResponse::flash_redirect(
             true,
             &ctx.t("Started the showcase video. It appears under Videos when it is ready."),
-            &to,
+            &back("videos"),
         ),
         Err(e) => fail(ctx.tf("Could not start the job: {detail}", &[("detail", &e)])),
     }
@@ -740,6 +786,7 @@ fn tabs_html(ctx: &UiCtx, active: &str) -> String {
     let labels = [
         ("discover", ctx.t("Discover")),
         ("library", ctx.t("Library")),
+        ("showcase", ctx.t("Showcase")),
         ("videos", ctx.t("Videos")),
         ("jobs", ctx.t("Jobs")),
     ];
@@ -1464,7 +1511,7 @@ fn link_panel(ctx: &UiCtx) -> String {
         &format!(
             "<div class='cr-surface'>{}<form method='post' action='/creator/generate' class='cr-link-form'>{}\
 <input type='hidden' name='tab' value='discover'>\
-<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>\
+<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>{}\
 <div class='cr-item-actions cr-link-actions'>\
 <label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
 <span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
@@ -1476,6 +1523,7 @@ fn link_panel(ctx: &UiCtx) -> String {
             icons::icon("link"),
             h(&ctx.t("Paste a video link, for example https://www.youtube.com/watch?v=...")),
             h(&ctx.t("Video link")),
+            platform_picker(ctx),
             h(&ctx.t("I own this video or have permission to reuse it")),
             icons::icon("video"),
             h(&ctx.t("Generate"))
@@ -1483,29 +1531,74 @@ fn link_panel(ctx: &UiCtx) -> String {
     )
 }
 
-/// Make a promo from a website or repository link (the inspire-showcase skill).
-fn showcase_panel(ctx: &UiCtx) -> String {
-    section(
-        &ctx.t("Make a showcase video"),
-        "",
-        &format!(
-            "<div class='cr-surface'>{}<form method='post' action='/creator/showcase' class='cr-link-form'>{}\
-<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>\
+/// The platforms a video is made for: WeChat and Douyin checked, the rest not.
+fn platform_picker(ctx: &UiCtx) -> String {
+    let chips: String = PLATFORMS
+        .iter()
+        .map(|(key, label)| {
+            format!(
+                "<label class='cr-chip'><input type='checkbox' name='platforms' value='{key}'{}>\
+<span>{}</span></label>",
+                if default_platforms().iter().any(|d| d == key) { " checked" } else { "" },
+                h(label)
+            )
+        })
+        .collect();
+    format!(
+        "<div class='cr-field'><span class='cr-label'>{}</span>\
+<div class='cr-platforms' role='group' aria-label=\"{}\">{chips}</div>\
+<input type='hidden' name='platform_choice' value='1'>{}</div>",
+        h(&ctx.t("Publish to")),
+        h(&ctx.t("Platforms")),
+        subtitle(&ctx.t(
+            "Publish text is written for the platforms you tick. LinkedIn and Facebook also get a 4:5 video and English text."
+        )),
+    )
+}
+
+/// Make a promo video from a website or repository link, from a folder of screenshots, or
+/// from both (the inspire-showcase skill).
+fn showcase_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
+    let form = format!(
+        "<div class='cr-surface'>{}<form method='post' action='/creator/showcase' class='cr-showcase-form'>{}\
+<div class='cr-field'><label class='cr-label' for='cr-showcase-url'>{}</label>\
+<div class='cr-search'><div class='cr-search-field'>{}<input type='text' id='cr-showcase-url' name='url' inputmode='url' autocomplete='off' spellcheck='false' placeholder=\"{}\"></div></div></div>\
+<div class='cr-field'><label class='cr-label' for='cr-showcase-folder'>{}</label>\
+<div class='cr-field-row'><div class='cr-search-field'>{}<input type='text' id='cr-showcase-folder' name='local_path' autocomplete='off' spellcheck='false' placeholder=\"{}\"></div>\
+<button type='button' class='cr-btn cr-btn-plain' data-pick-folder>{} {}</button></div>\
+{}</div>{}\
 <div class='cr-item-actions cr-link-actions'>\
 <label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
 <span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
 <button type='submit' class='cr-btn cr-btn-primary cr-generate'>{} {}</button></div></form></div>",
-            subtitle(&ctx.t(
-                "Turns a website or a GitHub or GitLab repository into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and screenshots only."
-            )),
-            ctx.csrf_input(),
-            icons::icon("link"),
-            h(&ctx.t("Paste a website or repository link, for example https://example.com")),
-            h(&ctx.t("Website or repository link")),
-            h(&ctx.t("I own this project or have permission to make a video about it")),
-            icons::icon("video"),
-            h(&ctx.t("Make showcase"))
-        ),
+        subtitle(&ctx.t(
+            "Turns a website or a GitHub or GitLab repository, your own screenshots, or both into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and images only."
+        )),
+        ctx.csrf_input(),
+        h(&ctx.t("Website or repository link")),
+        icons::icon("link"),
+        h(&ctx.t("https://example.com (optional)")),
+        h(&ctx.t("Screenshots folder")),
+        icons::icon("folder"),
+        h(&ctx.t("A folder with a few images (optional)")),
+        icons::icon("folder"),
+        h(&ctx.t("Browse")),
+        subtitle(&ctx.t(
+            "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images."
+        )),
+        platform_picker(ctx),
+        h(&ctx.t("I own this project or have permission to make a video about it")),
+        icons::icon("video"),
+        h(&ctx.t("Make showcase"))
+    );
+    let running: Vec<&JobRecord> = jobs
+        .iter()
+        .filter(|j| j.kind == JobKind::Showcase && j.state == "running")
+        .collect();
+    format!(
+        "{}{}",
+        section(&ctx.t("Make a showcase video"), "", &form),
+        running_list(ctx, &ctx.t("Running jobs"), &running, "showcase")
     )
 }
 
@@ -1557,7 +1650,7 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         )
         .replacen("</form></div>", &format!("</form>{}</div>", latest_topic(ctx, jobs, runs.first())), 1),
     );
-    let link = format!("{}{}", link_panel(ctx), showcase_panel(ctx));
+    let link = link_panel(ctx);
     let running: Vec<&JobRecord> = jobs
         .iter()
         .filter(|j| j.kind == JobKind::Scout && j.state == "running")
@@ -2494,6 +2587,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let (flash, ok) = ctx.flash();
     let jobs = settle(ctx, jobs::list_jobs(&jobs_dir(ctx)));
     let body = match tab {
+        "showcase" => showcase_tab(ctx, &jobs),
         "videos" => videos_tab(ctx, &jobs),
         "jobs" => jobs_tab(ctx, &jobs),
         "library" => library_tab(ctx, &jobs),
@@ -2800,30 +2894,68 @@ mod tests {
     }
 
     #[test]
-    fn the_showcase_panel_is_on_discover_and_its_route_checks_rights_url_and_spawning() {
+    fn the_showcase_tab_takes_a_link_and_or_a_folder_and_its_route_checks_everything_first() {
         let fx = Fx::new();
-        let body = fx.get("/creator").body_text();
+        let body = fx.get("/creator?tab=showcase").body_text();
         assert!(body.contains("action='/creator/showcase'"), "{body}");
-        assert!(body.contains("Make a showcase video"), "{body}");
-        let (loc, ok) = flash_of(&fx.post(
-            "/creator/showcase",
-            "csrf_token=tok&url=https%3A%2F%2Fexample.com",
-        ));
+        assert!(body.contains("name='local_path'") && body.contains("data-pick-folder"), "{body}");
+        assert!(body.contains("name='url'") && !body.contains("name='url' inputmode='url' autocomplete='off' spellcheck='false' required"), "{body}");
+        // The old home of the panel no longer has it.
+        assert!(!fx.get("/creator").body_text().contains("action='/creator/showcase'"));
+        let post = |b: &str| flash_of(&fx.post("/creator/showcase", &format!("csrf_token=tok&{b}")));
+        let (loc, ok) = post("url=https%3A%2F%2Fexample.com");
         assert_eq!(ok, "0");
-        assert!(loc.starts_with("/creator?tab=discover&flash="), "{loc}");
-        let (_, ok) = flash_of(&fx.post(
-            "/creator/showcase",
-            "csrf_token=tok&rights=1&url=http%3A%2F%2Fexample.com",
-        ));
+        assert!(loc.starts_with("/creator?tab=showcase&flash="), "{loc}");
+        let (loc, _) = post("rights=1");
+        assert!(loc.contains("or%20both"), "{loc}");
+        let (_, ok) = post("rights=1&url=http%3A%2F%2Fexample.com");
         assert_eq!(ok, "0");
+        let (loc, _) = post("rights=1&url=https%3A%2F%2Fexample.com&platform_choice=1");
+        assert!(loc.contains("at%20least%20one%20platform"), "{loc}");
         // This test server does not spawn agents: refused, no job recorded.
-        let (loc, ok) = flash_of(&fx.post(
-            "/creator/showcase",
-            "csrf_token=tok&rights=1&url=https%3A%2F%2Fexample.com",
-        ));
+        let (loc, ok) = post("rights=1&url=https%3A%2F%2Fexample.com&platform_choice=1&platforms=wechat");
         assert_eq!(ok, "0");
         assert!(loc.contains("does%20not%20start"), "{loc}");
         assert_eq!(fx.job_files(), 0);
+    }
+
+    #[test]
+    fn video_forms_offer_the_platforms_with_wechat_and_douyin_ticked() {
+        let fx = Fx::new();
+        for url in ["/creator?tab=showcase", "/creator"] {
+            let body = fx.get(url).body_text();
+            for (key, label, on) in [
+                ("wechat", "WeChat", true),
+                ("douyin", "Douyin", true),
+                ("linkedin", "LinkedIn", false),
+                ("facebook", "Facebook", false),
+            ] {
+                let chip = format!(
+                    "<input type='checkbox' name='platforms' value='{key}'{}><span>{label}</span>",
+                    if on { " checked" } else { "" }
+                );
+                assert!(body.contains(&chip), "{url} {key}: {body}");
+            }
+            assert!(body.contains("name='platform_choice' value='1'"), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_generate_form_with_no_platform_ticked_is_refused_and_one_without_the_picker_uses_the_default() {
+        let fx = Fx::new();
+        let (loc, ok) = flash_of(&fx.post(
+            "/creator/generate",
+            "csrf_token=tok&rights=1&url=https%3A%2F%2Fexample.com%2Fv&platform_choice=1",
+        ));
+        assert_eq!(ok, "0");
+        assert!(loc.contains("at%20least%20one%20platform"), "{loc}");
+        // A source row's Generate button has no picker: past the platform check, only the
+        // spawn refusal of this test server remains.
+        let (loc, _) = flash_of(&fx.post(
+            "/creator/generate",
+            "csrf_token=tok&rights=1&url=https%3A%2F%2Fexample.com%2Fv",
+        ));
+        assert!(loc.contains("does%20not%20start"), "{loc}");
     }
 
     #[test]

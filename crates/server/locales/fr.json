@@ -1681,10 +1681,18 @@
   "Preview": "Aperçu",
   "Render and review": "Rendu et relecture",
   "Make a showcase video": "Créer une vidéo de présentation",
-  "Turns a website or a GitHub or GitLab repository into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and screenshots only.": "Transforme un site web ou un dépôt GitHub ou GitLab en court clip promotionnel bilingue : une caméra qui survole la vraie page, ou une visite encadrée. Seuls les textes et captures du projet sont utilisés.",
-  "Paste a website or repository link, for example https://example.com": "Collez un lien de site ou de dépôt, par exemple https://example.com",
   "Website or repository link": "Lien du site ou du dépôt",
   "I own this project or have permission to make a video about it": "Je possède ce projet ou j’ai l’autorisation d’en faire une vidéo",
   "Make showcase": "Créer la présentation",
-  "The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos": "Le dépôt inspire-video (il contient les deux skills), plus Chrome et Playwright pour les promos de sites web"
+  "The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos": "Le dépôt inspire-video (il contient les deux skills), plus Chrome et Playwright pour les promos de sites web",
+  "Nothing started: pick at least one platform": "Rien n’a démarré : choisissez au moins une plateforme",
+  "Nothing started: give a website or repository link, a screenshots folder, or both": "Rien n’a démarré : indiquez un lien de site ou de dépôt, un dossier de captures, ou les deux",
+  "Publish to": "Publier sur",
+  "Platforms": "Plateformes",
+  "Publish text is written for the platforms you tick. LinkedIn and Facebook also get a 4:5 video and English text.": "Le texte de publication est rédigé pour les plateformes cochées. LinkedIn et Facebook reçoivent aussi une vidéo 4:5 et un texte en anglais.",
+  "Turns a website or a GitHub or GitLab repository, your own screenshots, or both into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and images only.": "Transforme un site web, un dépôt GitHub ou GitLab, vos propres captures d’écran, ou une combinaison, en court clip promotionnel bilingue : une caméra qui survole la vraie page, ou une visite encadrée. Seuls les textes et images du projet sont utilisés.",
+  "https://example.com (optional)": "https://example.com (facultatif)",
+  "Screenshots folder": "Dossier de captures d’écran",
+  "A folder with a few images (optional)": "Un dossier avec quelques images (facultatif)",
+  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "Indiquez un lien, un dossier ou les deux. Les images sont copiées pour la tâche ; PNG, JPG et WebP, 20 images au maximum."
 }

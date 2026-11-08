@@ -1681,10 +1681,18 @@
   "Preview": "预览",
   "Render and review": "渲染与审核",
   "Make a showcase video": "制作展示视频",
-  "Turns a website or a GitHub or GitLab repository into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and screenshots only.": "把网站或 GitHub、GitLab 仓库做成简短的中英双语宣传视频：镜头飞越真实页面，或是带边框的演示。只使用项目自身的文字和截图。",
-  "Paste a website or repository link, for example https://example.com": "粘贴网站或仓库链接，例如 https://example.com",
   "Website or repository link": "网站或仓库链接",
   "I own this project or have permission to make a video about it": "我拥有此项目或已获准为其制作视频",
   "Make showcase": "制作展示视频",
-  "The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos": "inspire-video 仓库（包含两个技能），以及用于网站宣传片的 Chrome 和 Playwright"
+  "The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos": "inspire-video 仓库（包含两个技能），以及用于网站宣传片的 Chrome 和 Playwright",
+  "Nothing started: pick at least one platform": "未开始：请至少选择一个平台",
+  "Nothing started: give a website or repository link, a screenshots folder, or both": "未开始：请提供网站或仓库链接、截图文件夹，或两者都提供",
+  "Publish to": "发布到",
+  "Platforms": "平台",
+  "Publish text is written for the platforms you tick. LinkedIn and Facebook also get a 4:5 video and English text.": "会为勾选的平台撰写发布文案。LinkedIn 和 Facebook 还会生成 4:5 视频和英文文案。",
+  "Turns a website or a GitHub or GitLab repository, your own screenshots, or both into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and images only.": "把网站、GitHub 或 GitLab 仓库、你自己的截图，或它们的组合，做成简短的中英双语宣传视频：镜头飞越真实页面，或是带边框的演示。只使用项目自身的文字和图片。",
+  "https://example.com (optional)": "https://example.com（可选）",
+  "Screenshots folder": "截图文件夹",
+  "A folder with a few images (optional)": "包含几张图片的文件夹（可选）",
+  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "请提供链接、文件夹或两者。图片会为任务复制一份；支持 PNG、JPG、WebP，最多 20 张。"
 }

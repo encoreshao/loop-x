@@ -1681,10 +1681,18 @@
   "Preview": "プレビュー",
   "Render and review": "レンダリングとレビュー",
   "Make a showcase video": "紹介動画を作る",
-  "Turns a website or a GitHub or GitLab repository into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and screenshots only.": "ウェブサイトや GitHub・GitLab のリポジトリを、短い日英中のプロモ動画にします。実際のページ上をカメラが飛ぶ演出か、フレーム付きのウォークスルーです。プロジェクト自身のテキストとスクリーンショットだけを使います。",
-  "Paste a website or repository link, for example https://example.com": "ウェブサイトまたはリポジトリのリンクを貼り付け（例: https://example.com）",
   "Website or repository link": "ウェブサイトまたはリポジトリのリンク",
   "I own this project or have permission to make a video about it": "このプロジェクトを所有している、または動画の作成が許可されている",
   "Make showcase": "紹介動画を作成",
-  "The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos": "inspire-video リポジトリ（両方のスキルを含みます）、およびウェブサイト用の Chrome と Playwright"
+  "The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos": "inspire-video リポジトリ（両方のスキルを含みます）、およびウェブサイト用の Chrome と Playwright",
+  "Nothing started: pick at least one platform": "開始していません。プラットフォームを 1 つ以上選んでください",
+  "Nothing started: give a website or repository link, a screenshots folder, or both": "開始していません。ウェブサイトまたはリポジトリのリンク、スクリーンショットのフォルダ、またはその両方を指定してください",
+  "Publish to": "公開先",
+  "Platforms": "プラットフォーム",
+  "Publish text is written for the platforms you tick. LinkedIn and Facebook also get a 4:5 video and English text.": "チェックしたプラットフォーム向けに公開用テキストを作成します。LinkedIn と Facebook には 4:5 の動画と英語のテキストも付きます。",
+  "Turns a website or a GitHub or GitLab repository, your own screenshots, or both into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and images only.": "ウェブサイト、GitHub・GitLab のリポジトリ、自分のスクリーンショット、またはその組み合わせを、短い中英バイリンガルのプロモ動画にします。実際のページ上をカメラが飛ぶ演出か、フレーム付きのウォークスルーです。プロジェクト自身のテキストと画像だけを使います。",
+  "https://example.com (optional)": "https://example.com（任意）",
+  "Screenshots folder": "スクリーンショットのフォルダ",
+  "A folder with a few images (optional)": "数枚の画像が入ったフォルダ（任意）",
+  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "リンク、フォルダ、またはその両方を指定してください。画像はジョブ用にコピーされます。PNG・JPG・WebP、最大 20 枚。"
 }
