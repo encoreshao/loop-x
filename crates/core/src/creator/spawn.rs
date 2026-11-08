@@ -458,6 +458,7 @@ pub fn start_showcase(
     url: Option<&str>,
     folder: Option<&str>,
     platforms: &[String],
+    voice: &str,
     rights_confirmed: bool,
 ) -> Result<JobRecord, String> {
     let (cli, loopx_home, exe) = (
@@ -477,6 +478,7 @@ pub fn start_showcase(
         url,
         folder,
         platforms,
+        voice,
         rights_confirmed,
         &spawn_agent,
     )
@@ -502,12 +504,14 @@ fn folder_key(folder: &Path) -> String {
     format!("folder:{clean}")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_showcase_with(
     jobs_dir: &Path,
     env: &JobEnv<'_>,
     url: Option<&str>,
     folder: Option<&str>,
     platforms: &[String],
+    voice: &str,
     rights_confirmed: bool,
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
@@ -523,6 +527,7 @@ fn start_showcase_with(
     let platforms = super::parse_platforms(platforms)?;
     let skill = generate_dir(env.user_home);
     check_installed(&skill, JobKind::Showcase)?;
+    let narration = super::voices::resolve(&skill, env.user_home, voice)?;
     let Some(folder) = folder else {
         // Link only: a link run before restarts that job, with the platforms now picked.
         let url = url.unwrap_or_default();
@@ -530,6 +535,7 @@ fn start_showcase_with(
         let options = VideoOptions {
             platforms,
             screenshots: None,
+            narration,
         };
         return launch_video(
             jobs_dir,
@@ -548,6 +554,7 @@ fn start_showcase_with(
     let options = VideoOptions {
         platforms,
         screenshots: Some(staged.clone()),
+        narration,
     };
     // New screenshots always make a new video, never a restart of an earlier one.
     let started = launch_video(
@@ -596,6 +603,7 @@ fn start_generate_with(
     let options = VideoOptions {
         platforms: super::parse_platforms(&options.platforms)?,
         screenshots: None,
+        narration: None,
     };
     // A link run before restarts that job (its files are reused) rather than adding a record.
     let earlier = jobs::latest_finished(jobs_dir, JobKind::Generate, &url).map(|j| j.id);
@@ -1123,6 +1131,7 @@ mod tests {
             Some("https://example.com/app"),
             None,
             &default_platforms(),
+            "none",
             true,
             &recorder(&calls),
         )
@@ -1190,6 +1199,7 @@ mod tests {
                 Some(url),
                 None,
                 &default_platforms(),
+                "none",
                 rights,
                 &recorder(&calls),
             )
@@ -1227,6 +1237,7 @@ mod tests {
             None,
             Some(folder.to_str().unwrap()),
             &["linkedin".to_string(), "wechat".to_string()],
+            "none",
             true,
             &recorder(&calls),
         )
@@ -1268,6 +1279,7 @@ mod tests {
                 url,
                 folder,
                 &default_platforms(),
+                "none",
                 true,
                 &recorder(&calls),
             )
@@ -1315,6 +1327,7 @@ mod tests {
                 url,
                 folder,
                 platforms,
+                "none",
                 true,
                 &recorder(&calls),
             )
@@ -1346,6 +1359,78 @@ mod tests {
     }
 
     #[test]
+    fn a_showcase_voice_is_checked_before_any_job_and_kept_for_a_retry() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        let skill = generate_dir(&home);
+        std::fs::create_dir_all(skill.join("voices/encore")).unwrap();
+        std::fs::write(skill.join("voices/encore/prompt.wav"), b"x").unwrap();
+        std::fs::write(
+            skill.join("voices/encore/meta.json"),
+            r#"{"language":"zh"}"#,
+        )
+        .unwrap();
+        install_showcase(&home);
+        let calls = Calls::default();
+        let go = |voice: &str| {
+            start_showcase_with(
+                &jobs_dir,
+                &env("claude", &home),
+                Some("https://example.com/app"),
+                None,
+                &default_platforms(),
+                voice,
+                true,
+                &recorder(&calls),
+            )
+        };
+        // Unknown, and a cloned voice without CosyVoice: refused, no job, nothing launched.
+        assert!(go("nobody").is_err());
+        assert!(go("voice:encore")
+            .unwrap_err()
+            .contains("setup_cosyvoice.sh"));
+        assert!(calls.borrow().is_empty() && jobs::list_jobs(&jobs_dir).is_empty());
+        let cv = home.join(".cache/inspire-video/cosyvoice");
+        std::fs::create_dir_all(cv.join("venv/bin")).unwrap();
+        std::fs::write(cv.join("venv/bin/python"), b"x").unwrap();
+        let model = cv.join("repo/pretrained_models/Fun-CosyVoice3-0.5B");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("llm.pt"), b"x").unwrap();
+        let rec = go("voice:encore").unwrap();
+        assert_eq!(
+            rec.options.narration,
+            Some(super::super::Narration::Cloned {
+                name: "encore".into(),
+                lang: "zh".into()
+            })
+        );
+        let prompt = calls.borrow()[0].0.last().unwrap().clone();
+        assert!(
+            prompt.contains("--engine cosyvoice --voice encore --lang zh"),
+            "{prompt}"
+        );
+        // The record keeps it, so a retry narrates the same way.
+        std::fs::write(
+            jobs_dir.join(format!("{}.json", rec.id)),
+            serde_json::json!({"id": rec.id, "kind": "showcase", "key": rec.key, "state": "failed",
+                               "pid": null, "started_at": rec.started_at,
+                               "narration": "voice:encore:zh"})
+            .to_string(),
+        )
+        .unwrap();
+        let again =
+            retry_generate_with(&jobs_dir, &env("claude", &home), &rec.id, &recorder(&calls))
+                .unwrap();
+        assert_eq!(again.options.narration, rec.options.narration);
+        assert!(calls.borrow()[1]
+            .0
+            .last()
+            .unwrap()
+            .contains("--voice encore"));
+    }
+
+    #[test]
     fn generating_with_picked_platforms_keeps_them_and_a_retry_makes_the_same_video() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
@@ -1355,6 +1440,7 @@ mod tests {
         let opts = VideoOptions {
             platforms: vec!["douyin".into(), "facebook".into()],
             screenshots: None,
+            narration: None,
         };
         let rec = start_generate_with(
             &jobs_dir,
@@ -1390,6 +1476,7 @@ mod tests {
         let none = VideoOptions {
             platforms: vec![],
             screenshots: None,
+            narration: None,
         };
         assert!(start_generate_with(
             &jobs_dir,

@@ -1694,5 +1694,14 @@
   "https://example.com (optional)": "https://example.com (facultatif)",
   "Screenshots folder": "Dossier de captures d’écran",
   "A folder with a few images (optional)": "Un dossier avec quelques images (facultatif)",
-  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "Indiquez un lien, un dossier ou les deux. Les images sont copiées pour la tâche ; PNG, JPG et WebP, 20 images au maximum."
+  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "Indiquez un lien, un dossier ou les deux. Les images sont copiées pour la tâche ; PNG, JPG et WebP, 20 images au maximum.",
+  "Chinese": "chinois",
+  "English": "anglais",
+  "No narration": "Sans narration",
+  "Quick voice (macOS), English": "Voix rapide (macOS), anglais",
+  "Quick voice (macOS), Chinese": "Voix rapide (macOS), chinois",
+  "{name} (your cloned voice, {language})": "{name} (votre voix clonée, {language})",
+  "Narrated videos use a synthetic voice, and the publish text says so.": "Les vidéos narrées utilisent une voix synthétique, et le texte de publication l’indique.",
+  "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.": "Les voix clonées nécessitent CosyVoice 3. Configurez-le une fois avec bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.",
+  "Voice": "Voix"
 }

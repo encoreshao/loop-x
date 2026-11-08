@@ -1694,5 +1694,14 @@
   "https://example.com (optional)": "https://example.com（任意）",
   "Screenshots folder": "スクリーンショットのフォルダ",
   "A folder with a few images (optional)": "数枚の画像が入ったフォルダ（任意）",
-  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "リンク、フォルダ、またはその両方を指定してください。画像はジョブ用にコピーされます。PNG・JPG・WebP、最大 20 枚。"
+  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "リンク、フォルダ、またはその両方を指定してください。画像はジョブ用にコピーされます。PNG・JPG・WebP、最大 20 枚。",
+  "Chinese": "中国語",
+  "English": "英語",
+  "No narration": "ナレーションなし",
+  "Quick voice (macOS), English": "クイック音声（macOS）・英語",
+  "Quick voice (macOS), Chinese": "クイック音声（macOS）・中国語",
+  "{name} (your cloned voice, {language})": "{name}（あなたのクローン音声・{language}）",
+  "Narrated videos use a synthetic voice, and the publish text says so.": "ナレーション付きの動画は合成音声を使い、公開用テキストにもその旨を記載します。",
+  "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.": "クローン音声には CosyVoice 3 が必要です。bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh で一度だけセットアップしてください。",
+  "Voice": "音声"
 }

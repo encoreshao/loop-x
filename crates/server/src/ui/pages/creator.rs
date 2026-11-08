@@ -18,6 +18,7 @@ use loopx_core::creator::jobs::{self, JobKind, JobRecord};
 use loopx_core::creator::scout::{self, ScoutRun, Source};
 use loopx_core::creator::spawn;
 use loopx_core::creator::state::{self as cstate, CreatorState};
+use loopx_core::creator::voices;
 use loopx_core::creator::{
     default_platforms, normalize_source_url, parse_platforms, valid_source_url, VideoOptions,
 };
@@ -137,7 +138,7 @@ fn generate(ctx: &UiCtx) -> UiResponse {
     }
     let options = VideoOptions {
         platforms,
-        screenshots: None,
+        ..VideoOptions::default()
     };
     match spawn::start_generate(&dir, &ctx.state.user_home, &url, true, &options) {
         Ok(_) => UiResponse::flash_redirect(
@@ -205,6 +206,7 @@ fn showcase(ctx: &UiCtx) -> UiResponse {
         url.as_deref(),
         folder.as_deref(),
         &platforms,
+        form.first("voice").unwrap_or("none"),
         true,
     ) {
         Ok(_) => UiResponse::flash_redirect(
@@ -1556,6 +1558,43 @@ fn platform_picker(ctx: &UiCtx) -> String {
     )
 }
 
+/// The narration choice: none, the quick macOS voice, or one of the user's cloned voice
+/// profiles (offered once CosyVoice 3 is set up). Narration defaults to none.
+fn voice_picker(ctx: &UiCtx) -> String {
+    let skill = spawn::generate_dir(&ctx.state.user_home);
+    let ready = voices::cosyvoice_ready(&ctx.state.user_home);
+    let profiles = voices::list(&skill);
+    let lang = |l: &str| if l == "zh" { ctx.t("Chinese") } else { ctx.t("English") };
+    let option = |value: &str, label: &str| {
+        format!("<option value=\"{}\">{}</option>", h(value), h(label))
+    };
+    let mut options = option("none", &ctx.t("No narration"));
+    options.push_str(&option("say:en", &ctx.t("Quick voice (macOS), English")));
+    options.push_str(&option("say:zh", &ctx.t("Quick voice (macOS), Chinese")));
+    if ready {
+        for p in &profiles {
+            let label = ctx.tf(
+                "{name} (your cloned voice, {language})",
+                &[("name", &p.name), ("language", &lang(&p.language))],
+            );
+            options.push_str(&option(&format!("voice:{}", p.name), &label));
+        }
+    }
+    let mut hint = ctx.t("Narrated videos use a synthetic voice, and the publish text says so.");
+    if !ready {
+        hint.push(' ');
+        hint.push_str(&ctx.t(
+            "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.",
+        ));
+    }
+    format!(
+        "<div class='cr-field'><label class='cr-label' for='cr-showcase-voice'>{}</label>\
+<div class='cr-field-row'><select id='cr-showcase-voice' name='voice' class='cr-select'>{options}</select></div>{}</div>",
+        h(&ctx.t("Voice")),
+        subtitle(&hint),
+    )
+}
+
 /// Make a promo video from a website or repository link, from a folder of screenshots, or
 /// from both (the inspire-showcase skill).
 fn showcase_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
@@ -1566,7 +1605,7 @@ fn showcase_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
 <div class='cr-field'><label class='cr-label' for='cr-showcase-folder'>{}</label>\
 <div class='cr-field-row'><div class='cr-search-field'>{}<input type='text' id='cr-showcase-folder' name='local_path' autocomplete='off' spellcheck='false' placeholder=\"{}\"></div>\
 <button type='button' class='cr-btn cr-btn-plain' data-pick-folder>{} {}</button></div>\
-{}</div>{}\
+{}</div>{}{}\
 <div class='cr-item-actions cr-link-actions'>\
 <label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
 <span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
@@ -1587,6 +1626,7 @@ fn showcase_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images."
         )),
         platform_picker(ctx),
+        voice_picker(ctx),
         h(&ctx.t("I own this project or have permission to make a video about it")),
         icons::icon("video"),
         h(&ctx.t("Make showcase"))
@@ -2917,6 +2957,38 @@ mod tests {
         assert_eq!(ok, "0");
         assert!(loc.contains("does%20not%20start"), "{loc}");
         assert_eq!(fx.job_files(), 0);
+    }
+
+    #[test]
+    fn the_showcase_voice_choice_lists_cloned_profiles_only_when_cosyvoice_is_ready() {
+        let fx = Fx::new();
+        let skill = fx.user().join(".inspire-video");
+        let profile = skill.join("voices/encore");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("prompt.wav"), b"x").unwrap();
+        std::fs::write(profile.join("meta.json"), r#"{"language":"zh"}"#).unwrap();
+        let body = fx.get("/creator?tab=showcase").body_text();
+        assert!(body.contains("name='voice'"), "{body}");
+        // None is first and the default; the quick macOS voice is always offered.
+        let first = body.find("<option value=\"none\">No narration</option>").unwrap();
+        assert!(body[first..].contains("<option value=\"say:en\">Quick voice (macOS), English</option>"));
+        assert!(body.contains("<option value=\"say:zh\">Quick voice (macOS), Chinese</option>"));
+        // CosyVoice is not set up: the profile is not offered and the page says how to.
+        assert!(!body.contains("value=\"voice:encore\""), "{body}");
+        assert!(body.contains("setup_cosyvoice.sh"), "{body}");
+        let cv = fx.user().join(".cache/inspire-video/cosyvoice");
+        std::fs::create_dir_all(cv.join("venv/bin")).unwrap();
+        std::fs::write(cv.join("venv/bin/python"), b"x").unwrap();
+        let model = cv.join("repo/pretrained_models/Fun-CosyVoice3-0.5B");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("llm.pt"), b"x").unwrap();
+        let body = fx.get("/creator?tab=showcase").body_text();
+        assert!(
+            body.contains("<option value=\"voice:encore\">encore (your cloned voice, Chinese)</option>"),
+            "{body}"
+        );
+        assert!(!body.contains("setup_cosyvoice.sh"), "{body}");
+        assert!(body.contains("synthetic voice"), "{body}");
     }
 
     #[test]

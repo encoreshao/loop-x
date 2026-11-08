@@ -9,6 +9,7 @@ pub mod spawn;
 pub mod state;
 pub mod uploads;
 pub mod videos;
+pub mod voices;
 
 /// The platforms a video can carry publish text for: the page's key, the skill's id
 /// (`config/platforms.yaml`) and whether the copy is English.
@@ -45,6 +46,42 @@ pub fn parse_platforms<S: AsRef<str>>(picked: &[S]) -> Result<Vec<String>, Strin
     Ok(chosen)
 }
 
+/// How a showcase video is narrated (when it is).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Narration {
+    /// The macOS `say` voice: nothing to install, a quick preview. `lang` is `en` or `zh`.
+    Say { lang: String },
+    /// One of the user's cloned voice profiles (CosyVoice 3), spoken in the profile's language.
+    Cloned { name: String, lang: String },
+}
+
+impl Narration {
+    /// The form of this choice kept in a job record.
+    pub fn key(&self) -> String {
+        match self {
+            Narration::Say { lang } => format!("say:{lang}"),
+            Narration::Cloned { name, lang } => format!("voice:{name}:{lang}"),
+        }
+    }
+
+    /// The inverse of [`Narration::key`]; `None` for anything else.
+    pub fn from_key(key: &str) -> Option<Narration> {
+        let lang_ok = |l: &str| matches!(l, "en" | "zh");
+        if let Some(lang) = key.strip_prefix("say:").filter(|l| lang_ok(l)) {
+            return Some(Narration::Say {
+                lang: lang.to_string(),
+            });
+        }
+        let (name, lang) = key.strip_prefix("voice:")?.rsplit_once(':')?;
+        (lang_ok(lang) && !name.is_empty() && !name.contains([':', '/', '.', ' '])).then(|| {
+            Narration::Cloned {
+                name: name.to_string(),
+                lang: lang.to_string(),
+            }
+        })
+    }
+}
+
 /// Choices that ride with a video job and are kept in its record, so a retry makes the
 /// same video.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +91,8 @@ pub struct VideoOptions {
     /// Showcase only: the user's screenshots, staged under the skill's `output/uploads/`
     /// (a path relative to the skill directory; see [`uploads`]).
     pub screenshots: Option<String>,
+    /// Showcase only: the narration, or none (the skill's default).
+    pub narration: Option<Narration>,
 }
 
 impl Default for VideoOptions {
@@ -61,6 +100,7 @@ impl Default for VideoOptions {
         VideoOptions {
             platforms: default_platforms(),
             screenshots: None,
+            narration: None,
         }
     }
 }
@@ -237,6 +277,30 @@ mod tests {
             .unwrap_err()
             .contains("tiktok"));
         assert_eq!(VideoOptions::default().platforms, default_platforms());
+    }
+
+    #[test]
+    fn a_narration_choice_round_trips_through_its_key() {
+        for n in [
+            Narration::Say { lang: "en".into() },
+            Narration::Cloned {
+                name: "encore-en".into(),
+                lang: "zh".into(),
+            },
+        ] {
+            assert_eq!(Narration::from_key(&n.key()), Some(n));
+        }
+        for bad in [
+            "",
+            "say:fr",
+            "voice:x",
+            "voice::en",
+            "voice:a/b:en",
+            "voice:a.b:en",
+            "x:y",
+        ] {
+            assert_eq!(Narration::from_key(bad), None, "{bad}");
+        }
     }
 
     #[test]

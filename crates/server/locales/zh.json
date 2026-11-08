@@ -1694,5 +1694,14 @@
   "https://example.com (optional)": "https://example.com（可选）",
   "Screenshots folder": "截图文件夹",
   "A folder with a few images (optional)": "包含几张图片的文件夹（可选）",
-  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "请提供链接、文件夹或两者。图片会为任务复制一份；支持 PNG、JPG、WebP，最多 20 张。"
+  "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images.": "请提供链接、文件夹或两者。图片会为任务复制一份；支持 PNG、JPG、WebP，最多 20 张。",
+  "Chinese": "中文",
+  "English": "英语",
+  "No narration": "不配音",
+  "Quick voice (macOS), English": "快速语音（macOS），英语",
+  "Quick voice (macOS), Chinese": "快速语音（macOS），中文",
+  "{name} (your cloned voice, {language})": "{name}（你的克隆声音，{language}）",
+  "Narrated videos use a synthetic voice, and the publish text says so.": "带配音的视频使用合成声音，发布文案中也会注明。",
+  "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.": "克隆声音需要 CosyVoice 3。请用 bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh 设置一次。",
+  "Voice": "声音"
 }
