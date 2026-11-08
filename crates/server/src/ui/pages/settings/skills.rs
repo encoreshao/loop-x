@@ -9,7 +9,7 @@ use loopx_core::settings_store as store;
 
 /// (name, description, installed-marker path relative to the user's home, code-path users).
 /// An empty users list marks a skill the Creator page and chat use (see `creator_skill_detail`).
-const SKILLS: [(&str, &str, &str, &[&str]); 3] = [
+const SKILLS: [(&str, &str, &str, &[&str]); 4] = [
     (
         "gitlab-config",
         "GitLab API access - instances, tokens, project aliases, and the local instance/project/issue cache every gitlab_api.py/gitlab_cache.py call reads from.",
@@ -34,6 +34,12 @@ const SKILLS: [(&str, &str, &str, &[&str]); 3] = [
         ".inspire-video/SKILL.md",
         &[],
     ),
+    (
+        "inspire-showcase",
+        "Turns a website or a GitHub or GitLab repository into a short bilingual promo video (a camera flying over the real page, or a framed walkthrough).",
+        ".inspire-video/skills/inspire-showcase/SKILL.md",
+        &[],
+    ),
 ];
 
 /// Used-by list, requirements and manual setup steps for the Creator skills. They are not
@@ -47,6 +53,12 @@ fn creator_skill_detail(ctx: &UiCtx, name: &str) -> (String, String, String) {
             used,
             ctx.t("Web search and fetch (no extra tools)"),
             "git clone https://github.com/encoreshao/video-scout ~/.claude/skills/video-scout".to_string(),
+        )
+    } else if name == "inspire-showcase" {
+        (
+            used,
+            ctx.t("The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos"),
+            "git clone https://github.com/encoreshao/inspire-video ~/.inspire-video".to_string(),
         )
     } else {
         (
@@ -115,7 +127,7 @@ pub fn skills_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
                     pyfmt::escape(&ctx.t("Set up in a terminal")),
                     pyfmt::escape(&clone_url)
                 ));
-                if name == "inspire-video" {
+                if name.starts_with("inspire-") {
                     extra.push_str(&format!(
                         "<p>{}</p><p><code>bash ~/.inspire-video/install.sh</code></p>",
                         pyfmt::escape(&ctx.t("Then run the install script:"))
@@ -254,8 +266,15 @@ mod tests {
         let inspire = user.path().join(".inspire-video");
         std::fs::create_dir_all(&inspire).unwrap();
         std::fs::write(inspire.join("SKILL.md"), "x").unwrap();
+        // The repository root alone (an older clone) does not install the showcase skill.
+        let older = page(user.path());
+        assert_eq!(older.matches("pill pill-green").count(), 2, "{older}");
+        assert!(older.contains("inspire-showcase"), "{older}");
+        let showcase = inspire.join("skills/inspire-showcase");
+        std::fs::create_dir_all(&showcase).unwrap();
+        std::fs::write(showcase.join("SKILL.md"), "x").unwrap();
         let both = page(user.path());
-        assert_eq!(both.matches("pill pill-green").count(), 2, "{both}");
+        assert_eq!(both.matches("pill pill-green").count(), 3, "{both}");
         assert!(!both.contains("bash ~/.inspire-video/install.sh"), "{both}");
         // gitlab-config keeps its restart-the-dashboard setup button.
         assert!(both.contains("Set up &amp; restart dashboard"), "{both}");

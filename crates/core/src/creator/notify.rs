@@ -23,7 +23,7 @@ const REMEMBERED: usize = 500;
 fn loop_name(kind: JobKind) -> &'static str {
     match kind {
         JobKind::Scout => FIND_LOOP,
-        JobKind::Generate => GENERATE_LOOP,
+        JobKind::Generate | JobKind::Showcase => GENERATE_LOOP,
     }
 }
 
@@ -48,7 +48,7 @@ fn stage_text(dir: &Path, rec: &JobRecord) -> String {
 
 fn reason(rec: &JobRecord) -> &'static str {
     match (rec.state.as_str(), rec.kind) {
-        ("no_output", JobKind::Generate) => "No video produced",
+        ("no_output", JobKind::Generate | JobKind::Showcase) => "No video produced",
         ("no_output", JobKind::Scout) => "No results",
         ("incomplete", _) => "Incomplete",
         _ => "Failed",
@@ -75,8 +75,12 @@ pub fn loop_statuses(
     now: DateTime<Utc>,
 ) -> Vec<(String, Value)> {
     let mut out = Vec::new();
+    // One entry per loop: Generate and Showcase jobs share "creator-generate-video".
     for kind in [JobKind::Scout, JobKind::Generate] {
-        let mine: Vec<&JobRecord> = settled.iter().filter(|j| j.kind == kind).collect();
+        let mine: Vec<&JobRecord> = settled
+            .iter()
+            .filter(|j| loop_name(j.kind) == loop_name(kind))
+            .collect();
         let Some(newest) = mine.first() else {
             continue;
         };
@@ -121,7 +125,7 @@ fn took(rec: &JobRecord) -> Option<String> {
 
 /// The Slack message for a finished job.
 pub fn finished_report(dir: &Path, rec: &JobRecord) -> Report {
-    let generate = rec.kind == JobKind::Generate;
+    let generate = rec.kind.makes_video();
     let (title, state, status, summary) = match (rec.state.as_str(), generate) {
         ("done", true) => (
             "Video generated",

@@ -29,6 +29,17 @@ pub const SCOUT_STAGES: [&str; 4] = [
     "Write the results",
 ];
 
+/// The stages of one showcase video (the inspire-showcase skill), in order.
+pub const SHOWCASE_STAGES: [&str; 7] = [
+    "Read the source",
+    "Capture the pages",
+    "Write the beats",
+    "Validate the manifest",
+    "Preview",
+    "Render and review",
+    "Write the publishing copy",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
     /// 1-based index into the job kind's stage list.
@@ -85,13 +96,40 @@ fn stage_of(line: &str) -> Option<usize> {
         && !has(&["audio.wav"])
     {
         Some(5)
-    } else if writes("copy.json") || writes("publish_draft") {
+    } else if writes("copy.json") || writes("publish_draft") || has(&["refine_segment.py"]) {
         Some(4)
     } else if has(&["transcribe.py"]) {
         Some(3)
     } else if has(&["audio.wav", "media.py ffprobe", "media.py ffmpeg"]) {
         Some(2)
-    } else if has(&["fetch.py", "check_env.py"]) {
+    } else if has(&["fetch.py", "check_env.py", "precheck.py"]) {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// The stage a showcase step line belongs to.
+fn showcase_stage_of(line: &str) -> Option<usize> {
+    let rest = line.strip_prefix("Step ")?;
+    let (_, call) = rest.split_once(" · ")?;
+    let has = |needles: &[&str]| needles.iter().any(|n| call.contains(n));
+    let writes = |name: &str| {
+        (call.starts_with("Write:") || call.starts_with("Edit:")) && call.contains(name)
+    };
+    if writes("project.json") {
+        Some(7)
+    } else if has(&["render.py"]) && !has(&["--preview"]) || has(&["checks.py"]) {
+        Some(6)
+    } else if has(&["--preview"]) || has(&["narrate.py"]) {
+        Some(5)
+    } else if has(&["manifest.py validate"]) {
+        Some(4)
+    } else if has(&["manifest.py scaffold"]) || writes("video_manifest.json") {
+        Some(3)
+    } else if has(&["capture_page.py", "capture.py"]) {
+        Some(2)
+    } else if has(&["ingest.py", "check_env.py"]) {
         Some(1)
     } else {
         None
@@ -107,6 +145,7 @@ pub fn of_rendered_log(kind: JobKind, rendered: &str) -> Option<Progress> {
     let (stages, stage_of): (&[&'static str], StageFn) = match kind {
         JobKind::Generate => (&STAGES, stage_of),
         JobKind::Scout => (&SCOUT_STAGES, scout_stage_of),
+        JobKind::Showcase => (&SHOWCASE_STAGES, showcase_stage_of),
     };
     let stage = rendered.lines().filter_map(stage_of).max()?;
     let total = stages.len();
@@ -196,6 +235,45 @@ mod tests {
         for (line, stage) in steps {
             assert_eq!(stage_of(line), Some(stage), "{line}");
         }
+    }
+
+    #[test]
+    fn each_showcase_stage_is_recognised_in_order() {
+        let steps = [
+            ("Step 1 · Bash: python3 scripts/showcase/ingest.py https://example.com --project output/projects/s", 1),
+            ("Step 2 · Bash: python3 scripts/showcase/capture_page.py https://example.com --project output/projects/s", 2),
+            ("Step 3 · Bash: python3 scripts/showcase/manifest.py scaffold output/projects/s --beats 5", 3),
+            ("Step 4 · Write: /h/.inspire-video/output/projects/s/video_manifest.json", 3),
+            ("Step 5 · Bash: python3 scripts/showcase/manifest.py validate output/projects/s", 4),
+            ("Step 6 · Bash: python3 scripts/render.py output/projects/s --preview", 5),
+            ("Step 7 · Bash: python3 scripts/render.py output/projects/s", 6),
+            ("Step 8 · Bash: python3 scripts/showcase/checks.py output/final/s/s.mp4 --final", 6),
+            ("Step 9 · Write: /h/.inspire-video/output/final/s/project.json", 7),
+        ];
+        for (line, stage) in steps {
+            assert_eq!(showcase_stage_of(line), Some(stage), "{line}");
+        }
+        let lines: Vec<String> = steps.iter().take(5).map(|(l, _)| l.to_string()).collect();
+        let now = of_rendered_log(JobKind::Showcase, &lines.join("\n")).unwrap();
+        assert_eq!((now.stage, now.total), (4, 7));
+        assert_eq!(now.label, "Validate the manifest");
+        // A talk's command means nothing to a showcase run.
+        assert_eq!(
+            showcase_stage_of("Step 1 · Bash: python scripts/fetch.py u"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_skills_precheck_and_segment_refine_steps_belong_to_their_stages() {
+        assert_eq!(
+            stage_of("Step 3 · Bash: python scripts/precheck.py output/cache/x/source.mp4"),
+            Some(1)
+        );
+        assert_eq!(
+            stage_of("Step 8 · Bash: python scripts/refine_segment.py output/projects/s"),
+            Some(4)
+        );
     }
 
     #[test]

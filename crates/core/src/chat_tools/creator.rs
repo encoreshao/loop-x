@@ -164,10 +164,11 @@ fn list_videos(e: &Env, _c: Option<&dyn Connector>, _args: &Map<String, Value>) 
         .take(MAX_VIDEOS)
         .map(|p| {
             let source = p.source_url.as_deref().and_then(https_url);
-            let rendering = source
-                .as_deref()
-                .and_then(|u| jobs::running(&all_jobs, JobKind::Generate, u))
-                .is_some();
+            let rendering = source.as_deref().is_some_and(|u| {
+                [JobKind::Generate, JobKind::Showcase]
+                    .iter()
+                    .any(|k| jobs::running(&all_jobs, *k, u).is_some())
+            });
             let approved = st.approved.contains(&p.slug);
             let status = if rendering {
                 "rendering"
@@ -188,6 +189,8 @@ fn list_videos(e: &Env, _c: Option<&dyn Connector>, _args: &Map<String, Value>) 
                 "published": st.published.get(&p.slug).cloned().unwrap_or_default(),
                 "wechat": p.wechat.is_some(),
                 "douyin": p.douyin.is_some(),
+                "linkedin": p.linkedin.is_some(),
+                "facebook": p.facebook.is_some(),
             })
         })
         .collect();
@@ -195,7 +198,7 @@ fn list_videos(e: &Env, _c: Option<&dyn Connector>, _args: &Map<String, Value>) 
         .iter()
         .take(MAX_JOBS)
         .map(|j| {
-            json!({"id": j.id, "kind": match j.kind { JobKind::Scout => "scout", JobKind::Generate => "generate" },
+            json!({"id": j.id, "kind": match j.kind { JobKind::Scout => "scout", JobKind::Generate => "generate", JobKind::Showcase => "showcase" },
                    "input": text(&j.key), "state": j.state, "started_at": j.started_at})
         })
         .collect();

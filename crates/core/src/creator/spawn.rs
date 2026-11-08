@@ -310,10 +310,25 @@ fn strs(a: &[&str]) -> Vec<String> {
 /// are not code. No media tool directly (their flags open and write arbitrary
 /// files), no web tools, no browser cookies, no path escapes out of `scripts/`.
 pub fn generate_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>, String> {
+    video_argv(cli, prompt, f, "inspire-video")
+}
+
+/// The inspire-showcase job: the same fence as [`generate_argv`] (its pipeline is also
+/// `python3 scripts/showcase/*.py`, which that fence already covers), reading its own skill.
+pub fn showcase_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>, String> {
+    video_argv(cli, prompt, f, "inspire-showcase")
+}
+
+fn video_argv(
+    cli: &str,
+    prompt: &str,
+    f: &Fence<'_>,
+    skill_name: &str,
+) -> Result<Vec<String>, String> {
     require_claude(cli)?;
     let c = f.cwd.display();
     let h = f.user_home.display();
-    let skill = format!("/{h}/.claude/skills/inspire-video");
+    let skill = format!("/{h}/.claude/skills/{skill_name}");
     let mut allowed = strs(&[
         "Bash(python scripts/*)",
         "Bash(python3 scripts/*)",
@@ -432,6 +447,50 @@ pub fn start_generate(
     start_generate_with(jobs_dir, &env, url, rights_confirmed, &spawn_agent)
 }
 
+/// Start an inspire-showcase job for the website or repository at `url`. Refuses
+/// (creating no job) unless the user confirmed they own it or may make a video about it.
+pub fn start_showcase(
+    jobs_dir: &Path,
+    user_home: &Path,
+    url: &str,
+    rights_confirmed: bool,
+) -> Result<JobRecord, String> {
+    let (cli, loopx_home, exe) = (
+        crate::ai_cli_config::selected_cli(),
+        crate::config::home_dir(),
+        current_exe(),
+    );
+    let env = JobEnv {
+        cli: &cli,
+        user_home,
+        loopx_home: &loopx_home,
+        exe: &exe,
+    };
+    start_showcase_with(jobs_dir, &env, url, rights_confirmed, &spawn_agent)
+}
+
+fn start_showcase_with(
+    jobs_dir: &Path,
+    env: &JobEnv<'_>,
+    url: &str,
+    rights_confirmed: bool,
+    spawn: &SpawnFull<'_>,
+) -> Result<JobRecord, String> {
+    if !rights_confirmed {
+        return Err("confirm you own this project or may make a video about it first".to_string());
+    }
+    let url = super::valid_source_url(url)?;
+    let earlier = jobs::latest_finished(jobs_dir, JobKind::Showcase, &url).map(|j| j.id);
+    launch_video(
+        jobs_dir,
+        env,
+        JobKind::Showcase,
+        &url,
+        earlier.as_deref(),
+        spawn,
+    )
+}
+
 /// Start a video-scout job for `query`.
 pub fn start_scout(jobs_dir: &Path, user_home: &Path, query: &str) -> Result<JobRecord, String> {
     let (cli, loopx_home, exe) = (
@@ -487,16 +546,29 @@ fn retry_generate_with(
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
     let job = jobs::get(jobs_dir, id).ok_or_else(|| "unknown job".to_string())?;
-    if job.kind != JobKind::Generate {
+    if !job.kind.makes_video() {
         return Err("only a video generation job can be retried".to_string());
     }
-    launch_generate(jobs_dir, env, &job.key, Some(id), spawn)
+    launch_video(jobs_dir, env, job.kind, &job.key, Some(id), spawn)
 }
 
 /// Start `url`'s Generate run: a new record, or `restart_id`'s record run again.
 fn launch_generate(
     jobs_dir: &Path,
     env: &JobEnv<'_>,
+    url: &str,
+    restart_id: Option<&str>,
+    spawn: &SpawnFull<'_>,
+) -> Result<JobRecord, String> {
+    launch_video(jobs_dir, env, JobKind::Generate, url, restart_id, spawn)
+}
+
+/// Start a video job (`Generate` or `Showcase`) for `url`: a new record, or
+/// `restart_id`'s record run again.
+fn launch_video(
+    jobs_dir: &Path,
+    env: &JobEnv<'_>,
+    kind: JobKind,
     url: &str,
     restart_id: Option<&str>,
     spawn: &SpawnFull<'_>,
@@ -508,7 +580,19 @@ fn launch_generate(
             cwd.display()
         ));
     }
-    let prompt = jobs::generate_prompt(url, true, restart_id.is_some());
+    let showcase = kind == JobKind::Showcase;
+    if showcase && !cwd.join("skills/inspire-showcase/SKILL.md").is_file() {
+        return Err(format!(
+            "the inspire-showcase skill is not installed ({} is missing); update ~/.inspire-video",
+            cwd.join("skills/inspire-showcase").display()
+        ));
+    }
+    let resume = restart_id.is_some();
+    let prompt = if showcase {
+        jobs::showcase_prompt(url, true, resume)
+    } else {
+        jobs::generate_prompt(url, true, resume)
+    };
     let fence = Fence {
         cwd: &cwd,
         user_home: env.user_home,
@@ -516,11 +600,15 @@ fn launch_generate(
         exe: env.exe,
     };
     // Built up front so an unsupported CLI is refused before any job is recorded.
-    let argv = generate_argv(env.cli, &prompt, &fence)?;
+    let argv = if showcase {
+        showcase_argv(env.cli, &prompt, &fence)?
+    } else {
+        generate_argv(env.cli, &prompt, &fence)?
+    };
     let run = |log: &Path| spawn(&argv, &cwd, log);
     match restart_id {
         Some(id) => jobs::restart(jobs_dir, id, &run),
-        None => jobs::start(jobs_dir, JobKind::Generate, url, &run),
+        None => jobs::start(jobs_dir, kind, url, &run),
     }
 }
 
@@ -913,6 +1001,98 @@ mod tests {
         assert!(denied(argv).contains(&format!("Bash({EXE}*)").as_str()));
         assert_eq!(cwd, &generate_dir(&home));
         assert_eq!(log, &rec.log_path);
+    }
+
+    fn install_showcase(home: &Path) {
+        let d = generate_dir(home).join("skills/inspire-showcase");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), "x").unwrap();
+    }
+
+    #[test]
+    fn start_showcase_launches_its_own_skill_in_the_same_working_dir_and_fence() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_showcase(&home);
+        let calls = Calls::default();
+        let rec = start_showcase_with(
+            &jobs_dir,
+            &env("claude", &home),
+            "https://example.com/app",
+            true,
+            &recorder(&calls),
+        )
+        .unwrap();
+        assert_eq!(rec.kind, JobKind::Showcase);
+        let calls = calls.borrow();
+        let (argv, cwd, _) = &calls[0];
+        assert_eq!(
+            argv.last().unwrap(),
+            &jobs::showcase_prompt("https://example.com/app", true, false)
+        );
+        assert_eq!(cwd, &generate_dir(&home));
+        let joined = argv.join(" ");
+        assert!(
+            joined.contains(".claude/skills/inspire-showcase"),
+            "{joined}"
+        );
+        assert!(joined.contains("Bash(python3 scripts/*)"), "{joined}");
+        assert!(!joined.contains("WebFetch"), "{joined}");
+        drop(calls);
+    }
+
+    #[test]
+    fn a_finished_showcase_job_is_retried_as_a_showcase() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_showcase(&home);
+        std::fs::create_dir_all(&jobs_dir).unwrap();
+        let id = "20261105T000000-show0000";
+        std::fs::write(
+            jobs_dir.join(format!("{id}.json")),
+            serde_json::json!({"id": id, "kind": "showcase", "key": "https://example.com/app",
+                               "state": "failed", "pid": null,
+                               "started_at": "2026-11-05T00:00:00Z"})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(jobs_dir.join(format!("{id}.log")), "old\n").unwrap();
+        let calls = Calls::default();
+        let again =
+            retry_generate_with(&jobs_dir, &env("claude", &home), id, &recorder(&calls)).unwrap();
+        assert_eq!(again.kind, JobKind::Showcase);
+        let prompt = calls.borrow()[0].0.last().unwrap().clone();
+        assert!(prompt.contains("inspire-showcase") && prompt.contains("previous attempt"));
+    }
+
+    #[test]
+    fn start_showcase_needs_rights_a_valid_url_and_the_showcase_skill() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        let calls = Calls::default();
+        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        let go = |url: &str, rights: bool| {
+            start_showcase_with(
+                &jobs_dir,
+                &env("claude", &home),
+                url,
+                rights,
+                &recorder(&calls),
+            )
+        };
+        assert!(go("https://example.com/app", false)
+            .unwrap_err()
+            .contains("own"));
+        assert!(go("http://example.com/app", true).is_err());
+        let e = go("https://example.com/app", true).unwrap_err();
+        assert!(e.contains("inspire-showcase"), "{e}");
+        assert!(calls.borrow().is_empty());
+        assert!(jobs::list_jobs(&jobs_dir).is_empty());
     }
 
     #[test]

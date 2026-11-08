@@ -23,6 +23,22 @@ pub struct VideoProject {
     pub cover: Option<PathBuf>,
     pub wechat: Option<PublishCopy>,
     pub douyin: Option<PublishCopy>,
+    /// English platforms: the skill writes these for its 4:5 feed render.
+    pub linkedin: Option<PublishCopy>,
+    pub facebook: Option<PublishCopy>,
+}
+
+impl VideoProject {
+    /// The publish text for a platform key (`wechat`, `douyin`, `linkedin`, `facebook`).
+    pub fn copy(&self, platform: &str) -> Option<&PublishCopy> {
+        match platform {
+            "wechat" => self.wechat.as_ref(),
+            "douyin" => self.douyin.as_ref(),
+            "linkedin" => self.linkedin.as_ref(),
+            "facebook" => self.facebook.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 /// `<user_home>/.inspire-video/output/final`, under the generate jobs' working
@@ -172,6 +188,8 @@ fn read_project(root: &Path, slug: &str) -> Result<VideoProject, String> {
         cover: None,
         wechat: None,
         douyin: None,
+        linkedin: None,
+        facebook: None,
     };
     let (mut video, mut cover) = (None, None);
     if manifest.symlink_metadata().is_ok() {
@@ -191,6 +209,8 @@ fn read_project(root: &Path, slug: &str) -> Result<VideoProject, String> {
         if let Some(publish) = v.get("publish") {
             p.wechat = publish.get("wechat").and_then(copy_of);
             p.douyin = publish.get("douyin").and_then(copy_of);
+            p.linkedin = publish.get("linkedin").and_then(copy_of);
+            p.facebook = publish.get("facebook").and_then(copy_of);
         }
     }
     if p.wechat.is_none() {
@@ -198,6 +218,12 @@ fn read_project(root: &Path, slug: &str) -> Result<VideoProject, String> {
     }
     if p.douyin.is_none() {
         p.douyin = copy_from_txt(root, slug, "publish_douyin.txt");
+    }
+    if p.linkedin.is_none() {
+        p.linkedin = copy_from_txt(root, slug, "publish_linkedin.txt");
+    }
+    if p.facebook.is_none() {
+        p.facebook = copy_from_txt(root, slug, "publish_facebook.txt");
     }
     p.mp4 = video
         .and_then(|n| existing(root, slug, &n))
@@ -388,6 +414,8 @@ mod tests {
             cover: None,
             wechat: None,
             douyin: None,
+            linkedin: None,
+            facebook: None,
         };
         let hour = std::time::Duration::from_secs(3600);
         let now = std::time::SystemTime::now();
@@ -443,6 +471,37 @@ mod tests {
             })
         );
         assert_eq!(p.douyin.as_ref().unwrap().title, "抖音标题");
+    }
+
+    #[test]
+    fn reads_the_english_platforms_from_project_json_and_from_txt_files() {
+        let d = tempfile::tempdir().unwrap();
+        project(
+            d.path(),
+            "en",
+            &[
+                (
+                    "project.json",
+                    r#"{"schema":1,"slug":"en","publish":{
+"linkedin":{"title":"LI title","caption":"LI caption","hashtags":["x"]},
+"facebook":{"title":"FB title","caption":"FB caption","hashtags":[]}}}"#,
+                ),
+                ("en.mp4", "x"),
+            ],
+        );
+        project(
+            d.path(),
+            "old",
+            &[("publish_linkedin.txt", "Old title\n\nBody\n\n#a #b\n")],
+        );
+        let (ps, errs) = list_projects(d.path());
+        assert!(errs.is_empty(), "{errs:?}");
+        let en = ps.iter().find(|p| p.slug == "en").unwrap();
+        assert_eq!(en.copy("linkedin").unwrap().title, "LI title");
+        assert_eq!(en.copy("facebook").unwrap().caption, "FB caption");
+        assert!(en.copy("wechat").is_none() && en.copy("tiktok").is_none());
+        let old = ps.iter().find(|p| p.slug == "old").unwrap();
+        assert_eq!(old.linkedin.as_ref().unwrap().hashtags, vec!["a", "b"]);
     }
 
     #[test]

@@ -22,7 +22,7 @@ pub struct Record {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreatorState {
     pub approved: BTreeSet<String>,
-    /// slug -> platforms (`wechat`, `douyin`)
+    /// slug -> platforms (`wechat`, `douyin`, `linkedin`, `facebook`)
     pub published: BTreeMap<String, Vec<String>>,
     /// slug -> what is remembered of the video.
     pub records: BTreeMap<String, Record>,
@@ -56,7 +56,7 @@ pub fn publish_level(s: &CreatorState, slug: &str, available: &[&str]) -> Publis
     }
 }
 
-const PLATFORMS: [&str; 2] = ["wechat", "douyin"];
+const PLATFORMS: [&str; 4] = ["wechat", "douyin", "linkedin", "facebook"];
 
 /// `<loopx_home>/creator.json`.
 pub fn state_path(loopx_home: &Path) -> std::path::PathBuf {
@@ -261,6 +261,10 @@ mod tests {
         set_approved(&p, "b", true).unwrap();
         set_approved(&p, "b", false).unwrap();
         set_published(&p, "a", "wechat", true).unwrap();
+        set_published(&p, "a", "linkedin", true).unwrap();
+        set_published(&p, "a", "facebook", true).unwrap();
+        set_published(&p, "a", "facebook", false).unwrap();
+        set_published(&p, "a", "linkedin", false).unwrap();
         set_published(&p, "a", "douyin", true).unwrap();
         set_published(&p, "a", "wechat", false).unwrap();
         let s = load(&p);
@@ -278,6 +282,8 @@ mod tests {
             cover: None,
             wechat: None,
             douyin: None,
+            linkedin: None,
+            facebook: None,
         }
     }
 

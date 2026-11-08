@@ -36,7 +36,12 @@ const LIBRARY_SHOWN: usize = 200;
 /// What a scout job searches for when the topic field is left empty.
 const OPEN_SCOUT_QUERY: &str =
     "topic-free discovery: a few of the most worthwhile recent public talks and interviews";
-const PLATFORMS: [(&str, &str); 2] = [("wechat", "WeChat"), ("douyin", "Douyin")];
+const PLATFORMS: [(&str, &str); 4] = [
+    ("wechat", "WeChat"),
+    ("douyin", "Douyin"),
+    ("linkedin", "LinkedIn"),
+    ("facebook", "Facebook"),
+];
 
 pub fn register(r: &mut Registry) {
     r.get("/creator", page);
@@ -47,6 +52,7 @@ pub fn register(r: &mut Registry) {
     r.post("/creator/jobs/retry", retry_job);
     r.post("/creator/jobs/clear", clear_jobs);
     r.post("/creator/generate", generate);
+    r.post("/creator/showcase", showcase);
     r.post("/creator/scout", start_scout);
     r.post("/creator/stop", stop);
     r.post("/creator/folder", open_folder);
@@ -127,6 +133,37 @@ fn generate(ctx: &UiCtx) -> UiResponse {
         Ok(_) => UiResponse::flash_redirect(
             true,
             &ctx.t("Started generating the video. It appears under Videos when it is ready."),
+            &to,
+        ),
+        Err(e) => fail(ctx.tf("Could not start the job: {detail}", &[("detail", &e)])),
+    }
+}
+
+/// Start an inspire-showcase job: a promo for the website or repository at the pasted link.
+fn showcase(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let to = back("videos");
+    let fail = |m: String| UiResponse::flash_redirect(false, &m, &back("discover"));
+    if form.first("rights") != Some("1") {
+        return fail(ctx.t(
+            "Nothing started: tick \"I own this project or have permission to make a video about it\" first",
+        ));
+    }
+    let url = match valid_source_url(form.first("url").unwrap_or("")) {
+        Ok(u) => u,
+        Err(e) => return fail(ctx.tf("Nothing started: {detail}", &[("detail", &e)])),
+    };
+    let dir = jobs_dir(ctx);
+    if jobs::running(&jobs::list_jobs(&dir), JobKind::Showcase, &url).is_some() {
+        return fail(ctx.t("A job for this video is already running"));
+    }
+    if !ctx.state.spawn_processes {
+        return fail(ctx.t("This server does not start agent jobs"));
+    }
+    match spawn::start_showcase(&dir, &ctx.state.user_home, &url, true) {
+        Ok(_) => UiResponse::flash_redirect(
+            true,
+            &ctx.t("Started the showcase video. It appears under Videos when it is ready."),
             &to,
         ),
         Err(e) => fail(ctx.tf("Could not start the job: {detail}", &[("detail", &e)])),
@@ -494,6 +531,7 @@ fn job_status(ctx: &UiCtx) -> UiResponse {
                     let none_yet = match job.kind {
                         JobKind::Generate => loopx_core::creator::progress::STAGES.len(),
                         JobKind::Scout => loopx_core::creator::progress::SCOUT_STAGES.len(),
+                        JobKind::Showcase => loopx_core::creator::progress::SHOWCASE_STAGES.len(),
                     };
                     let (stage, total) =
                         jobs::progress(&dir, id).map_or((0, none_yet), |p| (p.stage, p.total));
@@ -741,7 +779,9 @@ fn state_pill(ctx: &UiCtx, state: &str) -> String {
 /// what it is, not as Done.
 fn job_pill(ctx: &UiCtx, job: &JobRecord) -> String {
     match (job.state.as_str(), job.kind) {
-        ("no_output", JobKind::Generate) => pill("error", &ctx.t("No video produced")),
+        ("no_output", JobKind::Generate | JobKind::Showcase) => {
+            pill("error", &ctx.t("No video produced"))
+        }
         ("no_output", JobKind::Scout) => pill("error", &ctx.t("No results")),
         ("incomplete", _) => pill("error", &ctx.t("Incomplete")),
         (state, _) => state_pill(ctx, state),
@@ -857,6 +897,7 @@ fn kind_label(ctx: &UiCtx, job: &JobRecord) -> String {
     match job.kind {
         JobKind::Scout => ctx.t("Find videos"),
         JobKind::Generate => ctx.t("Generate"),
+        JobKind::Showcase => ctx.t("Showcase"),
     }
 }
 
@@ -869,6 +910,17 @@ fn stage_label(ctx: &UiCtx, kind: JobKind, n: usize) -> String {
             2 => ctx.t("Search for candidates"),
             3 => ctx.t("Inspect candidates"),
             _ => ctx.t("Write the results"),
+        };
+    }
+    if kind == JobKind::Showcase {
+        return match n {
+            1 => ctx.t("Read the source"),
+            2 => ctx.t("Capture the pages"),
+            3 => ctx.t("Write the beats"),
+            4 => ctx.t("Validate the manifest"),
+            5 => ctx.t("Preview"),
+            6 => ctx.t("Render and review"),
+            _ => ctx.t("Write the publishing copy"),
         };
     }
     match n {
@@ -979,7 +1031,7 @@ fn incomplete_note(ctx: &UiCtx, job: &JobRecord) -> String {
 fn job_row(ctx: &UiCtx, job: &JobRecord, tab: &str, titles: &HashMap<String, String>) -> String {
     let action = if job.state == "running" {
         stop_form(ctx, job, tab)
-    } else if job.kind == JobKind::Generate && job.state != "done" {
+    } else if job.kind.makes_video() && job.state != "done" {
         format!("{}{}", retry_form(ctx, job), delete_form(ctx, job))
     } else {
         delete_form(ctx, job)
@@ -1024,7 +1076,7 @@ fn running_list(ctx: &UiCtx, title: &str, jobs: &[&JobRecord], tab: &str) -> Str
 /// Time and cost per kind of job over its finished runs: how many ran, the average
 /// time of the successful ones and the total API cost.
 fn stats_html(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
-    let cards: String = [JobKind::Generate, JobKind::Scout]
+    let cards: String = [JobKind::Generate, JobKind::Showcase, JobKind::Scout]
         .iter()
         .filter_map(|kind| {
             let finished: Vec<&JobRecord> = jobs
@@ -1062,6 +1114,7 @@ fn stats_html(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
             };
             let label = match kind {
                 JobKind::Generate => ctx.t("Generate video"),
+                JobKind::Showcase => ctx.t("Showcase video"),
                 JobKind::Scout => ctx.t("Find videos"),
             };
             let count = finished.len().to_string();
@@ -1098,7 +1151,7 @@ fn stats_html(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
 fn job_titles(ctx: &UiCtx, jobs: &[JobRecord]) -> HashMap<String, String> {
     let projects = videos::list_projects(&videos::videos_root(&ctx.state.user_home)).0;
     jobs.iter()
-        .filter(|j| j.kind == JobKind::Generate && j.state == "done")
+        .filter(|j| j.kind.makes_video() && j.state == "done")
         .filter_map(|j| {
             let since = jobs::started_time(j)?;
             let until = jobs::ended_time(j).map(|t| t + std::time::Duration::from_secs(5));
@@ -1430,6 +1483,32 @@ fn link_panel(ctx: &UiCtx) -> String {
     )
 }
 
+/// Make a promo from a website or repository link (the inspire-showcase skill).
+fn showcase_panel(ctx: &UiCtx) -> String {
+    section(
+        &ctx.t("Make a showcase video"),
+        "",
+        &format!(
+            "<div class='cr-surface'>{}<form method='post' action='/creator/showcase' class='cr-link-form'>{}\
+<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>\
+<div class='cr-item-actions cr-link-actions'>\
+<label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
+<span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
+<button type='submit' class='cr-btn cr-btn-primary cr-generate'>{} {}</button></div></form></div>",
+            subtitle(&ctx.t(
+                "Turns a website or a GitHub or GitLab repository into a short bilingual promo: a camera flying over the real page, or a framed walkthrough. It uses the project's own text and screenshots only."
+            )),
+            ctx.csrf_input(),
+            icons::icon("link"),
+            h(&ctx.t("Paste a website or repository link, for example https://example.com")),
+            h(&ctx.t("Website or repository link")),
+            h(&ctx.t("I own this project or have permission to make a video about it")),
+            icons::icon("video"),
+            h(&ctx.t("Make showcase"))
+        ),
+    )
+}
+
 /// The most recent Find videos topic: the newest Find videos job (running or finished), else
 /// the newest catalog's search. Empty when nothing was ever searched.
 fn latest_topic(ctx: &UiCtx, jobs: &[JobRecord], run: Option<&ScoutRun>) -> String {
@@ -1478,7 +1557,7 @@ fn discover_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         )
         .replacen("</form></div>", &format!("</form>{}</div>", latest_topic(ctx, jobs, runs.first())), 1),
     );
-    let link = link_panel(ctx);
+    let link = format!("{}{}", link_panel(ctx), showcase_panel(ctx));
     let running: Vec<&JobRecord> = jobs
         .iter()
         .filter(|j| j.kind == JobKind::Scout && j.state == "running")
@@ -1890,10 +1969,7 @@ struct VideoView<'a> {
 fn available_platforms(p: &VideoProject) -> Vec<&'static str> {
     PLATFORMS
         .iter()
-        .filter(|(key, _)| match *key {
-            "wechat" => p.wechat.is_some(),
-            _ => p.douyin.is_some(),
-        })
+        .filter(|(key, _)| p.copy(key).is_some())
         .map(|(key, _)| *key)
         .collect()
 }
@@ -1911,10 +1987,12 @@ fn video_view<'a>(
         .and_then(|u| valid_source_url(u).ok());
     let rendering = key
         .as_deref()
-        .and_then(|u| jobs::running(jobs, JobKind::Generate, u));
+        .and_then(|u| {
+            jobs::running(jobs, JobKind::Generate, u).or_else(|| jobs::running(jobs, JobKind::Showcase, u))
+        });
     let last_job = key.as_deref().and_then(|u| {
         jobs.iter()
-            .find(|j| j.kind == JobKind::Generate && j.key == u)
+            .find(|j| j.kind.makes_video() && j.key == u)
     });
     let approved = st.approved.contains(&p.slug);
     let level = cstate::publish_level(st, &p.slug, &available_platforms(p));
@@ -2264,10 +2342,7 @@ fn publish_html(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
     let groups: Vec<String> = PLATFORMS
         .iter()
         .filter_map(|(key, label)| {
-            let copy = match *key {
-                "wechat" => v.p.wechat.as_ref(),
-                _ => v.p.douyin.as_ref(),
-            }?;
+            let copy = v.p.copy(key)?;
             let is_published = done.is_some_and(|d| d.iter().any(|x| x == key));
             Some((*key, *label, copy, is_published))
         })
@@ -2279,7 +2354,7 @@ fn publish_html(ctx: &UiCtx, v: &VideoView<'_>, st: &CreatorState) -> String {
     let body = if groups.is_empty() {
         format!(
             "<p class='cr-muted cr-publish-empty'>{}</p>",
-            h(&ctx.t("No publish text yet. When inspire-video writes a WeChat or Douyin title, caption and hashtags for this video, they show up here."))
+            h(&ctx.t("No publish text yet. When a title, caption and hashtags are written for this video, they show up here."))
         )
     } else {
         groups.concat()
@@ -2388,7 +2463,7 @@ fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
     gone.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at).then(a.0.cmp(b.0)));
     let pending: Vec<&JobRecord> = jobs
         .iter()
-        .filter(|j| j.kind == JobKind::Generate && j.state == "running")
+        .filter(|j| j.kind.makes_video() && j.state == "running")
         .collect();
     let pending = running_list(ctx, &ctx.t("Generating"), &pending, "videos");
     let list = if projects.is_empty() && gone.is_empty() {
@@ -2725,10 +2800,38 @@ mod tests {
     }
 
     #[test]
+    fn the_showcase_panel_is_on_discover_and_its_route_checks_rights_url_and_spawning() {
+        let fx = Fx::new();
+        let body = fx.get("/creator").body_text();
+        assert!(body.contains("action='/creator/showcase'"), "{body}");
+        assert!(body.contains("Make a showcase video"), "{body}");
+        let (loc, ok) = flash_of(&fx.post(
+            "/creator/showcase",
+            "csrf_token=tok&url=https%3A%2F%2Fexample.com",
+        ));
+        assert_eq!(ok, "0");
+        assert!(loc.starts_with("/creator?tab=discover&flash="), "{loc}");
+        let (_, ok) = flash_of(&fx.post(
+            "/creator/showcase",
+            "csrf_token=tok&rights=1&url=http%3A%2F%2Fexample.com",
+        ));
+        assert_eq!(ok, "0");
+        // This test server does not spawn agents: refused, no job recorded.
+        let (loc, ok) = flash_of(&fx.post(
+            "/creator/showcase",
+            "csrf_token=tok&rights=1&url=https%3A%2F%2Fexample.com",
+        ));
+        assert_eq!(ok, "0");
+        assert!(loc.contains("does%20not%20start"), "{loc}");
+        assert_eq!(fx.job_files(), 0);
+    }
+
+    #[test]
     fn generate_requires_csrf() {
         let fx = Fx::new();
         for path in [
             "/creator/generate",
+            "/creator/showcase",
             "/creator/scout",
             "/creator/stop",
             "/creator/approve",
@@ -3015,6 +3118,35 @@ mod tests {
             "{body}"
         );
         assert!(!body.contains("No publish text yet."), "{body}");
+    }
+
+    #[test]
+    fn linkedin_and_facebook_copy_shows_in_the_dialog_and_can_be_marked_published() {
+        let fx = Fx::new();
+        write_project(&fx, "T", true);
+        let p = fx.project();
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(p.join("project.json")).unwrap()).unwrap();
+        manifest["publish"]["linkedin"] =
+            json!({"title": "LI headline", "caption": "LI body", "hashtags": ["growth"]});
+        manifest["publish"]["facebook"] =
+            json!({"title": "FB headline", "caption": "FB body", "hashtags": []});
+        std::fs::write(p.join("project.json"), manifest.to_string()).unwrap();
+        let body = fx.get("/creator?tab=videos").body_text();
+        let dialog = &body[body.find("<dialog class='cr-dialog'").unwrap()..];
+        let dialog = &dialog[..dialog.find("</dialog>").unwrap()];
+        for want in ["LinkedIn", "Facebook", "LI headline", "FB body", "#growth"] {
+            assert!(dialog.contains(want), "{want}: {dialog}");
+        }
+        let (_, ok) = flash_of(&fx.post(
+            "/creator/published",
+            "csrf_token=tok&slug=demo&platform=linkedin&on=1",
+        ));
+        assert_eq!(ok, "1");
+        assert_eq!(
+            cstate::load(&fx.state_path()).published.get("demo"),
+            Some(&vec!["linkedin".to_string()])
+        );
     }
 
     #[test]

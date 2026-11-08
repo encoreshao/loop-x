@@ -11,6 +11,16 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Creator → Discover: **Make a showcase video** turns a website or a GitHub or GitLab repository into a short bilingual promo with the new inspire-showcase skill. It appears under Videos like any other video; its jobs show up in Jobs with their own stages, Retry and Slack/Mac notifications.
+- Creator → Videos: publish text for **LinkedIn** and **Facebook** (English) next to WeChat and Douyin, each with Copy, Share and a Published mark. Generate now asks the skill for all four platforms and its 4:5 feed render.
+- Settings → Skills lists the inspire-showcase skill with its install steps.
+
+### Changed
+
+- Creator → Generate: follows the updated inspire-video skill, which keeps its workflow in `skills/inspire-video/SKILL.md`. Runs read it from there, and the job's progress bar recognises the skill's new source pre-check and segment refine steps.
+
 ## [0.18.0] - 2026-11-07
 
 ### Added
