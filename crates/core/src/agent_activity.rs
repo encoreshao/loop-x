@@ -97,9 +97,36 @@ pub fn from_hook_input(stdin: &str, label: &str, at: &str) -> Option<Value> {
 /// ignored: a hook must never get in the agent's way.
 pub fn record(file: &Path, stdin: &str, label: &str, at: &str) -> std::io::Result<()> {
     match from_hook_input(stdin, label, at) {
-        Some(v) => atomic_write(file, v.to_string().as_bytes(), None),
+        Some(v) => {
+            let _ = append_trace(file, &v);
+            atomic_write(file, v.to_string().as_bytes(), None)
+        }
         None => Ok(()),
     }
+}
+
+/// Every step of every agent, appended in order (the activity file only keeps the
+/// latest one): `outputs/agent-trace.jsonl`, beside the status file whichever
+/// activity file (shared or per-task) a hook wrote.
+pub fn trace_path(activity_file: &Path) -> PathBuf {
+    let dir = activity_file.parent().unwrap_or_else(|| Path::new("."));
+    let outputs = if dir.file_name().is_some_and(|n| n == "agent-activity") {
+        dir.parent().unwrap_or(dir)
+    } else {
+        dir
+    };
+    outputs.join("agent-trace.jsonl")
+}
+
+/// The trace stops growing at this size: the old file moves to `.old` and a new one starts.
+const TRACE_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+fn append_trace(activity_file: &Path, record: &Value) -> std::io::Result<()> {
+    let path = trace_path(activity_file);
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > TRACE_MAX_BYTES) {
+        let _ = std::fs::rename(&path, path.with_extension("jsonl.old"));
+    }
+    crate::events::append_line(&path, &format!("{record}\n"))
 }
 
 /// Mark the start of a call, so the dashboard and the stall watch never read
@@ -109,6 +136,7 @@ pub fn start(file: &Path, label: &str, at: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let v = json!({"at": at, "label": label, "event": "Start", "tool": null, "detail": null});
+    let _ = append_trace(file, &v);
     atomic_write(file, v.to_string().as_bytes(), None)
 }
 
@@ -278,6 +306,20 @@ mod tests {
             (v["event"].as_str(), v["label"].as_str()),
             (Some("Stop"), Some("web #4"))
         );
+    }
+
+    #[test]
+    fn every_hook_event_is_appended_to_the_trace_beside_the_status_file() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("agent-activity/web-7.json");
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        let pre = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
+        record(&f, pre, "web #7", "t1").unwrap();
+        record(&f, pre, "web #7", "t2").unwrap();
+        let trace = std::fs::read_to_string(d.path().join("agent-trace.jsonl")).unwrap();
+        assert_eq!(trace.lines().count(), 2);
+        assert!(trace.contains("cargo test"));
+        assert_eq!(read(&f).unwrap()["at"], "t2");
     }
 
     #[test]

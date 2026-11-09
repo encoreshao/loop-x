@@ -6,7 +6,7 @@ use crate::ui::badge::default_badge;
 use crate::ui::pyfmt;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
-use loopx_core::live_trace::{self, TraceLine};
+use loopx_core::live_trace::{self, Filter, TraceLine};
 use serde_json::json;
 
 const FIRST_LOAD: usize = 200;
@@ -18,7 +18,10 @@ pub fn register(r: &mut Registry) {
 
 fn line_html(l: &TraceLine) -> String {
     format!(
-        "<div class='term-line term-{}'><time>{}</time><b>{}</b><i aria-hidden='true'>{}</i><span>{}</span></div>",
+        "<div class='term-line term-{}' data-src='{}' data-scope='{}' data-lvl='{}'><time>{}</time><b>{}</b><i aria-hidden='true'>{}</i><span>{}</span></div>",
+        l.level.css(),
+        l.source.css(),
+        pyfmt::escape(&l.scope),
         l.level.css(),
         pyfmt::escape(&l.time),
         pyfmt::escape(&l.scope),
@@ -36,9 +39,9 @@ fn running_html(running: &[String]) -> String {
 
 fn page(ctx: &UiCtx) -> UiResponse {
     let state = ctx.state;
-    let rows = live_trace::recent(&state.events_dir, FIRST_LOAD, None);
+    let rows = live_trace::recent(&state.events_dir, &state.status_path_for_loop("issue-loop"), FIRST_LOAD, None, &Filter::default());
     let cursor = rows.last().map(|l| l.at.clone()).unwrap_or_default();
-    let running = live_trace::running_now(&state.repo_root);
+    let running = live_trace::running_now(&state.status_path_for_loop("issue-loop"));
     let body_lines: String = rows.iter().map(line_html).collect();
     let empty = if rows.is_empty() {
         format!("<div class='term-empty'>{}</div>", pyfmt::escape(&ctx.t("No loop steps yet. They appear here as soon as a loop runs.")))
@@ -46,13 +49,27 @@ fn page(ctx: &UiCtx) -> UiResponse {
         String::new()
     };
     let body = format!(
-        "<div class='wrap'><div class='card term-card'>\
+        "<div class='card term-card'>\
 <div class='term-head'><div class='term-title'>{title}</div>\
 <div class='term-live' id='term-live'><span class='term-dot'></span>{live}</div>\
 <button type='button' class='term-btn' id='term-pause'>{pause}</button></div>\
+<div class='term-filters' id='term-filters'>\
+<input type='search' class='term-input' id='term-q' placeholder='{ph}' aria-label='{ph}'>\
+<select class='term-select' id='term-scope' aria-label='{scope_l}'><option value=''>{all_scopes}</option></select>\
+<div class='term-seg' role='group' aria-label='{src_l}'>\
+<button type='button' class='on' data-src=''>{all}</button><button type='button' data-src='step'>{steps}</button><button type='button' data-src='agent'>{agents}</button></div>\
+<button type='button' class='term-btn' id='term-attn' aria-pressed='false'>{attn}</button></div>\
 <div class='term-now' id='term-now'>{now}</div>\
 <div class='term' id='term' role='log' aria-live='polite' data-after='{cursor}' data-pause='{pause}' data-resume='{resume}' data-idle='{idle}'>{empty}{lines}</div>\
-<div class='term-hint'>{hint}</div></div></div>{script}",
+<div class='term-hint'>{hint}</div></div>{script}",
+        ph = pyfmt::escape(&ctx.t("Filter steps")),
+        scope_l = pyfmt::escape(&ctx.t("Loop or issue")),
+        all_scopes = pyfmt::escape(&ctx.t("All loops and issues")),
+        src_l = pyfmt::escape(&ctx.t("Show")),
+        all = pyfmt::escape(&ctx.t("All")),
+        steps = pyfmt::escape(&ctx.t("Steps")),
+        agents = pyfmt::escape(&ctx.t("Agent tools")),
+        attn = pyfmt::escape(&ctx.t("Needs attention")),
         title = pyfmt::escape(&ctx.t("Terminal")),
         live = pyfmt::escape(&ctx.t("Live")),
         pause = pyfmt::escape(&ctx.t("Pause")),
@@ -82,8 +99,8 @@ fn page(ctx: &UiCtx) -> UiResponse {
 fn lines(ctx: &UiCtx) -> UiResponse {
     let state = ctx.state;
     let after = ctx.query().first("after").map(str::to_string).filter(|a| !a.is_empty());
-    let rows = live_trace::recent(&state.events_dir, 500, after.as_deref());
-    let running = live_trace::running_now(&state.repo_root);
+    let rows = live_trace::recent(&state.events_dir, &state.status_path_for_loop("issue-loop"), 500, after.as_deref(), &Filter::default());
+    let running = live_trace::running_now(&state.status_path_for_loop("issue-loop"));
     UiResponse::json(
         200,
         &json!({
@@ -97,17 +114,23 @@ fn lines(ctx: &UiCtx) -> UiResponse {
 const SCRIPT: &str = "<script>(function(){\
 var t=document.getElementById('term');if(!t)return;\
 var now=document.getElementById('term-now'),btn=document.getElementById('term-pause'),live=document.getElementById('term-live');\
-var after=t.dataset.after||'',paused=false,stick=true;\
-function bottom(){t.scrollTop=t.scrollHeight}bottom();\
+var after=t.dataset.after||'',paused=false,stick=true,fq='',fs='',fsrc='',fat=false;\
+var q=document.getElementById('term-q'),sel=document.getElementById('term-scope'),attn=document.getElementById('term-attn'),seen={};\
+function apply(){var n=fq.toLowerCase();t.querySelectorAll('.term-line').forEach(function(l){var ok=(!fs||l.dataset.scope===fs)&&(!fsrc||l.dataset.src===fsrc)&&(!fat||l.dataset.lvl==='warn'||l.dataset.lvl==='err')&&(!n||l.textContent.toLowerCase().indexOf(n)>-1);l.hidden=!ok});if(stick)bottom()}\
+function scopes(){t.querySelectorAll('.term-line[data-scope]').forEach(function(l){var s=l.dataset.scope;if(s&&!seen[s]){seen[s]=1;var o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o)}})}\
+q.addEventListener('input',function(){fq=q.value;apply()});sel.addEventListener('change',function(){fs=sel.value;apply()});\
+attn.addEventListener('click',function(){fat=!fat;attn.setAttribute('aria-pressed',fat);attn.classList.toggle('on',fat);apply()});\
+document.querySelectorAll('.term-seg button').forEach(function(b){b.addEventListener('click',function(){fsrc=b.dataset.src;document.querySelectorAll('.term-seg button').forEach(function(x){x.classList.toggle('on',x===b)});apply()})});\
+function bottom(){t.scrollTop=t.scrollHeight}\
 t.addEventListener('scroll',function(){stick=t.scrollHeight-t.scrollTop-t.clientHeight<24});\
 btn.addEventListener('click',function(){paused=!paused;btn.textContent=paused?t.dataset.resume:t.dataset.pause;live.classList.toggle('paused',paused)});\
 function esc(s){return s.replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c]})}\
 function tick(){if(paused||document.hidden)return;\
 fetch('/terminal/lines?after='+encodeURIComponent(after),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){\
-if(d.html){var e=t.querySelector('.term-empty');if(e)e.remove();t.insertAdjacentHTML('beforeend',d.html);if(d.after)after=d.after;if(stick)bottom()}\
+if(d.html){var e=t.querySelector('.term-empty');if(e)e.remove();t.insertAdjacentHTML('beforeend',d.html);if(d.after)after=d.after;scopes();apply()}\
 now.innerHTML=d.running.length?d.running.map(function(x){return\"<div class='term-line term-run'><i>\\u25b6</i><span>\"+esc(x)+'</span></div>'}).join(''):\"<div class='term-line term-info'><span>\"+esc(t.dataset.idle)+'</span></div>'\
 }).catch(function(){})}\
-setInterval(tick,1500)})();</script>";
+scopes();bottom();setInterval(tick,1500)})();</script>";
 
 #[cfg(test)]
 mod tests {

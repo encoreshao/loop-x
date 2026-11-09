@@ -1707,5 +1707,11 @@
   "Terminal": "Terminal",
   "Nothing is running right now.": "Rien n'est en cours d'exécution.",
   "No loop steps yet. They appear here as soon as a loop runs.": "Aucune étape pour l'instant. Elles apparaissent ici dès qu'une boucle s'exécute.",
-  "The same steps are available in a terminal with: loopx watch --follow": "Les mêmes étapes sont disponibles dans un terminal avec : loopx watch --follow"
+  "The same steps are available in a terminal with: loopx watch --follow": "Les mêmes étapes sont disponibles dans un terminal avec : loopx watch --follow",
+  "Filter steps": "Filtrer les étapes",
+  "Loop or issue": "Boucle ou ticket",
+  "All loops and issues": "Toutes les boucles et tickets",
+  "Steps": "Étapes",
+  "Agent tools": "Outils de l'agent",
+  "Needs attention": "À examiner"
 }

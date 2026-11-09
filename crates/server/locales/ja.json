@@ -1707,5 +1707,11 @@
   "Terminal": "ターミナル",
   "Nothing is running right now.": "現在実行中のものはありません。",
   "No loop steps yet. They appear here as soon as a loop runs.": "ループのステップはまだありません。ループが動くとここに表示されます。",
-  "The same steps are available in a terminal with: loopx watch --follow": "ターミナルでは次のコマンドで同じステップを確認できます: loopx watch --follow"
+  "The same steps are available in a terminal with: loopx watch --follow": "ターミナルでは次のコマンドで同じステップを確認できます: loopx watch --follow",
+  "Filter steps": "ステップを絞り込む",
+  "Loop or issue": "ループまたはイシュー",
+  "All loops and issues": "すべてのループとイシュー",
+  "Steps": "ステップ",
+  "Agent tools": "エージェントのツール",
+  "Needs attention": "要確認"
 }

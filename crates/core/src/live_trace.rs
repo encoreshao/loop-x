@@ -45,8 +45,27 @@ impl Level {
     }
 }
 
+/// Where a line came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A ledger event: a step of a run, issue or loop.
+    Step,
+    /// A tool an agent is using right now (the agent hooks' trace).
+    Agent,
+}
+
+impl Source {
+    pub fn css(self) -> &'static str {
+        match self {
+            Source::Step => "step",
+            Source::Agent => "agent",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceLine {
+    pub source: Source,
     /// The event's own timestamp, for ordering and "since" cursors.
     pub at: String,
     /// Local `HH:MM:SS`.
@@ -186,6 +205,7 @@ pub fn describe(ev: &Value) -> Option<TraceLine> {
         _ => s(ev, "run_id").to_string(),
     };
     Some(TraceLine {
+        source: Source::Step,
         time: local_time(&at),
         at,
         scope,
@@ -194,9 +214,85 @@ pub fn describe(ev: &Value) -> Option<TraceLine> {
     })
 }
 
-/// The newest `limit` trace lines, oldest first. Reads today's and yesterday's
-/// ledger files only. `after` keeps only lines newer than that `at` cursor.
-pub fn recent(events_dir: &Path, limit: usize, after: Option<&str>) -> Vec<TraceLine> {
+/// Which lines to keep; every field narrows the result.
+#[derive(Debug, Default, Clone)]
+pub struct Filter {
+    /// Case-insensitive part of the scope (`kurrant.web`, `#1528`, a run id).
+    pub scope: Option<String>,
+    pub source: Option<Source>,
+    /// Only warnings and failures.
+    pub attention: bool,
+    /// Case-insensitive part of the scope or the text.
+    pub text: Option<String>,
+}
+
+impl Filter {
+    pub fn matches(&self, l: &TraceLine) -> bool {
+        let has = |hay: &str, needle: &str| hay.to_lowercase().contains(&needle.to_lowercase());
+        self.scope.as_deref().is_none_or(|q| has(&l.scope, q))
+            && self.source.is_none_or(|s| s == l.source)
+            && (!self.attention || matches!(l.level, Level::Warn | Level::Err))
+            && self
+                .text
+                .as_deref()
+                .is_none_or(|q| has(&l.text, q) || has(&l.scope, q))
+    }
+}
+
+/// One agent hook record as a trace line. Tool results are skipped: the line that
+/// announced the tool is the step.
+fn describe_agent(rec: &Value) -> Option<TraceLine> {
+    let detail = s(rec, "detail");
+    let tool = s(rec, "tool");
+    let (level, text) = match s(rec, "event") {
+        "PreToolUse" => (
+            Level::Run,
+            if detail.is_empty() {
+                tool.to_string()
+            } else {
+                format!("{tool}: {detail}")
+            },
+        ),
+        "Notification" => (Level::Warn, format!("needs input: {detail}")),
+        "Start" => (Level::Info, "agent started".to_string()),
+        "Stop" => (Level::Info, "agent finished its turn".to_string()),
+        _ => return None,
+    };
+    let at = DateTime::parse_from_rfc3339(s(rec, "at"))
+        .map(|t| events::fmt_timestamp(t.with_timezone(&chrono::Utc)))
+        .unwrap_or_else(|_| s(rec, "at").to_string());
+    Some(TraceLine {
+        source: Source::Agent,
+        time: local_time(&at),
+        at,
+        scope: s(rec, "label").to_string(),
+        level,
+        text,
+    })
+}
+
+fn agent_lines(status: &Path) -> Vec<TraceLine> {
+    let path = agent_activity::trace_path(&agent_activity::beside(status));
+    std::fs::read_to_string(path)
+        .map(|t| {
+            t.lines()
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .filter_map(|v| describe_agent(&v))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The newest `limit` trace lines that pass `filter`, oldest first: ledger steps
+/// from today and yesterday merged with the agents' tool steps under `base`
+/// (beside `status`, the issue loop's status file). `after` keeps only lines newer than that `at` cursor.
+pub fn recent(
+    events_dir: &Path,
+    status: &Path,
+    limit: usize,
+    after: Option<&str>,
+    filter: &Filter,
+) -> Vec<TraceLine> {
     let today = Local::now().date_naive();
     let since = (today - chrono::Duration::days(1))
         .format("%Y-%m-%d")
@@ -214,6 +310,7 @@ pub fn recent(events_dir: &Path, limit: usize, after: Option<&str>) -> Vec<Trace
             }
         }
     }
+    let day_start = format!("{since}T00:00:00");
     let mut lines: Vec<TraceLine> = raw
         .iter()
         .filter_map(describe)
@@ -223,7 +320,13 @@ pub fn recent(events_dir: &Path, limit: usize, after: Option<&str>) -> Vec<Trace
             }
             l
         })
+        .chain(
+            agent_lines(status)
+                .into_iter()
+                .filter(|l| l.at >= day_start),
+        )
         .filter(|l| after.is_none_or(|a| l.at.as_str() > a))
+        .filter(|l| filter.matches(l))
         .collect();
     lines.sort_by(|a, b| a.at.cmp(&b.at));
     let skip = lines.len().saturating_sub(limit);
@@ -231,9 +334,8 @@ pub fn recent(events_dir: &Path, limit: usize, after: Option<&str>) -> Vec<Trace
 }
 
 /// What is running right now, one line per active agent: `label  Tool: detail`.
-pub fn running_now(base: &Path) -> Vec<String> {
-    let status = crate::loop_scheduler::status_path_for_loop("issue-loop", Some(base));
-    agent_activity::read_all(&agent_activity::beside(&status))
+pub fn running_now(status: &Path) -> Vec<String> {
+    agent_activity::read_all(&agent_activity::beside(status))
         .iter()
         .filter(|a| s(a, "event") != "Stop")
         .map(|a| {
@@ -318,13 +420,13 @@ mod tests {
             .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(3));
         }
-        let all = recent(d.path(), 10, None);
+        let all = recent(d.path(), d.path(), 10, None, &Filter::default());
         assert_eq!(all.len(), 3);
         assert!(all[0].text.starts_with("run started"));
-        let last_two = recent(d.path(), 2, None);
+        let last_two = recent(d.path(), d.path(), 2, None, &Filter::default());
         assert_eq!(last_two.len(), 2);
         assert_eq!(last_two[0].text, "working on it");
-        let newer = recent(d.path(), 10, Some(&all[1].at));
+        let newer = recent(d.path(), d.path(), 10, Some(&all[1].at), &Filter::default());
         assert_eq!(newer.len(), 1);
     }
 
@@ -345,14 +447,94 @@ mod tests {
             Some(d.path()),
         )
         .unwrap();
-        let lines = recent(d.path(), 10, None);
+        let lines = recent(d.path(), d.path(), 10, None, &Filter::default());
         assert_eq!(lines.len(), 2);
         assert!(lines.iter().all(|l| l.scope == "web #7"), "{lines:?}");
+    }
+
+    fn agent_rec(at: &str, event: &str, tool: &str, detail: &str) -> Value {
+        json!({"at": at, "label": "web #7", "event": event, "tool": tool, "detail": detail})
+    }
+
+    #[test]
+    fn agent_tool_steps_merge_into_the_trace_and_results_are_skipped() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        let status = d.path().join("outputs/status.json");
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+        let body = [
+            agent_rec(&now, "PreToolUse", "Bash", "cargo test"),
+            agent_rec(&now, "PostToolUse", "Bash", "cargo test"),
+        ]
+        .iter()
+        .map(|v| v.to_string() + "\n")
+        .collect::<String>();
+        std::fs::write(d.path().join("outputs/agent-trace.jsonl"), body).unwrap();
+        let lines = recent(
+            &d.path().join("events"),
+            &status,
+            10,
+            None,
+            &Filter::default(),
+        );
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(
+            (lines[0].source, lines[0].text.as_str()),
+            (Source::Agent, "Bash: cargo test")
+        );
+        assert_eq!(lines[0].scope, "web #7");
+    }
+
+    #[test]
+    fn filters_narrow_by_scope_source_attention_and_text() {
+        let step = describe(&ev(
+            "issue.escalated",
+            json!({"reason": "verification_failed"}),
+        ))
+        .unwrap();
+        let agent = describe_agent(&agent_rec(
+            "2026-11-09T12:00:00+00:00",
+            "PreToolUse",
+            "Edit",
+            "src/a.rs",
+        ))
+        .unwrap();
+        let f = |f: Filter| (f.matches(&step), f.matches(&agent));
+        assert_eq!(f(Filter::default()), (true, true));
+        assert_eq!(
+            f(Filter {
+                scope: Some("KURRANT".into()),
+                ..Default::default()
+            }),
+            (true, false)
+        );
+        assert_eq!(
+            f(Filter {
+                source: Some(Source::Agent),
+                ..Default::default()
+            }),
+            (false, true)
+        );
+        assert_eq!(
+            f(Filter {
+                attention: true,
+                ..Default::default()
+            }),
+            (true, false)
+        );
+        assert_eq!(
+            f(Filter {
+                text: Some("a.rs".into()),
+                ..Default::default()
+            }),
+            (false, true)
+        );
     }
 
     #[test]
     fn a_line_renders_time_scope_glyph_and_text() {
         let l = TraceLine {
+            source: Source::Step,
             at: "a".into(),
             time: "19:57:03".into(),
             scope: "web #1".into(),

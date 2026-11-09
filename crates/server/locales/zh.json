@@ -1707,5 +1707,11 @@
   "Terminal": "终端",
   "Nothing is running right now.": "当前没有正在运行的内容。",
   "No loop steps yet. They appear here as soon as a loop runs.": "还没有循环步骤。循环运行后会立即显示在这里。",
-  "The same steps are available in a terminal with: loopx watch --follow": "在终端中可用以下命令查看相同的步骤：loopx watch --follow"
+  "The same steps are available in a terminal with: loopx watch --follow": "在终端中可用以下命令查看相同的步骤：loopx watch --follow",
+  "Filter steps": "筛选步骤",
+  "Loop or issue": "循环或议题",
+  "All loops and issues": "所有循环和议题",
+  "Steps": "步骤",
+  "Agent tools": "智能体工具",
+  "Needs attention": "需要关注"
 }
