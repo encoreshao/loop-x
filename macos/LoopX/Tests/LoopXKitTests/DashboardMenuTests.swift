@@ -6,12 +6,12 @@ import Testing
     private var all: [DashboardMenu.Entry] { DashboardMenu.sections.flatMap(\.entries) }
 
     @Test func sectionsFollowTheSidebarGroups() {
-        #expect(DashboardMenu.sections.map(\.title) == ["Loops", "Observe", "System"])
+        #expect(DashboardMenu.sections.map(\.title) == ["Loops", "Creator", "Observe", "System"])
     }
 
     @Test func everySidebarPageHasAnEntry() {
         let paths = Set(all.map(\.path))
-        for p in ["/loops", "/creator", "/runs", "/insights", "/harness", "/connectors", "/settings"] { #expect(paths.contains(p), "missing \(p)") }
+        for p in ["/loops", "/runs", "/insights", "/harness", "/connectors", "/settings"] { #expect(paths.contains(p), "missing \(p)") }
         #expect(DashboardMenu.home.path == "/")
     }
 
@@ -26,6 +26,11 @@ import Testing
         #expect(byTitle["Daemons"] == "/settings?view=daemons")
         #expect(byTitle["Cost"] == "/insights?view=cost")
         #expect(byTitle["Issues"] == "/loops/issue-loop")
+    }
+
+    @Test func creatorTabsDeepLinkIntoTheirPanel() {
+        let creator = DashboardMenu.sections.first { $0.title == "Creator" }
+        #expect(creator?.entries.map(\.path) == ["discover", "library", "showcase", "videos", "jobs"].map { "/creator?tab=\($0)" })
     }
 
     @Test func repositoryLinksPointAtTheProject() {

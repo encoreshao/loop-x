@@ -18,6 +18,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Creator: choose which platforms a video is made for, on the Showcase form and on Generate from a link. WeChat and Douyin are ticked by default, LinkedIn and Facebook are not; the choice is kept with the job, so Retry makes the same video. LinkedIn and Facebook also get a 4:5 render and English text.
 - Creator → Videos: publish text for **LinkedIn** and **Facebook** (English) next to WeChat and Douyin, each with Copy, Share and a Published mark.- Settings → Skills lists the inspire-showcase skill with its install steps.
 
+### Changed
+
+- Creator is no longer in the dashboard sidebar; the Mac app has a new **Creator** menu (also in the menu-bar icon) that opens its Discover, Library, Showcase, Videos and Jobs panels directly.
+
 ### Fixed
 
 - GitLab issues: after the loop opens a merge request for an issue, scheduled checks and manual runs do nothing for 7 days (no duplicate comment on the issue) unless someone other than the assignee comments; that comment wakes the issue up and gets a reply in its thread.

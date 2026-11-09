@@ -1,6 +1,6 @@
 import Foundation
 
-/// The dashboard pages the Mac app's menus open. Sections mirror the web sidebar (`_NAV_GROUPS`), with
+/// The dashboard pages the Mac app's menus open. Sections mirror the web sidebar (`_NAV_GROUPS`) plus a Mac-only Creator section (the sidebar has no Creator link), with
 /// the views that otherwise take a click inside a page (Logs, Daemons, Cost, ...) as direct entries.
 public enum DashboardMenu {
     /// A key equivalent, kept free of AppKit so it can be tested; the app maps it onto `NSMenuItem`.
@@ -39,7 +39,13 @@ public enum DashboardMenu {
             Entry("Issues", "/loops/issue-loop", Shortcut("2", [.command])),
             Entry("Topic Monitor", "/loops/topic-loop", Shortcut("3", [.command])),
             Entry("Inbox Triage", "/loops/inbox-triage-loop", Shortcut("4", [.command])),
-            Entry("Creator", "/creator", Shortcut("5", [.command])),
+        ]),
+        Section(title: "Creator", entries: [
+            Entry("Discover", "/creator?tab=discover", Shortcut("1", [.control, .option])),
+            Entry("Library", "/creator?tab=library", Shortcut("2", [.control, .option])),
+            Entry("Showcase", "/creator?tab=showcase", Shortcut("3", [.control, .option])),
+            Entry("Videos", "/creator?tab=videos", Shortcut("4", [.control, .option])),
+            Entry("Jobs", "/creator?tab=jobs", Shortcut("5", [.control, .option])),
         ]),
         Section(title: "Observe", entries: [
             Entry("Runs", "/runs", Shortcut("1", [.command, .option])),
