@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- `loopx watch [--follow] [--lines N]` and a **Terminal** view (Observe → Terminal, also in the Mac app's Observe menu): one terminal-style log of every loop step (run, issue, verification, escalation, merge request) plus what an agent is running right now, in the same words in both places.
 - Creator → **Showcase** tab: make a promo video from a website or repository link, from a folder of your own screenshots (pick it with Browse; up to 20 PNG/JPG/WebP images, copied for the job), or from both. It appears under Videos like any other video; its jobs show up in Jobs with their own stages, Retry and Slack/Mac notifications.
 - Creator → Showcase: choose the **voice**: no narration (the default), the quick macOS voice in English or Chinese, or one of your own cloned voice profiles from `~/.inspire-video/voices/` (listed once CosyVoice 3 is set up, spoken in the profile's language). Narrated videos get a note in their publish text that the voice is synthetic. The choice is kept with the job, so Retry narrates the same way.
 - Creator: choose which platforms a video is made for, on the Showcase form and on Generate from a link. WeChat and Douyin are ticked by default, LinkedIn and Facebook are not; the choice is kept with the job, so Retry makes the same video. LinkedIn and Facebook also get a 4:5 render and English text.

@@ -56,6 +56,7 @@ public enum DashboardMenu {
             Entry("Budget", "/insights?view=budget", Shortcut("6", [.command, .option])),
             Entry("Memory", "/insights?view=memory", Shortcut("7", [.command, .option])),
             Entry("Harness", "/harness", Shortcut("8", [.command, .option])),
+            Entry("Terminal", "/terminal", Shortcut("9", [.command, .option])),
         ]),
         Section(title: "System", entries: [
             Entry("Connectors", "/connectors", Shortcut("1", [.command, .control])),

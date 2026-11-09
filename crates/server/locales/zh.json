@@ -1703,5 +1703,9 @@
   "{name} (your cloned voice, {language})": "{name}（你的克隆声音，{language}）",
   "Narrated videos use a synthetic voice, and the publish text says so.": "带配音的视频使用合成声音，发布文案中也会注明。",
   "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.": "克隆声音需要 CosyVoice 3。请用 bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh 设置一次。",
-  "Voice": "声音"
+  "Voice": "声音",
+  "Terminal": "终端",
+  "Nothing is running right now.": "当前没有正在运行的内容。",
+  "No loop steps yet. They appear here as soon as a loop runs.": "还没有循环步骤。循环运行后会立即显示在这里。",
+  "The same steps are available in a terminal with: loopx watch --follow": "在终端中可用以下命令查看相同的步骤：loopx watch --follow"
 }

@@ -25,6 +25,7 @@ mod serve_cmd;
 mod status_cmd;
 mod topic_cmd;
 mod update_cmd;
+mod watch_cmd;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -147,6 +148,11 @@ enum Command {
     #[command(disable_help_flag = true)]
     Gitlab {
         /// `[--instance=<name>] <command> [args...]`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Terminal view of every loop step: what runs now plus the newest steps (`--follow`, `--lines N`)
+    Watch {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -372,6 +378,7 @@ fn main() -> ExitCode {
         Command::Serve { args } => serve_cmd::run(&args),
         Command::Entry { args } => run_cmds::entry(&args),
         Command::Status { args } => status_cmd::run(&args),
+        Command::Watch { args } => watch_cmd::run(&args),
         Command::Gitlab { args } => gitlab_cmd::run(&args),
         Command::Worktree {
             command: WorktreeCommand::New { args },

@@ -1703,5 +1703,9 @@
   "{name} (your cloned voice, {language})": "{name}（あなたのクローン音声・{language}）",
   "Narrated videos use a synthetic voice, and the publish text says so.": "ナレーション付きの動画は合成音声を使い、公開用テキストにもその旨を記載します。",
   "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.": "クローン音声には CosyVoice 3 が必要です。bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh で一度だけセットアップしてください。",
-  "Voice": "音声"
+  "Voice": "音声",
+  "Terminal": "ターミナル",
+  "Nothing is running right now.": "現在実行中のものはありません。",
+  "No loop steps yet. They appear here as soon as a loop runs.": "ループのステップはまだありません。ループが動くとここに表示されます。",
+  "The same steps are available in a terminal with: loopx watch --follow": "ターミナルでは次のコマンドで同じステップを確認できます: loopx watch --follow"
 }

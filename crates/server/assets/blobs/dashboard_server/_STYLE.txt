@@ -3223,3 +3223,29 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .proj-add { margin-top: 0.85rem; padding: 1rem 1.1rem; border: 1px dashed var(--md-outline); border-radius: 16px; background: color-mix(in srgb, var(--md-surface-container-lowest) 70%, transparent); }
 .proj-add-head h3 { margin: 0; font-size: 0.9375rem; font-weight: 600; }
 .proj-add-head p { margin: 0.15rem 0 0; font-size: 0.8125rem; color: var(--md-on-surface-variant); }
+
+/* Terminal view (/terminal): one dark monospace log of every loop step, the same lines `loopx watch` prints. */
+.term-card{display:flex;flex-direction:column;gap:.75rem;padding:1rem 1.1rem}
+.term-head{display:flex;align-items:center;gap:.75rem;min-height:32px}
+.term-title{font-size:1.05rem;font-weight:600;color:var(--md-on-surface)}
+.term-live{display:inline-flex;align-items:center;gap:.4rem;margin-right:auto;font-size:.8rem;color:var(--md-on-surface-variant)}
+.term-dot{width:.5rem;height:.5rem;border-radius:50%;background:var(--md-success,#30d158)}
+.term-live.paused .term-dot{background:var(--md-on-surface-variant)}
+@media(prefers-reduced-motion:no-preference){.term-live:not(.paused) .term-dot{animation:term-pulse 1.6s ease-in-out infinite}@keyframes term-pulse{50%{opacity:.35}}}
+.term-btn{height:32px;box-sizing:border-box;padding:0 .9rem;border:1px solid var(--md-outline-variant);border-radius:999px;background:transparent;color:var(--md-on-surface);font:inherit;font-size:.8rem;cursor:pointer;transition:background .2s cubic-bezier(.32,.72,0,1)}
+.term-btn:hover{background:color-mix(in srgb,var(--md-on-surface) 8%,transparent)}
+.term-now,.term{box-sizing:border-box;border-radius:12px;background:#1c1c1e;color:#f5f5f7;font:12.5px/1.6 ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace}
+.term-now{padding:.55rem .85rem;border:1px solid #38383a}
+.term{height:min(62vh,640px);min-height:240px;overflow:auto;padding:.7rem .85rem;border:1px solid #38383a;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.term-line{display:flex;gap:.75rem;align-items:baseline;white-space:pre-wrap;overflow-wrap:anywhere}
+.term-line time{flex:none;color:#8e8e93}
+.term-line b{flex:none;min-width:11ch;max-width:26ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#64d2ff;font-weight:500}
+.term-line i{flex:none;width:1.2ch;font-style:normal;text-align:center}
+.term-line span{min-width:0}
+.term-ok i,.term-ok span{color:#30d158}
+.term-err i,.term-err span{color:#ff453a}
+.term-warn i,.term-warn span{color:#ff9f0a}
+.term-run i,.term-run span{color:#0a84ff}
+.term-info i,.term-info span{color:#aeaeb2}
+.term-empty{color:#8e8e93}
+.term-hint{font-size:.78rem;color:var(--md-on-surface-variant)}

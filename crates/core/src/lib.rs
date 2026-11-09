@@ -52,6 +52,7 @@ pub mod linkedin_extract;
 pub mod linkedin_humanize;
 pub mod linkedin_people;
 pub mod linkedin_session;
+pub mod live_trace;
 pub mod loop_audit;
 pub mod loop_definition;
 pub mod loop_eval;

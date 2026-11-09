@@ -278,6 +278,12 @@
     "<svg class='icon' aria-hidden='true'><use href='#i-fact_check'/></svg>"
    ],
    [
+    "terminal",
+    "/terminal",
+    "Terminal",
+    "<svg class='icon' aria-hidden='true'><use href='#i-terminal'/></svg>"
+   ],
+   [
     "connectors",
     "/connectors",
     "Connectors",
@@ -308,7 +314,8 @@
     [
      "runs",
      "insights",
-     "harness"
+     "harness",
+     "terminal"
     ]
    ],
    [
