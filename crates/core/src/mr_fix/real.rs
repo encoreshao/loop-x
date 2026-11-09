@@ -298,13 +298,20 @@ impl GitWorkspace {
             .collect())
     }
 
-    /// Refuse a worktree whose branch holds commits origin does not have: an
-    /// earlier run's fix that was never pushed. Discarding it is manual.
-    fn refuse_unpushed(&self, wt: &Path, source_branch: &str) -> Result<(), String> {
+    /// A worktree whose branch holds commits origin does not have is an earlier
+    /// run's fix that was never pushed (its checks failed, say). The goal is a
+    /// fix on the latest code of the MR branch, so those commits are saved on a
+    /// `loopx-backup/mr-<iid>-<sha>` branch and the worktree is reset to
+    /// `origin/<source_branch>`; the agent redoes the pending threads on top of it.
+    /// Uncommitted changes are never discarded: they are refused.
+    fn shelve_unpushed(&self, wt: &Path, source_branch: &str) -> Result<(), String> {
         if !wt.join(".git").exists() {
             return Ok(());
         }
-        let range = format!("refs/remotes/origin/{source_branch}..HEAD");
+        let origin_ref = format!("refs/remotes/origin/{source_branch}");
+        // Reset to the latest branch, not to what the last run saw.
+        self.git(wt, &["fetch", "origin", "--", source_branch])?;
+        let range = format!("{origin_ref}..HEAD");
         let Ok((Some(0), out)) = self.git_status(wt, &["rev-list", "--count", &range]) else {
             return Ok(());
         };
@@ -312,12 +319,26 @@ impl GitWorkspace {
         if n == 0 {
             return Ok(());
         }
-        Err(format!(
-            "{}: an earlier unpushed fix is waiting there ({n} commit(s) on loop/mr-{} \
-             that origin/{source_branch} does not have); push or discard it by hand",
-            wt.display(),
-            self.mr_iid
-        ))
+        if self.dirty(wt)? {
+            return Err(format!(
+                "{}: an earlier unpushed fix ({n} commit(s)) sits next to uncommitted changes, \
+                 which are never discarded; commit or discard them by hand",
+                wt.display()
+            ));
+        }
+        let head = self.head(wt)?;
+        let backup = format!(
+            "loopx-backup/mr-{}-{}",
+            self.mr_iid,
+            head.chars().take(10).collect::<String>()
+        );
+        self.git(wt, &["branch", "-f", &backup, &head])?;
+        self.git(wt, &["reset", "--hard", &origin_ref])?;
+        eprintln!(
+            "discarded {n} unpushed commit(s) from an earlier run of this MR's fix and reset \
+             to origin/{source_branch}; they are kept on branch {backup}"
+        );
+        Ok(())
     }
 }
 
@@ -334,8 +355,8 @@ impl Workspace for GitWorkspace {
             &self.mr_iid,
             &self.worktree_root,
         ));
-        // Before syncing, so a diverged branch reports the leftover, not "cannot fast-forward".
-        self.refuse_unpushed(&wt, source_branch)?;
+        // Before syncing, so a diverged branch is reset, not "cannot fast-forward".
+        self.shelve_unpushed(&wt, source_branch)?;
         let dir = crate::worktree::new_mr_worktree(
             &self.repo_path,
             &self.mr_iid,
@@ -344,7 +365,7 @@ impl Workspace for GitWorkspace {
         )
         .map(PathBuf::from)
         .map_err(|f| f.message)?;
-        self.refuse_unpushed(&dir, source_branch)?;
+        self.shelve_unpushed(&dir, source_branch)?;
         if let Some(cmd) = install_command(&dir) {
             let r = CommandVerifier::new("mr_fix_install", cmd)
                 .with_cwd(&dir)
@@ -617,19 +638,82 @@ mod tests {
         assert!(dir.join("rebased.txt").is_file());
     }
 
+    fn backups(repo: &Path) -> Vec<String> {
+        sh(
+            repo,
+            &[
+                "branch",
+                "--list",
+                "loopx-backup/*",
+                "--format=%(refname:short)",
+            ],
+        )
+        .lines()
+        .map(str::to_string)
+        .collect()
+    }
+
     #[test]
-    fn a_force_push_with_an_unpushed_local_fix_stays_refused() {
+    fn a_force_push_with_an_unpushed_local_fix_follows_origin_and_keeps_a_backup() {
         let d = tempfile::tempdir().unwrap();
         let (ws, dir, origin) = setup(d.path());
         commit(&dir, "mine.txt");
         let ours = ws.head(&dir).unwrap();
         force_push_rewrite(d.path(), &origin);
-        let e = ws.prepare("feat/x").unwrap_err();
+        let again = ws.prepare("feat/x").unwrap();
+        assert_eq!(again, dir);
         assert!(
-            e.contains("an earlier unpushed fix is waiting there"),
-            "{e}"
+            !dir.join("mine.txt").exists(),
+            "the worktree follows origin"
         );
-        assert_eq!(ws.head(&dir).unwrap(), ours, "nothing was reset");
+        assert!(dir.join("rebased.txt").is_file());
+        let kept = backups(&dir);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(sh(&dir, &["rev-parse", &kept[0]]), ours);
+    }
+
+    #[test]
+    fn an_earlier_unpushed_fix_is_backed_up_and_the_worktree_follows_origin() {
+        let d = tempfile::tempdir().unwrap();
+        let (ws, dir, origin) = setup(d.path());
+        commit(&dir, "fix.txt");
+        let ours = ws.head(&dir).unwrap();
+        // The branch also moved on origin meanwhile (a new commit by the author).
+        sh(
+            d.path(),
+            &[
+                "clone",
+                "-q",
+                "-b",
+                "feat/x",
+                &origin.display().to_string(),
+                "other",
+            ],
+        );
+        commit(&d.path().join("other"), "theirs.txt");
+        sh(&d.path().join("other"), &["push", "-q", "origin", "feat/x"]);
+        let theirs = sh(&d.path().join("other"), &["rev-parse", "HEAD"]);
+        assert_eq!(ws.prepare("feat/x").unwrap(), dir);
+        assert_eq!(ws.head(&dir).unwrap(), theirs, "latest code on the branch");
+        assert!(!dir.join("fix.txt").exists());
+        let kept = backups(&dir);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(sh(&dir, &["rev-parse", &kept[0]]), ours, "nothing is lost");
+        // A second prepare has nothing left to shelve.
+        assert!(ws.prepare("feat/x").is_ok());
+        assert_eq!(backups(&dir).len(), 1);
+    }
+
+    #[test]
+    fn an_unpushed_fix_with_uncommitted_changes_is_still_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let (ws, dir, _) = setup(d.path());
+        commit(&dir, "fix.txt");
+        std::fs::write(dir.join("wip.txt"), "x").unwrap();
+        let e = ws.prepare("feat/x").unwrap_err();
+        assert!(e.contains("uncommitted changes"), "{e}");
+        assert!(dir.join("fix.txt").is_file() && dir.join("wip.txt").is_file());
+        assert!(backups(&dir).is_empty());
     }
 
     #[test]
@@ -786,44 +870,6 @@ mod tests {
         ] {
             assert!(ws.checks(&dir, &v(t, l)).is_err(), "{t} / {l}");
         }
-    }
-
-    #[test]
-    fn an_earlier_unpushed_fix_blocks_the_next_prepare() {
-        let d = tempfile::tempdir().unwrap();
-        let (ws, dir, origin) = setup(d.path());
-        commit(&dir, "fix.txt");
-        let e = ws.prepare("feat/x").unwrap_err();
-        assert!(
-            e.contains("an earlier unpushed fix is waiting there"),
-            "{e}"
-        );
-        assert!(e.contains(&dir.display().to_string()), "{e}");
-        assert!(e.contains("push or discard it by hand"), "{e}");
-        // Also when the branch moved on origin meanwhile (no fast-forward).
-        sh(
-            d.path(),
-            &[
-                "clone",
-                "-q",
-                "-b",
-                "feat/x",
-                &origin.display().to_string(),
-                "other",
-            ],
-        );
-        commit(&d.path().join("other"), "theirs.txt");
-        sh(&d.path().join("other"), &["push", "-q", "origin", "feat/x"]);
-        let e = ws.prepare("feat/x").unwrap_err();
-        assert!(
-            e.contains("an earlier unpushed fix is waiting there"),
-            "{e}"
-        );
-        // Nothing was discarded.
-        assert!(dir.join("fix.txt").is_file());
-        // Once pushed (here: after a manual reset to origin), prepare works again.
-        sh(&dir, &["reset", "-q", "--hard", "origin/feat/x"]);
-        assert!(ws.prepare("feat/x").is_ok());
     }
 
     #[test]

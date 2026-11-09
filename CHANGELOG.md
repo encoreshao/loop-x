@@ -26,6 +26,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Fix now no longer stops with "an earlier unpushed fix is waiting there": a leftover unpushed fix from an earlier run (for example one whose checks failed) is saved on a `loopx-backup/mr-<iid>-<sha>` branch and the MR worktree is reset to the latest `origin/<branch>`, so the new run fixes the pending comments on current code. Uncommitted changes are still never discarded.
 - Fix now installs a JavaScript project's dependencies (`yarn install --frozen-lockfile`, `pnpm` or `npm ci`, by lockfile) in a fresh worktree before the agent and the checks run; before, `yarn test` and `yarn lint` failed with exit 127 (`jest`/`next: command not found`). A failed fix now shows its headline and the failing command's output in a readable error panel on the MR card.
 - Fix now no longer fails with "the agent wrote no handoff" on macOS: the agent's scratch paths are resolved (`/var` → `/private/var`) so its permission rules match, and a failed fix shows its reason on the MR card instead of only on hover.
 - Dashboard notification toasts in dark mode with a tinted accent (green, blue, ...): the background now follows the dark theme instead of the light accent wash, so the message, time and close button are readable.
