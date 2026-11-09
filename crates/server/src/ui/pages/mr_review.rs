@@ -266,8 +266,14 @@ fn fix_html(ctx: &UiCtx, mr: &MyMr, fix: &FixEnv) -> String {
             "stopped" => ("skipped", ctx.t("Fix stopped"), String::new()),
             _ => return None,
         };
+        // A failure's reason is shown in full under the buttons, not only on hover.
+        let why = if kind == "failed" && !title.trim().is_empty() {
+            format!("<p class='mr-fix-error' role='alert'>{}</p>", h(title.trim()))
+        } else {
+            String::new()
+        };
         let title = if title.is_empty() { String::new() } else { format!(" title='{}'", h(&title)) };
-        Some(format!("<span class='pill history-pill history-{kind}'{title}>{}</span>", h(&text)))
+        Some(format!("<span class='pill history-pill history-{kind}'{title}>{}</span>{why}", h(&text)))
     });
     format!("{button}{}", result.unwrap_or_default())
 }
@@ -927,6 +933,7 @@ mod tests {
         loopx_core::mr_fix::jobs::finish(&dir, &job.id, "failed", "build <broke>").unwrap();
         let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
         assert!(html.contains("Fix failed") && html.contains("title='build &lt;broke&gt;'"), "{html}");
+        assert!(html.contains("<p class='mr-fix-error' role='alert'>build &lt;broke&gt;</p>"), "{html}");
     }
 
     fn render_in(st: &UiState, lang: &str, listed: Vec<AccountMrs>) -> String {

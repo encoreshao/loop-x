@@ -1755,6 +1755,7 @@ ul.plain li { font-size: 0.9rem; }
 .result-mr { display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 500; color: var(--md-primary); text-decoration: none; }
 .result-mr:hover { color: var(--md-primary); text-decoration: underline; text-underline-offset: 2px; }
 .result-mr .icon:last-child { width: 0.8rem; height: 0.8rem; opacity: 0.75; }
+.mr-fix-error { flex-basis: 100%; margin: 0; padding: 0.5rem 0.75rem; border-radius: 10px; font-size: 0.85rem; line-height: 1.4; color: var(--md-error, #b3261e); background: color-mix(in srgb, var(--md-error, #b3261e) 10%, transparent); overflow-wrap: anywhere; }
 .mr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin-top: 0.6rem; }
 .mr-auto { display: inline-flex; align-items: center; gap: 0.5rem; }
 .mr-auto-label { font-size: 0.85rem; color: var(--md-on-surface-variant); }

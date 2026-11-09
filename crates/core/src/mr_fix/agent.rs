@@ -315,6 +315,12 @@ pub struct ClaudeAgent {
 
 impl ClaudeAgent {
     pub fn new(argv: Box<ArgvFn>, scratch: PathBuf, exe: &str) -> Self {
+        // The permission rules hold resolved paths (macOS: /var -> /private/var),
+        // so the paths the prompt hands the agent must be resolved too, or its
+        // writes and the announce command are denied.
+        let scratch = std::fs::create_dir_all(&scratch)
+            .and_then(|_| std::fs::canonicalize(&scratch))
+            .unwrap_or(scratch);
         ClaudeAgent {
             announce_cmd: announce_command(exe, &scratch),
             argv,
@@ -918,9 +924,28 @@ mod tests {
         assert_eq!(got.items[0].discussion_id, "d1");
         assert_eq!(got.verification.test, "make test");
         let p = seen.borrow();
+        let scratch = std::fs::canonicalize(&scratch).unwrap();
         assert!(p.contains(&format!("plan at {}", plan_draft_path(&scratch).display())));
         assert!(p.contains(&format!("run {}", announce_command(EXE, &scratch))));
-        assert!(p.contains(&format!("handoff {h}")));
+        assert!(p.contains(&format!("handoff {}", handoff_path(&scratch).display())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_agent_hands_the_session_resolved_scratch_paths() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let a = ClaudeAgent::new(Box::new(|_| Ok(vec![])), link.join("job"), EXE);
+        let resolved = std::fs::canonicalize(&real).unwrap().join("job");
+        assert_eq!(a.scratch, resolved);
+        assert!(
+            a.announce_cmd.contains(&resolved.display().to_string()),
+            "{}",
+            a.announce_cmd
+        );
     }
 
     #[test]
