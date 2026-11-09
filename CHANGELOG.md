@@ -20,10 +20,12 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Issue loop screenshots: shots are planned from the merge request's changed files, and pages behind a sign-in are reached through a documented dev bypass first, then the local development database read-only, then test data or mocks.
 - Creator is no longer in the dashboard sidebar; the Mac app has a new **Creator** menu (also in the menu-bar icon) that opens its Discover, Library, Showcase, Videos and Jobs panels directly.
 
 ### Fixed
 
+- Dashboard notification toasts in dark mode with a tinted accent (green, blue, ...): the background now follows the dark theme instead of the light accent wash, so the message, time and close button are readable.
 - GitLab issues: after the loop opens a merge request for an issue, scheduled checks and manual runs do nothing for 7 days (no duplicate comment on the issue) unless someone other than the assignee comments; that comment wakes the issue up and gets a reply in its thread.
 
 ### Changed

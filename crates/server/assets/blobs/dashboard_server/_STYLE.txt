@@ -3103,7 +3103,7 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .app-toasts{position:fixed;left:calc(var(--shell-left,0px) + 12px);bottom:12px;z-index:1000;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;width:min(340px,calc(100vw - 24px));max-height:calc(100vh - 80px);margin:0;padding:0;list-style:none;overflow:visible;pointer-events:none}
 html.office-mode .app-toasts{left:12px}
 body:has(#office .office-motion) .app-toasts{bottom:52px}
-.app-toast{position:relative;display:flex;align-items:flex-start;gap:.65rem;box-sizing:border-box;padding:.75rem .7rem .75rem .9rem;border-radius:14px;border:1px solid color-mix(in srgb,var(--toast-tint) 28%,var(--md-outline-variant,#888));border-left:3px solid var(--toast-tint);background:color-mix(in srgb,var(--toast-tint) 7%,var(--md-nav-surface,var(--md-surface,#fff)));color:var(--md-on-surface,#e6e8ee);-webkit-backdrop-filter:saturate(160%) blur(18px);backdrop-filter:saturate(160%) blur(18px);box-shadow:0 1px 2px rgba(0,0,0,.08),0 10px 28px rgba(0,0,0,.16);font-size:.875rem;line-height:1.45;pointer-events:auto;--toast-tint:var(--md-nav-accent,var(--md-primary,#8ab4f8));animation:app-toast-in .32s ease-out both}
+.app-toast{position:relative;display:flex;align-items:flex-start;gap:.65rem;box-sizing:border-box;padding:.75rem .7rem .75rem .9rem;border-radius:14px;border:1px solid color-mix(in srgb,var(--toast-tint) 28%,var(--md-outline-variant,#888));border-left:3px solid var(--toast-tint);background:color-mix(in srgb,var(--toast-tint) 7%,var(--md-surface-container-high,var(--md-surface,#fff)));color:var(--md-on-surface,#e6e8ee);-webkit-backdrop-filter:saturate(160%) blur(18px);backdrop-filter:saturate(160%) blur(18px);box-shadow:0 1px 2px rgba(0,0,0,.08),0 10px 28px rgba(0,0,0,.16);font-size:.875rem;line-height:1.45;pointer-events:auto;--toast-tint:var(--md-nav-accent,var(--md-primary,#8ab4f8));animation:app-toast-in .32s ease-out both}
 .app-toast.is-link{cursor:pointer}
 .app-toast[data-kind='done']{--toast-tint:var(--md-success,#3ddc84)}
 .app-toast[data-kind='failed']{--toast-tint:var(--md-error,#ff5252)}
@@ -3119,7 +3119,7 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 @keyframes app-toast-in{from{opacity:0}to{opacity:1}}
 @keyframes app-toast-out{to{opacity:0}}
 @media(prefers-reduced-motion:no-preference){@keyframes app-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}}
-@media(prefers-reduced-transparency:reduce){.app-toast{background:var(--md-nav-surface,var(--md-surface,#fff));-webkit-backdrop-filter:none;backdrop-filter:none}}
+@media(prefers-reduced-transparency:reduce){.app-toast{background:var(--md-surface-container-high,var(--md-surface,#fff));-webkit-backdrop-filter:none;backdrop-filter:none}}
 
 /* Project cards (GitLab and connected projects): identity and state on top, where it works,
    a readable Custom instructions row, and the settings folded away. */
