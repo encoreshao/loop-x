@@ -445,7 +445,7 @@ impl Client {
     }
 
     /// The open merge request from the loop's `loop/issue-<iid>` branch, as
-    /// `{iid, web_url}`, or `None` when there is none.
+    /// `{iid, web_url, created_at}`, or `None` when there is none.
     pub fn loop_merge_request(
         &self,
         project_id: &str,
@@ -461,6 +461,7 @@ impl Client {
         Ok(Some(serde_json::json!({
             "iid": mr_iid,
             "web_url": mr.get("web_url").cloned().unwrap_or(Value::Null),
+            "created_at": mr.get("created_at").cloned().unwrap_or(Value::Null),
         })))
     }
 
@@ -697,7 +698,7 @@ mod tests {
             (
                 200,
                 "Content-Type: application/json\r\n",
-                json!([{"iid": 5, "web_url": "https://g.test/mr/5", "state": "opened"}])
+                json!([{"iid": 5, "web_url": "https://g.test/mr/5", "state": "opened", "created_at": "2026-11-06T09:00:00Z"}])
                     .to_string(),
             ),
             (200, "Content-Type: application/json\r\n", "[]".to_string()),
@@ -707,6 +708,7 @@ mod tests {
         let mr = client.loop_merge_request("g/web", 7).unwrap().unwrap();
         assert_eq!(mr["iid"], 5);
         assert_eq!(mr["web_url"], "https://g.test/mr/5");
+        assert_eq!(mr["created_at"], "2026-11-06T09:00:00Z");
         assert!(mr.get("notes").is_none());
         let requests = served.requests.lock().unwrap();
         assert!(

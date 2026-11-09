@@ -3222,9 +3222,17 @@ pub fn run_all_issues(
                     ctx.log(&format!("issue tracking config unreadable ({e}); treating {alias} #{iid_text} as enabled"));
                     true
                 });
-            if enabled {
-                todo.push((alias.clone(), issue));
+            if !enabled {
+                continue;
             }
+            if let Some(mr) = quiet_mr(ctx, &alias, &iid_text) {
+                ctx.log(&format!(
+                    "{alias} #{iid_text}: quiet, merge request !{mr} is under {} days old and nobody else has commented; skipped",
+                    crate::mr_quiet::QUIET_DAYS
+                ));
+                continue;
+            }
+            todo.push((alias.clone(), issue));
         }
     }
     let max_parallel = crate::concurrency_config::current().issues;
@@ -3525,6 +3533,46 @@ fn value_text_or_empty(v: &Value) -> String {
     value_text(v)
 }
 
+/// The open MR's iid when the issue is inside the quiet window after the loop
+/// opened its merge request (see [`crate::mr_quiet`]): neither a scheduled
+/// batch nor a manual run should start the agent. GitLab projects only; never
+/// under test fakes; any trouble means "run as usual".
+pub(crate) fn quiet_mr(ctx: &RunCtx, alias: &str, issue_iid: &str) -> Option<i64> {
+    if ctx.fakes.is_some() {
+        return None;
+    }
+    let config = Config::load(&project_config_path(ctx)).ok()?;
+    let project = config.project(alias).ok()?;
+    if crate::hosted::is_hosted(&project) || !crate::config::changes_code(&project) {
+        return None;
+    }
+    let text = |k: &str| {
+        project
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    };
+    let project_id = text("project_id")?;
+    let assignee = text("assignee_username").or_else(|| config.assignee_username().ok())?;
+    let instance = text("instance");
+    let cache_instance = instance.clone().or_else(|| {
+        crate::gitlab::load_config()
+            .and_then(|c| c.get("default").and_then(Value::as_str).map(str::to_owned))
+            .filter(|n| !n.is_empty())
+    })?;
+    match crate::mr_quiet::check(
+        &project_id,
+        instance.as_deref(),
+        &cache_instance,
+        issue_iid,
+        &assignee,
+    ) {
+        crate::mr_quiet::Verdict::Quiet { mr_iid } => Some(mr_iid),
+        crate::mr_quiet::Verdict::Run => None,
+    }
+}
+
 pub fn run_single_issue(
     ctx: &RunCtx,
     run_id: &str,
@@ -3532,6 +3580,14 @@ pub fn run_single_issue(
     issue_iid: &str,
     invoker: Invoker,
 ) -> Result<IssueRun, String> {
+    if let Some(mr) = quiet_mr(ctx, alias, issue_iid) {
+        let msg = format!(
+            "{alias} #{issue_iid} is quiet: merge request !{mr} was opened less than {} days ago and nobody else has commented since. A new comment from someone else wakes it up.",
+            crate::mr_quiet::QUIET_DAYS
+        );
+        ctx.log(&msg);
+        return Err(msg);
+    }
     let definition =
         LoopDefinition::from_yaml(&ctx.definition_path()).map_err(|e| e.to_string())?;
     // Never alongside another run working on the same issue.

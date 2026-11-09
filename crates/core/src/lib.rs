@@ -81,6 +81,7 @@ pub mod mr_feedback;
 pub mod mr_fix;
 pub mod mr_plan;
 pub mod mr_precheck;
+pub mod mr_quiet;
 pub mod mr_screenshots;
 pub mod mr_threads;
 pub mod msg;
