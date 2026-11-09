@@ -153,17 +153,34 @@ fn always_private(path: &str) -> bool {
 /// has a lockfile but no `node_modules` (a fresh worktree never has one, so
 /// `yarn test` would die with "jest: command not found", exit 127).
 fn install_command(dir: &Path) -> Option<&'static str> {
-    if !dir.join("package.json").is_file() || dir.join("node_modules").exists() {
+    if !dir.join("package.json").is_file() {
         return None;
     }
+    // `SHARP_IGNORE_GLOBAL_LIBVIPS`: with Homebrew's libvips on the daemon's PATH,
+    // sharp skips its prebuilt binary and tries to compile from source.
+    // The marker is written only when an install finishes, so a tree left by a
+    // failed install is installed again.
     [
-        ("yarn.lock", "yarn install --frozen-lockfile"),
-        ("pnpm-lock.yaml", "pnpm install --frozen-lockfile"),
-        ("package-lock.json", "npm ci"),
+        (
+            "yarn.lock",
+            "SHARP_IGNORE_GLOBAL_LIBVIPS=1 yarn install --frozen-lockfile",
+            ".yarn-integrity",
+        ),
+        (
+            "pnpm-lock.yaml",
+            "SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install --frozen-lockfile",
+            ".modules.yaml",
+        ),
+        (
+            "package-lock.json",
+            "SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm ci",
+            ".package-lock.json",
+        ),
     ]
     .into_iter()
-    .find(|(lock, _)| dir.join(lock).is_file())
-    .map(|(_, cmd)| cmd)
+    .find(|(lock, _, _)| dir.join(lock).is_file())
+    .filter(|(_, _, marker)| !dir.join("node_modules").join(marker).exists())
+    .map(|(_, cmd, _)| cmd)
 }
 
 /// Files the worktree setup copies in when the branch does not track them.
@@ -821,18 +838,28 @@ mod tests {
     }
 
     #[test]
-    fn install_command_follows_the_lockfile_and_skips_installed_trees() {
+    fn install_command_follows_the_lockfile_and_skips_only_complete_installs() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path();
         assert_eq!(install_command(p), None);
         std::fs::write(p.join("package.json"), "{}").unwrap();
         assert_eq!(install_command(p), None, "no lockfile, no guess");
         std::fs::write(p.join("package-lock.json"), "{}").unwrap();
-        assert_eq!(install_command(p), Some("npm ci"));
+        assert_eq!(
+            install_command(p),
+            Some("SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm ci")
+        );
         std::fs::write(p.join("yarn.lock"), "").unwrap();
-        assert_eq!(install_command(p), Some("yarn install --frozen-lockfile"));
+        // A global (Homebrew) libvips must not make sharp compile from source.
+        assert_eq!(
+            install_command(p),
+            Some("SHARP_IGNORE_GLOBAL_LIBVIPS=1 yarn install --frozen-lockfile")
+        );
+        // A half-installed tree (a failed earlier install) is installed again.
         std::fs::create_dir(p.join("node_modules")).unwrap();
-        assert_eq!(install_command(p), None, "already installed");
+        assert!(install_command(p).is_some(), "partial tree");
+        std::fs::write(p.join("node_modules/.yarn-integrity"), "").unwrap();
+        assert_eq!(install_command(p), None, "complete install");
     }
 
     #[test]
