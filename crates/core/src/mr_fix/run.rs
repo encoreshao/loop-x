@@ -10,6 +10,7 @@ use super::feedback::{parse_marker_from_notes, pending, Handled, Item, Severity}
 use super::jobs::FixJob;
 use super::notes::{finish_note, start_note, Done, Outcome, PlannedChange, AGENT_PREFIX};
 use crate::loop_plugins::mr_review::{build_diff_text, DIFF_CAP_BYTES};
+use crate::mr_screenshots::{screenshots_section, ShotPair, UploadedPair};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -55,6 +56,10 @@ pub trait MrApi {
     /// Post a top-level MR note; returns its id.
     fn post_note(&self, body: &str) -> Result<i64, String>;
     fn reply(&self, discussion_id: &str, body: &str) -> Result<(), String>;
+    /// Upload an image to the project; returns the URL to embed it with.
+    fn upload(&self, _path: &Path) -> Result<String, String> {
+        Err("uploads are not supported".into())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +132,10 @@ pub struct HandoffItem {
 pub struct AgentHandoff {
     pub items: Vec<HandoffItem>,
     pub verification: Verification,
+    /// Validated before/after pairs (files the agent saved), posted after the push.
+    pub screenshots: Vec<ShotPair>,
+    /// Why a shot is missing, in the agent's words.
+    pub screenshots_note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +259,9 @@ pub fn parse_handoff(json: &str) -> Result<AgentHandoff, String> {
             lint: text(&ver, "lint", 500),
             test: text(&ver, "test", 500),
         },
+        // The agent session validates and resolves the files (it knows the dir).
+        screenshots: Vec::new(),
+        screenshots_note: text(&v, "screenshots_note", MAX_PLAN_TEXT),
     })
 }
 
@@ -785,8 +797,58 @@ pub fn run_with(
             }
         }
     }
+    if pushed {
+        if let Ok(h) = &handoff {
+            post_screenshots(mr, h, out);
+        }
+    }
     let _ = writeln!(out, "{}: {}", res.state, res.summary);
     res
+}
+
+/// Upload the agent's screenshots and post them in one note. Only called for a
+/// fix that was pushed, so the images match the code on the branch. A failed
+/// upload drops that image and is logged; it never fails the run.
+fn post_screenshots(mr: &dyn MrApi, h: &AgentHandoff, out: &mut dyn Write) {
+    let reason = super::notes::safe_text(&h.screenshots_note);
+    let mut pairs = Vec::new();
+    for shot in &h.screenshots {
+        let after = match mr.upload(&shot.after) {
+            Ok(u) => u,
+            Err(e) => {
+                let _ = writeln!(out, "could not upload a screenshot: {e}");
+                continue;
+            }
+        };
+        let (before, before_failed) = match &shot.before {
+            None => (None, false),
+            Some(b) => match mr.upload(b) {
+                Ok(u) => (Some(u), false),
+                Err(e) => {
+                    let _ = writeln!(out, "could not upload a before screenshot: {e}");
+                    (None, true)
+                }
+            },
+        };
+        pairs.push(UploadedPair {
+            label: super::notes::safe_text(&shot.label),
+            before,
+            after,
+            before_failed,
+        });
+    }
+    let note = (!reason.is_empty()).then_some(reason.as_str());
+    let Some(section) = screenshots_section(&pairs, note) else {
+        return;
+    };
+    match mr.post_note(&super::notes::screenshots_note(&section)) {
+        Ok(id) => {
+            let _ = writeln!(out, "screenshots note {id} posted");
+        }
+        Err(e) => {
+            let _ = writeln!(out, "could not post the screenshots note: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -810,6 +872,8 @@ mod tests {
         changes: RefCell<Vec<Value>>,
         /// Runs inside `post_note`, before it returns.
         on_post: RefCell<Option<Box<dyn Fn()>>>,
+        uploaded: RefCell<Vec<PathBuf>>,
+        upload_err: Cell<bool>,
     }
 
     impl FakeMr {
@@ -823,6 +887,8 @@ mod tests {
                 next_id: Cell::new(1000),
                 changes: RefCell::new(vec![json!({"new_path": "a.rb", "diff": "+x"})]),
                 on_post: RefCell::new(None),
+                uploaded: RefCell::new(vec![]),
+                upload_err: Cell::new(false),
             }
         }
         fn id(&self) -> i64 {
@@ -857,6 +923,8 @@ mod tests {
             let id = self.id();
             let kind = if body.contains("is fixing") {
                 "start"
+            } else if body.contains("screenshots of the pushed fix") {
+                "screenshots"
             } else {
                 "finish"
             };
@@ -868,6 +936,16 @@ mod tests {
                             "author": {"username": "bot"}}]
             }));
             Ok(id)
+        }
+        fn upload(&self, path: &Path) -> Result<String, String> {
+            if self.upload_err.get() {
+                return Err("403 Forbidden".into());
+            }
+            self.uploaded.borrow_mut().push(path.to_path_buf());
+            Ok(format!(
+                "/uploads/h/{}",
+                path.file_name().unwrap().to_string_lossy()
+            ))
         }
         fn reply(&self, discussion_id: &str, body: &str) -> Result<(), String> {
             let id = self.id();
@@ -1067,6 +1145,7 @@ mod tests {
                 lint: "bundle exec rubocop .".into(),
                 test: "bundle exec rspec".into(),
             },
+            ..Default::default()
         }
     }
 
@@ -1084,6 +1163,74 @@ mod tests {
         let mut log = Vec::new();
         let r = run(mr, ws, agent, &job(), &mut log);
         (r, String::from_utf8(log).unwrap())
+    }
+
+    fn agent_with_shots(ws: &FakeWs, events: &Events) -> FakeAgent {
+        let (s, ev) = (ws.s.clone(), events.clone());
+        FakeAgent::new(move |_d, _p, announce| {
+            announce(&plan())?;
+            FakeWs::commit(&s, &ev, now_secs() + 1);
+            let mut h = handoff();
+            h.screenshots = vec![ShotPair {
+                label: "Add to Pipeline popup".into(),
+                before: Some(PathBuf::from("/s/1-before.png")),
+                after: PathBuf::from("/s/1-after.png"),
+            }];
+            h.screenshots_note = "Dark mode not captured".into();
+            Ok(h)
+        })
+    }
+
+    #[test]
+    fn screenshots_are_uploaded_and_posted_after_a_successful_push() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        let ws = FakeWs::new(&ev);
+        let agent = agent_with_shots(&ws, &ev);
+        let (r, log) = go(&mr, &ws, &agent);
+        assert_eq!(r.state, "done", "{log}");
+        let events = ev.borrow();
+        let push = events.iter().position(|e| e == "push").unwrap();
+        let shots = events.iter().position(|e| e == "note:screenshots").unwrap();
+        assert!(shots > push, "{events:?}");
+        let notes = mr.notes.borrow();
+        let n = notes.last().unwrap();
+        assert!(is_agent_note(n), "{n}");
+        assert!(n.contains("![before](/uploads/h/1-before.png)"), "{n}");
+        assert!(n.contains("![after](/uploads/h/1-after.png)"), "{n}");
+        assert!(
+            n.contains("Add to Pipeline popup") && n.contains("Dark mode not captured"),
+            "{n}"
+        );
+        assert_eq!(mr.uploaded.borrow().len(), 2);
+    }
+
+    #[test]
+    fn screenshots_of_a_fix_that_was_not_pushed_are_not_posted() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        let ws = FakeWs::new(&ev);
+        ws.s.borrow_mut().checks_pass = false;
+        let agent = agent_with_shots(&ws, &ev);
+        let (r, _) = go(&mr, &ws, &agent);
+        assert_eq!(r.state, "failed");
+        assert!(mr.uploaded.borrow().is_empty());
+        assert!(!ev.borrow().iter().any(|e| e == "note:screenshots"));
+    }
+
+    #[test]
+    fn a_failed_screenshot_upload_never_fails_the_run() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        mr.upload_err.set(true);
+        let ws = FakeWs::new(&ev);
+        let agent = agent_with_shots(&ws, &ev);
+        let (r, log) = go(&mr, &ws, &agent);
+        assert_eq!(r.state, "done", "{log}");
+        assert!(log.contains("could not upload a screenshot"), "{log}");
+        // Nothing to show but the agent's own reason, which is still posted.
+        let notes = mr.notes.borrow();
+        assert!(notes.last().unwrap().contains("Dark mode not captured"));
     }
 
     #[test]
@@ -1490,6 +1637,10 @@ mod tests {
             "{{PLAN_PATH}}",
             "{{HANDOFF_PATH}}",
             "{{ANNOUNCE}}",
+            "{{SCREENS_DIR}}",
+            "{{LOOPX_EXE}}",
+            "{{PROJECT_NOTES}}",
+            "screenshots_note",
             "Major",
             "Medium",
             "Low",

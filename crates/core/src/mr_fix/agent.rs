@@ -123,6 +123,11 @@ pub fn ack_path(plan: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Where the agent saves screenshots (`loopx screenshot --out <dir>/1-after.png`).
+pub fn screens_path(scratch: &Path) -> PathBuf {
+    scratch.join("screens")
+}
+
 /// The agent's final report.
 pub fn handoff_path(scratch: &Path) -> PathBuf {
     scratch.join("handoff.json")
@@ -174,6 +179,11 @@ pub fn fix_argv(
     let draft = plan_draft_path(scratch);
     allowed.push(format!("Bash(loopx mr-fix announce {})", draft.display()));
     allowed.push(format!("Bash({})", announce_command(f.exe, scratch)));
+    // Screenshots of the page the fix changes: `loopx screenshot` only visits
+    // localhost and starts only a known dev-server command, so it is safe to
+    // allow as a whole (every other loopx command stays denied).
+    allowed.push("Bash(loopx screenshot *)".into());
+    allowed.push(format!("Bash({} screenshot *)", f.exe));
     for root in [&c as &dyn std::fmt::Display, &sc] {
         allowed.push(format!("Read(/{root}/**)"));
         allowed.push(format!("Edit(/{root}/**)"));
@@ -309,6 +319,8 @@ pub struct ClaudeAgent {
     pub scratch: PathBuf,
     /// [`announce_command`] for this job.
     pub announce_cmd: String,
+    /// The loopx binary, for the screenshot command in the prompt.
+    pub exe: String,
     pub timeout: Duration,
     pub poll: Duration,
 }
@@ -323,6 +335,7 @@ impl ClaudeAgent {
             .unwrap_or(scratch);
         ClaudeAgent {
             announce_cmd: announce_command(exe, &scratch),
+            exe: exe.to_string(),
             argv,
             scratch,
             timeout: Duration::from_secs(60 * 60),
@@ -379,6 +392,9 @@ impl Agent for ClaudeAgent {
     ) -> Result<AgentHandoff, String> {
         std::fs::create_dir_all(&self.scratch)
             .map_err(|e| format!("cannot create {}: {e}", self.scratch.display()))?;
+        let screens = screens_path(&self.scratch);
+        std::fs::create_dir_all(&screens)
+            .map_err(|e| format!("cannot create {}: {e}", screens.display()))?;
         let plan = plan_path(&self.scratch);
         let handoff = handoff_path(&self.scratch);
         for p in [
@@ -395,6 +411,8 @@ impl Agent for ClaudeAgent {
                 &plan_draft_path(&self.scratch).display().to_string(),
             )
             .replace("{{HANDOFF_PATH}}", &handoff.display().to_string())
+            .replace("{{SCREENS_DIR}}", &screens.display().to_string())
+            .replace("{{LOOPX_EXE}}", &self.exe)
             .replace("{{ANNOUNCE}}", &self.announce_cmd);
         let argv = (self.argv)(&prompt)?;
         let mut cmd = agent_command(&argv, dir, &plan)?;
@@ -434,7 +452,16 @@ impl Agent for ClaudeAgent {
         );
         let text = std::fs::read_to_string(&handoff)
             .map_err(|_| format!("the agent wrote no handoff (exit status {status})"))?;
-        parse_handoff(&text)
+        let mut parsed = parse_handoff(&text)?;
+        // The images the agent saved: only PNGs inside the screens dir.
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            let (pairs, dropped) = crate::mr_screenshots::screenshot_pairs(&v, &screens, &screens);
+            parsed.screenshots = pairs;
+            if !dropped.is_empty() && parsed.screenshots_note.is_empty() {
+                parsed.screenshots_note = dropped.join(" ");
+            }
+        }
+        Ok(parsed)
     }
 }
 
@@ -493,6 +520,20 @@ mod tests {
             Path::new("/tmp/job1"),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn fix_argv_lets_the_agent_take_localhost_screenshots_and_nothing_else_of_loopx() {
+        let a = argv();
+        let allowed = rules(flag(&a, "--allowedTools"));
+        assert!(allowed.contains(&"Bash(loopx screenshot *)"), "{allowed:?}");
+        assert!(allowed
+            .iter()
+            .any(|r| r.ends_with("screenshot *)") && r.contains(EXE)));
+        let denied = rules(flag(&a, "--disallowedTools"));
+        // Everything else of loopx stays denied, screenshots are not a wildcard.
+        assert!(denied.contains(&"Bash(loopx gitlab*)"));
+        assert!(!allowed.contains(&"Bash(loopx *)"));
     }
 
     #[test]
@@ -585,9 +626,14 @@ mod tests {
                 assert!(!hit, "{rule} denies {cmd}");
             }
         }
+        // The exact announce command is the only loopx command without a wildcard,
+        // and `screenshot` the only one with one (localhost pages only).
         let loopx: Vec<_> = allowed.iter().filter(|r| r.contains("loopx")).collect();
-        assert_eq!(loopx.len(), 2, "{loopx:?}");
-        assert!(loopx.iter().all(|r| !r.contains('*')));
+        let exact: Vec<_> = loopx.iter().filter(|r| !r.contains('*')).collect();
+        assert_eq!(exact.len(), 2, "{loopx:?}");
+        assert!(exact.iter().all(|r| r.contains("mr-fix announce")));
+        let wild: Vec<_> = loopx.iter().filter(|r| r.contains('*')).collect();
+        assert!(wild.iter().all(|r| r.contains("screenshot *)")), "{wild:?}");
         // Both the worktree and the scratch dir are working directories.
         let dirs: Vec<_> = a
             .windows(2)
@@ -946,6 +992,44 @@ mod tests {
             "{}",
             a.announce_cmd
         );
+    }
+
+    #[test]
+    fn claude_agent_resolves_the_handoffs_screenshots_inside_the_screens_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let scratch = d.path().join("job");
+        let wt = d.path().join("wt");
+        std::fs::create_dir(&wt).unwrap();
+        let h = handoff_path(&scratch).display().to_string();
+        // A real PNG header; the third entry escapes the screens directory.
+        let script = format!(
+            r#"mkdir -p "$LOOPX_SCREENS"
+               printf '\211PNG\r\n\032\n' > "$LOOPX_SCREENS/1-after.png"
+               printf '\211PNG\r\n\032\n' > ../secret.png
+               printf '{{"items":[],"verification":{{"test":"t"}},"screenshots_note":"dark mode skipped","screenshots":[{{"label":"popup","after":"1-after.png"}},{{"label":"bad","after":"../secret.png"}}]}}' > '{h}'"#
+        );
+        let mut agent = ClaudeAgent::new(
+            Box::new(move |p| {
+                Ok(vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!("export LOOPX_SCREENS=\"{}\"; {script}", screens_marker(p)),
+                ])
+            }),
+            scratch.clone(),
+            EXE,
+        );
+        agent.poll = Duration::from_millis(20);
+        let got = agent.run(&wt, "{{SCREENS_DIR}}", &|_| Ok(())).unwrap();
+        assert_eq!(got.screenshots.len(), 1, "{:?}", got.screenshots);
+        assert_eq!(got.screenshots[0].label, "popup");
+        assert!(got.screenshots[0].after.ends_with("screens/1-after.png"));
+        assert_eq!(got.screenshots_note, "dark mode skipped");
+    }
+
+    /// The prompt is the screens dir (the test template is just the placeholder).
+    fn screens_marker(prompt: &str) -> String {
+        prompt.to_string()
     }
 
     #[test]

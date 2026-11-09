@@ -83,6 +83,47 @@ impl MrApi for GitlabMr {
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
+
+    fn upload(&self, path: &Path) -> Result<String, String> {
+        let v = self
+            .client
+            .upload_file(&self.project_id, path)
+            .map_err(|e| e.to_string())?;
+        v.get("url")
+            .and_then(Value::as_str)
+            .filter(|u| u.starts_with("/uploads/"))
+            .map(str::to_owned)
+            .ok_or_else(|| "GitLab returned no upload url".into())
+    }
+}
+
+/// What the project's own config tells the agent: its `custom_instructions`
+/// and the `screenshot-recipe` lessons recorded for it. Both come from the
+/// user's own files (trusted), unlike the merge request text.
+pub fn render_project_notes(custom_instructions: &str, recipes: &[String]) -> String {
+    let mut out = String::new();
+    let custom = custom_instructions.trim();
+    if !custom.is_empty() {
+        out.push_str("### Project instructions (from the user's LoopX settings)\n\n");
+        out.push_str(custom);
+        out.push_str("\n\n");
+    }
+    let recipes: Vec<&str> = recipes
+        .iter()
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+        .collect();
+    if !recipes.is_empty() {
+        out.push_str("### Screenshot recipes recorded for this project\n\n");
+        for r in recipes {
+            out.push_str(&format!("- {}\n", r.replace('\n', " ")));
+        }
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() {
+        return "(none recorded)".into();
+    }
+    crate::runner_util::head(&out, 8000)
 }
 
 /// The MR's worktree under `worktree_root` (`<repo>-mr-<iid>`, local branch
@@ -860,6 +901,27 @@ mod tests {
         assert!(install_command(p).is_some(), "partial tree");
         std::fs::write(p.join("node_modules/.yarn-integrity"), "").unwrap();
         assert_eq!(install_command(p), None, "complete install");
+    }
+
+    #[test]
+    fn project_notes_carry_the_instructions_and_screenshot_recipes() {
+        assert_eq!(render_project_notes("  ", &[]), "(none recorded)");
+        let n = render_project_notes(
+            "Use yarn.",
+            &["camp: yarn dev -p 3001 with mocks".into(), "  ".into()],
+        );
+        assert!(n.contains("Use yarn.") && n.contains("- camp: yarn dev -p 3001 with mocks"));
+        assert_eq!(
+            n.matches("\n- ").count(),
+            1,
+            "blank recipes are dropped: {n}"
+        );
+        assert!(
+            render_project_notes(&"x".repeat(20000), &[])
+                .chars()
+                .count()
+                <= 8000
+        );
     }
 
     #[test]

@@ -249,7 +249,32 @@ fn fix(mr_ref: &str, home: &Path, job: Option<&FixJob>) -> Result<RunResult, Str
         summary: String::new(),
         log_path: PathBuf::new(),
     });
-    let result = runner::run(&gitlab, &ws, &agent, &record, &mut std::io::stdout());
+    let custom = config
+        .project(&target.alias)
+        .ok()
+        .and_then(|p| {
+            p.get("custom_instructions")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default();
+    let recipes: Vec<String> = loopx_core::memory_store::list_task_memories(&target.alias, None)
+        .into_iter()
+        .filter(|m| m.category.as_deref() == Some("screenshot-recipe"))
+        .map(|m| m.body)
+        .collect();
+    let template = runner::PROMPT_TEMPLATE.replace(
+        "{{PROJECT_NOTES}}",
+        &loopx_core::mr_fix::real::render_project_notes(&custom, &recipes),
+    );
+    let result = runner::run_with(
+        &gitlab,
+        &ws,
+        &agent,
+        &record,
+        &mut std::io::stdout(),
+        &template,
+    );
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(result)
 }

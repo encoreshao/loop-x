@@ -39,7 +39,7 @@ pub fn marker(h: &Handled) -> String {
 
 /// Merge every marker found in the text (max id per discussion wins).
 /// Trusts its input: callers must use `parse_marker_from_notes`.
-fn parse_marker(notes_text: &str) -> Handled {
+pub(crate) fn parse_marker(notes_text: &str) -> Handled {
     let mut out: BTreeMap<String, i64> = BTreeMap::new();
     let mut rest = notes_text;
     while let Some(i) = rest.find(MARKER_OPEN) {

@@ -31,7 +31,7 @@ pub struct Outcome {
 /// Sanitise model/human text for a GitLab note: one line (so no line can start
 /// a `/quick action`), HTML comments broken (so no hidden marker or signature
 /// can be forged), mentions and images defused, length capped.
-fn safe_text(text: &str) -> String {
+pub fn safe_text(text: &str) -> String {
     let line = text
         .split(['\n', '\r'])
         .map(str::trim)
@@ -93,10 +93,31 @@ pub fn finish_note(outcome: &Outcome, handled: &Handled) -> String {
     finalize(&out, &format!("{}\n{SIGNATURE}", marker(handled)))
 }
 
+/// The note with the screenshots of a pushed fix: `section` is already the
+/// Markdown from `mr_screenshots::screenshots_section`.
+pub fn screenshots_note(section: &str) -> String {
+    let body = format!("{AGENT_PREFIX} screenshots of the pushed fix.\n\n{section}\n\n");
+    finalize(&body, SIGNATURE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn a_screenshots_note_is_an_agent_note_with_the_section_intact() {
+        let n = screenshots_note("## Screenshots\n\n![after](/uploads/a/1.png)");
+        assert!(n.starts_with(AGENT_PREFIX) && is_agent_note(&n));
+        assert!(n.trim_end().ends_with(SIGNATURE));
+        assert!(n.contains("![after](/uploads/a/1.png)"));
+        // No handled marker: it must not change which threads count as handled.
+        assert!(parse_marker_from_notes_body(&n));
+    }
+
+    fn parse_marker_from_notes_body(n: &str) -> bool {
+        crate::mr_fix::feedback::parse_marker(n).0.is_empty()
+    }
 
     #[test]
     fn quoting_or_mid_text_signature_is_not_an_agent_note() {
