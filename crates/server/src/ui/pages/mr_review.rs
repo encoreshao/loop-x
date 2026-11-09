@@ -266,9 +266,13 @@ fn fix_html(ctx: &UiCtx, mr: &MyMr, fix: &FixEnv) -> String {
             "stopped" => ("skipped", ctx.t("Fix stopped"), String::new()),
             _ => return None,
         };
-        // A failure's reason is shown in full under the buttons, not only on hover.
+        // A failure's reason is shown in full under the buttons, not only on hover:
+        // the first line as the headline, any command output below it in a block.
         let why = if kind == "failed" && !title.trim().is_empty() {
-            format!("<p class='mr-fix-error' role='alert'>{}</p>", h(title.trim()))
+            let (head, detail) = title.trim().split_once('\n').unwrap_or((title.trim(), ""));
+            let detail = detail.trim();
+            let pre = if detail.is_empty() { String::new() } else { format!("<pre>{}</pre>", h(detail)) };
+            format!("<div class='mr-fix-error' role='alert'><p>{}</p>{pre}</div>", h(head))
         } else {
             String::new()
         };
@@ -933,7 +937,11 @@ mod tests {
         loopx_core::mr_fix::jobs::finish(&dir, &job.id, "failed", "build <broke>").unwrap();
         let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
         assert!(html.contains("Fix failed") && html.contains("title='build &lt;broke&gt;'"), "{html}");
-        assert!(html.contains("<p class='mr-fix-error' role='alert'>build &lt;broke&gt;</p>"), "{html}");
+        assert!(html.contains("<div class='mr-fix-error' role='alert'><p>build &lt;broke&gt;</p></div>"), "{html}");
+        let job = loopx_core::mr_fix::jobs::start(&dir, "work:9!1", "t", &|_| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "failed", "checks failed: `yarn lint` failed (exit 127)\n$ yarn lint\nsh: next: command not found").unwrap();
+        let html = render(&st, Ok(vec![account(vec![mr("1", |_| {})])]));
+        assert!(html.contains("<p>checks failed: `yarn lint` failed (exit 127)</p><pre>$ yarn lint\nsh: next: command not found</pre>"), "{html}");
     }
 
     fn render_in(st: &UiState, lang: &str, listed: Vec<AccountMrs>) -> String {

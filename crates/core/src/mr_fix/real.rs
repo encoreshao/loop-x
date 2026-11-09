@@ -149,6 +149,23 @@ fn always_private(path: &str) -> bool {
         || (path.starts_with("config/credentials/") && path.ends_with(".key"))
 }
 
+/// The command that installs a JS project's dependencies, when its worktree
+/// has a lockfile but no `node_modules` (a fresh worktree never has one, so
+/// `yarn test` would die with "jest: command not found", exit 127).
+fn install_command(dir: &Path) -> Option<&'static str> {
+    if !dir.join("package.json").is_file() || dir.join("node_modules").exists() {
+        return None;
+    }
+    [
+        ("yarn.lock", "yarn install --frozen-lockfile"),
+        ("pnpm-lock.yaml", "pnpm install --frozen-lockfile"),
+        ("package-lock.json", "npm ci"),
+    ]
+    .into_iter()
+    .find(|(lock, _)| dir.join(lock).is_file())
+    .map(|(_, cmd)| cmd)
+}
+
 /// Files the worktree setup copies in when the branch does not track them.
 const COPIED_IF_UNTRACKED: [&str; 2] = [".ruby-version", "config/database.yml"];
 
@@ -172,7 +189,7 @@ impl GitWorkspace {
             check_verify_command(cmd).map_err(|e| format!("refused {kind} command: {e}"))?;
             chosen.push((kind, cmd));
         }
-        let (mut passed, mut lines) = (true, Vec::new());
+        let (mut passed, mut lines, mut details) = (true, Vec::new(), Vec::<String>::new());
         for (kind, cmd) in chosen {
             let r = CommandVerifier::new(&format!("mr_fix_{kind}"), cmd)
                 .with_cwd(dir)
@@ -186,11 +203,18 @@ impl GitWorkspace {
                 (false, None) => "failed (timed out or did not start)".to_string(),
             };
             lines.push(format!("`{cmd}` {status}"));
+            if !r.passed {
+                let out = crate::runner_util::tail(r.output.trim(), 1500);
+                if !out.is_empty() {
+                    details.push(format!("$ {cmd}\n{out}"));
+                }
+            }
         }
-        Ok(CheckResult {
-            passed,
-            summary: lines.join("; "),
-        })
+        let mut summary = lines.join("; ");
+        if !details.is_empty() {
+            summary = format!("{summary}\n{}", details.join("\n\n"));
+        }
+        Ok(CheckResult { passed, summary })
     }
 
     /// `git <args>` in `dir`: exit code and stdout (no error on a non-zero exit).
@@ -321,6 +345,17 @@ impl Workspace for GitWorkspace {
         .map(PathBuf::from)
         .map_err(|f| f.message)?;
         self.refuse_unpushed(&dir, source_branch)?;
+        if let Some(cmd) = install_command(&dir) {
+            let r = CommandVerifier::new("mr_fix_install", cmd)
+                .with_cwd(&dir)
+                .with_timeout(self.check_timeout.as_secs_f64())
+                .with_env_removed(&SCRUBBED_ENV)
+                .run_once();
+            if !r.passed {
+                let out = crate::runner_util::tail(r.output.trim(), 1500);
+                return Err(format!("`{cmd}` failed in the new worktree\n{out}"));
+            }
+        }
         Ok(dir)
     }
 
@@ -668,6 +703,52 @@ mod tests {
         assert_eq!(ws.head(&dir).unwrap(), ours);
         assert!(dir.join("fix.txt").is_file());
         assert_ne!(sh(&origin, &["rev-parse", "refs/heads/feat/x"]), ours);
+    }
+
+    #[test]
+    fn a_failed_check_reports_the_tail_of_its_output() {
+        let d = tempfile::tempdir().unwrap();
+        let (ws, dir, _) = setup(d.path());
+        std::fs::write(
+            dir.join("Makefile"),
+            "test:\n\ttrue\nlint:\n\techo first-line; echo 'next: command not found'; exit 127\n",
+        )
+        .unwrap();
+        let v = Verification {
+            test: "make test".into(),
+            lint: "make lint".into(),
+        };
+        let r = ws.checks(&dir, &v).unwrap();
+        assert!(!r.passed);
+        let (head, detail) = r.summary.split_once('\n').expect(&r.summary);
+        assert!(head.contains("`make lint` failed (exit 2)"), "{head}");
+        assert!(detail.contains("next: command not found"), "{detail}");
+        // A passing command adds no detail.
+        let ok = ws
+            .checks(
+                &dir,
+                &Verification {
+                    test: "make test".into(),
+                    lint: String::new(),
+                },
+            )
+            .unwrap();
+        assert!(!ok.summary.contains('\n'), "{}", ok.summary);
+    }
+
+    #[test]
+    fn install_command_follows_the_lockfile_and_skips_installed_trees() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        assert_eq!(install_command(p), None);
+        std::fs::write(p.join("package.json"), "{}").unwrap();
+        assert_eq!(install_command(p), None, "no lockfile, no guess");
+        std::fs::write(p.join("package-lock.json"), "{}").unwrap();
+        assert_eq!(install_command(p), Some("npm ci"));
+        std::fs::write(p.join("yarn.lock"), "").unwrap();
+        assert_eq!(install_command(p), Some("yarn install --frozen-lockfile"));
+        std::fs::create_dir(p.join("node_modules")).unwrap();
+        assert_eq!(install_command(p), None, "already installed");
     }
 
     #[test]
