@@ -19,6 +19,9 @@ pub struct Feature {
     pub highlights: Vec<String>,
     #[serde(default)]
     pub authors: Vec<String>,
+    /// A theme (a few words) several features share; used to group a long release.
+    #[serde(default)]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -71,6 +74,7 @@ fn parse(text: &str) -> Result<Summary, ReleaseError> {
             summary: "Smaller changes and fixes across the product.".into(),
             highlights: Vec::new(),
             authors,
+            group: String::new(),
         });
     }
     Ok(s)

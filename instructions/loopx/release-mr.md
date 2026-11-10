@@ -34,6 +34,10 @@ Rules:
   (for example "Customers can now export their orders, and search is much faster. Billing
   invoices also show the right tax rate."). Do not mention branch names.
 - `summary` is one short sentence per feature; `highlights` are short phrases, not sentences.
+- `group` is a theme of two or three words (for example `Data quality`, `Dashboard`) that
+  several features share. Set it on every feature when there are more than six features, with
+  three to five themes in total; leave it empty for a short release.
+- Credit one person once, even if their name appears in several spellings.
 - Plain text only: no Markdown, no links, no emoji.
 
 Reply with only this JSON and nothing else:
@@ -44,5 +48,6 @@ Reply with only this JSON and nothing else:
  "features": [{"name": "<short feature name>",
                "summary": "<one short sentence>",
                "highlights": ["<short phrase>", "..."],
-               "authors": ["<author name>", "..."]}]}
+               "authors": ["<author name>", "..."],
+               "group": "<theme, or empty>"}]}
 ```

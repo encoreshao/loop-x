@@ -67,6 +67,27 @@ fn is_bot(name: &str) -> bool {
     name.to_ascii_lowercase().ends_with("[bot]")
 }
 
+/// One entry per person: a spelling whose words all appear in another spelling
+/// ("tiaki" in "Tiaki Yen") or that differs only by case is the same person, kept once.
+fn one_per_person(names: Vec<String>) -> Vec<String> {
+    let words: Vec<Vec<String>> = names
+        .iter()
+        .map(|n| n.split_whitespace().map(str::to_lowercase).collect())
+        .collect();
+    names
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| {
+            !(0..words.len()).any(|j| {
+                j != *i
+                    && words[*i].iter().all(|w| words[j].contains(w))
+                    && (words[*i].len() < words[j].len() || j < *i)
+            })
+        })
+        .map(|(_, n)| n)
+        .collect()
+}
+
 fn plural(n: usize, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
@@ -108,20 +129,16 @@ pub fn render(summary: &Summary, resolved: &Resolved, branches: (&str, &str)) ->
         .features
         .iter()
         .map(|f| {
-            f.authors
-                .iter()
-                .map(|a| a.replace('@', "").trim().to_string())
-                .filter(|a| !a.is_empty() && !is_bot(a))
-                .collect()
+            one_per_person(
+                f.authors
+                    .iter()
+                    .map(|a| a.replace('@', "").trim().to_string())
+                    .filter(|a| !a.is_empty() && !is_bot(a))
+                    .collect(),
+            )
         })
         .collect();
-    let mut people: Vec<String> = credited
-        .iter()
-        .flatten()
-        .map(|a| a.to_ascii_lowercase())
-        .collect();
-    people.sort();
-    people.dedup();
+    let people = one_per_person(credited.iter().flatten().cloned().collect());
 
     let mut body = format!(
         "**Promoting `{source}` \u{2192} `{target}`{}**",
@@ -150,7 +167,41 @@ pub fn render(summary: &Summary, resolved: &Resolved, branches: (&str, &str)) ->
 
     let mut mentioned: Vec<&str> = Vec::new();
     let mut shown_plain: Vec<String> = Vec::new();
-    for (f, names) in summary.features.iter().zip(&credited) {
+    // A long release is grouped under theme headings (first-seen order, ungrouped last).
+    let grouped =
+        summary.features.len() > 6 && summary.features.iter().any(|f| !f.group.trim().is_empty());
+    let mut order: Vec<usize> = (0..summary.features.len()).collect();
+    let group_of = |i: usize| -> String {
+        let g = summary.features[i].group.trim();
+        if g.is_empty() {
+            "Other".to_string()
+        } else {
+            clean(g)
+        }
+    };
+    let mut heads: Vec<String> = Vec::new();
+    if grouped {
+        for i in &order {
+            let g = group_of(*i);
+            if g != "Other" && !heads.contains(&g) {
+                heads.push(g);
+            }
+        }
+        heads.push("Other".into());
+        order.sort_by_key(|i| {
+            heads
+                .iter()
+                .position(|h| *h == group_of(*i))
+                .unwrap_or(usize::MAX)
+        });
+    }
+    let mut current = String::new();
+    for i in order {
+        let (f, names) = (&summary.features[i], &credited[i]);
+        if grouped && group_of(i) != current {
+            current = group_of(i);
+            body.push_str(&format!("## {current}\n\n"));
+        }
         // Blank lines between the parts keep each one its own paragraph in any Markdown renderer.
         body.push_str(&format!(
             "### {}\n{}\n\n",
@@ -187,6 +238,15 @@ pub fn render(summary: &Summary, resolved: &Resolved, branches: (&str, &str)) ->
                         clean(n)
                     }
                 }
+            })
+            .collect();
+        let mut seen_by: Vec<String> = Vec::new();
+        let by: Vec<String> = by
+            .into_iter()
+            .filter(|b| {
+                let fresh = !seen_by.contains(b);
+                seen_by.push(b.clone());
+                fresh
             })
             .collect();
         if !by.is_empty() {
@@ -230,6 +290,7 @@ mod tests {
             summary: summary.into(),
             highlights: highlights.iter().map(|h| h.to_string()).collect(),
             authors: authors.iter().map(|a| a.to_string()).collect(),
+            group: String::new(),
         }
     }
 
@@ -266,6 +327,61 @@ mod tests {
     }
 
     const PROD: (&str, &str) = ("staging", "master");
+
+    #[test]
+    fn one_person_under_several_spellings_is_named_once() {
+        let mut s = summary();
+        s.features[1].authors = vec![
+            "tiaki".into(),
+            "Tiaki YEN".into(),
+            "Tiaki Yen".into(),
+            "Berin".into(),
+        ];
+        let (_, d) = render(&s, &Resolved::default(), PROD);
+        assert!(d.contains("_By Tiaki YEN, Berin_\n"), "{d}");
+        assert!(d.contains("\u{b7} 3 contributors"), "{d}");
+        let mut r = resolved();
+        r.mentions.push(("bo b".into(), "bo".into()));
+        s.features[1].authors = vec!["Bo".into(), "Bo B".into(), "Cy".into()];
+        let (_, d) = render(&s, &r, PROD);
+        assert!(d.contains("_By @bo, Cy_\n"), "one mention per user: {d}");
+    }
+
+    #[test]
+    fn a_long_release_is_grouped_under_headings() {
+        let mut s = summary();
+        s.features = (0..8)
+            .map(|i| {
+                let mut f = feature(&format!("F{i}"), "s.", &[], &["Ann Lee"]);
+                f.group = if i < 5 {
+                    "Data quality".into()
+                } else if i < 7 {
+                    "Dashboard".into()
+                } else {
+                    String::new()
+                };
+                f
+            })
+            .collect();
+        let (_, d) = render(&s, &resolved(), PROD);
+        let (a, b, c) = (
+            d.find("## Data quality\n"),
+            d.find("## Dashboard\n"),
+            d.find("## Other\n"),
+        );
+        assert!(a.is_some() && b > a && c > b, "{d}");
+        assert!(
+            d.find("### F0") > a && d.find("### F5") > b && d.find("### F7") > c,
+            "{d}"
+        );
+        let mut few = summary();
+        few.features[0].group = "Data quality".into();
+        let (_, d) = render(&few, &resolved(), PROD);
+        assert!(
+            !d.contains("## Data quality"),
+            "short releases stay flat: {d}"
+        );
+    }
 
     #[test]
     fn title_lists_only_the_leading_items_and_counts_the_rest() {
