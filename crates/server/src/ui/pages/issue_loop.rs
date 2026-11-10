@@ -709,14 +709,90 @@ const WT_SNIPPET: &str = r#"wt() {
   cd "$dir"
 }"#;
 
+const SH_KEYWORDS: [&str; 14] = [
+    "local", "return", "cd", "if", "then", "else", "fi", "for", "while", "do", "done", "case", "esac", "in",
+];
+const SH_COMMANDS: [&str; 6] = ["git", "awk", "echo", "sed", "grep", "export"];
+
+fn sh_span(class: &str, text: &str) -> String {
+    format!("<span class='{class}'>{}</span>", pyfmt::escape(text))
+}
+
+/// Wraps the parts of a short shell script in `sh-*` spans (comments, strings,
+/// variables, keywords, commands, flags) so it reads like the Terminal view.
+/// Only wraps: removing the tags gives back the escaped script, so copying the
+/// block copies the plain code.
+fn highlight_shell(code: &str) -> String {
+    let chars: Vec<char> = code.chars().collect();
+    let word_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-');
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let at_word_start = i == 0 || chars[i - 1].is_whitespace();
+        if c == '#' && at_word_start {
+            let end = chars[i..].iter().position(|&x| x == '\n').map_or(chars.len(), |n| i + n);
+            out.push_str(&sh_span("sh-cmt", &chars[i..end].iter().collect::<String>()));
+            i = end;
+        } else if c == '"' || c == '\'' {
+            let mut end = i + 1;
+            while end < chars.len() && chars[end] != c {
+                end += if chars[end] == '\\' && c == '"' { 2 } else { 1 };
+            }
+            let end = (end + 1).min(chars.len());
+            out.push_str(&sh_span("sh-str", &chars[i..end].iter().collect::<String>()));
+            i = end;
+        } else if c == '$' && chars.get(i + 1).is_some_and(|n| n.is_ascii_alphanumeric() || matches!(n, '_' | '?' | '@' | '#' | '{')) {
+            let mut end = i + 1;
+            if chars[end] == '{' {
+                while end < chars.len() && chars[end] != '}' {
+                    end += 1;
+                }
+                end = (end + 1).min(chars.len());
+            } else if chars[end].is_ascii_alphanumeric() || chars[end] == '_' {
+                while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_') {
+                    end += 1;
+                }
+            } else {
+                end += 1;
+            }
+            out.push_str(&sh_span("sh-var", &chars[i..end].iter().collect::<String>()));
+            i = end;
+        } else if word_char(c) {
+            let mut end = i;
+            while end < chars.len() && word_char(chars[end]) {
+                end += 1;
+            }
+            let word: String = chars[i..end].iter().collect();
+            let is_function = chars.get(end) == Some(&'(') && chars.get(end + 1) == Some(&')');
+            if SH_KEYWORDS.contains(&word.as_str()) {
+                out.push_str(&sh_span("sh-kw", &word));
+            } else if is_function {
+                out.push_str(&sh_span("sh-fn", &word));
+            } else if SH_COMMANDS.contains(&word.as_str()) {
+                out.push_str(&sh_span("sh-cmd", &word));
+            } else if word.len() > 1 && word.starts_with('-') && at_word_start {
+                out.push_str(&sh_span("sh-flag", &word));
+            } else {
+                out.push_str(&pyfmt::escape(&word));
+            }
+            i = end;
+        } else {
+            out.push_str(&pyfmt::escape(&c.to_string()));
+            i += 1;
+        }
+    }
+    out
+}
+
 fn wt_snippet_card(ctx: &UiCtx) -> String {
     format!(
-        "<section class='card'><div class='section-header'><h2>{}</h2><button type='button' class='btn btn-neutral' style='margin-left: auto;' data-copy-target='wt-snippet' data-copied-label='{}'><svg class='icon' aria-hidden='true'><use href='#i-content_copy'/></svg> <span data-copy-label>{}</span></button></div><p class='section-subtitle'>{}</p><pre class='log' id='wt-snippet'>{}</pre></section>",
+        "<section class='card'><div class='section-header'><h2>{}</h2><button type='button' class='btn btn-neutral' style='margin-left: auto;' data-copy-target='wt-snippet' data-copied-label='{}'><svg class='icon' aria-hidden='true'><use href='#i-content_copy'/></svg> <span data-copy-label>{}</span></button></div><p class='section-subtitle'>{}</p><pre class='term-code' id='wt-snippet'>{}</pre></section>",
         esc_t(ctx, "Switch to a worktree"),
         esc_t(ctx, "Copied"),
         esc_t(ctx, "Copy"),
         esc_t(ctx, "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change."),
-        pyfmt::escape(WT_SNIPPET),
+        highlight_shell(WT_SNIPPET),
     )
 }
 
@@ -3986,13 +4062,36 @@ mod tests {
     fn the_worktrees_view_opens_with_the_wt_shell_snippet() {
         let sb = Sandbox::new();
         let body = worktrees_body(&sb.ctx(), None, true);
-        let snippet = body.find("wt() {").expect(&body);
+        let snippet = body.find("<span class='sh-fn'>wt</span>() {").expect(&body);
         assert!(snippet < body.find("No issue branches in progress.").unwrap(), "{body}");
         assert!(body.contains("$0==&quot;branch &quot;b"), "{body}");
-        assert!(body.contains("return 1"), "{body}");
-        assert!(body.contains("<pre class='log' id='wt-snippet'>"), "{body}");
+        assert!(body.contains("<span class='sh-kw'>return</span> 1"), "{body}");
+        assert!(body.contains("<pre class='term-code' id='wt-snippet'>"), "{body}");
         assert!(body.contains("data-copy-target='wt-snippet' data-copied-label='Copied'"), "{body}");
         assert!(body.contains("href='#i-content_copy'"), "{body}");
+    }
+
+    #[test]
+    fn the_wt_snippet_is_highlighted_like_the_terminal_and_copies_as_the_plain_script() {
+        let html = highlight_shell(WT_SNIPPET);
+        // Highlighting only wraps text: stripping the tags gives back the escaped script.
+        let mut plain = String::new();
+        let mut in_tag = false;
+        for c in html.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' if in_tag => in_tag = false,
+                _ if !in_tag => plain.push(c),
+                _ => {}
+            }
+        }
+        assert_eq!(plain, pyfmt::escape(WT_SNIPPET));
+        assert!(html.contains("<span class='sh-kw'>local</span>"), "{html}");
+        assert!(html.contains("<span class='sh-cmd'>git</span>"), "{html}");
+        assert!(html.contains("<span class='sh-flag'>--porcelain</span>"), "{html}");
+        assert!(html.contains("<span class='sh-var'>$1</span>"), "{html}");
+        assert!(html.contains("<span class='sh-str'>&quot;no worktree for branch: $1&quot;</span>"), "{html}");
+        assert_eq!(highlight_shell("echo hi # note"), "<span class='sh-cmd'>echo</span> hi <span class='sh-cmt'># note</span>");
     }
 
     #[test]

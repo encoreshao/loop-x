@@ -3251,6 +3251,14 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .term-run i,.term-run span{color:#0a84ff}
 .term-info i,.term-info span{color:#aeaeb2}
 .term-empty{color:#8e8e93}
+.term-code{box-sizing:border-box;margin:.75rem 0 0;padding:.85rem 1rem;overflow-x:auto;white-space:pre;border:1px solid #38383a;border-radius:12px;background:#1c1c1e;color:#f5f5f7;font:12.5px/1.6 ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;box-shadow:inset 0 1px 0 rgba(255,255,255,.04);tab-size:2}
+.term-code .sh-cmt{color:#8e8e93}
+.term-code .sh-str{color:#30d158}
+.term-code .sh-var{color:#ff9f0a}
+.term-code .sh-kw{color:#bf5af2}
+.term-code .sh-cmd{color:#64d2ff}
+.term-code .sh-fn{color:#0a84ff}
+.term-code .sh-flag{color:#aeaeb2}
 .term-hint{font-size:.78rem;color:var(--md-on-surface-variant)}
 .term-filters{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
 .term-input,.term-select{height:32px;box-sizing:border-box;border:1px solid var(--md-outline-variant);border-radius:999px;background:transparent;color:var(--md-on-surface);font:inherit;font-size:.8rem;padding:0 .85rem}
