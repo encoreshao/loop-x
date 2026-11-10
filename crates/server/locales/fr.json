@@ -1763,5 +1763,19 @@
   "Release MR": "MR de release",
   "Release MR stopped": "MR de version arrêtée",
   "This release MR is not running": "Cette MR de version n’est pas en cours",
-  "Release MR text": "Texte de la MR de version"
+  "Release MR text": "Texte de la MR de version",
+  "Promo template": "Modèle de promo",
+  "Play sample": "Lire l'exemple",
+  "How the camera moves and how fast the video cuts, for a website promo. A repository or screenshots use the framed walkthrough instead.": "Définit les mouvements de caméra et le rythme des coupes pour une promo de site web. Un dépôt ou des captures d'écran utilisent à la place la présentation encadrée.",
+  "Sample clip of this template": "Exemple de ce modèle",
+  "Cinematic tour": "Visite cinématographique",
+  "Calm explainer": "Explication posée",
+  "Minimal": "Minimal",
+  "Punchy launch": "Lancement percutant",
+  "Guided tour": "Visite guidée",
+  "Slow pushes and spotlights over the real page; calm and premium. The default.": "Zooms lents et projecteurs sur la vraie page ; calme et haut de gamme. Le modèle par défaut.",
+  "Gentle spotlights and long pans that let each section be read; for explainers and docs.": "Projecteurs doux et longs panoramiques pour laisser lire chaque section ; pour les explications et la documentation.",
+  "Only the two simplest camera moves and one statement; the safest choice for any page.": "Seulement les deux mouvements de caméra les plus simples et une déclaration ; le choix le plus sûr pour n'importe quelle page.",
+  "Fast cuts with a punch-in and bold statements; for launches and short attention spans.": "Coupes rapides avec zoom brusque et déclarations audacieuses ; pour les lancements et les attentions courtes.",
+  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "Un curseur désigne chaque fonctionnalité et clique, avec des défilements rapides qui freinent sur la suivante ; pour les présentations de produit."
 }

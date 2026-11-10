@@ -1763,5 +1763,19 @@
   "Release MR": "发布 MR",
   "Release MR stopped": "已停止发布 MR",
   "This release MR is not running": "此发布 MR 未在运行",
-  "Release MR text": "发布 MR 内容"
+  "Release MR text": "发布 MR 内容",
+  "Promo template": "宣传片模板",
+  "Play sample": "播放示例",
+  "How the camera moves and how fast the video cuts, for a website promo. A repository or screenshots use the framed walkthrough instead.": "决定网站宣传片的镜头运动和剪辑节奏。仓库或截图会改用带边框的演示。",
+  "Sample clip of this template": "此模板的示例视频",
+  "Cinematic tour": "电影感巡礼",
+  "Calm explainer": "平静讲解",
+  "Minimal": "极简",
+  "Punchy launch": "发布会快节奏",
+  "Guided tour": "功能导览",
+  "Slow pushes and spotlights over the real page; calm and premium. The default.": "在真实页面上缓慢推进并打聚光；沉稳而高级。默认模板。",
+  "Gentle spotlights and long pans that let each section be read; for explainers and docs.": "柔和的聚光和较长的平移，让每个板块都能读完；适合讲解和文档。",
+  "Only the two simplest camera moves and one statement; the safest choice for any page.": "只用两种最简单的镜头运动和一个陈述镜头；对任何页面都最稳妥。",
+  "Fast cuts with a punch-in and bold statements; for launches and short attention spans.": "快速剪辑、推近冲击和醒目的陈述镜头；适合发布会和注意力短暂的观众。",
+  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "光标指向每个功能并点击，快速滚动后刹停在下一个功能；适合产品演示。"
 }

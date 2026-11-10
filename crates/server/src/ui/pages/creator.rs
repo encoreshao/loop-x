@@ -10,6 +10,7 @@
 
 use super::loops_common::flash_html;
 use crate::ui::badge::default_badge;
+use crate::ui::i18n::Lang;
 use crate::ui::icons;
 use crate::ui::pyfmt::{self, escape as h};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
@@ -18,6 +19,7 @@ use loopx_core::creator::jobs::{self, JobKind, JobRecord};
 use loopx_core::creator::scout::{self, ScoutRun, Source};
 use loopx_core::creator::spawn;
 use loopx_core::creator::state::{self as cstate, CreatorState};
+use loopx_core::creator::templates;
 use loopx_core::creator::voices;
 use loopx_core::creator::{
     default_platforms, normalize_source_url, parse_platforms, valid_source_url, VideoOptions,
@@ -49,6 +51,7 @@ const PLATFORMS: [(&str, &str); 4] = [
 pub fn register(r: &mut Registry) {
     r.get("/creator", page);
     r.get("/creator/media/:slug/:file", media);
+    r.get("/creator/template/:id/:kind", template_file);
     r.get("/creator/jobs/:id/log", job_log);
     r.get("/creator/jobs/:id/status", job_status);
     r.post("/creator/jobs/delete", delete_job);
@@ -207,6 +210,7 @@ fn showcase(ctx: &UiCtx) -> UiResponse {
         folder.as_deref(),
         &platforms,
         form.first("voice").unwrap_or("none"),
+        form.first("template").unwrap_or(""),
         true,
     ) {
         Ok(_) => UiResponse::flash_redirect(
@@ -641,10 +645,25 @@ fn media(ctx: &UiCtx) -> UiResponse {
     else {
         return not_found();
     };
-    let Some(content_type) = media_type(&path) else {
+    serve_file(ctx, &path)
+}
+
+/// A promo template's cover image or sample clip, from the skill folder.
+fn template_file(ctx: &UiCtx) -> UiResponse {
+    let skill = spawn::generate_dir(&ctx.state.user_home);
+    match templates::file(&skill, ctx.param("id"), ctx.param("kind")) {
+        Some(path) => serve_file(ctx, &path),
+        None => UiResponse::not_found(ctx.lang),
+    }
+}
+
+/// Send `path` (an image or a clip) whole, or the byte range the player asked for.
+fn serve_file(ctx: &UiCtx, path: &Path) -> UiResponse {
+    let not_found = || UiResponse::not_found(ctx.lang);
+    let Some(content_type) = media_type(path) else {
         return not_found();
     };
-    let Ok(mut file) = std::fs::File::open(&path) else {
+    let Ok(mut file) = std::fs::File::open(path) else {
         return not_found();
     };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -1558,6 +1577,132 @@ fn platform_picker(ctx: &UiCtx) -> String {
     )
 }
 
+/// The promo template: a card per recipe the skill ships, with its cover, a one-line
+/// description and its sample clip. Empty for a skill from before templates.
+fn template_picker(ctx: &UiCtx) -> String {
+    let skill = spawn::generate_dir(&ctx.state.user_home);
+    let list = templates::list(&skill);
+    if list.is_empty() {
+        return String::new();
+    }
+    let pick = if list.iter().any(|t| t.id == templates::DEFAULT) {
+        templates::DEFAULT
+    } else {
+        list[0].id.as_str()
+    };
+    let cards: String = list
+        .iter()
+        .map(|t| {
+            let (name, desc) = template_text(ctx, t);
+            let cover = if t.cover.is_some() {
+                format!(
+                    "<img class='cr-tpl-cover' src='/creator/template/{}/cover' alt='' loading='lazy'>",
+                    h(&t.id)
+                )
+            } else {
+                "<span class='cr-tpl-cover cr-tpl-nocover' aria-hidden='true'></span>".to_string()
+            };
+            let sample = if t.preview.is_some() {
+                format!(
+                    "<button type='button' class='cr-tpl-sample' data-cr-open='cr-tpl-dialog' aria-haspopup='dialog' \
+data-tpl-src=\"/creator/template/{}/preview\" data-tpl-title=\"{}\">{} {}</button>",
+                    h(&t.id),
+                    h(&name),
+                    icons::icon("video"),
+                    h(&ctx.t("Play sample"))
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "<div class='cr-tpl'><label class='cr-tpl-pick'><input type='radio' name='template' value='{}'{}>\
+{cover}<span class='cr-tpl-name'>{}</span><span class='cr-tpl-desc'>{}</span></label>{sample}</div>",
+                h(&t.id),
+                if t.id == pick { " checked" } else { "" },
+                h(&name),
+                h(&desc),
+            )
+        })
+        .collect();
+    format!(
+        "<div class='cr-field'><span class='cr-label'>{}</span>\
+<div class='cr-templates' role='radiogroup' aria-label=\"{}\">{cards}</div>{}{}</div>",
+        h(&ctx.t("Promo template")),
+        h(&ctx.t("Promo template")),
+        subtitle(&ctx.t(
+            "How the camera moves and how fast the video cuts, for a website promo. A repository or screenshots use the framed walkthrough instead."
+        )),
+        template_dialog(ctx),
+    )
+}
+
+/// The one popup every "Play sample" button opens; creator.js fills in its clip and title and
+/// clears the clip again on close, so nothing keeps playing.
+fn template_dialog(ctx: &UiCtx) -> String {
+    format!(
+        "<dialog class='cr-dialog cr-tpl-dialog' id='cr-tpl-dialog' aria-labelledby='cr-tpl-dialog-title'>\
+<div class='cr-dialog-inner'><header class='cr-dialog-head'><div class='cr-dialog-titles'>\
+<h2 id='cr-tpl-dialog-title'></h2><span class='cr-meta'>{}</span></div>\
+<button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
+<div class='cr-tpl-stage'><video controls playsinline preload='none' data-src=''></video></div></div></dialog>",
+        h(&ctx.t("Sample clip of this template")),
+        h(&ctx.t("Close")),
+        icons::icon("close"),
+    )
+}
+
+/// A template's name and description in the page's language. The templates the skill is known
+/// to ship are translated from the catalogs, but only while the skill's own text is the text
+/// those translations were written for; anything else (a new template, reworded text) shows
+/// the skill's text, with its Chinese name on the Chinese page.
+fn template_text(ctx: &UiCtx, t: &templates::Template) -> (String, String) {
+    let known: Option<(&str, String, &str, String)> = match t.id.as_str() {
+        "cinematic" => Some((
+            "Cinematic tour",
+            ctx.t("Cinematic tour"),
+            "Slow pushes and spotlights over the real page; calm and premium. The default.",
+            ctx.t("Slow pushes and spotlights over the real page; calm and premium. The default."),
+        )),
+        "calm" => Some((
+            "Calm explainer",
+            ctx.t("Calm explainer"),
+            "Gentle spotlights and long pans that let each section be read; for explainers and docs.",
+            ctx.t("Gentle spotlights and long pans that let each section be read; for explainers and docs."),
+        )),
+        "minimal" => Some((
+            "Minimal",
+            ctx.t("Minimal"),
+            "Only the two simplest camera moves and one statement; the safest choice for any page.",
+            ctx.t("Only the two simplest camera moves and one statement; the safest choice for any page."),
+        )),
+        "punchy" => Some((
+            "Punchy launch",
+            ctx.t("Punchy launch"),
+            "Fast cuts with a punch-in and bold statements; for launches and short attention spans.",
+            ctx.t("Fast cuts with a punch-in and bold statements; for launches and short attention spans."),
+        )),
+        "tour" => Some((
+            "Guided tour",
+            ctx.t("Guided tour"),
+            "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.",
+            ctx.t("A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs."),
+        )),
+        _ => None,
+    };
+    let (name, desc) = match known {
+        Some((en_name, name, en_desc, desc)) => (
+            if t.name == en_name { name } else { fallback_name(ctx, t) },
+            if t.description == en_desc { desc } else { t.description.clone() },
+        ),
+        None => (fallback_name(ctx, t), t.description.clone()),
+    };
+    (name, desc)
+}
+
+fn fallback_name(ctx: &UiCtx, t: &templates::Template) -> String {
+    if ctx.lang == Lang::Zh && !t.name_zh.is_empty() { t.name_zh.clone() } else { t.name.clone() }
+}
+
 /// The narration choice: none, the quick macOS voice, or one of the user's cloned voice
 /// profiles (offered once CosyVoice 3 is set up). Narration defaults to none.
 fn voice_picker(ctx: &UiCtx) -> String {
@@ -1605,7 +1750,7 @@ fn showcase_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
 <div class='cr-field'><label class='cr-label' for='cr-showcase-folder'>{}</label>\
 <div class='cr-field-row'><div class='cr-search-field'>{}<input type='text' id='cr-showcase-folder' name='local_path' autocomplete='off' spellcheck='false' placeholder=\"{}\"></div>\
 <button type='button' class='cr-btn cr-btn-plain' data-pick-folder>{} {}</button></div>\
-{}</div>{}{}\
+{}</div>{}{}{}\
 <div class='cr-item-actions cr-link-actions'>\
 <label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
 <span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
@@ -1625,6 +1770,7 @@ fn showcase_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         subtitle(&ctx.t(
             "Give a link, a folder or both. The images are copied for the job; PNG, JPG and WebP, up to 20 images."
         )),
+        template_picker(ctx),
         platform_picker(ctx),
         voice_picker(ctx),
         h(&ctx.t("I own this project or have permission to make a video about it")),
@@ -2989,6 +3135,81 @@ mod tests {
         );
         assert!(!body.contains("setup_cosyvoice.sh"), "{body}");
         assert!(body.contains("synthetic voice"), "{body}");
+    }
+
+    #[test]
+    fn the_showcase_tab_offers_each_promo_template_with_its_cover_and_serves_its_files() {
+        let fx = Fx::new();
+        let body = fx.get("/creator?tab=showcase").body_text();
+        assert!(!body.contains("name='template'"), "a skill without templates shows no picker");
+        let t = fx.user().join(".inspire-video/templates");
+        std::fs::create_dir_all(t.join("covers")).unwrap();
+        for id in ["calm", "cinematic"] {
+            std::fs::write(
+                t.join(format!("{id}.yaml")),
+                format!("id: {id}\nname: Name {id}\ndescription: About {id}.\n"),
+            )
+            .unwrap();
+            std::fs::write(t.join(format!("covers/{id}.png")), b"png").unwrap();
+        }
+        std::fs::write(t.join("covers/calm.mp4"), b"mp4").unwrap();
+        let body = fx.get("/creator?tab=showcase").body_text();
+        // The default is listed first and checked; a card shows its name, text and cover.
+        let first = body.find("name='template' value='cinematic' checked").unwrap();
+        assert!(first < body.find("name='template' value='calm'>").unwrap(), "{body}");
+        assert!(body.contains("About calm.") && body.contains("src='/creator/template/calm/cover'"));
+        // Only a recipe with a sample clip links to it.
+        assert!(!body.contains("/creator/template/cinematic/preview"), "{body}");
+        assert!(body.contains("/creator/template/calm/preview"), "{body}");
+        assert_eq!(fx.get("/creator/template/calm/cover").status, 200);
+        assert_eq!(fx.get("/creator/template/calm/preview").status, 200);
+        assert_eq!(fx.get("/creator/template/cinematic/preview").status, 404);
+        assert_eq!(fx.get("/creator/template/nope/cover").status, 404);
+    }
+
+    #[test]
+    fn template_cards_speak_the_page_language_and_play_in_one_shared_popup() {
+        let fx = Fx::new();
+        let t = fx.user().join(".inspire-video/templates");
+        std::fs::create_dir_all(t.join("covers")).unwrap();
+        let yaml = |id: &str, name: &str, desc: &str| {
+            std::fs::write(
+                t.join(format!("{id}.yaml")),
+                format!("id: {id}\nname: {name}\nname_zh: 中{id}\ndescription: {desc}\n"),
+            )
+            .unwrap();
+            std::fs::write(t.join(format!("covers/{id}.mp4")), b"mp4").unwrap();
+        };
+        let known = "Gentle spotlights and long pans that let each section be read; for explainers and docs.";
+        yaml("calm", "Calm explainer", known);
+        yaml("fresh", "Fresh", "A template this build has never heard of.");
+        let get = |lang: &str| {
+            fx.st
+                .registry
+                .dispatch(
+                    &fx.st,
+                    &UiRequest::new(Method::GET, "/creator?tab=showcase")
+                        .with_header("cookie", &format!("loop_lang={lang}")),
+                )
+                .unwrap()
+                .body_text()
+        };
+        let en = get("en");
+        assert!(en.contains(known), "{en}");
+        let zh = get("zh");
+        assert!(!zh.contains(known) && zh.contains("平静讲解"), "{zh}");
+        // A template the build does not know shows the skill's own text, its Chinese name on zh.
+        assert!(zh.contains("A template this build has never heard of.") && zh.contains("中fresh"), "{zh}");
+        assert!(get("fr").contains("Explication posée"));
+        // Play is a button that names its clip for one shared popup; it is not a link.
+        assert!(
+            zh.contains("data-cr-open='cr-tpl-dialog'")
+                && zh.contains("data-tpl-src=\"/creator/template/calm/preview\"")
+                && zh.contains("data-tpl-title=\"平静讲解\""),
+            "{zh}"
+        );
+        assert_eq!(zh.matches("<dialog class='cr-dialog cr-tpl-dialog'").count(), 1, "{zh}");
+        assert!(!zh.contains("target='_blank'"), "{zh}");
     }
 
     #[test]

@@ -1763,5 +1763,19 @@
   "Release MR": "リリースMR",
   "Release MR stopped": "リリースMRを停止しました",
   "This release MR is not running": "このリリースMRは実行中ではありません",
-  "Release MR text": "リリースMRの本文"
+  "Release MR text": "リリースMRの本文",
+  "Promo template": "プロモのテンプレート",
+  "Play sample": "サンプルを再生",
+  "How the camera moves and how fast the video cuts, for a website promo. A repository or screenshots use the framed walkthrough instead.": "ウェブサイトのプロモ用に、カメラの動きとカットの速さを決めます。リポジトリやスクリーンショットでは、枠付きのウォークスルーが使われます。",
+  "Sample clip of this template": "このテンプレートのサンプル動画",
+  "Cinematic tour": "シネマティック・ツアー",
+  "Calm explainer": "穏やかな解説",
+  "Minimal": "ミニマル",
+  "Punchy launch": "テンポの速いローンチ",
+  "Guided tour": "ガイドツアー",
+  "Slow pushes and spotlights over the real page; calm and premium. The default.": "実際のページをゆっくりズームし、スポットライトを当てます。落ち着いた上質な雰囲気で、既定のテンプレートです。",
+  "Gentle spotlights and long pans that let each section be read; for explainers and docs.": "やさしいスポットライトと長めのパンで、各セクションをじっくり読めます。解説やドキュメント向けです。",
+  "Only the two simplest camera moves and one statement; the safest choice for any page.": "最もシンプルなカメラワーク2種類と1つのステートメントだけ。どんなページでも安心して使えます。",
+  "Fast cuts with a punch-in and bold statements; for launches and short attention spans.": "素早いカットとパンチイン、力強いステートメント。ローンチや集中が続きにくい視聴向けです。",
+  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "カーソルが各機能を指してクリックし、素早いスクロールが次の機能でぴたりと止まります。製品紹介向けです。"
 }

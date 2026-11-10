@@ -8,10 +8,19 @@
 
   function open(dialog, opener) {
     var video = dialog.querySelector('video[data-src]');
+    // A template's Play sample button names its clip and title; one popup serves them all.
+    var clip = opener && opener.getAttribute('data-tpl-src');
+    if (video && clip) {
+      video.setAttribute('data-src', clip);
+      video.removeAttribute('src');
+      var heading = dialog.querySelector('h2');
+      if (heading) heading.textContent = opener.getAttribute('data-tpl-title') || '';
+    }
     if (video && !video.getAttribute('src')) video.setAttribute('src', video.getAttribute('data-src'));
     dialog.__opener = opener || null;
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else dialog.setAttribute('open', '');
+    if (video && clip) { var p = video.play(); if (p && p.catch) p.catch(function () {}); }
     checkClamps(dialog);
   }
 

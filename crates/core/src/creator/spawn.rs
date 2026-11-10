@@ -459,6 +459,7 @@ pub fn start_generate(
 /// Start an inspire-showcase job for the website or repository at `url`, for the images
 /// in `folder`, or for both. Refuses (creating no job) unless the user confirmed they own
 /// the project or may make a video about it.
+#[allow(clippy::too_many_arguments)]
 pub fn start_showcase(
     jobs_dir: &Path,
     user_home: &Path,
@@ -466,6 +467,7 @@ pub fn start_showcase(
     folder: Option<&str>,
     platforms: &[String],
     voice: &str,
+    template: &str,
     rights_confirmed: bool,
 ) -> Result<JobRecord, String> {
     let (cli, loopx_home, exe) = (
@@ -486,6 +488,7 @@ pub fn start_showcase(
         folder,
         platforms,
         voice,
+        template,
         rights_confirmed,
         &spawn_agent,
     )
@@ -519,6 +522,7 @@ fn start_showcase_with(
     folder: Option<&str>,
     platforms: &[String],
     voice: &str,
+    template: &str,
     rights_confirmed: bool,
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
@@ -535,6 +539,7 @@ fn start_showcase_with(
     let skill = generate_dir(env.user_home);
     check_installed(&skill, JobKind::Showcase)?;
     let narration = super::voices::resolve(&skill, env.user_home, voice)?;
+    let template = super::templates::resolve(&skill, template)?;
     let Some(folder) = folder else {
         // Link only: a link run before restarts that job, with the platforms now picked.
         let url = url.unwrap_or_default();
@@ -543,6 +548,7 @@ fn start_showcase_with(
             platforms,
             screenshots: None,
             narration,
+            template,
         };
         return launch_video(
             jobs_dir,
@@ -562,6 +568,7 @@ fn start_showcase_with(
         platforms,
         screenshots: Some(staged.clone()),
         narration,
+        template,
     };
     // New screenshots always make a new video, never a restart of an earlier one.
     let started = launch_video(
@@ -611,6 +618,7 @@ fn start_generate_with(
         platforms: super::parse_platforms(&options.platforms)?,
         screenshots: None,
         narration: None,
+        template: None,
     };
     // A link run before restarts that job (its files are reused) rather than adding a record.
     let earlier = jobs::latest_finished(jobs_dir, JobKind::Generate, &url).map(|j| j.id);
@@ -1139,6 +1147,7 @@ mod tests {
             None,
             &default_platforms(),
             "none",
+            "",
             true,
             &recorder(&calls),
         )
@@ -1207,6 +1216,7 @@ mod tests {
                 None,
                 &default_platforms(),
                 "none",
+                "",
                 rights,
                 &recorder(&calls),
             )
@@ -1245,6 +1255,7 @@ mod tests {
             Some(folder.to_str().unwrap()),
             &["linkedin".to_string(), "wechat".to_string()],
             "none",
+            "",
             true,
             &recorder(&calls),
         )
@@ -1287,6 +1298,7 @@ mod tests {
                 folder,
                 &default_platforms(),
                 "none",
+                "",
                 true,
                 &recorder(&calls),
             )
@@ -1335,6 +1347,7 @@ mod tests {
                 folder,
                 platforms,
                 "none",
+                "",
                 true,
                 &recorder(&calls),
             )
@@ -1366,6 +1379,49 @@ mod tests {
     }
 
     #[test]
+    fn a_showcase_template_is_checked_before_any_job_and_kept_for_a_retry() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        let t = generate_dir(&home).join("templates");
+        std::fs::create_dir_all(&t).unwrap();
+        std::fs::write(t.join("calm.yaml"), "id: calm\nname: Calm\n").unwrap();
+        install_showcase(&home);
+        let calls = Calls::default();
+        let go = |template: &str| {
+            start_showcase_with(
+                &jobs_dir,
+                &env("claude", &home),
+                Some("https://example.com/app"),
+                None,
+                &default_platforms(),
+                "none",
+                template,
+                true,
+                &recorder(&calls),
+            )
+        };
+        assert!(go("nope").unwrap_err().contains("unknown template"));
+        assert!(calls.borrow().is_empty() && jobs::list_jobs(&jobs_dir).is_empty());
+        let rec = go("calm").unwrap();
+        assert_eq!(rec.options.template.as_deref(), Some("calm"));
+        assert!(calls.borrow()[0]
+            .0
+            .last()
+            .unwrap()
+            .contains("--template calm"));
+        assert_eq!(
+            jobs::get(&jobs_dir, &rec.id)
+                .unwrap()
+                .options
+                .template
+                .as_deref(),
+            Some("calm"),
+            "kept in the record, so a retry makes the same video"
+        );
+    }
+
+    #[test]
     fn a_showcase_voice_is_checked_before_any_job_and_kept_for_a_retry() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
@@ -1388,6 +1444,7 @@ mod tests {
                 None,
                 &default_platforms(),
                 voice,
+                "",
                 true,
                 &recorder(&calls),
             )
@@ -1448,6 +1505,7 @@ mod tests {
             platforms: vec!["douyin".into(), "facebook".into()],
             screenshots: None,
             narration: None,
+            template: None,
         };
         let rec = start_generate_with(
             &jobs_dir,
@@ -1484,6 +1542,7 @@ mod tests {
             platforms: vec![],
             screenshots: None,
             narration: None,
+            template: None,
         };
         assert!(start_generate_with(
             &jobs_dir,

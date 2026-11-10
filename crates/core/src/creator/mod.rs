@@ -7,6 +7,7 @@ pub mod progress;
 pub mod scout;
 pub mod spawn;
 pub mod state;
+pub mod templates;
 pub mod uploads;
 pub mod videos;
 pub mod voices;
@@ -93,6 +94,8 @@ pub struct VideoOptions {
     pub screenshots: Option<String>,
     /// Showcase only: the narration, or none (the skill's default).
     pub narration: Option<Narration>,
+    /// Showcase only: the promo template (see [`templates`]), or none (the skill's default).
+    pub template: Option<String>,
 }
 
 impl Default for VideoOptions {
@@ -101,6 +104,7 @@ impl Default for VideoOptions {
             platforms: default_platforms(),
             screenshots: None,
             narration: None,
+            template: None,
         }
     }
 }
