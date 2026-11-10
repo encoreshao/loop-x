@@ -2,7 +2,9 @@
 //! project and two branches, and an agent writes the MR (see
 //! docs/superpowers/specs/2026-11-10-release-mr-panel-design.md).
 
+use crate::ui::markdown::render_markdown;
 use crate::ui::pyfmt::escape as h;
+use crate::ui::pages::loops_common::flash_html;
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use loopx_core::config::Config;
 use loopx_core::release_mr::api::{GitlabApi, ReleaseApi};
@@ -11,11 +13,12 @@ use loopx_core::release_mr::run as runner;
 use serde_json::Value;
 use std::path::PathBuf;
 
-const BACK: &str = "/loops/mr-review-loop";
+const BACK: &str = "/loops/mr-review-loop?view=release";
 
 pub fn register(r: &mut Registry) {
     r.get("/loops/mr-review-loop/release/branches", branches);
     r.get("/loops/mr-review-loop/release/progress", progress_fragment);
+    r.post("/loops/mr-review-loop/release/markdown", markdown_preview);
     r.post("/loops/mr-review-loop/release/start", start);
     r.post("/loops/mr-review-loop/release/confirm", confirm);
     r.post("/loops/mr-review-loop/release/discard", discard);
@@ -278,7 +281,7 @@ fn progress_block(ctx: &UiCtx, j: &ReleaseJob) -> String {
         .collect();
     let (title, extra) = match j.state.as_str() {
         "running" => (ctx.t("Writing your release MR"), String::new()),
-        "ready" => (ctx.t("Preview ready"), format!("<a class='btn btn-primary' href='{BACK}'>{}</a>", h(&ctx.t("Review and create")))),
+        "ready" => (ctx.t("Preview ready"), format!("<a class='btn btn-primary' href='{BACK}'>{}</a>", h(&ctx.t("Review")))),
         "created" if j.mr_url.starts_with("http") => (ctx.t("Merge request created"), format!("<a class='btn btn-primary' href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))),
         "created" => (ctx.t("Merge request created"), String::new()),
         _ => (ctx.t("Could not create the release MR"), format!("<p class='rel-error' role='alert'>{}</p>", h(&j.summary))),
@@ -289,13 +292,36 @@ fn progress_block(ctx: &UiCtx, j: &ReleaseJob) -> String {
     )
 }
 
-/// The block for the newest job, or nothing.
-fn latest_block(ctx: &UiCtx, jobs: &[ReleaseJob]) -> String {
-    jobs.first().filter(|j| showing(j)).map(|j| progress_block(ctx, j)).unwrap_or_default()
+/// The progress block of the newest job for exactly this project and branch pair, or nothing.
+fn pair_block(ctx: &UiCtx, jobs: &[ReleaseJob], alias: &str, source: &str, target: &str) -> String {
+    jobs.iter()
+        .find(|j| j.alias == alias && j.source == source && j.target == target)
+        .filter(|j| showing(j))
+        .map(|j| progress_block(ctx, j))
+        .unwrap_or_default()
 }
 
+/// `GET .../release/progress?alias=&source=&target=`: what the page shows under the picker.
 fn progress_fragment(ctx: &UiCtx) -> UiResponse {
-    UiResponse::html(latest_block(ctx, &job::list(&jobs_dir(ctx))))
+    let q = ctx.query();
+    let (alias, source, target) = (q.first("alias").unwrap_or_default(), q.first("source").unwrap_or_default(), q.first("target").unwrap_or_default());
+    if alias.is_empty() || source.is_empty() || target.is_empty() {
+        return UiResponse::html(String::new());
+    }
+    UiResponse::html(pair_block(ctx, &job::list(&jobs_dir(ctx)), alias, source, target))
+}
+
+/// Markdown to HTML for the review sheet's preview; `@name` becomes a mention chip.
+fn markdown_html(text: &str) -> String {
+    let rendered = render_markdown(text, &std::collections::BTreeMap::new());
+    let mention = regex::Regex::new(r"(^|[\s(>])@([A-Za-z0-9][A-Za-z0-9_.-]*)").expect("mention regex");
+    mention.replace_all(&rendered, "$1<span class='rel-mention'>@$2</span>").into_owned()
+}
+
+fn markdown_preview(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let text: String = form.first("text").unwrap_or_default().chars().take(100_000).collect();
+    UiResponse::html(markdown_html(&text))
 }
 
 fn sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
@@ -305,28 +331,36 @@ fn sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
 <div class='rel-sheet-head'><h3>{label}</h3><p class='rel-meta'><code>{src} \u{2192} {dst}</code> \u{b7} {hint}</p></div>\
 <form id='rel-confirm' method='post' action='/loops/mr-review-loop/release/confirm' class='rel-sheet-form'>{csrf}<input type='hidden' name='job' value='{id}'>\
 <label class='rel-field'><span>{title_l}</span><input type='text' name='title' class='rel-input rel-title' value='{title}' maxlength='255'></label>\
-<label class='rel-field rel-grow'><span>{desc_l}</span><textarea name='description' class='rel-text' spellcheck='false'>{desc}</textarea></label></form>\
+<div class='rel-field rel-grow'><div class='rel-desc-head'><span>{desc_l}</span>\
+<div class='rel-seg' role='group'><button type='button' data-mode='preview' class='on'>{preview_l}</button><button type='button' data-mode='edit'>{edit_l}</button></div></div>\
+<div class='rel-desc is-preview'><div class='rel-preview markdown' data-md-url='/loops/mr-review-loop/release/markdown'>{rendered}</div>\
+<textarea name='description' class='rel-text' spellcheck='false'>{desc}</textarea></div></div></form>\
 <form id='rel-discard' method='post' action='/loops/mr-review-loop/release/discard'>{csrf}<input type='hidden' name='job' value='{id}'></form>\
 <div class='rel-actions rel-sheet-foot'><button type='submit' form='rel-confirm' class='btn btn-primary'>{create}</button>\
 <button type='submit' form='rel-discard' class='btn btn-neutral'>{discard}</button>\
-<a class='btn btn-neutral' href='{BACK}?sheet=0'>{close}</a></div></aside>",
+<a class='btn btn-neutral' href='{BACK}&amp;sheet=0'>{close}</a></div></aside>",
         label = h(&ctx.t("Review the release MR")),
         hint = h(&ctx.t("The merge request is created with exactly this text.")),
         src = h(&j.source), dst = h(&j.target), id = h(&j.id),
         title_l = h(&ctx.t("Title")), title = h(&j.title),
-        desc_l = h(&ctx.t("Description")), desc = h(&j.description),
+        desc_l = h(&ctx.t("Description")), desc = h(&j.description), rendered = markdown_html(&j.description),
+        preview_l = h(&ctx.t("Preview")), edit_l = h(&ctx.t("Edit")),
         create = h(&ctx.t("Create MR")), discard = h(&ctx.t("Discard")), close = h(&ctx.t("Close")),
     )
 }
 
-/// Keeps the pickers' choice for this tab, holds the page's auto-refresh while one is in use,
-/// loads the branches of the chosen project and writes the "merging X into Y" line.
-const FORM_SCRIPT: &str = "<script>(function(){var a=document.getElementById('rel-alias'),b=document.getElementById('rel-branches'),r=document.getElementById('rel-route'),f=a&&a.form;if(!a||!b)return;var seq=0,K='rel-pick';function save(){try{var s=b.querySelector('[name=source]'),t=b.querySelector('[name=target]');sessionStorage.setItem(K,JSON.stringify({a:a.value,s:s&&s.value,t:t&&t.value}))}catch(e){}}function saved(){try{return JSON.parse(sessionStorage.getItem(K)||'null')}catch(e){return null}}function route(){var s=b.querySelector('[name=source]'),t=b.querySelector('[name=target]');if(!r)return;r.textContent=s&&t?(r.dataset.pre||'')+' '+s.value+' '+(r.dataset.mid||'')+' '+t.value+(/^(master|main|production|prod)$/i.test(t.value)?' (production)':t.value==='staging'?' (staging)':''):''}function pick(sel,v){if(sel&&v){for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===v){sel.value=v}}}}function load(keep){var n=++seq;if(!a.value){b.innerHTML='';route();return}fetch('/loops/mr-review-loop/release/branches?alias='+encodeURIComponent(a.value),{credentials:'same-origin'}).then(function(x){return x.text()}).then(function(h){if(n!==seq)return;b.innerHTML=h;var p=saved();if(keep&&p&&p.a===a.value){pick(b.querySelector('[name=source]'),p.s);pick(b.querySelector('[name=target]'),p.t)}route();save()}).catch(function(){})}a.addEventListener('change',function(){load(false)});b.addEventListener('change',function(){route();save()});f.addEventListener('focusin',function(){window.__loopChatStreaming=true});f.addEventListener('focusout',function(){window.__loopChatStreaming=false});var p=saved();if(p){pick(a,p.a)}load(true)})();</script>";
+/// The page's behaviour: load the branches of the chosen project, keep the choice for this tab, write the
+/// "merging X into Y" line and show the progress of the selected project and branch pair. Progress is asked
+/// for again only while that job is running; once it is done nothing refreshes. The sheet's Preview/Edit
+/// switch renders the description through the server so it matches the rest of the dashboard.
+const FORM_SCRIPT: &str = "<script>(function(){var a=document.getElementById('rel-alias'),b=document.getElementById('rel-branches'),r=document.getElementById('rel-route'),pb=document.getElementById('rel-progress');if(a&&b){var seq=0,pseq=0,timer=null,K='rel-pick';function sel(n){return b.querySelector('[name='+n+']')}function save(){try{var s=sel('source'),t=sel('target');sessionStorage.setItem(K,JSON.stringify({a:a.value,s:s&&s.value,t:t&&t.value}))}catch(e){}}function saved(){try{return JSON.parse(sessionStorage.getItem(K)||'null')}catch(e){return null}}function route(){var s=sel('source'),t=sel('target');if(!r)return;r.textContent=s&&t?(r.dataset.pre||'')+' '+s.value+' '+(r.dataset.mid||'')+' '+t.value+(/^(master|main|production|prod)$/i.test(t.value)?' (production)':t.value==='staging'?' (staging)':''):''}function pick(el,v){if(el&&v){for(var i=0;i<el.options.length;i++){if(el.options[i].value===v){el.value=v}}}}function progress(){clearTimeout(timer);var s=sel('source'),t=sel('target');if(!pb||!a.value||!s||!t){if(pb)pb.innerHTML='';return}var n=++pseq;fetch('/loops/mr-review-loop/release/progress?alias='+encodeURIComponent(a.value)+'&source='+encodeURIComponent(s.value)+'&target='+encodeURIComponent(t.value),{credentials:'same-origin'}).then(function(x){return x.text()}).then(function(h){if(n!==pseq)return;pb.innerHTML=h;if(h.indexOf(\"data-state='running'\")>-1)timer=setTimeout(progress,2000)}).catch(function(){timer=setTimeout(progress,5000)})}function load(keep){var n=++seq;if(!a.value){b.innerHTML='';route();progress();return}fetch('/loops/mr-review-loop/release/branches?alias='+encodeURIComponent(a.value),{credentials:'same-origin'}).then(function(x){return x.text()}).then(function(h){if(n!==seq)return;b.innerHTML=h;var p=saved();if(keep&&p&&p.a===a.value){pick(sel('source'),p.s);pick(sel('target'),p.t)}route();save();progress()}).catch(function(){})}a.addEventListener('change',function(){load(false)});b.addEventListener('change',function(){route();save();progress()});var p0=saved();if(p0){pick(a,p0.a)}load(true)}var d=document.querySelector('.rel-desc');if(d){var box=d.querySelector('.rel-preview'),ta=d.querySelector('textarea'),seg=d.parentNode.querySelectorAll('.rel-seg button'),tok=document.querySelector('#rel-confirm [name=csrf_token]');function mode(m){d.classList.toggle('is-preview',m==='preview');for(var i=0;i<seg.length;i++){seg[i].classList.toggle('on',seg[i].dataset.mode===m)}}for(var i=0;i<seg.length;i++){seg[i].addEventListener('click',function(){var m=this.dataset.mode;if(m==='edit'){mode('edit');ta.focus();return}fetch(box.dataset.mdUrl,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'csrf_token='+encodeURIComponent(tok?tok.value:'')+'&text='+encodeURIComponent(ta.value)}).then(function(x){return x.text()}).then(function(h){box.innerHTML=h;mode('preview')}).catch(function(){mode('preview')})})}}})();</script>";
 
-/// Polls the progress block while a job runs; reloads once it settles so the sheet and links appear.
-const POLL_SCRIPT: &str = "<script>(function(){var box=document.getElementById('rel-progress');if(!box)return;function tick(){fetch('/loops/mr-review-loop/release/progress',{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var m=/data-state='([a-z]+)'/.exec(h);if(!m||m[1]!=='running'){location.reload();return}box.innerHTML=h;setTimeout(tick,2000)}).catch(function(){setTimeout(tick,5000)})}setTimeout(tick,2000)})();</script>";
+/// The Release MR view: the Create a release MR card (and, when one is waiting, the review sheet).
+pub fn view_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
+    format!("{}{}{}", flash_html(flash, ok), panel(ctx), overlays(ctx))
+}
 
-/// The Create release MR card for the Live page, right after Status.
+/// The Create a release MR card.
 pub fn panel(ctx: &UiCtx) -> String {
     let projects = tracked(ctx);
     let jobs = job::list(&jobs_dir(ctx));
@@ -342,8 +376,8 @@ pub fn panel(ctx: &UiCtx) -> String {
     let ready = cli_ready(ctx);
     let disabled = if ready { "" } else { " disabled" };
     let reason = if ready { String::new() } else { format!("<p class='rel-empty' role='note'>{}</p>", h(&ctx.t("No AI CLI is available. Install and sign in to your AI CLI in Settings to create release merge requests."))) };
-    let recent: String = jobs.iter().skip(usize::from(jobs.first().is_some_and(showing))).take(4).map(|j| job_row(ctx, j)).collect();
-    let recent = if recent.is_empty() { String::new() } else { format!("<h3 class='rel-sub'>{}</h3><ul class='rel-jobs'>{recent}</ul>", h(&ctx.t("Earlier"))) };
+    let recent: String = jobs.iter().take(5).map(|j| job_row(ctx, j)).collect();
+    let recent = if recent.is_empty() { String::new() } else { format!("<h3 class='rel-sub'>{}</h3><ul class='rel-jobs'>{recent}</ul>", h(&ctx.t("Recent release merge requests"))) };
     format!(
         "<section class='card rel-card'>{heading}\
 <form method='post' action='/loops/mr-review-loop/release/start' class='rel-form'>{csrf}\
@@ -353,7 +387,7 @@ pub fn panel(ctx: &UiCtx) -> String {
 <div class='rel-actions'><button type='submit' name='mode' value='create' class='btn btn-primary'{disabled}>{create}</button>\
 <button type='submit' name='mode' value='preview' class='btn btn-neutral'{disabled}>{preview}</button></div>\
 <p class='rel-hint'>{hint}</p></form>{reason}\
-<div id='rel-progress'>{block}</div>{recent}</section>",
+<div id='rel-progress' aria-live='polite'></div>{recent}</section>",
         csrf = ctx.csrf_input(),
         project = h(&ctx.t("Project")),
         create = h(&ctx.t("Create MR")),
@@ -361,24 +395,20 @@ pub fn panel(ctx: &UiCtx) -> String {
         pre = h(&ctx.t("Merging")),
         mid = h(&ctx.t("into")),
         hint = h(&ctx.t("Create MR opens the merge request right away. Preview first lets you edit the title and description before anything is created.")),
-        block = latest_block(ctx, &jobs),
     )
 }
 
-/// The review sheet, the form script and (while a job runs) the progress poller: placed after
-/// the page's cards so the shared card spacing never touches them.
+/// The review sheet and the page script: placed after the cards so the shared card spacing never touches them.
 pub fn overlays(ctx: &UiCtx) -> String {
     if tracked(ctx).is_empty() {
         return String::new();
     }
-    let jobs = job::list(&jobs_dir(ctx));
     let sheet_html = if ctx.query().first("sheet") == Some("0") {
         String::new()
     } else {
-        jobs.iter().find(|j| j.state == "ready").map(|j| sheet(ctx, j)).unwrap_or_default()
+        job::list(&jobs_dir(ctx)).iter().find(|j| j.state == "ready").map(|j| sheet(ctx, j)).unwrap_or_default()
     };
-    let poll = if jobs.first().is_some_and(|j| j.state == "running") { POLL_SCRIPT } else { "" };
-    format!("{sheet_html}{FORM_SCRIPT}{poll}")
+    format!("{sheet_html}{FORM_SCRIPT}")
 }
 
 #[cfg(test)]
@@ -641,11 +671,17 @@ mod tests {
         ready_job(d.path());
         let st = state(d.path());
         let open = overlays(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(open.contains("class='rel-sheet'") && open.contains("href='/loops/mr-review-loop?sheet=0'"), "{open}");
-        let closed_req = UiRequest::get("/loops/mr-review-loop?sheet=0");
+        assert!(open.contains("class='rel-sheet'") && open.contains("href='/loops/mr-review-loop?view=release&amp;sheet=0'"), "{open}");
+        let closed_req = UiRequest::get("/loops/mr-review-loop?view=release&sheet=0");
         assert!(!overlays(&UiCtx::new(&st, &closed_req)).contains("class='rel-sheet'"));
-        let panel_html = panel(&UiCtx::new(&st, &closed_req));
-        assert!(panel_html.contains("Preview ready") && panel_html.contains("href='/loops/mr-review-loop'"), "the ready block links back to the preview: {panel_html}");
+        let panel_html = progress_for(&st);
+        assert!(panel_html.contains("Preview ready") && panel_html.contains(">Review</a>"), "a short Review button: {panel_html}");
+        assert!(panel_html.contains("href='/loops/mr-review-loop?view=release'") && !panel_html.contains("Review and create"), "{panel_html}");
+    }
+
+    /// What the page shows under the picker for staging -> master of `app`.
+    fn progress_for(st: &UiState) -> String {
+        st.registry.dispatch(st, &UiRequest::get("/loops/mr-review-loop/release/progress?alias=app&source=staging&target=master")).unwrap().body_text()
     }
 
     fn running_job(dir: &std::path::Path, mode: Mode) -> (std::path::PathBuf, String) {
@@ -661,8 +697,8 @@ mod tests {
         let (jd, id) = running_job(d.path(), Mode::Preview);
         job::set_step(&jd, &id, 2, "42 changes found").unwrap();
         let st = state(d.path());
-        let html = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(html.contains("data-state='running'") && html.contains("id='rel-progress'"), "{html}");
+        let html = progress_for(&st);
+        assert!(html.contains("data-state='running'"), "{html}");
         for step in ["Checking the branches", "Reading the changes", "Matching contributors", "Writing the summary", "Preparing the preview"] {
             assert!(html.contains(step), "{step}: {html}");
         }
@@ -679,19 +715,21 @@ mod tests {
     }
 
     #[test]
-    fn the_progress_fragment_updates_in_place_and_polling_runs_only_while_a_job_runs() {
+    fn the_progress_fragment_is_for_the_selected_pair_and_the_page_never_forces_a_reload() {
         let d = tempfile::tempdir().unwrap();
         seed_projects(d.path());
         let st = state(d.path());
-        let get = |st: &UiState| st.registry.dispatch(st, &UiRequest::get("/loops/mr-review-loop/release/progress")).unwrap().body_text();
-        assert!(!overlays(&UiCtx::new(&st, &UiRequest::get(BACK))).contains("release/progress"), "no polling without a running job");
+        let get = |q: &str| st.registry.dispatch(&st, &UiRequest::get(&format!("/loops/mr-review-loop/release/progress?{q}"))).unwrap().body_text();
+        let pair = "alias=app&source=staging&target=master";
+        assert_eq!(get(pair), "", "no job for the pair yet");
         let (jd, id) = running_job(d.path(), Mode::Create);
-        let busy = overlays(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(busy.contains("/loops/mr-review-loop/release/progress") && busy.contains("location.reload"), "{busy}");
-        let before = get(&st);
-        assert!(before.contains("data-state='running'") && !before.contains("Matching contributors</span><span class='rel-step-detail'>"), "{before}");
+        assert_eq!(get("alias=app&source=develop&target=master"), "", "another pair has nothing to show");
+        assert_eq!(get("alias=other&source=staging&target=master"), "");
+        assert_eq!(get("alias=app"), "", "no pair, no block");
+        let before = get(pair);
+        assert!(before.contains("data-state='running'"), "{before}");
         job::set_step(&jd, &id, 3, "2 people to tag").unwrap();
-        let during = get(&st);
+        let during = get(pair);
         assert_ne!(during, before);
         assert!(during.contains("2 people to tag"), "{during}");
         job::update(&jd, &id, |j| {
@@ -699,10 +737,12 @@ mod tests {
             j.summary = "Nothing to <release>".into();
         })
         .unwrap();
-        let failed = get(&st);
-        assert!(failed.contains("data-state='failed'") && failed.contains("Nothing to &lt;release&gt;"), "{failed}");
-        assert!(failed.contains("is-failed"), "the step that failed is marked: {failed}");
-        assert!(!overlays(&UiCtx::new(&st, &UiRequest::get(BACK))).contains("release/progress"), "polling stops once nothing runs");
+        let failed = get(pair);
+        assert!(failed.contains("data-state='failed'") && failed.contains("Nothing to &lt;release&gt;") && failed.contains("is-failed"), "{failed}");
+        let script = overlays(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(script.contains("/loops/mr-review-loop/release/progress"), "the page asks for the selected pair's progress");
+        assert!(!script.contains("location.reload"), "the page never reloads itself");
+        assert!(script.contains("data-state='running'"), "it keeps asking only while the job is running");
     }
 
     #[test]
@@ -726,24 +766,55 @@ mod tests {
         })
         .unwrap();
         let st = state(d.path());
+        let block = progress_for(&st);
+        assert!(block.contains("data-state='created'") && block.contains("href='https://g/app/-/merge_requests/10'"), "{block}");
+        assert_eq!(block.matches("is-done").count(), 5, "{block}");
         let html = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(html.contains("data-state='created'") && html.contains("href='https://g/app/-/merge_requests/10'"), "{html}");
-        assert_eq!(html.matches("is-done").count(), 5, "{html}");
         assert!(html.contains("Nothing to &lt;release&gt;") && html.contains("develop"), "the older failure is in the recent list: {html}");
     }
 
     #[test]
-    fn the_panel_lives_on_the_live_page_after_status_and_not_on_the_merge_requests_view() {
+    fn the_panel_is_the_release_mr_view_and_not_on_live_or_merge_requests() {
         let d = tempfile::tempdir().unwrap();
         seed_projects(d.path());
         std::fs::write(d.path().join("loops.json"), r#"[{"name": "mr-review-loop", "label": "MR Review", "enabled": true}]"#).unwrap();
         let st = state(d.path());
-        let live = st.registry.dispatch(&st, &UiRequest::get("/loops/mr-review-loop")).unwrap().body_text();
-        let status = live.find("Status").expect(&live);
-        let panel_at = live.find("Create a release MR").expect(&live);
-        assert!(status < panel_at, "after the Status section");
-        let mrs = st.registry.dispatch(&st, &UiRequest::get("/loops/mr-review-loop?view=mrs")).unwrap().body_text();
-        assert!(!mrs.contains("Create a release MR"), "no longer on the merge requests view");
+        let page = |q: &str| st.registry.dispatch(&st, &UiRequest::get(&format!("/loops/mr-review-loop{q}"))).unwrap().body_text();
+        let release = page("?view=release");
+        assert!(release.contains("Create a release MR") && release.contains("Release MR"), "{release}");
+        assert!(release.contains("href='/loops/mr-review-loop?view=release'") || release.contains("view=release"), "the tab exists");
+        assert!(!page("").contains("Create a release MR"), "not on Live");
+        assert!(!page("?view=mrs").contains("Create a release MR"), "not on Merge requests");
+        assert!(!release.contains("auto-refreshes every"), "the release view does not auto-refresh: it would wipe the selection");
+    }
+
+    #[test]
+    fn the_sheet_offers_a_rendered_markdown_preview_and_stays_editable() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        ready_job(d.path());
+        let st = state(d.path());
+        let html = overlays(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(html.contains("class='rel-seg'") && html.contains(">Preview</button>") && html.contains(">Edit</button>"), "{html}");
+        assert!(html.contains("class='rel-preview markdown'") && html.contains("data-md-url='/loops/mr-review-loop/release/markdown'"), "{html}");
+        assert!(html.contains("<textarea name='description'"), "the raw text is still editable: {html}");
+        assert!(html.contains("rel-desc is-preview"), "the sheet opens on the rendered view: {html}");
+    }
+
+    #[test]
+    fn the_markdown_route_renders_the_description_safely_and_needs_the_csrf_token() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let st = state(d.path());
+        let body = "csrf_token=tok&text=%23%23%23+Faster+CI%0AThe+suite+runs+in+parallel.%0A-+one+thing%0A-+another%0A_By+%40ann%2C+Bo_%0A%0A**bold**+%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        let r = st.registry.dispatch(&st, &UiRequest::new(Method::POST, "/loops/mr-review-loop/release/markdown").with_body(body)).unwrap();
+        let html = r.body_text();
+        assert_eq!(r.status, 200, "{html}");
+        assert!(html.contains("<h3") && html.contains("Faster CI") && html.contains("<li>one thing</li>") && html.contains("<strong>bold</strong>"), "{html}");
+        assert!(html.contains("<em>") && html.contains("<span class='rel-mention'>@ann</span>"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
+        let denied = st.registry.dispatch(&st, &UiRequest::new(Method::POST, "/loops/mr-review-loop/release/markdown").with_body("text=hi")).unwrap();
+        assert_eq!(denied.status, 403);
     }
 
     #[test]

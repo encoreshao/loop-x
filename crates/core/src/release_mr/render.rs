@@ -151,15 +151,24 @@ pub fn render(summary: &Summary, resolved: &Resolved, branches: (&str, &str)) ->
     let mut mentioned: Vec<&str> = Vec::new();
     let mut shown_plain: Vec<String> = Vec::new();
     for (f, names) in summary.features.iter().zip(&credited) {
-        body.push_str(&format!("### {}\n{}\n", clean(&f.name), clean(&f.summary)));
-        for h in f
+        // Blank lines between the parts keep each one its own paragraph in any Markdown renderer.
+        body.push_str(&format!(
+            "### {}\n{}\n\n",
+            clean(&f.name),
+            clean(&f.summary)
+        ));
+        let highlights: Vec<String> = f
             .highlights
             .iter()
             .map(|h| clean(h))
             .filter(|h| !h.is_empty())
             .take(MAX_HIGHLIGHTS)
-        {
+            .collect();
+        for h in &highlights {
             body.push_str(&format!("- {h}\n"));
+        }
+        if !highlights.is_empty() {
+            body.push('\n');
         }
         let by: Vec<String> = names
             .iter()
@@ -181,9 +190,8 @@ pub fn render(summary: &Summary, resolved: &Resolved, branches: (&str, &str)) ->
             })
             .collect();
         if !by.is_empty() {
-            body.push_str(&format!("_By {}_\n", by.join(", ")));
+            body.push_str(&format!("_By {}_\n\n", by.join(", ")));
         }
-        body.push('\n');
     }
 
     // Anyone already named in a feature is not tagged again at the end.
@@ -317,11 +325,13 @@ mod tests {
     fn each_feature_is_a_group_with_highlights_and_clickable_authors() {
         let (_, d) = render(&summary(), &resolved(), PROD);
         assert!(
-            d.contains("### Order export\nCustomers can download their orders as CSV.\n- Export button on the orders page\n- Large exports run in the background\n_By @ann_\n"),
+            d.contains("### Order export\nCustomers can download their orders as CSV.\n\n- Export button on the orders page\n- Large exports run in the background\n\n_By @ann_\n\n"),
             "{d}"
         );
         assert!(
-            d.contains("### Faster search\nSearch results load in under a second.\n_By @bo, Cy_\n"),
+            d.contains(
+                "### Faster search\nSearch results load in under a second.\n\n_By @bo, Cy_\n"
+            ),
             "an unmatched author stays a plain name: {d}"
         );
     }

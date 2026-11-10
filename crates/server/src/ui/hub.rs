@@ -202,6 +202,8 @@ pub fn generic_loop_page(
     }
     if name == "mr-review-loop" {
         views.insert(1, v("mrs", "Merge requests"));
+        // Not refreshing: a page reload would wipe the branch selection.
+        views.insert(2, v("release", "Release MR"));
     }
     if has_settings {
         views.push(v("settings", "Settings"));
@@ -343,7 +345,15 @@ mod tests {
         let mr = generic_loop_page("mr-review-loop", None, false);
         assert!(mr.icon.contains("#i-git_pull_request"), "{}", mr.icon);
         let keys: Vec<&str> = mr.views.iter().map(|v| v.key.as_str()).collect();
-        assert_eq!(keys, ["live", "mrs", "content", "history"]);
+        assert_eq!(keys, ["live", "mrs", "release", "content", "history"]);
+        assert!(
+            !mr.views
+                .iter()
+                .find(|v| v.key == "release")
+                .unwrap()
+                .refresh,
+            "the release view never reloads itself"
+        );
     }
 
     #[test]
