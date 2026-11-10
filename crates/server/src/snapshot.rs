@@ -41,6 +41,8 @@ pub struct Paths {
     pub creator_jobs_dir: PathBuf,
     /// The MR Review page's release MR jobs (`~/.loopx/release-mr/jobs`), shown as one agent.
     pub release_jobs_dir: PathBuf,
+    /// The MR Review page's "Fix now" jobs (`~/.loopx/mr-fix/jobs`), shown as one agent.
+    pub mr_fix_jobs_dir: PathBuf,
     /// Where the Creator's skills keep their output (`~`): a clean run that wrote
     /// nothing there is not a success.
     pub user_home: PathBuf,
@@ -60,6 +62,7 @@ impl Paths {
             memory_root: loopx_core::memory_store::default_memory_root(),
             creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&loopx_core::config::home_dir()),
             release_jobs_dir: loopx_core::release_mr::job::jobs_dir(&loopx_core::config::home_dir()),
+            mr_fix_jobs_dir: loopx_core::mr_fix::jobs::jobs_dir(&loopx_core::config::home_dir()),
             user_home: PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),
             loops_config: loopx_core::config::home_dir().join("loops.json"),
             outputs,
@@ -316,6 +319,12 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     ) {
         loops.insert("release-mr".to_string(), entry);
     }
+    if let Some(entry) = loopx_core::mr_fix::jobs::island_entry(
+        &loopx_core::mr_fix::jobs::list(&paths.mr_fix_jobs_dir),
+        now,
+    ) {
+        loops.insert("mr-fix".to_string(), entry);
+    }
     let state = app_state(&loops, pending.len());
 
     json!({
@@ -353,6 +362,7 @@ mod tests {
             memory_root: root.join("memory"),
             creator_jobs_dir: root.join("creator/jobs"),
             release_jobs_dir: root.join("release-mr/jobs"),
+            mr_fix_jobs_dir: root.join("mr-fix/jobs"),
             user_home: root.join("home"),
             loops_config: root.join("loops.json"),
         }
@@ -510,6 +520,30 @@ mod tests {
                 .unwrap()
                 .starts_with("Writing the summary \u{b7} step 4 of 5"),
             "{s}"
+        );
+        assert_eq!(s["app_state"], "running");
+    }
+
+    #[test]
+    fn a_running_fix_now_job_is_a_running_agent_with_its_step_for_the_island() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        assert!(build_snapshot(&p, now())["loops"].get("mr-fix").is_none());
+        let j = loopx_core::mr_fix::jobs::start(
+            &p.mr_fix_jobs_dir,
+            "work:9!1",
+            "Fix login",
+            &|_: &Path| Ok(i64::from(std::process::id())),
+        )
+        .unwrap();
+        loopx_core::mr_fix::jobs::set_step(&p.mr_fix_jobs_dir, &j.id, 3).unwrap();
+        let s = build_snapshot(&p, now());
+        let l = &s["loops"]["mr-fix"];
+        assert_eq!(l["state"], "running", "{s}");
+        assert_eq!(l["current_issue"], "work:9!1 \u{b7} Fix login");
+        assert_eq!(
+            l["current_step"],
+            "Agent fixing the feedback \u{b7} step 4 of 6"
         );
         assert_eq!(s["app_state"], "running");
     }

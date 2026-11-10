@@ -43,6 +43,8 @@ pub struct MrInfo {
     pub source_branch: String,
     /// The project path from `references.full` (`group/project`), or empty.
     pub project_path: String,
+    /// The merge request's page, or empty.
+    pub web_url: String,
     /// GitLab's `changes` array (`new_path`, `old_path`, `diff`).
     pub changes: Vec<Value>,
 }
@@ -571,6 +573,22 @@ pub fn run_with(
     out: &mut dyn Write,
     template: &str,
 ) -> RunResult {
+    run_reporting(mr, ws, agent, job, out, template, &|_| {})
+}
+
+/// [`run_with`] that also calls `progress` with the index into
+/// [`super::jobs::STEPS`] each time the run moves to its next step.
+#[allow(clippy::too_many_arguments)]
+pub fn run_reporting(
+    mr: &dyn MrApi,
+    ws: &dyn Workspace,
+    agent: &dyn Agent,
+    job: &FixJob,
+    out: &mut dyn Write,
+    template: &str,
+    progress: &dyn Fn(usize),
+) -> RunResult {
+    progress(0);
     let _ = writeln!(out, "mr-fix {} for {}", job.id, job.mr_ref);
     let info = match mr.mr() {
         Ok(i) => i,
@@ -590,6 +608,7 @@ pub fn run_with(
             format!("The merge request is {}; nothing to fix.", info.state),
         );
     }
+    progress(1);
     let (me, discussions) = match mr.me().and_then(|me| Ok((me, mr.discussions()?))) {
         Ok(x) => x,
         Err(e) => return result("failed", format!("Cannot read the feedback: {e}")),
@@ -612,6 +631,7 @@ pub fn run_with(
         return result("failed", format!("MR changes agent settings: {path}"));
     }
 
+    progress(2);
     let dir = match ws.prepare(&info.source_branch) {
         Ok(d) => d,
         Err(e) => return result("failed", format!("Cannot prepare the worktree: {e}")),
@@ -661,6 +681,7 @@ pub fn run_with(
         }
         Ok(())
     };
+    progress(3);
     let handoff = agent.run(&dir, &prompt, &announce);
     for l in log.borrow().iter() {
         let _ = writeln!(out, "{l}");
@@ -680,6 +701,7 @@ pub fn run_with(
         );
     };
 
+    progress(4);
     let gated = gate(
         ws,
         &dir,
@@ -774,6 +796,7 @@ pub fn run_with(
         }
     }
     let mut res = res;
+    progress(5);
     match mr.post_note(&finish_note(&Outcome { items: done }, &marked)) {
         Ok(id) => {
             let _ = writeln!(out, "finish note {id} posted");
@@ -1095,6 +1118,7 @@ mod tests {
             pid: None,
             started_at: String::new(),
             summary: String::new(),
+            step: 0,
             log_path: PathBuf::from("/tmp/x.log"),
         }
     }
@@ -1231,6 +1255,26 @@ mod tests {
         // Nothing to show but the agent's own reason, which is still posted.
         let notes = mr.notes.borrow();
         assert!(notes.last().unwrap().contains("Dark mode not captured"));
+    }
+
+    #[test]
+    fn a_full_run_reports_each_step_in_order() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        let ws = FakeWs::new(&ev);
+        let agent = good_agent(&ws, &ev);
+        let seen = RefCell::new(Vec::new());
+        let r = run_reporting(
+            &mr,
+            &ws,
+            &agent,
+            &job(),
+            &mut Vec::new(),
+            PROMPT_TEMPLATE,
+            &|s| seen.borrow_mut().push(s),
+        );
+        assert_eq!(r.state, "done");
+        assert_eq!(*seen.borrow(), [0, 1, 2, 3, 4, 5]);
     }
 
     #[test]

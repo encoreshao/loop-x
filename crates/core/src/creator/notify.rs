@@ -8,6 +8,7 @@
 //!   exited cleanly with nothing produced), once, however many times it is called.
 
 use super::jobs::{self, JobKind, JobRecord};
+use super::videos::{self, VideoProject};
 use crate::slack_report::{Field, Link, Report, State, Status};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
@@ -123,8 +124,19 @@ fn took(rec: &JobRecord) -> Option<String> {
     })
 }
 
-/// The Slack message for a finished job.
-pub fn finished_report(dir: &Path, rec: &JobRecord) -> Report {
+fn platform_label(key: &str) -> Option<&'static str> {
+    match key {
+        "wechat" => Some("WeChat Channels"),
+        "douyin" => Some("Douyin"),
+        "linkedin" => Some("LinkedIn"),
+        "facebook" => Some("Facebook"),
+        _ => None,
+    }
+}
+
+/// The Slack message for a finished job. `video` is the project a finished Generate job
+/// produced, when it could be found: the message then names it instead of its address.
+pub fn finished_report(dir: &Path, rec: &JobRecord, video: Option<&VideoProject>) -> Report {
     let generate = rec.kind.makes_video();
     let (title, state, status, summary) = match (rec.state.as_str(), generate) {
         ("done", true) => (
@@ -170,11 +182,53 @@ pub fn finished_report(dir: &Path, rec: &JobRecord) -> Report {
             "The run did not finish. Open its log under Creator → Jobs.",
         ),
     };
-    let mut fields = vec![Field {
-        label: if generate { "Source" } else { "Topic" }.into(),
+    let video = video.filter(|_| generate && state == State::Done);
+    let (title, summary) = match video {
+        Some(v) if !v.title.trim().is_empty() => (
+            format!("Video ready: {}", v.title.trim()),
+            format!(
+                "\u{201c}{}\u{201d} was made from {}. Review it under Creator \u{2192} Videos.",
+                v.title.trim(),
+                short(&rec.key)
+            ),
+        ),
+        _ => (title.to_string(), summary.to_string()),
+    };
+    let mut fields = Vec::new();
+    if let Some(v) = video.filter(|v| !v.title.trim().is_empty()) {
+        fields.push(Field {
+            label: "Video".into(),
+            value: v.title.trim().to_string(),
+            url: None,
+        });
+    }
+    fields.push(Field {
+        label: if generate { "Made from" } else { "Topic" }.into(),
         value: short(&rec.key),
         url: rec.key.starts_with("https://").then(|| rec.key.clone()),
-    }];
+    });
+    if let Some(mp4) = video.and_then(|v| v.mp4.as_ref()) {
+        fields.push(Field {
+            label: "File".into(),
+            value: mp4.display().to_string(),
+            url: None,
+        });
+    }
+    if video.is_some() {
+        let names: Vec<&str> = rec
+            .options
+            .platforms
+            .iter()
+            .filter_map(|k| platform_label(k))
+            .collect();
+        if !names.is_empty() {
+            fields.push(Field {
+                label: "Publish text for".into(),
+                value: names.join(", "),
+                url: None,
+            });
+        }
+    }
     if state == State::Failed {
         if let Some(p) = jobs::progress(dir, &rec.id) {
             fields.push(Field {
@@ -192,12 +246,12 @@ pub fn finished_report(dir: &Path, rec: &JobRecord) -> Report {
         });
     }
     Report {
-        title: title.into(),
+        title,
         status: Some(Status {
             state,
             text: status.into(),
         }),
-        summary: Some(summary.into()),
+        summary: Some(summary),
         fields,
         footer: vec![Link {
             text: "LoopX Creator".into(),
@@ -205,6 +259,16 @@ pub fn finished_report(dir: &Path, rec: &JobRecord) -> Report {
         }],
         ..Report::default()
     }
+}
+
+/// The video project a finished Generate job wrote, found by its source and the window it ran in.
+fn produced_video<'a>(rec: &JobRecord, projects: &'a [VideoProject]) -> Option<&'a VideoProject> {
+    if !rec.kind.makes_video() || rec.state != "done" {
+        return None;
+    }
+    let since = jobs::started_time(rec)?;
+    let until = jobs::ended_time(rec).map(|t| t + std::time::Duration::from_secs(5));
+    videos::project_between(projects, &rec.key, since, until)
 }
 
 fn read_notified(path: &Path) -> Option<Vec<String>> {
@@ -251,12 +315,21 @@ pub fn notify_finished(
         write_notified(notified_path, &ids);
         return 0;
     };
+    let projects = if finished
+        .iter()
+        .any(|j| j.state == "done" && j.kind.makes_video())
+    {
+        videos::list_projects(&videos::videos_root(user_home)).0
+    } else {
+        Vec::new()
+    };
     let mut sent = 0;
     for rec in finished.iter().rev() {
         if known.contains(&rec.id) {
             continue;
         }
-        if send(&finished_report(dir, rec)) {
+        let video = produced_video(rec, &projects);
+        if send(&finished_report(dir, rec, video)) {
             sent += 1;
         }
         known.push(rec.id.clone());
@@ -434,7 +507,7 @@ mod tests {
         let out = loop_statuses(d.path(), &settled, now());
         assert_eq!(out[0].1["state"], "failed");
         assert_eq!(out[0].1["current_step"], "Incomplete");
-        let r = finished_report(d.path(), &settled[0]);
+        let r = finished_report(d.path(), &settled[0], None);
         assert_eq!(r.title, "Video generation incomplete");
         assert_eq!(r.status.as_ref().unwrap().state, State::Failed);
         // A "Result: complete" closing line, or none (older runs), changes nothing.
@@ -479,7 +552,7 @@ mod tests {
             .concat(),
         );
         let settled = jobs::settle_outputs(jobs::list_jobs(d.path()), home.path());
-        let r = finished_report(d.path(), &settled[0]);
+        let r = finished_report(d.path(), &settled[0], None);
         assert_eq!(r.title, "Video generation failed");
         assert_eq!(r.status.as_ref().unwrap().state, State::Failed);
         let field = |l: &str| {
@@ -488,7 +561,7 @@ mod tests {
                 .find(|f| f.label == l)
                 .map(|f| f.value.clone())
         };
-        assert_eq!(field("Source").as_deref(), Some("www.ted.com/talks/x"));
+        assert_eq!(field("Made from").as_deref(), Some("www.ted.com/talks/x"));
         assert_eq!(
             r.fields[0].url.as_deref(),
             Some("https://www.ted.com/talks/x")
@@ -507,10 +580,55 @@ mod tests {
         );
         let settled = jobs::settle_outputs(jobs::list_jobs(d.path()), home.path());
         let scout = settled.iter().find(|j| j.kind == JobKind::Scout).unwrap();
-        let r = finished_report(d.path(), scout);
+        let r = finished_report(d.path(), scout, None);
         assert_eq!(r.title, "Video search failed");
         assert_eq!(r.fields[0].label, "Topic");
         assert!(r.fields[0].url.is_none());
+    }
+
+    #[test]
+    fn a_finished_video_is_named_by_its_title_with_where_it_is_and_what_it_carries() {
+        let d = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        record(
+            d.path(),
+            "20261105T000001-gen000000",
+            "generate",
+            "https://www.ted.com/talks/x",
+            false,
+            &stamp(5),
+            "loopx-exit=0\n",
+        );
+        let mut rec = jobs::list_jobs(d.path()).remove(0);
+        rec.state = "done".into();
+        rec.options.platforms = vec!["wechat".into(), "linkedin".into()];
+        let video = videos::VideoProject {
+            slug: "tim".into(),
+            title: "Procrastinator".into(),
+            source_url: Some("https://www.ted.com/talks/x".into()),
+            mp4: Some(home.path().join("output/final/tim/tim.mp4")),
+            ..Default::default()
+        };
+        let r = finished_report(d.path(), &rec, Some(&video));
+        assert_eq!(r.title, "Video ready: Procrastinator");
+        let summary = r.summary.clone().unwrap();
+        assert!(
+            summary.contains("Procrastinator") && summary.contains("www.ted.com/talks/x"),
+            "{summary}"
+        );
+        let field = |l: &str| {
+            r.fields
+                .iter()
+                .find(|f| f.label == l)
+                .map(|f| f.value.clone())
+        };
+        assert_eq!(field("Video").as_deref(), Some("Procrastinator"));
+        assert_eq!(
+            field("Publish text for").as_deref(),
+            Some("WeChat Channels, LinkedIn")
+        );
+        assert!(field("File").unwrap().ends_with("output/final/tim/tim.mp4"));
+        assert!(field("Took").is_some());
     }
 
     #[test]

@@ -811,43 +811,48 @@ fn digest_covers_every_status() {
     let status = report.status.as_ref().unwrap();
     assert_eq!(status.state, slack_report::State::Failed);
     assert!(
-        status.text.starts_with("4 inboxes checked \u{b7} "),
+        status.text.starts_with("Checked 4 inboxes at "),
         "{}",
         status.text
     );
     let text = slack_report::plain_text(&report);
     assert!(text.starts_with("*Inbox Triage* :x: "), "{text}");
     assert!(
-        text.contains("\n3 urgent \u{b7} 6 action \u{b7} 9 other\n"),
+        text.contains("\n18 new emails: 3 urgent, 6 need a reply, 9 can wait.\n"),
         "{text}"
     );
     assert!(
         text.contains(
-            "\u{2022} *Alice &lt;a@x.com&gt;* \u{2014} Prod | down <https://mail/m1|draft>"
+            "\u{2022} *Alice &lt;a@x.com&gt;* \u{2014} Prod | down <https://mail/m1|Open draft>"
         ),
         "{text}"
     );
     assert!(
-        text.contains("Work   1       2       3      drafts ready"),
+        text.contains("Work   1       2             3         Drafts ready"),
         "{text}"
     );
     assert!(
-        text.contains("Quiet  0       0       0      no new mail"),
+        text.contains("Quiet  0       0             0         Nothing new"),
         "{text}"
     );
-    assert!(text.contains(":zap: *3 things need you*"), "{text}");
+    assert!(
+        text.contains(":zap: *3 things need your attention*"),
+        "{text}"
+    );
     assert!(
         text.contains(
-            "*Home* \u{2014} needs re-auth - reconnect it from the dashboard's Inbox Triage page"
+            "*Home* \u{2014} the sign-in expired - reconnect it on the Inbox Triage page in LoopX"
         ),
         "{text}"
     );
     assert!(
-        text.contains("*Side* \u{2014} failed - AI triage failed: x"),
+        text.contains("*Side* \u{2014} couldn't check this inbox - AI triage failed: x"),
         "{text}"
     );
     assert!(
-        text.contains("*Side* \u{2014} more waiting - over 50 new messages"),
+        text.contains(
+            "*Side* \u{2014} more than 50 new emails - the rest will be handled on the next run"
+        ),
         "{text}"
     );
 }
@@ -860,13 +865,12 @@ fn digest_manual_reply_and_overflow() {
     o.overflow = true;
     let text = slack_report::plain_text(&digest_report(&[&o], now()));
     assert!(
-        text.contains("Prod | down (reply manually)")
-            && text.contains("more waiting - over 50 new messages"),
+        text.contains("Prod | down (reply needed)") && text.contains("more than 50 new emails"),
         "{text}"
     );
     o.urgent[0].draft_failed = true;
     assert!(slack_report::plain_text(&digest_report(&[&o], now()))
-        .contains("draft failed - reply manually"));
+        .contains("couldn't write a draft - please reply yourself"));
 }
 
 #[test]
@@ -941,10 +945,10 @@ fn digests_are_grouped_by_bundle() {
     assert_eq!(posts.len(), 2);
     assert!(posts[0]
         .0
-        .starts_with("http://default|Inbox Triage - 1 inbox checked"));
+        .starts_with("http://default|Inbox Triage - Checked "));
     assert!(posts[1]
         .0
-        .starts_with("http://team|Inbox Triage - 1 inbox checked"));
+        .starts_with("http://team|Inbox Triage - Checked "));
     let blocks = |i: usize| posts[i].1.as_ref().unwrap().to_string();
     assert!(blocks(0).contains("Alice") && !blocks(0).contains("\"B\""));
     assert!(blocks(1).contains("Alice"));
@@ -1185,7 +1189,7 @@ fn run_all_sends_one_digest_for_the_run() {
     run_all_inboxes(&w.ctx, "run_1", now(), &deps).unwrap();
     let posts = posts.lock().unwrap();
     assert_eq!(posts.len(), 1);
-    assert!(posts[0].0.contains("2 inboxes checked"), "{}", posts[0].0);
+    assert!(posts[0].0.contains("Checked 2 inboxes"), "{}", posts[0].0);
     let blocks = posts[0].1.as_ref().unwrap().to_string();
     assert!(
         blocks.contains("\"Work\"") && blocks.contains("\"Home\""),

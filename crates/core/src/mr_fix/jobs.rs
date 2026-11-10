@@ -23,7 +23,25 @@ pub struct FixJob {
     pub started_at: String,
     /// e.g. "Fixed 5 of 7"
     pub summary: String,
+    /// Index into [`STEPS`] of what the runner is doing now.
+    pub step: usize,
     pub log_path: PathBuf,
+}
+
+/// What a Fix now run goes through, in order; the header, Agents page and island show the current one.
+pub const STEPS: [&str; 6] = [
+    "Reading the merge request",
+    "Reading the review feedback",
+    "Preparing the worktree",
+    "Agent fixing the feedback",
+    "Checking and pushing the changes",
+    "Replying on the merge request",
+];
+
+/// The current step as one line: `Preparing the worktree · step 3 of 6`.
+pub fn step_text(step: usize) -> String {
+    let i = step.min(STEPS.len() - 1);
+    format!("{} \u{b7} step {} of {}", STEPS[i], i + 1, STEPS.len())
 }
 
 const FINAL_STATES: [&str; 4] = ["done", "failed", "stopped", "nothing"];
@@ -69,7 +87,7 @@ fn record_path(dir: &Path, id: &str) -> PathBuf {
 fn write_record(dir: &Path, r: &FixJob) -> Result<(), String> {
     let v = json!({
         "id": r.id, "mr_ref": r.mr_ref, "title": r.title, "state": r.state,
-        "pid": r.pid, "started_at": r.started_at, "summary": r.summary,
+        "pid": r.pid, "started_at": r.started_at, "summary": r.summary, "step": r.step,
     });
     crate::settings_store::atomic_write_json(&v, &record_path(dir, &r.id))
         .map_err(|e| e.to_string())
@@ -87,6 +105,7 @@ fn read_record(dir: &Path, id: &str) -> Option<FixJob> {
         pid: v.get("pid").and_then(Value::as_i64),
         started_at: s("started_at").unwrap_or_default(),
         summary: s("summary").unwrap_or_default(),
+        step: v.get("step").and_then(Value::as_u64).unwrap_or(0) as usize,
         log_path: dir.join(format!("{id}.log")),
     })
 }
@@ -191,6 +210,7 @@ pub fn start(dir: &Path, mr_ref: &str, title: &str, spawn: &Spawn<'_>) -> Result
         pid: None,
         started_at: chrono::Utc::now().to_rfc3339(),
         summary: String::new(),
+        step: 0,
     };
     write_record(dir, &rec)?;
     let pid = match spawn(&rec.log_path) {
@@ -217,6 +237,41 @@ pub fn start(dir: &Path, mr_ref: &str, title: &str, spawn: &Spawn<'_>) -> Result
                 .unwrap_or_else(|| "the job record vanished".to_string()))
         }
     }
+}
+
+/// Record which step a running job is on. A settled record is left as it is.
+pub fn set_step(dir: &Path, id: &str, step: usize) -> Result<(), String> {
+    if !is_safe_id(id) {
+        return Err("invalid job id".to_string());
+    }
+    update_if_running(dir, id, |r| r.step = step.min(STEPS.len() - 1))?
+        .map(|_| ())
+        .ok_or_else(|| "no such job".to_string())
+}
+
+/// A job as the status document the island, header pill and Agents page read: a running job
+/// with its step, or a failure from the last 24 hours. `None` when there is nothing to show.
+/// `jobs` is newest first.
+pub fn island_entry(jobs: &[FixJob], now: chrono::DateTime<chrono::Utc>) -> Option<Value> {
+    let label = |j: &FixJob| {
+        if j.title.is_empty() {
+            j.mr_ref.clone()
+        } else {
+            format!("{} \u{b7} {}", j.mr_ref, j.title)
+        }
+    };
+    if let Some(j) = jobs.iter().find(|j| j.state == "running") {
+        return Some(
+            json!({"state": "running", "updated_at": j.started_at, "current_issue": label(j), "current_step": step_text(j.step)}),
+        );
+    }
+    let latest = jobs.first()?;
+    let age = chrono::DateTime::parse_from_rfc3339(&latest.started_at)
+        .map(|t| now - t.to_utc())
+        .ok()?;
+    (latest.state == "failed" && age.num_hours() < 24).then(|| {
+        json!({"state": "failed", "updated_at": latest.started_at, "current_issue": label(latest), "current_step": latest.summary})
+    })
 }
 
 /// Record a job's outcome. Only a `running` record changes: a settled one (stopped by
@@ -399,6 +454,36 @@ mod tests {
     }
 
     #[test]
+    fn a_running_job_shows_its_step_and_a_recent_failure_stays_visible() {
+        let d = tempfile::tempdir().unwrap();
+        let now = chrono::Utc::now();
+        assert_eq!(island_entry(&[], now), None);
+        let j = start(d.path(), "a:1!1", "Fix login", &|_| Ok(me())).unwrap();
+        set_step(d.path(), &j.id, 2).unwrap();
+        let running = island_entry(&list(d.path()), now).unwrap();
+        assert_eq!(running["state"], "running");
+        assert_eq!(running["current_issue"], "a:1!1 \u{b7} Fix login");
+        assert_eq!(
+            running["current_step"],
+            "Preparing the worktree \u{b7} step 3 of 6"
+        );
+        finish(d.path(), &j.id, "failed", "Not pushed: x").unwrap();
+        let failed = island_entry(&list(d.path()), now).unwrap();
+        assert_eq!(
+            (failed["state"].as_str(), failed["current_step"].as_str()),
+            (Some("failed"), Some("Not pushed: x"))
+        );
+        assert_eq!(
+            island_entry(&list(d.path()), now + chrono::Duration::hours(25)),
+            None
+        );
+        finish(d.path(), &j.id, "done", "x").ok();
+        // A settled record never moves back a step.
+        assert!(set_step(d.path(), &j.id, 4).is_ok());
+        assert_eq!(get(d.path(), &j.id).unwrap().step, 2);
+    }
+
+    #[test]
     fn latest_for_is_the_newest_job_of_that_mr() {
         let d = tempfile::tempdir().unwrap();
         let mk = |id: &str, mr: &str, at: &str| FixJob {
@@ -409,6 +494,7 @@ mod tests {
             pid: None,
             started_at: at.into(),
             summary: String::new(),
+            step: 0,
             log_path: d.path().join(id),
         };
         let jobs = vec![

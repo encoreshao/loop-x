@@ -46,6 +46,13 @@ import Testing
         #expect(starts.map(\.loop) == ["issue-loop", "inbox-triage-loop"])
     }
 
+    @Test func theFixNowJobHasNoRunButtonAndAReadableName() {
+        #expect(LoopNames.display("mr-fix") == "Fix now")
+        #expect(LoopNames.isCreatorJob("mr-fix"))
+        let task = NotchTask(id: "loop:mr-fix", name: "mr-fix", state: .failed, detail: nil)
+        #expect(IslandStarts.runnableLoop(for: task) == nil)
+    }
+
     @Test func theReleaseMRJobHasNoRunButtonAndAReadableName() {
         #expect(LoopNames.display("release-mr") == "Release MR")
         #expect(LoopNames.isCreatorJob("release-mr"), "listed beside the loops, never started from the island")

@@ -1166,6 +1166,24 @@ fn failure_text(result: &LoopResult) -> String {
     tail(&parts.join("\n\n"), FAILURE_TAIL_CHARS)
 }
 
+/// The merge request as Slack mrkdwn, labelled with its title (`view MR` when it has none).
+pub fn mr_slack_link(url: &str, title: &str) -> String {
+    let title = title.trim();
+    let label = if title.is_empty() {
+        "view MR".to_string()
+    } else {
+        slack_text(title).replace('|', "\u{2223}")
+    };
+    format!("<{url}|{label}>")
+}
+
+/// `text` with Slack's required `& < >` escaping, so a title can't ping or fake a link.
+pub fn slack_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// The issue as Slack mrkdwn: `<url|alias #iid>`, or bold text with no URL.
 pub fn slack_issue_link(alias: &str, issue_iid: &str, project_url: Option<&str>) -> String {
     match project_url {
@@ -1971,11 +1989,11 @@ pub fn finalize_gated_issue(
     }
     emit(
         "issue.completed",
-        json!({"outcome": "mr_opened", "gated": true, "action": "fix", "mr_url": mr_url}),
+        json!({"outcome": "mr_opened", "gated": true, "action": "fix", "mr_url": mr_url, "mr_title": title}),
     );
     // Step 10's "Finished" message, which the gate override tells the agent not to send.
     let link = match &mr_url {
-        Some(u) => format!("<{u}|view MR>"),
+        Some(u) => mr_slack_link(u, &title),
         None => branch.clone(),
     };
     let setup_note = match deps.setup_fixed {
@@ -4087,7 +4105,7 @@ mod tests {
             "{finished}"
         );
         assert!(
-            finished.contains("<https://github.com/o/r/pull/7|view MR>"),
+            finished.contains("<https://github.com/o/r/pull/7|fix: #7 x>"),
             "{finished}"
         );
     }

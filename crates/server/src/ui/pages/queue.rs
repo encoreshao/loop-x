@@ -159,20 +159,13 @@ fn release_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
         .collect()
 }
 
-/// Running "Fix now" jobs from the Merge requests view, as `("mr-fix", status)`.
+/// The running "Fix now" job from the Merge requests view, as `("mr-fix", status)` with its step.
 fn mr_fix_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
-    loopx_core::mr_fix::jobs::list(&loopx_core::mr_fix::jobs::jobs_dir(&ctx.state.home_dir))
+    let jobs = loopx_core::mr_fix::jobs::list(&loopx_core::mr_fix::jobs::jobs_dir(&ctx.state.home_dir));
+    loopx_core::mr_fix::jobs::island_entry(&jobs, chrono::Utc::now())
+        .filter(|doc| doc.get("state").and_then(serde_json::Value::as_str) == Some("running"))
+        .map(|doc| ("mr-fix".to_string(), doc))
         .into_iter()
-        .filter(|j| j.state == "running")
-        .map(|j| {
-            let doc = json!({
-                "state": "running",
-                "updated_at": j.started_at,
-                "current_issue": j.mr_ref,
-                "current_step": ctx.t("Fixing\u{2026}"),
-            });
-            ("mr-fix".to_string(), doc)
-        })
         .collect()
 }
 
@@ -286,6 +279,9 @@ fn action_button(ctx: &UiCtx, action: &str, style: &str, id: &str, label: &str, 
 
 /// A loop's name in a row; the release MR job links to the page that shows its progress.
 fn loop_name_html(ctx: &UiCtx, name: &str) -> String {
+    if name == "mr-fix" {
+        return format!("<a href='/loops/mr-review-loop'>{}</a>", pyfmt::escape(&ctx.t("Fix now")));
+    }
     if name == "release-mr" {
         return format!("<a href='/loops/mr-review-loop'>{}</a>", pyfmt::escape(&ctx.t("Release MR")));
     }
@@ -612,7 +608,8 @@ mod tests {
         let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
         assert!(pill.contains("work:9!1") && pill.contains("pill-blue"), "{pill}");
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
-        assert!(html.contains("mr-fix") && html.contains("running for") && html.contains("work:9!1"), "{html}");
+        assert!(html.contains("Fix now") && html.contains("running for") && html.contains("work:9!1"), "{html}");
+        assert!(html.contains("Reading the merge request") && html.contains("step 1 of 6"), "{html}");
         assert!(!html.contains("Nothing is running"), "{html}");
     }
 

@@ -5,6 +5,7 @@ pub mod jobs;
 pub mod notes;
 pub mod real;
 pub mod run;
+pub mod slack;
 
 /// Whether `s` is a well-formed `account:project!iid` merge request reference.
 pub fn valid_mr_ref(s: &str) -> bool {

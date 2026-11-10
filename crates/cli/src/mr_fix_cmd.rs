@@ -142,6 +142,45 @@ fn finish_outcome(
     }
 }
 
+/// One Slack message when the run ends (not when the user stopped it). Best effort: no
+/// webhook, or a rejected post, never changes how the run ended.
+fn announce_in_slack(
+    gitlab: &GitlabMr,
+    record: &FixJob,
+    result: &RunResult,
+    job: Option<(&Path, &str)>,
+) {
+    use loopx_core::mr_fix::slack;
+    let info = gitlab.mr().ok();
+    let step = job
+        .and_then(|(dir, id)| jobs::get(dir, id))
+        .map_or(0, |j| j.step);
+    let took = chrono::DateTime::parse_from_rfc3339(&record.started_at)
+        .ok()
+        .map(|t| {
+            loopx_core::slack_report::fmt_duration(
+                (chrono::Utc::now() - t.to_utc()).num_seconds() as f64
+            )
+        });
+    let title = info
+        .as_ref()
+        .map_or(record.title.as_str(), |i| i.title.as_str());
+    let url = info
+        .as_ref()
+        .map(|i| i.web_url.as_str())
+        .filter(|u| !u.is_empty());
+    let report = slack::report(&slack::Finished {
+        mr_ref: &record.mr_ref,
+        mr_title: title,
+        mr_url: url,
+        state: &result.state,
+        summary: &result.summary,
+        step,
+        took,
+    });
+    loopx_core::slack_report::send(&report, None);
+}
+
 fn run_fix(mr_ref: &str) -> Result<ExitCode, String> {
     if !valid_mr_ref(mr_ref) {
         return Err(format!(
@@ -247,6 +286,7 @@ fn fix(mr_ref: &str, home: &Path, job: Option<&FixJob>) -> Result<RunResult, Str
         pid: None,
         started_at: String::new(),
         summary: String::new(),
+        step: 0,
         log_path: PathBuf::new(),
     });
     let custom = config
@@ -267,13 +307,26 @@ fn fix(mr_ref: &str, home: &Path, job: Option<&FixJob>) -> Result<RunResult, Str
         "{{PROJECT_NOTES}}",
         &loopx_core::mr_fix::real::render_project_notes(&custom, &recipes),
     );
-    let result = runner::run_with(
+    let jobs_dir = jobs::jobs_dir(home);
+    let job_id = job.map(|j| j.id.clone());
+    let result = runner::run_reporting(
         &gitlab,
         &ws,
         &agent,
         &record,
         &mut std::io::stdout(),
         &template,
+        &|step| {
+            if let Some(id) = &job_id {
+                let _ = jobs::set_step(&jobs_dir, id, step);
+            }
+        },
+    );
+    announce_in_slack(
+        &gitlab,
+        &record,
+        &result,
+        job.map(|j| (jobs_dir.as_path(), j.id.as_str())),
     );
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(result)
@@ -298,6 +351,7 @@ mod tests {
             pid: Some(4242),
             started_at: String::new(),
             summary: String::new(),
+            step: 0,
             log_path: PathBuf::new(),
         };
         // Launched by the dashboard: the record's pid is this process or its

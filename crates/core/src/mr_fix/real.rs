@@ -30,6 +30,7 @@ pub fn mr_info(v: &Value) -> MrInfo {
         title: text("title"),
         description: text("description"),
         source_branch: text("source_branch"),
+        web_url: text("web_url"),
         project_path: v
             .pointer("/references/full")
             .and_then(Value::as_str)

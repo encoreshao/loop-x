@@ -6,14 +6,14 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PublishCopy {
     pub title: String,
     pub caption: String,
     pub hashtags: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct VideoProject {
     pub slug: String,
     pub title: String,

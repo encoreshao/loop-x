@@ -30,6 +30,8 @@ pub struct IssueLine {
     pub iid: String,
     pub title: String,
     pub web_url: Option<String>,
+    /// The merge request's own title, when the run opened one and recorded it.
+    pub mr_title: Option<String>,
     pub outcome: Outcome,
 }
 
@@ -79,6 +81,7 @@ pub fn issue_lines(
                         iid: text(&e["issue_iid"]),
                         title: String::new(),
                         web_url: None,
+                        mr_title: None,
                         outcome: Outcome::Checked,
                     },
                 ));
@@ -96,6 +99,11 @@ pub fn issue_lines(
                     .map(str::to_owned);
             }
             "issue.completed" => {
+                line.mr_title = data["mr_title"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_owned);
                 line.outcome = match data["action"].as_str() {
                     Some("fix") => Outcome::MrOpened(
                         data["mr_url"]
@@ -140,6 +148,15 @@ fn item(line: &IssueLine, text: String) -> Item {
         text,
         url: line.web_url.clone(),
         link: None,
+    }
+}
+
+/// What the merge request list shows for a line: the MR's title, then the issue it closes.
+fn mr_item_text(l: &IssueLine) -> String {
+    match &l.mr_title {
+        Some(t) if *t != l.title && !l.title.is_empty() => format!("{t} (closes: {})", l.title),
+        Some(t) => t.clone(),
+        None => l.title.clone(),
     }
 }
 
@@ -205,7 +222,7 @@ pub fn build(lines: &[IssueLine], facts: &RunFacts) -> Report {
                             .map_or("view MR".to_string(), |iid| format!("!{iid}")),
                         url: url.clone(),
                     }),
-                    ..item(l, l.title.clone())
+                    ..item(l, mr_item_text(l))
                 }),
                 _ => None,
             })
@@ -539,6 +556,22 @@ mod tests {
         assert_eq!(
             r.footer.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(),
             ["LoopX Issue Loop", "run R", "$1.23"]
+        );
+    }
+
+    #[test]
+    fn an_opened_merge_request_is_listed_by_its_own_title() {
+        let mut ls = lines();
+        let l = ls
+            .iter_mut()
+            .find(|l| matches!(l.outcome, Outcome::MrOpened(_)))
+            .unwrap();
+        l.mr_title = Some("fix: login redirect".into());
+        l.title = "Login loops".into();
+        let text = crate::slack_report::plain_text(&build(&ls, &RunFacts::default()));
+        assert!(
+            text.contains("fix: login redirect (closes: Login loops)"),
+            "{text}"
         );
     }
 

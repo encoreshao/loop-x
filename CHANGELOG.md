@@ -13,6 +13,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Fix now (MR Review → Merge requests) shows its steps (reading the merge request and feedback, preparing the worktree, the agent fixing, checking and pushing, replying) in the header Agents pill, on the Agents page and on the Mac island, and posts one Slack message when it finishes, naming the merge request by its title and listing what the run did.
+
 - Creator → Showcase: choose a promo template (the inspire-showcase skill's calm, cinematic, minimal, punchy and tour recipes) from cards with a cover and a sample clip; the choice is kept with the job, so a retry makes the same video, and the agent scaffolds with it instead of asking. Names and descriptions follow the page language, and Play sample opens the clip in a popup, in the browser and in the Mac app.
 
 - Release MR: a Stop button on a running release MR kills it at any time, and each recent release MR shows when it was made with a View link that reopens its title and description.
@@ -27,6 +29,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Creator → Videos: publish text for **LinkedIn** and **Facebook** (English) next to WeChat and Douyin, each with Copy, Share and a Published mark.- Settings → Skills lists the inspire-showcase skill with its install steps.
 
 ### Changed
+
+- Slack messages about a merge request now show its title: the issue loop's "MR opened" message and report list, and the review-thread "needs you" alert.
+- Inbox Triage's Slack digest reads as plain sentences ("18 new emails: 3 urgent, 6 need a reply, 9 can wait", "Open draft", "Sign in again") and only shows the per-inbox table when several inboxes ran.
+- The Creator's "video generated" Slack message names the video by its title, with what it was made from, where the file is and which platforms have publish text.
 
 - Release MR: the merge request is now assigned to whoever creates it, and its description follows the team format: a `ccing` line, then numbered feature areas with one bold-labelled bullet per feature and the merge request numbers it came from. Created releases show an Open merge request link in Recent release merge requests.
 - Release MR: when the target already has every commit of the source, the job finishes as **Up to date** instead of a red failure, and Recent release merge requests is a tidier list: date and time first, then project, branches, status, a one-line brief and a View details link that works for every finished job.

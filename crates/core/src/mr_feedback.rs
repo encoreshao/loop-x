@@ -70,6 +70,10 @@ pub trait MrGitlab {
     fn reply(&self, mr_iid: i64, discussion_id: &str, body: &str) -> Result<Value, String>;
     /// The MR's unified diff for one file, if it has one.
     fn file_diff(&self, mr_iid: i64, path: &str) -> Option<String>;
+    /// The MR's title, for messages people read; `None` when it cannot be fetched.
+    fn mr_title(&self, _mr_iid: i64) -> Option<String> {
+        None
+    }
 }
 
 /// Where `loop/issue-<iid>` stands against its remote.
@@ -1030,8 +1034,15 @@ impl Round<'_> {
             }),
         );
         let link = crate::issue_runner::slack_issue_link(self.alias, self.issue_iid, None);
+        let mr = state
+            .threads
+            .get(id)
+            .and_then(|t| t.mr_iid)
+            .and_then(|iid| self.deps.gitlab.mr_title(iid))
+            .map(|t| format!(" \u{201c}{}\u{201d}", crate::issue_runner::slack_text(&t)))
+            .unwrap_or_default();
         (self.deps.notifier)(&format!(
-            "{link}: a review thread on the merge request needs you ({reason}). Nothing was posted; decide in LoopX under Needs you."
+            "{link}: a review thread on the merge request{mr} needs you ({reason}). Nothing was posted; decide in LoopX under Needs you."
         ));
         ThreadEnd::NeedsYou
     }
@@ -1955,6 +1966,18 @@ impl MrGitlab for RealMrGitlab {
             .and_then(Value::as_i64))
     }
 
+    fn mr_title(&self, mr_iid: i64) -> Option<String> {
+        let mr = self
+            .client()
+            .ok()?
+            .get_json(&format!(
+                "projects/{}/merge_requests/{mr_iid}",
+                crate::gitlab::quote(&self.project_id)
+            ))
+            .ok()?;
+        mr.get("title").and_then(Value::as_str).map(str::to_string)
+    }
+
     fn mr_state(&self, mr_iid: i64) -> Result<String, String> {
         self.client()?
             .mr_state(&self.project_id, mr_iid)
@@ -2151,6 +2174,9 @@ mod tests {
                 }
             }
             Ok(json!({"id": id, "body": body}))
+        }
+        fn mr_title(&self, _: i64) -> Option<String> {
+            Some("fix: <b>login</b>".into())
         }
         fn file_diff(&self, _: i64, _: &str) -> Option<String> {
             None
@@ -2660,6 +2686,11 @@ mod tests {
         assert!(log.replies.is_empty() && log.pushes.is_empty() && log.ensured == 0);
         assert_eq!(log.notified.len(), 1);
         assert!(log.notified[0].contains("web #7"), "{}", log.notified[0]);
+        assert!(
+            log.notified[0].contains("\u{201c}fix: &lt;b&gt;login&lt;/b&gt;\u{201d}"),
+            "{}",
+            log.notified[0]
+        );
         let t = h.thread();
         assert_eq!(t.status, ThreadStatus::NeedsYou);
         assert_eq!(t.confidence, Some(60));

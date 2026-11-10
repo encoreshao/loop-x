@@ -788,6 +788,7 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
         .any(|o| o.status == "needs_reauth" || o.overflow);
     let n = outcomes.len();
     let total = |k: fn(&Outcome) -> i64| outcomes.iter().map(|o| k(o)).sum::<i64>();
+    let at = now.with_timezone(&Local).format("%H:%M");
     let status = Status {
         state: if failed {
             State::Failed
@@ -796,18 +797,39 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
         } else {
             State::Done
         },
-        text: format!(
-            "{n} {} checked \u{b7} {}",
-            if n == 1 { "inbox" } else { "inboxes" },
-            now.with_timezone(&Local).format("%Y-%m-%d %H:%M")
-        ),
+        text: match outcomes {
+            [only] => format!("Checked {} at {at}", only.label),
+            _ => format!("Checked {n} inboxes at {at}"),
+        },
     };
-    let summary = format!(
-        "{} urgent \u{b7} {} action \u{b7} {} other",
+    let (urgent_n, action_n, other_n) = (
         total(|o| count(o, "urgent")),
         total(|o| count(o, "action")),
-        total(other_count)
+        total(other_count),
     );
+    let all_mail = urgent_n + action_n + other_n;
+    let summary = if all_mail == 0 {
+        if n == 1 {
+            "No new mail.".to_string()
+        } else {
+            "No new mail in any inbox.".to_string()
+        }
+    } else {
+        let parts: Vec<String> = [
+            (urgent_n, "urgent"),
+            (action_n, "need a reply"),
+            (other_n, "can wait"),
+        ]
+        .into_iter()
+        .filter(|(k, _)| *k > 0)
+        .map(|(k, what)| format!("{k} {what}"))
+        .collect();
+        format!(
+            "{all_mail} new {}: {}.",
+            if all_mail == 1 { "email" } else { "emails" },
+            parts.join(", ")
+        )
+    };
     let urgent: Vec<Item> = outcomes
         .iter()
         .flat_map(|o| &o.urgent)
@@ -816,15 +838,18 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
                 (Some(l), _) => (
                     item.subject.clone(),
                     Some(Link {
-                        text: "draft".into(),
+                        text: "Open draft".into(),
                         url: Some(l.clone()),
                     }),
                 ),
                 (None, true) => (
-                    format!("{} (draft failed - reply manually)", item.subject),
+                    format!(
+                        "{} (couldn't write a draft - please reply yourself)",
+                        item.subject
+                    ),
                     None,
                 ),
-                (None, false) => (format!("{} (reply manually)", item.subject), None),
+                (None, false) => (format!("{} (reply needed)", item.subject), None),
             };
             Item {
                 title: item.from.clone(),
@@ -838,11 +863,11 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
         .iter()
         .map(|o| {
             let state = match o.status.as_str() {
-                "quiet" => "no new mail",
-                "needs_reauth" => "needs re-auth",
-                "failed" => "failed",
-                _ if o.urgent.iter().any(|u| u.draft_link.is_some()) => "drafts ready",
-                _ => "new mail",
+                "quiet" => "Nothing new",
+                "needs_reauth" => "Sign in again",
+                "failed" => "Couldn't check",
+                _ if o.urgent.iter().any(|u| u.draft_link.is_some()) => "Drafts ready",
+                _ => "New mail",
             };
             vec![
                 o.label.clone(),
@@ -864,37 +889,43 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
         };
         match o.status.as_str() {
             "needs_reauth" => {
-                note("needs re-auth - reconnect it from the dashboard's Inbox Triage page".into())
+                note("the sign-in expired - reconnect it on the Inbox Triage page in LoopX".into())
             }
-            "failed" => note(format!("failed - {}", o.error.as_deref().unwrap_or("None"))),
+            "failed" => note(format!(
+                "couldn't check this inbox - {}",
+                o.error.as_deref().unwrap_or("no reason was given")
+            )),
             _ => {}
         }
         if o.overflow {
             note(format!(
-                "more waiting - over {MESSAGE_CAP} new messages, the rest are picked up next run"
+                "more than {MESSAGE_CAP} new emails - the rest will be handled on the next run"
             ));
         }
     }
     let mut sections = Vec::new();
     if !urgent.is_empty() {
         sections.push(Section::List {
-            heading: "Urgent".into(),
+            heading: "Urgent - needs your reply".into(),
             items: urgent,
         });
     }
-    sections.push(Section::Table {
-        heading: "By inbox".into(),
-        columns: ["Inbox", "Urgent", "Action", "Other", "Status"]
-            .map(String::from)
-            .to_vec(),
-        rows,
-    });
+    // One inbox is already named in the status line; a table is for comparing several.
+    if n > 1 {
+        sections.push(Section::Table {
+            heading: "By inbox".into(),
+            columns: ["Inbox", "Urgent", "Need a reply", "Can wait", "Result"]
+                .map(String::from)
+                .to_vec(),
+            rows,
+        });
+    }
     if !needs.is_empty() {
         sections.push(Section::Callout {
             heading: if needs.len() == 1 {
-                "One thing needs you".into()
+                "One thing needs your attention".into()
             } else {
-                format!("{} things need you", needs.len())
+                format!("{} things need your attention", needs.len())
             },
             text: String::new(),
             items: needs,

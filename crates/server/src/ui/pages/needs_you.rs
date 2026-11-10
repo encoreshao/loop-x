@@ -47,6 +47,7 @@ fn paths(state: &UiState) -> Paths {
         memory_root: memory_root(state),
         creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&state.home_dir),
         release_jobs_dir: loopx_core::release_mr::job::jobs_dir(&state.home_dir),
+        mr_fix_jobs_dir: loopx_core::mr_fix::jobs::jobs_dir(&state.home_dir),
         loops_config: state.loops_config_path(),
         user_home: state.user_home.clone(),
         outputs,
