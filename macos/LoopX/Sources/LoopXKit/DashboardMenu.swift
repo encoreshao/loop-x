@@ -22,8 +22,10 @@ public enum DashboardMenu {
         public let title: String
         public let path: String
         public let shortcut: Shortcut
-        public init(_ title: String, _ path: String, _ shortcut: Shortcut) {
-            self.title = title; self.path = path; self.shortcut = shortcut
+        /// The loop this entry opens, so it can be left out while that loop is turned off.
+        public let loop: String?
+        public init(_ title: String, _ path: String, _ shortcut: Shortcut, loop: String? = nil) {
+            self.title = title; self.path = path; self.shortcut = shortcut; self.loop = loop
         }
     }
     public struct Section: Equatable, Sendable {
@@ -36,9 +38,9 @@ public enum DashboardMenu {
     public static let sections: [Section] = [
         Section(title: "Loops", entries: [
             Entry("All Loops", "/loops", Shortcut("1", [.command])),
-            Entry("Issues", "/loops/issue-loop", Shortcut("2", [.command])),
-            Entry("Topic Monitor", "/loops/topic-loop", Shortcut("3", [.command])),
-            Entry("Inbox Triage", "/loops/inbox-triage-loop", Shortcut("4", [.command])),
+            Entry("Issues", "/loops/issue-loop", Shortcut("2", [.command]), loop: "issue-loop"),
+            Entry("Topic Monitor", "/loops/topic-loop", Shortcut("3", [.command]), loop: "topic-loop"),
+            Entry("Inbox Triage", "/loops/inbox-triage-loop", Shortcut("4", [.command]), loop: "inbox-triage-loop"),
         ]),
         Section(title: "Creator", entries: [
             Entry("Discover", "/creator?tab=discover", Shortcut("1", [.control, .option])),
@@ -65,6 +67,13 @@ public enum DashboardMenu {
             Entry("Skills", "/settings?view=skills", Shortcut("4", [.command, .control])),
         ]),
     ]
+
+    /// The sections with every entry of a turned-off loop left out, so the Loops menu matches the sidebar.
+    public static func sections(disabled: Set<String>) -> [Section] {
+        sections.map { sec in
+            Section(title: sec.title, entries: sec.entries.filter { e in e.loop.map { !disabled.contains($0) } ?? true })
+        }
+    }
 
     /// External links shown in the app's menus; they open in the default browser.
     public static let links: [(title: String, url: URL, shortcut: Shortcut)] = [

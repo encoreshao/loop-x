@@ -534,7 +534,12 @@ mod tests {
             r#"[{"name": "issue-loop", "enabled": true}, {"name": "topic-loop", "enabled": true},
                 {"name": "inbox-triage-loop", "enabled": true},
                 {"name": "daily-digest-loop", "label": "Daily Digest", "enabled": true},
-                {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": false}]"#,
+                {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": false},
+                {"name": "linkedin-autopilot-loop", "label": "LinkedIn", "enabled": false}]"#,
+        );
+        write(
+            state.status_path_for_loop("linkedin-autopilot-loop"),
+            r#"{"state": "idle", "updated_at": "2026-10-27T14:00:00+00:00", "last_exit_code": 0}"#,
         );
         write(
             state.status_path_for_loop("daily-digest-loop"),
@@ -549,7 +554,8 @@ mod tests {
         assert!(pos("issue-loop") < pos("topic-loop"));
         assert!(pos("topic-loop") < pos("inbox-triage-loop"));
         assert!(pos("inbox-triage-loop") < pos("daily-digest-loop"));
-        assert!(!cards.contains("rss-watch-loop"), "a disabled loop that never ran is hidden");
+        assert!(!cards.contains("rss-watch-loop"), "a disabled loop is hidden");
+        assert!(!cards.contains("linkedin-autopilot-loop"), "a disabled loop is hidden even after it ran");
         let digest = &cards[pos("daily-digest-loop")..];
         assert!(digest.contains("Daily Digest") && digest.contains("Last run failed"), "{digest}");
         assert!(digest.contains("pill-red"), "{digest}");

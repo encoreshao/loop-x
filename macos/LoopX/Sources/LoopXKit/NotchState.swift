@@ -45,6 +45,8 @@ public struct NotchState: Equatable, Sendable {
     public var tasks: [NotchTask] = []
     /// How many things wait on the user (the backend's `needs_you.count`).
     public var needsYou: Int = 0
+    /// Loops turned off in the registry; the island's start buttons and the Loops menu leave them out.
+    public var disabledLoops: Set<String> = []
 
     public static let alertWindow: TimeInterval = 120
 
@@ -58,6 +60,7 @@ public struct NotchState: Equatable, Sendable {
         var state = headline(from: s, now: now, dismissed: dismissed, alertWindow: alertWindow)
         state.tasks = TaskNotifications.tasks(in: s)
         state.needsYou = s.needsYou.count
+        state.disabledLoops = s.disabledLoops
         return state
     }
 

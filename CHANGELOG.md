@@ -23,6 +23,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Turning a loop off now removes it everywhere it was listed: the sidebar's Loops menu, the Activity page, the Mac island (its loop rows and Start buttons) and the Mac app's Loops menu. Only enabled loops are shown, even if a disabled loop has run before (its history is kept and returns when it is enabled again); a disabled loop that is running right now stays on the island until it finishes.
 - The Issues → Worktrees "Switch to a worktree" snippet is now a dark, syntax-highlighted code block in the same style as the Terminal view; copying it still copies the plain script.
 - Issue loop screenshots: shots are planned from the merge request's changed files, and pages behind a sign-in are reached through a documented dev bypass first, then the local development database read-only, then test data or mocks.
 - Creator is no longer in the dashboard sidebar; the Mac app has a new **Creator** menu (also in the menu-bar icon) that opens its Discover, Library, Showcase, Videos and Jobs panels directly.

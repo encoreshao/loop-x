@@ -3,6 +3,13 @@ import Testing
 @testable import LoopXKit
 
 @Suite struct NotchStateTests {
+    @Test func theNotchCarriesTheDisabledLoopsFromTheSnapshot() {
+        var snap = Snapshot()
+        snap.disabledLoops = ["topic-loop"]
+        #expect(NotchState.make(from: snap, now: Date()).disabledLoops == ["topic-loop"])
+        #expect(NotchState.idle.disabledLoops.isEmpty)
+    }
+
     let now = Timestamps.parse("2026-10-22T08:20:30.000Z")!
     func attention(_ kind: Attention.Kind, at: String = "2026-10-22T08:20:00.000Z", reason: String? = nil,
                    mr: String? = nil) -> Attention {

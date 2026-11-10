@@ -96,7 +96,7 @@ extension StatusItemController: NSMenuDelegate {
         }
         if !st.approvals.isEmpty { menu.addItem(.separator()) }
         add("Open Dashboard", #selector(openDashboard), "d")
-        let starts = IslandStarts.available(tasks: st.tasks)
+        let starts = IslandStarts.available(tasks: st.tasks, disabled: st.disabledLoops)
         if !starts.isEmpty {
             let run = NSMenu()
             for (n, s) in starts.prefix(9).enumerated() {

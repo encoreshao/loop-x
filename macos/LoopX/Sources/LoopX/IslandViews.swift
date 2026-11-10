@@ -92,7 +92,7 @@ struct HomeView: View {
             ForEach(tasks) { t in
                 Button { island.open(t.id) } label: { card(t) }.buttonStyle(.plain)
             }
-            let starts = IslandStarts.available(tasks: tasks)
+            let starts = IslandStarts.available(tasks: tasks, disabled: model.notch.disabledLoops)
             if !starts.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {

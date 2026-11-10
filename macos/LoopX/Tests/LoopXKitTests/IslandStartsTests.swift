@@ -40,4 +40,9 @@ import Testing
         let failed = NotchTask(id: "loop:creator-generate-video", name: "creator-generate-video", state: .failed, detail: nil)
         #expect(IslandDetail.make(task: failed, events: [], attention: nil).chips == [.openDashboard])
     }
+
+    @Test func aDisabledLoopHasNoStartButton() {
+        let starts = IslandStarts.available(tasks: [], disabled: ["topic-loop", "rss-watch-loop"])
+        #expect(starts.map(\.loop) == ["issue-loop", "inbox-triage-loop"])
+    }
 }

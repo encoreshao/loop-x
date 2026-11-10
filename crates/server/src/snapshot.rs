@@ -42,6 +42,8 @@ pub struct Paths {
     /// Where the Creator's skills keep their output (`~`): a clean run that wrote
     /// nothing there is not a success.
     pub user_home: PathBuf,
+    /// The loops registry (`~/.loopx/loops.json`): a disabled loop is left out of the snapshot.
+    pub loops_config: PathBuf,
 }
 
 impl Paths {
@@ -56,6 +58,7 @@ impl Paths {
             memory_root: loopx_core::memory_store::default_memory_root(),
             creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&loopx_core::config::home_dir()),
             user_home: PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),
+            loops_config: loopx_core::config::home_dir().join("loops.json"),
             outputs,
         }
     }
@@ -224,8 +227,26 @@ fn queue_view(queue_path: &Path, loops: &Map<String, Value>) -> Value {
     })
 }
 
+/// Loops the user disabled in the registry. A loop the registry does not list,
+/// or no registry at all, hides nothing.
+fn disabled_loops(loops_config: &Path) -> std::collections::BTreeSet<String> {
+    loopx_core::loops_config::list_loops(loops_config, None)
+        .unwrap_or_default()
+        .iter()
+        .filter(|e| {
+            e.get("enabled")
+                .is_some_and(|v| !loopx_core::loops_config::py_truthy(v))
+        })
+        .filter_map(|e| e.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
 pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
-    let loops = loop_statuses(&paths.outputs);
+    let mut loops = loop_statuses(&paths.outputs);
+    // Only enabled loops reach the Mac island; a disabled one that is running
+    // right now stays so its progress is not hidden.
+    let disabled = disabled_loops(&paths.loops_config);
+    loops.retain(|name, doc| !disabled.contains(name) || doc["state"] == "running");
     let topics =
         status::read_topic_status(&paths.outputs.join("topic-monitor").join("status.json"));
     approvals::expire_overdue(&paths.approvals_dir, now);
@@ -270,6 +291,7 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         "version": 1,
         "app_state": state,
         "loops": loops,
+        "disabled_loops": disabled,
         "topics": topics["topics"],
         "approvals": {"pending": pending},
         "queue": queue,
@@ -299,6 +321,7 @@ mod tests {
             memory_root: root.join("memory"),
             creator_jobs_dir: root.join("creator/jobs"),
             user_home: root.join("home"),
+            loops_config: root.join("loops.json"),
         }
     }
 
@@ -319,6 +342,99 @@ mod tests {
         )
         .unwrap();
         std::fs::write(p.creator_jobs_dir.join(format!("{id}.log")), log).unwrap();
+    }
+
+    fn write_status(p: &Paths, name: &str, state: &str) {
+        let dir = p.outputs.join("status");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{name}.json")),
+            json!({"state": state, "updated_at": "2026-10-22T11:00:00+00:00"}).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_disabled_loop_is_left_out_of_the_snapshot_even_with_run_history() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::write(
+            &p.loops_config,
+            r#"[{"name": "linkedin-autopilot-loop", "enabled": false},
+                {"name": "rss-watch-loop", "enabled": false},
+                {"name": "stale-sweeper-loop", "enabled": true}]"#,
+        )
+        .unwrap();
+        for n in [
+            "linkedin-autopilot-loop",
+            "rss-watch-loop",
+            "stale-sweeper-loop",
+            "unlisted-loop",
+        ] {
+            write_status(&p, n, "idle");
+        }
+        let s = build_snapshot(&p, now());
+        let loops = s["loops"].as_object().unwrap();
+        assert!(!loops.contains_key("linkedin-autopilot-loop"), "{s}");
+        assert!(!loops.contains_key("rss-watch-loop"), "{s}");
+        assert!(loops.contains_key("stale-sweeper-loop"), "{s}");
+        assert!(
+            loops.contains_key("unlisted-loop"),
+            "a loop the registry does not list is kept: {s}"
+        );
+    }
+
+    #[test]
+    fn the_snapshot_names_the_disabled_loops_so_the_app_can_hide_their_menus_and_buttons() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::write(
+            &p.loops_config,
+            r#"[{"name": "topic-loop", "enabled": false}, {"name": "issue-loop", "enabled": true},
+                {"name": "rss-watch-loop", "enabled": false}]"#,
+        )
+        .unwrap();
+        let s = build_snapshot(&p, now());
+        let names: Vec<&str> = s["disabled_loops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        // Also the template loops the file does not list, as the sidebar treats them.
+        assert!(
+            names.contains(&"rss-watch-loop") && names.contains(&"topic-loop"),
+            "{s}"
+        );
+        assert!(!names.contains(&"issue-loop"), "{s}");
+        assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {s}");
+        std::fs::remove_file(&p.loops_config).unwrap();
+        assert_eq!(build_snapshot(&p, now())["disabled_loops"], json!([]));
+    }
+
+    #[test]
+    fn a_disabled_loop_that_is_running_right_now_stays_visible() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::write(
+            &p.loops_config,
+            r#"[{"name": "rss-watch-loop", "enabled": false}]"#,
+        )
+        .unwrap();
+        write_status(&p, "rss-watch-loop", "running");
+        assert!(build_snapshot(&p, now())["loops"]
+            .get("rss-watch-loop")
+            .is_some());
+    }
+
+    #[test]
+    fn a_missing_loops_registry_hides_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        write_status(&p, "rss-watch-loop", "idle");
+        assert!(build_snapshot(&p, now())["loops"]
+            .get("rss-watch-loop")
+            .is_some());
     }
 
     #[test]

@@ -37,6 +37,13 @@ import Testing
         #expect(s.runningLoop?.name == "issue-loop")
     }
 
+    @Test func decodesTheDisabledLoops() throws {
+        let s = try Snapshot.decode(Data(#"{"disabled_loops":["rss-watch-loop","topic-loop"]}"#.utf8))
+        #expect(s.disabledLoops == ["rss-watch-loop", "topic-loop"])
+        // An older backend without the field hides nothing.
+        #expect(try Snapshot.decode(Data("{}".utf8)).disabledLoops.isEmpty)
+    }
+
     @Test func decodesWhatNeedsYou() throws {
         let doc = #"{"needs_you":{"count":2,"items":[{"id":"escalated:web#7","kind":"escalated","title":"web #7 was escalated to you (ambiguous)","since":"2026-10-22T10:00:00+00:00","dismissable":true},{"id":"sign_in:ai_cli","kind":"sign_in","title":"Sign-in needs attention: AI CLI (claude) - not signed in","since":null,"dismissable":false}]}}"#
         let s = try Snapshot.decode(Data(doc.utf8))

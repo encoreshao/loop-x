@@ -5,6 +5,17 @@ import Testing
 @Suite struct DashboardMenuTests {
     private var all: [DashboardMenu.Entry] { DashboardMenu.sections.flatMap(\.entries) }
 
+    @Test func theLoopsSectionListsOnlyEnabledLoops() {
+        func loopsEntries(_ disabled: Set<String>) -> [String] {
+            DashboardMenu.sections(disabled: disabled).first { $0.title == "Loops" }?.entries.map(\.title) ?? []
+        }
+        #expect(loopsEntries([]) == ["All Loops", "Issues", "Topic Monitor", "Inbox Triage"])
+        #expect(loopsEntries(["topic-loop", "inbox-triage-loop"]) == ["All Loops", "Issues"])
+        // A disabled loop that has no menu entry changes nothing, and other sections are untouched.
+        #expect(loopsEntries(["linkedin-autopilot-loop"]).count == 4)
+        #expect(DashboardMenu.sections(disabled: ["topic-loop"]).map(\.title) == ["Loops", "Creator", "Observe", "System"])
+    }
+
     @Test func sectionsFollowTheSidebarGroups() {
         #expect(DashboardMenu.sections.map(\.title) == ["Loops", "Creator", "Observe", "System"])
     }

@@ -51,16 +51,13 @@ pub fn nav_link(
         .expect("nav_link template")
 }
 
-/// `loop_is_visible`: enabled, or has ever run (its status file exists).
-pub fn loop_is_visible(state: &UiState, entry: &Value) -> bool {
-    match entry.get("enabled") {
-        None => true,
-        Some(v) if loopx_core::loops_config::py_truthy(v) => true,
-        _ => {
-            let name = entry.get("name").and_then(Value::as_str).unwrap_or("?");
-            state.status_path_for_loop(name).exists()
-        }
-    }
+/// `loop_is_visible`: only an enabled loop is listed. A loop the user turned
+/// off disappears from the sidebar and Activity even if it has run before; its
+/// history stays on disk and comes back when it is enabled again.
+pub fn loop_is_visible(_state: &UiState, entry: &Value) -> bool {
+    entry
+        .get("enabled")
+        .is_none_or(loopx_core::loops_config::py_truthy)
 }
 
 /// The registry's loops, or none when the file is missing or malformed.
@@ -152,6 +149,27 @@ mod tests {
         assert_eq!(nav_key("history"), "runs");
         assert_eq!(nav_key("overview"), "overview");
         assert_eq!(nav_key("update"), "update");
+    }
+
+    #[test]
+    fn only_enabled_loops_are_visible_even_when_a_disabled_one_has_run_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        let status = state.status_path_for_loop("rss-watch-loop");
+        std::fs::create_dir_all(status.parent().unwrap()).unwrap();
+        std::fs::write(&status, r#"{"state": "idle"}"#).unwrap();
+        assert!(!loop_is_visible(
+            &state,
+            &serde_json::json!({"name": "rss-watch-loop", "enabled": false})
+        ));
+        assert!(loop_is_visible(
+            &state,
+            &serde_json::json!({"name": "rss-watch-loop", "enabled": true})
+        ));
+        assert!(loop_is_visible(
+            &state,
+            &serde_json::json!({"name": "no-flag-loop"})
+        ));
     }
 
     #[test]

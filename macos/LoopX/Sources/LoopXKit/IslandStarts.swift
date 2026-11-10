@@ -9,10 +9,10 @@ public enum IslandStarts {
         Start(loop: "inbox-triage-loop", title: "Triage inbox", symbol: "tray"),
     ]
 
-    /// Hides a start whose loop is already running (topics all share `topic-loop`).
-    public static func available(tasks: [NotchTask]) -> [Start] {
+    /// Hides a start whose loop is already running (topics all share `topic-loop`) or is turned off.
+    public static func available(tasks: [NotchTask], disabled: Set<String> = []) -> [Start] {
         let running = Set(tasks.filter { $0.state == .running }.map { $0.id.hasPrefix("topic:") ? "topic-loop" : $0.name })
-        return all.filter { !running.contains($0.loop) }
+        return all.filter { !running.contains($0.loop) && !disabled.contains($0.loop) }
     }
 
     /// The loop a row's Run button starts: any loop row that is idle or failed. Running and queued
