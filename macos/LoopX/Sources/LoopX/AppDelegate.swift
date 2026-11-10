@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onNotchChange = { [weak self] old, new in
             previous(old, new)
             // The Loops menu lists only enabled loops: rebuild it when the set changes.
-            if old.disabledLoops != new.disabledLoops, let self { NSApp.mainMenu = self.makeMainMenu() }
+            if old.enabledLoops != new.enabledLoops, let self { NSApp.mainMenu = self.makeMainMenu() }
             self?.status.update(new)
             self?.dashboard.backendChanged()
         }
@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             item("Quit LoopX", #selector(NSApplication.terminate(_:)), "q"),
         ]))
-        for section in DashboardMenu.sections(disabled: model.notch.disabledLoops) {
+        for section in DashboardMenu.sections(enabled: model.notch.enabledLoops) {
             main.addItem(submenu(section.title, section.entries.map { e in
                 let i = item(e.title, #selector(openPageFromMenu(_:)), "", target: self)
                 i.setShortcut(e.shortcut)

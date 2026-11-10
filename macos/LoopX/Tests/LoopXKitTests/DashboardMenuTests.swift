@@ -5,15 +5,27 @@ import Testing
 @Suite struct DashboardMenuTests {
     private var all: [DashboardMenu.Entry] { DashboardMenu.sections.flatMap(\.entries) }
 
-    @Test func theLoopsSectionListsOnlyEnabledLoops() {
-        func loopsEntries(_ disabled: Set<String>) -> [String] {
-            DashboardMenu.sections(disabled: disabled).first { $0.title == "Loops" }?.entries.map(\.title) ?? []
-        }
-        #expect(loopsEntries([]) == ["All Loops", "Issues", "Topic Monitor", "Inbox Triage"])
-        #expect(loopsEntries(["topic-loop", "inbox-triage-loop"]) == ["All Loops", "Issues"])
-        // A disabled loop that has no menu entry changes nothing, and other sections are untouched.
-        #expect(loopsEntries(["linkedin-autopilot-loop"]).count == 4)
-        #expect(DashboardMenu.sections(disabled: ["topic-loop"]).map(\.title) == ["Loops", "Creator", "Observe", "System"])
+    @Test func theLoopsSectionListsEveryEnabledLoopInSidebarOrder() {
+        let enabled = [LoopRef(name: "issue-loop", label: "Issues"), LoopRef(name: "mr-review-loop", label: "MR Review"),
+                       LoopRef(name: "daily-digest-loop", label: "Daily Digest")]
+        let loops = DashboardMenu.sections(enabled: enabled).first { $0.title == "Loops" }!
+        #expect(loops.entries.map(\.title) == ["All Loops", "Issues", "MR Review", "Daily Digest"])
+        #expect(loops.entries.map(\.path) == ["/loops", "/loops/issue-loop", "/loops/mr-review-loop", "/loops/daily-digest-loop"])
+        #expect(loops.entries.first?.shortcut == .init("1"))
+        #expect(DashboardMenu.sections(enabled: enabled).map(\.title) == ["Loops", "Creator", "Observe", "System"])
+    }
+
+    @Test func loopsBeyondTheNinthShortcutStillGetAnEntry() {
+        let many = (1...12).map { LoopRef(name: "l\($0)-loop", label: "L\($0)") }
+        let entries = DashboardMenu.sections(enabled: many).first { $0.title == "Loops" }!.entries
+        #expect(entries.count == 13)
+        #expect(entries.last?.shortcut.key == "")
+        #expect(entries[8].shortcut.key == "9")
+    }
+
+    @Test func aMenuWithoutTheEnabledListFallsBackToTheBuiltInLoops() {
+        let titles = DashboardMenu.sections(enabled: []).first { $0.title == "Loops" }?.entries.map(\.title)
+        #expect(titles == ["All Loops", "Issues", "Topic Monitor", "Inbox Triage"])
     }
 
     @Test func sectionsFollowTheSidebarGroups() {

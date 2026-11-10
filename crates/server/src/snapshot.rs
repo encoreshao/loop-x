@@ -241,6 +241,28 @@ fn disabled_loops(loops_config: &Path) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
+/// The enabled loops as the sidebar lists them (registry order, the sidebar's
+/// labels), for the Mac app's Loops menu. Empty without a registry.
+fn enabled_loops(loops_config: &Path) -> Vec<Value> {
+    loopx_core::loops_config::list_loops(loops_config, None)
+        .unwrap_or_default()
+        .iter()
+        .filter(|e| {
+            e.get("enabled")
+                .is_none_or(loopx_core::loops_config::py_truthy)
+        })
+        .filter_map(|e| {
+            let name = e
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|n| !n.is_empty())?;
+            let page = crate::ui::hub::builtin_loop_page(name)
+                .unwrap_or_else(|| crate::ui::hub::generic_loop_page(name, Some(e), false));
+            Some(json!({"name": name, "label": page.label}))
+        })
+        .collect()
+}
+
 pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     let mut loops = loop_statuses(&paths.outputs);
     // Only enabled loops reach the Mac island; a disabled one that is running
@@ -292,6 +314,7 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         "app_state": state,
         "loops": loops,
         "disabled_loops": disabled,
+        "enabled_loops": enabled_loops(&paths.loops_config),
         "topics": topics["topics"],
         "approvals": {"pending": pending},
         "queue": queue,
@@ -410,6 +433,42 @@ mod tests {
         assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {s}");
         std::fs::remove_file(&p.loops_config).unwrap();
         assert_eq!(build_snapshot(&p, now())["disabled_loops"], json!([]));
+    }
+
+    #[test]
+    fn the_snapshot_lists_the_enabled_loops_with_the_sidebar_labels_in_registry_order() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::write(
+            &p.loops_config,
+            r#"[{"name": "issue-loop", "enabled": true},
+                {"name": "topic-loop", "enabled": false},
+                {"name": "mr-review-loop", "label": "MR Review", "enabled": true},
+                {"name": "meeting-prep-loop", "label": "Meeting Prep"},
+                {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": false}]"#,
+        )
+        .unwrap();
+        let s = build_snapshot(&p, now());
+        let listed: Vec<(&str, &str)> = s["enabled_loops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| (e["name"].as_str().unwrap(), e["label"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            &listed[..3],
+            [
+                ("issue-loop", "Issues"),
+                ("mr-review-loop", "MR Review"),
+                ("meeting-prep-loop", "Meeting Prep")
+            ],
+            "{s}"
+        );
+        assert!(!listed
+            .iter()
+            .any(|(n, _)| *n == "topic-loop" || *n == "rss-watch-loop"));
+        std::fs::remove_file(&p.loops_config).unwrap();
+        assert_eq!(build_snapshot(&p, now())["enabled_loops"], json!([]));
     }
 
     #[test]

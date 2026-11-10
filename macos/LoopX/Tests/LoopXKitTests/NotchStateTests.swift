@@ -8,6 +8,8 @@ import Testing
         snap.disabledLoops = ["topic-loop"]
         #expect(NotchState.make(from: snap, now: Date()).disabledLoops == ["topic-loop"])
         #expect(NotchState.idle.disabledLoops.isEmpty)
+        snap.enabledLoops = [LoopRef(name: "issue-loop", label: "Issues")]
+        #expect(NotchState.make(from: snap, now: Date()).enabledLoops == snap.enabledLoops)
     }
 
     let now = Timestamps.parse("2026-10-22T08:20:30.000Z")!

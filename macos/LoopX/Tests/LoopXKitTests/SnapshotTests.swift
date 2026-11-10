@@ -44,6 +44,12 @@ import Testing
         #expect(try Snapshot.decode(Data("{}".utf8)).disabledLoops.isEmpty)
     }
 
+    @Test func decodesTheEnabledLoopsWithTheirLabels() throws {
+        let s = try Snapshot.decode(Data(#"{"enabled_loops":[{"name":"mr-review-loop","label":"MR Review"},{"name":"x"}]}"#.utf8))
+        #expect(s.enabledLoops == [LoopRef(name: "mr-review-loop", label: "MR Review")])
+        #expect(try Snapshot.decode(Data("{}".utf8)).enabledLoops.isEmpty)
+    }
+
     @Test func decodesWhatNeedsYou() throws {
         let doc = #"{"needs_you":{"count":2,"items":[{"id":"escalated:web#7","kind":"escalated","title":"web #7 was escalated to you (ambiguous)","since":"2026-10-22T10:00:00+00:00","dismissable":true},{"id":"sign_in:ai_cli","kind":"sign_in","title":"Sign-in needs attention: AI CLI (claude) - not signed in","since":null,"dismissable":false}]}}"#
         let s = try Snapshot.decode(Data(doc.utf8))

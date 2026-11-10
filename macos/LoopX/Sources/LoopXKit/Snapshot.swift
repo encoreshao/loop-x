@@ -225,6 +225,13 @@ public struct QueueBlock: Codable, Equatable, Sendable {
     }
 }
 
+/// An enabled loop as the sidebar lists it: its id and label.
+public struct LoopRef: Codable, Equatable, Hashable, Sendable {
+    public var name: String
+    public var label: String
+    public init(name: String, label: String) { self.name = name; self.label = label }
+}
+
 /// The whole-state document pushed on every `event: snapshot`.
 public struct Snapshot: Codable, Equatable, Sendable {
     public var version: Int
@@ -238,10 +245,12 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var needsYou: NeedsYouBlock = .init()
     /// Loops the user turned off in the registry: hidden from the island's start buttons and the Loops menu.
     public var disabledLoops: Set<String> = []
+    /// The enabled loops in the sidebar's order, for the Loops menu.
+    public var enabledLoops: [LoopRef] = []
 
     enum CodingKeys: String, CodingKey {
         case version, loops, topics, approvals, attention, queue
-        case disabledLoops = "disabled_loops"
+        case disabledLoops = "disabled_loops", enabledLoops = "enabled_loops"
         case appState = "app_state", recentEvents = "recent_events", needsYou = "needs_you"
     }
 
@@ -266,6 +275,11 @@ public struct Snapshot: Codable, Equatable, Sendable {
         queue = (try? c.decodeIfPresent(QueueBlock.self, forKey: .queue)) ?? .init()
         needsYou = (try? c.decodeIfPresent(NeedsYouBlock.self, forKey: .needsYou)) ?? .init()
         disabledLoops = Set((try? c.decodeIfPresent([String].self, forKey: .disabledLoops)) ?? [])
+        struct Raw: Decodable { var name: String?; var label: String? }
+        enabledLoops = ((try? c.decodeIfPresent([Raw].self, forKey: .enabledLoops)) ?? []).compactMap {
+            guard let name = $0.name, let label = $0.label else { return nil }
+            return LoopRef(name: name, label: label)
+        }
     }
 
     public static func decode(_ data: Data) throws -> Snapshot { try JSONDecoder().decode(Snapshot.self, from: data) }
