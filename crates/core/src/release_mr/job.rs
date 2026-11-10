@@ -11,7 +11,7 @@ pub enum Mode {
     Preview,
 }
 
-/// running | ready | created | failed | expired
+/// running | ready | created | failed | expired | discarded | stopped
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseJob {
     pub id: String,
@@ -248,6 +248,28 @@ pub fn start(
     }
 }
 
+/// Stops a `running` job: its whole process group is killed (the runner and the agent it
+/// started) and the record becomes `stopped`. `false` when the job is not running.
+pub fn stop(dir: &Path, id: &str) -> bool {
+    let Some(j) = get(dir, id).filter(|j| j.state == "running") else {
+        return false;
+    };
+    if let Some(pid) = j.pid {
+        crate::run_control::kill_process_group(
+            pid,
+            std::time::Duration::from_secs(3),
+            std::time::Duration::from_millis(100),
+        );
+    }
+    update(dir, id, |c| {
+        if c.state == "running" {
+            c.state = "stopped".into();
+            c.summary = "Stopped".into();
+        }
+    })
+    .is_ok()
+}
+
 /// The one entry the island and the Agents page show for release jobs, as a loop status
 /// document: a running job with its step, a failure from the last 24 hours, or a preview
 /// waiting for review. `None` when there is nothing to show. `jobs` is newest first.
@@ -388,6 +410,41 @@ mod tests {
             None,
             "a finished job needs nothing from the island"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_kills_the_running_process_group_and_marks_the_job_stopped() {
+        use std::os::unix::process::CommandExt;
+        let d = tempfile::tempdir().unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = i64::from(child.id());
+        let j = start(
+            d.path(),
+            "app",
+            "g/app",
+            "staging",
+            "master",
+            Mode::Create,
+            &fake(pid),
+        )
+        .unwrap();
+        assert!(stop(d.path(), &j.id));
+        let _ = child.wait();
+        let after = get(d.path(), &j.id).unwrap();
+        assert_eq!(
+            (after.state.as_str(), after.summary.as_str()),
+            ("stopped", "Stopped")
+        );
+        assert!(
+            !stop(d.path(), &j.id),
+            "a settled job cannot be stopped again"
+        );
+        assert!(!stop(d.path(), "nope"));
     }
 
     #[test]

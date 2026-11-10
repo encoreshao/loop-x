@@ -1760,5 +1760,8 @@
   "Writing the summary": "Rédaction du résumé",
   "Creating the merge request": "Création de la merge request",
   "Preparing the preview": "Préparation de l'aperçu",
-  "Release MR": "MR de release"
+  "Release MR": "MR de release",
+  "Release MR stopped": "MR de version arrêtée",
+  "This release MR is not running": "Cette MR de version n’est pas en cours",
+  "Release MR text": "Texte de la MR de version"
 }

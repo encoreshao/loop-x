@@ -1760,5 +1760,8 @@
   "Writing the summary": "撰写摘要",
   "Creating the merge request": "创建合并请求",
   "Preparing the preview": "准备预览",
-  "Release MR": "发布 MR"
+  "Release MR": "发布 MR",
+  "Release MR stopped": "已停止发布 MR",
+  "This release MR is not running": "此发布 MR 未在运行",
+  "Release MR text": "发布 MR 内容"
 }

@@ -3287,7 +3287,11 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .rel-sub{margin:.25rem 0 0;font-size:.85rem;font-weight:600;color:var(--md-on-surface-variant)}
 .rel-jobs{display:flex;flex-direction:column;gap:.45rem;margin:0;padding:0;list-style:none}
 .rel-job{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;font-size:.85rem}
-.rel-job-project,.rel-reason,.rel-meta{color:var(--md-on-surface-variant)}
+.rel-when{font-variant-numeric:tabular-nums}
+.rel-view{font-weight:500;text-decoration:none;color:var(--md-primary)}
+.rel-view:hover{text-decoration:underline}
+.rel-stop{margin:.75rem 0 0}
+.rel-job-project,.rel-reason,.rel-meta,.rel-when{color:var(--md-on-surface-variant)}
 .rel-meta{margin:0;font-size:.82rem}
 .rel-run{display:flex;flex-direction:column;gap:.7rem;padding:1rem 1.1rem;border:1px solid var(--md-outline-variant);border-radius:14px;background:color-mix(in srgb,var(--md-surface) 70%,transparent)}
 .rel-run-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem .9rem}

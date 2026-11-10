@@ -22,6 +22,7 @@ pub fn register(r: &mut Registry) {
     r.post("/loops/mr-review-loop/release/start", start);
     r.post("/loops/mr-review-loop/release/confirm", confirm);
     r.post("/loops/mr-review-loop/release/discard", discard);
+    r.post("/loops/mr-review-loop/release/stop", stop);
 }
 
 // ---- projects and the real GitLab ---------------------------------------------------------------
@@ -218,6 +219,15 @@ fn discard(ctx: &UiCtx) -> UiResponse {
     }
 }
 
+fn stop(ctx: &UiCtx) -> UiResponse {
+    let id = ctx.form().first("job").unwrap_or_default().to_string();
+    if job::stop(&jobs_dir(ctx), &id) {
+        UiResponse::flash_redirect(true, &ctx.t("Release MR stopped"), BACK)
+    } else {
+        fail(ctx, &ctx.t("This release MR is not running"))
+    }
+}
+
 // ---- the panel -----------------------------------------------------------------------------------------
 
 fn state_pill(ctx: &UiCtx, state: &str) -> String {
@@ -227,9 +237,18 @@ fn state_pill(ctx: &UiCtx, state: &str) -> String {
         "ready" => ("skipped", "Ready to review"),
         "expired" => ("skipped", "Expired"),
         "discarded" => ("skipped", "Discarded"),
+        "stopped" => ("skipped", "Stopped"),
         _ => ("skipped", "Running\u{2026}"),
     };
     format!("<span class='pill history-pill history-{kind}'>{}</span>", h(&ctx.t(label)))
+}
+
+/// When the job started, in this machine's local time, as a `<time>` element.
+fn when(j: &ReleaseJob) -> String {
+    match chrono::DateTime::parse_from_rfc3339(&j.started_at) {
+        Ok(t) => format!("<time class='rel-when' datetime='{}'>{}</time>", h(&j.started_at), t.with_timezone(&chrono::Local).format("%b %-d, %Y %H:%M")),
+        Err(_) => String::new(),
+    }
 }
 
 /// An older job in the "Recent" list.
@@ -241,9 +260,14 @@ fn job_row(ctx: &UiCtx, j: &ReleaseJob) -> String {
     } else {
         String::new()
     };
+    let view = if j.state != "running" && !j.description.is_empty() {
+        format!("<a class='rel-view' href='{BACK}&amp;job={}'>{}</a>", h(&j.id), h(&ctx.t("View")))
+    } else {
+        String::new()
+    };
     format!(
-        "<li class='rel-job'><code>{} \u{2192} {}</code><span class='rel-job-project'>{}</span>{}{}</li>",
-        h(&j.source), h(&j.target), h(&j.alias), state_pill(ctx, &j.state), detail
+        "<li class='rel-job'><code>{} \u{2192} {}</code><span class='rel-job-project'>{}</span>{}{}{}{}</li>",
+        h(&j.source), h(&j.target), h(&j.alias), state_pill(ctx, &j.state), when(j), detail, view
     )
 }
 
@@ -280,7 +304,13 @@ fn progress_block(ctx: &UiCtx, j: &ReleaseJob) -> String {
         })
         .collect();
     let (title, extra) = match j.state.as_str() {
-        "running" => (ctx.t("Writing your release MR"), String::new()),
+        "running" => (
+            ctx.t("Writing your release MR"),
+            format!(
+                "<form method='post' action='/loops/mr-review-loop/release/stop' class='rel-stop'>{}<input type='hidden' name='job' value='{}'><button type='submit' class='btn btn-neutral'>{}</button></form>",
+                ctx.csrf_input(), h(&j.id), h(&ctx.t("Stop"))
+            ),
+        ),
         "ready" => (ctx.t("Preview ready"), format!("<a class='btn btn-primary' href='{BACK}'>{}</a>", h(&ctx.t("Review")))),
         "created" if j.mr_url.starts_with("http") => (ctx.t("Merge request created"), format!("<a class='btn btn-primary' href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))),
         "created" => (ctx.t("Merge request created"), String::new()),
@@ -349,6 +379,21 @@ fn sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
     )
 }
 
+/// A finished job's text, read-only: when it was made, its title and the rendered description.
+fn view_sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
+    format!(
+        "<aside class='rel-sheet' role='dialog' aria-label='{label}'>\
+<div class='rel-sheet-head'><h3>{title}</h3><p class='rel-meta'><code>{src} \u{2192} {dst}</code> \u{b7} {alias} \u{b7} {when}</p></div>\
+<div class='rel-desc is-preview rel-grow'><div class='rel-preview markdown'>{rendered}</div></div>\
+<div class='rel-actions rel-sheet-foot'><a class='btn btn-neutral' href='{BACK}&amp;sheet=0'>{close}</a></div></aside>",
+        label = h(&ctx.t("Release MR text")),
+        title = h(&j.title),
+        src = h(&j.source), dst = h(&j.target), alias = h(&j.alias), when = when(j),
+        rendered = markdown_html(&j.description),
+        close = h(&ctx.t("Close")),
+    )
+}
+
 /// The page's behaviour: load the branches of the chosen project, keep the choice for this tab, write the
 /// "merging X into Y" line and show the progress of the selected project and branch pair. Progress is asked
 /// for again only while that job is running; once it is done nothing refreshes. The sheet's Preview/Edit
@@ -403,10 +448,13 @@ pub fn overlays(ctx: &UiCtx) -> String {
     if tracked(ctx).is_empty() {
         return String::new();
     }
-    let sheet_html = if ctx.query().first("sheet") == Some("0") {
-        String::new()
-    } else {
-        job::list(&jobs_dir(ctx)).iter().find(|j| j.state == "ready").map(|j| sheet(ctx, j)).unwrap_or_default()
+    let jobs = job::list(&jobs_dir(ctx));
+    let asked = ctx.query().first("job").and_then(|id| jobs.iter().find(|j| j.id == id));
+    let sheet_html = match asked {
+        Some(j) if j.state == "ready" => sheet(ctx, j),
+        Some(j) if !j.description.is_empty() => view_sheet(ctx, j),
+        _ if ctx.query().first("sheet") == Some("0") => String::new(),
+        _ => jobs.iter().find(|j| j.state == "ready").map(|j| sheet(ctx, j)).unwrap_or_default(),
     };
     format!("{sheet_html}{FORM_SCRIPT}")
 }
@@ -842,5 +890,44 @@ mod tests {
         let r = st.registry.dispatch(&st, &req).unwrap();
         assert!(location(&r).contains("ok=1"));
         assert_eq!(job::get(&job::jobs_dir(d.path()), &id2).unwrap().state, "discarded");
+    }
+
+    #[test]
+    fn a_running_job_has_a_stop_button_and_stopping_it_settles_the_job() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let (jd, id) = running_job(d.path(), Mode::Create);
+        let st = state(d.path());
+        let html = progress_for(&st);
+        assert!(html.contains("action='/loops/mr-review-loop/release/stop'") && html.contains(&format!("name='job' value='{id}'")) && html.contains(">Stop</button>"), "{html}");
+        let denied = st.registry.dispatch(&st, &UiRequest::new(Method::POST, "/loops/mr-review-loop/release/stop").with_body(format!("job={id}"))).unwrap();
+        assert_eq!(denied.status, 403);
+        let req = form_req("/loops/mr-review-loop/release/stop", &format!("csrf_token=tok&job={id}"));
+        let r = st.registry.dispatch(&st, &req).unwrap();
+        assert!(location(&r).contains("ok=1"), "{}", location(&r));
+        assert_eq!(job::get(&jd, &id).unwrap().state, "stopped");
+        assert!(!progress_for(&st).contains("/release/stop"), "a stopped job has no stop button");
+        let again = st.registry.dispatch(&st, &form_req("/loops/mr-review-loop/release/stop", &format!("csrf_token=tok&job={id}"))).unwrap();
+        assert!(location(&again).contains("ok=0"));
+    }
+
+    #[test]
+    fn recent_releases_show_when_they_were_made_and_can_be_opened_read_only() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let id = ready_job(d.path());
+        let jd = job::jobs_dir(d.path());
+        job::update(&jd, &id, |j| {
+            j.state = "discarded".into();
+            j.started_at = "2026-11-10T06:32:00+00:00".into();
+        })
+        .unwrap();
+        let st = state(d.path());
+        let page = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(page.contains("<time class='rel-when' datetime='2026-11-10T06:32:00+00:00'>"), "{page}");
+        assert!(page.contains(&format!("href='/loops/mr-review-loop?view=release&amp;job={id}'")) && page.contains(">View</a>"), "{page}");
+        let open = overlays(&UiCtx::new(&st, &UiRequest::get(&format!("{BACK}&job={id}"))));
+        assert!(open.contains("class='rel-sheet'") && open.contains("Release: order &lt;export&gt;") && open.contains("Order export"), "{open}");
+        assert!(!open.contains("<textarea") && !open.contains("/release/confirm"), "read-only: {open}");
     }
 }

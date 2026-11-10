@@ -1760,5 +1760,8 @@
   "Writing the summary": "要約を作成中",
   "Creating the merge request": "マージリクエストを作成中",
   "Preparing the preview": "プレビューを準備中",
-  "Release MR": "リリースMR"
+  "Release MR": "リリースMR",
+  "Release MR stopped": "リリースMRを停止しました",
+  "This release MR is not running": "このリリースMRは実行中ではありません",
+  "Release MR text": "リリースMRの本文"
 }
