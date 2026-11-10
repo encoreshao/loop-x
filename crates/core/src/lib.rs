@@ -98,6 +98,7 @@ pub mod pydumps;
 pub mod pyfmt_lite;
 pub mod pyjson;
 pub mod quota;
+pub mod release_mr;
 pub mod risk;
 pub mod run_control;
 pub mod run_history;

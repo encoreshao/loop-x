@@ -17,6 +17,7 @@ mod messages_cmd;
 mod metrics_cmd;
 mod mr_fix_cmd;
 mod notify_cmd;
+mod release_mr_cmd;
 mod run_cmds;
 mod screenshot_cmd;
 mod screenshot_serve;
@@ -253,6 +254,11 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Create a release merge request from the changes between two branches (`run <job_id>`)
+    ReleaseMr {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Inbox Triage loop
     Inbox {
         /// `run <run_id>`
@@ -387,6 +393,7 @@ fn main() -> ExitCode {
             command: MrCommand::Open { args },
         } => git_cmds::mr_open(&args),
         Command::MrFix { args } => mr_fix_cmd::run(&args),
+        Command::ReleaseMr { args } => release_mr_cmd::run(&args),
         Command::Notify { args } => notify_cmd::run(&args),
         Command::Inbox { args } => match args.split_first() {
             Some((sub, rest)) if sub == "run" => inbox_cmd::run(rest),

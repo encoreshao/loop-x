@@ -429,8 +429,9 @@ pub fn mrs_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
         Some((mrs_html(ctx, Ok(accounts)), saved))
     });
     format!(
-        "{}<div data-lazy-load='/loops/mr-review-loop/mrs/fragment'>{}</div>",
+        "{}{}<div data-lazy-load='/loops/mr-review-loop/mrs/fragment'>{}</div>",
         flash_html(flash, ok),
+        super::release_mr::panel(ctx),
         crate::ui::live_cache::placeholder(ctx, cached, &ctx.t("Loading your merge requests"))
     )
 }

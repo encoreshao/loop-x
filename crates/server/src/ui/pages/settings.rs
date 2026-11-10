@@ -8,7 +8,7 @@ mod claude_account;
 #[path = "settings/daemons.rs"]
 mod daemons;
 #[path = "settings/general.rs"]
-mod general;
+pub(crate) mod general;
 #[path = "settings/posts.rs"]
 mod posts;
 #[path = "settings/skills.rs"]

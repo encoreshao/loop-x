@@ -3268,3 +3268,23 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .term-seg button{height:26px;padding:0 .8rem;border:0;border-radius:999px;background:transparent;color:var(--md-on-surface-variant);font:inherit;font-size:.8rem;cursor:pointer;transition:background .2s cubic-bezier(.32,.72,0,1)}
 .term-seg button.on,.term-btn.on{background:var(--md-primary);color:var(--md-on-primary,#fff)}
 .term-line[hidden]{display:none}
+
+/* Release MR panel (MR Review -> Merge requests) */
+.rel-card{display:flex;flex-direction:column;gap:.75rem}
+.rel-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.75rem 1rem;align-items:end}
+.rel-branches{display:contents}
+.rel-field{display:flex;flex-direction:column;gap:.3rem;min-width:0;font-size:.8rem;color:var(--md-on-surface-variant)}
+.rel-input{height:36px;width:100%;box-sizing:border-box;padding:0 .75rem;border:1px solid var(--md-outline-variant);border-radius:10px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.9rem}
+.rel-text{width:100%;min-height:260px;box-sizing:border-box;padding:.6rem .75rem;border:1px solid var(--md-outline-variant);border-radius:10px;background:var(--md-surface);color:var(--md-on-surface);font:12.5px/1.6 ui-monospace,SFMono-Regular,'SF Mono',Menlo,monospace;resize:vertical}
+.rel-actions{display:flex;flex-wrap:wrap;gap:.5rem;grid-column:1/-1}
+.rel-error{grid-column:1/-1;font-size:.85rem;color:var(--md-error,#ff453a)}
+.rel-empty{margin:0;font-size:.85rem;color:var(--md-on-surface-variant)}
+.rel-sub{margin:.5rem 0 0;font-size:.9rem}
+.rel-jobs{display:flex;flex-direction:column;gap:.4rem;margin:0;padding:0;list-style:none}
+.rel-job{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;font-size:.85rem}
+.rel-job-project,.rel-reason,.rel-meta{color:var(--md-on-surface-variant)}
+.rel-meta{margin:0;font-size:.8rem}
+.rel-sheet{position:fixed;top:0;right:0;bottom:0;z-index:60;display:flex;flex-direction:column;gap:.75rem;width:min(520px,100vw);box-sizing:border-box;padding:4.75rem 1.25rem 1.25rem;overflow:auto;background:color-mix(in srgb,var(--md-surface) 98%,transparent);-webkit-backdrop-filter:saturate(180%) blur(24px);backdrop-filter:saturate(180%) blur(24px);border-left:1px solid var(--md-outline-variant);box-shadow:-12px 0 40px rgba(0,0,0,.18)}
+.rel-sheet h3{margin:0;font-size:1.05rem;color:var(--md-on-surface)}
+.rel-sheet-form{display:flex;flex-direction:column;gap:.75rem}
+@media(prefers-reduced-motion:no-preference){.rel-sheet{animation:rel-in .3s cubic-bezier(.32,.72,0,1)}@keyframes rel-in{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}}
