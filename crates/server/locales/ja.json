@@ -1777,5 +1777,10 @@
   "Gentle spotlights and long pans that let each section be read; for explainers and docs.": "やさしいスポットライトと長めのパンで、各セクションをじっくり読めます。解説やドキュメント向けです。",
   "Only the two simplest camera moves and one statement; the safest choice for any page.": "最もシンプルなカメラワーク2種類と1つのステートメントだけ。どんなページでも安心して使えます。",
   "Fast cuts with a punch-in and bold statements; for launches and short attention spans.": "素早いカットとパンチイン、力強いステートメント。ローンチや集中が続きにくい視聴向けです。",
-  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "カーソルが各機能を指してクリックし、素早いスクロールが次の機能でぴたりと止まります。製品紹介向けです。"
+  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "カーソルが各機能を指してクリックし、素早いスクロールが次の機能でぴたりと止まります。製品紹介向けです。",
+  "Up to date": "最新",
+  "Nothing new to release": "リリースする新しい変更はありません",
+  "View details": "詳細を見る",
+  "Already up to date": "すでに最新です",
+  "The target already has every commit of the source, so there is nothing to release.": "ターゲットにはソースのすべてのコミットが含まれているため、リリースするものはありません。"
 }

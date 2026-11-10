@@ -120,6 +120,7 @@ mod tests {
             ..FakeApi::default()
         };
         let mr = MrInfo {
+            iid: 1351,
             title: "Export orders".into(),
             author_username: "ann".into(),
         };

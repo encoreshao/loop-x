@@ -105,6 +105,7 @@ mod tests {
             author_name: name.into(),
             author_email: email.into(),
             mr: mr_author.map(|a| MrInfo {
+                iid: 0,
                 title: "t".into(),
                 author_username: a.into(),
             }),

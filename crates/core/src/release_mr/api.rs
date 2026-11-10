@@ -18,6 +18,8 @@ pub struct Member {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MrInfo {
+    /// The merge request number in its project (`!iid`).
+    pub iid: u64,
     pub title: String,
     pub author_username: String,
 }
@@ -189,6 +191,7 @@ impl ReleaseApi for GitlabApi {
             .iter()
             .find(|m| text(m, "state") == "merged" && text(m, "target_branch") == into_branch);
         Ok(landed.map(|m| MrInfo {
+            iid: m.get("iid").and_then(Value::as_u64).unwrap_or_default(),
             title: text(m, "title"),
             author_username: m
                 .pointer("/author/username")
@@ -223,18 +226,28 @@ impl ReleaseApi for GitlabApi {
     }
 
     fn create_mr(&self, project: &str, mr: &NewMr) -> Result<String, String> {
+        // The MR is assigned to whoever signed in; if that lookup fails it is still created.
+        let me = self
+            .client
+            .current_user()
+            .ok()
+            .and_then(|u| u.get("id").and_then(Value::as_u64));
+        let mut body = json!({
+            "source_branch": mr.source,
+            "target_branch": mr.target,
+            "title": mr.title,
+            "description": mr.description,
+            "remove_source_branch": false,
+            "squash": false,
+        });
+        if let Some(id) = me {
+            body["assignee_id"] = json!(id);
+        }
         let made = self
             .client
             .post_json(
                 &format!("projects/{}/merge_requests", quote(project)),
-                &json!({
-                    "source_branch": mr.source,
-                    "target_branch": mr.target,
-                    "title": mr.title,
-                    "description": mr.description,
-                    "remove_source_branch": false,
-                    "squash": false,
-                }),
+                &body,
             )
             .map_err(|e| e.to_string())?;
         Ok(text(&made, "web_url"))
@@ -399,9 +412,11 @@ mod tests {
 
     #[test]
     fn create_mr_sends_remove_source_branch_false_and_squash_false() {
-        let (url, seen) = stub(|m, _| {
+        let (url, seen) = stub(|m, p| {
             if m == "POST" {
                 r#"{"web_url":"https://g/app/-/merge_requests/10"}"#
+            } else if p.ends_with("/user") {
+                r#"{"id":42,"username":"me"}"#
             } else {
                 "[]"
             }
@@ -426,6 +441,7 @@ mod tests {
         assert_eq!(v["title"], "Release: x");
         assert_eq!(v["remove_source_branch"], false);
         assert_eq!(v["squash"], false);
+        assert_eq!(v["assignee_id"], 42, "assigned to whoever creates it");
     }
 
     #[test]
@@ -454,6 +470,7 @@ mod tests {
         assert_eq!(
             a.commit_mr("g/app", "abc", "staging").unwrap(),
             Some(MrInfo {
+                iid: 0,
                 title: "Export".into(),
                 author_username: "ann".into()
             })

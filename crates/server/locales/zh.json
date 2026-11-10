@@ -1777,5 +1777,10 @@
   "Gentle spotlights and long pans that let each section be read; for explainers and docs.": "柔和的聚光和较长的平移，让每个板块都能读完；适合讲解和文档。",
   "Only the two simplest camera moves and one statement; the safest choice for any page.": "只用两种最简单的镜头运动和一个陈述镜头；对任何页面都最稳妥。",
   "Fast cuts with a punch-in and bold statements; for launches and short attention spans.": "快速剪辑、推近冲击和醒目的陈述镜头；适合发布会和注意力短暂的观众。",
-  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "光标指向每个功能并点击，快速滚动后刹停在下一个功能；适合产品演示。"
+  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "光标指向每个功能并点击，快速滚动后刹停在下一个功能；适合产品演示。",
+  "Up to date": "已是最新",
+  "Nothing new to release": "没有需要发布的新内容",
+  "View details": "查看详情",
+  "Already up to date": "已是最新",
+  "The target already has every commit of the source, so there is nothing to release.": "目标分支已包含源分支的所有提交，无需发布。"
 }

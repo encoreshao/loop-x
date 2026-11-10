@@ -10,6 +10,9 @@ use super::ReleaseError;
 use crate::agents::sealed::SealedHooks;
 use std::path::Path;
 
+/// The note on a job whose target already has every commit of the source.
+pub const UP_TO_DATE: &str = "Already up to date: the target has every commit of the source";
+
 /// Runs the job `job_id` to its end: `created`, `ready` (preview mode) or `failed`.
 /// An `Err` is also recorded on the job as its failure reason.
 pub fn run(
@@ -21,6 +24,14 @@ pub fn run(
     let job = job::get(dir, job_id).ok_or_else(|| "no such job".to_string())?;
     match run_inner(api, hooks, dir, &job) {
         Ok(()) => Ok(()),
+        // Branches that are already in sync are a finished outcome, not a failure.
+        Err(ReleaseError::NothingToRelease) => {
+            let _ = job::update(dir, job_id, |j| {
+                j.state = "uptodate".into();
+                j.summary = UP_TO_DATE.into();
+            });
+            Ok(())
+        }
         Err(e) => {
             let reason = e.to_string();
             let _ = job::update(dir, job_id, |j| {
@@ -75,7 +86,7 @@ fn run_inner(
         4,
         &format!("{} written", plural(summary.features.len(), "feature")),
     );
-    let (title, description) = render(&summary, &resolved, (source, target));
+    let (title, description) = render(&summary, &resolved, &changes);
     let (state, mr_url) = match job.mode {
         Mode::Create => {
             let url = api.create_mr(
@@ -169,7 +180,7 @@ mod tests {
     use crate::release_mr::job::{self, Mode};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    const REPLY: &str = r#"{"title_brief":"order export","features":[{"name":"Order export","summary":"Download orders as CSV.","authors":["Ann"]}]}"#;
+    const REPLY: &str = r#"{"title_brief":"order export","features":[{"name":"Order export","summary":"Download orders as CSV.","refs":[1],"group":"Orders"}]}"#;
 
     fn api() -> FakeApi {
         let mut api = FakeApi {
@@ -190,6 +201,7 @@ mod tests {
         api.commit_mrs.insert(
             "c1".into(),
             MrInfo {
+                iid: 1351,
                 title: "Order export".into(),
                 author_username: "ann".into(),
             },
@@ -251,7 +263,10 @@ mod tests {
         );
         assert_eq!(made[0].title, "Release: order export");
         assert!(
-            made[0].description.contains("_By @ann_") && !made[0].description.contains("cc @ann"),
+            made[0].description.starts_with("ccing @ann\n")
+                && made[0]
+                    .description
+                    .contains("* **Order export:** Download orders as CSV. (`#1351`)"),
             "{}",
             made[0].description
         );
@@ -303,13 +318,14 @@ mod tests {
         let mut api = api();
         api.commits.clear();
         let id = new_job(d.path(), Mode::Create);
-        let (_, calls) = with_agent(REPLY, |h, c| {
+        let (res, calls) = with_agent(REPLY, |h, c| {
             (run(&api, h, d.path(), &id), c.load(Ordering::SeqCst))
         });
         assert_eq!(calls, 0);
+        assert!(res.is_ok(), "already in sync is not an error");
         let j = job::get(d.path(), &id).unwrap();
-        assert_eq!(j.state, "failed");
-        assert!(j.summary.contains("Nothing to release"), "{}", j.summary);
+        assert_eq!(j.state, "uptodate");
+        assert!(j.summary.contains("Already up to date"), "{}", j.summary);
         assert_eq!(j.step, 1, "it failed while reading the changes");
     }
 

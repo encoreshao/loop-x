@@ -1777,5 +1777,10 @@
   "Gentle spotlights and long pans that let each section be read; for explainers and docs.": "Projecteurs doux et longs panoramiques pour laisser lire chaque section ; pour les explications et la documentation.",
   "Only the two simplest camera moves and one statement; the safest choice for any page.": "Seulement les deux mouvements de caméra les plus simples et une déclaration ; le choix le plus sûr pour n'importe quelle page.",
   "Fast cuts with a punch-in and bold statements; for launches and short attention spans.": "Coupes rapides avec zoom brusque et déclarations audacieuses ; pour les lancements et les attentions courtes.",
-  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "Un curseur désigne chaque fonctionnalité et clique, avec des défilements rapides qui freinent sur la suivante ; pour les présentations de produit."
+  "A cursor points at each feature and clicks, with fast scrolls that brake onto the next one; for product walkthroughs.": "Un curseur désigne chaque fonctionnalité et clique, avec des défilements rapides qui freinent sur la suivante ; pour les présentations de produit.",
+  "Up to date": "À jour",
+  "Nothing new to release": "Rien de nouveau à publier",
+  "View details": "Voir les détails",
+  "Already up to date": "Déjà à jour",
+  "The target already has every commit of the source, so there is nothing to release.": "La cible contient déjà tous les commits de la source : il n'y a rien à publier."
 }

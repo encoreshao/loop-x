@@ -28,6 +28,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Release MR: the merge request is now assigned to whoever creates it, and its description follows the team format: a `ccing` line, then numbered feature areas with one bold-labelled bullet per feature and the merge request numbers it came from. Created releases show an Open merge request link in Recent release merge requests.
+- Release MR: when the target already has every commit of the source, the job finishes as **Up to date** instead of a red failure, and Recent release merge requests is a tidier list: date and time first, then project, branches, status, a one-line brief and a View details link that works for every finished job.
+
 - Turning a loop off now removes it everywhere it was listed: the sidebar's Loops menu, the Activity page, the Mac island (its loop rows and Start buttons) and the Mac app's Loops menu. Only enabled loops are shown, even if a disabled loop has run before (its history is kept and returns when it is enabled again); a disabled loop that is running right now stays on the island until it finishes.
 - The Mac app's Loops menu now lists every enabled loop in the sidebar's order (MR Review, Daily Digest, Meeting Prep and so on), not just Issues, Topic Monitor and Inbox Triage; it updates when a loop is enabled or disabled.
 - The Issues → Worktrees "Switch to a worktree" snippet is now a dark, syntax-highlighted code block in the same style as the Terminal view; copying it still copies the plain script.

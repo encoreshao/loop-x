@@ -233,6 +233,7 @@ fn stop(ctx: &UiCtx) -> UiResponse {
 fn state_pill(ctx: &UiCtx, state: &str) -> String {
     let (kind, label) = match state {
         "created" => ("done", "Created"),
+        "uptodate" => ("done", "Up to date"),
         "failed" => ("failed", "Failed"),
         "ready" => ("skipped", "Ready to review"),
         "expired" => ("skipped", "Expired"),
@@ -251,23 +252,33 @@ fn when(j: &ReleaseJob) -> String {
     }
 }
 
-/// An older job in the "Recent" list.
+/// One line about what a job came to: the MR title, the failure reason, or "nothing new".
+fn brief(ctx: &UiCtx, j: &ReleaseJob) -> String {
+    match j.state.as_str() {
+        "uptodate" => ctx.t("Nothing new to release"),
+        "running" => ctx.t("Running\u{2026}"),
+        "failed" => j.summary.clone(),
+        _ if !j.title.is_empty() => j.title.clone(),
+        _ => j.summary.clone(),
+    }
+}
+
+/// An older job in the "Recent" list: when, project, branches, status, a short brief and a way to read more.
 fn job_row(ctx: &UiCtx, j: &ReleaseJob) -> String {
-    let detail = if j.state == "created" && j.mr_url.starts_with("http") {
-        format!("<a href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))
-    } else if j.state == "failed" && !j.summary.is_empty() {
-        format!("<span class='rel-reason'>{}</span>", h(&j.summary))
+    let more = if j.state != "running" {
+        format!("<a class='rel-view' href='{BACK}&amp;job={}'>{}</a>", h(&j.id), h(&ctx.t("View details")))
     } else {
         String::new()
     };
-    let view = if j.state != "running" && !j.description.is_empty() {
-        format!("<a class='rel-view' href='{BACK}&amp;job={}'>{}</a>", h(&j.id), h(&ctx.t("View")))
+    let link = if j.state == "created" && j.mr_url.starts_with("http") {
+        format!("<a class='rel-mr' href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))
     } else {
         String::new()
     };
+    let brief = brief(ctx, j);
     format!(
-        "<li class='rel-job'><code>{} \u{2192} {}</code><span class='rel-job-project'>{}</span>{}{}{}{}</li>",
-        h(&j.source), h(&j.target), h(&j.alias), state_pill(ctx, &j.state), when(j), detail, view
+        "<li class='rel-job'>{when}<span class='rel-job-project'>{alias}</span><code>{} \u{2192} {}</code>{pill}<span class='rel-reason' title='{brief}'>{brief}</span>{link}{more}</li>",
+        h(&j.source), h(&j.target), when = when(j), alias = h(&j.alias), pill = state_pill(ctx, &j.state), brief = h(&brief),
     )
 }
 
@@ -277,7 +288,7 @@ fn showing(j: &ReleaseJob) -> bool {
     let recent = chrono::DateTime::parse_from_rfc3339(&j.started_at).map(|t| (chrono::Utc::now() - t.to_utc()).num_hours() < job::READY_TTL_HOURS).unwrap_or(false);
     match j.state.as_str() {
         "running" | "ready" => true,
-        "created" | "failed" => recent,
+        "created" | "failed" | "uptodate" => recent,
         _ => false,
     }
 }
@@ -286,11 +297,12 @@ fn showing(j: &ReleaseJob) -> bool {
 fn progress_block(ctx: &UiCtx, j: &ReleaseJob) -> String {
     let labels = job::step_labels(j.mode);
     let finished = matches!(j.state.as_str(), "ready" | "created");
+    let uptodate = j.state == "uptodate";
     let steps: String = labels
         .iter()
         .enumerate()
         .map(|(i, label)| {
-            let (class, mark) = if finished || i < j.step {
+            let (class, mark) = if finished || i < j.step || (uptodate && i < 2) {
                 ("is-done", "<span class='rel-mark'>\u{2713}</span>".to_string())
             } else if i == j.step && j.state == "running" {
                 ("is-active", "<span class='rel-mark'><span class='rel-spin'></span></span>".to_string())
@@ -314,6 +326,7 @@ fn progress_block(ctx: &UiCtx, j: &ReleaseJob) -> String {
         "ready" => (ctx.t("Preview ready"), format!("<a class='btn btn-primary' href='{BACK}'>{}</a>", h(&ctx.t("Review")))),
         "created" if j.mr_url.starts_with("http") => (ctx.t("Merge request created"), format!("<a class='btn btn-primary' href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))),
         "created" => (ctx.t("Merge request created"), String::new()),
+        "uptodate" => (ctx.t("Already up to date"), format!("<p class='rel-reason'>{}</p>", h(&ctx.t("The target already has every commit of the source, so there is nothing to release.")))),
         _ => (ctx.t("Could not create the release MR"), format!("<p class='rel-error' role='alert'>{}</p>", h(&j.summary))),
     };
     format!(
@@ -387,9 +400,14 @@ fn view_sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
 <div class='rel-desc is-preview rel-grow'><div class='rel-preview markdown'>{rendered}</div></div>\
 <div class='rel-actions rel-sheet-foot'><a class='btn btn-neutral' href='{BACK}&amp;sheet=0'>{close}</a></div></aside>",
         label = h(&ctx.t("Release MR text")),
-        title = h(&j.title),
+        title = h(&if j.title.is_empty() { brief(ctx, j) } else { j.title.clone() }),
         src = h(&j.source), dst = h(&j.target), alias = h(&j.alias), when = when(j),
-        rendered = markdown_html(&j.description),
+        rendered = if j.description.is_empty() {
+            let note = if j.state == "uptodate" { ctx.t("The target already has every commit of the source, so there is nothing to release.") } else { j.summary.clone() };
+            format!("<p>{}</p>", h(&note))
+        } else {
+            markdown_html(&j.description)
+        },
         close = h(&ctx.t("Close")),
     )
 }
@@ -402,13 +420,12 @@ const FORM_SCRIPT: &str = "<script>(function(){var a=document.getElementById('re
 
 /// The Release MR view: the Create a release MR card (and, when one is waiting, the review sheet).
 pub fn view_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
-    format!("{}{}{}", flash_html(flash, ok), panel(ctx), overlays(ctx))
+    format!("{}{}{}{}", flash_html(flash, ok), panel(ctx), recent_panel(ctx), overlays(ctx))
 }
 
 /// The Create a release MR card.
 pub fn panel(ctx: &UiCtx) -> String {
     let projects = tracked(ctx);
-    let jobs = job::list(&jobs_dir(ctx));
     let heading = format!(
         "<div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>",
         h(&ctx.t("Create a release MR")),
@@ -421,8 +438,6 @@ pub fn panel(ctx: &UiCtx) -> String {
     let ready = cli_ready(ctx);
     let disabled = if ready { "" } else { " disabled" };
     let reason = if ready { String::new() } else { format!("<p class='rel-empty' role='note'>{}</p>", h(&ctx.t("No AI CLI is available. Install and sign in to your AI CLI in Settings to create release merge requests."))) };
-    let recent: String = jobs.iter().take(5).map(|j| job_row(ctx, j)).collect();
-    let recent = if recent.is_empty() { String::new() } else { format!("<h3 class='rel-sub'>{}</h3><ul class='rel-jobs'>{recent}</ul>", h(&ctx.t("Recent release merge requests"))) };
     format!(
         "<section class='card rel-card'>{heading}\
 <form method='post' action='/loops/mr-review-loop/release/start' class='rel-form'>{csrf}\
@@ -432,7 +447,7 @@ pub fn panel(ctx: &UiCtx) -> String {
 <div class='rel-actions'><button type='submit' name='mode' value='create' class='btn btn-primary'{disabled}>{create}</button>\
 <button type='submit' name='mode' value='preview' class='btn btn-neutral'{disabled}>{preview}</button></div>\
 <p class='rel-hint'>{hint}</p></form>{reason}\
-<div id='rel-progress' aria-live='polite'></div>{recent}</section>",
+<div id='rel-progress' aria-live='polite'></div></section>",
         csrf = ctx.csrf_input(),
         project = h(&ctx.t("Project")),
         create = h(&ctx.t("Create MR")),
@@ -441,6 +456,18 @@ pub fn panel(ctx: &UiCtx) -> String {
         mid = h(&ctx.t("into")),
         hint = h(&ctx.t("Create MR opens the merge request right away. Preview first lets you edit the title and description before anything is created.")),
     )
+}
+
+/// The Recent release merge requests card: its own section below the create card, empty when there are none.
+pub fn recent_panel(ctx: &UiCtx) -> String {
+    if tracked(ctx).is_empty() {
+        return String::new();
+    }
+    let rows: String = job::list(&jobs_dir(ctx)).iter().take(5).map(|j| job_row(ctx, j)).collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!("<section class='card rel-card'><div class='section-header'><h2>{}</h2></div><ul class='rel-jobs'>{rows}</ul></section>", h(&ctx.t("Recent release merge requests")))
 }
 
 /// The review sheet and the page script: placed after the cards so the shared card spacing never touches them.
@@ -452,7 +479,7 @@ pub fn overlays(ctx: &UiCtx) -> String {
     let asked = ctx.query().first("job").and_then(|id| jobs.iter().find(|j| j.id == id));
     let sheet_html = match asked {
         Some(j) if j.state == "ready" => sheet(ctx, j),
-        Some(j) if !j.description.is_empty() => view_sheet(ctx, j),
+        Some(j) if j.state != "running" => view_sheet(ctx, j),
         _ if ctx.query().first("sheet") == Some("0") => String::new(),
         _ => jobs.iter().find(|j| j.state == "ready").map(|j| sheet(ctx, j)).unwrap_or_default(),
     };
@@ -817,7 +844,7 @@ mod tests {
         let block = progress_for(&st);
         assert!(block.contains("data-state='created'") && block.contains("href='https://g/app/-/merge_requests/10'"), "{block}");
         assert_eq!(block.matches("is-done").count(), 5, "{block}");
-        let html = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        let html = recent_panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
         assert!(html.contains("Nothing to &lt;release&gt;") && html.contains("develop"), "the older failure is in the recent list: {html}");
     }
 
@@ -923,11 +950,54 @@ mod tests {
         })
         .unwrap();
         let st = state(d.path());
-        let page = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        let page = recent_panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
         assert!(page.contains("<time class='rel-when' datetime='2026-11-10T06:32:00+00:00'>"), "{page}");
-        assert!(page.contains(&format!("href='/loops/mr-review-loop?view=release&amp;job={id}'")) && page.contains(">View</a>"), "{page}");
+        assert!(page.contains(&format!("href='/loops/mr-review-loop?view=release&amp;job={id}'")) && page.contains(">View details</a>"), "{page}");
         let open = overlays(&UiCtx::new(&st, &UiRequest::get(&format!("{BACK}&job={id}"))));
         assert!(open.contains("class='rel-sheet'") && open.contains("Release: order &lt;export&gt;") && open.contains("Order export"), "{open}");
         assert!(!open.contains("<textarea") && !open.contains("/release/confirm"), "read-only: {open}");
+    }
+
+    #[test]
+    fn a_created_release_links_to_its_merge_request_in_the_recent_list() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let id = ready_job(d.path());
+        let jd = job::jobs_dir(d.path());
+        job::update(&jd, &id, |j| {
+            j.state = "created".into();
+            j.mr_url = "https://g/app/-/merge_requests/10".into();
+        })
+        .unwrap();
+        let st = state(d.path());
+        let page = recent_panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(page.contains("class='rel-mr' href='https://g/app/-/merge_requests/10' target='_blank' rel='noopener'>Open merge request</a>"), "{page}");
+        job::update(&jd, &id, |j| j.mr_url = "javascript:alert(1)".into()).unwrap();
+        let page = recent_panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(!page.contains("javascript:"), "only http links: {page}");
+    }
+
+    #[test]
+    fn an_up_to_date_job_is_done_not_an_error_and_has_details() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let id = ready_job(d.path());
+        let jd = job::jobs_dir(d.path());
+        job::update(&jd, &id, |j| {
+            j.state = "uptodate".into();
+            j.title.clear();
+            j.description.clear();
+            j.summary = "Already up to date".into();
+        })
+        .unwrap();
+        let st = state(d.path());
+        let page = recent_panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(page.contains("history-done'>Up to date"), "{page}");
+        assert!(page.contains("Nothing new to release") && page.contains(">View details</a>"), "{page}");
+        let jobs = job::list(&jd);
+        let block = pair_block(&UiCtx::new(&st, &UiRequest::get(BACK)), &jobs, "app", "staging", "master");
+        assert!(!block.contains("rel-error") && !block.contains("Could not create"), "{block}");
+        let open = overlays(&UiCtx::new(&st, &UiRequest::get(&format!("{BACK}&job={id}"))));
+        assert!(open.contains("nothing to release"), "{open}");
     }
 }
