@@ -45,4 +45,13 @@ import Testing
         let starts = IslandStarts.available(tasks: [], disabled: ["topic-loop", "rss-watch-loop"])
         #expect(starts.map(\.loop) == ["issue-loop", "inbox-triage-loop"])
     }
+
+    @Test func theReleaseMRJobHasNoRunButtonAndAReadableName() {
+        #expect(LoopNames.display("release-mr") == "Release MR")
+        #expect(LoopNames.isCreatorJob("release-mr"), "listed beside the loops, never started from the island")
+        for state in [NotchTask.State.idle, .failed] {
+            let task = NotchTask(id: "loop:release-mr", name: "release-mr", state: state, detail: nil)
+            #expect(IslandStarts.runnableLoop(for: task) == nil)
+        }
+    }
 }

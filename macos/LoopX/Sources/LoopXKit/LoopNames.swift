@@ -12,6 +12,7 @@ public enum LoopNames {
         "inbox-triage-loop": "Inbox Triage",
         "stale-sweeper-loop": "Stale Work Sweeper",
         "linkedin-autopilot-loop": "LinkedIn",
+        "release-mr": "Release MR",
         // The Creator page's jobs, shown beside the loops while they run (see the snapshot's creator entries).
         "creator-find-videos": "Find Videos",
         "creator-generate-video": "Generate Video",
@@ -22,8 +23,9 @@ public enum LoopNames {
         "mr": "MR", "rss": "RSS", "ai": "AI", "ci": "CI", "pr": "PR",
     ]
 
-    /// The Creator page's jobs (Find videos, Generate video), listed beside the loops but not runnable as loops.
-    public static func isCreatorJob(_ id: String) -> Bool { id.hasPrefix("creator-") }
+    /// Jobs listed beside the loops but not runnable as loops: the Creator page's (Find videos, Generate video)
+    /// and the MR Review page's release MR, which needs a project and two branches.
+    public static func isCreatorJob(_ id: String) -> Bool { id.hasPrefix("creator-") || id == "release-mr" }
 
     public static func display(_ id: String) -> String {
         if let name = named[id] { return name }

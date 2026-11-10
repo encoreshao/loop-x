@@ -53,6 +53,7 @@ impl AppState {
         let root_for_ui = root.clone();
         let mut paths = Paths::for_root(&root);
         paths.creator_jobs_dir = loopx_core::creator::jobs::jobs_dir(&home);
+        paths.release_jobs_dir = loopx_core::release_mr::job::jobs_dir(&home);
         Arc::new(Self {
             paths,
             root,

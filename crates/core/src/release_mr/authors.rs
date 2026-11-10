@@ -12,6 +12,9 @@ pub struct Resolved {
     pub tags: Vec<String>,
     /// People in the change who could not be matched to one user (or are past the cap).
     pub plain: Vec<String>,
+    /// `(lowercase author name, username)` for every tagged person, so a name in a
+    /// feature can be written as a clickable mention.
+    pub mentions: Vec<(String, String)>,
 }
 
 fn is_bot(name: &str) -> bool {
@@ -70,6 +73,8 @@ pub fn resolve(api: &dyn ReleaseApi, project: &str, changes: &[Change]) -> Resol
                 if !out.tags.contains(&u.username) {
                     out.tags.push(u.username.clone());
                 }
+                out.mentions
+                    .push((c.author_name.to_ascii_lowercase(), u.username.clone()));
             }
             _ if !c.author_name.is_empty() && c.author_name.to_ascii_lowercase() != me => {
                 if !out.plain.contains(&c.author_name) {

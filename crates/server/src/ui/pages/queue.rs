@@ -145,7 +145,18 @@ fn creator_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
             })
             .collect();
     out.extend(mr_fix_running(ctx));
+    out.extend(release_running(ctx));
     out
+}
+
+/// The running release MR job (MR Review → Live), as `("release-mr", status)` with its step.
+fn release_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
+    let jobs = loopx_core::release_mr::job::list(&loopx_core::release_mr::job::jobs_dir(&ctx.state.home_dir));
+    loopx_core::release_mr::job::island_entry(&jobs, chrono::Utc::now())
+        .filter(|doc| doc.get("state").and_then(serde_json::Value::as_str) == Some("running"))
+        .map(|doc| ("release-mr".to_string(), doc))
+        .into_iter()
+        .collect()
 }
 
 /// Running "Fix now" jobs from the Merge requests view, as `("mr-fix", status)`.
@@ -273,6 +284,14 @@ fn action_button(ctx: &UiCtx, action: &str, style: &str, id: &str, label: &str, 
     )
 }
 
+/// A loop's name in a row; the release MR job links to the page that shows its progress.
+fn loop_name_html(ctx: &UiCtx, name: &str) -> String {
+    if name == "release-mr" {
+        return format!("<a href='/loops/mr-review-loop'>{}</a>", pyfmt::escape(&ctx.t("Release MR")));
+    }
+    pyfmt::escape(name)
+}
+
 fn row(ctx: &UiCtx, e: &Entry, detail: &str, actions: &str) -> String {
     let (pill_class, state_label) = match e.state.as_str() {
         "running" => ("pill-blue", ctx.t("Running")),
@@ -287,7 +306,7 @@ fn row(ctx: &UiCtx, e: &Entry, detail: &str, actions: &str) -> String {
          <div class='pill-row'><span class='pill {pill_class}'>{}</span><span class='pill pill-outline'>{}</span></div>\
          <div class='queue-actions'>{actions}</div></div>\
          <p class='history-entry-overview'>{}</p></div>",
-        pyfmt::escape(&e.loop_name),
+        loop_name_html(ctx, &e.loop_name),
         pyfmt::escape(&state_label),
         pyfmt::escape(&reason_label(ctx, &e.reason)),
         pyfmt::escape(detail),
@@ -564,6 +583,24 @@ mod tests {
         let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
         assert!(html.contains("creator-generate-video") && html.contains("running for"), "{html}");
         assert!(!html.contains("Nothing is running"), "{html}");
+    }
+
+    #[test]
+    fn a_running_release_mr_job_is_an_agent_with_its_step_and_a_link_to_the_live_page() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let dir = loopx_core::release_mr::job::jobs_dir(d.path());
+        let j = loopx_core::release_mr::job::start(&dir, "app", "g/app", "staging", "master", loopx_core::release_mr::job::Mode::Create, &|_: &std::path::Path| Ok(i64::from(std::process::id()))).unwrap();
+        loopx_core::release_mr::job::set_step(&dir, &j.id, 1, "42 commits").unwrap();
+        let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
+        assert!(pill.contains("Reading the changes") && pill.contains("pill-blue"), "{pill}");
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("Release MR") && html.contains("href='/loops/mr-review-loop'"), "{html}");
+        assert!(html.contains("Reading the changes") && html.contains("42 commits") && html.contains("running for"), "{html}");
+        assert!(!html.contains("Nothing is running"), "{html}");
+        loopx_core::release_mr::job::update(&dir, &j.id, |j| j.state = "ready".into()).unwrap();
+        let after = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(!after.contains("Reading the changes"), "a settled job is no longer an agent: {after}");
     }
 
     #[test]

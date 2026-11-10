@@ -14,6 +14,9 @@ pub const MAX_FEATURES: usize = 30;
 pub struct Feature {
     pub name: String,
     pub summary: String,
+    /// A few of the most important changes inside the feature, as short items.
+    #[serde(default)]
+    pub highlights: Vec<String>,
     #[serde(default)]
     pub authors: Vec<String>,
 }
@@ -21,6 +24,9 @@ pub struct Feature {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Summary {
     pub title_brief: String,
+    /// One or two sentences that tell a reader at a glance what this release is.
+    #[serde(default)]
+    pub overview: String,
     pub features: Vec<Feature>,
 }
 
@@ -63,6 +69,7 @@ fn parse(text: &str) -> Result<Summary, ReleaseError> {
         s.features.push(Feature {
             name: "Other improvements".into(),
             summary: "Smaller changes and fixes across the product.".into(),
+            highlights: Vec::new(),
             authors,
         });
     }

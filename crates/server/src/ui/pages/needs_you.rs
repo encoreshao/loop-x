@@ -46,6 +46,7 @@ fn paths(state: &UiState) -> Paths {
         dismissed: state.home_dir.join("needs_you_dismissed.json"),
         memory_root: memory_root(state),
         creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&state.home_dir),
+        release_jobs_dir: loopx_core::release_mr::job::jobs_dir(&state.home_dir),
         loops_config: state.loops_config_path(),
         user_home: state.user_home.clone(),
         outputs,

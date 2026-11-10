@@ -11,11 +11,11 @@ use loopx_core::release_mr::run as runner;
 use serde_json::Value;
 use std::path::PathBuf;
 
-const BACK: &str = "/loops/mr-review-loop?view=mrs";
+const BACK: &str = "/loops/mr-review-loop";
 
 pub fn register(r: &mut Registry) {
     r.get("/loops/mr-review-loop/release/branches", branches);
-    r.get("/loops/mr-review-loop/release/state", state_signature);
+    r.get("/loops/mr-review-loop/release/progress", progress_fragment);
     r.post("/loops/mr-review-loop/release/start", start);
     r.post("/loops/mr-review-loop/release/confirm", confirm);
     r.post("/loops/mr-review-loop/release/discard", discard);
@@ -85,6 +85,19 @@ fn branches(ctx: &UiCtx) -> UiResponse {
     }
 }
 
+/// The branch pair a release usually wants: `staging` into `master` (else `main`).
+fn default_pair(names: &[String], configured: &str, default_branch: &str) -> (String, String) {
+    let has = |n: &str| names.iter().any(|x| x == n);
+    let source = ["staging", configured, "develop"].iter().find(|c| !c.is_empty() && has(c)).map(|s| s.to_string()).or_else(|| names.first().cloned()).unwrap_or_default();
+    let target = ["master", "main", default_branch]
+        .iter()
+        .find(|c| !c.is_empty() && has(c) && **c != source)
+        .map(|s| s.to_string())
+        .or_else(|| names.iter().find(|n| **n != source).cloned())
+        .unwrap_or_default();
+    (source, target)
+}
+
 fn branches_with(ctx: &UiCtx, api: &dyn ReleaseApi) -> UiResponse {
     let alias = ctx.query().first("alias").unwrap_or_default().to_string();
     let Some(project) = project_of(ctx, &alias) else {
@@ -95,14 +108,13 @@ fn branches_with(ctx: &UiCtx, api: &dyn ReleaseApi) -> UiResponse {
         Ok(n) => n,
         Err(e) => return rel_error(&ctx.tf("Could not load branches: {detail}", &[("detail", &e)])),
     };
-    let default_target = api.default_branch(&id).unwrap_or_default();
-    let configured = project.get("target_branch").and_then(Value::as_str).unwrap_or("staging");
-    let source = [configured, "staging", "develop"].iter().find(|c| names.iter().any(|n| n == *c)).map(|s| s.to_string()).or_else(|| names.first().cloned()).unwrap_or_default();
-    let target = if names.contains(&default_target) { default_target } else { names.first().cloned().unwrap_or_default() };
+    let default_branch = api.default_branch(&id).unwrap_or_default();
+    let configured = project.get("target_branch").and_then(Value::as_str).unwrap_or_default();
+    let (source, target) = default_pair(&names, configured, &default_branch);
     UiResponse::html(format!(
-        "{}{}",
-        select(ctx, "source", "From (source branch)", &names, &source),
-        select(ctx, "target", "Into (target branch)", &names, &target)
+        "{}<span class='rel-arrow' aria-hidden='true'>\u{2192}</span>{}",
+        select(ctx, "source", "Merge from", &names, &source),
+        select(ctx, "target", "Into", &names, &target)
     ))
 }
 
@@ -217,11 +229,10 @@ fn state_pill(ctx: &UiCtx, state: &str) -> String {
     format!("<span class='pill history-pill history-{kind}'>{}</span>", h(&ctx.t(label)))
 }
 
+/// An older job in the "Recent" list.
 fn job_row(ctx: &UiCtx, j: &ReleaseJob) -> String {
     let detail = if j.state == "created" && j.mr_url.starts_with("http") {
         format!("<a href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))
-    } else if j.state == "ready" {
-        format!("<a href='{BACK}'>{}</a>", h(&ctx.t("Review")))
     } else if j.state == "failed" && !j.summary.is_empty() {
         format!("<span class='rel-reason'>{}</span>", h(&j.summary))
     } else {
@@ -233,19 +244,74 @@ fn job_row(ctx: &UiCtx, j: &ReleaseJob) -> String {
     )
 }
 
+/// The newest job as a progress block, while it matters: running or waiting for review,
+/// or finished within the last day. `None` for old, expired and discarded jobs.
+fn showing(j: &ReleaseJob) -> bool {
+    let recent = chrono::DateTime::parse_from_rfc3339(&j.started_at).map(|t| (chrono::Utc::now() - t.to_utc()).num_hours() < job::READY_TTL_HOURS).unwrap_or(false);
+    match j.state.as_str() {
+        "running" | "ready" => true,
+        "created" | "failed" => recent,
+        _ => false,
+    }
+}
+
+/// Every step of the job with where it is: the whole run is visible at a glance.
+fn progress_block(ctx: &UiCtx, j: &ReleaseJob) -> String {
+    let labels = job::step_labels(j.mode);
+    let finished = matches!(j.state.as_str(), "ready" | "created");
+    let steps: String = labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let (class, mark) = if finished || i < j.step {
+                ("is-done", "<span class='rel-mark'>\u{2713}</span>".to_string())
+            } else if i == j.step && j.state == "running" {
+                ("is-active", "<span class='rel-mark'><span class='rel-spin'></span></span>".to_string())
+            } else if i == j.step && j.state == "failed" {
+                ("is-failed", "<span class='rel-mark'>!</span>".to_string())
+            } else {
+                ("is-todo", "<span class='rel-mark'></span>".to_string())
+            };
+            let detail = if i == j.step && j.state == "running" && !j.detail.is_empty() { format!("<span class='rel-step-detail'>{}</span>", h(&j.detail)) } else { String::new() };
+            format!("<li class='rel-step {class}'>{mark}<span class='rel-step-name'>{}</span>{detail}</li>", h(&ctx.t(label)))
+        })
+        .collect();
+    let (title, extra) = match j.state.as_str() {
+        "running" => (ctx.t("Writing your release MR"), String::new()),
+        "ready" => (ctx.t("Preview ready"), format!("<a class='btn btn-primary' href='{BACK}'>{}</a>", h(&ctx.t("Review and create")))),
+        "created" if j.mr_url.starts_with("http") => (ctx.t("Merge request created"), format!("<a class='btn btn-primary' href='{}' target='_blank' rel='noopener'>{}</a>", h(&j.mr_url), h(&ctx.t("Open merge request")))),
+        "created" => (ctx.t("Merge request created"), String::new()),
+        _ => (ctx.t("Could not create the release MR"), format!("<p class='rel-error' role='alert'>{}</p>", h(&j.summary))),
+    };
+    format!(
+        "<div class='rel-run' data-state='{state}'><div class='rel-run-head'><strong>{title}</strong><code>{} \u{b7} {} \u{2192} {}</code></div><ol class='rel-steps'>{steps}</ol>{extra}</div>",
+        h(&j.alias), h(&j.source), h(&j.target), state = h(&j.state), title = h(&title),
+    )
+}
+
+/// The block for the newest job, or nothing.
+fn latest_block(ctx: &UiCtx, jobs: &[ReleaseJob]) -> String {
+    jobs.first().filter(|j| showing(j)).map(|j| progress_block(ctx, j)).unwrap_or_default()
+}
+
+fn progress_fragment(ctx: &UiCtx) -> UiResponse {
+    UiResponse::html(latest_block(ctx, &job::list(&jobs_dir(ctx))))
+}
+
 fn sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
     let csrf = ctx.csrf_input();
     format!(
         "<aside class='rel-sheet' role='dialog' aria-label='{label}'>\
-<h3>{label}</h3><p class='rel-meta'><code>{src} \u{2192} {dst}</code></p>\
-<form method='post' action='/loops/mr-review-loop/release/confirm' class='rel-sheet-form'>{csrf}<input type='hidden' name='job' value='{id}'>\
-<label class='rel-field'><span>{title_l}</span><input type='text' name='title' class='rel-input' value='{title}' maxlength='255'></label>\
-<label class='rel-field'><span>{desc_l}</span><textarea name='description' class='rel-text' rows='14'>{desc}</textarea></label>\
-<div class='rel-actions'><button type='submit' class='btn btn-primary'>{create}</button></div></form>\
-<form method='post' action='/loops/mr-review-loop/release/discard' class='rel-sheet-form'>{csrf}<input type='hidden' name='job' value='{id}'>\
-<div class='rel-actions'><button type='submit' class='btn btn-neutral'>{discard}</button>\
-<a class='btn btn-neutral' href='{BACK}&amp;sheet=0'>{close}</a></div></form></aside>",
+<div class='rel-sheet-head'><h3>{label}</h3><p class='rel-meta'><code>{src} \u{2192} {dst}</code> \u{b7} {hint}</p></div>\
+<form id='rel-confirm' method='post' action='/loops/mr-review-loop/release/confirm' class='rel-sheet-form'>{csrf}<input type='hidden' name='job' value='{id}'>\
+<label class='rel-field'><span>{title_l}</span><input type='text' name='title' class='rel-input rel-title' value='{title}' maxlength='255'></label>\
+<label class='rel-field rel-grow'><span>{desc_l}</span><textarea name='description' class='rel-text' spellcheck='false'>{desc}</textarea></label></form>\
+<form id='rel-discard' method='post' action='/loops/mr-review-loop/release/discard'>{csrf}<input type='hidden' name='job' value='{id}'></form>\
+<div class='rel-actions rel-sheet-foot'><button type='submit' form='rel-confirm' class='btn btn-primary'>{create}</button>\
+<button type='submit' form='rel-discard' class='btn btn-neutral'>{discard}</button>\
+<a class='btn btn-neutral' href='{BACK}?sheet=0'>{close}</a></div></aside>",
         label = h(&ctx.t("Review the release MR")),
+        hint = h(&ctx.t("The merge request is created with exactly this text.")),
         src = h(&j.source), dst = h(&j.target), id = h(&j.id),
         title_l = h(&ctx.t("Title")), title = h(&j.title),
         desc_l = h(&ctx.t("Description")), desc = h(&j.description),
@@ -253,23 +319,22 @@ fn sheet(ctx: &UiCtx, j: &ReleaseJob) -> String {
     )
 }
 
-/// Every job and its state, as one string: it changes whenever a job settles, which is the
-/// panel's cue to reload.
-fn state_signature(ctx: &UiCtx) -> UiResponse {
-    let sig: Vec<String> = job::list(&jobs_dir(ctx)).iter().map(|j| format!("{}:{}", j.id, j.state)).collect();
-    UiResponse::html(sig.join("|"))
-}
+/// Keeps the pickers' choice for this tab, holds the page's auto-refresh while one is in use,
+/// loads the branches of the chosen project and writes the "merging X into Y" line.
+const FORM_SCRIPT: &str = "<script>(function(){var a=document.getElementById('rel-alias'),b=document.getElementById('rel-branches'),r=document.getElementById('rel-route'),f=a&&a.form;if(!a||!b)return;var seq=0,K='rel-pick';function save(){try{var s=b.querySelector('[name=source]'),t=b.querySelector('[name=target]');sessionStorage.setItem(K,JSON.stringify({a:a.value,s:s&&s.value,t:t&&t.value}))}catch(e){}}function saved(){try{return JSON.parse(sessionStorage.getItem(K)||'null')}catch(e){return null}}function route(){var s=b.querySelector('[name=source]'),t=b.querySelector('[name=target]');if(!r)return;r.textContent=s&&t?(r.dataset.pre||'')+' '+s.value+' '+(r.dataset.mid||'')+' '+t.value+(/^(master|main|production|prod)$/i.test(t.value)?' (production)':t.value==='staging'?' (staging)':''):''}function pick(sel,v){if(sel&&v){for(var i=0;i<sel.options.length;i++){if(sel.options[i].value===v){sel.value=v}}}}function load(keep){var n=++seq;if(!a.value){b.innerHTML='';route();return}fetch('/loops/mr-review-loop/release/branches?alias='+encodeURIComponent(a.value),{credentials:'same-origin'}).then(function(x){return x.text()}).then(function(h){if(n!==seq)return;b.innerHTML=h;var p=saved();if(keep&&p&&p.a===a.value){pick(b.querySelector('[name=source]'),p.s);pick(b.querySelector('[name=target]'),p.t)}route();save()}).catch(function(){})}a.addEventListener('change',function(){load(false)});b.addEventListener('change',function(){route();save()});f.addEventListener('focusin',function(){window.__loopChatStreaming=true});f.addEventListener('focusout',function(){window.__loopChatStreaming=false});var p=saved();if(p){pick(a,p.a)}load(true)})();</script>";
 
-/// Polls while a job runs and reloads the page once any job changes state.
-const POLL_SCRIPT: &str = "<script>(function(){var sig=null;function tick(){fetch('/loops/mr-review-loop/release/state',{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(t){if(sig===null){sig=t}else if(t!==sig){location.reload();return}setTimeout(tick,4000)}).catch(function(){setTimeout(tick,8000)})}tick()})();</script>";
+/// Polls the progress block while a job runs; reloads once it settles so the sheet and links appear.
+const POLL_SCRIPT: &str = "<script>(function(){var box=document.getElementById('rel-progress');if(!box)return;function tick(){fetch('/loops/mr-review-loop/release/progress',{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){var m=/data-state='([a-z]+)'/.exec(h);if(!m||m[1]!=='running'){location.reload();return}box.innerHTML=h;setTimeout(tick,2000)}).catch(function(){setTimeout(tick,5000)})}setTimeout(tick,2000)})();</script>";
 
-const SCRIPT: &str = "<script>(function(){var a=document.getElementById('rel-alias'),b=document.getElementById('rel-branches');if(!a||!b)return;var seq=0;function load(){var n=++seq;if(!a.value){b.innerHTML='';return}fetch('/loops/mr-review-loop/release/branches?alias='+encodeURIComponent(a.value),{credentials:'same-origin'}).then(function(r){return r.text()}).then(function(h){if(n===seq)b.innerHTML=h}).catch(function(){})}a.addEventListener('change',load);load()})();</script>";
-
-/// The panel (and the preview sheet when a preview is waiting).
+/// The Create release MR card for the Live page, right after Status.
 pub fn panel(ctx: &UiCtx) -> String {
     let projects = tracked(ctx);
     let jobs = job::list(&jobs_dir(ctx));
-    let heading = format!("<div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>", h(&ctx.t("Create release MR")), h(&ctx.t("Pick a project and two branches. An agent reads what changed between them and writes the title and description; the merge request is created for you.")));
+    let heading = format!(
+        "<div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>",
+        h(&ctx.t("Create a release MR")),
+        h(&ctx.t("Compare two branches and an agent writes the merge request: a short title, a clear summary by feature, and the right people tagged."))
+    );
     if projects.is_empty() {
         return format!("<section class='card rel-card'>{heading}<p class='rel-empty'>{}</p></section>", h(&ctx.t("No tracked projects yet. Add one on the Issues page, in Projects.")));
     }
@@ -277,26 +342,43 @@ pub fn panel(ctx: &UiCtx) -> String {
     let ready = cli_ready(ctx);
     let disabled = if ready { "" } else { " disabled" };
     let reason = if ready { String::new() } else { format!("<p class='rel-empty' role='note'>{}</p>", h(&ctx.t("No AI CLI is available. Install and sign in to your AI CLI in Settings to create release merge requests."))) };
-    let recent: String = jobs.iter().take(5).map(|j| job_row(ctx, j)).collect();
-    let recent = if recent.is_empty() { String::new() } else { format!("<h3 class='rel-sub'>{}</h3><ul class='rel-jobs'>{recent}</ul>", h(&ctx.t("Recent release merge requests"))) };
+    let recent: String = jobs.iter().skip(usize::from(jobs.first().is_some_and(showing))).take(4).map(|j| job_row(ctx, j)).collect();
+    let recent = if recent.is_empty() { String::new() } else { format!("<h3 class='rel-sub'>{}</h3><ul class='rel-jobs'>{recent}</ul>", h(&ctx.t("Earlier"))) };
+    format!(
+        "<section class='card rel-card'>{heading}\
+<form method='post' action='/loops/mr-review-loop/release/start' class='rel-form'>{csrf}\
+<div class='rel-row'><label class='rel-field'><span>{project}</span><select name='alias' id='rel-alias' class='rel-input'>{options}</select></label>\
+<div id='rel-branches' class='rel-branches'></div></div>\
+<p class='rel-route' id='rel-route' data-pre='{pre}' data-mid='{mid}' aria-live='polite'></p>\
+<div class='rel-actions'><button type='submit' name='mode' value='create' class='btn btn-primary'{disabled}>{create}</button>\
+<button type='submit' name='mode' value='preview' class='btn btn-neutral'{disabled}>{preview}</button></div>\
+<p class='rel-hint'>{hint}</p></form>{reason}\
+<div id='rel-progress'>{block}</div>{recent}</section>",
+        csrf = ctx.csrf_input(),
+        project = h(&ctx.t("Project")),
+        create = h(&ctx.t("Create MR")),
+        preview = h(&ctx.t("Preview first")),
+        pre = h(&ctx.t("Merging")),
+        mid = h(&ctx.t("into")),
+        hint = h(&ctx.t("Create MR opens the merge request right away. Preview first lets you edit the title and description before anything is created.")),
+        block = latest_block(ctx, &jobs),
+    )
+}
+
+/// The review sheet, the form script and (while a job runs) the progress poller: placed after
+/// the page's cards so the shared card spacing never touches them.
+pub fn overlays(ctx: &UiCtx) -> String {
+    if tracked(ctx).is_empty() {
+        return String::new();
+    }
+    let jobs = job::list(&jobs_dir(ctx));
     let sheet_html = if ctx.query().first("sheet") == Some("0") {
         String::new()
     } else {
         jobs.iter().find(|j| j.state == "ready").map(|j| sheet(ctx, j)).unwrap_or_default()
     };
-    format!(
-        "<section class='card rel-card'>{heading}\
-<form method='post' action='/loops/mr-review-loop/release/start' class='rel-form'>{csrf}\
-<label class='rel-field'><span>{project}</span><select name='alias' id='rel-alias' class='rel-input'>{options}</select></label>\
-<div id='rel-branches' class='rel-branches'></div>\
-<div class='rel-actions'><button type='submit' name='mode' value='create' class='btn btn-primary'{disabled}>{create}</button>\
-<button type='submit' name='mode' value='preview' class='btn btn-neutral'{disabled}>{preview}</button></div></form>{reason}{recent}</section>{sheet_html}{SCRIPT}{poll}",
-        csrf = ctx.csrf_input(),
-        poll = if jobs.iter().any(|j| j.state == "running") { POLL_SCRIPT } else { "" },
-        project = h(&ctx.t("Project")),
-        create = h(&ctx.t("Create MR")),
-        preview = h(&ctx.t("Preview first")),
-    )
+    let poll = if jobs.first().is_some_and(|j| j.state == "running") { POLL_SCRIPT } else { "" };
+    format!("{sheet_html}{FORM_SCRIPT}{poll}")
 }
 
 #[cfg(test)]
@@ -394,7 +476,7 @@ mod tests {
         assert!(html.contains("name='mode' value='create'") && html.contains("name='mode' value='preview'"), "{html}");
         assert!(html.contains("Create MR") && html.contains("Preview first"));
         assert!(html.contains("action='/loops/mr-review-loop/release/start'") && html.contains("name='csrf_token'"));
-        assert!(html.contains("/loops/mr-review-loop/release/branches"), "the branch selects load lazily");
+        assert!(overlays(&UiCtx::new(&st, &req)).contains("/loops/mr-review-loop/release/branches"), "the branch selects load lazily");
     }
 
     #[test]
@@ -418,19 +500,49 @@ mod tests {
         assert!(html.contains("disabled") && html.contains("No AI CLI is available"), "{html}");
     }
 
+    fn branch_fragment(d: &std::path::Path, api: &Fake) -> String {
+        let st = state(d);
+        let req = UiRequest::get("/loops/mr-review-loop/release/branches?alias=app");
+        branches_with(&UiCtx::new(&st, &req), api).body_text()
+    }
+
     #[test]
-    fn the_branch_fragment_defaults_source_to_the_project_branch_and_target_to_the_default_branch() {
+    fn the_branch_fragment_defaults_to_staging_into_master() {
         let d = tempfile::tempdir().unwrap();
         seed_projects(d.path());
-        let st = state(d.path());
-        let req = UiRequest::get("/loops/mr-review-loop/release/branches?alias=app");
-        let r = branches_with(&UiCtx::new(&st, &req), &fake());
-        let html = r.body_text();
+        let html = branch_fragment(d.path(), &fake());
         assert!(html.contains("<select name='source'") && html.contains("<select name='target'"), "{html}");
         assert!(html.contains("<option value='staging' selected>"), "{html}");
         assert!(html.contains("<option value='master' selected>"), "{html}");
+        assert!(html.contains("rel-arrow"), "the two selects read as from -> into: {html}");
+        let st = state(d.path());
         let bad = branches_with(&UiCtx::new(&st, &UiRequest::get("/loops/mr-review-loop/release/branches?alias=nope")), &fake());
         assert!(bad.body_text().contains("Unknown project"));
+    }
+
+    #[test]
+    fn the_target_prefers_master_then_main_and_never_equals_the_source() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        // Both exist: master wins even when GitLab's default branch is something else.
+        let mut api = fake();
+        api.branches = vec!["develop".into(), "main".into(), "master".into(), "staging".into()];
+        api.default_branch = "develop".into();
+        assert!(branch_fragment(d.path(), &api).contains("<option value='master' selected>"));
+        // Only main.
+        api.branches = vec!["develop".into(), "main".into(), "staging".into()];
+        let html = branch_fragment(d.path(), &api);
+        assert!(html.contains("<option value='main' selected>") && html.contains("<option value='staging' selected>"), "{html}");
+        // No staging: the source falls back to the project's branch, then develop, and is never the target.
+        api.branches = vec!["develop".into(), "master".into()];
+        let html = branch_fragment(d.path(), &api);
+        assert!(html.contains("<option value='develop' selected>") && html.contains("<option value='master' selected>"), "{html}");
+        // GitLab's default branch is staging and there is no master/main: the target is not the source.
+        api.branches = vec!["staging".into(), "release".into()];
+        api.default_branch = "staging".into();
+        let html = branch_fragment(d.path(), &api);
+        assert_eq!(html.matches("selected>").count(), 2);
+        assert!(html.contains("<option value='staging' selected>") && html.contains("<option value='release' selected>"), "{html}");
     }
 
     #[test]
@@ -514,43 +626,124 @@ mod tests {
         let id = ready_job(d.path());
         let st = state(d.path());
         let req = UiRequest::get(BACK);
-        let html = panel(&UiCtx::new(&st, &req));
+        let html = overlays(&UiCtx::new(&st, &req));
         assert!(html.contains("class='rel-sheet'"), "{html}");
-        assert!(html.contains("<input type='text' name='title' class='rel-input' value='Release: order &lt;export&gt;'"), "{html}");
+        assert!(html.contains("<input type='text' name='title' class='rel-input rel-title' value='Release: order &lt;export&gt;'"), "{html}");
         assert!(html.contains("<textarea name='description'") && html.contains("Order export"), "{html}");
         assert!(html.contains("action='/loops/mr-review-loop/release/confirm'") && html.contains("action='/loops/mr-review-loop/release/discard'"));
         assert!(html.contains(&format!("name='job' value='{id}'")));
     }
 
     #[test]
-    fn a_running_job_makes_the_panel_poll_and_the_state_changes_when_it_settles() {
-        let d = tempfile::tempdir().unwrap();
-        seed_projects(d.path());
-        let st = state(d.path());
-        let jd = job::jobs_dir(d.path());
-        let quiet = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(!quiet.contains("release/state"), "no polling without a running job: {quiet}");
-        let j = job::start(&jd, "app", "g/app", "staging", "master", Mode::Preview, &|_: &std::path::Path| Ok(std::process::id() as i64)).unwrap();
-        let busy = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(busy.contains("/loops/mr-review-loop/release/state") && busy.contains("location.reload"), "{busy}");
-        let sig = |st: &UiState| st.registry.dispatch(st, &UiRequest::get("/loops/mr-review-loop/release/state")).unwrap().body_text();
-        let before = sig(&st);
-        job::update(&jd, &j.id, |j| j.state = "ready".into()).unwrap();
-        assert_ne!(sig(&st), before, "a settled job changes the signature so the page reloads");
-        assert!(!panel(&UiCtx::new(&st, &UiRequest::get(BACK))).contains("release/state"), "polling stops once nothing runs");
-    }
-
-    #[test]
-    fn the_sheet_can_be_closed_without_discarding_and_reopened_from_the_ready_row() {
+    fn the_sheet_can_be_closed_without_discarding_and_reopened_from_the_ready_block() {
         let d = tempfile::tempdir().unwrap();
         seed_projects(d.path());
         ready_job(d.path());
         let st = state(d.path());
-        let open = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
-        assert!(open.contains("class='rel-sheet'") && open.contains("href='/loops/mr-review-loop?view=mrs&amp;sheet=0'"), "{open}");
-        let closed = panel(&UiCtx::new(&st, &UiRequest::get("/loops/mr-review-loop?view=mrs&sheet=0")));
-        assert!(!closed.contains("class='rel-sheet'"), "{closed}");
-        assert!(closed.contains("href='/loops/mr-review-loop?view=mrs'") && closed.contains("Review"), "the ready row links back to the preview: {closed}");
+        let open = overlays(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(open.contains("class='rel-sheet'") && open.contains("href='/loops/mr-review-loop?sheet=0'"), "{open}");
+        let closed_req = UiRequest::get("/loops/mr-review-loop?sheet=0");
+        assert!(!overlays(&UiCtx::new(&st, &closed_req)).contains("class='rel-sheet'"));
+        let panel_html = panel(&UiCtx::new(&st, &closed_req));
+        assert!(panel_html.contains("Preview ready") && panel_html.contains("href='/loops/mr-review-loop'"), "the ready block links back to the preview: {panel_html}");
+    }
+
+    fn running_job(dir: &std::path::Path, mode: Mode) -> (std::path::PathBuf, String) {
+        let jd = job::jobs_dir(dir);
+        let j = job::start(&jd, "app", "g/app", "staging", "master", mode, &|_: &std::path::Path| Ok(std::process::id() as i64)).unwrap();
+        (jd, j.id)
+    }
+
+    #[test]
+    fn a_running_job_shows_every_step_with_the_current_one_and_its_detail() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let (jd, id) = running_job(d.path(), Mode::Preview);
+        job::set_step(&jd, &id, 2, "42 changes found").unwrap();
+        let st = state(d.path());
+        let html = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(html.contains("data-state='running'") && html.contains("id='rel-progress'"), "{html}");
+        for step in ["Checking the branches", "Reading the changes", "Matching contributors", "Writing the summary", "Preparing the preview"] {
+            assert!(html.contains(step), "{step}: {html}");
+        }
+        assert_eq!(html.matches("is-done").count(), 2, "{html}");
+        assert_eq!(html.matches("is-active").count(), 1, "{html}");
+        assert_eq!(html.matches("is-todo").count(), 2, "{html}");
+        assert!(html.contains("42 changes found") && html.contains("staging \u{2192} master"), "{html}");
+        let create = running_job_label(d.path());
+        assert!(create.contains("Creating the merge request") || html.contains("Preparing the preview"));
+    }
+
+    fn running_job_label(_d: &std::path::Path) -> String {
+        job::step_labels(Mode::Create)[4].to_string()
+    }
+
+    #[test]
+    fn the_progress_fragment_updates_in_place_and_polling_runs_only_while_a_job_runs() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let st = state(d.path());
+        let get = |st: &UiState| st.registry.dispatch(st, &UiRequest::get("/loops/mr-review-loop/release/progress")).unwrap().body_text();
+        assert!(!overlays(&UiCtx::new(&st, &UiRequest::get(BACK))).contains("release/progress"), "no polling without a running job");
+        let (jd, id) = running_job(d.path(), Mode::Create);
+        let busy = overlays(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(busy.contains("/loops/mr-review-loop/release/progress") && busy.contains("location.reload"), "{busy}");
+        let before = get(&st);
+        assert!(before.contains("data-state='running'") && !before.contains("Matching contributors</span><span class='rel-step-detail'>"), "{before}");
+        job::set_step(&jd, &id, 3, "2 people to tag").unwrap();
+        let during = get(&st);
+        assert_ne!(during, before);
+        assert!(during.contains("2 people to tag"), "{during}");
+        job::update(&jd, &id, |j| {
+            j.state = "failed".into();
+            j.summary = "Nothing to <release>".into();
+        })
+        .unwrap();
+        let failed = get(&st);
+        assert!(failed.contains("data-state='failed'") && failed.contains("Nothing to &lt;release&gt;"), "{failed}");
+        assert!(failed.contains("is-failed"), "the step that failed is marked: {failed}");
+        assert!(!overlays(&UiCtx::new(&st, &UiRequest::get(BACK))).contains("release/progress"), "polling stops once nothing runs");
+    }
+
+    #[test]
+    fn a_created_job_shows_a_success_block_with_the_mr_link_and_older_ones_list_below() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        let jd = job::jobs_dir(d.path());
+        let spawn = |_: &std::path::Path| Ok(std::process::id() as i64);
+        let a = job::start(&jd, "app", "g/app", "develop", "master", Mode::Create, &spawn).unwrap();
+        job::update(&jd, &a.id, |j| {
+            j.state = "failed".into();
+            j.summary = "Nothing to <release>".into();
+            j.started_at = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339();
+        })
+        .unwrap();
+        let b = job::start(&jd, "app", "g/app", "staging", "master", Mode::Create, &spawn).unwrap();
+        job::update(&jd, &b.id, |j| {
+            j.state = "created".into();
+            j.step = job::STEP_COUNT;
+            j.mr_url = "https://g/app/-/merge_requests/10".into();
+        })
+        .unwrap();
+        let st = state(d.path());
+        let html = panel(&UiCtx::new(&st, &UiRequest::get(BACK)));
+        assert!(html.contains("data-state='created'") && html.contains("href='https://g/app/-/merge_requests/10'"), "{html}");
+        assert_eq!(html.matches("is-done").count(), 5, "{html}");
+        assert!(html.contains("Nothing to &lt;release&gt;") && html.contains("develop"), "the older failure is in the recent list: {html}");
+    }
+
+    #[test]
+    fn the_panel_lives_on_the_live_page_after_status_and_not_on_the_merge_requests_view() {
+        let d = tempfile::tempdir().unwrap();
+        seed_projects(d.path());
+        std::fs::write(d.path().join("loops.json"), r#"[{"name": "mr-review-loop", "label": "MR Review", "enabled": true}]"#).unwrap();
+        let st = state(d.path());
+        let live = st.registry.dispatch(&st, &UiRequest::get("/loops/mr-review-loop")).unwrap().body_text();
+        let status = live.find("Status").expect(&live);
+        let panel_at = live.find("Create a release MR").expect(&live);
+        assert!(status < panel_at, "after the Status section");
+        let mrs = st.registry.dispatch(&st, &UiRequest::get("/loops/mr-review-loop?view=mrs")).unwrap().body_text();
+        assert!(!mrs.contains("Create a release MR"), "no longer on the merge requests view");
     }
 
     #[test]
@@ -578,30 +771,5 @@ mod tests {
         let r = st.registry.dispatch(&st, &req).unwrap();
         assert!(location(&r).contains("ok=1"));
         assert_eq!(job::get(&job::jobs_dir(d.path()), &id2).unwrap().state, "discarded");
-    }
-
-    #[test]
-    fn recent_jobs_show_their_state_and_the_created_mr_link_and_failures_show_the_reason() {
-        let d = tempfile::tempdir().unwrap();
-        seed_projects(d.path());
-        let jd = job::jobs_dir(d.path());
-        let spawn = |_: &std::path::Path| Ok(std::process::id() as i64);
-        let a = job::start(&jd, "app", "g/app", "staging", "master", Mode::Create, &spawn).unwrap();
-        job::update(&jd, &a.id, |j| {
-            j.state = "created".into();
-            j.mr_url = "https://g/app/-/merge_requests/10".into();
-        })
-        .unwrap();
-        let b = job::start(&jd, "app", "g/app", "develop", "master", Mode::Create, &spawn).unwrap();
-        job::update(&jd, &b.id, |j| {
-            j.state = "failed".into();
-            j.summary = "Nothing to <release>".into();
-        })
-        .unwrap();
-        let st = state(d.path());
-        let req = UiRequest::get(BACK);
-        let html = panel(&UiCtx::new(&st, &req));
-        assert!(html.contains("href='https://g/app/-/merge_requests/10'"), "{html}");
-        assert!(html.contains("Nothing to &lt;release&gt;"), "{html}");
     }
 }

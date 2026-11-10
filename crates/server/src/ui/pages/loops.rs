@@ -350,10 +350,15 @@ fn live_body(ctx: &UiCtx, name: &str, flash: Option<&str>, ok: bool) -> String {
     let last = read_json_obj(&output_dir(ctx.state, name).join("last-run.json"));
     let mut out = flash_html(flash, ok);
     out.push_str(&status_card(ctx, name, &status, last.as_ref()));
+    if name == super::mr_review::LOOP {
+        // Right after Status: create a release MR and watch it run.
+        out.push_str(&super::release_mr::panel(ctx));
+    }
     if name == "meeting-prep-loop" {
         out.push_str(&meetings_today_card(ctx, name));
     } else if name == super::mr_review::LOOP {
         out.push_str(&super::mr_review::latest_results_card(ctx, last.as_ref()));
+        out.push_str(&super::release_mr::overlays(ctx));
     } else {
         out.push_str(&latest_results_card(ctx, last.as_ref()));
     }

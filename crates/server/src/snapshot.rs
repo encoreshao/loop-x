@@ -39,6 +39,8 @@ pub struct Paths {
     pub memory_root: PathBuf,
     /// The Creator page's job records (`~/.loopx/creator/jobs`), shown as loops.
     pub creator_jobs_dir: PathBuf,
+    /// The MR Review page's release MR jobs (`~/.loopx/release-mr/jobs`), shown as one agent.
+    pub release_jobs_dir: PathBuf,
     /// Where the Creator's skills keep their output (`~`): a clean run that wrote
     /// nothing there is not a success.
     pub user_home: PathBuf,
@@ -57,6 +59,7 @@ impl Paths {
             dismissed: loopx_core::needs_you::default_dismissed_path(),
             memory_root: loopx_core::memory_store::default_memory_root(),
             creator_jobs_dir: loopx_core::creator::jobs::jobs_dir(&loopx_core::config::home_dir()),
+            release_jobs_dir: loopx_core::release_mr::job::jobs_dir(&loopx_core::config::home_dir()),
             user_home: PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),
             loops_config: loopx_core::config::home_dir().join("loops.json"),
             outputs,
@@ -307,6 +310,12 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     {
         loops.insert(name, doc);
     }
+    if let Some(entry) = loopx_core::release_mr::job::island_entry(
+        &loopx_core::release_mr::job::list(&paths.release_jobs_dir),
+        now,
+    ) {
+        loops.insert("release-mr".to_string(), entry);
+    }
     let state = app_state(&loops, pending.len());
 
     json!({
@@ -343,6 +352,7 @@ mod tests {
             dismissed: root.join("needs_you_dismissed.json"),
             memory_root: root.join("memory"),
             creator_jobs_dir: root.join("creator/jobs"),
+            release_jobs_dir: root.join("release-mr/jobs"),
             user_home: root.join("home"),
             loops_config: root.join("loops.json"),
         }
@@ -469,6 +479,39 @@ mod tests {
             .any(|(n, _)| *n == "topic-loop" || *n == "rss-watch-loop"));
         std::fs::remove_file(&p.loops_config).unwrap();
         assert_eq!(build_snapshot(&p, now())["enabled_loops"], json!([]));
+    }
+
+    #[test]
+    fn a_running_release_job_is_a_running_agent_with_its_step_for_the_island() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        assert!(build_snapshot(&p, now())["loops"]
+            .get("release-mr")
+            .is_none());
+        let j = loopx_core::release_mr::job::start(
+            &p.release_jobs_dir,
+            "app",
+            "g/app",
+            "staging",
+            "master",
+            loopx_core::release_mr::job::Mode::Create,
+            &|_: &Path| Ok(i64::from(std::process::id())),
+        )
+        .unwrap();
+        loopx_core::release_mr::job::set_step(&p.release_jobs_dir, &j.id, 3, "4 people to tag")
+            .unwrap();
+        let s = build_snapshot(&p, now());
+        let l = &s["loops"]["release-mr"];
+        assert_eq!(l["state"], "running", "{s}");
+        assert_eq!(l["current_issue"], "app \u{b7} staging \u{2192} master");
+        assert!(
+            l["current_step"]
+                .as_str()
+                .unwrap()
+                .starts_with("Writing the summary \u{b7} step 4 of 5"),
+            "{s}"
+        );
+        assert_eq!(s["app_state"], "running");
     }
 
     #[test]

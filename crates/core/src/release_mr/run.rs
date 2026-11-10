@@ -43,13 +43,23 @@ fn run_inner(
         job.source.as_str(),
         job.target.as_str(),
     );
+    let step = |n: usize, detail: &str| {
+        let _ = job::set_step(dir, &job.id, n, detail);
+    };
+    step(0, &format!("{source} \u{2192} {target}"));
     if let Some(url) = api.open_mr(project, source, target)? {
         return Err(ReleaseError::OpenMrExists(url));
     }
     let source_head = api.branch_head(project, source)?;
     let target_head = api.branch_head(project, target)?;
+    step(1, "");
     let changes = collect(api, project, target, source)?;
+    step(2, &format!("{} found", plural(changes.len(), "change")));
     let resolved = resolve(api, project, &changes);
+    step(
+        3,
+        &format!("{} to tag", plural(resolved.tags.len(), "person")).replace("persons", "people"),
+    );
     let mut log = |m: &str| {
         use std::io::Write;
         if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -61,7 +71,11 @@ fn run_inner(
         }
     };
     let summary = summarize(&changes, hooks, &mut log)?;
-    let (title, description) = render(&summary, &resolved);
+    step(
+        4,
+        &format!("{} written", plural(summary.features.len(), "feature")),
+    );
+    let (title, description) = render(&summary, &resolved, (source, target));
     let (state, mr_url) = match job.mode {
         Mode::Create => {
             let url = api.create_mr(
@@ -77,6 +91,7 @@ fn run_inner(
         }
         Mode::Preview => ("ready", String::new()),
     };
+    let done = format!("{} written", plural(summary.features.len(), "feature"));
     job::update(dir, &job.id, |j| {
         j.state = state.into();
         j.title = title;
@@ -84,6 +99,8 @@ fn run_inner(
         j.source_head = source_head;
         j.target_head = target_head;
         j.mr_url = mr_url;
+        j.step = job::STEP_COUNT;
+        j.detail = done;
         j.summary = if state == "created" {
             "Merge request created".into()
         } else {
@@ -91,6 +108,10 @@ fn run_inner(
         };
     })?;
     Ok(())
+}
+
+fn plural(n: usize, one: &str) -> String {
+    format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
 
 /// Creates the MR of a `ready` preview with the (possibly edited) text; returns its URL.
@@ -230,7 +251,7 @@ mod tests {
         );
         assert_eq!(made[0].title, "Release: order export");
         assert!(
-            made[0].description.contains("cc @ann"),
+            made[0].description.contains("_By @ann_") && !made[0].description.contains("cc @ann"),
             "{}",
             made[0].description
         );
@@ -289,6 +310,7 @@ mod tests {
         let j = job::get(d.path(), &id).unwrap();
         assert_eq!(j.state, "failed");
         assert!(j.summary.contains("Nothing to release"), "{}", j.summary);
+        assert_eq!(j.step, 1, "it failed while reading the changes");
     }
 
     #[test]

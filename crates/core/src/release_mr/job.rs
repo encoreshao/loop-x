@@ -36,8 +36,38 @@ pub struct ReleaseJob {
     pub target_head: String,
     #[serde(default)]
     pub mr_url: String,
+    /// The step in progress (0-based); `STEP_COUNT` once every step is done.
+    #[serde(default)]
+    pub step: usize,
+    /// A short human line about the latest step, e.g. "42 commits".
+    #[serde(default)]
+    pub detail: String,
     #[serde(skip)]
     pub log_path: PathBuf,
+}
+
+pub const STEP_COUNT: usize = 5;
+
+/// The steps a release job goes through, in order; the last one depends on the mode.
+pub fn step_labels(mode: Mode) -> [&'static str; STEP_COUNT] {
+    [
+        "Checking the branches",
+        "Reading the changes",
+        "Matching contributors",
+        "Writing the summary",
+        match mode {
+            Mode::Create => "Creating the merge request",
+            Mode::Preview => "Preparing the preview",
+        },
+    ]
+}
+
+/// Records progress: the step now in progress and a short detail about it.
+pub fn set_step(dir: &Path, id: &str, step: usize, detail: &str) -> Result<ReleaseJob, String> {
+    update(dir, id, |j| {
+        j.step = step;
+        j.detail = detail.to_string();
+    })
 }
 
 /// A `ready` preview nobody confirmed expires after this many hours.
@@ -202,6 +232,8 @@ pub fn start(
         source_head: String::new(),
         target_head: String::new(),
         mr_url: String::new(),
+        step: 0,
+        detail: String::new(),
     };
     write_record(dir, &rec)?;
     match spawn(&rec.log_path) {
@@ -213,6 +245,42 @@ pub fn start(
             });
             Err(e)
         }
+    }
+}
+
+/// The one entry the island and the Agents page show for release jobs, as a loop status
+/// document: a running job with its step, a failure from the last 24 hours, or a preview
+/// waiting for review. `None` when there is nothing to show. `jobs` is newest first.
+pub fn island_entry(
+    jobs: &[ReleaseJob],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<serde_json::Value> {
+    let label = |j: &ReleaseJob| format!("{} \u{b7} {} \u{2192} {}", j.alias, j.source, j.target);
+    if let Some(j) = jobs.iter().find(|j| j.state == "running") {
+        let name = step_labels(j.mode)[j.step.min(STEP_COUNT - 1)];
+        let mut step = format!(
+            "{name} \u{b7} step {} of {STEP_COUNT}",
+            j.step.min(STEP_COUNT - 1) + 1
+        );
+        if !j.detail.is_empty() {
+            step.push_str(&format!(" \u{b7} {}", j.detail));
+        }
+        return Some(
+            serde_json::json!({"state": "running", "updated_at": j.started_at, "current_issue": label(j), "current_step": step}),
+        );
+    }
+    let latest = jobs.first()?;
+    let age = chrono::DateTime::parse_from_rfc3339(&latest.started_at)
+        .map(|t| now - t.to_utc())
+        .ok()?;
+    match latest.state.as_str() {
+        "failed" if age.num_hours() < READY_TTL_HOURS => Some(
+            serde_json::json!({"state": "failed", "updated_at": latest.started_at, "current_issue": label(latest), "current_step": latest.summary}),
+        ),
+        "ready" => Some(
+            serde_json::json!({"state": "idle", "updated_at": latest.started_at, "current_issue": label(latest), "current_step": "Preview ready to review"}),
+        ),
+        _ => None,
     }
 }
 
@@ -236,6 +304,90 @@ mod tests {
     }
     fn fake(pid: i64) -> impl Fn(&Path) -> Result<i64, String> {
         move |_| Ok(pid)
+    }
+
+    #[test]
+    fn a_new_job_starts_at_the_first_step_and_labels_follow_the_mode() {
+        let d = tempfile::tempdir().unwrap();
+        let j = start(
+            d.path(),
+            "app",
+            "g/app",
+            "staging",
+            "master",
+            Mode::Preview,
+            &fake(me()),
+        )
+        .unwrap();
+        assert_eq!((j.step, j.detail.as_str()), (0, ""));
+        assert_eq!(step_labels(Mode::Create)[4], "Creating the merge request");
+        assert_eq!(step_labels(Mode::Preview)[4], "Preparing the preview");
+        assert_eq!(
+            step_labels(Mode::Create)[..4],
+            step_labels(Mode::Preview)[..4]
+        );
+        set_step(d.path(), &j.id, 2, "5 contributors").unwrap();
+        let again = get(d.path(), &j.id).unwrap();
+        assert_eq!((again.step, again.detail.as_str()), (2, "5 contributors"));
+    }
+
+    #[test]
+    fn the_island_entry_shows_a_running_job_with_its_step_a_recent_failure_and_a_waiting_preview() {
+        let d = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        assert_eq!(island_entry(&[], now), None);
+        let j = start(
+            d.path(),
+            "app",
+            "g/app",
+            "staging",
+            "master",
+            Mode::Preview,
+            &fake(me()),
+        )
+        .unwrap();
+        set_step(d.path(), &j.id, 1, "42 commits").unwrap();
+        let running = island_entry(&list(d.path()), now).unwrap();
+        assert_eq!(running["state"], "running");
+        assert_eq!(
+            running["current_issue"],
+            "app \u{b7} staging \u{2192} master"
+        );
+        assert_eq!(
+            running["current_step"],
+            "Reading the changes \u{b7} step 2 of 5 \u{b7} 42 commits"
+        );
+        update(d.path(), &j.id, |j| {
+            j.state = "ready".into();
+            j.step = STEP_COUNT;
+        })
+        .unwrap();
+        let waiting = island_entry(&list(d.path()), now).unwrap();
+        assert_eq!(
+            (waiting["state"].as_str(), waiting["current_step"].as_str()),
+            (Some("idle"), Some("Preview ready to review"))
+        );
+        update(d.path(), &j.id, |j| {
+            j.state = "failed".into();
+            j.summary = "Nothing to release".into();
+        })
+        .unwrap();
+        let failed = island_entry(&list(d.path()), now).unwrap();
+        assert_eq!(
+            (failed["state"].as_str(), failed["current_step"].as_str()),
+            (Some("failed"), Some("Nothing to release"))
+        );
+        assert_eq!(
+            island_entry(&list(d.path()), now + Duration::hours(25)),
+            None,
+            "an old failure is forgotten"
+        );
+        update(d.path(), &j.id, |j| j.state = "created".into()).unwrap();
+        assert_eq!(
+            island_entry(&list(d.path()), now),
+            None,
+            "a finished job needs nothing from the island"
+        );
     }
 
     #[test]
