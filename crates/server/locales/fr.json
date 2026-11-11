@@ -2014,7 +2014,6 @@
   "{project}: {state}, linked projects: {n}": "{project} : {state}, projets liés : {n}",
   "{projects} projects, {links} links": "{projects} projets, {links} liens",
   "Details": "Détails",
-  "Drag to move, scroll or pinch to zoom. Select a project or a link to see why.": "Faites glisser pour déplacer, faites défiler ou pincez pour zoomer. Sélectionnez un projet ou un lien pour en voir la raison.",
   "Evidence": "Preuve",
   "Fit the whole graph": "Afficher tout le graphe",
   "Link types": "Types de liens",
@@ -2033,5 +2032,7 @@
   "The graph needs a wider window; the same links are listed below.": "Le graphe a besoin d'une fenêtre plus large ; les mêmes liens sont listés ci-dessous.",
   "Zoom in": "Zoom avant",
   "Zoom out": "Zoom arrière",
-  "Zoom": "Zoom"
+  "Zoom": "Zoom",
+  "Use Ctrl/⌘ + scroll to zoom": "Utilisez Ctrl/⌘ + défilement pour zoomer",
+  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "Faites glisser pour déplacer ; Ctrl/⌘ + défilement ou pincement pour zoomer. Sélectionnez un projet ou un lien pour en voir la raison."
 }

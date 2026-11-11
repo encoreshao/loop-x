@@ -590,6 +590,115 @@ pub fn digest_issues_in(
     )
 }
 
+/// At most this many project digests are memoised by [`digest_issues_cached`].
+pub const DIGEST_CACHE_MAX: usize = 256;
+
+type DigestKey = (std::path::PathBuf, String);
+
+/// Memoised digests keyed by (issues dir, alias), each stored with the cheap
+/// signature it was computed under; a different signature recomputes. Bounded:
+/// the oldest entry goes first.
+#[derive(Default)]
+pub struct DigestCache {
+    entries: Vec<(DigestKey, u64, IssueDigest)>,
+}
+
+impl DigestCache {
+    /// The digest for `key`, computed by `make` unless an entry with the same
+    /// `sig` exists. A `None` signature (unreadable) is never cached.
+    pub fn get(
+        &mut self,
+        key: DigestKey,
+        sig: Option<u64>,
+        make: impl FnOnce() -> IssueDigest,
+    ) -> IssueDigest {
+        let Some(sig) = sig else {
+            return make();
+        };
+        if let Some((_, s, d)) = self.entries.iter().find(|(k, _, _)| *k == key) {
+            if *s == sig {
+                return d.clone();
+            }
+        }
+        let d = make();
+        self.entries.retain(|(k, _, _)| *k != key);
+        self.entries.push((key, sig, d.clone()));
+        if self.entries.len() > DIGEST_CACHE_MAX {
+            let extra = self.entries.len() - DIGEST_CACHE_MAX;
+            self.entries.drain(..extra);
+        }
+        d
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// A directory's mtime (ns) and entry count, hashed; a missing directory reads
+/// as a fixed value so "no cache yet" is cacheable too. `None` when it exists
+/// but cannot be read.
+fn dir_signature(dir: &Path, h: &mut u64) -> Option<()> {
+    let mix = |h: &mut u64, v: u64| {
+        *h ^= v;
+        *h = h.wrapping_mul(0x0100_0000_01b3);
+    };
+    match std::fs::metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            mix(h, 1);
+            Some(())
+        }
+        Err(_) => None,
+        Ok(m) => {
+            let t = m
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?;
+            mix(h, t.as_nanos() as u64);
+            mix(h, std::fs::read_dir(dir).ok()?.count() as u64);
+            Some(())
+        }
+    }
+}
+
+/// [`digest_issues_in`], memoised per project in a process-wide [`DigestCache`].
+/// The signature is the issues directory's mtime and entry count plus the
+/// alias's task-memory directory's: the GitLab cache writes every issue file
+/// by an atomic rename into that directory, so any sync changes it, while page
+/// views that change nothing never re-read thousands of issue files.
+pub fn digest_issues_cached(
+    instance: &str,
+    project_id: &str,
+    alias: &str,
+    gitlab_root: &Path,
+    data_root: &Path,
+    memory_root: Option<&Path>,
+) -> IssueDigest {
+    static CACHE: std::sync::Mutex<Option<DigestCache>> = std::sync::Mutex::new(None);
+    let dir = gitlab_cache::issues_dir_in(instance, project_id, gitlab_root, data_root);
+    let mem_dir = memory_store::alias_dir(alias, memory_root);
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let sig = dir_signature(&dir, &mut h)
+        .and_then(|()| dir_signature(&mem_dir, &mut h))
+        .map(|()| h);
+    let key = (
+        dir.clone(),
+        format!("{alias}\u{0}{project_id}\u{0}{}", mem_dir.display()),
+    );
+    let make = || digest_from(&dir, project_id, alias, memory_root);
+    // Computed outside the lock would let two requests race to fill it; the
+    // digest is cheap enough on a hit that holding the lock is fine.
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(DigestCache::default)
+        .get(key, sig, make)
+}
+
 /// Where [`gitlab_cache::sync_issue`] keeps this project's issue files.
 pub(crate) fn issues_dir_for(instance: &str, project_id: &str) -> std::path::PathBuf {
     gitlab_cache::project_path(instance, project_id)
@@ -608,8 +717,10 @@ pub(crate) fn digest_from(
     let mut people: BTreeMap<String, usize> = BTreeMap::new();
     let mut recent: Vec<(String, i64, String)> = Vec::new();
     let mut cross = Vec::new();
-    let re =
-        Regex::new(r"\b([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)[#!]\d+").expect("static regex");
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"\b([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)[#!]\d+").expect("static regex")
+    });
 
     let mut files: Vec<_> = std::fs::read_dir(issues_dir)
         .into_iter()
@@ -1112,6 +1223,67 @@ mod tests {
             digest_issues_in("work", "grp/none", "none", &gitlab, &data, Some(&mem)),
             IssueDigest::default()
         );
+    }
+
+    #[test]
+    fn digest_cache_hit_does_not_reread_and_a_changed_dir_invalidates() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gl");
+        let data = d.path().join("data");
+        let mem = d.path().join("mem");
+        let dir = gitlab
+            .join("work")
+            .join("projects")
+            .join("grp__p")
+            .join("issues");
+        write(
+            &dir,
+            "1.json",
+            &json!({"iid": 1, "title": "Old"}).to_string(),
+        );
+        let get = || digest_issues_cached("work", "grp/p", "p", &gitlab, &data, Some(&mem));
+        assert_eq!(get().recent, vec![(1, "Old".to_string())]);
+        // Rewritten in place (the directory itself does not change): a cache hit,
+        // so the file is not read again and the old digest comes back.
+        let f = dir.join("1.json");
+        let mtime = fs::metadata(&dir).unwrap().modified().unwrap();
+        fs::write(&f, json!({"iid": 1, "title": "New"}).to_string()).unwrap();
+        assert_eq!(fs::metadata(&dir).unwrap().modified().unwrap(), mtime);
+        assert_eq!(get().recent, vec![(1, "Old".to_string())]);
+        // A new issue file (how the GitLab cache writes: a rename into the dir)
+        // changes the signature and the digest is recomputed.
+        write(
+            &dir,
+            "2.json",
+            &json!({"iid": 2, "title": "Two"}).to_string(),
+        );
+        let fresh = get();
+        assert!(fresh.recent.contains(&(1, "New".to_string())), "{fresh:?}");
+        assert!(fresh.recent.contains(&(2, "Two".to_string())));
+    }
+
+    #[test]
+    fn digest_cache_counts_computations_and_stays_bounded() {
+        let mut c = DigestCache::default();
+        let calls = std::cell::Cell::new(0);
+        let make = || {
+            calls.set(calls.get() + 1);
+            IssueDigest::default()
+        };
+        let key = |i: usize| (std::path::PathBuf::from(format!("/x/{i}")), "a".to_string());
+        c.get(key(1), Some(7), make);
+        c.get(key(1), Some(7), make);
+        assert_eq!(calls.get(), 1, "same signature: one computation");
+        c.get(key(1), Some(8), make);
+        assert_eq!(calls.get(), 2, "new signature: recomputed");
+        // An unreadable signature is never cached.
+        c.get(key(2), None, make);
+        c.get(key(2), None, make);
+        assert_eq!(calls.get(), 4);
+        for i in 0..DIGEST_CACHE_MAX + 50 {
+            c.get(key(100 + i), Some(1), make);
+        }
+        assert!(c.len() <= DIGEST_CACHE_MAX);
     }
 
     #[test]

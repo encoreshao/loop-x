@@ -2014,7 +2014,6 @@
   "{project}: {state}, linked projects: {n}": "{project}：{state}，关联项目：{n}",
   "{projects} projects, {links} links": "{projects} 个项目，{links} 条关联",
   "Details": "详情",
-  "Drag to move, scroll or pinch to zoom. Select a project or a link to see why.": "拖动以移动，滚动或双指缩放。选择项目或关联可查看原因。",
   "Evidence": "依据",
   "Fit the whole graph": "显示整个图",
   "Link types": "关联类型",
@@ -2033,5 +2032,7 @@
   "The graph needs a wider window; the same links are listed below.": "图需要更宽的窗口；相同的关联列在下方。",
   "Zoom in": "放大",
   "Zoom out": "缩小",
-  "Zoom": "缩放"
+  "Zoom": "缩放",
+  "Use Ctrl/⌘ + scroll to zoom": "使用 Ctrl/⌘ + 滚动来缩放",
+  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "拖动以移动；Ctrl/⌘ + 滚动或双指缩放。选择项目或关联可查看原因。"
 }

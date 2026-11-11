@@ -96,14 +96,13 @@ struct Model {
     proposals: Vec<Value>,
     /// The banner for a whitelisted `notice` code, or empty.
     notice: String,
-    /// The project graph (profiles plus issue digests), derived on first use.
-    derived: OnceCell<Derived>,
-}
-
-/// The graph of every known project and, per alias, its direct neighbours.
-struct Derived {
-    graph: Graph,
-    neighbors: BTreeMap<String, Vec<(String, EdgeKind)>>,
+    /// Each project's issue digest, read (through the process-wide digest cache)
+    /// on first use.
+    digests: OnceCell<BTreeMap<String, IssueDigest>>,
+    /// Who links to whom, without a layout: the overview and project pages.
+    links: OnceCell<BTreeMap<String, Vec<(String, EdgeKind)>>>,
+    /// The laid-out graph: only the graph view asks for it.
+    graph: OnceCell<Graph>,
 }
 
 struct Project {
@@ -130,33 +129,39 @@ fn model(ctx: &UiCtx) -> Model {
         projects: projects(ctx),
         proposals: proposals(ctx),
         notice: notice_html(ctx),
-        derived: OnceCell::new(),
+        digests: OnceCell::new(),
+        links: OnceCell::new(),
+        graph: OnceCell::new(),
     }
 }
 
-/// The graph for this request, computed once: every profile, plus the issue
-/// digests read from the dashboard's own cache roots (`user_home`'s
-/// `.gitlab/cache` and `<home>/data`), never the process's `HOME`.
-fn derived<'a>(ctx: &UiCtx, m: &'a Model) -> &'a Derived {
-    m.derived.get_or_init(|| {
-        let profiles: Vec<Profile> = m
-            .projects
-            .iter()
-            .filter_map(|p| match &p.loaded {
-                Loaded::Ready(profile) => Some(profile.clone()),
-                _ => None,
-            })
-            .collect();
-        let aliases: Vec<String> = m.projects.iter().map(|p| p.alias.clone()).collect();
+fn parsed_profiles(m: &Model) -> Vec<Profile> {
+    m.projects
+        .iter()
+        .filter_map(|p| match &p.loaded {
+            Loaded::Ready(profile) => Some(profile.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn aliases(m: &Model) -> Vec<String> {
+    m.projects.iter().map(|p| p.alias.clone()).collect()
+}
+
+/// This request's issue digests, read once, from the dashboard's own cache roots
+/// (`user_home`'s `.gitlab/cache` and `<home>/data`), never the process's
+/// `HOME`, and memoised across requests until a project's issue cache changes.
+fn digests<'a>(ctx: &UiCtx, m: &'a Model) -> &'a BTreeMap<String, IssueDigest> {
+    m.digests.get_or_init(|| {
         let gitlab_root = ctx.state.user_home.join(".gitlab").join("cache");
         let data_root = ctx.state.home_dir.join("data");
         let memory = memory_root(ctx);
-        let digests: BTreeMap<String, IssueDigest> = m
-            .projects
+        m.projects
             .iter()
             .filter(|p| !p.instance.is_empty() && !p.project_id.is_empty())
             .map(|p| {
-                let d = profile_scan::digest_issues_in(
+                let d = profile_scan::digest_issues_cached(
                     &p.instance,
                     &p.project_id,
                     &p.alias,
@@ -166,11 +171,22 @@ fn derived<'a>(ctx: &UiCtx, m: &'a Model) -> &'a Derived {
                 );
                 (p.alias.clone(), d)
             })
-            .collect();
-        let graph = profile_graph::derive(&profiles, &digests, &aliases);
-        let neighbors = neighbors(&graph);
-        Derived { graph, neighbors }
+            .collect()
     })
+}
+
+/// Per alias, its directly linked projects: edges only, no layout.
+fn links<'a>(ctx: &UiCtx, m: &'a Model) -> &'a BTreeMap<String, Vec<(String, EdgeKind)>> {
+    m.links.get_or_init(|| {
+        let edges = profile_graph::derive_edges(&parsed_profiles(m), digests(ctx, m), &aliases(m));
+        neighbors(&edges)
+    })
+}
+
+/// The laid-out graph of every known project (the graph view only).
+fn graph<'a>(ctx: &UiCtx, m: &'a Model) -> &'a Graph {
+    m.graph
+        .get_or_init(|| profile_graph::derive(&parsed_profiles(m), digests(ctx, m), &aliases(m)))
 }
 
 /// Like the old Memory view, every alias of `projects.json` in its order (the
@@ -374,9 +390,9 @@ fn pending_for(all: &[Value], alias: &str) -> usize {
 
 /// Directly linked projects per alias, from every edge of the graph except the
 /// weak shared-people guess (hidden by default in the graph too).
-fn neighbors(graph: &Graph) -> BTreeMap<String, Vec<(String, EdgeKind)>> {
+fn neighbors(edges: &[Edge]) -> BTreeMap<String, Vec<(String, EdgeKind)>> {
     let mut out: BTreeMap<String, Vec<(String, EdgeKind)>> = BTreeMap::new();
-    for e in graph.edges.iter().filter(|e| e.kind != EdgeKind::SharesPeople) {
+    for e in edges.iter().filter(|e| e.kind != EdgeKind::SharesPeople) {
         for (a, b) in [(&e.from, &e.to), (&e.to, &e.from)] {
             let list = out.entry(a.clone()).or_default();
             if a != b && !list.iter().any(|(o, k)| o == b && *k == e.kind) {
@@ -604,7 +620,7 @@ fn overview(ctx: &UiCtx, m: &Model, graph: bool) -> String {
         graph_view(ctx, m)
     } else {
         let all = &m.proposals;
-        let links = &derived(ctx, m).neighbors;
+        let links = links(ctx, m);
         let status = store.as_ref().ok();
         let cards: String = projects
             .iter()
@@ -865,7 +881,7 @@ fn hide_classes(hidden: &[EdgeKind]) -> String {
 
 fn graph_view(ctx: &UiCtx, m: &Model) -> String {
     use std::fmt::Write as _;
-    let g = &derived(ctx, m).graph;
+    let g = graph(ctx, m);
     let edges = drawn_edges(g);
     let by_alias: BTreeMap<&str, &Project> = m.projects.iter().map(|p| (p.alias.as_str(), p)).collect();
     // alias -> (index, x, y, r)
@@ -945,12 +961,17 @@ fn graph_view(ctx: &UiCtx, m: &Model) -> String {
         };
         let circ = std::f32::consts::TAU * r;
         let arc = circ * good.unwrap_or(0) as f32 / total_sections as f32;
-        let mine: Vec<&&Edge> = edges.iter().filter(|e| e.from == n.alias || e.to == n.alias).collect();
+        let mine: Vec<(usize, &Edge)> = edges
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.from == n.alias || e.to == n.alias)
+            .map(|(i, e)| (i, *e))
+            .collect();
         let linked = {
             let mut names: Vec<&str> = mine
                 .iter()
-                .filter(|e| e.kind != EdgeKind::SharesPeople)
-                .map(|e| if e.from == n.alias { e.to.as_str() } else { e.from.as_str() })
+                .filter(|(_, e)| e.kind != EdgeKind::SharesPeople)
+                .map(|(_, e)| if e.from == n.alias { e.to.as_str() } else { e.from.as_str() })
                 .collect();
             names.sort_unstable();
             names.dedup();
@@ -1072,21 +1093,22 @@ fn graph_view(ctx: &UiCtx, m: &Model) -> String {
          <p class='mem-muted mg-hint' data-mg-js hidden>{}</p>\
          <p class='mem-muted mg-narrow-note'>{}</p></div>\
          <div class='mg-filters' role='group' aria-label='{}' data-mg-js hidden>{chips}</div></div>{notes}\
-         <div class='mg-stage'><svg class='mg-svg{hide}' viewBox='0 0 {} {}' preserveAspectRatio='xMidYMid meet' role='group' aria-label='{}'>\
+         <div class='mg-stage' data-wheel-hint='{}'><svg class='mg-svg{hide}' viewBox='0 0 {} {}' preserveAspectRatio='xMidYMid meet' role='group' aria-label='{}'>\
          <defs>{markers}</defs><g class='mg-edges'>{edge_svg}</g><g class='mg-nodes'>{node_svg}</g></svg>\
          <div class='mg-zoom' role='group' aria-label='{}' data-mg-js hidden>\
          <button type='button' data-zoom='in' aria-label='{}' title='{}'>+</button>\
          <button type='button' data-zoom='out' aria-label='{}' title='{}'>−</button>\
          <button type='button' data-zoom='fit' aria-label='{}' title='{}'>{}</button></div>\
-         <aside class='mg-inspector{hide}' aria-label='{}' tabindex='-1' hidden>\
+         <aside class='mg-inspector{hide}' aria-live='polite' aria-label='{}' tabindex='-1' hidden>\
          <button type='button' class='mg-close' aria-label='{}' title='{}'>{}</button><div class='mg-insp-body'></div></aside></div>\
          <div class='mg-legend' aria-label='{}'><span class='mg-legend-title'>{}</span>{legend}</div>\
          {templates}{edge_tpl}</section>",
         icon("hub"),
         escape(&ctx.t("Project graph")),
-        escape(&ctx.t("Drag to move, scroll or pinch to zoom. Select a project or a link to see why.")),
+        escape(&ctx.t("Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.")),
         escape(&ctx.t("The graph needs a wider window; the same links are listed below.")),
         escape(&ctx.t("Link types")),
+        escape(&ctx.t("Use Ctrl/⌘ + scroll to zoom")),
         num(VIEW_W),
         num(VIEW_H),
         escape(&ctx.t("Project graph")),
@@ -1120,7 +1142,7 @@ fn node_template(
     v: Verdict,
     i: usize,
     activity: usize,
-    mine: &[&&Edge],
+    mine: &[(usize, &Edge)],
     index: &BTreeMap<&str, (usize, f32, f32, f32)>,
 ) -> String {
     let draft = match &p.loaded {
@@ -1142,16 +1164,24 @@ fn node_template(
         .collect();
     let rows: String = mine
         .iter()
-        .map(|e| {
+        .map(|(edge, e)| {
             let from_here = e.from == p.alias;
             let other = if from_here { &e.to } else { &e.from };
-            let goto = index.get(other.as_str()).map_or(0, |t| t.0);
+            // A neighbour without a node gets its name only, never a jump to a
+            // wrong node.
+            let target = match index.get(other.as_str()) {
+                Some(t) => format!(
+                    "<button type='button' class='mg-goto' data-goto='{}'>{}</button>",
+                    t.0,
+                    escape(other)
+                ),
+                None => format!("<span class='mg-other'>{}</span>", escape(other)),
+            };
             format!(
-                "<li class='mg-row mg-row-{kind}'><span class='mg-kind mg-k-{kind}'>{}</span>{}\
-                 <button type='button' class='mg-goto' data-goto='{goto}'>{}</button><small>{}</small></li>",
+                "<li class='mg-row mg-row-{kind}'><button type='button' class='mg-kind mg-k-{kind}' data-edge='{edge}'>{}</button>{}\
+                 {target}<small>{}</small></li>",
                 escape(&edge_label(ctx, e.kind)),
                 direction(ctx, e, from_here),
-                escape(other),
                 escape(&e.evidence),
                 kind = e.kind.as_str()
             )
@@ -1380,7 +1410,7 @@ fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
             } else {
                 String::new()
             };
-            let links = &derived(ctx, m).neighbors;
+            let links = links(ctx, m);
             let pending = pending_for(&m.proposals, &p.alias);
             let cards: String = SectionKey::ALL
                 .into_iter()
@@ -3042,6 +3072,8 @@ display:flex;flex-direction:column;gap:.9rem;min-width:0}
 .mg-svg.is-focusing .mg-edge.is-lit{opacity:1;stroke-width:3.4}
 .mg-svg.is-focusing .mg-node{opacity:.32}
 .mg-svg.is-focusing .mg-node.is-lit{opacity:1}
+.mg-wheel-hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:.55rem 1rem;border-radius:999px;background:var(--mg-panel);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);border:1px solid var(--mg-hairline);color:var(--mg-fg);font-size:.88rem;font-weight:500;pointer-events:none;opacity:0;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.mg-wheel-hint.is-on{opacity:1}
 .mg-zoom{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;overflow:hidden;border-radius:12px;border:1px solid var(--mg-hairline);background:var(--mg-panel);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);box-shadow:0 4px 16px rgba(0,0,0,.14)}
 .mg-zoom button{display:grid;place-items:center;width:36px;height:36px;box-sizing:border-box;margin:0;padding:0;border:0;border-top:1px solid var(--mg-hairline);background:transparent;color:var(--mg-fg);font:500 1.15rem/1 var(--font-family-stack);cursor:pointer}
 .mg-zoom button:first-child{border-top:0}
@@ -3050,7 +3082,7 @@ display:flex;flex-direction:column;gap:.9rem;min-width:0}
 .mg-inspector{position:absolute;top:12px;right:12px;width:min(340px,calc(100% - 24px));max-height:calc(100% - 24px);box-sizing:border-box;overflow:auto;padding:1rem 1.1rem 1.1rem;border-radius:16px;border:1px solid var(--mg-hairline);background:var(--mg-panel);-webkit-backdrop-filter:blur(24px) saturate(1.6);backdrop-filter:blur(24px) saturate(1.6);box-shadow:0 18px 48px rgba(0,0,0,.24);color:var(--mg-fg);opacity:0;transform:translateX(12px)}
 .mg-inspector[hidden]{display:none}
 .mg-inspector.is-open{opacity:1;transform:none}
-.mg-inspector:focus{outline:none}
+.mg-inspector:focus:not(:focus-visible){outline:none}
 .mg-close{position:absolute;top:10px;right:10px;display:grid;place-items:center;width:28px;height:28px;box-sizing:border-box;margin:0;padding:0;border:0;border-radius:999px;background:var(--mg-hairline);color:var(--mg-fg);cursor:pointer}
 .mg-close .icon{width:14px;height:14px}
 .mg-insp-head{display:flex;flex-direction:column;align-items:flex-start;gap:.4rem;padding-right:2rem;min-width:0}
@@ -3067,6 +3099,10 @@ display:flex;flex-direction:column;gap:.9rem;min-width:0}
 .mg-row{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .45rem;min-width:0;font-size:.85rem}
 .mg-row small{flex:1 1 100%;color:var(--mg-muted);font-size:.78rem;line-height:1.4;overflow-wrap:anywhere}
 .mg-kind{display:inline-flex;align-items:center;gap:.3rem;height:20px;box-sizing:border-box;padding:0 .5rem;border-radius:999px;border:1px solid var(--k);color:inherit;font-size:.7rem;font-weight:600;white-space:nowrap}
+button.mg-kind{margin:0;background:transparent;font-family:inherit;cursor:pointer}
+button.mg-kind:hover{background:color-mix(in srgb,var(--k) 14%,transparent)}
+button.mg-kind:focus-visible{outline:2px solid var(--mg-focus);outline-offset:2px}
+.mg-inspector:focus-visible{outline:2px solid var(--mg-focus);outline-offset:-2px}
 .mg-kind::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--k)}
 .mg-dir{color:var(--mg-muted)}
 .mg-goto{margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-color:var(--mg-hairline);text-underline-offset:3px;overflow-wrap:anywhere}
@@ -3092,6 +3128,7 @@ display:flex;flex-direction:column;gap:.9rem;min-width:0}
 @media (prefers-reduced-motion:no-preference){
 .mg-inspector{transition:opacity .28s cubic-bezier(.32,.72,0,1),transform .28s cubic-bezier(.32,.72,0,1)}
 .mg-edge,.mg-node{transition:opacity .2s cubic-bezier(.32,.72,0,1)}
+.mg-wheel-hint{transition:opacity .25s cubic-bezier(.32,.72,0,1)}
 .mg-chip{transition:background-color .2s cubic-bezier(.32,.72,0,1),color .2s cubic-bezier(.32,.72,0,1)}
 }
 @media (max-width:639px){
@@ -4536,5 +4573,62 @@ mod tests {
         let html = String::from_utf8(r.body).unwrap();
         assert!(!html.contains(">Open full page<"), "untranslated");
         assert!(!html.contains("aria-label='Zoom in'"));
+    }
+
+    #[test]
+    fn overview_and_project_page_run_no_layout() {
+        use loopx_core::profile_graph::layout_runs_on_this_thread as runs;
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        let mut a = profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.links.push(link("beta", "calls", "x"));
+        sb.save(&a);
+        let before = runs();
+        assert!(sb.get("/insights?view=memory").contains("1 linked project"));
+        assert!(sb.get("/insights?view=memory&project=alpha").contains("project=beta'"));
+        assert_eq!(runs(), before, "counts need edges, not a layout");
+        sb.get("/insights?view=memory&graph=1");
+        assert_eq!(runs(), before + 1, "the graph lays out once per request");
+    }
+
+    #[test]
+    fn overview_with_200_projects_renders_quickly() {
+        let aliases: Vec<String> = (0..200).map(|i| format!("s{i:03}")).collect();
+        let spec: Vec<(&str, bool)> = aliases.iter().map(|a| (a.as_str(), false)).collect();
+        let sb = Sb::new(&spec);
+        for (i, a) in aliases.iter().enumerate() {
+            let mut p = profile(a, &[(SectionKey::Overview, section("x", "x"))]);
+            for j in [i + 1, i + 7, i + 31] {
+                p.links.push(link(&aliases[j % 200], "calls", "cfg"));
+            }
+            sb.save(&p);
+            if i % 3 == 0 {
+                put_issue(&sb, &format!("group/{a}"), 1, json!({"title": "t",
+                    "description": format!("see group/{}#2", aliases[(i + 11) % 200])}));
+            }
+        }
+        let t = std::time::Instant::now();
+        let html = sb.get("/insights?view=memory");
+        let took = t.elapsed();
+        assert!(html.contains("class='mem-grid'"));
+        eprintln!("overview, 200 projects: {took:?}");
+        assert!(took < std::time::Duration::from_secs(3), "{took:?}");
+    }
+
+    #[test]
+    fn graph_is_keyboard_reachable_and_wheel_zoom_is_opt_in() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        let mut a = profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.links.push(link("beta", "calls", "x"));
+        sb.save(&a);
+        let html = sb.get("/insights?view=memory&graph=1");
+        // The inspector announces its content and takes focus (tabindex -1).
+        assert!(html.contains("class='mg-inspector mg-hide-shares-people' aria-live='polite'"), "{html}");
+        // In a node's inspector, each link's kind is a button that opens that link.
+        assert!(html.contains("<button type='button' class='mg-kind mg-k-calls' data-edge='0'>"), "{html}");
+        assert!(svg_of(&html).contains("data-edge='0'"));
+        // Plain scrolling scrolls the page; the stage carries the translated hint.
+        assert!(html.contains("data-wheel-hint='Use Ctrl/⌘ + scroll to zoom'"), "{html}");
+        let script = crate::ui::assets::text("memory/graph.js").unwrap();
+        assert!(script.contains("ev.ctrlKey || ev.metaKey"));
     }
 }

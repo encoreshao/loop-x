@@ -16,13 +16,14 @@
   if (list && window.matchMedia('(min-width: 640px)').matches) list.open = false;
 
   // ---- index the drawing
-  var byAlias = {}, byIndex = {}, tplNode = {}, kindLabel = {};
+  var byAlias = {}, byIndex = {}, byEdge = {}, tplNode = {}, kindLabel = {};
   svg.querySelectorAll('.mg-node').forEach(function (n) {
     byAlias[n.dataset.alias] = n;
     byIndex[n.dataset.node] = n;
     n.mgEdges = [];
   });
   svg.querySelectorAll('.mg-edge').forEach(function (e) {
+    byEdge[e.dataset.edge] = e;
     e.mgA = byAlias[e.dataset.from];
     e.mgB = byAlias[e.dataset.to];
     if (e.mgA) e.mgA.mgEdges.push(e);
@@ -45,6 +46,7 @@
 
   // ---- highlight
   var selected = null;
+  var returnTo = null; // the node focus goes back to when the inspector closes
   function clearLight() {
     svg.classList.remove('is-focusing');
     svg.querySelectorAll('.is-lit').forEach(function (x) { x.classList.remove('is-lit'); });
@@ -79,6 +81,8 @@
     insp.hidden = false;
     requestAnimationFrame(function () { insp.classList.add('is-open'); });
     insp.scrollTop = 0;
+    // Keyboard and screen-reader users land in what they opened.
+    insp.focus({ preventScroll: true });
   }
   function unselect() {
     if (selected && selected.node) selected.node.classList.remove('is-selected');
@@ -90,6 +94,7 @@
     selected = { node: n };
     n.classList.add('is-selected');
     lightNode(n);
+    returnTo = n;
     open(tplNode[n.dataset.node].content.cloneNode(true));
     var r = n.querySelector('.mg-core').getBoundingClientRect();
     keepVisible(r.left + r.width / 2, r.top + r.height / 2);
@@ -132,15 +137,18 @@
     apply();
   }
   function closeInspector() {
-    var back = selected && selected.node;
+    var back = returnTo;
+    returnTo = null;
     insp.classList.remove('is-open');
     insp.hidden = true;
     unselect();
     clearLight();
-    if (back) back.focus();
+    if (back) back.focus({ preventScroll: true });
   }
   insp.addEventListener('click', function (ev) {
     if (ev.target.closest('.mg-close')) { closeInspector(); return; }
+    var link = ev.target.closest('[data-edge]');
+    if (link && byEdge[link.dataset.edge]) { selectEdge(byEdge[link.dataset.edge]); return; }
     var go = ev.target.closest('[data-goto]');
     if (go && byIndex[go.dataset.goto]) {
       var n = byIndex[go.dataset.goto];
@@ -187,7 +195,23 @@
     else if (b.dataset.zoom === 'out') zoomCenter(1.3);
     else { view = { x: home.x, y: home.y, w: home.w, h: home.h }; apply(); }
   });
+  // Plain scrolling scrolls the page; Ctrl/Cmd + scroll (and a trackpad pinch,
+  // which arrives as ctrl + wheel) zooms. A plain scroll shows the hint.
+  var stage = root.querySelector('.mg-stage');
+  var hint = document.createElement('div');
+  hint.className = 'mg-wheel-hint';
+  hint.setAttribute('aria-hidden', 'true');
+  hint.textContent = stage.dataset.wheelHint || '';
+  stage.appendChild(hint);
+  var hintTimer = 0;
   svg.addEventListener('wheel', function (ev) {
+    if (!(ev.ctrlKey || ev.metaKey)) {
+      hint.classList.add('is-on');
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(function () { hint.classList.remove('is-on'); }, 1200);
+      return;
+    }
+    hint.classList.remove('is-on');
     ev.preventDefault();
     var k = ev.ctrlKey ? 0.01 : 0.0015;
     zoomAt(Math.exp(ev.deltaY * k), ev.clientX, ev.clientY);

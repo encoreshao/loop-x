@@ -28,6 +28,11 @@ fn project_dir(alias: &str, root: Option<&Path>) -> PathBuf {
     resolve_root(root).join(alias)
 }
 
+/// `<root>/<alias>`: where an alias's task memories (and profile) live.
+pub fn alias_dir(alias: &str, root: Option<&Path>) -> PathBuf {
+    project_dir(alias, root)
+}
+
 /// A frontmatter value that is either a bare string or a `[a, b]` list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {

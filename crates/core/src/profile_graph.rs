@@ -287,11 +287,47 @@ fn cap(s: &str) -> String {
     out
 }
 
+/// The graph: [`derive_edges`] plus one node per tracked alias, laid out with
+/// [`layout_with_edges`].
 pub fn derive(
     profiles: &[Profile],
     digests: &BTreeMap<String, IssueDigest>,
     tracked: &[String],
 ) -> Graph {
+    let edges = derive_edges(profiles, digests, tracked);
+    let tracked_set: BTreeSet<String> = tracked.iter().cloned().collect();
+    let by_alias: BTreeMap<&str, &Profile> = profiles
+        .iter()
+        .filter(|p| tracked_set.contains(&p.alias))
+        .map(|p| (p.alias.as_str(), p))
+        .collect();
+    let mut nodes: Vec<Node> = tracked_set
+        .iter()
+        .map(|alias| Node {
+            alias: alias.clone(),
+            x: 500.0,
+            y: 500.0,
+            freshness: by_alias.get(alias.as_str()).map(|p| {
+                if p.sections.is_empty() {
+                    Freshness::NeedsReview
+                } else {
+                    Freshness::Fresh
+                }
+            }),
+            activity: digests.get(alias).map(|d| d.recent.len()).unwrap_or(0),
+        })
+        .collect();
+    layout_with_edges(&mut nodes, &edges);
+    Graph { nodes, edges }
+}
+
+/// Only the edges of [`derive`], without nodes or the (quadratic) force layout:
+/// for pages that only need who links to whom.
+pub fn derive_edges(
+    profiles: &[Profile],
+    digests: &BTreeMap<String, IssueDigest>,
+    tracked: &[String],
+) -> Vec<Edge> {
     let tracked_set: BTreeSet<String> = tracked.iter().cloned().collect();
     let by_alias: BTreeMap<&str, &Profile> = profiles
         .iter()
@@ -402,7 +438,7 @@ pub fn derive(
         }
     }
 
-    let edges: Vec<Edge> = merged
+    merged
         .into_iter()
         .map(|((from, to, kind), (confidence, ev))| Edge {
             from,
@@ -411,26 +447,17 @@ pub fn derive(
             evidence: cap(&ev.join("; ")),
             confidence,
         })
-        .collect();
+        .collect()
+}
 
-    let mut nodes: Vec<Node> = tracked_set
-        .iter()
-        .map(|alias| Node {
-            alias: alias.clone(),
-            x: 500.0,
-            y: 500.0,
-            freshness: by_alias.get(alias.as_str()).map(|p| {
-                if p.sections.is_empty() {
-                    Freshness::NeedsReview
-                } else {
-                    Freshness::Fresh
-                }
-            }),
-            activity: digests.get(alias).map(|d| d.recent.len()).unwrap_or(0),
-        })
-        .collect();
-    layout_with_edges(&mut nodes, &edges);
-    Graph { nodes, edges }
+thread_local! {
+    static LAYOUT_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`layout_with_edges`] ran on this thread: lets a page test
+/// prove it never paid for a layout it does not draw.
+pub fn layout_runs_on_this_thread() -> usize {
+    LAYOUT_RUNS.with(|c| c.get())
 }
 
 /// Rounds points to tenths; the points are visited in `order` and a point whose
@@ -461,6 +488,7 @@ pub fn layout(nodes: &mut [Node]) {
 /// and the same aliases/edges always give the same result. Coordinates land in
 /// [50, 950] within the 0..1000 box.
 pub fn layout_with_edges(nodes: &mut [Node], edges: &[Edge]) {
+    LAYOUT_RUNS.with(|c| c.set(c.get() + 1));
     let n = nodes.len();
     if n == 0 {
         return;
@@ -896,6 +924,29 @@ mod tests {
             closest > 90.0,
             "nodes overlap: closest pair {closest}: {n:?}"
         );
+    }
+
+    #[test]
+    fn derive_edges_equals_derive_and_runs_no_layout() {
+        let mut a = profile("a");
+        a.links.push(Link {
+            to: "b".into(),
+            kind: "calls".into(),
+            evidence: "x.yml:1".into(),
+        });
+        let profiles = vec![a, profile("b"), profile("c")];
+        let tracked = t(&["a", "b", "c"]);
+        let before = layout_runs_on_this_thread();
+        let edges = derive_edges(&profiles, &none(), &tracked);
+        assert_eq!(
+            layout_runs_on_this_thread(),
+            before,
+            "derive_edges must not lay out"
+        );
+        let g = derive(&profiles, &none(), &tracked);
+        assert_eq!(layout_runs_on_this_thread(), before + 1);
+        assert_eq!(edges, g.edges);
+        assert_eq!(edges.len(), 1);
     }
 
     #[test]
