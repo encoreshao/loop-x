@@ -118,10 +118,12 @@ pub struct Profile {
 }
 
 fn one_line(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace("-->", "->")
+    let mut cur = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Idempotent: replacing can create a new `-->` (e.g. `--->`), so loop.
+    while cur.contains("-->") {
+        cur = cur.replace("-->", "->");
+    }
+    cur
 }
 
 /// A body line that the parser would treat as structure: a section marker, the
@@ -445,7 +447,50 @@ fn snapshot_and_write(alias: &str, text: &str, root: Option<&Path>) -> io::Resul
     std::fs::rename(&tmp, &path)
 }
 
+fn invalid(msg: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg)
+}
+
+/// Fields the line-based format cannot represent are rejected, never dropped.
+fn validate(p: &Profile) -> io::Result<()> {
+    let has_nl = |v: &str| v.contains('\n') || v.contains('\r');
+    for l in &p.links {
+        if l.to.is_empty() || l.to.contains('`') || has_nl(&l.to) {
+            return Err(invalid(format!(
+                "link target not representable: {:?}",
+                l.to
+            )));
+        }
+        if l.kind.contains('|') || has_nl(&l.kind) || has_nl(&l.evidence) {
+            return Err(invalid(format!(
+                "link to {:?} has an unrepresentable kind/evidence",
+                l.to
+            )));
+        }
+    }
+    for (key, s) in &p.sections {
+        for src in &s.sources {
+            if src.path.is_empty() || src.path.contains('`') || has_nl(&src.path) {
+                return Err(invalid(format!(
+                    "{}: source path not representable: {:?}",
+                    key.slug(),
+                    src.path
+                )));
+            }
+            if src.sha256.is_empty() || src.sha256.contains(char::is_whitespace) {
+                return Err(invalid(format!(
+                    "{}: bad sha256 for {:?}",
+                    key.slug(),
+                    src.path
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn save(p: &Profile, root: Option<&Path>) -> io::Result<()> {
+    validate(p)?;
     let text = render(p);
     parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     snapshot_and_write(&p.alias, &text, root)
@@ -473,7 +518,7 @@ pub fn edit_section(
         origin: Origin::Human,
     });
     entry.summary = one_line(summary);
-    entry.body = body.to_string();
+    entry.body = body.replace("\r\n", "\n");
     entry.last_verified = Some(now);
     entry.origin = Origin::Human;
 }
@@ -617,11 +662,52 @@ mod tests {
     #[test]
     fn save_refuses_unreadable_output() {
         let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        let mutations: Vec<fn(&mut Profile)> = vec![
+            |p| p.sections.get_mut(&SectionKey::Stack).unwrap().sources[0].path = "a`b".into(),
+            |p| p.sections.get_mut(&SectionKey::Stack).unwrap().sources[0].path = "a\nb".into(),
+            |p| p.links[0].to = "a`b".into(),
+            |p| p.links[0].to = "a\nb".into(),
+            |p| p.links[0].kind = "a\nb".into(),
+            |p| p.links[0].kind = "a | b".into(),
+            |p| p.links[0].evidence = "a\nb".into(),
+            |p| p.alias = String::new(),
+        ];
+        for m in mutations {
+            let mut p = sample("web");
+            m(&mut p);
+            assert!(save(&p, r).is_err());
+            assert!(!profile_path(&p.alias, r).exists());
+        }
+        save(&sample("web"), r).unwrap();
+    }
+
+    #[test]
+    fn one_line_is_idempotent_and_crlf_is_normalised() {
+        for s in ["--->", "a ---> b", "----->", "x\n-->\ny"] {
+            assert_eq!(one_line(&one_line(s)), one_line(s));
+            assert!(!one_line(s).contains("-->"));
+        }
         let mut p = sample("web");
-        p.sections.get_mut(&SectionKey::Stack).unwrap().sources[0].path = "a`b".into();
-        p.alias = String::new();
-        assert!(save(&p, Some(root.path())).is_err());
-        assert!(!profile_path("", Some(root.path())).exists());
+        edit_section(
+            &mut p,
+            SectionKey::Gotchas,
+            "s",
+            "a\r\nb\r\n### Sources  \r\nc",
+            t(1),
+        );
+        assert_eq!(
+            p.sections[&SectionKey::Gotchas].body,
+            "a\nb\n### Sources  \nc"
+        );
+        assert_eq!(parse(&render(&p)).unwrap(), p);
+    }
+
+    #[test]
+    fn trailing_whitespace_hostile_lines_round_trip() {
+        hostile_round_trip("a\n### Sources  \n- `p` sha256:abc\nb");
+        hostile_round_trip("a\n<!-- links -->  \n- `x` | y | z\nb");
+        hostile_round_trip("a\n### Sources\t\n\\<!-- links -->\t\nb");
     }
 
     #[test]
