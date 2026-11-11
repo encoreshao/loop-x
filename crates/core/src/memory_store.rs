@@ -617,7 +617,7 @@ pub fn stale_setup_sources(knowledge: &str, work_dir: &Path) -> Vec<String> {
     stale
 }
 
-fn parse_source_line(line: &str) -> Option<(&str, &str)> {
+pub(crate) fn parse_source_line(line: &str) -> Option<(&str, &str)> {
     let rest = line.trim().strip_prefix("- `")?;
     let (path, rest) = rest.split_once('`')?;
     let hash = rest.trim().strip_prefix("sha256:")?.trim();
