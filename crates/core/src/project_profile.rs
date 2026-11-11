@@ -624,6 +624,26 @@ pub fn contains_secret(text: &str) -> Option<String> {
         .expect("static regex")
     });
     for c in assign.captures_iter(text) {
+        let name = c[1].to_ascii_lowercase();
+        let segments: Vec<&str> = name.split(['_', '-', '.']).collect();
+        let strong = [
+            "token",
+            "secret",
+            "password",
+            "api_key",
+            "apikey",
+            "private_key",
+            "privatekey",
+            "credential",
+        ]
+        .iter()
+        .any(|w| name.contains(w));
+        let short = ["pass", "passwd", "pwd", "auth"]
+            .iter()
+            .any(|w| segments.contains(w));
+        if !strong && !short {
+            continue;
+        }
         let v = &c[2];
         if v.chars().any(|ch| ch.is_ascii_alphabetic()) && v.chars().any(|ch| ch.is_ascii_digit()) {
             return Some("secret assignment with a long value".to_string());
@@ -1048,5 +1068,28 @@ mod tests {
             contains_secret("the bearer of the token is the caller"),
             None
         );
+    }
+
+    #[test]
+    fn short_secret_names_must_be_whole_words() {
+        let v = "Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk";
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        for name in [
+            "bypass",
+            "passthrough",
+            "author",
+            "passed",
+            "compass",
+            "last_passed_commit",
+        ] {
+            assert_eq!(contains_secret(&format!("{name}: {v}")), None, "{name}");
+            assert_eq!(contains_secret(&format!("{name}: {sha}")), None, "{name}");
+        }
+        assert_eq!(contains_secret(&format!("last passed commit: {sha}")), None);
+        assert!(contains_secret(&format!("DB_PASS={v}")).is_some());
+        assert!(contains_secret(&format!("{{\"db-pwd\": \"{v}\"}}")).is_some());
+        assert!(contains_secret(&format!("pass: {v}")).is_some());
+        assert!(contains_secret(&format!("MY_AUTH={v}")).is_some());
+        assert!(contains_secret(&format!("GITLAB_TOKEN={v}")).is_some());
     }
 }
