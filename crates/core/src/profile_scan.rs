@@ -24,8 +24,10 @@ use std::path::Path;
 const MAX_DEPTH: usize = 3;
 const MAX_READ: u64 = 64 * 1024;
 const MAX_TREE: usize = 500;
+/// Files larger than this are not hashed into `sources` (never loaded whole).
+const SOURCE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const SKIP_DIRS: [&str; 5] = [".git", "node_modules", "target", "vendor", ".venv"];
-const MANIFEST_NAMES: [&str; 16] = [
+const MANIFEST_NAMES: [&str; 17] = [
     "Cargo.toml",
     "package.json",
     "Gemfile",
@@ -42,6 +44,7 @@ const MANIFEST_NAMES: [&str; 16] = [
     "docker-compose.yml",
     "docker-compose.yaml",
     "compose.yaml",
+    "compose.yml",
 ];
 const ENTRY_NAMES: [&str; 10] = [
     "main.rs",
@@ -138,17 +141,79 @@ fn read_capped(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn redact(text: &str) -> String {
-    text.lines()
-        .map(|l| {
-            if contains_secret(l).is_some() {
-                "[redacted line]"
-            } else {
-                l
+fn secret_like_key(key: &str) -> bool {
+    let name = key.to_ascii_lowercase();
+    let segments: Vec<&str> = name.split(['_', '-', '.']).collect();
+    [
+        "token",
+        "secret",
+        "password",
+        "api_key",
+        "apikey",
+        "private_key",
+        "privatekey",
+        "credential",
+        "authorization",
+    ]
+    .iter()
+    .any(|w| name.contains(w))
+        || ["pass", "passwd", "pwd", "auth", "key"]
+            .iter()
+            .any(|w| segments.contains(w))
+}
+
+/// `(key, value start offset)` of an assignment-looking line: `KEY=v`,
+/// `KEY: v`, `"key": "v"`, `ENV KEY=v`, `ENV KEY v`, `export KEY=v`, `- KEY=v`.
+fn assignment(line: &str) -> Option<(&str, usize)> {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r#"^\s*(?:-\s+)?(?:(?:export|ENV|ARG)\s+)?["']?([A-Za-z0-9_.\-]+)["']?(?:\s*[=:]\s*|\s+)"#,
+        )
+        .expect("static regex")
+    });
+    let c = re.captures(line)?;
+    Some((c.get(1)?.as_str(), c.get(0)?.end()))
+}
+
+/// Manifest text with secret values replaced (key names kept) and the names
+/// of the variables whose value was replaced.
+fn redact(text: &str) -> (String, Vec<String>) {
+    let mut names = Vec::new();
+    let mut out: Vec<String> = Vec::new();
+    let mut in_pem = false;
+    for line in text.lines() {
+        if in_pem {
+            if line.contains("-----END") {
+                in_pem = false;
             }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            continue;
+        }
+        if line.contains("-----BEGIN") && line.contains("PRIVATE KEY") {
+            in_pem = !line.contains("-----END");
+            out.push("[redacted private key block]".to_string());
+            continue;
+        }
+        if let Some((key, start)) = assignment(line) {
+            let value = line[start..]
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'' || c == ',');
+            let is_ref = value.starts_with('$') || value.starts_with("{{");
+            if secret_like_key(key) && !value.is_empty() && !is_ref {
+                if !names.iter().any(|n| n == key) {
+                    names.push(key.to_string());
+                }
+                out.push(format!("{}[redacted]", &line[..start]));
+                continue;
+            }
+        }
+        if contains_secret(line).is_some() {
+            out.push("[redacted line]".to_string());
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    (out.join("\n"), names)
 }
 
 fn env_key_names(text: &str) -> Vec<String> {
@@ -241,17 +306,53 @@ fn path_dependency_siblings(file: &str, text: &str, out: &mut Vec<SiblingRef>) {
     }
 }
 
+/// Hashes the whole file (what `stale_setup_sources` compares against), but
+/// only when it is small enough to load; bigger files are not recorded.
+fn add_source(scan: &mut Scan, rel: &str, full: &Path) {
+    let small = std::fs::metadata(full).is_ok_and(|m| m.len() <= SOURCE_MAX_BYTES);
+    if !small {
+        return;
+    }
+    if let Ok(bytes) = std::fs::read(full) {
+        scan.sources.push(Source {
+            path: rel.to_string(),
+            sha256: sha256::hex(&sha256::sha256(&bytes)),
+        });
+    }
+}
+
 fn head_sha(work_dir: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
+    use std::io::Read;
+    let mut child = std::process::Command::new("git")
         .arg("-C")
         .arg(work_dir)
         .args(["rev-parse", "HEAD"])
-        .output()
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    if !out.status.success() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(st) => break st,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    };
+    if !status.success() {
         return None;
     }
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let mut sha = String::new();
+    child.stdout.take()?.read_to_string(&mut sha).ok()?;
+    let sha = sha.trim().to_string();
     (!sha.is_empty()).then_some(sha)
 }
 
@@ -316,6 +417,7 @@ pub fn scan_repo(work_dir: &Path, tracked_aliases: &[String]) -> Result<Scan, St
         let ci = is_ci(rel);
         let manifest = MANIFEST_NAMES.contains(&name);
         if rel == ".gitmodules" {
+            add_source(&mut scan, rel, &full);
             if let Some(text) = read_capped(&full) {
                 for (i, line) in text.lines().enumerate() {
                     if let Some(url) = line.trim().strip_prefix("url") {
@@ -358,14 +460,16 @@ pub fn scan_repo(work_dir: &Path, tracked_aliases: &[String]) -> Result<Scan, St
                 }
             }
         }
-        if let Ok(bytes) = std::fs::read(&full) {
-            scan.sources.push(Source {
-                path: rel.clone(),
-                sha256: sha256::hex(&sha256::sha256(&bytes)),
-            });
-        }
+        add_source(&mut scan, rel, &full);
         if manifest {
-            scan.manifests.push((rel.clone(), redact(&text)));
+            let (text, names) = redact(&text);
+            for name in names {
+                scan.secret_names.push(SecretRef {
+                    name,
+                    location: rel.clone(),
+                });
+            }
+            scan.manifests.push((rel.clone(), text));
         }
     }
     for s in siblings {
@@ -410,11 +514,20 @@ fn username(v: &Value) -> Option<String> {
 /// Digest of the cached issues of one project (layout in the module doc) and
 /// the alias's task memories. Nothing cached reads as empty fields.
 pub fn digest_issues(instance: &str, project_id: &str, alias: &str) -> IssueDigest {
-    let issues_dir = gitlab_cache::project_path(instance, project_id)
+    digest_from(
+        &issues_dir_for(instance, project_id),
+        project_id,
+        alias,
+        None,
+    )
+}
+
+/// Where [`gitlab_cache::sync_issue`] keeps this project's issue files.
+fn issues_dir_for(instance: &str, project_id: &str) -> std::path::PathBuf {
+    gitlab_cache::project_path(instance, project_id)
         .parent()
         .map(|p| p.join("issues"))
-        .unwrap_or_default();
-    digest_from(&issues_dir, project_id, alias, None)
+        .unwrap_or_default()
 }
 
 fn digest_from(
@@ -674,5 +787,140 @@ mod tests {
             Some(&d.path().join("mem")),
         );
         assert_eq!(empty, IssueDigest::default());
+    }
+
+    fn manifest_text(s: &Scan, name: &str) -> String {
+        s.manifests
+            .iter()
+            .find(|(p, _)| p == name)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn short_secret_values_in_manifests_are_redacted_but_names_are_kept() {
+        let d = tempfile::tempdir().unwrap();
+        write(
+            d.path(),
+            "docker-compose.yml",
+            "services:\n  db:\n    environment:\n      POSTGRES_PASSWORD: hunter2\n      POSTGRES_DB: app\n",
+        );
+        write(
+            d.path(),
+            "Dockerfile",
+            "FROM x\nENV DB_PASSWORD=abc123\nENV API_TOKEN abc123\n",
+        );
+        write(d.path(), "Makefile", "PASSWORD=x\nall:\n\techo hi\n");
+        write(
+            d.path(),
+            "Gemfile",
+            "gem 'x'\n-----BEGIN RSA PRIVATE KEY-----\nMIIEBODYLINEONE\nBODYLINETWO==\n-----END RSA PRIVATE KEY-----\ngem 'after'\n",
+        );
+        let s = scan_repo(d.path(), &[]).unwrap();
+        let compose = manifest_text(&s, "docker-compose.yml");
+        assert!(!compose.contains("hunter2"), "{compose}");
+        assert!(compose.contains("POSTGRES_PASSWORD"));
+        assert!(compose.contains("POSTGRES_DB: app"));
+        let docker = manifest_text(&s, "Dockerfile");
+        assert!(!docker.contains("abc123"), "{docker}");
+        assert!(docker.contains("DB_PASSWORD") && docker.contains("API_TOKEN"));
+        let make = manifest_text(&s, "Makefile");
+        assert!(!make.contains("PASSWORD=x"), "{make}");
+        assert!(make.contains("PASSWORD") && make.contains("echo hi"));
+        let gem = manifest_text(&s, "Gemfile");
+        assert!(!gem.contains("BODYLINE") && !gem.contains("MIIE"), "{gem}");
+        assert!(gem.contains("gem 'x'") && gem.contains("gem 'after'"));
+        for n in ["POSTGRES_PASSWORD", "DB_PASSWORD", "PASSWORD"] {
+            assert!(s.secret_names.iter().any(|r| r.name == n), "{n}");
+        }
+    }
+
+    #[test]
+    fn symlinks_are_not_followed() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "Cargo.toml", "outside-secret-content");
+        write(d.path(), "Gemfile", "gem 'x'\n");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                outside.path().join("Cargo.toml"),
+                d.path().join("Cargo.toml"),
+            )
+            .unwrap();
+            std::os::unix::fs::symlink(outside.path(), d.path().join("linked")).unwrap();
+        }
+        let s = scan_repo(d.path(), &[]).unwrap();
+        assert!(!format!("{s:?}").contains("outside-secret-content"));
+        assert!(!s.tree.iter().any(|p| p.starts_with("linked/")));
+        assert!(!s.manifests.iter().any(|(p, _)| p == "Cargo.toml"));
+    }
+
+    #[test]
+    fn non_utf8_manifest_does_not_fail_the_scan() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("Makefile"), b"all:\n\techo \xff\xfe\n").unwrap();
+        let s = scan_repo(d.path(), &[]).unwrap();
+        assert!(manifest_text(&s, "Makefile").contains("echo"));
+    }
+
+    #[test]
+    fn manifest_text_is_capped_at_64_kib_but_the_hash_covers_the_file() {
+        let d = tempfile::tempdir().unwrap();
+        let big = "a".repeat(100 * 1024);
+        write(d.path(), "Makefile", &big);
+        let s = scan_repo(d.path(), &[]).unwrap();
+        assert!(manifest_text(&s, "Makefile").len() <= 64 * 1024);
+        assert_eq!(
+            s.sources[0].sha256,
+            sha256::hex(&sha256::sha256(big.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn files_over_the_hash_limit_are_not_loaded_or_recorded_as_sources() {
+        let d = tempfile::tempdir().unwrap();
+        let f = fs::File::create(d.path().join("Makefile")).unwrap();
+        f.set_len(SOURCE_MAX_BYTES + 1).unwrap();
+        let s = scan_repo(d.path(), &[]).unwrap();
+        assert!(s.sources.is_empty());
+        assert!(manifest_text(&s, "Makefile").len() <= 64 * 1024);
+    }
+
+    #[test]
+    fn compose_yml_and_gitmodules_are_scanned_and_hashed() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), "compose.yml", "services:\n  api:\n    image: x\n");
+        write(
+            d.path(),
+            ".gitmodules",
+            "[submodule \"a\"]\n\turl = https://h/g/lib.git\n",
+        );
+        let s = scan_repo(d.path(), &[]).unwrap();
+        assert!(s.manifests.iter().any(|(p, _)| p == "compose.yml"));
+        assert_eq!(s.services, vec!["api"]);
+        assert!(s.sources.iter().any(|x| x.path == ".gitmodules"));
+    }
+
+    #[test]
+    fn digest_issues_wrapper_reads_the_cache_under_a_temp_home() {
+        let _g = crate::connectors::testutil::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("LOOP_ENGINEERING_HOME", home.path().join("lx"));
+        let issue = json!({"iid": 7, "title": "T", "labels": ["ui"], "author": {"username": "zed"},
+                           "updated_at": "2026-03-01T00:00:00Z"});
+        gitlab_cache::write_json(&gitlab_cache::issue_path("work", "grp/p", "7"), &issue).unwrap();
+        assert!(issues_dir_for("work", "grp/p").starts_with(home.path()));
+        let g = digest_issues("work", "grp/p", "p");
+        assert_eq!(g.areas, vec![("ui".to_string(), 1)]);
+        assert_eq!(g.people, vec![("zed".to_string(), 1)]);
+        assert_eq!(g.recent, vec![(7, "T".to_string())]);
+        assert_eq!(
+            digest_issues("work", "grp/none", "none"),
+            IssueDigest::default()
+        );
     }
 }
