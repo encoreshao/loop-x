@@ -21,6 +21,21 @@ fn project_dir(instance: &str, project_id: &str) -> PathBuf {
         .join(sanitize(project_id))
 }
 
+/// The issues directory of a project under explicit cache roots: `gitlab_root` is
+/// `<HOME>/.gitlab/cache`, `data_root` is `<LOOP_ENGINEERING_HOME>/data` (see
+/// [`data_root`]). For callers that must not read the env-based defaults.
+pub fn issues_dir_in(
+    instance: &str,
+    project_id: &str,
+    gitlab_root: &Path,
+    data_root: &Path,
+) -> PathBuf {
+    instance_dir_in(instance, gitlab_root, data_root)
+        .join("projects")
+        .join(sanitize(project_id))
+        .join("issues")
+}
+
 pub fn issue_path(instance: &str, project_id: &str, iid: &str) -> PathBuf {
     project_dir(instance, project_id)
         .join("issues")

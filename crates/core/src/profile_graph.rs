@@ -541,6 +541,11 @@ pub fn layout_with_edges(nodes: &mut [Node], edges: &[Edge]) {
             if !pos[i].0.is_finite() || !pos[i].1.is_finite() {
                 pos[i] = (500.0, 500.0);
             }
+            // Fruchterman-Reingold's frame: a project with no links is pushed to
+            // the edge, not off to infinity, so fitting the box at the end does
+            // not crush the connected projects together.
+            pos[i].0 = pos[i].0.clamp(0.0, 1000.0);
+            pos[i].1 = pos[i].1.clamp(0.0, 1000.0);
         }
     }
 
@@ -835,6 +840,62 @@ mod tests {
                 assert!((n[i].x - n[j].x).abs() + (n[i].y - n[j].y).abs() > 1.0);
             }
         }
+    }
+
+    #[test]
+    fn an_isolated_node_does_not_squeeze_the_connected_cluster() {
+        // A dense cluster of 7 plus one project with no links (the shape of a
+        // real dashboard): the loner must not be flung so far that fitting the
+        // box crushes the cluster into a corner.
+        let names = ["a", "b", "c", "d", "e", "f", "g", "loner"];
+        let mut n = nodes(&names);
+        let e = |f: &str, t: &str| Edge {
+            from: f.into(),
+            to: t.into(),
+            kind: EdgeKind::Calls,
+            evidence: "x".into(),
+            confidence: 0.9,
+        };
+        let edges = vec![
+            e("a", "b"),
+            e("b", "c"),
+            e("c", "d"),
+            e("d", "e"),
+            e("e", "f"),
+            e("f", "g"),
+            e("a", "c"),
+            e("b", "d"),
+            e("e", "g"),
+            e("a", "g"),
+        ];
+        layout_with_edges(&mut n, &edges);
+        let cluster: Vec<&Node> = n.iter().filter(|x| x.alias != "loner").collect();
+        let (mut minx, mut maxx, mut miny, mut maxy) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+        for p in &cluster {
+            minx = minx.min(p.x);
+            maxx = maxx.max(p.x);
+            miny = miny.min(p.y);
+            maxy = maxy.max(p.y);
+        }
+        assert!(
+            (maxx - minx).max(maxy - miny) > 450.0,
+            "cluster squeezed into {}x{}: {n:?}",
+            maxx - minx,
+            maxy - miny
+        );
+        let mut closest = f32::MAX;
+        for i in 0..cluster.len() {
+            for j in i + 1..cluster.len() {
+                let d = ((cluster[i].x - cluster[j].x).powi(2)
+                    + (cluster[i].y - cluster[j].y).powi(2))
+                .sqrt();
+                closest = closest.min(d);
+            }
+        }
+        assert!(
+            closest > 90.0,
+            "nodes overlap: closest pair {closest}: {n:?}"
+        );
     }
 
     #[test]

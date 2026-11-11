@@ -1,0 +1,1 @@
+{"iid": 12, "title": "Show season passes in the new app", "labels": ["passes"], "author": {"username": "dev-a"}, "assignees": [{"username": "dev-b"}], "updated_at": "2026-01-09T10:00:00Z", "description": "Needs the passes endpoint from group/proj#3 first."}

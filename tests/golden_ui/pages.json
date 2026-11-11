@@ -51,6 +51,7 @@
     {"id": "ins-memory-profile-features", "path": "/insights?view=memory&project=proj&page=features", "overlay": "memory-profile"},
     {"id": "ins-memory-profile-stack", "path": "/insights?view=memory&project=proj&page=stack", "overlay": "memory-profile"},
     {"id": "ins-memory-profile-proposals", "path": "/insights?view=memory&project=proj&page=proposals", "overlay": "memory-profile"},
+    {"id": "ins-memory-profile-graph", "path": "/insights?view=memory&graph=1", "overlay": "memory-profile"},
     {"id": "har-gates-full", "path": "/harness", "overlay": "insights-full"},
     {"id": "har-evals-full", "path": "/harness?view=evals", "overlay": "insights-full"},
     {"id": "har-audit-full", "path": "/harness?view=audit", "overlay": "insights-full"},

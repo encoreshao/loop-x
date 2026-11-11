@@ -1514,6 +1514,37 @@
    }
   },
   {
+   "id": "ins-memory-profile-graph",
+   "path": "/insights?view=memory&graph=1",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-graph.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-graph.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-graph.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-graph.html"
+    }
+   }
+  },
+  {
    "id": "har-gates-full",
    "path": "/harness",
    "overlay": "insights-full",

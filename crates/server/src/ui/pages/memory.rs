@@ -30,14 +30,16 @@ use crate::ui::pyfmt::{escape, escape_text, quote};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::state::ProfileAgent;
 use chrono::{DateTime, Duration, Local, Utc};
-use loopx_core::profile_graph::{self, EdgeKind};
+use loopx_core::profile_graph::{self, Edge, EdgeKind, Graph};
 use loopx_core::profile_build;
 use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
+use loopx_core::profile_scan::IssueDigest;
 use loopx_core::{approvals, learning, memory_store, profile_scan};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::cell::OnceCell;
 use std::sync::{Arc, Mutex};
 
 const BASE: &str = "/insights?view=memory";
@@ -94,6 +96,14 @@ struct Model {
     proposals: Vec<Value>,
     /// The banner for a whitelisted `notice` code, or empty.
     notice: String,
+    /// The project graph (profiles plus issue digests), derived on first use.
+    derived: OnceCell<Derived>,
+}
+
+/// The graph of every known project and, per alias, its direct neighbours.
+struct Derived {
+    graph: Graph,
+    neighbors: BTreeMap<String, Vec<(String, EdgeKind)>>,
 }
 
 struct Project {
@@ -120,7 +130,47 @@ fn model(ctx: &UiCtx) -> Model {
         projects: projects(ctx),
         proposals: proposals(ctx),
         notice: notice_html(ctx),
+        derived: OnceCell::new(),
     }
+}
+
+/// The graph for this request, computed once: every profile, plus the issue
+/// digests read from the dashboard's own cache roots (`user_home`'s
+/// `.gitlab/cache` and `<home>/data`), never the process's `HOME`.
+fn derived<'a>(ctx: &UiCtx, m: &'a Model) -> &'a Derived {
+    m.derived.get_or_init(|| {
+        let profiles: Vec<Profile> = m
+            .projects
+            .iter()
+            .filter_map(|p| match &p.loaded {
+                Loaded::Ready(profile) => Some(profile.clone()),
+                _ => None,
+            })
+            .collect();
+        let aliases: Vec<String> = m.projects.iter().map(|p| p.alias.clone()).collect();
+        let gitlab_root = ctx.state.user_home.join(".gitlab").join("cache");
+        let data_root = ctx.state.home_dir.join("data");
+        let memory = memory_root(ctx);
+        let digests: BTreeMap<String, IssueDigest> = m
+            .projects
+            .iter()
+            .filter(|p| !p.instance.is_empty() && !p.project_id.is_empty())
+            .map(|p| {
+                let d = profile_scan::digest_issues_in(
+                    &p.instance,
+                    &p.project_id,
+                    &p.alias,
+                    &gitlab_root,
+                    &data_root,
+                    Some(&memory),
+                );
+                (p.alias.clone(), d)
+            })
+            .collect();
+        let graph = profile_graph::derive(&profiles, &digests, &aliases);
+        let neighbors = neighbors(&graph);
+        Derived { graph, neighbors }
+    })
 }
 
 /// Like the old Memory view, every alias of `projects.json` in its order (the
@@ -242,6 +292,59 @@ fn state_pill(ctx: &UiCtx, state: State) -> String {
     pill(class, &label)
 }
 
+/// A project's freshness verdict as the overview shows it: the worst section
+/// state of its profile (with how many sections are fresh or human-edited), or
+/// why there is none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    Missing,
+    Unreadable,
+    Ready { worst: State, good: usize },
+}
+
+fn verdict(p: &Project) -> Verdict {
+    match &p.loaded {
+        Loaded::Missing => Verdict::Missing,
+        Loaded::Unreadable(_) => Verdict::Unreadable,
+        Loaded::Ready(profile) => {
+            let states: Vec<State> = SectionKey::ALL
+                .into_iter()
+                .map(|k| state_of(profile, k, &p.check).0)
+                .collect();
+            Verdict::Ready {
+                worst: states.iter().copied().max().unwrap_or(State::Fresh),
+                good: states
+                    .iter()
+                    .filter(|s| matches!(s, State::Fresh | State::Human))
+                    .count(),
+            }
+        }
+    }
+}
+
+fn verdict_pill(ctx: &UiCtx, v: Verdict) -> String {
+    match v {
+        Verdict::Missing => pill("none", &ctx.t("No profile")),
+        Verdict::Unreadable => pill("bad", &ctx.t("Unreadable")),
+        Verdict::Ready { worst, .. } => state_pill(ctx, worst),
+    }
+}
+
+/// The graph node's ring class: `mg-v-<this>`.
+fn verdict_class(v: Verdict) -> &'static str {
+    match v {
+        Verdict::Missing => "none",
+        Verdict::Unreadable => "bad",
+        Verdict::Ready { worst, .. } => match worst {
+            State::Fresh => "fresh",
+            State::Human => "human",
+            State::Unchecked => "unchecked",
+            State::Review => "review",
+            State::Stale => "stale",
+        },
+    }
+}
+
 fn pill(class: &str, label: &str) -> String {
     format!("<span class='mem-pill mem-pill-{class}'>{}</span>", escape(label))
 }
@@ -269,20 +372,11 @@ fn pending_for(all: &[Value], alias: &str) -> usize {
         .count()
 }
 
-/// Directly linked projects per alias (profile-derived edges only; the issue
-/// digests the full graph adds come with the Graph view).
-fn neighbors(projects: &[Project]) -> BTreeMap<String, Vec<(String, EdgeKind)>> {
-    let profiles: Vec<Profile> = projects
-        .iter()
-        .filter_map(|p| match &p.loaded {
-            Loaded::Ready(profile) => Some(profile.clone()),
-            _ => None,
-        })
-        .collect();
-    let aliases: Vec<String> = projects.iter().map(|p| p.alias.clone()).collect();
-    let graph = profile_graph::derive(&profiles, &BTreeMap::new(), &aliases);
+/// Directly linked projects per alias, from every edge of the graph except the
+/// weak shared-people guess (hidden by default in the graph too).
+fn neighbors(graph: &Graph) -> BTreeMap<String, Vec<(String, EdgeKind)>> {
     let mut out: BTreeMap<String, Vec<(String, EdgeKind)>> = BTreeMap::new();
-    for e in graph.edges {
+    for e in graph.edges.iter().filter(|e| e.kind != EdgeKind::SharesPeople) {
         for (a, b) in [(&e.from, &e.to), (&e.to, &e.from)] {
             let list = out.entry(a.clone()).or_default();
             if a != b && !list.iter().any(|(o, k)| o == b && *k == e.kind) {
@@ -507,19 +601,14 @@ fn overview(ctx: &UiCtx, m: &Model, graph: bool) -> String {
         overview_controls(ctx, &store)
     );
     let main = if graph {
-        format!(
-            "<section class='card mem-graph-soon'><div class='section-header'>{}<h2>{}</h2></div><p class='mem-muted'>{}</p></section>",
-            icon("hub"),
-            escape(&ctx.t("Project graph")),
-            escape(&ctx.t("The graph of how your projects connect is coming soon. Each project page already lists its linked projects."))
-        )
+        graph_view(ctx, m)
     } else {
         let all = &m.proposals;
-        let links = neighbors(projects);
+        let links = &derived(ctx, m).neighbors;
         let status = store.as_ref().ok();
         let cards: String = projects
             .iter()
-            .map(|p| project_card(ctx, p, all, &links, status))
+            .map(|p| project_card(ctx, p, all, links, status))
             .collect();
         format!("<div class='mem-grid'>{cards}</div>")
     };
@@ -577,6 +666,19 @@ fn chip(class: &str, icon_name: &str, label: &str, title: Option<&str>) -> Strin
     )
 }
 
+/// The one-line overview of a project, as its card shows it.
+fn overview_line(ctx: &UiCtx, p: &Project) -> String {
+    match &p.loaded {
+        Loaded::Missing => ctx.t("No profile yet"),
+        Loaded::Unreadable(_) => ctx.t("The profile file could not be read."),
+        Loaded::Ready(profile) => profile
+            .sections
+            .get(&SectionKey::Overview)
+            .and_then(safe_summary)
+            .map_or_else(|| ctx.t("No overview yet"), str::to_string),
+    }
+}
+
 fn project_card(
     ctx: &UiCtx,
     p: &Project,
@@ -585,39 +687,17 @@ fn project_card(
     status: Option<&SyncStore>,
 ) -> String {
     let total = SectionKey::ALL.len();
-    let (ring_class, good, state_html, line, draft) = match &p.loaded {
-        Loaded::Missing => ("none", 0, pill("none", &ctx.t("No profile")), ctx.t("No profile yet"), false),
-        Loaded::Unreadable(_) => (
-            "bad",
-            0,
-            pill("bad", &ctx.t("Unreadable")),
-            ctx.t("The profile file could not be read."),
-            false,
-        ),
-        Loaded::Ready(profile) => {
-            let check = &p.check;
-            let states: Vec<State> = SectionKey::ALL
-                .into_iter()
-                .map(|k| state_of(profile, k, check).0)
-                .collect();
-            let worst = states.iter().copied().max().unwrap_or(State::Fresh);
-            let good = states
-                .iter()
-                .filter(|s| matches!(s, State::Fresh | State::Human))
-                .count();
-            let line = profile
-                .sections
-                .get(&SectionKey::Overview)
-                .and_then(safe_summary)
-                .map_or_else(|| ctx.t("No overview yet"), str::to_string);
-            let ring = match worst {
-                State::Stale => "stale",
-                State::Review => "review",
-                _ => "fresh",
-            };
-            (ring, good, state_pill(ctx, worst), line, profile.status == Status::Draft)
-        }
+    let v = verdict(p);
+    let (ring_class, good) = match v {
+        Verdict::Missing => ("none", 0),
+        Verdict::Unreadable => ("bad", 0),
+        Verdict::Ready { worst: State::Stale, good } => ("stale", good),
+        Verdict::Ready { worst: State::Review, good } => ("review", good),
+        Verdict::Ready { good, .. } => ("fresh", good),
     };
+    let state_html = verdict_pill(ctx, v);
+    let line = overview_line(ctx, p);
+    let draft = matches!(&p.loaded, Loaded::Ready(profile) if profile.status == Status::Draft);
     let pct = good * 100 / total;
     let ring = format!(
         "<span class='mem-ring mem-ring-{ring_class}' style='--p:{pct}' role='img' aria-label='{}'><span>{good}</span></span>",
@@ -685,6 +765,470 @@ fn project_card(
         escape(&line),
         chips.concat()
     )
+}
+
+
+// ------------------------------------------------------------------ the graph view
+
+/// Above this many links only the strongest are drawn, with a notice.
+const MAX_DRAWN_EDGES: usize = 2000;
+/// Above this many projects the nodes carry no text label (the name is still in
+/// the node's tooltip, its accessible name and the inspector).
+const MAX_LABELLED_NODES: usize = 60;
+const VIEW_W: f32 = 1600.0;
+const VIEW_H: f32 = 1000.0;
+/// Chip order: the strong, deterministic kinds first, the weak guess last.
+const KINDS: [EdgeKind; 7] = [
+    EdgeKind::DependsOn,
+    EdgeKind::Calls,
+    EdgeKind::Declared,
+    EdgeKind::IssueLink,
+    EdgeKind::SharesSecret,
+    EdgeKind::SharesService,
+    EdgeKind::SharesPeople,
+];
+
+fn directed(kind: EdgeKind) -> bool {
+    !matches!(
+        kind,
+        EdgeKind::SharesSecret | EdgeKind::SharesService | EdgeKind::SharesPeople
+    )
+}
+
+/// `layout_with_edges` places nodes in a 0..1000 square; the view is wider than
+/// tall, so x is stretched to use a dashboard-width card.
+fn place(n: &profile_graph::Node) -> (f32, f32) {
+    (100.0 + n.x * 1.4, 50.0 + n.y * 0.9)
+}
+
+fn radius(activity: usize) -> f32 {
+    20.0 + activity.min(10) as f32 * 1.6
+}
+
+/// A coordinate with at most one decimal and no trailing `.0`.
+fn num(v: f32) -> String {
+    let r = (v * 10.0).round() / 10.0;
+    if r.fract() == 0.0 {
+        format!("{}", r as i64)
+    } else {
+        format!("{r:.1}")
+    }
+}
+
+fn short_label(alias: &str) -> String {
+    const MAX: usize = 18;
+    if alias.chars().count() <= MAX {
+        alias.to_string()
+    } else {
+        let mut out: String = alias.chars().take(MAX - 1).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// The arrow for an edge seen from one end, with its spoken name.
+fn direction(ctx: &UiCtx, e: &Edge, from_here: bool) -> String {
+    let (arrow, label) = if !directed(e.kind) {
+        ("↔", ctx.t("shared with"))
+    } else if from_here {
+        ("→", ctx.t("links to"))
+    } else {
+        ("←", ctx.t("linked from"))
+    };
+    format!("<span class='mg-dir' role='img' aria-label='{}'>{arrow}</span>", escape(&label))
+}
+
+/// The drawn edges: all of them, or the [`MAX_DRAWN_EDGES`] most confident
+/// (ties keep the derive order), in derive order.
+fn drawn_edges(g: &Graph) -> Vec<&Edge> {
+    let mut order: Vec<usize> = (0..g.edges.len()).collect();
+    if order.len() > MAX_DRAWN_EDGES {
+        order.sort_by(|&a, &b| {
+            g.edges[b]
+                .confidence
+                .partial_cmp(&g.edges[a].confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.cmp(&b))
+        });
+        order.truncate(MAX_DRAWN_EDGES);
+        order.sort_unstable();
+    }
+    order.into_iter().map(|i| &g.edges[i]).collect()
+}
+
+fn hide_classes(hidden: &[EdgeKind]) -> String {
+    hidden
+        .iter()
+        .map(|k| format!(" mg-hide-{}", k.as_str()))
+        .collect()
+}
+
+fn graph_view(ctx: &UiCtx, m: &Model) -> String {
+    use std::fmt::Write as _;
+    let g = &derived(ctx, m).graph;
+    let edges = drawn_edges(g);
+    let by_alias: BTreeMap<&str, &Project> = m.projects.iter().map(|p| (p.alias.as_str(), p)).collect();
+    // alias -> (index, x, y, r)
+    let index: BTreeMap<&str, (usize, f32, f32, f32)> = g
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let (x, y) = place(n);
+            (n.alias.as_str(), (i, x, y, radius(n.activity)))
+        })
+        .collect();
+    let hidden = [EdgeKind::SharesPeople];
+    let hide = hide_classes(&hidden);
+
+    // --- edges: parallel links between one pair bow apart so each stays visible.
+    let mut pairs: BTreeMap<(&str, &str), Vec<usize>> = BTreeMap::new();
+    for (i, e) in edges.iter().enumerate() {
+        let key = if e.from <= e.to { (e.from.as_str(), e.to.as_str()) } else { (e.to.as_str(), e.from.as_str()) };
+        pairs.entry(key).or_default().push(i);
+    }
+    let mut edge_svg = String::new();
+    for ((lo, hi), list) in &pairs {
+        let (Some(&(_, lx, ly, _)), Some(&(_, hx, hy, _))) = (index.get(lo), index.get(hi)) else {
+            continue;
+        };
+        let (dx, dy) = (hx - lx, hy - ly);
+        let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+        let (nx, ny) = (-dy / len, dx / len);
+        for (k, &i) in list.iter().enumerate() {
+            let e = edges[i];
+            let (Some(&(_, x1, y1, r1)), Some(&(_, x2, y2, r2))) = (index.get(e.from.as_str()), index.get(e.to.as_str())) else {
+                continue;
+            };
+            let off = (k as f32 - (list.len() as f32 - 1.0) / 2.0) * 26.0;
+            let (cx, cy) = ((x1 + x2) / 2.0 + nx * off * 2.0, (y1 + y2) / 2.0 + ny * off * 2.0);
+            let toward = |px: f32, py: f32, qx: f32, qy: f32, d: f32| {
+                let (vx, vy) = (qx - px, qy - py);
+                let l = (vx * vx + vy * vy).sqrt().max(1e-3);
+                (px + vx / l * d, py + vy / l * d)
+            };
+            let arrow = directed(e.kind);
+            let (sx, sy) = toward(x1, y1, cx, cy, r1 + 2.0);
+            let (ex, ey) = toward(x2, y2, cx, cy, r2 + if arrow { 4.0 } else { 2.0 });
+            let kind = e.kind.as_str();
+            let marker = if arrow { format!(" marker-end='url(#mg-a-{kind})'") } else { String::new() };
+            let _ = write!(
+                edge_svg,
+                "<path class='mg-edge mg-k-{kind}' data-edge='{i}' data-from='{}' data-to='{}' data-kind='{kind}' data-ev='{}' data-conf='{:.2}' d='M{} {} Q{} {} {} {}'{marker}><title>{}</title></path>",
+                escape(&e.from),
+                escape(&e.to),
+                escape(&e.evidence),
+                e.confidence,
+                num(sx),
+                num(sy),
+                num(cx),
+                num(cy),
+                num(ex),
+                num(ey),
+                escape(&format!("{} {} {}: {}", e.from, if arrow { "→" } else { "↔" }, e.to, edge_label(ctx, e.kind)))
+            );
+        }
+    }
+
+    // --- nodes, and one inspector template per node.
+    let labelled = g.nodes.len() <= MAX_LABELLED_NODES;
+    let total_sections = SectionKey::ALL.len();
+    let mut node_svg = String::new();
+    let mut templates = String::new();
+    for (i, n) in g.nodes.iter().enumerate() {
+        let Some(p) = by_alias.get(n.alias.as_str()) else { continue };
+        let v = verdict(p);
+        let (x, y, r) = index.get(n.alias.as_str()).map(|&(_, x, y, r)| (x, y, r)).unwrap_or((800.0, 500.0, 16.0));
+        let good = match v {
+            Verdict::Ready { good, .. } => Some(good),
+            _ => None,
+        };
+        let circ = std::f32::consts::TAU * r;
+        let arc = circ * good.unwrap_or(0) as f32 / total_sections as f32;
+        let mine: Vec<&&Edge> = edges.iter().filter(|e| e.from == n.alias || e.to == n.alias).collect();
+        let linked = {
+            let mut names: Vec<&str> = mine
+                .iter()
+                .filter(|e| e.kind != EdgeKind::SharesPeople)
+                .map(|e| if e.from == n.alias { e.to.as_str() } else { e.from.as_str() })
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            names.len()
+        };
+        let state_label = match v {
+            Verdict::Missing => ctx.t("No profile"),
+            Verdict::Unreadable => ctx.t("Unreadable"),
+            Verdict::Ready { worst, .. } => match worst {
+                State::Fresh => ctx.t("Fresh"),
+                State::Human => ctx.t("Human-edited"),
+                State::Unchecked => ctx.t("No checkout"),
+                State::Review => ctx.t("Needs review"),
+                State::Stale => ctx.t("Stale"),
+            },
+        };
+        let aria = ctx.tf(
+            "{project}: {state}, linked projects: {n}",
+            &[("project", &n.alias), ("state", &state_label), ("n", &linked.to_string())],
+        );
+        let label = if labelled {
+            format!("<text class='mg-label' y='{}'>{}</text>", num(r + 24.0), escape(&short_label(&n.alias)))
+        } else {
+            String::new()
+        };
+        let center = good.map_or_else(|| "–".to_string(), |g| g.to_string());
+        let _ = write!(
+            node_svg,
+            "<g class='mg-node mg-v-{}' data-node='{i}' data-alias='{}' data-activity='{}' transform='translate({} {})' tabindex='0' role='button' aria-label='{}'>\
+             <title>{}</title><circle class='mg-halo' r='{}'/><circle class='mg-core' r='{}'/><circle class='mg-track' r='{}'/>\
+             <circle class='mg-ring' r='{}' stroke-dasharray='{} {}' transform='rotate(-90)'/><text class='mg-count' dy='.35em'>{center}</text>{label}</g>",
+            verdict_class(v),
+            escape(&n.alias),
+            n.activity,
+            num(x),
+            num(y),
+            escape(&aria),
+            escape(&n.alias),
+            num(r + 7.0),
+            num(r),
+            num(r),
+            num(r),
+            num(arc),
+            num(circ),
+        );
+        templates.push_str(&node_template(ctx, m, p, v, i, n.activity, &mine, &index));
+    }
+
+    // --- the toolbar chips (one per kind, with its count) and the notices.
+    let chips: String = KINDS
+        .iter()
+        .map(|&k| {
+            let count = edges.iter().filter(|e| e.kind == k).count();
+            format!(
+                "<button type='button' class='mg-chip mg-k-{kind}' data-kind='{kind}' aria-pressed='{}'>\
+                 <svg class='mg-swatch' viewBox='0 0 24 8' aria-hidden='true'><line x1='2' y1='4' x2='22' y2='4'/></svg>\
+                 <span class='mg-chip-label'>{}</span><span class='mg-chip-count'>{count}</span></button>",
+                !hidden.contains(&k),
+                escape(&edge_label(ctx, k)),
+                kind = k.as_str(),
+            )
+        })
+        .collect();
+    let mut notes = String::new();
+    if g.edges.len() > edges.len() {
+        let _ = write!(
+            notes,
+            "<p class='mg-note' role='status'>{}{}</p>",
+            icon("warning"),
+            escape(&ctx.tf(
+                "Showing the {shown} strongest of {total} links.",
+                &[("shown", &edges.len().to_string()), ("total", &g.edges.len().to_string())]
+            ))
+        );
+    }
+    if edges.is_empty() {
+        let _ = write!(
+            notes,
+            "<p class='mg-note'>{}<span><strong>{}</strong> {}</span></p>",
+            icon("hub"),
+            escape(&ctx.t("No links between projects yet.")),
+            escape(&ctx.t("Links appear when profiles or issues show that projects depend on, call or mention each other."))
+        );
+    }
+    let markers: String = KINDS
+        .iter()
+        .filter(|k| directed(**k))
+        .map(|k| {
+            format!(
+                "<marker id='mg-a-{kind}' viewBox='0 0 10 10' refX='8.5' refY='5' markerWidth='13' markerHeight='13' markerUnits='userSpaceOnUse' orient='auto'>\
+                 <path class='mg-arrow mg-k-{kind}' d='M0 1L9 5L0 9z'/></marker>",
+                kind = k.as_str()
+            )
+        })
+        .collect();
+    let legend: String = [
+        ("fresh", ctx.t("Fresh")),
+        ("stale", ctx.t("Stale")),
+        ("review", ctx.t("Needs review")),
+        ("human", ctx.t("Human-edited")),
+        ("unchecked", ctx.t("No checkout")),
+        ("none", ctx.t("No profile")),
+    ]
+    .iter()
+    .map(|(c, l)| format!("<span class='mg-v-{c}'><i aria-hidden='true'></i>{}</span>", escape(l)))
+    .collect();
+    let edge_tpl = format!(
+        "<template class='mg-tpl-edge'><div class='mg-insp-head'><span class='mg-kind' data-slot='kind'></span></div>\
+         <p class='mg-insp-pair'><button type='button' class='mg-goto' data-slot='from'></button><span class='mg-dir' data-slot='dir' aria-hidden='true'></span>\
+         <button type='button' class='mg-goto' data-slot='to'></button></p>\
+         <h4>{}</h4><p class='mg-insp-ev' data-slot='ev'></p>\
+         <dl class='mg-facts'><div><dt>{}</dt><dd data-slot='conf'></dd></div></dl></template>",
+        escape(&ctx.t("Evidence")),
+        escape(&ctx.t("Confidence"))
+    );
+    let graph_card = format!(
+        "<section class='card mem-graph' data-mg>\
+         <div class='mg-head'><div class='mg-title'><div class='section-header'>{}<h2>{}</h2></div>\
+         <p class='mem-muted mg-hint' data-mg-js hidden>{}</p>\
+         <p class='mem-muted mg-narrow-note'>{}</p></div>\
+         <div class='mg-filters' role='group' aria-label='{}' data-mg-js hidden>{chips}</div></div>{notes}\
+         <div class='mg-stage'><svg class='mg-svg{hide}' viewBox='0 0 {} {}' preserveAspectRatio='xMidYMid meet' role='group' aria-label='{}'>\
+         <defs>{markers}</defs><g class='mg-edges'>{edge_svg}</g><g class='mg-nodes'>{node_svg}</g></svg>\
+         <div class='mg-zoom' role='group' aria-label='{}' data-mg-js hidden>\
+         <button type='button' data-zoom='in' aria-label='{}' title='{}'>+</button>\
+         <button type='button' data-zoom='out' aria-label='{}' title='{}'>−</button>\
+         <button type='button' data-zoom='fit' aria-label='{}' title='{}'>{}</button></div>\
+         <aside class='mg-inspector{hide}' aria-label='{}' tabindex='-1' hidden>\
+         <button type='button' class='mg-close' aria-label='{}' title='{}'>{}</button><div class='mg-insp-body'></div></aside></div>\
+         <div class='mg-legend' aria-label='{}'><span class='mg-legend-title'>{}</span>{legend}</div>\
+         {templates}{edge_tpl}</section>",
+        icon("hub"),
+        escape(&ctx.t("Project graph")),
+        escape(&ctx.t("Drag to move, scroll or pinch to zoom. Select a project or a link to see why.")),
+        escape(&ctx.t("The graph needs a wider window; the same links are listed below.")),
+        escape(&ctx.t("Link types")),
+        num(VIEW_W),
+        num(VIEW_H),
+        escape(&ctx.t("Project graph")),
+        escape(&ctx.t("Zoom")),
+        escape(&ctx.t("Zoom in")),
+        escape(&ctx.t("Zoom in")),
+        escape(&ctx.t("Zoom out")),
+        escape(&ctx.t("Zoom out")),
+        escape(&ctx.t("Fit the whole graph")),
+        escape(&ctx.t("Fit the whole graph")),
+        icon("unfold_more"),
+        escape(&ctx.t("Details")),
+        escape(&ctx.t("Close")),
+        escape(&ctx.t("Close")),
+        icon("close"),
+        escape(&ctx.t("Ring colour")),
+        escape(&ctx.t("Ring:")),
+    );
+    let script = crate::ui::assets::text("memory/graph.js").unwrap_or("");
+    format!(
+        "{GRAPH_STYLE}<div class='mem-stack mg-wrap'>{graph_card}{}</div><script>{script}</script>",
+        graph_list(ctx, m, g, &edges, &hide)
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn node_template(
+    ctx: &UiCtx,
+    m: &Model,
+    p: &Project,
+    v: Verdict,
+    i: usize,
+    activity: usize,
+    mine: &[&&Edge],
+    index: &BTreeMap<&str, (usize, f32, f32, f32)>,
+) -> String {
+    let draft = match &p.loaded {
+        Loaded::Ready(profile) if profile.status == Status::Draft => chip(" mem-chip-warn", "edit_note", &ctx.t("Draft"), None),
+        _ => String::new(),
+    };
+    let mut facts = Vec::new();
+    if let Verdict::Ready { good, .. } = v {
+        facts.push((
+            ctx.t("Sections up to date"),
+            ctx.tf("{n} of {total}", &[("n", &good.to_string()), ("total", &SectionKey::ALL.len().to_string())]),
+        ));
+    }
+    facts.push((ctx.t("Recent issues"), activity.to_string()));
+    facts.push((ctx.t("Pending proposals"), pending_for(&m.proposals, &p.alias).to_string()));
+    let facts: String = facts
+        .iter()
+        .map(|(k, v)| format!("<div><dt>{}</dt><dd>{}</dd></div>", escape(k), escape(v)))
+        .collect();
+    let rows: String = mine
+        .iter()
+        .map(|e| {
+            let from_here = e.from == p.alias;
+            let other = if from_here { &e.to } else { &e.from };
+            let goto = index.get(other.as_str()).map_or(0, |t| t.0);
+            format!(
+                "<li class='mg-row mg-row-{kind}'><span class='mg-kind mg-k-{kind}'>{}</span>{}\
+                 <button type='button' class='mg-goto' data-goto='{goto}'>{}</button><small>{}</small></li>",
+                escape(&edge_label(ctx, e.kind)),
+                direction(ctx, e, from_here),
+                escape(other),
+                escape(&e.evidence),
+                kind = e.kind.as_str()
+            )
+        })
+        .collect();
+    let links = if rows.is_empty() {
+        format!("<p class='mem-muted'>{}</p>", escape(&ctx.t("No linked projects yet.")))
+    } else {
+        format!("<ul class='mg-insp-links'>{rows}</ul>")
+    };
+    format!(
+        "<template class='mg-tpl-node' data-node='{i}'><div class='mg-insp-head'><h3>{}</h3><div class='mg-insp-pills'>{}{draft}</div></div>\
+         <p class='mg-insp-sum'>{}</p><dl class='mg-facts'>{facts}</dl><h4>{}</h4>{links}\
+         <a class='mem-btn mem-btn-primary mg-open' href='{}'>{}{}</a></template>",
+        escape(&p.alias),
+        verdict_pill(ctx, v),
+        escape(&overview_line(ctx, p)),
+        escape(&ctx.t("Linked projects")),
+        escape(&project_url(&p.alias, None)),
+        escape(&ctx.t("Open full page")),
+        icon("arrow_forward")
+    )
+}
+
+/// The same graph as a list: every project with its links, kinds and evidence.
+/// Open without JavaScript and on narrow screens; the script folds it away on
+/// wide ones, where the graph is the main view.
+fn graph_list(ctx: &UiCtx, m: &Model, g: &Graph, edges: &[&Edge], hide: &str) -> String {
+    let items: String = g
+        .nodes
+        .iter()
+        .filter_map(|n| by_alias_of(m, &n.alias))
+        .map(|p| {
+            let rows: String = edges
+                .iter()
+                .filter(|e| e.from == p.alias || e.to == p.alias)
+                .map(|e| {
+                    let from_here = e.from == p.alias;
+                    let other = if from_here { &e.to } else { &e.from };
+                    format!(
+                        "<li class='mg-row mg-row-{kind}'><span class='mg-kind mg-k-{kind}'>{}</span>{}\
+                         <a href='{}'>{}</a><small>{}</small></li>",
+                        escape(&edge_label(ctx, e.kind)),
+                        direction(ctx, e, from_here),
+                        escape(&project_url(other, None)),
+                        escape(other),
+                        escape(&e.evidence),
+                        kind = e.kind.as_str()
+                    )
+                })
+                .collect();
+            let links = if rows.is_empty() {
+                format!("<p class='mem-muted'>{}</p>", escape(&ctx.t("No linked projects yet.")))
+            } else {
+                format!("<ul class='mg-list-links'>{rows}</ul>")
+            };
+            format!(
+                "<li><div class='mg-list-head'><a href='{}'>{}</a>{}</div>{links}</li>",
+                escape(&project_url(&p.alias, None)),
+                escape(&p.alias),
+                verdict_pill(ctx, verdict(p))
+            )
+        })
+        .collect();
+    format!(
+        "<section class='card mem-graph-listcard'><details class='mem-graph-list{hide}' open>\
+         <summary><span>{}</span><small>{}</small></summary><ul class='mg-list'>{items}</ul></details></section>",
+        escape(&ctx.t("List view")),
+        escape(&ctx.tf(
+            "{projects} projects, {links} links",
+            &[("projects", &g.nodes.len().to_string()), ("links", &edges.len().to_string())]
+        ))
+    )
+}
+
+fn by_alias_of<'a>(m: &'a Model, alias: &str) -> Option<&'a Project> {
+    m.projects.iter().find(|p| p.alias == alias)
 }
 
 // ------------------------------------------------------------------ levels 2 and 3
@@ -836,7 +1380,7 @@ fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
             } else {
                 String::new()
             };
-            let links = neighbors(&m.projects);
+            let links = &derived(ctx, m).neighbors;
             let pending = pending_for(&m.proposals, &p.alias);
             let cards: String = SectionKey::ALL
                 .into_iter()
@@ -2428,6 +2972,136 @@ fn proposal_actions(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profil
     )
 }
 
+/// The graph view's own styles (only on `&graph=1`). The stage has its own
+/// light and dark palette (`--mg-*`) that follows the card around it: the named
+/// accents wash every card light in both modes (the `dark` accent, dark in
+/// both), and only the `default` accent follows the colour mode, so the stage is
+/// never a black well in a light card or a white one in a dark card.
+const GRAPH_STYLE: &str = "<style>
+.mem-graph{--mg-bg:#141416;--mg-fg:#F5F5F7;--mg-muted:#AEAEB2;--mg-hairline:rgba(255,255,255,.1);--mg-node:#2C2C2E;--mg-node-off:#232325;--mg-track:rgba(255,255,255,.16);--mg-panel:rgba(40,40,42,.78);--mg-focus:#0A84FF;
+--mg-fresh:#30D158;--mg-stale:#FF9F0A;--mg-review:#0A84FF;--mg-human:#BF5AF2;--mg-unchecked:#8E8E93;--mg-bad:#FF453A;--mg-none:#636366;
+--mg-depends-on:#0A84FF;--mg-calls:#64D2FF;--mg-declared:#AEAEB2;--mg-issue-link:#FFD60A;--mg-shares-secret:#FF6961;--mg-shares-service:#DA8FFF;--mg-shares-people:#8E8E93;
+display:flex;flex-direction:column;gap:.9rem;min-width:0}
+@media (prefers-color-scheme:light){:root:is([data-accent=\"default\"],:not([data-accent])):not([data-color-mode=\"dark\"]) .mem-graph{--mg-bg:#FFFFFF;--mg-fg:#1D1D1F;--mg-muted:#6E6E73;--mg-hairline:rgba(0,0,0,.1);--mg-node:#F5F5F7;--mg-node-off:#ECECEF;--mg-track:rgba(0,0,0,.1);--mg-panel:rgba(255,255,255,.78);--mg-focus:#007AFF;
+--mg-fresh:#248A3D;--mg-stale:#C93400;--mg-review:#007AFF;--mg-human:#8944AB;--mg-unchecked:#8E8E93;--mg-bad:#D70015;--mg-none:#AEAEB2;
+--mg-depends-on:#007AFF;--mg-calls:#0071A4;--mg-declared:#6E6E73;--mg-issue-link:#B25000;--mg-shares-secret:#D70015;--mg-shares-service:#8944AB;--mg-shares-people:#8E8E93}}
+:root:is([data-accent=\"default\"],:not([data-accent]))[data-color-mode=\"light\"] .mem-graph,:root[data-accent=\"indigo\"] .mem-graph,:root[data-accent=\"blue\"] .mem-graph,:root[data-accent=\"green\"] .mem-graph,:root[data-accent=\"red\"] .mem-graph,:root[data-accent=\"gray\"] .mem-graph{--mg-bg:#FFFFFF;--mg-fg:#1D1D1F;--mg-muted:#6E6E73;--mg-hairline:rgba(0,0,0,.1);--mg-node:#F5F5F7;--mg-node-off:#ECECEF;--mg-track:rgba(0,0,0,.1);--mg-panel:rgba(255,255,255,.78);--mg-focus:#007AFF;
+--mg-fresh:#248A3D;--mg-stale:#C93400;--mg-review:#007AFF;--mg-human:#8944AB;--mg-unchecked:#8E8E93;--mg-bad:#D70015;--mg-none:#AEAEB2;
+--mg-depends-on:#007AFF;--mg-calls:#0071A4;--mg-declared:#6E6E73;--mg-issue-link:#B25000;--mg-shares-secret:#D70015;--mg-shares-service:#8944AB;--mg-shares-people:#8E8E93}
+.mg-k-depends-on{--k:var(--mg-depends-on)}.mg-k-calls{--k:var(--mg-calls)}.mg-k-declared{--k:var(--mg-declared)}.mg-k-issue-link{--k:var(--mg-issue-link)}
+.mg-k-shares-secret{--k:var(--mg-shares-secret)}.mg-k-shares-service{--k:var(--mg-shares-service)}.mg-k-shares-people{--k:var(--mg-shares-people)}
+.mg-v-fresh{--v:var(--mg-fresh)}.mg-v-stale{--v:var(--mg-stale)}.mg-v-review{--v:var(--mg-review)}.mg-v-human{--v:var(--mg-human)}.mg-v-unchecked{--v:var(--mg-unchecked)}.mg-v-bad{--v:var(--mg-bad)}.mg-v-none{--v:var(--mg-none)}
+.mg-head{display:flex;flex-direction:column;gap:.7rem;min-width:0}
+.mg-title{min-width:0}
+.mg-title .section-header{margin-bottom:.2rem}
+.mg-hint,.mg-narrow-note{font-size:.84rem}
+.mg-narrow-note{display:none}
+.mg-filters{display:flex;flex-wrap:wrap;gap:.4rem;min-width:0}
+.mg-filters[hidden],.mg-zoom[hidden],.mg-hint[hidden]{display:none}
+.mg-chip{display:inline-flex;align-items:center;gap:.4rem;height:28px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .7rem 0 .55rem;border:1px solid var(--md-outline-variant);border-radius:999px;background:transparent;color:var(--md-on-surface);font:inherit;font-size:.8rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer}
+.mg-chip:hover{background:var(--md-surface-container-high)}
+.mg-chip[aria-pressed='true']{background:var(--md-surface-container-highest);border-color:transparent}
+.mg-chip[aria-pressed='false']{color:var(--md-on-surface-variant)}
+.mg-chip[aria-pressed='false'] .mg-swatch{opacity:.35}
+.mg-chip:focus-visible,.mg-zoom button:focus-visible,.mg-close:focus-visible,.mg-goto:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
+.mg-chip-count{min-width:1.1rem;padding:0 .3rem;height:18px;box-sizing:border-box;display:inline-grid;place-items:center;border-radius:999px;background:var(--md-surface);color:var(--md-on-surface-variant);font-size:.7rem;font-variant-numeric:tabular-nums}
+.mg-swatch{width:24px;height:8px;flex:0 0 24px}
+.mg-swatch line,.mg-edge{fill:none;stroke:var(--k);stroke-linecap:round}
+.mg-swatch line{stroke-width:2.5}
+.mg-note{display:flex;align-items:flex-start;gap:.5rem;margin:0;padding:.6rem .85rem;border-radius:12px;background:var(--md-surface-container-high);color:var(--md-on-surface);font-size:.85rem;line-height:1.45}
+.mg-note .icon{width:16px;height:16px;flex:0 0 16px;margin-top:.1rem}
+.mg-stage{position:relative;height:clamp(420px,66vh,760px);min-width:0;overflow:hidden;border-radius:14px;border:1px solid var(--mg-hairline);background:var(--mg-bg);color:var(--mg-fg)}
+.mg-svg{display:block;width:100%;height:100%;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}
+.mg-svg.is-panning{cursor:grabbing}
+.mg-svg:focus{outline:none}
+.mg-edge{stroke-width:2.2;opacity:.78}
+.mg-edge.mg-k-issue-link{stroke-dasharray:8 6}
+.mg-chip.mg-k-issue-link .mg-swatch line{stroke-dasharray:6 4}
+.mg-edge.mg-k-shares-secret,.mg-edge.mg-k-shares-service,.mg-edge.mg-k-shares-people{stroke-width:2.8;stroke-dasharray:.1 7}
+.mg-chip.mg-k-shares-secret .mg-swatch line,.mg-chip.mg-k-shares-service .mg-swatch line,.mg-chip.mg-k-shares-people .mg-swatch line{stroke-width:3;stroke-dasharray:.1 5}
+.mg-arrow{fill:var(--k);stroke:none}
+.mg-hit{fill:none;stroke:transparent;stroke-width:16;pointer-events:stroke;cursor:pointer}
+.mg-hide-depends-on .mg-k-depends-on:is(.mg-edge,.mg-row,.mg-hit),.mg-hide-calls .mg-k-calls:is(.mg-edge,.mg-row,.mg-hit),.mg-hide-declared .mg-k-declared:is(.mg-edge,.mg-row,.mg-hit),.mg-hide-issue-link .mg-k-issue-link:is(.mg-edge,.mg-row,.mg-hit),
+.mg-hide-shares-secret .mg-k-shares-secret:is(.mg-edge,.mg-row,.mg-hit),.mg-hide-shares-service .mg-k-shares-service:is(.mg-edge,.mg-row,.mg-hit),.mg-hide-shares-people .mg-k-shares-people:is(.mg-edge,.mg-row,.mg-hit){display:none}
+.mg-hide-depends-on .mg-row-depends-on,.mg-hide-calls .mg-row-calls,.mg-hide-declared .mg-row-declared,.mg-hide-issue-link .mg-row-issue-link,.mg-hide-shares-secret .mg-row-shares-secret,.mg-hide-shares-service .mg-row-shares-service,.mg-hide-shares-people .mg-row-shares-people{display:none}
+.mg-node{cursor:pointer;outline:none}
+.mg-halo{fill:none;stroke:transparent;stroke-width:5}
+.mg-core{fill:var(--mg-node)}
+.mg-track{fill:none;stroke:var(--mg-track);stroke-width:4.5}
+.mg-ring{fill:none;stroke:var(--v);stroke-width:4.5;stroke-linecap:round}
+.mg-count{fill:var(--mg-fg);font:600 15px var(--font-family-stack);text-anchor:middle;pointer-events:none}
+.mg-label{fill:var(--mg-fg);font:500 19px var(--font-family-stack);text-anchor:middle;paint-order:stroke;stroke:var(--mg-bg);stroke-width:6px;stroke-linejoin:round;pointer-events:none}
+.mg-v-none .mg-core,.mg-v-bad .mg-core{fill:var(--mg-node-off)}
+.mg-v-none .mg-track{stroke:var(--v);stroke-dasharray:3 5}
+.mg-v-bad .mg-track{stroke:var(--v)}
+.mg-v-none .mg-count,.mg-v-none .mg-label{fill:var(--mg-muted)}
+.mg-node:hover .mg-halo,.mg-node.is-lit .mg-halo{stroke:var(--mg-hairline)}
+.mg-node:focus-visible .mg-halo{stroke:var(--mg-focus)}
+.mg-node.is-selected .mg-halo{stroke:var(--mg-focus);stroke-width:4}
+.mg-svg.is-focusing .mg-edge{opacity:.1}
+.mg-svg.is-focusing .mg-edge.is-lit{opacity:1;stroke-width:3.4}
+.mg-svg.is-focusing .mg-node{opacity:.32}
+.mg-svg.is-focusing .mg-node.is-lit{opacity:1}
+.mg-zoom{position:absolute;left:12px;bottom:12px;display:flex;flex-direction:column;overflow:hidden;border-radius:12px;border:1px solid var(--mg-hairline);background:var(--mg-panel);-webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);box-shadow:0 4px 16px rgba(0,0,0,.14)}
+.mg-zoom button{display:grid;place-items:center;width:36px;height:36px;box-sizing:border-box;margin:0;padding:0;border:0;border-top:1px solid var(--mg-hairline);background:transparent;color:var(--mg-fg);font:500 1.15rem/1 var(--font-family-stack);cursor:pointer}
+.mg-zoom button:first-child{border-top:0}
+.mg-zoom button:hover{background:var(--mg-hairline)}
+.mg-zoom .icon{width:16px;height:16px}
+.mg-inspector{position:absolute;top:12px;right:12px;width:min(340px,calc(100% - 24px));max-height:calc(100% - 24px);box-sizing:border-box;overflow:auto;padding:1rem 1.1rem 1.1rem;border-radius:16px;border:1px solid var(--mg-hairline);background:var(--mg-panel);-webkit-backdrop-filter:blur(24px) saturate(1.6);backdrop-filter:blur(24px) saturate(1.6);box-shadow:0 18px 48px rgba(0,0,0,.24);color:var(--mg-fg);opacity:0;transform:translateX(12px)}
+.mg-inspector[hidden]{display:none}
+.mg-inspector.is-open{opacity:1;transform:none}
+.mg-inspector:focus{outline:none}
+.mg-close{position:absolute;top:10px;right:10px;display:grid;place-items:center;width:28px;height:28px;box-sizing:border-box;margin:0;padding:0;border:0;border-radius:999px;background:var(--mg-hairline);color:var(--mg-fg);cursor:pointer}
+.mg-close .icon{width:14px;height:14px}
+.mg-insp-head{display:flex;flex-direction:column;align-items:flex-start;gap:.4rem;padding-right:2rem;min-width:0}
+.mg-insp-head h3{margin:0;max-width:100%;font-size:1.1rem;overflow-wrap:anywhere}
+.mg-insp-pills{display:flex;flex-wrap:wrap;gap:.35rem}
+.mg-insp-sum,.mg-insp-ev{margin:.7rem 0 0;font-size:.88rem;line-height:1.45;overflow-wrap:anywhere}
+.mg-insp-pair{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin:.7rem 0 0;font-size:.95rem;font-weight:600}
+.mg-inspector h4{margin:1rem 0 .4rem;font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mg-muted)}
+.mg-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:.5rem;margin:.85rem 0 0}
+.mg-facts div{padding:.5rem .6rem;border-radius:10px;background:var(--mg-hairline)}
+.mg-facts dt{font-size:.72rem;color:var(--mg-muted)}
+.mg-facts dd{margin:.15rem 0 0;font-size:.95rem;font-weight:600;font-variant-numeric:tabular-nums}
+.mg-insp-links,.mg-list-links{display:flex;flex-direction:column;gap:.45rem;margin:0;padding:0;list-style:none}
+.mg-row{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .45rem;min-width:0;font-size:.85rem}
+.mg-row small{flex:1 1 100%;color:var(--mg-muted);font-size:.78rem;line-height:1.4;overflow-wrap:anywhere}
+.mg-kind{display:inline-flex;align-items:center;gap:.3rem;height:20px;box-sizing:border-box;padding:0 .5rem;border-radius:999px;border:1px solid var(--k);color:inherit;font-size:.7rem;font-weight:600;white-space:nowrap}
+.mg-kind::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--k)}
+.mg-dir{color:var(--mg-muted)}
+.mg-goto{margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;text-decoration-color:var(--mg-hairline);text-underline-offset:3px;overflow-wrap:anywhere}
+.mg-goto:hover{text-decoration-color:currentColor}
+.mg-open{margin-top:1.1rem}
+.mg-legend{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem 1rem;font-size:.8rem;color:var(--md-on-surface-variant)}
+.mg-legend-title{font-weight:600}
+.mg-legend span{display:inline-flex;align-items:center;gap:.35rem}
+.mg-legend i{width:10px;height:10px;box-sizing:border-box;border-radius:50%;border:2.5px solid var(--v)}
+.mg-legend .mg-v-none i{border-style:dashed}
+.mem-graph-list summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem .75rem;cursor:pointer;font-weight:600}
+.mem-graph-list summary small{font-weight:400;color:var(--md-on-surface-variant)}
+.mg-list{display:grid;gap:.25rem;margin:.75rem 0 0;padding:0;list-style:none}
+.mg-list>li{display:flex;flex-direction:column;gap:.45rem;padding:.75rem 0;border-top:1px solid var(--md-outline-variant);min-width:0}
+.mg-list>li:first-child{border-top:0}
+.mg-list-head{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;min-width:0}
+.mg-list-head a{font-weight:600;color:var(--md-on-surface);text-decoration:none;overflow-wrap:anywhere}
+.mg-list-head a:hover{text-decoration:underline}
+.mg-list-links .mg-row a{color:var(--md-primary);font-weight:500;text-decoration:none;overflow-wrap:anywhere}
+.mg-list-links .mg-row small,.mg-list-links .mg-dir{color:var(--md-on-surface-variant)}
+.mem-graph-list .mg-kind{border-color:color-mix(in srgb,var(--k) 70%,transparent)}
+.mem-graph-listcard{--mg-depends-on:#0A84FF;--mg-calls:#5AC8DA;--mg-declared:#8E8E93;--mg-issue-link:#FF9F0A;--mg-shares-secret:#FF6961;--mg-shares-service:#BF5AF2;--mg-shares-people:#8E8E93}
+@media (prefers-reduced-motion:no-preference){
+.mg-inspector{transition:opacity .28s cubic-bezier(.32,.72,0,1),transform .28s cubic-bezier(.32,.72,0,1)}
+.mg-edge,.mg-node{transition:opacity .2s cubic-bezier(.32,.72,0,1)}
+.mg-chip{transition:background-color .2s cubic-bezier(.32,.72,0,1),color .2s cubic-bezier(.32,.72,0,1)}
+}
+@media (max-width:639px){
+.mg-stage,.mg-legend,.mg-hint{display:none}
+.mg-narrow-note{display:block}
+.mg-chip{height:26px;padding:0 .55rem 0 .45rem;font-size:.75rem}
+.mg-swatch{width:16px;flex-basis:16px}
+}
+</style>";
+
 const STYLE: &str = "<style>
 .mem-stack{display:flex;flex-direction:column;gap:1.25rem;min-width:0}
 .mem-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1rem;min-width:0}
@@ -2898,10 +3572,11 @@ mod tests {
     }
 
     #[test]
-    fn graph_toggle_renders_a_placeholder() {
+    fn graph_toggle_renders_the_graph_not_the_cards() {
         let sb = Sb::new(&[("alpha", true)]);
         let html = sb.get("/insights?view=memory&graph=1");
-        assert!(html.contains("mem-graph-soon"), "{html}");
+        assert!(html.contains("class='mg-svg"), "{html}");
+        assert!(!html.contains("mem-graph-soon"));
         assert!(!html.contains("class='mem-grid'"));
     }
 
@@ -3610,5 +4285,256 @@ mod tests {
         let secret = "glpat-abcdefghijklmnop1234";
         sb.post_to("/insights/memory/section/save", &format!("project=oversize&section=stack&summary={small}&body={secret}"));
         assert!(!sb.get("/insights?view=memory&project=oversize&page=stack").contains("glpat-"));
+    }
+
+    // ------------------------------------------------------------------ graph view
+
+    fn count(html: &str, needle: &str) -> usize {
+        html.matches(needle).count()
+    }
+
+    /// The `<svg …>…</svg>` part of the graph page.
+    fn svg_of(html: &str) -> &str {
+        let start = html.find("<svg class='mg-svg").expect("graph svg");
+        let end = start + html[start..].find("</svg>").expect("svg end");
+        &html[start..end]
+    }
+
+    fn link(to: &str, kind: &str, evidence: &str) -> Link {
+        Link { to: to.into(), kind: kind.into(), evidence: evidence.into() }
+    }
+
+    fn put_issue(sb: &Sb, project_id: &str, iid: i64, issue: serde_json::Value) {
+        let dir = sb
+            .state
+            .user_home
+            .join(".gitlab/cache/main/projects")
+            .join(project_id.replace('/', "__"))
+            .join("issues");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut issue = issue;
+        issue["iid"] = json!(iid);
+        std::fs::write(dir.join(format!("{iid}.json")), issue.to_string()).unwrap();
+    }
+
+    #[test]
+    fn graph_svg_has_one_node_per_tracked_project() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true), ("gamma", false)]);
+        sb.save(&profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]));
+        sb.save(&profile("orphan", &[(SectionKey::Overview, section("O.", "o"))]));
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        assert_eq!(count(svg, "<g class='mg-node "), 4, "{svg}");
+        for alias in ["alpha", "beta", "gamma", "orphan"] {
+            assert!(svg.contains(&format!("data-alias='{alias}'")), "missing {alias}");
+        }
+        // A project without a profile is a greyed node.
+        assert!(svg.contains("mg-v-none"), "{svg}");
+        // Every node is focusable and named for assistive tech.
+        assert_eq!(count(svg, "tabindex='0'"), 4);
+        // The inspector has a template per node, with the full page link.
+        assert_eq!(count(&html, "<template class='mg-tpl-node'"), 4);
+        assert!(html.contains("project=alpha'"));
+        assert!(html.contains("Open full page"));
+    }
+
+    #[test]
+    fn unevidenced_edges_not_rendered() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true), ("gamma", true)]);
+        let mut a = profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.links.push(link("beta", "depends-on", "Gemfile: gem 'beta', path: '../beta'"));
+        a.links.push(link("gamma", "calls", "   "));
+        sb.save(&a);
+        sb.save(&profile("beta", &[(SectionKey::Overview, section("B.", "b"))]));
+        sb.save(&profile("gamma", &[(SectionKey::Overview, section("G.", "g"))]));
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        assert_eq!(count(svg, "<path class='mg-edge "), 1, "{svg}");
+        assert!(svg.contains("data-kind='depends-on'"));
+        assert!(!svg.contains("data-kind='calls'"));
+        assert!(svg.contains("marker-end="), "directed kinds get an arrowhead");
+    }
+
+    #[test]
+    fn people_edges_hidden_by_default() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        sb.save(&profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]));
+        sb.save(&profile("beta", &[(SectionKey::Overview, section("B.", "b"))]));
+        for (pid, iid) in [("group/alpha", 1), ("group/beta", 2)] {
+            put_issue(&sb, pid, iid, json!({"title": "t", "author": {"username": "ann"},
+                "assignees": [{"username": "bob"}], "updated_at": "2026-11-01T00:00:00Z"}));
+        }
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        assert!(svg.contains("data-kind='shares-people'"), "{svg}");
+        // The svg starts with the people kind hidden, and its chip is off.
+        assert!(html.contains("<svg class='mg-svg mg-hide-shares-people'"), "{html}");
+        assert!(html.contains("data-kind='shares-people' aria-pressed='false'"), "{html}");
+        assert!(html.contains("data-kind='depends-on' aria-pressed='true'"));
+        // The list rows for people links are hidden the same way.
+        assert!(html.contains("class='mem-graph-list mg-hide-shares-people'"), "{html}");
+    }
+
+    #[test]
+    fn fallback_list_present() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        let mut a = profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.links.push(link("beta", "calls", "config/services.yml: BETA_URL"));
+        sb.save(&a);
+        let html = sb.get("/insights?view=memory&graph=1");
+        let start = html.find("class='mem-graph-list").expect("list view");
+        let list = &html[start..];
+        assert!(list.starts_with("class='mem-graph-list"));
+        // Open without JS; the page script closes it on wide screens.
+        assert!(html[..start].ends_with("<details "), "{}", &html[start - 40..start + 60]);
+        assert!(list.contains("config/services.yml: BETA_URL"));
+        assert!(list.contains(">calls<"), "{list}");
+        assert!(list.contains("project=beta'"));
+        assert!(list.contains(" open>"));
+    }
+
+    #[test]
+    fn graph_uses_issue_digests_from_the_state_home_not_the_real_home() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        sb.save(&profile("beta", &[(SectionKey::Overview, section("B.", "b"))]));
+        put_issue(&sb, "group/alpha", 7, json!({"title": "Checkout fails",
+            "description": "Blocked by group/beta#4", "updated_at": "2026-11-01T00:00:00Z"}));
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        assert!(svg.contains("data-kind='issue-link'"), "{svg}");
+        assert!(svg.contains("data-from='alpha' data-to='beta'"), "{svg}");
+        assert!(html.contains("issues #7"));
+        // The overview and the project page count the issue link too.
+        assert!(sb.get("/insights?view=memory").contains("1 linked project"));
+        let page = sb.get("/insights?view=memory&project=beta");
+        assert!(page.contains("linked issues"), "{page}");
+        // Activity sizes the node: alpha has one recent issue, beta none.
+        assert!(svg.contains("data-alias='alpha' data-activity='1'"), "{svg}");
+        assert!(svg.contains("data-alias='beta' data-activity='0'"), "{svg}");
+    }
+
+    #[test]
+    fn node_freshness_comes_from_the_overview_verdict_not_the_approximation() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true), ("gamma", true)]);
+        // Only one section: the overview says Needs review (the rest are missing);
+        // `derive` alone would call it Fresh.
+        sb.save(&profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]));
+        // A source that no longer matches the checkout: Stale.
+        let mut s = section("B.", "b");
+        s.sources.push(Source { path: "README.md".into(), sha256: "0".repeat(64) });
+        let full: Vec<(SectionKey, Section)> = SectionKey::ALL.into_iter().map(|k| (k, s.clone())).collect();
+        sb.save(&profile("beta", &full));
+        // All ten sections written by a person: Human-edited.
+        let mut h = section("G.", "g");
+        h.origin = Origin::Human;
+        let human: Vec<(SectionKey, Section)> = SectionKey::ALL.into_iter().map(|k| (k, h.clone())).collect();
+        sb.save(&profile("gamma", &human));
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        let class_of = |alias: &str| {
+            let at = svg.find(&format!("data-alias='{alias}'")).unwrap();
+            let open = svg[..at].rfind("<g class='mg-node ").unwrap();
+            svg[open..at].to_string()
+        };
+        assert!(class_of("alpha").contains("mg-v-review"), "{}", class_of("alpha"));
+        assert!(class_of("beta").contains("mg-v-stale"), "{}", class_of("beta"));
+        assert!(class_of("gamma").contains("mg-v-human"), "{}", class_of("gamma"));
+        // The same verdict pills as the overview, in the inspector templates.
+        assert!(html.contains("mem-pill-review") && html.contains("mem-pill-stale") && html.contains("mem-pill-human"));
+    }
+
+    #[test]
+    fn evidence_is_escaped_and_secret_free() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        let secret = "glpat-abcdefghijklmnop1234";
+        let mut a = profile(
+            "alpha",
+            &[
+                (SectionKey::Overview, section("<script>alert(1)</script>", "x")),
+                (SectionKey::Secrets, section("names", &format!("- `GITLAB_TOKEN` = {secret}\n- `SHARED_API_KEY`"))),
+            ],
+        );
+        a.links.push(link("beta", "calls", "<img src=x onerror=alert(1)> in config"));
+        a.links.push(link("beta", "depends-on", &format!("token {secret}")));
+        sb.save(&a);
+        sb.save(&profile(
+            "beta",
+            &[
+                (SectionKey::Overview, section(&format!("Uses {secret}"), "y")),
+                (SectionKey::Secrets, section("names", "- `SHARED_API_KEY`")),
+            ],
+        ));
+        let html = sb.get("/insights?view=memory&graph=1");
+        assert!(!html.contains("glpat-"), "a secret value leaked");
+        assert!(!html.contains("<script>alert(1)"));
+        assert!(!html.contains("<img src=x"));
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt; in config"), "{html}");
+        // The shared secret NAME is evidence; the value is not.
+        assert!(svg_of(&html).contains("data-kind='shares-secret'"));
+        assert!(html.contains("SHARED_API_KEY"));
+    }
+
+    #[test]
+    fn graph_with_no_projects_shows_the_empty_state() {
+        let sb = Sb::new(&[]);
+        let html = sb.get("/insights?view=memory&graph=1");
+        assert!(!html.contains("<svg class='mg-svg"));
+        assert!(html.contains("No projects configured yet"), "{html}");
+    }
+
+    #[test]
+    fn graph_with_one_project_centres_it_and_has_no_edges() {
+        let sb = Sb::new(&[("solo", true)]);
+        sb.save(&profile("solo", &[(SectionKey::Overview, section("S.", "s"))]));
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        assert_eq!(count(svg, "<g class='mg-node "), 1);
+        assert!(svg.contains("transform='translate(800 500)'"), "{svg}");
+        assert_eq!(count(svg, "<path class='mg-edge "), 0);
+        assert!(html.contains("No links between projects yet."), "{html}");
+    }
+
+    #[test]
+    fn graph_caps_drawn_edges_with_a_notice() {
+        let aliases: Vec<String> = (0..50).map(|i| format!("p{i:02}")).collect();
+        let spec: Vec<(&str, bool)> = aliases.iter().map(|a| (a.as_str(), false)).collect();
+        let sb = Sb::new(&spec);
+        for a in &aliases {
+            let mut p = profile(a, &[(SectionKey::Overview, section("x", "x"))]);
+            for b in aliases.iter().filter(|b| *b != a) {
+                p.links.push(link(b, "declared", &format!("{a} mentions {b}")));
+            }
+            sb.save(&p);
+        }
+        let html = sb.get("/insights?view=memory&graph=1");
+        let svg = svg_of(&html);
+        assert_eq!(count(svg, "<path class='mg-edge "), super::MAX_DRAWN_EDGES, "cap");
+        assert!(html.contains("Showing the 2000 strongest of 2450 links."), "notice");
+        assert_eq!(count(svg, "<g class='mg-node "), 50);
+    }
+
+    #[test]
+    fn graph_ignores_unknown_query_values() {
+        let sb = Sb::new(&[("alpha", true)]);
+        sb.save(&profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]));
+        let html = sb.get("/insights?view=memory&graph=1&kind=%3Cscript%3E&zoom=NaN&select=..%2F..");
+        assert!(html.contains("<svg class='mg-svg"));
+        assert!(!html.contains("<script>'") && !html.contains("../.."));
+        // Not "1": the cards, not the graph.
+        assert!(sb.get("/insights?view=memory&graph=%3Cb%3E").contains("class='mem-grid'"));
+    }
+
+    #[test]
+    fn graph_strings_are_translated() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        let mut a = profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.links.push(link("beta", "calls", "x"));
+        sb.save(&a);
+        let req = crate::ui::routes::UiRequest::get("/insights?view=memory&graph=1")
+            .with_header("cookie", "loop_lang=fr");
+        let r = sb.state.registry.dispatch(&sb.state, &req).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        assert!(!html.contains(">Open full page<"), "untranslated");
+        assert!(!html.contains("aria-label='Zoom in'"));
     }
 }

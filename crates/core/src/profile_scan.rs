@@ -569,6 +569,27 @@ pub fn digest_issues(instance: &str, project_id: &str, alias: &str) -> IssueDige
     )
 }
 
+/// [`digest_issues`] with the cache roots given explicitly instead of read from
+/// `HOME` / `LOOP_ENGINEERING_HOME` (the dashboard has its own user home): the
+/// issue cache is looked up under `gitlab_root` (`<HOME>/.gitlab/cache`) or, for a
+/// connected account, `data_root` (`<home>/data`), and the task memories under
+/// `memory_root`.
+pub fn digest_issues_in(
+    instance: &str,
+    project_id: &str,
+    alias: &str,
+    gitlab_root: &Path,
+    data_root: &Path,
+    memory_root: Option<&Path>,
+) -> IssueDigest {
+    digest_from(
+        &gitlab_cache::issues_dir_in(instance, project_id, gitlab_root, data_root),
+        project_id,
+        alias,
+        memory_root,
+    )
+}
+
 /// Where [`gitlab_cache::sync_issue`] keeps this project's issue files.
 pub(crate) fn issues_dir_for(instance: &str, project_id: &str) -> std::path::PathBuf {
     gitlab_cache::project_path(instance, project_id)
@@ -1045,6 +1066,52 @@ mod tests {
         assert!(s.manifests.iter().any(|(p, _)| p == "compose.yml"));
         assert_eq!(s.services, vec!["api"]);
         assert!(s.sources.iter().any(|x| x.path == ".gitmodules"));
+    }
+
+    #[test]
+    fn digest_issues_in_reads_only_the_given_cache_roots() {
+        // No env at all: the roots are explicit, so a dashboard with its own
+        // user home never reads the real ~/.gitlab.
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("uh").join(".gitlab").join("cache");
+        let data = d.path().join("lx").join("data");
+        let issue = json!({"iid": 3, "title": "T", "updated_at": "2026-03-01T00:00:00Z",
+                           "description": "blocked by grp/other#9"});
+        write(
+            &gitlab
+                .join("work")
+                .join("projects")
+                .join("grp__p")
+                .join("issues"),
+            "3.json",
+            &issue.to_string(),
+        );
+        write(
+            &data
+                .join("github")
+                .join("acme")
+                .join("projects")
+                .join("o__r")
+                .join("issues"),
+            "5.json",
+            &json!({"iid": 5, "title": "G"}).to_string(),
+        );
+        let mem = d.path().join("mem");
+        let g = digest_issues_in("work", "grp/p", "p", &gitlab, &data, Some(&mem));
+        assert_eq!(g.recent, vec![(3, "T".to_string())]);
+        assert_eq!(
+            g.cross_refs,
+            vec![CrossRef {
+                issue_iid: 3,
+                target_project: "grp/other".into()
+            }]
+        );
+        let gh = digest_issues_in("github/acme", "o/r", "r", &gitlab, &data, Some(&mem));
+        assert_eq!(gh.recent, vec![(5, "G".to_string())]);
+        assert_eq!(
+            digest_issues_in("work", "grp/none", "none", &gitlab, &data, Some(&mem)),
+            IssueDigest::default()
+        );
     }
 
     #[test]
