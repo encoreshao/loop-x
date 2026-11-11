@@ -600,9 +600,26 @@ pub fn contains_secret(text: &str) -> Option<String> {
             return Some((*kind).to_string());
         }
     }
+    static URL_CRED: OnceLock<regex::Regex> = OnceLock::new();
+    static BEARER: OnceLock<regex::Regex> = OnceLock::new();
+    let url_cred = URL_CRED.get_or_init(|| {
+        regex::Regex::new(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s/:@]+:[^\s/@$<{][^\s/@]*@")
+            .expect("static regex")
+    });
+    if url_cred.is_match(text) {
+        return Some("URL with embedded credentials".to_string());
+    }
+    let bearer = BEARER.get_or_init(|| {
+        regex::Regex::new(r"(?i)\bbearer\s+([A-Za-z0-9._~+/=\-]{20,})").expect("static regex")
+    });
+    for c in bearer.captures_iter(text) {
+        if c[1].chars().any(|ch| ch.is_ascii_digit()) {
+            return Some("bearer token".to_string());
+        }
+    }
     let assign = ASSIGN.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)([A-Za-z0-9_.\-]*(?:token|secret|password|passwd|api_?key|private_?key|credential|auth)[A-Za-z0-9_.\-]*)\s*[=:]\s*["']?([A-Za-z0-9+/_\-]{20,})"#,
+            r#"(?i)([A-Za-z0-9_.\-]*(?:token|secret|pass|passwd|pwd|password|api_?key|private_?key|credential|auth)[A-Za-z0-9_.\-]*)["']?\s*[=:]\s*["']?([A-Za-z0-9+/_\-]{20,})"#,
         )
         .expect("static regex")
     });
@@ -987,5 +1004,49 @@ mod tests {
             evidence: secret,
         });
         assert!(validate_draft(&p).unwrap_err().contains("link 1 evidence"));
+    }
+
+    #[test]
+    fn rejects_json_quoted_keys() {
+        let v = "Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk";
+        assert!(contains_secret(&format!("{{\"api_key\": \"{v}\"}}")).is_some());
+        assert!(contains_secret(&format!("{{\"password\":\"{v}\"}}")).is_some());
+        assert!(contains_secret(&format!("{{'password': '{v}'}}")).is_some());
+    }
+
+    #[test]
+    fn rejects_db_pass_but_not_its_name() {
+        let t = fake(&["DB_PASS=", "Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk"]);
+        assert!(contains_secret(&t).is_some());
+        assert_eq!(contains_secret("DB_PASS \u{2013} set in .env"), None);
+        assert_eq!(contains_secret("pwd: see the vault"), None);
+    }
+
+    #[test]
+    fn rejects_url_credentials_and_bearer_headers() {
+        let u = fake(&["postgres://admin:", "hunter2pw@db.internal:5432/app"]);
+        assert_eq!(
+            contains_secret(&u).as_deref(),
+            Some("URL with embedded credentials")
+        );
+        let b = fake(&["Authorization: Bearer ", "eyJhbGciOiJIUzI1NiJ9abc123"]);
+        assert_eq!(contains_secret(&b).as_deref(), Some("bearer token"));
+        let d = contains_secret(&u).unwrap() + &contains_secret(&b).unwrap();
+        assert!(!d.contains("hunter2") && !d.contains("eyJ"));
+    }
+
+    #[test]
+    fn accepts_plain_urls_and_bearer_prose() {
+        assert_eq!(contains_secret("https://github.com/org/repo"), None);
+        assert_eq!(contains_secret("clone https://user@host/path.git"), None);
+        assert_eq!(contains_secret("https://user:$PASS@host/x"), None);
+        assert_eq!(
+            contains_secret("Sends an Authorization: Bearer header on each request"),
+            None
+        );
+        assert_eq!(
+            contains_secret("the bearer of the token is the caller"),
+            None
+        );
     }
 }
