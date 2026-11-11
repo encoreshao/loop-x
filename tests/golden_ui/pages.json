@@ -47,6 +47,8 @@
     {"id": "hub-settings", "path": "/settings"},
     {"id": "hub-connectors", "path": "/connectors"},
     {"id": "loops-catalog", "path": "/loops"},
+    {"id": "issue-todos-off", "path": "/loops/issue-loop?view=todos"},
+    {"id": "issue-todos", "path": "/loops/issue-loop?view=todos", "overlay": "todos-on"},
     {"id": "runs-empty-loop-runs", "path": "/runs"},
     {"id": "runs-empty-logs", "path": "/runs?view=logs"},
     {"id": "runs-unknown-view", "path": "/runs?view=nope", "langs": ["en"]},

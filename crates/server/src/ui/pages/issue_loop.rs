@@ -203,6 +203,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let body = match resolve_view(&hub, view).key.as_str() {
         "live" => live_body(ctx, flash.as_deref(), flash_ok),
         "tasks" => tasks_body(ctx),
+        "todos" => super::todos::body(ctx, flash.as_deref(), flash_ok),
         "worktrees" => worktrees_body(ctx, flash.as_deref(), flash_ok),
         _ => projects_body(ctx, flash.as_deref(), flash_ok),
     };
@@ -4099,7 +4100,7 @@ mod tests {
         let sb = Sandbox::new();
         let body = worktrees_body(&sb.ctx(), None, true);
         assert!(body.contains("No issue branches in progress."), "{body}");
-        assert_eq!(builtin_loop_page("issue-loop").unwrap().views[2].key, "worktrees");
+        assert_eq!(builtin_loop_page("issue-loop").unwrap().views[3].key, "worktrees");
     }
 
     #[test]

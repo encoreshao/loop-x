@@ -463,6 +463,7 @@ mod tests {
                 target_branch: "main".into(),
                 summary: "s".into(),
                 timeout_seconds: 3600,
+                target: None,
             };
             approvals::create(&self.dir.path().join("outputs").join("approvals"), &new, chrono::Utc::now()).unwrap();
         }

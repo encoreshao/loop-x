@@ -52,6 +52,8 @@ pub struct NewApproval {
     pub target_branch: String,
     pub summary: String,
     pub timeout_seconds: i64,
+    /// Where an approved reply is posted (`todo_reply` approvals).
+    pub target: Option<Value>,
 }
 
 fn path_of(dir: &Path, id: &str) -> PathBuf {
@@ -95,6 +97,7 @@ pub fn create(dir: &Path, new: &NewApproval, now: DateTime<Utc>) -> Result<Value
         "branch": new.branch,
         "target_branch": new.target_branch,
         "summary": new.summary,
+        "target": new.target,
         "status": "pending",
         "created_at": fmt_timestamp(now),
         "expires_at": fmt_timestamp(now + Duration::seconds(timeout)),
@@ -292,6 +295,7 @@ mod tests {
             target_branch: "main".into(),
             summary: "s".into(),
             timeout_seconds: 60,
+            target: None,
         }
     }
 

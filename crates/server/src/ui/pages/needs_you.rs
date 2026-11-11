@@ -485,6 +485,7 @@ mod tests {
             target_branch: "main".into(),
             summary: "s".into(),
             timeout_seconds: 1800,
+            target: None,
         };
         let a = approvals::create(&dir.join("outputs/approvals"), &new, chrono::Utc::now()).unwrap();
         a["id"].as_str().unwrap().to_string()

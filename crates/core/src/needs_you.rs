@@ -517,6 +517,7 @@ mod tests {
             target_branch: "main".into(),
             summary: "s".into(),
             timeout_seconds: 1800,
+            target: None,
         };
         let a = crate::approvals::create(&f.p("approvals"), &new, now()).unwrap();
         let items = f.collect();

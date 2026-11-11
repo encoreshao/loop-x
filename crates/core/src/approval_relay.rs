@@ -221,6 +221,7 @@ mod tests {
             target_branch: "main".into(),
             summary: "s".into(),
             timeout_seconds: 600,
+            target: None,
         };
         approvals::create(dir, &new, Utc::now()).unwrap()["id"]
             .as_str()

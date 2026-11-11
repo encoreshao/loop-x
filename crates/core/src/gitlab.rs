@@ -306,6 +306,16 @@ impl Client {
         self.get_all(&endpoint, &params)
     }
 
+    /// The user's todos in `state` (`pending` or `done`), every page.
+    pub fn list_todos(&self, state: &str) -> Result<Vec<Value>, GitlabError> {
+        self.get_all("todos", &[("state", state)])
+    }
+
+    /// Mark one todo done in GitLab.
+    pub fn mark_todo_done(&self, id: i64) -> Result<Value, GitlabError> {
+        self.post_json(&format!("todos/{id}/mark_as_done"), &serde_json::json!({}))
+    }
+
     /// GET a single resource (no pagination).
     pub fn get_json(&self, endpoint: &str) -> Result<Value, GitlabError> {
         self.get(endpoint, &[])
@@ -737,6 +747,37 @@ mod tests {
         assert_eq!(requests.len(), 1, "only the MR lookup, no notes request");
         drop(requests);
         assert!(client.loop_merge_request("g/web", 8).unwrap().is_none());
+    }
+
+    #[test]
+    fn list_todos_requests_the_state_filter_and_mark_done_posts() {
+        let served = crate::connectors::testutil::serve(vec![
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                json!([{"id": 1}]).to_string(),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                json!({"id": 1, "state": "done"}).to_string(),
+            ),
+        ]);
+        let cfg = json!({"default": "g", "instances": {"g": {"url": served.url, "token": "t"}}});
+        let client = Client::from_config(Some(&cfg), None, None).unwrap();
+        assert_eq!(client.list_todos("pending").unwrap().len(), 1);
+        assert_eq!(client.mark_todo_done(1).unwrap()["state"], "done");
+        let requests = served.requests.lock().unwrap();
+        assert!(
+            requests[0].contains("/todos") && requests[0].contains("state=pending"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("POST") && requests[1].contains("/todos/1/mark_as_done"),
+            "{}",
+            requests[1]
+        );
     }
 
     #[test]

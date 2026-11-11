@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- **Todos** view on the Issues page (after Tasks): your GitLab to-do list, including issues where you were only mentioned or tagged. Sync is off until you switch it on, then fetches every 5 or 10 minutes into a local cache (the first enable imports only the last 2 days). **Mark done** syncs back to GitLab, and **Analyze & draft reply** drafts a comment you review, edit and approve before anything is posted. The Daily Digest lists the important cached todos when sync is on.
 - The landing page (Office or Dashboard) now leads with **Human in the LoopX**: a pill with a small orbiting-dot loop, the line "Agents do the work. You make the calls.", and shorter cards that say what each view is for (watch and ask in the Office; review, approve and steer in the Dashboard). The "Choose your view" heading is gone.
 
 - Inbox Triage writes an email brief: the Slack digest now says what each email is about (who wrote, what they want, any deadline), grouped as urgent, needs a reply and can wait, instead of counting emails. The same brief shows on each inbox's Live card, and a new **History** tab keeps every day's brief (all inboxes merged, newest day first) for review and for building weekly reports later. The AI writes one `summary` per email in the same call, so there is no extra cost.

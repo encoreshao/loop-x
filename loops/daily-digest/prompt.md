@@ -12,7 +12,7 @@ Answer with ONLY a JSON object (no prose, no code fence) of exactly this shape:
 - summary: one plain sentence (max 25 words) giving the day's overall picture, e.g. how much needs the user and the one thing that matters most. No URLs.
 
 Sections:
-- needs_you: todos, review requests and assigned issues that need the user to act today, most urgent first.
+- needs_you: todos, review requests and assigned issues that need the user to act today, most urgent first. When the data has gitlab_todos (LoopX's cached GitLab todos, present only when the user turned sync on), list its important items here too, including issues where the user was only tagged; skip any whose url already appears from another account's todos.
 - waiting_on_others: the user's own open merge requests and anything blocked on someone else.
 - meetings: today's meetings in time order, with the start time in the text.
 - loop_x_did: what the Loop X automation completed or escalated yesterday, plus urgent inbox counts.

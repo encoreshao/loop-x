@@ -35,6 +35,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../instructions/loopx/inbox-triage.md"),
     ),
     (
+        "instructions/loopx/todo-reply.md",
+        include_str!("../../../instructions/loopx/todo-reply.md"),
+    ),
+    (
         "instructions/loopx/setup-doctor.md",
         include_str!("../../../instructions/loopx/setup-doctor.md"),
     ),

@@ -51,6 +51,7 @@ pub struct DailyDigest {
     loop_x_fn: Option<SourceFn>,
     inbox_fn: Option<SourceFn>,
     topics_fn: Option<SourceFn>,
+    todos_fn: Option<SourceFn>,
     calendar_accounts_fn: Option<CalendarAccountsFn>,
     events_dir: Option<PathBuf>,
 }
@@ -62,6 +63,7 @@ impl DailyDigest {
             loop_x_fn: None,
             inbox_fn: None,
             topics_fn: None,
+            todos_fn: None,
             calendar_accounts_fn: None,
             events_dir: None,
         }
@@ -72,6 +74,10 @@ impl DailyDigest {
     }
     pub fn with_inbox_fn(mut self, f: SourceFn) -> Self {
         self.inbox_fn = Some(f);
+        self
+    }
+    pub fn with_todos_fn(mut self, f: SourceFn) -> Self {
+        self.todos_fn = Some(f);
         self
     }
     pub fn with_topics_fn(mut self, f: SourceFn) -> Self {
@@ -146,8 +152,49 @@ impl DailyDigest {
             "topics".into(),
             safe(self.topics_fn.clone(), ctx, default_topics_fn),
         );
+        payload.insert(
+            "gitlab_todos".into(),
+            safe(self.todos_fn.clone(), ctx, default_todos_fn),
+        );
         cap(Value::Object(payload))
     }
+}
+
+/// How many cached todos the digest lists.
+const DIGEST_TODOS: usize = 10;
+
+fn default_todos_fn(_ctx: &LoopContext) -> Result<Value, String> {
+    let store =
+        crate::todos::load(&crate::todos::path()).map_err(|_| "TodosUnreadable".to_string())?;
+    Ok(cached_todos(&store))
+}
+
+/// LoopX's cached GitLab todos for the digest, only while sync is on: pending,
+/// reply-worthy ones, newest first, capped, with the overflow counted. Includes
+/// issues the user was only tagged on, which the live account queries miss.
+pub fn cached_todos(store: &crate::todos::TodoStore) -> Value {
+    if !store.settings.enabled {
+        return json!({});
+    }
+    let mut pending: Vec<&crate::todos::Todo> = store
+        .instances
+        .values()
+        .flat_map(|i| i.todos.values())
+        .filter(|t| t.state == "pending" && crate::todos::is_reply_worthy(&t.action))
+        .collect();
+    pending.sort_by_key(|t| std::cmp::Reverse(t.created_at));
+    let more = pending.len().saturating_sub(DIGEST_TODOS);
+    let important: Vec<Value> = pending
+        .iter()
+        .take(DIGEST_TODOS)
+        .map(|t| {
+            let body: String = t.body.chars().take(200).collect();
+            json!({"reason": t.action, "title": t.title, "project": t.project, "author": t.author,
+                   "url": t.web_url, "created_at": t.created_at.to_rfc3339_opts(SecondsFormat::Secs, true),
+                   "body": if t.body.chars().count() > 200 { format!("{body}…") } else { body }})
+        })
+        .collect();
+    json!({"important": important, "more": more})
 }
 
 fn load_class(f: &LoadFailure) -> String {
@@ -924,6 +971,7 @@ mod tests {
             .with_loop_x_fn(Arc::new(|_| Ok(json!({}))))
             .with_inbox_fn(Arc::new(|_| Ok(json!({}))))
             .with_topics_fn(Arc::new(|_| Ok(json!({}))))
+            .with_todos_fn(Arc::new(|_| Ok(json!({}))))
             .with_calendar_accounts_fn(Arc::new(|| Ok(vec![])))
     }
 
@@ -1358,6 +1406,102 @@ mod tests {
                 .digest(&[failed, done], &ctx())
                 .unwrap()
                 .starts_with("*Daily digest* \u{b7} 2026-10-06"));
+        });
+    }
+
+    #[test]
+    fn cached_todos_are_listed_when_sync_is_on_newest_first_reply_worthy_only() {
+        use crate::todos::{InstanceState, Todo, TodoStore};
+        let mk = |id: i64, action: &str, mins: i64, state: &str| Todo {
+            id,
+            instance: "work".into(),
+            action: action.into(),
+            target_type: "Issue".into(),
+            target_iid: Some(id),
+            title: format!("T{id}"),
+            web_url: format!("https://gl/{id}"),
+            project: "g/p".into(),
+            author: "ann".into(),
+            body: "x".repeat(500),
+            created_at: Utc.with_ymd_and_hms(2026, 10, 6, 9, 0, 0).unwrap()
+                - Duration::minutes(mins),
+            state: state.into(),
+            done_at: None,
+            draft_approval_id: None,
+        };
+        let mut store = TodoStore::default();
+        store.settings.enabled = true;
+        let st = store
+            .instances
+            .entry("work".into())
+            .or_insert_with(InstanceState::default);
+        for t in [
+            mk(1, "mentioned", 30, "pending"),
+            mk(2, "mentioned", 5, "pending"),
+            mk(3, "build_failed", 1, "pending"),
+            mk(4, "mentioned", 2, "done"),
+        ] {
+            st.todos.insert(t.id, t);
+        }
+        let v = cached_todos(&store);
+        let ids: Vec<i64> = v["important"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap()[1..].parse().unwrap())
+            .collect();
+        assert_eq!(ids, vec![2, 1]);
+        assert_eq!(v["more"], 0);
+        assert!(v["important"][0]["body"].as_str().unwrap().chars().count() <= 201);
+        store.settings.enabled = false;
+        assert_eq!(cached_todos(&store), json!({}));
+    }
+
+    #[test]
+    fn cached_todos_cap_at_ten_and_report_how_many_more() {
+        use crate::todos::{InstanceState, Todo, TodoStore};
+        let mut store = TodoStore::default();
+        store.settings.enabled = true;
+        let st = store
+            .instances
+            .entry("work".into())
+            .or_insert_with(InstanceState::default);
+        for id in 1..=13 {
+            st.todos.insert(
+                id,
+                Todo {
+                    id,
+                    instance: "work".into(),
+                    action: "mentioned".into(),
+                    target_type: "Issue".into(),
+                    target_iid: Some(id),
+                    title: "t".into(),
+                    web_url: "u".into(),
+                    project: "p".into(),
+                    author: "a".into(),
+                    body: "b".into(),
+                    created_at: Utc.with_ymd_and_hms(2026, 10, 6, 9, 0, 0).unwrap()
+                        - Duration::minutes(id),
+                    state: "pending".into(),
+                    done_at: None,
+                    draft_approval_id: None,
+                },
+            );
+        }
+        let v = cached_todos(&store);
+        assert_eq!(v["important"].as_array().unwrap().len(), 10);
+        assert_eq!(v["more"], 3);
+    }
+
+    #[test]
+    fn the_payload_carries_the_cached_todos_under_gitlab_todos() {
+        with_tz("UTC", || {
+            let data = plugin(Source::default())
+                .with_todos_fn(Arc::new(|_| {
+                    Ok(json!({"important": [{"title": "T"}], "more": 0}))
+                }))
+                .collect(&ctx());
+            assert_eq!(data["gitlab_todos"]["important"][0]["title"], "T");
         });
     }
 }

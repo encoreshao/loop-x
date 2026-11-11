@@ -1832,6 +1832,7 @@ pub fn finalize_gated_issue(
                 .unwrap_or("")
                 .to_string(),
             timeout_seconds: approval_timeout_seconds(&project),
+            target: None,
         };
         let approval = match approvals::create(&dir, &request, Utc::now()) {
             Ok(a) => a,

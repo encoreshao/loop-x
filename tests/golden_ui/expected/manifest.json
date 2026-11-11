@@ -1903,6 +1903,68 @@
      "file": "en/runs-claude-logs.html"
     }
    }
+  },
+  {
+   "id": "issue-todos-off",
+   "path": "/loops/issue-loop?view=todos",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/issue-todos-off.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/issue-todos-off.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/issue-todos-off.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/issue-todos-off.html"
+    }
+   }
+  },
+  {
+   "id": "issue-todos",
+   "path": "/loops/issue-loop?view=todos",
+   "overlay": "todos-on",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/issue-todos.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/issue-todos.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/issue-todos.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/issue-todos.html"
+    }
+   }
   }
  ]
 }
