@@ -24,6 +24,14 @@
 .todo-actions form{margin:0}
 .todo-row.is-done{opacity:.6}
 .todo-error{margin-bottom:.75rem}
-.todo-draft{margin-top:.6rem}
-.todo-draft-text{display:block;width:100%;height:auto;min-height:110px;padding:.6rem .75rem;box-sizing:border-box;resize:vertical;line-height:1.4}
-.todo-draft .todo-actions{margin-top:.5rem}
+.todo-draft-text{display:block;width:100%;height:auto;min-height:200px;padding:.6rem .75rem;box-sizing:border-box;resize:vertical;line-height:1.45}
+.todo-dialog{width:min(640px,calc(100vw - 2rem));max-width:none;padding:1.25rem 1.4rem;border:1px solid var(--md-outline-variant,rgba(128,128,128,.3));border-radius:16px;background:var(--md-surface,#fff);color:inherit;box-shadow:0 24px 60px rgba(0,0,0,.28)}
+.todo-dialog::backdrop{background:rgba(0,0,0,.35);backdrop-filter:blur(4px)}
+.todo-dialog h2{margin:0 0 .25rem;font-size:1.05rem}
+.todo-dialog .todo-meta{margin:0 0 .75rem}
+.todo-dialog .todo-actions{margin-top:.9rem;justify-content:flex-end}
+.todo-pick{display:flex;align-items:flex-start;padding-top:.2rem}
+.todo-pick input{width:16px;height:16px;margin:0}
+.todo-bulkbar{display:flex;align-items:center;gap:.75rem;padding:.4rem 0 .6rem;font-size:.85rem}
+.todo-bulkbar label{display:inline-flex;align-items:center;gap:.4rem}
+.todo-bulkbar input[type=checkbox]{width:16px;height:16px;margin:0}

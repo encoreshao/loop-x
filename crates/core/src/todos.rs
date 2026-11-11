@@ -51,6 +51,10 @@ pub struct Todo {
     pub target_iid: Option<i64>,
     pub title: String,
     pub web_url: String,
+    /// GitLab's `target_url`: the issue or MR plus the `#note_…` anchor of the comment
+    /// that raised the todo. Empty in a cache written before the field existed.
+    #[serde(default)]
+    pub target_url: String,
     pub project: String,
     pub author: String,
     pub body: String,
@@ -62,6 +66,15 @@ pub struct Todo {
 }
 
 impl Todo {
+    /// Where "Open" goes: the comment that raised the todo, else the issue or MR.
+    pub fn link(&self) -> &str {
+        if self.target_url.is_empty() {
+            &self.web_url
+        } else {
+            &self.target_url
+        }
+    }
+
     /// One entry of GitLab's `GET /todos`; `None` when it lacks an id or a valid time.
     pub fn from_gitlab(instance: &str, v: &serde_json::Value) -> Option<Todo> {
         let text =
@@ -82,6 +95,7 @@ impl Todo {
             target_iid: target.and_then(|t| t.get("iid")).and_then(|i| i.as_i64()),
             title: text(target.and_then(|t| t.get("title"))),
             web_url,
+            target_url: text(v.get("target_url")),
             project: text(v.get("project").and_then(|p| p.get("path_with_namespace"))),
             author: text(v.get("author").and_then(|a| a.get("username"))),
             body: text(v.get("body")),
@@ -173,6 +187,7 @@ pub fn merge_fetch(state: &mut InstanceState, fetched_pending: Vec<Todo>, now: D
                 old.title = t.title;
                 old.body = t.body;
                 old.web_url = t.web_url;
+                old.target_url = t.target_url;
             }
             None if t.created_at >= cutoff => {
                 state.todos.insert(t.id, t);
@@ -232,6 +247,7 @@ mod tests {
             created_at: now() - age,
             state: "pending".into(),
             done_at: None,
+            target_url: String::new(),
             draft_approval_id: None,
         }
     }
@@ -371,6 +387,26 @@ mod tests {
         assert_eq!((t.id, t.target_iid, t.author.as_str()), (9, Some(3), "bob"));
         assert_eq!(t.web_url, "https://gl/mr/3");
         assert!(Todo::from_gitlab("work", &json!({"id": 1})).is_none());
+    }
+
+    #[test]
+    fn the_todo_keeps_gitlabs_target_url_which_points_at_the_comment() {
+        let v = json!({"id": 9, "action_name": "mentioned", "target_type": "Issue",
+            "target": {"iid": 3, "title": "Fix", "web_url": "https://gl/i/3"},
+            "target_url": "https://gl/i/3#note_77",
+            "created_at": "2026-11-11T10:00:00.000Z"});
+        let t = Todo::from_gitlab("work", &v).unwrap();
+        assert_eq!(t.target_url, "https://gl/i/3#note_77");
+        assert_eq!(t.link(), "https://gl/i/3#note_77");
+        // Without it the link falls back to the issue itself.
+        let mut bare = t.clone();
+        bare.target_url.clear();
+        assert_eq!(bare.link(), "https://gl/i/3");
+        // A cache written before the field existed still loads.
+        let mut old = serde_json::to_value(&t).unwrap();
+        old.as_object_mut().unwrap().remove("target_url");
+        let back: Todo = serde_json::from_value(old).unwrap();
+        assert_eq!(back.link(), "https://gl/i/3");
     }
 
     #[test]

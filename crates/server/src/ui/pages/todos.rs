@@ -17,6 +17,7 @@ const URL: &str = "/loops/issue-loop?view=todos";
 pub fn register(r: &mut Registry) {
     r.post("/todos/settings", save_settings);
     r.post("/todos/refresh", refresh);
+    r.post("/todos/bulk-done", bulk_done);
     r.post("/todos/:instance/:id/done", mark_done);
     r.post("/todos/:instance/:id/draft", start_draft);
     r.post("/todos/:instance/:id/approve", approve_draft);
@@ -61,14 +62,14 @@ fn start_draft(ctx: &UiCtx) -> UiResponse {
         todos_draft::begin(s, &instance, id, now).map(|()| s.instances[&instance].todos[&id].clone())
     }) {
         Ok(Ok(t)) => t,
-        Ok(Err(e)) => return back(false, &e),
+        Ok(Err(e)) => return back(ctx, false, &e),
         Err(r) => return r,
     };
     if ctx.state.spawn_processes {
         let (path, config) = (store_path(ctx), gitlab_config(ctx));
         std::thread::spawn(move || run_draft(&path, &dir, config, &instance, todo));
     }
-    back(true, &ctx.t("Drafting a reply. It will appear here for you to review."))
+    back(ctx, true, &ctx.t("Drafting a reply. It will appear here for you to review."))
 }
 
 /// The draft job: read the thread, ask the agent, store the result for review.
@@ -95,14 +96,14 @@ fn approve_draft(ctx: &UiCtx) -> UiResponse {
     let instance = ctx.param("instance").to_string();
     let client = match client(ctx, &instance) {
         Ok(c) => c,
-        Err(e) => return back(false, &e),
+        Err(e) => return back(ctx, false, &e),
     };
     let text = ctx.form().first("text").unwrap_or("").to_string();
     let (id, now, dir) = (todo_id(ctx), ctx.state.now(), approvals_dir(ctx));
     // Under the store lock, so a double click cannot post the reply twice.
     match locked(ctx, |s| todos_draft::approve(s, &dir, &client, &instance, id, &text, now)) {
-        Ok(Ok(())) => back(true, &ctx.t("Reply posted to GitLab.")),
-        Ok(Err(e)) => back(false, &ctx.tf("The reply was not posted: {error}", &[("error", &e)])),
+        Ok(Ok(())) => back(ctx, true, &ctx.t("Reply posted to GitLab.")),
+        Ok(Err(e)) => back(ctx, false, &ctx.tf("The reply was not posted: {error}", &[("error", &e)])),
         Err(r) => r,
     }
 }
@@ -110,8 +111,8 @@ fn approve_draft(ctx: &UiCtx) -> UiResponse {
 fn discard_draft(ctx: &UiCtx) -> UiResponse {
     let (instance, id, now, dir) = (ctx.param("instance").to_string(), todo_id(ctx), ctx.state.now(), approvals_dir(ctx));
     match locked(ctx, |s| todos_draft::discard(s, &dir, &instance, id, now)) {
-        Ok(Ok(())) => back(true, &ctx.t("Draft discarded.")),
-        Ok(Err(e)) => back(false, &e),
+        Ok(Ok(())) => back(ctx, true, &ctx.t("Draft discarded.")),
+        Ok(Err(e)) => back(ctx, false, &e),
         Err(r) => r,
     }
 }
@@ -127,13 +128,32 @@ fn gitlab_config(ctx: &UiCtx) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
-fn back(ok: bool, message: &str) -> UiResponse {
-    UiResponse::flash_redirect(ok, message, URL)
+/// The view a form was submitted from: only the known filters are echoed back.
+fn view_filter(ctx: &UiCtx) -> &'static str {
+    match ctx.form().first("filter") {
+        Some("pending") => "pending",
+        Some("done") => "done",
+        _ => "all",
+    }
+}
+
+/// Back to the list the user was on, so marking one todo done keeps them in Pending.
+fn back(ctx: &UiCtx, ok: bool, message: &str) -> UiResponse {
+    let location = match view_filter(ctx) {
+        "all" => URL.to_string(),
+        f => format!("{URL}&filter={f}"),
+    };
+    UiResponse::flash_redirect(ok, message, &location)
+}
+
+/// The hidden field that tells a form's handler which view to return to.
+fn filter_input(filter: &str) -> String {
+    format!("<input type='hidden' name='filter' value='{}'>", pyfmt::escape(filter))
 }
 
 /// Run `f` on the store under the process-wide lock; a corrupt or unwritable file is a flash.
 fn locked<R>(ctx: &UiCtx, f: impl FnOnce(&mut TodoStore) -> R) -> Result<R, UiResponse> {
-    todos::with_store(&store_path(ctx), f).map_err(|_| back(false, &ctx.t("The saved todos could not be read.")))
+    todos::with_store(&store_path(ctx), f).map_err(|_| back(ctx, false, &ctx.t("The saved todos could not be read.")))
 }
 
 fn save_settings(ctx: &UiCtx) -> UiResponse {
@@ -147,21 +167,21 @@ fn save_settings(ctx: &UiCtx) -> UiResponse {
         return r;
     }
     if enabled {
-        back(true, &ctx.t("Saved. The first fetch starts within a minute."))
+        back(ctx, true, &ctx.t("Saved. The first fetch starts within a minute."))
     } else {
-        back(true, &ctx.t("Saved. Todo sync is off."))
+        back(ctx, true, &ctx.t("Saved. Todo sync is off."))
     }
 }
 
 /// One fetch now, whether or not automatic sync is on: the user asked for it.
 fn refresh(ctx: &UiCtx) -> UiResponse {
     if todos::load(&store_path(ctx)).is_err() {
-        return back(false, &ctx.t("The saved todos could not be read."));
+        return back(ctx, false, &ctx.t("The saved todos could not be read."));
     }
     let fetched = crate::todos_tick::fetch_sources(todos_sync::sources_from_config(gitlab_config(ctx).as_ref()));
     let now = ctx.state.now();
     match locked(ctx, |s| todos_sync::apply_fetched(s, fetched, now)) {
-        Ok(()) => back(true, &ctx.t("Todos refreshed.")),
+        Ok(()) => back(ctx, true, &ctx.t("Todos refreshed.")),
         Err(r) => r,
     }
 }
@@ -170,12 +190,55 @@ fn mark_done(ctx: &UiCtx) -> UiResponse {
     let (instance, id, now) = (ctx.param("instance").to_string(), todo_id(ctx), ctx.state.now());
     let client = match client(ctx, &instance) {
         Ok(c) => c,
-        Err(e) => return back(false, &e),
+        Err(e) => return back(ctx, false, &e),
     };
     match locked(ctx, |s| todos_sync::mark_done(s, &client, &instance, id, now)) {
-        Ok(Ok(())) => back(true, &ctx.t("Marked done in GitLab.")),
-        Ok(Err(e)) => back(false, &ctx.tf("GitLab did not accept it: {error}", &[("error", &e)])),
+        Ok(Ok(())) => back(ctx, true, &ctx.t("Marked done in GitLab.")),
+        Ok(Err(e)) => back(ctx, false, &ctx.tf("GitLab did not accept it: {error}", &[("error", &e)])),
         Err(r) => r,
+    }
+}
+
+/// Mark every ticked todo done in GitLab and here; the failures are listed, not fatal.
+fn bulk_done(ctx: &UiCtx) -> UiResponse {
+    let now = ctx.state.now();
+    let mut by_instance: std::collections::BTreeMap<String, Vec<i64>> = Default::default();
+    for sel in ctx.form().all("sel") {
+        if let Some((instance, id)) = sel.rsplit_once(':').and_then(|(i, n)| Some((i, n.parse::<i64>().ok()?))) {
+            by_instance.entry(instance.to_string()).or_default().push(id);
+        }
+    }
+    if by_instance.is_empty() {
+        return back(ctx, false, &ctx.t("Select at least one todo first."));
+    }
+    let (mut done, mut failed) = (0, Vec::new());
+    for (instance, ids) in by_instance {
+        let client = match client(ctx, &instance) {
+            Ok(c) => c,
+            Err(e) => {
+                failed.push(e);
+                continue;
+            }
+        };
+        match locked(ctx, |s| todos_sync::mark_many(s, &client, &instance, &ids, now)) {
+            Ok((n, errs)) => {
+                done += n;
+                failed.extend(errs);
+            }
+            Err(r) => return r,
+        }
+    }
+    if failed.is_empty() {
+        back(ctx, true, &ctx.tf("Marked {n} done in GitLab.", &[("n", &done.to_string())]))
+    } else {
+        back(
+            ctx,
+            false,
+            &ctx.tf(
+                "Marked {n} done; {failed} could not be: {error}",
+                &[("n", &done.to_string()), ("failed", &failed.len().to_string()), ("error", &failed[0])],
+            ),
+        )
     }
 }
 
@@ -205,9 +268,17 @@ const STYLE: &str = "<style>
 .todo-actions form{margin:0}
 .todo-row.is-done{opacity:.6}
 .todo-error{margin-bottom:.75rem}
-.todo-draft{margin-top:.6rem}
-.todo-draft-text{display:block;width:100%;height:auto;min-height:110px;padding:.6rem .75rem;box-sizing:border-box;resize:vertical;line-height:1.4}
-.todo-draft .todo-actions{margin-top:.5rem}
+.todo-draft-text{display:block;width:100%;height:auto;min-height:200px;padding:.6rem .75rem;box-sizing:border-box;resize:vertical;line-height:1.45}
+.todo-dialog{width:min(640px,calc(100vw - 2rem));max-width:none;padding:1.25rem 1.4rem;border:1px solid var(--md-outline-variant,rgba(128,128,128,.3));border-radius:16px;background:var(--md-surface,#fff);color:inherit;box-shadow:0 24px 60px rgba(0,0,0,.28)}
+.todo-dialog::backdrop{background:rgba(0,0,0,.35);backdrop-filter:blur(4px)}
+.todo-dialog h2{margin:0 0 .25rem;font-size:1.05rem}
+.todo-dialog .todo-meta{margin:0 0 .75rem}
+.todo-dialog .todo-actions{margin-top:.9rem;justify-content:flex-end}
+.todo-pick{display:flex;align-items:flex-start;padding-top:.2rem}
+.todo-pick input{width:16px;height:16px;margin:0}
+.todo-bulkbar{display:flex;align-items:center;gap:.75rem;padding:.4rem 0 .6rem;font-size:.85rem}
+.todo-bulkbar label{display:inline-flex;align-items:center;gap:.4rem}
+.todo-bulkbar input[type=checkbox]{width:16px;height:16px;margin:0}
 </style>";
 
 fn reason_label(ctx: &UiCtx, action: &str) -> String {
@@ -237,8 +308,8 @@ fn ago(ctx: &UiCtx, now: DateTime<Utc>, then: DateTime<Utc>) -> String {
     }
 }
 
-fn settings_card(ctx: &UiCtx, store: &TodoStore) -> String {
-    let csrf = ctx.csrf_input();
+fn settings_card(ctx: &UiCtx, store: &TodoStore, filter: &str) -> String {
+    let csrf = format!("{}{}", ctx.csrf_input(), filter_input(filter));
     let enabled = store.settings.enabled;
     let interval = store.settings.interval_minutes;
     let last = store
@@ -274,8 +345,8 @@ fn settings_card(ctx: &UiCtx, store: &TodoStore) -> String {
     )
 }
 
-fn row(ctx: &UiCtx, t: &Todo, now: DateTime<Utc>) -> String {
-    let csrf = ctx.csrf_input();
+fn row(ctx: &UiCtx, t: &Todo, now: DateTime<Utc>, filter: &str) -> String {
+    let csrf = format!("{}{}", ctx.csrf_input(), filter_input(filter));
     let done = t.state == "done";
     let is_new = !done && now - t.created_at < Duration::hours(24);
     let new_chip = if is_new { format!("<span class='todo-chip is-new'>{}</span>", pyfmt::escape(&ctx.t("New"))) } else { String::new() };
@@ -290,29 +361,39 @@ fn row(ctx: &UiCtx, t: &Todo, now: DateTime<Utc>) -> String {
             pyfmt::escape(&ctx.t("Mark done"))
         )
     };
-    let draft = draft_html(ctx, t);
+    let draft = draft_html(ctx, t, filter);
     format!(
-        "<div class='todo-row{cls}'><div class='todo-main'>\
+        "<div class='todo-row{cls}'>{pick}<div class='todo-main'>\
 <a class='todo-title' href=\"{url}\" target='_blank' rel='noopener'>{title}</a>\
 <div class='todo-meta'>{new_chip}<span class='todo-chip'>{reason}</span><span>{project}</span><span>@{author}</span><span>{when}</span></div>\
 <p class='todo-body'>{body}</p>{draft}</div>\
 <div class='todo-actions'>{done_btn}{draft_btn}<a class='btn' style='height:34px' href=\"{url}\" target='_blank' rel='noopener'>{link} {open}</a></div></div>",
         cls = if done { " is-done" } else { "" },
-        url = pyfmt::escape(&t.web_url),
+        pick = if done {
+            String::new()
+        } else {
+            format!(
+                "<div class='todo-pick'><input type='checkbox' form='todo-bulk' name='sel' value='{}:{}' aria-label=\"{}\"></div>",
+                pyfmt::escape(&t.instance),
+                t.id,
+                pyfmt::escape(&ctx.t("Select"))
+            )
+        },
+        url = pyfmt::escape(t.link()),
         title = pyfmt::escape(&t.title),
         reason = pyfmt::escape(&reason_label(ctx, &t.action)),
         project = pyfmt::escape(&t.project),
         author = pyfmt::escape(&t.author),
         when = pyfmt::escape(&ago(ctx, now, t.created_at)),
         body = pyfmt::escape(&snippet(&t.body)),
-        link = icon("link"),
-        open = pyfmt::escape(&ctx.t("Open in GitLab")),
-        draft_btn = draft_button(ctx, t),
+        link = icon("open_in_new"),
+        open = pyfmt::escape(&ctx.t("Open")),
+        draft_btn = draft_button(ctx, t, filter),
     )
 }
 
 /// "Analyze & draft reply" for a pending todo a reply makes sense for and has no draft yet.
-fn draft_button(ctx: &UiCtx, t: &Todo) -> String {
+fn draft_button(ctx: &UiCtx, t: &Todo, filter: &str) -> String {
     if t.state == "done" || !todos::is_reply_worthy(&t.action) || has_live_draft(ctx, t) {
         return String::new();
     }
@@ -320,7 +401,7 @@ fn draft_button(ctx: &UiCtx, t: &Todo) -> String {
         "<form method='post' action='/todos/{}/{}/draft'>{}<button class='btn' type='submit' style='height:34px'>{}</button></form>",
         pyfmt::escape(&t.instance),
         t.id,
-        ctx.csrf_input(),
+        ctx.csrf_input() + &filter_input(filter),
         pyfmt::escape(&ctx.t("Analyze & draft reply"))
     )
 }
@@ -336,8 +417,9 @@ fn has_live_draft(ctx: &UiCtx, t: &Todo) -> bool {
         .is_some_and(|a| matches!(a["status"].as_str(), Some("pending" | "approved")))
 }
 
-/// The draft under a row: a spinner note while running, an editable card while pending.
-fn draft_html(ctx: &UiCtx, t: &Todo) -> String {
+/// The draft under a row: a spinner note while running, a Review button (and the dialog it
+/// opens) once the draft is ready.
+fn draft_html(ctx: &UiCtx, t: &Todo, filter: &str) -> String {
     let Some(id) = t.draft_approval_id.as_deref() else { return String::new() };
     if id.starts_with(todos_draft::RUNNING) {
         if !todos_draft::is_running(Some(id), ctx.state.now()) {
@@ -348,18 +430,32 @@ fn draft_html(ctx: &UiCtx, t: &Todo) -> String {
     let Some(approval) = loopx_core::approvals::get(&approvals_dir(ctx), id) else { return String::new() };
     let text = approval["summary"].as_str().unwrap_or("");
     match approval["status"].as_str() {
-        Some("pending") => format!(
-            "<div class='todo-draft'><form method='post' action='/todos/{inst}/{id}/approve'>{csrf}\
-<textarea class='todo-field todo-draft-text' name='text' rows='5'>{text}</textarea>\
-<div class='todo-actions'><button class='btn btn-primary' type='submit' style='height:34px'>{post}</button>\
-<button class='btn' type='submit' formaction='/todos/{inst}/{id}/discard' style='height:34px'>{discard}</button></div></form></div>",
-            inst = pyfmt::escape(&t.instance),
-            id = t.id,
-            csrf = ctx.csrf_input(),
-            text = pyfmt::escape(text),
-            post = pyfmt::escape(&ctx.t("Approve & post reply")),
-            discard = pyfmt::escape(&ctx.t("Discard")),
-        ),
+        Some("pending") => {
+            let slug: String = t.instance.chars().filter(char::is_ascii_alphanumeric).collect();
+            let dialog = format!("todo-review-{slug}-{}", t.id);
+            format!(
+                "<p class='todo-meta'>{ready} <button class='todo-btn' type='button' onclick=\"document.getElementById('{dialog}').showModal()\">{eye} {review}</button></p>\
+<dialog id='{dialog}' class='todo-dialog'><form method='post' action='/todos/{inst}/{id}/approve'>{csrf}{filter}\
+<h2>{heading}</h2><div class='todo-meta'>{about}</div>\
+<textarea class='todo-field todo-draft-text' name='text' rows='9'>{text}</textarea>\
+<div class='todo-actions'><button class='btn' type='button' onclick=\"this.closest('dialog').close()\" style='height:34px'>{cancel}</button>\
+<button class='btn' type='submit' formaction='/todos/{inst}/{id}/discard' style='height:34px'>{discard}</button>\
+<button class='btn btn-primary' type='submit' style='height:34px'>{post}</button></div></form></dialog>",
+                inst = pyfmt::escape(&t.instance),
+                id = t.id,
+                csrf = ctx.csrf_input(),
+                filter = filter_input(filter),
+                text = pyfmt::escape(text),
+                ready = pyfmt::escape(&ctx.t("Draft ready.")),
+                eye = icon("visibility"),
+                review = pyfmt::escape(&ctx.t("Review")),
+                heading = pyfmt::escape(&ctx.t("Review the reply")),
+                about = pyfmt::escape(&ctx.tf("{title} · posted to GitLab only when you confirm", &[("title", &t.title)])),
+                cancel = pyfmt::escape(&ctx.t("Cancel")),
+                post = pyfmt::escape(&ctx.t("Confirm & post reply")),
+                discard = pyfmt::escape(&ctx.t("Discard")),
+            )
+        }
         Some("approved") => format!("<p class='todo-meta'>{}</p>", pyfmt::escape(&ctx.t("Reply posted."))),
         _ => String::new(),
     }
@@ -399,7 +495,12 @@ pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
             )
         }
     };
-    let mut out = format!("{STYLE}{title}{}{}", flash_html(flash, flash_ok), settings_card(ctx, &store));
+    let view = match ctx.query().first("filter") {
+        Some("pending") => "pending",
+        Some("done") => "done",
+        _ => "all",
+    };
+    let mut out = format!("{STYLE}{title}{}{}", flash_html(flash, flash_ok), settings_card(ctx, &store, view));
     let cached = store.instances.values().any(|i| !i.todos.is_empty());
     if !store.settings.enabled && !cached {
         out.push_str(&format!(
@@ -408,7 +509,7 @@ pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         ));
         return out;
     }
-    let filter = ctx.query().first("filter").map(str::to_string).unwrap_or_else(|| "all".into());
+    let filter = view.to_string();
     let now = ctx.state.now();
     let mut rows: Vec<&Todo> = store
         .instances
@@ -436,12 +537,25 @@ pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         .collect();
     out.push_str(&errors);
     out.push_str(&format!("<section class='card'><div class='todo-bar'>{}</div>", filter_bar(ctx, &filter)));
+    let any_pending = rows.iter().any(|t| t.state == "pending");
     if rows.is_empty() {
         out.push_str(&format!("<p>{}</p></section>", pyfmt::escape(&ctx.t("Nothing here yet."))));
     } else {
+        if any_pending {
+            out.push_str(&format!(
+            "<form id='todo-bulk' method='post' action='/todos/bulk-done' class='todo-bulkbar'>{}{}\
+<label><input type='checkbox' aria-label=\"{all}\" onclick=\"document.querySelectorAll('input[form=todo-bulk][name=sel]').forEach(function(c){{c.checked=this.checked}},this)\"> {all}</label>\
+<button class='todo-btn' type='submit'>{check} {done}</button></form>",
+            ctx.csrf_input(),
+            filter_input(&filter),
+            all = pyfmt::escape(&ctx.t("Select all")),
+            check = icon("check"),
+            done = pyfmt::escape(&ctx.t("Mark selected done")),
+        ));
+        }
         out.push_str("<div class='todo-list'>");
         for t in rows {
-            out.push_str(&row(ctx, t, now));
+            out.push_str(&row(ctx, t, now, &filter));
         }
         out.push_str("</div></section>");
     }
@@ -521,6 +635,7 @@ mod tests {
             created_at: now() - age,
             state: state.into(),
             done_at: None,
+            target_url: String::new(),
             draft_approval_id: None,
         }
     }
@@ -576,7 +691,7 @@ mod tests {
     #[test]
     fn every_post_route_requires_csrf() {
         let sb = Sb::new();
-        for url in ["/todos/settings", "/todos/refresh", "/todos/work/1/done", "/todos/work/1/draft", "/todos/work/1/approve", "/todos/work/1/discard"] {
+        for url in ["/todos/settings", "/todos/refresh", "/todos/bulk-done", "/todos/work/1/done", "/todos/work/1/draft", "/todos/work/1/approve", "/todos/work/1/discard"] {
             let req = crate::ui::routes::UiRequest::new(Method::POST, url);
             let r = sb.state.registry.dispatch(&sb.state, &req).unwrap();
             assert_eq!(r.status, 403, "{url}");
@@ -664,6 +779,79 @@ mod tests {
         let id = todos_draft::complete(&mut s, &approvals_dir(sb), "work", 1, Ok("Thanks <b>ann</b>".into()), now()).unwrap();
         todos::save(&s, &sb.store_path()).unwrap();
         id
+    }
+
+    fn location(r: &crate::ui::routes::UiResponse) -> String {
+        r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("location")).unwrap().1.clone()
+    }
+
+    #[test]
+    fn open_goes_to_the_comment_that_raised_the_todo_and_says_just_open() {
+        let sb = Sb::new();
+        let mut t = todo(1, "mentioned", Duration::hours(1), "pending");
+        t.target_url = "https://gl/i/1#note_77".into();
+        sb.seed(true, vec![t, todo(2, "mentioned", Duration::hours(2), "pending")]);
+        let html = sb.get("/loops/issue-loop?view=todos");
+        assert!(html.contains("href=\"https://gl/i/1#note_77\""), "{html}");
+        assert!(html.contains("href=\"https://gl/i/2\""), "falls back to the issue: {html}");
+        assert!(!html.contains("Open in GitLab"), "{html}");
+        assert!(html.contains("#i-open_in_new"), "{html}");
+    }
+
+    #[test]
+    fn every_action_returns_to_the_view_it_came_from() {
+        let sb = Sb::new();
+        sb.seed(true, vec![todo(1, "mentioned", Duration::hours(1), "pending")]);
+        for (url, body) in [
+            ("/todos/work/1/done", "filter=pending"),
+            ("/todos/work/1/draft", "filter=pending"),
+            ("/todos/work/1/discard", "filter=pending"),
+            ("/todos/work/1/approve", "filter=pending&text=x"),
+            ("/todos/refresh", "filter=pending"),
+            ("/todos/bulk-done", "filter=pending&sel=work:1"),
+        ] {
+            let loc = location(&sb.post(url, body));
+            assert!(loc.contains("filter=pending"), "{url}: {loc}");
+        }
+        // An unknown filter value is not echoed back.
+        let loc = location(&sb.post("/todos/work/1/done", "filter=%22%3E%3Cb%3E"));
+        assert!(!loc.contains("filter=%22") && !loc.contains("<b>"), "{loc}");
+        // The forms carry the current view.
+        let html = sb.get("/loops/issue-loop?view=todos&filter=pending");
+        assert!(html.contains("name='filter' value='pending'"), "{html}");
+    }
+
+    #[test]
+    fn pending_rows_have_a_checkbox_for_the_bulk_mark_done_form() {
+        let sb = Sb::new();
+        sb.seed(true, vec![todo(1, "mentioned", Duration::hours(1), "pending"), todo(2, "mentioned", Duration::hours(2), "done")]);
+        let html = sb.get("/loops/issue-loop?view=todos");
+        assert!(html.contains("id='todo-bulk'") && html.contains("action='/todos/bulk-done'"), "{html}");
+        assert!(html.contains("form='todo-bulk' name='sel' value='work:1'"), "{html}");
+        assert!(!html.contains("value='work:2'"), "{html}");
+    }
+
+    #[test]
+    fn bulk_done_needs_a_selection_and_reports_gitlab_failures() {
+        let sb = Sb::new();
+        sb.seed(true, vec![todo(1, "mentioned", Duration::hours(1), "pending")]);
+        let none = location(&sb.post("/todos/bulk-done", "filter=pending"));
+        assert!(none.contains("ok=0"), "{none}");
+        // GitLab is unreachable here: nothing flips, and the user is told.
+        let failed = location(&sb.post("/todos/bulk-done", "sel=work:1"));
+        assert!(failed.contains("ok=0"), "{failed}");
+        let s = todos::load(&sb.store_path()).unwrap();
+        assert_eq!(s.instances["work"].todos[&1].state, "pending");
+    }
+
+    #[test]
+    fn a_pending_draft_shows_a_review_button_that_opens_a_dialog_with_the_text() {
+        let sb = Sb::new();
+        with_draft(&sb);
+        let html = sb.get("/loops/issue-loop?view=todos");
+        assert!(html.contains("<dialog"), "{html}");
+        assert!(html.contains("showModal()"), "{html}");
+        assert!(html.contains("Review"), "{html}");
     }
 
     #[test]

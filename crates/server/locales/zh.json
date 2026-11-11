@@ -1830,5 +1830,14 @@
   "Drafting a reply…": "正在起草回复…",
   "Approve & post reply": "批准并发布回复",
   "Reply posted.": "回复已发布。",
-  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "同步已关闭。在上方开启后，将每隔几分钟获取你的 GitLab 待办；也可以使用“立即刷新”只获取一次。关闭期间不会自动获取任何内容。"
+  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "同步已关闭。在上方开启后，将每隔几分钟获取你的 GitLab 待办；也可以使用“立即刷新”只获取一次。关闭期间不会自动获取任何内容。",
+  "Select at least one todo first.": "请先至少选择一项待办。",
+  "Marked {n} done in GitLab.": "已在 GitLab 中将 {n} 项标记为完成。",
+  "Marked {n} done; {failed} could not be: {error}": "已完成 {n} 项;{failed} 项失败:{error}",
+  "Select": "选择",
+  "Draft ready.": "草稿已就绪。",
+  "Review the reply": "审阅回复",
+  "{title} · posted to GitLab only when you confirm": "{title} · 仅在你确认后才会发布到 GitLab",
+  "Confirm & post reply": "确认并发布回复",
+  "Mark selected done": "将所选标记为完成"
 }

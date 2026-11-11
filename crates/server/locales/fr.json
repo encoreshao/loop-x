@@ -1830,5 +1830,14 @@
   "Drafting a reply…": "Rédaction d'une réponse…",
   "Approve & post reply": "Approuver et publier la réponse",
   "Reply posted.": "Réponse publiée.",
-  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "La synchronisation est désactivée. Activez-la ci-dessus pour récupérer vos tâches GitLab toutes les quelques minutes, ou utilisez Actualiser maintenant pour une seule récupération. Rien n'est récupéré automatiquement tant qu'elle est désactivée."
+  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "La synchronisation est désactivée. Activez-la ci-dessus pour récupérer vos tâches GitLab toutes les quelques minutes, ou utilisez Actualiser maintenant pour une seule récupération. Rien n'est récupéré automatiquement tant qu'elle est désactivée.",
+  "Select at least one todo first.": "Sélectionnez d'abord au moins une tâche.",
+  "Marked {n} done in GitLab.": "{n} tâche(s) marquée(s) comme faites dans GitLab.",
+  "Marked {n} done; {failed} could not be: {error}": "{n} marquée(s) comme faites ; {failed} en échec : {error}",
+  "Select": "Sélectionner",
+  "Draft ready.": "Brouillon prêt.",
+  "Review the reply": "Relire la réponse",
+  "{title} · posted to GitLab only when you confirm": "{title} · publié sur GitLab uniquement après votre confirmation",
+  "Confirm & post reply": "Confirmer et publier la réponse",
+  "Mark selected done": "Marquer la sélection comme faite"
 }

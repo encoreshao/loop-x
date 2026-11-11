@@ -1830,5 +1830,14 @@
   "Drafting a reply…": "返信を下書き中…",
   "Approve & post reply": "承認して返信を投稿",
   "Reply posted.": "返信を投稿しました。",
-  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "同期はオフです。上でオンにすると数分ごとにGitLabのToDoを取得します。1回だけ取得するには「今すぐ更新」を使ってください。オフの間は自動では何も取得しません。"
+  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "同期はオフです。上でオンにすると数分ごとにGitLabのToDoを取得します。1回だけ取得するには「今すぐ更新」を使ってください。オフの間は自動では何も取得しません。",
+  "Select at least one todo first.": "先にToDoを1つ以上選択してください。",
+  "Marked {n} done in GitLab.": "{n}件をGitLabで完了にしました。",
+  "Marked {n} done; {failed} could not be: {error}": "{n}件を完了にしました。{failed}件は失敗しました: {error}",
+  "Select": "選択",
+  "Draft ready.": "下書きの準備ができました。",
+  "Review the reply": "返信を確認",
+  "{title} · posted to GitLab only when you confirm": "{title} · 確認するとGitLabに投稿されます",
+  "Confirm & post reply": "確認して返信を投稿",
+  "Mark selected done": "選択を完了にする"
 }

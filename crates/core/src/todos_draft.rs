@@ -305,6 +305,7 @@ mod tests {
             created_at: now() - Duration::hours(1),
             state: "pending".into(),
             done_at: None,
+            target_url: String::new(),
             draft_approval_id: None,
         };
         s.instances

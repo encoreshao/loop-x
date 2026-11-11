@@ -88,6 +88,26 @@ pub fn mark_done(
     Ok(())
 }
 
+/// Mark several todos done, one after another. A failure on one does not stop the rest:
+/// returns how many were marked and one message per todo that was not.
+pub fn mark_many(
+    store: &mut TodoStore,
+    source: &dyn TodoSource,
+    instance: &str,
+    ids: &[i64],
+    now: DateTime<Utc>,
+) -> (usize, Vec<String>) {
+    let mut done = 0;
+    let mut failed = Vec::new();
+    for &id in ids {
+        match mark_done(store, source, instance, id, now) {
+            Ok(()) => done += 1,
+            Err(e) => failed.push(e),
+        }
+    }
+    (done, failed)
+}
+
 /// One GitLab instance's source, or why its client could not be built.
 pub type InstanceSource = (String, Result<Box<dyn TodoSource>, String>);
 
@@ -202,6 +222,22 @@ mod tests {
             ..Fake::ok(vec![])
         };
         assert!(mark_done(&mut store, &src, "work", 3, now()).is_err());
+        assert_eq!(store.instances["work"].todos[&3].state, "pending");
+    }
+
+    #[test]
+    fn mark_many_marks_each_and_reports_the_failures_without_stopping() {
+        let mut store = TodoStore::default();
+        let f = Fake::ok(vec![payload(1), payload(2), payload(3)]);
+        let todos = (1..=3)
+            .map(|i| Todo::from_gitlab("work", &payload(i)).unwrap())
+            .collect();
+        apply_fetched(&mut store, vec![("work".into(), Ok(todos))], now());
+        let (done, failed) = mark_many(&mut store, &f, "work", &[1, 2, 99], now());
+        assert_eq!(done, 2);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(store.instances["work"].todos[&1].state, "done");
+        assert_eq!(store.instances["work"].todos[&2].state, "done");
         assert_eq!(store.instances["work"].todos[&3].state, "pending");
     }
 

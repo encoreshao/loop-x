@@ -1427,6 +1427,7 @@ mod tests {
                 - Duration::minutes(mins),
             state: state.into(),
             done_at: None,
+            target_url: String::new(),
             draft_approval_id: None,
         };
         let mut store = TodoStore::default();
@@ -1484,6 +1485,7 @@ mod tests {
                         - Duration::minutes(id),
                     state: "pending".into(),
                     done_at: None,
+                    target_url: String::new(),
                     draft_approval_id: None,
                 },
             );
