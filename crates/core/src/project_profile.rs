@@ -124,6 +124,37 @@ fn one_line(s: &str) -> String {
         .replace("-->", "->")
 }
 
+/// A body line that the parser would treat as structure: a section marker, the
+/// links marker or the sources heading.
+fn is_structural(line: &str) -> bool {
+    line.starts_with("<!-- section: ")
+        || line.trim_end() == "<!-- links -->"
+        || line.trim_end() == "### Sources"
+}
+
+/// Body escaping: a structural line, with any number of leading backslashes,
+/// gets one more backslash on render; parse strips one. Round-trips exactly.
+fn escape_body(body: &str) -> String {
+    body.lines()
+        .map(|l| {
+            if is_structural(l.trim_start_matches('\\')) {
+                format!("\\{l}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn unescape_line(line: &str) -> &str {
+    if line.starts_with('\\') && is_structural(line.trim_start_matches('\\')) {
+        &line[1..]
+    } else {
+        line
+    }
+}
+
 fn ts(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -158,7 +189,7 @@ pub fn render(p: &Profile) -> String {
             key.heading()
         ));
         if !s.body.trim().is_empty() {
-            out.push_str(&format!("\n{}\n", s.body.trim()));
+            out.push_str(&format!("\n{}\n", escape_body(s.body.trim())));
         }
         if !s.sources.is_empty() {
             out.push_str("\n### Sources\n");
@@ -265,7 +296,7 @@ pub fn parse(text: &str) -> Result<Profile, String> {
     if !closed {
         return Err("unterminated frontmatter".into());
     }
-    let alias = alias.ok_or("missing alias")?;
+    let alias = alias.filter(|a| !a.is_empty()).ok_or("missing alias")?;
 
     let mut blocks: Vec<Block> = Vec::new();
     for line in lines {
@@ -321,7 +352,13 @@ pub fn parse(text: &str) -> Result<Profile, String> {
                     key,
                     Section {
                         summary,
-                        body: body_lines.join("\n").trim().to_string(),
+                        body: body_lines
+                            .iter()
+                            .map(|l| unescape_line(l))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            .trim()
+                            .to_string(),
                         last_verified,
                         sources,
                         origin,
@@ -409,7 +446,9 @@ fn snapshot_and_write(alias: &str, text: &str, root: Option<&Path>) -> io::Resul
 }
 
 pub fn save(p: &Profile, root: Option<&Path>) -> io::Result<()> {
-    snapshot_and_write(&p.alias, &render(p), root)
+    let text = render(p);
+    parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    snapshot_and_write(&p.alias, &text, root)
 }
 
 /// Make a history file the current profile (the current one is snapshotted first).
@@ -433,7 +472,7 @@ pub fn edit_section(
         sources: Vec::new(),
         origin: Origin::Human,
     });
-    entry.summary = summary.to_string();
+    entry.summary = one_line(summary);
     entry.body = body.to_string();
     entry.last_verified = Some(now);
     entry.origin = Origin::Human;
@@ -542,6 +581,47 @@ mod tests {
         assert_eq!(s.summary, "new sum");
         assert_eq!(s.body, "new body");
         assert_eq!(s.last_verified, Some(t(12)));
+    }
+
+    fn hostile_round_trip(body: &str) {
+        let mut p = sample("web");
+        edit_section(&mut p, SectionKey::Gotchas, "s", body, t(1));
+        let back = parse(&render(&p)).unwrap();
+        assert_eq!(back, p);
+        assert_eq!(back.sections[&SectionKey::Gotchas].body, body);
+    }
+
+    #[test]
+    fn hostile_bodies_round_trip_exactly() {
+        hostile_round_trip("a\n<!-- section: stack origin: agent verified: - summary: x -->\nb");
+        hostile_round_trip("a\n<!-- section: bogus -->\nb");
+        hostile_round_trip("a\n<!-- links -->\n- `x` | y | z\nb");
+        hostile_round_trip("a\n### Sources\n- `p` sha256:abc\nb");
+        hostile_round_trip("a\n\\### Sources\n\\\\<!-- links -->\nb");
+    }
+
+    #[test]
+    fn multiline_summary_round_trips_after_edit_section() {
+        let mut p = sample("web");
+        edit_section(
+            &mut p,
+            SectionKey::Gotchas,
+            "one\ntwo  --> three",
+            "b",
+            t(1),
+        );
+        assert_eq!(p.sections[&SectionKey::Gotchas].summary, "one two -> three");
+        assert_eq!(parse(&render(&p)).unwrap(), p);
+    }
+
+    #[test]
+    fn save_refuses_unreadable_output() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = sample("web");
+        p.sections.get_mut(&SectionKey::Stack).unwrap().sources[0].path = "a`b".into();
+        p.alias = String::new();
+        assert!(save(&p, Some(root.path())).is_err());
+        assert!(!profile_path("", Some(root.path())).exists());
     }
 
     #[test]
