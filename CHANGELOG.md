@@ -34,6 +34,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Fix now leaves one comment on the merge request per run instead of a plan note, a finish note, a reply in every thread and a screenshots note: the start note is rewritten into a single summary with **Fixed** (what each reviewer wanted and the outcome), **Not changed** (questions, risks and skipped items with the answer or reason) and the screenshots. If the note cannot be edited, the summary is posted as a new note.
+
 - Slack messages about a merge request now show its title: the issue loop's "MR opened" message and report list, and the review-thread "needs you" alert.
 - Inbox Triage's Slack digest reads as plain sentences ("18 new emails: 3 urgent, 6 need a reply, 9 can wait", "Open draft", "Sign in again") and only shows the per-inbox table when several inboxes ran.
 - The Creator's "video generated" Slack message names the video by its title, with what it was made from, where the file is and which platforms have publish text.
@@ -48,6 +50,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Creator is no longer in the dashboard sidebar; the Mac app has a new **Creator** menu (also in the menu-bar icon) that opens its Discover, Library, Showcase, Videos and Jobs panels directly.
 
 ### Fixed
+
+- The Terminal page's running strip no longer says "Nothing is running right now" while a loop or job is running: it lists everything the topbar island shows (the GitLab loop, queued loop runs, Creator, Fix now and Release MR jobs) with its step, above what each agent is doing.
 
 - Fix now's dependency install no longer fails on projects using `sharp` when Homebrew's libvips is installed (it tried to compile from source), and a `node_modules` left half-installed by a failed install is installed again instead of being trusted.
 - Fix now no longer stops with "an earlier unpushed fix is waiting there": a leftover unpushed fix from an earlier run (for example one whose checks failed) is saved on a `loopx-backup/mr-<iid>-<sha>` branch and the MR worktree is reset to the latest `origin/<branch>`, so the new run fixes the pending comments on current code. Uncommitted changes are still never discarded.

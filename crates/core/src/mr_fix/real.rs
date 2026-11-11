@@ -85,6 +85,13 @@ impl MrApi for GitlabMr {
             .map_err(|e| e.to_string())
     }
 
+    fn update_note(&self, note_id: i64, body: &str) -> Result<(), String> {
+        self.client
+            .update_mr_comment(&self.project_id, self.iid, note_id, body)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     fn upload(&self, path: &Path) -> Result<String, String> {
         let v = self
             .client

@@ -8,7 +8,7 @@
 
 use super::feedback::{parse_marker_from_notes, pending, Handled, Item, Severity};
 use super::jobs::FixJob;
-use super::notes::{finish_note, start_note, Done, Outcome, PlannedChange, AGENT_PREFIX};
+use super::notes::{finish_note, finish_note_with, start_note, Done, Outcome, PlannedChange};
 use crate::loop_plugins::mr_review::{build_diff_text, DIFF_CAP_BYTES};
 use crate::mr_screenshots::{screenshots_section, ShotPair, UploadedPair};
 use serde_json::Value;
@@ -58,6 +58,10 @@ pub trait MrApi {
     /// Post a top-level MR note; returns its id.
     fn post_note(&self, body: &str) -> Result<i64, String>;
     fn reply(&self, discussion_id: &str, body: &str) -> Result<(), String>;
+    /// Rewrite one of the agent's own notes in place.
+    fn update_note(&self, _note_id: i64, _body: &str) -> Result<(), String> {
+        Err("this merge request cannot edit notes".into())
+    }
     /// Upload an image to the project; returns the URL to embed it with.
     fn upload(&self, _path: &Path) -> Result<String, String> {
         Err("uploads are not supported".into())
@@ -401,16 +405,6 @@ fn excerpt(item: &Item) -> String {
     }
 }
 
-/// A thread reply: one line, visibly the agent's (so it is never read back
-/// as human feedback), no HTML comment, no mention, no quick action.
-fn reply_body(text: &str) -> String {
-    let line = one_line(text)
-        .replace("<!--", "<!\u{200b}--")
-        .replace("-->", "--\u{200b}>");
-    let line = crate::loop_plugins::mr_review::defuse(&line);
-    format!("{AGENT_PREFIX}: {line}")
-}
-
 /// The first path the MR adds, changes, renames or deletes that the agent
 /// session would load as its own configuration (settings, memory, MCP).
 fn agent_settings_path(changes: &[Value]) -> Option<String> {
@@ -686,7 +680,7 @@ pub fn run_reporting(
     for l in log.borrow().iter() {
         let _ = writeln!(out, "{l}");
     }
-    let Some((announced_at, _)) = *announced.borrow() else {
+    let Some((announced_at, start_id)) = *announced.borrow() else {
         if let Some(res) = planless_skips(mr, ws, &dir, &base, &items, &handoff, out) {
             return res;
         }
@@ -749,10 +743,18 @@ pub fn run_reporting(
                     });
                     continue;
                 }
+                // An answer to a question reads better than a bare skip reason.
+                let reason = if it.fixed {
+                    String::new()
+                } else if !it.reply.is_empty() {
+                    it.reply.clone()
+                } else {
+                    it.reason.clone()
+                };
                 done.push(Done {
                     text: text_of(it),
                     fixed: it.fixed,
-                    reason: it.reason.clone(),
+                    reason,
                 });
                 marked.0.insert(
                     it.discussion_id.clone(),
@@ -797,42 +799,41 @@ pub fn run_reporting(
     }
     let mut res = res;
     progress(5);
-    match mr.post_note(&finish_note(&Outcome { items: done }, &marked)) {
-        Ok(id) => {
-            let _ = writeln!(out, "finish note {id} posted");
+    // One comment for the whole run: the start note is rewritten into the
+    // summary (fixed, not changed, screenshots) instead of adding more notes.
+    let shots = match (&handoff, pushed) {
+        (Ok(h), true) => screenshots_markdown(mr, h, out),
+        _ => String::new(),
+    };
+    let body = finish_note_with(&Outcome { items: done }, &marked, &shots);
+    match mr.update_note(start_id, &body) {
+        Ok(()) => {
+            let _ = writeln!(out, "summary written into note {start_id}");
         }
         Err(e) => {
-            let _ = writeln!(out, "could not post the finish note: {e}");
-            res.summary.push_str(" (finish note not posted)");
-        }
-    }
-    if gated.is_ok() {
-        for it in reported.iter().filter(|it| !unclaimed(it)) {
-            let text = if !it.reply.is_empty() {
-                it.reply.clone()
-            } else if it.fixed {
-                format!("Fixed: {}", text_of(it))
-            } else {
-                format!("Skipped: {}", it.reason)
-            };
-            if let Err(e) = mr.reply(&it.discussion_id, &reply_body(&text)) {
-                let _ = writeln!(out, "could not reply in {}: {e}", it.discussion_id);
+            let _ = writeln!(
+                out,
+                "could not update the start note ({e}); posting a new one"
+            );
+            match mr.post_note(&body) {
+                Ok(id) => {
+                    let _ = writeln!(out, "finish note {id} posted");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "could not post the finish note: {e}");
+                    res.summary.push_str(" (finish note not posted)");
+                }
             }
-        }
-    }
-    if pushed {
-        if let Ok(h) = &handoff {
-            post_screenshots(mr, h, out);
         }
     }
     let _ = writeln!(out, "{}: {}", res.state, res.summary);
     res
 }
 
-/// Upload the agent's screenshots and post them in one note. Only called for a
+/// Upload the agent's screenshots and return the Markdown for the summary note. Only called for a
 /// fix that was pushed, so the images match the code on the branch. A failed
 /// upload drops that image and is logged; it never fails the run.
-fn post_screenshots(mr: &dyn MrApi, h: &AgentHandoff, out: &mut dyn Write) {
+fn screenshots_markdown(mr: &dyn MrApi, h: &AgentHandoff, out: &mut dyn Write) -> String {
     let reason = super::notes::safe_text(&h.screenshots_note);
     let mut pairs = Vec::new();
     for shot in &h.screenshots {
@@ -861,24 +862,14 @@ fn post_screenshots(mr: &dyn MrApi, h: &AgentHandoff, out: &mut dyn Write) {
         });
     }
     let note = (!reason.is_empty()).then_some(reason.as_str());
-    let Some(section) = screenshots_section(&pairs, note) else {
-        return;
-    };
-    match mr.post_note(&super::notes::screenshots_note(&section)) {
-        Ok(id) => {
-            let _ = writeln!(out, "screenshots note {id} posted");
-        }
-        Err(e) => {
-            let _ = writeln!(out, "could not post the screenshots note: {e}");
-        }
-    }
+    screenshots_section(&pairs, note).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mr_fix::feedback::parse_marker_from_notes;
-    use crate::mr_fix::notes::is_agent_note;
+    use crate::mr_fix::notes::{is_agent_note, AGENT_PREFIX};
     use serde_json::json;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -891,12 +882,15 @@ mod tests {
         discussions: RefCell<Vec<Value>>,
         notes: RefCell<Vec<String>>,
         replies: RefCell<Vec<(String, String)>>,
+        /// Every start note as first posted (it is later rewritten into the summary).
+        starts: RefCell<Vec<String>>,
         next_id: Cell<i64>,
         changes: RefCell<Vec<Value>>,
         /// Runs inside `post_note`, before it returns.
         on_post: RefCell<Option<Box<dyn Fn()>>>,
         uploaded: RefCell<Vec<PathBuf>>,
         upload_err: Cell<bool>,
+        update_err: Cell<bool>,
     }
 
     impl FakeMr {
@@ -907,11 +901,13 @@ mod tests {
                 discussions: RefCell::new(discussions),
                 notes: RefCell::new(vec![]),
                 replies: RefCell::new(vec![]),
+                starts: RefCell::new(vec![]),
                 next_id: Cell::new(1000),
                 changes: RefCell::new(vec![json!({"new_path": "a.rb", "diff": "+x"})]),
                 on_post: RefCell::new(None),
                 uploaded: RefCell::new(vec![]),
                 upload_err: Cell::new(false),
+                update_err: Cell::new(false),
             }
         }
         fn id(&self) -> i64 {
@@ -951,6 +947,9 @@ mod tests {
             } else {
                 "finish"
             };
+            if kind == "start" {
+                self.starts.borrow_mut().push(body.to_string());
+            }
             self.events.borrow_mut().push(format!("note:{kind}"));
             self.notes.borrow_mut().push(body.to_string());
             self.discussions.borrow_mut().push(json!({
@@ -969,6 +968,28 @@ mod tests {
                 "/uploads/h/{}",
                 path.file_name().unwrap().to_string_lossy()
             ))
+        }
+        fn update_note(&self, note_id: i64, body: &str) -> Result<(), String> {
+            if self.update_err.get() {
+                return Err("403 Forbidden".into());
+            }
+            self.events.borrow_mut().push("note:finish".into());
+            let kind_of = |b: &str| b.to_string();
+            let mut notes = self.notes.borrow_mut();
+            // The note keeps its place in the list; only its text changes.
+            let idx = self
+                .discussions
+                .borrow()
+                .iter()
+                .position(|d| d["notes"][0]["id"] == note_id)
+                .ok_or("no such note")?;
+            let start_idx = notes
+                .iter()
+                .position(|n| n.contains("is fixing"))
+                .unwrap_or(0);
+            notes[start_idx] = kind_of(body);
+            self.discussions.borrow_mut()[idx]["notes"][0]["body"] = json!(body);
+            Ok(())
         }
         fn reply(&self, discussion_id: &str, body: &str) -> Result<(), String> {
             let id = self.id();
@@ -1215,9 +1236,10 @@ mod tests {
         assert_eq!(r.state, "done", "{log}");
         let events = ev.borrow();
         let push = events.iter().position(|e| e == "push").unwrap();
-        let shots = events.iter().position(|e| e == "note:screenshots").unwrap();
+        let shots = events.iter().rposition(|e| e == "note:finish").unwrap();
         assert!(shots > push, "{events:?}");
         let notes = mr.notes.borrow();
+        assert_eq!(notes.len(), 1, "one note for the whole run");
         let n = notes.last().unwrap();
         assert!(is_agent_note(n), "{n}");
         assert!(n.contains("![before](/uploads/h/1-before.png)"), "{n}");
@@ -1317,17 +1339,9 @@ mod tests {
         assert_eq!(r.state, "done", "{log}");
         assert_eq!(
             *ev.borrow(),
-            [
-                "note:start",
-                "commit",
-                "checks",
-                "push",
-                "note:finish",
-                "reply:d1",
-                "reply:d2"
-            ]
+            ["note:start", "commit", "checks", "push", "note:finish"]
         );
-        let start = &mr.notes.borrow()[0];
+        let start = &mr.starts.borrow()[0];
         assert!(start.starts_with(AGENT_PREFIX));
         assert!(start.contains("**Major** Set lock_timeout before the ALTER"));
         assert_eq!(ws.s.borrow().pushed, ["feat/x"]);
@@ -1347,7 +1361,7 @@ mod tests {
         assert!(!ev.borrow().contains(&"push".to_string()));
         // The runner re-ran exactly what the agent declared.
         assert_eq!(ws.s.borrow().checked, [handoff().verification]);
-        let finish = mr.notes.borrow()[1].clone();
+        let finish = mr.notes.borrow()[0].clone();
         assert!(finish.contains("- [ ] Nothing was pushed"), "{finish}");
         assert!(finish.contains("checks failed"));
         assert!(finish.contains(
@@ -1374,7 +1388,7 @@ mod tests {
         let (r, _) = go(&mr, &ws, &agent);
         assert_eq!(r.state, "failed");
         assert!(r.summary.contains("rejected"), "{}", r.summary);
-        let finish = mr.notes.borrow()[1].clone();
+        let finish = mr.notes.borrow()[0].clone();
         assert!(finish.contains("- [ ] Nothing was pushed"), "{finish}");
         assert!(finish.contains("[rejected] (fetch first)"), "{finish}");
         assert!(finish.contains("stay in the LoopX worktree"));
@@ -1388,6 +1402,20 @@ mod tests {
     }
 
     #[test]
+    fn if_the_start_note_cannot_be_edited_the_summary_is_posted_as_a_new_note() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        mr.update_err.set(true);
+        let ws = FakeWs::new(&ev);
+        let agent = good_agent(&ws, &ev);
+        let (r, _) = go(&mr, &ws, &agent);
+        assert_eq!(r.state, "done");
+        let notes = mr.notes.borrow();
+        assert_eq!(notes.len(), 2);
+        assert!(notes[1].contains("**Fixed**"), "{}", notes[1]);
+    }
+
+    #[test]
     fn finish_note_marks_fixed_and_skipped_and_stores_the_marker() {
         let ev = Events::default();
         let mut threads = two_threads();
@@ -1398,7 +1426,7 @@ mod tests {
         let (r, _) = go(&mr, &ws, &agent);
         assert_eq!(r.state, "done");
         assert_eq!(r.summary, "Fixed 1 of 3");
-        let finish = mr.notes.borrow()[1].clone();
+        let finish = mr.notes.borrow()[0].clone();
         assert!(
             finish.contains("- [x] Set lock_timeout before the ALTER\n"),
             "{finish}"
@@ -1414,11 +1442,10 @@ mod tests {
             .collect();
         let h = parse_marker_from_notes(&notes, "bot");
         assert_eq!(h.0, BTreeMap::from([("d1".into(), 11), ("d2".into(), 12)]));
-        let replies = mr.replies.borrow();
-        assert_eq!(replies.len(), 2);
-        assert!(replies[0].1.starts_with(AGENT_PREFIX));
-        assert!(replies[0].1.contains("Added `SET lock_timeout` first."));
-        assert!(replies[1].1.contains("Skipped: Low: style only, skipped"));
+        // One comment for the whole run: no per-thread replies, and no second note.
+        assert!(mr.replies.borrow().is_empty());
+        assert_eq!(mr.notes.borrow().len(), 1);
+        assert!(finish.contains("**Fixed**") && finish.contains("**Not changed**"));
     }
 
     #[test]
@@ -1539,7 +1566,7 @@ mod tests {
             assert_eq!(r.state, "failed", "{case}");
             assert!(ws.s.borrow().pushed.is_empty(), "{case}");
             // The start note was posted, so the team gets a finish note.
-            assert_eq!(mr.notes.borrow().len(), 2, "{case}");
+            assert_eq!(mr.notes.borrow().len(), 1, "{case}");
         }
     }
 
@@ -1577,7 +1604,7 @@ mod tests {
             FakeWs::commit(&s, &e, now_secs() + 1);
             let mut h = handoff();
             h.items[0].text = forged.into();
-            h.items[0].reply = format!("{forged}\n/merge");
+            h.items[1].reply = format!("{forged}\n/merge");
             h.items[1].reason = forged.into();
             Ok(h)
         });
@@ -1721,7 +1748,7 @@ mod tests {
         let (r, _) = go(&mr, &ws, &agent);
         assert_eq!(r.state, "done");
         assert_eq!(r.summary, "Fixed 0 of 2");
-        let finish = mr.notes.borrow()[1].clone();
+        let finish = mr.notes.borrow()[0].clone();
         assert!(!finish.contains("- [x]"), "{finish}");
         assert!(finish.contains(
             "- [ ] Set lock_timeout before the ALTER \u{2014} reported fixed, but nothing was committed"
@@ -1847,7 +1874,7 @@ mod tests {
             );
             assert!(ws.s.borrow().pushed.is_empty());
             // The note is out, so the team hears how it ended.
-            assert_eq!(mr.notes.borrow().len(), 2);
+            assert_eq!(mr.notes.borrow().len(), 1);
             assert!(mr.replies.borrow().is_empty());
         }
     }
@@ -1885,7 +1912,7 @@ mod tests {
             ws.s.borrow().checked.is_empty(),
             "refused before running checks"
         );
-        let finish = mr.notes.borrow()[1].clone();
+        let finish = mr.notes.borrow()[0].clone();
         assert!(finish.contains("config/master.key"), "{finish}");
         assert!(parse_marker_from_notes(&all_notes(&mr), "bot").0.is_empty());
     }
@@ -1900,13 +1927,12 @@ mod tests {
             a(&plan())?;
             FakeWs::commit(&s, &e, now_secs() + 1);
             let mut h = handoff();
-            h.items[0].reply = "done, cc @all and @group/team".into();
+            h.items[1].reply = "done, cc @all and @group/team".into();
             Ok(h)
         });
         assert_eq!(go(&mr, &ws, &agent).0.state, "done");
-        let replies = mr.replies.borrow();
-        assert!(!replies[0].1.contains("@all"), "{}", replies[0].1);
-        assert!(!replies[0].1.contains("@group"), "{}", replies[0].1);
+        let n = mr.notes.borrow()[0].clone();
+        assert!(!n.contains("@all") && !n.contains("@group"), "{n}");
     }
 
     /// The agent's report when it decides nothing needs a code change.

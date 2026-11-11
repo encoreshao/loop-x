@@ -508,6 +508,23 @@ impl Client {
         )
     }
 
+    /// Rewrite the body of one of the token's own merge request notes.
+    pub fn update_mr_comment(
+        &self,
+        project_id: &str,
+        iid: i64,
+        note_id: i64,
+        body: &str,
+    ) -> Result<Value, GitlabError> {
+        self.put_json(
+            &format!(
+                "projects/{}/merge_requests/{iid}/notes/{note_id}",
+                quote(project_id)
+            ),
+            &serde_json::json!({ "body": body }),
+        )
+    }
+
     /// Every discussion thread on a merge request, all pages.
     pub fn list_mr_discussions(
         &self,

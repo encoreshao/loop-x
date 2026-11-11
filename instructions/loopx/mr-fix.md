@@ -56,7 +56,9 @@ and its reason. LoopX then posts one finish note listing them.
    `{{ANNOUNCE}}`
 
    LoopX posts your plan on the merge request as the "agent started" note so
-   the team knows an agent is working. If the command reports an error about
+   the team knows an agent is working. When you finish, LoopX rewrites that
+   same note into the one summary of the whole run (all fixed comments
+   together, then everything left unchanged); it posts no per-thread replies. If the command reports an error about
    the plan, fix the file and run it again. If it reports any other error, or
    that the start note could not be posted, stop at once: write the handoff
    (step 6) and finish without editing anything.
@@ -81,16 +83,21 @@ and its reason. LoopX then posts one finish note listing them.
    ```
    {"items": [{"discussion_id": "<thread id from '### Thread <id>'>",
                "fixed": true,
-               "text": "<one line: what you changed, or the item you skipped>",
+               "text": "<one plain-language line: the goal the reviewer wanted and what is now true>",
                "reason": "<empty when fixed; why it was skipped otherwise>",
-               "reply": "<one or two sentences for that thread's reviewer>"}],
+               "reply": "<for a question, risk or skipped item: the answer or key point in one or two sentences>"}],
     "verification": {"lint": "<lint command, or empty if the project has none>",
                      "test": "<test command - required when you committed anything>"},
     "screenshots": [{"label": "<what it shows>", "after": "1-after.png"}],
     "screenshots_note": "<optional, one line>"}
    ```
 
-   One item per thread you fixed or deliberately skipped. Use the thread ids
+   Write for a human reader of the merge request summary, goal first: say
+   what the reviewer wanted and the outcome ("The CSV export no longer
+   includes logo or vector columns"), not a list of files, commands or
+   internals. For a question or a risk, put the direct answer (or what the
+   person needs to decide) in `reply`. Do not repeat the same point in
+   `text` and `reply`. One item per thread you fixed or deliberately skipped. Use the thread ids
    exactly as shown. `lint` and `test` must be single commands from the
    project's standard toolchain (for example `bundle exec rspec spec/models/x_spec.rb`,
    `bundle exec rubocop .`, `npm test`, `pytest -q`, `cargo test`), with no

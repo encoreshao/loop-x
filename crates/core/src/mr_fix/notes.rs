@@ -80,15 +80,43 @@ fn finalize(body: &str, tail: &str) -> String {
     out
 }
 
+/// The one note a fix run leaves on the merge request: what was fixed, then
+/// what was left unchanged (questions, risks, skipped items) with the answer
+/// or reason, then the screenshots when there are any.
 pub fn finish_note(outcome: &Outcome, handled: &Handled) -> String {
-    let mut out = format!("{AGENT_PREFIX} finished.\n\n");
-    for d in &outcome.items {
+    finish_note_with(outcome, handled, "")
+}
+
+pub fn finish_note_with(outcome: &Outcome, handled: &Handled, extra: &str) -> String {
+    let line = |d: &Done| {
         let mark = if d.fixed { "x" } else { " " };
-        out.push_str(&format!("- [{mark}] {}", safe_text(&d.text)));
+        let mut l = format!("- [{mark}] {}", safe_text(&d.text));
         if !d.reason.trim().is_empty() {
-            out.push_str(&format!(" \u{2014} {}", safe_text(&d.reason)));
+            l.push_str(&format!(" \u{2014} {}", safe_text(&d.reason)));
         }
+        l.push('\n');
+        l
+    };
+    let fixed: Vec<&Done> = outcome.items.iter().filter(|d| d.fixed).collect();
+    let rest: Vec<&Done> = outcome.items.iter().filter(|d| !d.fixed).collect();
+    let mut out = match fixed.len() {
+        0 => format!("{AGENT_PREFIX} finished. Nothing needed a code change.\n\n"),
+        1 => format!("{AGENT_PREFIX} finished. Fixed 1 review comment.\n\n"),
+        n => format!("{AGENT_PREFIX} finished. Fixed {n} review comments.\n\n"),
+    };
+    if !fixed.is_empty() {
+        out.push_str("**Fixed**\n");
+        fixed.iter().for_each(|d| out.push_str(&line(d)));
         out.push('\n');
+    }
+    if !rest.is_empty() {
+        out.push_str("**Not changed** (questions, risks and anything that needs a person)\n");
+        rest.iter().for_each(|d| out.push_str(&line(d)));
+        out.push('\n');
+    }
+    if !extra.trim().is_empty() {
+        out.push_str(extra.trim());
+        out.push_str("\n\n");
     }
     finalize(&out, &format!("{}\n{SIGNATURE}", marker(handled)))
 }
@@ -201,7 +229,9 @@ mod tests {
         let h = Handled(BTreeMap::from([("d1".to_string(), 5)]));
         let n = finish_note(&o, &h);
         assert!(n.starts_with(AGENT_PREFIX));
-        assert!(n.contains("- [x] Add lock_timeout\n"));
+        assert!(n.contains("**Fixed**\n- [x] Add lock_timeout\n"));
+        assert!(n.contains("**Not changed**"));
+        assert!(n.contains("Fixed 1 review comment."));
         assert!(n.contains("- [ ] Rename field \u{2014} needs product call\n"));
         assert!(n.contains(&marker(&h)));
         assert!(is_agent_note(&n));
