@@ -12,6 +12,7 @@
 //!   lower-cased, minus a stop list of filler words (none, n/a, tbd, see, ...).
 //! - Document frequency: a name present in more than max(3, one third of) the
 //!   profiles that have that section carries no signal and creates no edge.
+//!
 //! Evidence for shared secrets/services is the NAME only, never a value.
 
 use crate::profile_scan::IssueDigest;
