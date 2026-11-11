@@ -16,7 +16,9 @@
 //! Dedupe: one proposal per `(alias, section, source_hash)`. While one is pending,
 //! approved or dismissed (denied) no identical one is raised again; once a source
 //! file changes the hash differs and a new proposal is allowed. A section with no
-//! sources hashes the repository HEAD instead, so it is re-proposed once HEAD moves.
+//! sources mixes the repository HEAD into the hash used for DENIED proposals only, so a
+//! dismissed one is re-proposed once HEAD moves; pending and approved-but-unapplied
+//! ones dedupe on the HEAD-free hash, so no new proposal per commit.
 //! A `changes_requested` or `timeout` proposal does not block: the same one may be
 //! raised again.
 //!
@@ -51,6 +53,15 @@ pub enum Freshness {
     /// A person wrote this section; the agent never overwrites it on its own.
     /// Use [`stale_sources`] to learn whether its sources drifted too.
     HumanEdited,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    /// The section was written by this call.
+    Applied,
+    /// This proposal was applied before (or the section already holds its text);
+    /// nothing was written.
+    AlreadyApplied,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,10 +144,9 @@ fn source_hash(sources: &[Source], head_sha: Option<&str>) -> String {
         .map(|s| format!("{}\t{}", s.path, s.sha256))
         .collect();
     lines.sort();
-    if sources.is_empty() {
-        // Nothing to hash: let the repository HEAD stand in, so a dismissed
-        // proposal for a source-less section comes back once HEAD moves.
-        lines.push(format!("head\t{}", head_sha.unwrap_or("")));
+    if let (true, Some(head)) = (sources.is_empty(), head_sha) {
+        // Nothing to hash: the caller lets the repository HEAD stand in.
+        lines.push(format!("head\t{head}"));
     }
     sha256::hex(&sha256::sha256(lines.join("\n").as_bytes()))
 }
@@ -201,16 +211,40 @@ fn fresh_sources(
     out
 }
 
-fn already_raised(approvals_dir: &Path, alias: &str, key: SectionKey, hash: &str) -> bool {
+/// Pending and approved-but-unapplied proposals dedupe on the HEAD-free `base`
+/// hash (a source-less section must not get a new proposal per commit); a
+/// dismissed one dedupes on the effective `hash` (HEAD-mixed for a source-less
+/// section, so it comes back once HEAD moves).
+fn already_raised(
+    approvals_dir: &Path,
+    alias: &str,
+    key: SectionKey,
+    hash: &str,
+    base: &str,
+    root: Option<&Path>,
+) -> bool {
     approvals::all(approvals_dir).iter().any(|a| {
-        a["kind"] == KIND
-            && a["project"] == alias
-            && a["target"]["section"] == key.slug()
-            && a["target"]["source_hash"] == hash
-            && matches!(
-                a["status"].as_str(),
-                Some("pending" | "denied" | "approved")
-            )
+        if a["kind"] != KIND || a["project"] != alias || a["target"]["section"] != key.slug() {
+            return false;
+        }
+        let t = &a["target"];
+        let a_base = if t["base_hash"].is_string() {
+            &t["base_hash"]
+        } else {
+            &t["source_hash"]
+        };
+        match a["status"].as_str() {
+            Some("pending") => a_base == base,
+            Some("approved") => {
+                a_base == base
+                    && a["id"]
+                        .as_str()
+                        .and_then(|id| applied_marker(alias, id, root).ok())
+                        .is_some_and(|m| !m.exists())
+            }
+            Some("denied") => t["source_hash"] == hash,
+            _ => false,
+        }
     })
 }
 
@@ -235,8 +269,13 @@ pub fn propose_refresh(
     let scan = profile_scan::scan_repo(work_dir, &[])?;
     let old = profile.sections.get(&key);
     let sources = fresh_sources(key, old, &scan, work_dir);
-    let hash = source_hash(&sources, scan.head_sha.as_deref());
-    if already_raised(approvals_dir, alias, key, &hash) {
+    let base = source_hash(&sources, None);
+    let hash = if sources.is_empty() {
+        source_hash(&sources, scan.head_sha.as_deref())
+    } else {
+        base.clone()
+    };
+    if already_raised(approvals_dir, alias, key, &hash, &base, root) {
         return Ok(None);
     }
     let prompt = section_prompt(alias, key, old, &scan);
@@ -268,6 +307,7 @@ pub fn propose_refresh(
         "section": key.slug(),
         "alias": alias,
         "source_hash": hash,
+        "base_hash": base,
         "old": old_body,
         "old_summary": old_summary,
         "new": new.body,
@@ -312,7 +352,11 @@ pub fn propose_refresh(
 /// Write an approved proposal's section into the profile (origin Agent, new
 /// sources, `last_verified` = the decision time) under the alias lock. Refuses a
 /// proposal that is not approved, and re-checks the text for secrets.
-pub fn apply_proposal(id: &str, root: Option<&Path>, approvals_dir: &Path) -> Result<(), String> {
+pub fn apply_proposal(
+    id: &str,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+) -> Result<ApplyOutcome, String> {
     let a = approvals::get(approvals_dir, id).ok_or_else(|| format!("no approval {id}"))?;
     if a["kind"] != KIND {
         return Err(format!("approval {id} is not a profile proposal"));
@@ -352,9 +396,29 @@ pub fn apply_proposal(id: &str, root: Option<&Path>, approvals_dir: &Path) -> Re
         sources,
         origin: Origin::Agent,
     };
-    let marker = applied_marker(alias, id, root);
+    let marker = applied_marker(alias, id, root)?;
     if marker.exists() {
-        return Ok(()); // Already applied: write nothing.
+        return Ok(ApplyOutcome::AlreadyApplied); // write nothing
+    }
+    let write_marker = || -> Result<(), String> {
+        if let Some(dir) = marker.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&marker, b"applied\n").map_err(|e| e.to_string())
+    };
+    // The marker write can fail after a successful save: if the section already
+    // is this proposal's result, report that instead of "changed since".
+    if let Some(Some(cur)) =
+        project_profile::load(alias, root)?.map(|p| p.sections.get(&key).cloned())
+    {
+        if cur.body == section.body
+            && cur.summary == section.summary
+            && cur.sources == section.sources
+            && cur.origin == Origin::Agent
+        {
+            let _ = write_marker();
+            return Ok(ApplyOutcome::AlreadyApplied);
+        }
     }
     let old_body = t["old"].as_str().unwrap_or_default();
     let old_summary = t["old_summary"].as_str().unwrap_or_default();
@@ -375,22 +439,25 @@ refresh the section to get a new proposal"
         project_profile::validate_draft(&p)?;
         Ok(p)
     })?;
-    if let Some(dir) = marker.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&marker, b"applied\n").map_err(|e| e.to_string())
+    write_marker()?;
+    Ok(ApplyOutcome::Applied)
 }
 
-fn applied_marker(alias: &str, id: &str, root: Option<&Path>) -> std::path::PathBuf {
+fn applied_marker(
+    alias: &str,
+    id: &str,
+    root: Option<&Path>,
+) -> Result<std::path::PathBuf, String> {
     let safe = Path::new(id)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| format!("invalid approval id {id:?}"))?;
     let dir = project_profile::profile_path(alias, root)
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    dir.join("PROFILE.applied").join(safe)
+    Ok(dir.join("PROFILE.applied").join(safe))
 }
 
 #[cfg(test)]
@@ -497,6 +564,47 @@ mod tests {
                 .unwrap()
                 .unwrap()
         }
+        fn git(&self, args: &[&str]) {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(self.work.path())
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        }
+        fn commit(&self, file: &str) {
+            fs::write(self.work.path().join(file), file).unwrap();
+            self.git(&["add", "-A"]);
+            self.git(&["commit", "-qm", file]);
+        }
+        /// A git checkout and a Gotchas section the scan never sources.
+        fn sourceless(&self) -> Fake {
+            self.git(&["init", "-q"]);
+            self.commit("one.txt");
+            let mut p = self.profile();
+            let mut sec = p.sections[&SectionKey::Stack].clone();
+            sec.sources.clear();
+            p.sections.insert(SectionKey::Gotchas, sec);
+            project_profile::save(&p, Some(self.root.path())).unwrap();
+            Fake::new("Gotcha text.").for_section("gotchas")
+        }
+        fn propose_gotchas(&self, a: &Fake) -> Result<Option<Proposal>, String> {
+            propose_refresh(
+                &self.alias,
+                SectionKey::Gotchas,
+                self.work.path(),
+                a,
+                now(),
+                Some(self.root.path()),
+                self.apr.path(),
+            )
+        }
         fn touch_cargo(&self, text: &str) {
             fs::write(self.work.path().join("Cargo.toml"), text).unwrap();
         }
@@ -511,7 +619,7 @@ mod tests {
                 self.apr.path(),
             )
         }
-        fn apply(&self, id: &str) -> Result<(), String> {
+        fn apply(&self, id: &str) -> Result<ApplyOutcome, String> {
             apply_proposal(id, Some(self.root.path()), self.apr.path())
         }
         fn decide(&self, id: &str, d: &str) {
@@ -700,7 +808,7 @@ mod tests {
         f.touch_cargo("x\n");
         let prop = f.propose(&Fake::new("New.")).unwrap().unwrap();
         f.decide(&prop.id, "approved");
-        f.apply(&prop.id).unwrap();
+        assert_eq!(f.apply(&prop.id).unwrap(), ApplyOutcome::Applied);
         let hist = project_profile::history(&f.alias, Some(f.root.path())).len();
         // A person edits after the first apply; a repeat apply must not clobber it.
         let mut p = f.profile();
@@ -708,7 +816,7 @@ mod tests {
         project_profile::save(&p, Some(f.root.path())).unwrap();
         let hist_after_edit = project_profile::history(&f.alias, Some(f.root.path())).len();
         assert_eq!(hist_after_edit, hist + 1);
-        f.apply(&prop.id).unwrap();
+        assert_eq!(f.apply(&prop.id).unwrap(), ApplyOutcome::AlreadyApplied);
         assert_eq!(f.profile().sections[&SectionKey::Stack].body, "Human edit.");
         assert_eq!(
             project_profile::history(&f.alias, Some(f.root.path())).len(),
@@ -719,48 +827,76 @@ mod tests {
     #[test]
     fn dismissed_sourceless_proposal_is_reraised_once_head_moves() {
         let f = Fx::new(Origin::Agent);
-        let git = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
-                .arg("-C")
-                .arg(f.work.path())
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .env_remove("GIT_DIR")
-                .env_remove("GIT_WORK_TREE")
-                .env_remove("GIT_INDEX_FILE")
-                .status()
-                .unwrap()
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        git(&["init", "-q"]);
-        git(&["add", "-A"]);
-        git(&["commit", "-qm", "one"]);
-        let mut p = f.profile();
-        let mut sec = p.sections[&SectionKey::Stack].clone();
-        sec.sources.clear();
-        p.sections.insert(SectionKey::Gotchas, sec);
-        project_profile::save(&p, Some(f.root.path())).unwrap();
-        let agent2 = Fake::new("Gotcha text.").for_section("gotchas");
-        let go = |a: &Fake| {
-            propose_refresh(
-                &f.alias,
-                SectionKey::Gotchas,
-                f.work.path(),
-                a,
-                now(),
-                Some(f.root.path()),
-                f.apr.path(),
-            )
-        };
-        let one = go(&agent2).unwrap().expect("first proposal");
+        let agent = f.sourceless();
+        let one = f.propose_gotchas(&agent).unwrap().expect("first proposal");
         f.decide(&one.id, "denied");
-        assert!(go(&agent2).unwrap().is_none(), "same HEAD stays dismissed");
-        fs::write(f.work.path().join("src/lib.rs"), "\n").unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "-qm", "two"]);
-        let two = go(&agent2).unwrap().expect("HEAD moved");
+        assert!(
+            f.propose_gotchas(&agent).unwrap().is_none(),
+            "same HEAD stays dismissed"
+        );
+        f.commit("two.txt");
+        let two = f.propose_gotchas(&agent).unwrap().expect("HEAD moved");
         assert_ne!(two.source_hash, one.source_hash);
+    }
+
+    #[test]
+    fn pending_sourceless_proposal_is_not_duplicated_when_head_moves() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.sourceless();
+        assert!(f.propose_gotchas(&agent).unwrap().is_some());
+        f.commit("two.txt");
+        assert!(f.propose_gotchas(&agent).unwrap().is_none());
+        f.commit("three.txt");
+        assert!(f.propose_gotchas(&agent).unwrap().is_none());
+        assert_eq!(agent.calls(), 1, "no model call for a duplicate");
+        assert_eq!(approvals::all(f.apr.path()).len(), 1);
+    }
+
+    #[test]
+    fn approved_unapplied_sourceless_proposal_is_not_duplicated_when_head_moves() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.sourceless();
+        let one = f.propose_gotchas(&agent).unwrap().unwrap();
+        f.decide(&one.id, "approved");
+        f.commit("two.txt");
+        assert!(f.propose_gotchas(&agent).unwrap().is_none());
+        assert_eq!(agent.calls(), 1);
+    }
+
+    #[test]
+    fn applied_sourceless_proposal_does_not_block_a_later_one_after_head_moves() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.sourceless();
+        let one = f.propose_gotchas(&agent).unwrap().unwrap();
+        f.decide(&one.id, "approved");
+        assert_eq!(f.apply(&one.id).unwrap(), ApplyOutcome::Applied);
+        f.commit("two.txt");
+        assert!(f
+            .propose_gotchas(&Fake::new("Newer.").for_section("gotchas"))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn retry_after_a_lost_marker_reports_already_applied() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("x\n");
+        let prop = f.propose(&Fake::new("New.")).unwrap().unwrap();
+        f.decide(&prop.id, "approved");
+        assert_eq!(f.apply(&prop.id).unwrap(), ApplyOutcome::Applied);
+        fs::remove_dir_all(
+            project_profile::profile_path(&f.alias, Some(f.root.path()))
+                .parent()
+                .unwrap()
+                .join("PROFILE.applied"),
+        )
+        .unwrap();
+        let hist = project_profile::history(&f.alias, Some(f.root.path())).len();
+        assert_eq!(f.apply(&prop.id).unwrap(), ApplyOutcome::AlreadyApplied);
+        assert_eq!(
+            project_profile::history(&f.alias, Some(f.root.path())).len(),
+            hist
+        );
     }
 
     #[test]
