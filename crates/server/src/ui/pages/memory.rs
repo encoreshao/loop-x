@@ -2026,30 +2026,94 @@ fn confirm_dialog(ctx: &UiCtx, id: &str, open: bool, title: &str, text: &str, fi
 }
 
 /// A refused (too long) edit, kept for a while so the editor shows it again.
-/// Never holds text that looked like a secret: that check runs first.
+/// Never holds text that looked like a secret: that check runs first. Bounded:
+/// at most [`DRAFT_MAX_ENTRIES`] entries and [`DRAFT_MAX_TOTAL_BYTES`] in all
+/// (oldest evicted first); an edit over [`DRAFT_MAX_ENTRY_BYTES`] is not kept.
+/// Expired entries are pruned on every read and write.
 type DraftKey = (PathBuf, String, SectionKey);
-/// (key, kept at, summary, body)
-type Draft = (DraftKey, DateTime<Utc>, String, String);
-static DRAFTS: Mutex<Vec<Draft>> = Mutex::new(Vec::new());
 const DRAFT_MINUTES: i64 = 30;
+const DRAFT_MAX_ENTRIES: usize = 32;
+const DRAFT_MAX_ENTRY_BYTES: usize = 64 * 1024;
+const DRAFT_MAX_TOTAL_BYTES: usize = 512 * 1024;
+
+struct KeptEdit {
+    key: DraftKey,
+    at: DateTime<Utc>,
+    summary: String,
+    body: String,
+}
+
+impl KeptEdit {
+    fn bytes(&self) -> usize {
+        self.summary.len() + self.body.len()
+    }
+}
+
+/// Oldest first.
+#[derive(Default)]
+struct DraftStore {
+    entries: Vec<KeptEdit>,
+}
+
+impl DraftStore {
+    fn prune(&mut self, now: DateTime<Utc>) {
+        self.entries.retain(|e| now - e.at < Duration::minutes(DRAFT_MINUTES));
+    }
+
+    fn keep(&mut self, key: DraftKey, summary: &str, body: &str, now: DateTime<Utc>) {
+        self.prune(now);
+        // A newer refusal replaces the older one, kept or not: never show stale text.
+        self.entries.retain(|e| e.key != key);
+        if summary.len() + body.len() > DRAFT_MAX_ENTRY_BYTES {
+            return;
+        }
+        self.entries.push(KeptEdit { key, at: now, summary: summary.to_string(), body: body.to_string() });
+        while self.entries.len() > DRAFT_MAX_ENTRIES || self.bytes() > DRAFT_MAX_TOTAL_BYTES {
+            self.entries.remove(0);
+        }
+    }
+
+    fn get(&mut self, key: &DraftKey, now: DateTime<Utc>) -> Option<(String, String)> {
+        self.prune(now);
+        self.entries
+            .iter()
+            .find(|e| &e.key == key)
+            .map(|e| (e.summary.clone(), e.body.clone()))
+    }
+
+    fn drop_key(&mut self, key: &DraftKey) {
+        self.entries.retain(|e| &e.key != key);
+    }
+
+    fn bytes(&self) -> usize {
+        self.entries.iter().map(KeptEdit::bytes).sum()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+static DRAFTS: Mutex<DraftStore> = Mutex::new(DraftStore { entries: Vec::new() });
+
+fn draft_key(home: &Path, alias: &str, key: SectionKey) -> DraftKey {
+    (home.to_path_buf(), alias.to_string(), key)
+}
 
 fn keep_draft(home: &Path, alias: &str, key: SectionKey, summary: &str, body: &str, now: DateTime<Utc>) {
     let mut drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
-    drafts.retain(|((h, a, k), at, _, _)| !(h == home && a == alias && *k == key) && now - *at < Duration::minutes(DRAFT_MINUTES));
-    drafts.push(((home.to_path_buf(), alias.to_string(), key), now, summary.to_string(), body.to_string()));
+    drafts.keep(draft_key(home, alias, key), summary, body, now);
 }
 
 fn kept_draft(home: &Path, alias: &str, key: SectionKey, now: DateTime<Utc>) -> Option<(String, String)> {
-    let drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
-    drafts
-        .iter()
-        .find(|((h, a, k), at, _, _)| h == home && a == alias && *k == key && now - *at < Duration::minutes(DRAFT_MINUTES))
-        .map(|(_, _, s, b)| (s.clone(), b.clone()))
+    let mut drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
+    drafts.get(&draft_key(home, alias, key), now)
 }
 
 fn drop_draft(home: &Path, alias: &str, key: SectionKey) {
     let mut drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
-    drafts.retain(|((h, a, k), _, _, _)| !(h == home && a == alias && *k == key));
+    drafts.drop_key(&draft_key(home, alias, key));
 }
 
 fn spinner() -> &'static str {
@@ -3475,5 +3539,76 @@ mod tests {
         sb.post_to("/insights/memory/section/save", "project=keep&section=stack&summary=Done&body=Saved");
         let html = sb.get("/insights?view=memory&project=keep&page=stack");
         assert!(!html.contains(&long) && !html.contains("<details class='mem-edit' open>"), "{html}");
+    }
+
+    // ---------------------------------------------------------------- fix round 2: kept-edit caps
+
+    fn dk(alias: &str, key: SectionKey) -> super::DraftKey {
+        (PathBuf::from("/h"), alias.to_string(), key)
+    }
+
+    #[test]
+    fn kept_edits_evict_the_oldest_past_the_entry_cap() {
+        let mut store = super::DraftStore::default();
+        for i in 0..=super::DRAFT_MAX_ENTRIES {
+            store.keep(dk(&format!("p{i}"), SectionKey::Stack), "s", "b", now() + chrono::Duration::seconds(i as i64));
+        }
+        let at = now() + chrono::Duration::seconds(super::DRAFT_MAX_ENTRIES as i64);
+        assert_eq!(store.len(), super::DRAFT_MAX_ENTRIES);
+        assert!(store.get(&dk("p0", SectionKey::Stack), at).is_none(), "the oldest went");
+        assert!(store.get(&dk("p1", SectionKey::Stack), at).is_some());
+        assert!(store.get(&dk(&format!("p{}", super::DRAFT_MAX_ENTRIES), SectionKey::Stack), at).is_some());
+    }
+
+    #[test]
+    fn kept_edits_stay_under_the_total_byte_cap() {
+        let mut store = super::DraftStore::default();
+        let big = "x".repeat(super::DRAFT_MAX_ENTRY_BYTES - 10);
+        for i in 0..20 {
+            store.keep(dk(&format!("b{i}"), SectionKey::Stack), "s", &big, now() + chrono::Duration::seconds(i));
+        }
+        assert!(store.bytes() <= super::DRAFT_MAX_TOTAL_BYTES, "{}", store.bytes());
+        let at = now() + chrono::Duration::seconds(19);
+        assert!(store.get(&dk("b19", SectionKey::Stack), at).is_some(), "the newest is kept");
+        assert!(store.get(&dk("b0", SectionKey::Stack), at).is_none(), "the oldest went");
+    }
+
+    #[test]
+    fn an_oversize_edit_is_not_kept_and_drops_an_older_one_for_the_section() {
+        let mut store = super::DraftStore::default();
+        store.keep(dk("o", SectionKey::Stack), "old typed", "b", now());
+        let huge = "y".repeat(super::DRAFT_MAX_ENTRY_BYTES + 1);
+        store.keep(dk("o", SectionKey::Stack), "s", &huge, now());
+        assert!(store.get(&dk("o", SectionKey::Stack), now()).is_none(), "no stale text either");
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn expired_kept_edits_are_removed_on_read() {
+        let mut store = super::DraftStore::default();
+        store.keep(dk("e", SectionKey::Stack), "s", "b", now());
+        store.keep(dk("f", SectionKey::Stack), "s", "b", now());
+        let later = now() + chrono::Duration::minutes(super::DRAFT_MINUTES + 1);
+        assert!(store.get(&dk("e", SectionKey::Stack), later).is_none());
+        assert_eq!(store.len(), 0, "every expired entry is pruned, not just the one asked for");
+    }
+
+    #[test]
+    fn an_oversize_save_reopens_the_editor_with_the_stored_text() {
+        let sb = Sb::new(&[("oversize", true)]);
+        sb.save(&profile("oversize", &[(SectionKey::Stack, section("Stored summary", "Stored body"))]));
+        let small = "z".repeat(301);
+        sb.post_to("/insights/memory/section/save", &format!("project=oversize&section=stack&summary={small}&body=b"));
+        assert!(sb.get("/insights?view=memory&project=oversize&page=stack").contains(&small));
+        let huge = "q".repeat(super::DRAFT_MAX_ENTRY_BYTES + 1);
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project=oversize&section=stack&summary=s&body={huge}"));
+        assert!(loc.ends_with("notice=too-long"), "{loc}");
+        let html = sb.get(&loc);
+        assert!(!html.contains(&small) && !html.contains("qqqqqqqqqq"), "neither the old nor the oversize text");
+        assert!(html.contains("value='Stored summary'") && !html.contains("<details class='mem-edit' open>"), "{html}");
+        // A secret is still never stored.
+        let secret = "glpat-abcdefghijklmnop1234";
+        sb.post_to("/insights/memory/section/save", &format!("project=oversize&section=stack&summary={small}&body={secret}"));
+        assert!(!sb.get("/insights?view=memory&project=oversize&page=stack").contains("glpat-"));
     }
 }
