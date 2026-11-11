@@ -1,8 +1,10 @@
 //! The Insights hub (`/insights`: analytics, cost, budget, memory) and the
 //! Harness hub (`/harness`: gates, evals, audit): `_analytics_body`,
 //! `_cost_body`, `_budget_body`, `_gates_body`, `_evals_body` and `_audit_body` of
-//! `bin/web/dashboard_server.py`; the Memory view lives in `memory.rs`. None of these
-//! views has a POST route, and the flash query parameter is ignored by every one of them.
+//! `bin/web/dashboard_server.py`; the Memory view lives in `memory.rs`, which also owns
+//! the only POST routes under this hub (`/insights/memory/...`) and shows their results
+//! through its own whitelisted `notice` codes. The flash query parameter is ignored by
+//! every view.
 
 use crate::ui::badge::default_badge;
 use crate::ui::consts;

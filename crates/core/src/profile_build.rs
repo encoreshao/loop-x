@@ -89,6 +89,12 @@ Sections, in order (slug, heading): overview Overview, structure Structure, feat
 stack Stack, integrations Integrations, secrets Secrets (names only), conventions Conventions, \
 gotchas Gotchas, activity Activity, people People.\n";
 
+/// Whether a build, refresh or sync holds `alias`'s single-flight slot now.
+/// Takes nothing: only for showing "in progress" on a page.
+pub fn is_running(alias: &str) -> bool {
+    RUNNING.lock().is_ok_and(|r| r.iter().any(|a| a == alias))
+}
+
 /// Repo text cannot close the fence early (any casing, any spacing).
 pub(crate) fn defang(text: &str) -> String {
     static FENCE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
@@ -730,9 +736,11 @@ mod tests {
     #[test]
     fn second_build_for_same_alias_is_refused_while_running() {
         let g = try_acquire("alias-a").unwrap();
+        assert!(is_running("alias-a"));
         assert!(try_acquire("alias-a").is_none());
         assert!(try_acquire("alias-b").is_some());
         drop(g);
         assert!(try_acquire("alias-a").is_some());
+        assert!(!is_running("alias-a"));
     }
 }

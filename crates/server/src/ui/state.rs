@@ -82,6 +82,9 @@ pub type MrFeedbackDeps = Arc<
         + Sync,
 >;
 
+/// The agent a dashboard-started profile build or section refresh runs on.
+pub type ProfileAgent = Arc<dyn loopx_core::profile_build::Agent + Send + Sync>;
+
 pub struct UiState {
     /// The checkout (`LOOP_DIR`): `README.md`, `outputs/`, `loops/`, `config/`.
     pub repo_root: PathBuf,
@@ -126,6 +129,10 @@ pub struct UiState {
     /// Needs you → review threads: `None` is the real GitLab, agent CLI and
     /// git ([`loopx_core::mr_feedback::RoundDeps::real`]); tests inject fakes.
     pub mr_feedback_deps: Option<MrFeedbackDeps>,
+    /// Memory → Build / Refresh this section: the agent the background job runs.
+    /// `None` is the real sealed AI CLI, started only when `spawn_processes` is on;
+    /// tests inject a fake (and then the job always runs).
+    pub profile_agent: Option<ProfileAgent>,
     pub registry: Arc<Registry>,
 }
 
@@ -191,6 +198,7 @@ impl UiState {
             connector_http: None,
             spawn_processes: true,
             mr_feedback_deps: None,
+            profile_agent: None,
             registry: Arc::new(Registry::with_pages()),
         }
     }
@@ -227,6 +235,7 @@ impl UiState {
             connector_http: None,
             spawn_processes: false,
             mr_feedback_deps: None,
+            profile_agent: None,
             registry: Arc::new(Registry::with_pages()),
         }
     }
@@ -262,6 +271,11 @@ impl UiState {
     }
 
     /// Replace what Needs-you decisions on review threads reach (tests).
+    pub fn with_profile_agent(mut self, agent: ProfileAgent) -> Self {
+        self.profile_agent = Some(agent);
+        self
+    }
+
     pub fn with_mr_feedback_deps(mut self, deps: MrFeedbackDeps) -> Self {
         self.mr_feedback_deps = Some(deps);
         self

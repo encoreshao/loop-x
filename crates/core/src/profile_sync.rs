@@ -280,9 +280,10 @@ pub fn propose_refresh(
 }
 
 /// [`propose_refresh`] for a caller that already holds the alias's single-flight
-/// slot (the weekly sync holds it across a whole project).
+/// slot (the weekly sync holds it across a whole project, the dashboard takes it
+/// on the click so a second click is refused at once).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn propose_refresh_held(
+pub fn propose_refresh_held(
     alias: &str,
     key: SectionKey,
     work_dir: &Path,

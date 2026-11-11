@@ -12,23 +12,33 @@
 //! Every query value is untrusted: `project` must be one of the known aliases and
 //! `page` one of [`PAGES`], and nothing from the query is echoed back. Profile text
 //! is escaped, and a section (or proposal, or parse error) that looks like it holds
-//! a secret value is replaced by a notice naming only the kind of secret. The
-//! `.mem-actions` containers are where Part B's controls (build, edit, refresh,
-//! approve) go; this module registers no POST route yet.
+//! a secret value is replaced by a notice naming only the kind of secret.
+//!
+//! The POST routes (all CSRF-checked by the registry) live at the end of this
+//! module: build a profile (one or all, in the background), save a section by hand,
+//! refresh one section into a proposal (background), approve or dismiss a proposal,
+//! and the weekly sync switch, schedule and "Sync now". Every form value is
+//! untrusted: aliases, slugs, ids and choices are checked against fixed or known
+//! sets, and a redirect is built only from checked values plus a `notice` code from
+//! a fixed list ([`Notice`]), which the page maps to a translated message. Nothing
+//! from the query or the form is echoed back.
 
 use super::insights::{f_of, fixed, icon as ds_icon, n_of, truthy};
 use crate::ui::icons::icon;
 use crate::ui::markdown::{self, GitlabPrefixes};
 use crate::ui::pyfmt::{escape, escape_text, quote};
-use crate::ui::routes::{Registry, UiCtx};
+use crate::ui::routes::{Registry, UiCtx, UiResponse};
+use crate::ui::state::ProfileAgent;
 use chrono::{DateTime, Duration, Local, Utc};
 use loopx_core::profile_graph::{self, EdgeKind};
-use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore};
+use loopx_core::profile_build;
+use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
 use loopx_core::{approvals, learning, memory_store, profile_scan};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 const BASE: &str = "/insights?view=memory";
 
@@ -47,9 +57,14 @@ pub const PAGES: [&str; 11] = [
     "proposals",
 ];
 
-/// Part B registers the POST routes (build, section save/refresh, proposal decide,
-/// sync settings, sync now) here.
-pub fn register(_r: &mut Registry) {}
+pub fn register(r: &mut Registry) {
+    r.post("/insights/memory/build", build);
+    r.post("/insights/memory/section/save", save_section);
+    r.post("/insights/memory/section/refresh", refresh_section);
+    r.post("/insights/memory/proposal/decide", decide);
+    r.post("/insights/memory/sync/settings", sync_settings);
+    r.post("/insights/memory/sync/now", sync_now);
+}
 
 pub fn render(ctx: &UiCtx) -> String {
     let q = ctx.query();
@@ -77,6 +92,8 @@ pub fn render(ctx: &UiCtx) -> String {
 struct Model {
     projects: Vec<Project>,
     proposals: Vec<Value>,
+    /// The banner for a whitelisted `notice` code, or empty.
+    notice: String,
 }
 
 struct Project {
@@ -84,6 +101,8 @@ struct Project {
     instance: String,
     project_id: String,
     loaded: Loaded,
+    /// A tracked project whose checkout exists: Build and Refresh can scan it.
+    checkout: bool,
     /// Only computed (from the checkout) when the profile parsed.
     check: Check,
 }
@@ -100,6 +119,7 @@ fn model(ctx: &UiCtx) -> Model {
     Model {
         projects: projects(ctx),
         proposals: proposals(ctx),
+        notice: notice_html(ctx),
     }
 }
 
@@ -110,16 +130,7 @@ fn projects(ctx: &UiCtx) -> Vec<Project> {
     let config_path = ctx.state.home_dir.join("projects.json");
     let tracked = profile_sync::tracked_projects_in(&config_path);
     let config = loopx_core::config::Config::load(&config_path).ok();
-    let mut aliases: Vec<String> = config
-        .as_ref()
-        .and_then(|c| c.aliases().ok())
-        .unwrap_or_default();
-    for alias in memory_store::all_aliases(Some(&memory_root(ctx))) {
-        if !alias.starts_with('.') && !aliases.contains(&alias) {
-            aliases.push(alias);
-        }
-    }
-    aliases
+    alias_list(ctx, config.as_ref())
         .into_iter()
         .map(|alias| {
             let (instance, project_id, work_dir) = match tracked.iter().find(|t| t.alias == alias) {
@@ -138,6 +149,7 @@ fn projects(ctx: &UiCtx) -> Vec<Project> {
                 }
             };
             let loaded = load(ctx, &alias);
+            let checkout = work_dir.as_ref().is_some_and(|w| !w.as_os_str().is_empty() && w.is_dir());
             let check = match loaded {
                 Loaded::Ready(_) => check_for(work_dir),
                 _ => Check { work_dir: None, head: None },
@@ -147,10 +159,22 @@ fn projects(ctx: &UiCtx) -> Vec<Project> {
                 instance,
                 project_id,
                 loaded,
+                checkout,
                 check,
             }
         })
         .collect()
+}
+
+/// The aliases of `projects.json` in order, then the other memory directories.
+fn alias_list(ctx: &UiCtx, config: Option<&loopx_core::config::Config>) -> Vec<String> {
+    let mut aliases: Vec<String> = config.and_then(|c| c.aliases().ok()).unwrap_or_default();
+    for alias in memory_store::all_aliases(Some(&memory_root(ctx))) {
+        if !alias.starts_with('.') && !aliases.contains(&alias) {
+            aliases.push(alias);
+        }
+    }
+    aliases
 }
 
 enum Loaded {
@@ -477,9 +501,10 @@ fn overview(ctx: &UiCtx, m: &Model, graph: bool) -> String {
     }
     let store = sync_store(ctx);
     let bar = format!(
-        "<div class='mem-bar'>{}{}<div class='mem-actions'></div></div>",
+        "<div class='mem-bar'>{}{}<div class='mem-actions'>{}</div></div>",
         segmented(ctx, graph),
-        sync_line(ctx, &store)
+        sync_line(ctx, &store),
+        overview_controls(ctx, &store)
     );
     let main = if graph {
         format!(
@@ -498,7 +523,7 @@ fn overview(ctx: &UiCtx, m: &Model, graph: bool) -> String {
             .collect();
         format!("<div class='mem-grid'>{cards}</div>")
     };
-    format!("{title}<div class='mem-stack'>{bar}{main}</div>")
+    format!("{title}<div class='mem-stack'>{}{bar}{main}</div>", m.notice)
 }
 
 fn segmented(ctx: &UiCtx, graph: bool) -> String {
@@ -609,6 +634,9 @@ fn project_card(
         .filter(|t| t.to_value()["flag"].as_str() == Some("needs_review"))
         .count();
     let mut chips = Vec::new();
+    if profile_build::is_running(&p.alias) {
+        chips.push(chip(" mem-chip-accent", "autorenew", &ctx.t("Working…"), None));
+    }
     if draft {
         chips.push(chip(" mem-chip-warn", "edit_note", &ctx.t("Draft"), None));
     }
@@ -757,10 +785,12 @@ fn frame(ctx: &UiCtx, p: &Project, page: Option<&str>, content: &str, m: &Model)
         format!("\n<p class=\"subtitle\">{}</p>", escape(&subtitle))
     };
     format!(
-        "{}<div class=\"page-title\">\n<h1>{}</h1>{subtitle}\n</div>\n<div class='mem-layout'>{}<div class='mem-content'>{content}</div></div>",
+        "{}<div class=\"page-title\">\n<h1>{}</h1>{subtitle}\n</div>\n<div class='mem-layout'>{}<div class='mem-content'>{}{}{content}</div></div>",
         crumbs(ctx, Some(&p.alias), page),
         escape(&p.alias),
-        subnav(ctx, p, page, pending)
+        subnav(ctx, p, page, pending),
+        m.notice,
+        job_line(ctx, &p.alias)
     )
 }
 
@@ -855,7 +885,10 @@ fn head_card(ctx: &UiCtx, p: &Project, profile: Option<(&Profile, &Check)>) -> S
         .iter()
         .map(|(k, v)| format!("<dt>{}</dt><dd>{}</dd>", escape(k), escape(v)))
         .collect();
-    format!("<section class='card mem-head'><dl>{dl}</dl><div class='mem-actions'></div></section>")
+    format!(
+        "<section class='card mem-head'><dl>{dl}</dl><div class='mem-actions'>{}</div></section>",
+        head_actions(ctx, p, profile.is_some())
+    )
 }
 
 fn summary_card(ctx: &UiCtx, p: &Project, profile: &Profile, key: SectionKey, check: &Check) -> String {
@@ -943,7 +976,7 @@ fn sub_page(ctx: &UiCtx, p: &Project, slug: &str, m: &Model) -> String {
             Loaded::Ready(profile) => {
                 let mut out: String = sections_of(slug)
                     .into_iter()
-                    .map(|k| detail_card(ctx, profile, k, &p.check))
+                    .map(|k| detail_card(ctx, p, profile, k))
                     .collect();
                 if slug == "stack" {
                     out.push_str(&setup_card(ctx, p));
@@ -955,7 +988,8 @@ fn sub_page(ctx: &UiCtx, p: &Project, slug: &str, m: &Model) -> String {
     frame(ctx, p, Some(slug), &content, m)
 }
 
-fn detail_card(ctx: &UiCtx, profile: &Profile, key: SectionKey, check: &Check) -> String {
+fn detail_card(ctx: &UiCtx, p: &Project, profile: &Profile, key: SectionKey) -> String {
+    let check = &p.check;
     let title = section_title(ctx, key);
     let (state, stale) = state_of(profile, key, check);
     let head = format!(
@@ -965,7 +999,8 @@ fn detail_card(ctx: &UiCtx, profile: &Profile, key: SectionKey, check: &Check) -
     );
     let Some(s) = profile.sections.get(&key) else {
         return format!(
-            "<section class='card mem-detail'>{head}<div class='mem-actions'></div><p class='mem-muted'>{}</p></section>",
+            "<section class='card mem-detail'>{head}<div class='mem-actions'>{}</div><p class='mem-muted'>{}</p></section>",
+            section_actions(ctx, p, key, None),
             escape(&ctx.t("Not written yet"))
         );
     };
@@ -980,7 +1015,8 @@ fn detail_card(ctx: &UiCtx, profile: &Profile, key: SectionKey, check: &Check) -
     let meta = format!("<p class='mem-meta'>{}</p>", escape(&meta.join(" · ")));
     if let Some(kind) = secret_in(&section_texts(s)) {
         return format!(
-            "<section class='card mem-detail'>{head}{meta}<div class='mem-actions'></div>{}</section>",
+            "<section class='card mem-detail'>{head}{meta}<div class='mem-actions'>{}</div>{}</section>",
+            section_actions(ctx, p, key, None),
             redacted(ctx, &kind)
         );
     }
@@ -1047,7 +1083,8 @@ fn detail_card(ctx: &UiCtx, profile: &Profile, key: SectionKey, check: &Check) -
         )
     };
     format!(
-        "<section class='card mem-detail'>{head}{meta}<div class='mem-actions'></div>{stale_html}{lede}{body}{sources}</section>"
+        "<section class='card mem-detail'>{head}{meta}<div class='mem-actions'>{}</div>{stale_html}{lede}{body}{sources}</section>",
+        section_actions(ctx, p, key, Some(s))
     )
 }
 
@@ -1076,7 +1113,11 @@ fn proposals_card(ctx: &UiCtx, p: &Project, all: &[Value]) -> String {
         .collect();
     // Pending first; each group stays newest first.
     items.sort_by_key(|a| a["status"] != "pending");
-    let list: String = items.iter().map(|a| proposal_item(ctx, a)).collect();
+    let profile = match &p.loaded {
+        Loaded::Ready(profile) => Some(profile),
+        _ => None,
+    };
+    let list: String = items.iter().map(|a| proposal_item(ctx, &p.alias, a, profile)).collect();
     let body = if list.is_empty() {
         format!("<p class='mem-muted'>{}</p>", escape(&ctx.t("No proposals for this project.")))
     } else {
@@ -1090,7 +1131,7 @@ fn proposals_card(ctx: &UiCtx, p: &Project, all: &[Value]) -> String {
     )
 }
 
-fn proposal_item(ctx: &UiCtx, a: &Value) -> String {
+fn proposal_item(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profile>) -> String {
     let t = &a["target"];
     let text = |k: &str| t[k].as_str().unwrap_or("").to_string();
     let slug = text("section");
@@ -1137,8 +1178,9 @@ fn proposal_item(ctx: &UiCtx, a: &Value) -> String {
         }
     };
     format!(
-        "<article class='mem-proposal'><div class='mem-proposal-head'><h3>{}</h3>{status}{when}</div>{diff}<div class='mem-actions'></div></article>",
-        escape(&title)
+        "<article class='mem-proposal'><div class='mem-proposal-head'><h3>{}</h3>{status}{when}</div>{diff}<div class='mem-actions'>{}</div></article>",
+        escape(&title),
+        proposal_actions(ctx, alias, a, profile)
     )
 }
 
@@ -1334,6 +1376,874 @@ label.memory-filter-chip { cursor: pointer; }\n\
     )
 }
 
+// ------------------------------------------------------------------ actions
+// The POST routes. Each answers with a 303 back to the page it belongs to, built
+// only from checked values, plus one `notice` code from [`NOTICES`].
+
+/// A summary is one line; a body is a page of Markdown, not a dump.
+const SUMMARY_MAX: usize = 300;
+const BODY_MAX: usize = 20_000;
+
+const WEEKDAYS: [(&str, chrono::Weekday); 7] = [
+    ("mon", chrono::Weekday::Mon),
+    ("tue", chrono::Weekday::Tue),
+    ("wed", chrono::Weekday::Wed),
+    ("thu", chrono::Weekday::Thu),
+    ("fri", chrono::Weekday::Fri),
+    ("sat", chrono::Weekday::Sat),
+    ("sun", chrono::Weekday::Sun),
+];
+
+/// What a redirect may tell the page. Only these codes are ever read back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Notice {
+    BuildStarted,
+    BuildAllStarted,
+    Busy,
+    NoCheckout,
+    NothingToBuild,
+    NoAgent,
+    Saved,
+    Secret,
+    TooLong,
+    NoProfile,
+    Unreadable,
+    SaveFailed,
+    BadInput,
+    RefreshStarted,
+    Approved,
+    Dismissed,
+    Changed,
+    AlreadyDecided,
+    ApplyFailed,
+    SyncOn,
+    SyncOff,
+    ScheduleSaved,
+    SyncRequested,
+    StoreBad,
+}
+
+const NOTICES: [(Notice, &str); 24] = [
+    (Notice::BuildStarted, "build-started"),
+    (Notice::BuildAllStarted, "build-all-started"),
+    (Notice::Busy, "busy"),
+    (Notice::NoCheckout, "no-checkout"),
+    (Notice::NothingToBuild, "nothing-to-build"),
+    (Notice::NoAgent, "no-agent"),
+    (Notice::Saved, "saved"),
+    (Notice::Secret, "secret"),
+    (Notice::TooLong, "too-long"),
+    (Notice::NoProfile, "no-profile"),
+    (Notice::Unreadable, "unreadable"),
+    (Notice::SaveFailed, "save-failed"),
+    (Notice::BadInput, "bad-input"),
+    (Notice::RefreshStarted, "refresh-started"),
+    (Notice::Approved, "approved"),
+    (Notice::Dismissed, "dismissed"),
+    (Notice::Changed, "changed"),
+    (Notice::AlreadyDecided, "already-decided"),
+    (Notice::ApplyFailed, "apply-failed"),
+    (Notice::SyncOn, "sync-on"),
+    (Notice::SyncOff, "sync-off"),
+    (Notice::ScheduleSaved, "schedule-saved"),
+    (Notice::SyncRequested, "sync-requested"),
+    (Notice::StoreBad, "store-bad"),
+];
+
+impl Notice {
+    fn code(self) -> &'static str {
+        NOTICES
+            .iter()
+            .find(|(n, _)| *n == self)
+            .map_or("bad-input", |(_, c)| c)
+    }
+
+    fn from_code(code: &str) -> Option<Self> {
+        NOTICES.iter().find(|(_, c)| *c == code).map(|(n, _)| *n)
+    }
+
+    fn ok(self) -> bool {
+        matches!(
+            self,
+            Notice::BuildStarted
+                | Notice::BuildAllStarted
+                | Notice::Saved
+                | Notice::RefreshStarted
+                | Notice::Approved
+                | Notice::Dismissed
+                | Notice::SyncOn
+                | Notice::SyncOff
+                | Notice::ScheduleSaved
+                | Notice::SyncRequested
+        )
+    }
+
+    fn message(self, ctx: &UiCtx) -> String {
+        match self {
+            Notice::BuildStarted => ctx.t("Building the profile in the background. It takes a few minutes; reload this page to see it."),
+            Notice::BuildAllStarted => ctx.t("Building every tracked project's profile in the background, one after another."),
+            Notice::Busy => ctx.t("A profile run for this project is already in progress. Try again when it finishes."),
+            Notice::NoCheckout => ctx.t("This project has no checkout to scan. Set its local path on the Projects page first."),
+            Notice::NothingToBuild => ctx.t("No tracked project has a checkout to build a profile from."),
+            Notice::NoAgent => ctx.t("This dashboard does not start AI runs, so nothing was started."),
+            Notice::Saved => ctx.t("Section saved. It is now marked as written by a person."),
+            Notice::Secret => ctx.t("Not saved: the text looks like it contains a secret value. Remove it and save again."),
+            Notice::TooLong => ctx.t("Not saved: a summary can be up to 300 characters and the details up to 20,000."),
+            Notice::NoProfile => ctx.t("This project has no profile yet. Build a profile first."),
+            Notice::Unreadable => ctx.t("The profile file could not be read, so nothing was changed."),
+            Notice::SaveFailed => ctx.t("The section could not be saved."),
+            Notice::BadInput => ctx.t("That request was not understood, so nothing was changed."),
+            Notice::RefreshStarted => ctx.t("Refreshing this section in the background. The update will wait under Proposals for your review."),
+            Notice::Approved => ctx.t("Proposal approved and applied to the profile."),
+            Notice::Dismissed => ctx.t("Proposal dismissed. It is not raised again until its sources change."),
+            Notice::Changed => ctx.t("This section changed since the proposal was raised, so it was not applied. Refresh the section to get a new proposal."),
+            Notice::AlreadyDecided => ctx.t("That proposal was already decided."),
+            Notice::ApplyFailed => ctx.t("The proposal could not be applied to the profile."),
+            Notice::SyncOn => ctx.t("Weekly sync is on."),
+            Notice::SyncOff => ctx.t("Weekly sync is off. Sync now still runs it once."),
+            Notice::ScheduleSaved => ctx.t("Weekly sync schedule saved."),
+            Notice::SyncRequested => ctx.t("Sync requested. It starts within a minute."),
+            Notice::StoreBad => ctx.t("The sync settings file could not be read, so nothing was changed."),
+        }
+    }
+}
+
+/// The banner for the request's `notice` code; unknown codes show nothing.
+fn notice_html(ctx: &UiCtx) -> String {
+    let Some(n) = ctx.query().first("notice").and_then(Notice::from_code) else {
+        return String::new();
+    };
+    let (class, icon_name) = if n.ok() { ("ok", "check_circle") } else { ("bad", "error") };
+    format!(
+        "<div class='mem-notice mem-notice-{class}' role='status'>{}<p>{}</p></div>",
+        icon(icon_name),
+        escape(&n.message(ctx))
+    )
+}
+
+/// Where a handler sends the user back to.
+enum Back<'a> {
+    Overview,
+    Project(&'a str, Option<&'static str>),
+}
+
+fn back(to: Back<'_>, notice: Notice) -> UiResponse {
+    let base = match to {
+        Back::Overview => BASE.to_string(),
+        Back::Project(alias, page) => project_url(alias, page),
+    };
+    UiResponse::redirect(303, &format!("{base}&notice={}", notice.code()))
+}
+
+/// The form's `project` when it is a known alias (never the raw value).
+fn known_alias(ctx: &UiCtx, raw: Option<&str>) -> Option<String> {
+    let raw = raw?;
+    let config = loopx_core::config::Config::load(&ctx.state.home_dir.join("projects.json")).ok();
+    alias_list(ctx, config.as_ref()).into_iter().find(|a| a == raw)
+}
+
+fn tracked_list(ctx: &UiCtx) -> Vec<TrackedProject> {
+    profile_sync::tracked_projects_in(&ctx.state.home_dir.join("projects.json"))
+}
+
+fn checkout_of(ctx: &UiCtx, alias: &str) -> Option<TrackedProject> {
+    tracked_list(ctx)
+        .into_iter()
+        .find(|t| t.alias == alias && !t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+}
+
+fn store_path(ctx: &UiCtx) -> PathBuf {
+    ctx.state.home_dir.join("profile_sync.json")
+}
+
+/// Hand edits and approvals in this process take turns, so an approval's
+/// "is the section still what the proposal replaces" check cannot race a save.
+static WRITES: Mutex<()> = Mutex::new(());
+
+// ---- background jobs
+
+/// The last finished build or refresh per (home, alias), for the page to show.
+/// In memory only: a restart forgets it (the profile and proposals are on disk).
+#[derive(Clone)]
+enum JobKind {
+    Build,
+    Refresh(SectionKey),
+}
+
+#[derive(Clone)]
+enum JobOutcome {
+    Built,
+    Proposed,
+    NothingNew,
+    Failed(String),
+}
+
+#[derive(Clone)]
+struct Job {
+    at: DateTime<Utc>,
+    kind: JobKind,
+    outcome: JobOutcome,
+}
+
+type JobKey = (PathBuf, String);
+static JOBS: Mutex<Vec<(JobKey, Job)>> = Mutex::new(Vec::new());
+/// The homes with a "Build all profiles" pass running.
+static BUILD_ALL: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+fn record(home: &Path, alias: &str, job: Job) {
+    let mut jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
+    jobs.retain(|((h, a), _)| !(h == home && a == alias));
+    jobs.push(((home.to_path_buf(), alias.to_string()), job));
+}
+
+fn last_job(home: &Path, alias: &str) -> Option<Job> {
+    let jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
+    jobs.iter()
+        .find(|((h, a), _)| h == home && a == alias)
+        .map(|(_, j)| j.clone())
+}
+
+struct BuildAllGuard(PathBuf);
+
+impl BuildAllGuard {
+    fn acquire(home: &Path) -> Option<Self> {
+        let mut running = BUILD_ALL.lock().unwrap_or_else(|e| e.into_inner());
+        if running.iter().any(|h| h == home) {
+            return None;
+        }
+        running.push(home.to_path_buf());
+        Some(Self(home.to_path_buf()))
+    }
+}
+
+impl Drop for BuildAllGuard {
+    fn drop(&mut self) {
+        let mut running = BUILD_ALL.lock().unwrap_or_else(|e| e.into_inner());
+        running.retain(|h| h != &self.0);
+    }
+}
+
+fn build_all_running(home: &Path) -> bool {
+    BUILD_ALL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|h| h == home)
+}
+
+/// One line, bounded: what a failed job shows.
+fn failure_line(e: &str) -> String {
+    e.lines().next().unwrap_or("").trim().chars().take(200).collect()
+}
+
+/// Everything a background job needs, owned (the request is gone by then).
+struct JobEnv {
+    home: PathBuf,
+    root: PathBuf,
+    approvals: PathBuf,
+    fixed_now: Option<DateTime<Utc>>,
+    agent: ProfileAgent,
+}
+
+impl JobEnv {
+    fn now(&self) -> DateTime<Utc> {
+        self.fixed_now.unwrap_or_else(Utc::now)
+    }
+}
+
+/// The injected agent, else the real sealed AI CLI when this dashboard may start
+/// processes; `None` (tests, golden pages) starts nothing.
+fn job_env(ctx: &UiCtx) -> Option<JobEnv> {
+    let agent = ctx.state.profile_agent.clone().or_else(|| {
+        ctx.state
+            .spawn_processes
+            .then(|| Arc::new(profile_build::SealedAgent) as ProfileAgent)
+    })?;
+    Some(JobEnv {
+        home: ctx.state.home_dir.clone(),
+        root: memory_root(ctx),
+        approvals: approvals_dir(ctx),
+        fixed_now: ctx.state.fixed_now,
+        agent,
+    })
+}
+
+fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        profile_build::build_profile(
+            &t.alias,
+            &t.work_dir,
+            &t.instance,
+            &t.project_id,
+            aliases,
+            &*env.agent,
+            env.now(),
+            Some(&env.root),
+        )
+    }))
+    .unwrap_or_else(|_| Err("internal error".into()));
+    let outcome = match res {
+        Ok(_) => JobOutcome::Built,
+        Err(e) => JobOutcome::Failed(failure_line(&e)),
+    };
+    record(&env.home, &t.alias, Job { at: env.now(), kind: JobKind::Build, outcome });
+}
+
+// ---- handlers
+
+fn build(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    if form.first("project") == Some("all") {
+        return build_all(ctx);
+    }
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || {
+        if form.first("from") == Some("overview") {
+            Back::Overview
+        } else {
+            Back::Project(&alias, None)
+        }
+    };
+    let Some(t) = checkout_of(ctx, &alias) else {
+        return back(to(), Notice::NoCheckout);
+    };
+    let Some(env) = job_env(ctx) else {
+        return back(to(), Notice::NoAgent);
+    };
+    // Taken on the click, so a second click is refused at once.
+    let Some(slot) = profile_build::try_acquire(&alias) else {
+        return back(to(), Notice::Busy);
+    };
+    let aliases: Vec<String> = tracked_list(ctx).into_iter().map(|t| t.alias).collect();
+    std::thread::spawn(move || {
+        let _slot = slot;
+        run_build(&env, &t, &aliases);
+    });
+    back(to(), Notice::BuildStarted)
+}
+
+/// Every tracked project with a checkout, one after another; a project another
+/// run is busy with is skipped. Human-written sections are kept by the build.
+fn build_all(ctx: &UiCtx) -> UiResponse {
+    let all = tracked_list(ctx);
+    let aliases: Vec<String> = all.iter().map(|t| t.alias.clone()).collect();
+    let list: Vec<TrackedProject> = all
+        .into_iter()
+        .filter(|t| !t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+        .collect();
+    if list.is_empty() {
+        return back(Back::Overview, Notice::NothingToBuild);
+    }
+    let Some(env) = job_env(ctx) else {
+        return back(Back::Overview, Notice::NoAgent);
+    };
+    let Some(guard) = BuildAllGuard::acquire(&ctx.state.home_dir) else {
+        return back(Back::Overview, Notice::Busy);
+    };
+    std::thread::spawn(move || {
+        let _guard = guard;
+        for t in &list {
+            let Some(_slot) = profile_build::try_acquire(&t.alias) else {
+                continue;
+            };
+            run_build(&env, t, &aliases);
+        }
+    });
+    back(Back::Overview, Notice::BuildAllStarted)
+}
+
+fn save_section(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let Some(key) = form.first("section").and_then(SectionKey::from_slug) else {
+        return back(Back::Project(&alias, None), Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, Some(page_of(key)));
+    let summary = form.first("summary").unwrap_or("");
+    let body = form.first("body").unwrap_or("");
+    if summary.chars().count() > SUMMARY_MAX || body.chars().count() > BODY_MAX {
+        return back(to(), Notice::TooLong);
+    }
+    // The profile's own save does not reject secrets; a person's paste must not
+    // land in a file agents read.
+    if contains_secret(summary).is_some() || contains_secret(body).is_some() {
+        return back(to(), Notice::Secret);
+    }
+    let root = memory_root(ctx);
+    let _w = WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    match project_profile::load(&alias, Some(&root)) {
+        Ok(Some(_)) => {}
+        Ok(None) => return back(to(), Notice::NoProfile),
+        Err(_) => return back(to(), Notice::Unreadable),
+    }
+    let now = ctx.state.now();
+    let saved = project_profile::update_locked(&alias, Some(&root), |existing| {
+        let mut p = existing.ok_or_else(|| "no profile".to_string())?;
+        project_profile::edit_section(&mut p, key, summary, body, now);
+        Ok(p)
+    });
+    match saved {
+        Ok(_) => back(to(), Notice::Saved),
+        Err(_) => back(to(), Notice::SaveFailed),
+    }
+}
+
+fn refresh_section(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let Some(key) = form.first("section").and_then(SectionKey::from_slug) else {
+        return back(Back::Project(&alias, None), Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, Some(page_of(key)));
+    match project_profile::load(&alias, Some(&memory_root(ctx))) {
+        Ok(Some(_)) => {}
+        Ok(None) => return back(to(), Notice::NoProfile),
+        Err(_) => return back(to(), Notice::Unreadable),
+    }
+    let Some(t) = checkout_of(ctx, &alias) else {
+        return back(to(), Notice::NoCheckout);
+    };
+    let Some(env) = job_env(ctx) else {
+        return back(to(), Notice::NoAgent);
+    };
+    let Some(slot) = profile_build::try_acquire(&alias) else {
+        return back(to(), Notice::Busy);
+    };
+    std::thread::spawn(move || {
+        let _slot = slot;
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            profile_sync::propose_refresh_held(
+                &t.alias,
+                key,
+                &t.work_dir,
+                &*env.agent,
+                env.now(),
+                Some(&env.root),
+                &env.approvals,
+            )
+        }))
+        .unwrap_or_else(|_| Err("internal error".into()));
+        let outcome = match res {
+            Ok(Some(_)) => JobOutcome::Proposed,
+            Ok(None) => JobOutcome::NothingNew,
+            Err(e) => JobOutcome::Failed(failure_line(&e)),
+        };
+        record(&env.home, &t.alias, Job { at: env.now(), kind: JobKind::Refresh(key), outcome });
+    });
+    back(to(), Notice::RefreshStarted)
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// The proposal's section key, when it is a well-formed proposal for `alias`.
+fn proposal_key(a: &Value, alias: &str) -> Option<SectionKey> {
+    if a["kind"] != profile_sync::KIND || a["target"]["alias"] != alias || a["project"] != alias {
+        return None;
+    }
+    a["target"]["section"].as_str().and_then(SectionKey::from_slug)
+}
+
+/// Whether the section still holds the text the proposal replaces (the same
+/// comparison `apply_proposal` makes under the lock).
+fn still_applies(profile: &Profile, key: SectionKey, a: &Value) -> bool {
+    let t = &a["target"];
+    let (old, old_summary) = (t["old"].as_str().unwrap_or(""), t["old_summary"].as_str().unwrap_or(""));
+    match profile.sections.get(&key) {
+        Some(cur) => cur.body == old && cur.summary == old_summary,
+        None => old.is_empty() && old_summary.is_empty(),
+    }
+}
+
+/// Approve or dismiss. A decision is final in the approvals store, so an approval
+/// is recorded only after checking that the section still holds the proposal's
+/// old text; then the proposal is applied. Should the apply still fail (another
+/// process wrote in between), the approved proposal keeps an Apply button while
+/// it remains applicable.
+fn decide(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, Some("proposals"));
+    let id = form.first("id").unwrap_or("");
+    let decision = form.first("decision");
+    if !valid_id(id) || !matches!(decision, Some("approve" | "dismiss")) {
+        return back(to(), Notice::BadInput);
+    }
+    let dir = approvals_dir(ctx);
+    let Some((a, key)) = approvals::get(&dir, id)
+        .filter(|a| a["id"] == id)
+        .and_then(|a| proposal_key(&a, &alias).map(|k| (a, k)))
+    else {
+        return back(to(), Notice::BadInput);
+    };
+    let now = ctx.state.now();
+    if decision == Some("dismiss") {
+        if a["status"] != "pending" {
+            return back(to(), Notice::AlreadyDecided);
+        }
+        return match approvals::decide(&dir, id, "deny", "dashboard", now) {
+            Ok(_) => back(to(), Notice::Dismissed),
+            Err(_) => back(to(), Notice::AlreadyDecided),
+        };
+    }
+    let root = memory_root(ctx);
+    let _w = WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    // No build or refresh may rewrite the profile between the check and the apply.
+    let Some(_slot) = profile_build::try_acquire(&alias) else {
+        return back(to(), Notice::Busy);
+    };
+    let profile = match project_profile::load(&alias, Some(&root)) {
+        Ok(Some(p)) => p,
+        Ok(None) => return back(to(), Notice::NoProfile),
+        Err(_) => return back(to(), Notice::Unreadable),
+    };
+    match a["status"].as_str() {
+        Some("pending") => {
+            if !still_applies(&profile, key, &a) {
+                return back(to(), Notice::Changed);
+            }
+            if approvals::decide(&dir, id, "approve", "dashboard", now).is_err() {
+                return back(to(), Notice::AlreadyDecided);
+            }
+        }
+        // Approved earlier but not applied: apply it now (a no-op when it was).
+        Some("approved") => {}
+        _ => return back(to(), Notice::AlreadyDecided),
+    }
+    match profile_sync::apply_proposal(id, Some(&root), &dir) {
+        Ok(_) => back(to(), Notice::Approved),
+        Err(e) if e.contains("changed since") => back(to(), Notice::Changed),
+        Err(_) => back(to(), Notice::ApplyFailed),
+    }
+}
+
+fn sync_settings(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let enabled = matches!(form.first("enabled"), Some("on" | "1"));
+    let Some(weekday) = form
+        .first("weekday")
+        .and_then(|w| WEEKDAYS.iter().find(|(code, _)| *code == w))
+        .map(|(_, d)| *d)
+    else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let Some(hour) = form
+        .first("hour")
+        .filter(|h| !h.is_empty() && h.len() <= 2 && h.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|h| h.parse::<u32>().ok())
+        .filter(|h| *h <= 23)
+    else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let changed = profile_sync::with_store(&store_path(ctx), |s| {
+        let was = s.settings.enabled;
+        s.settings.enabled = enabled;
+        s.settings.weekday = weekday;
+        s.settings.hour = hour;
+        was != enabled
+    });
+    match changed {
+        Err(_) => back(Back::Overview, Notice::StoreBad),
+        Ok(true) if enabled => back(Back::Overview, Notice::SyncOn),
+        Ok(true) => back(Back::Overview, Notice::SyncOff),
+        Ok(false) => back(Back::Overview, Notice::ScheduleSaved),
+    }
+}
+
+/// Runs once on the next server tick, whether or not the weekly switch is on.
+fn sync_now(ctx: &UiCtx) -> UiResponse {
+    match profile_sync::with_store(&store_path(ctx), |s| s.sync_requested = true) {
+        Ok(()) => back(Back::Overview, Notice::SyncRequested),
+        Err(_) => back(Back::Overview, Notice::StoreBad),
+    }
+}
+
+// ---- controls
+
+fn spinner() -> &'static str {
+    "<span class='mem-spin' aria-hidden='true'></span>"
+}
+
+fn hidden(name: &str, value: &str) -> String {
+    format!("<input type='hidden' name='{name}' value='{}'>", escape(value))
+}
+
+fn weekday_label(ctx: &UiCtx, d: chrono::Weekday) -> String {
+    match d {
+        chrono::Weekday::Mon => ctx.t("Monday"),
+        chrono::Weekday::Tue => ctx.t("Tuesday"),
+        chrono::Weekday::Wed => ctx.t("Wednesday"),
+        chrono::Weekday::Thu => ctx.t("Thursday"),
+        chrono::Weekday::Fri => ctx.t("Friday"),
+        chrono::Weekday::Sat => ctx.t("Saturday"),
+        chrono::Weekday::Sun => ctx.t("Sunday"),
+    }
+}
+
+/// The overview's controls: the weekly sync switch (saves on click, like the
+/// Todos switch), its day and hour (each saves on change; a Save button stands in
+/// without JavaScript), "Sync now" and "Build all profiles".
+fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
+    let csrf = ctx.csrf_input();
+    let mut out = String::new();
+    if let Ok(s) = store {
+        let set = &s.settings;
+        let day = WEEKDAYS.iter().find(|(_, d)| *d == set.weekday).map_or("mon", |(c, _)| c);
+        let hour = set.hour.min(23).to_string();
+        let label = escape(&ctx.t("Weekly sync"));
+        // The switch posts the opposite of what it shows; the schedule keeps it.
+        let (class, checked, next, keep) = if set.enabled {
+            (" is-on", "true", "0", "on")
+        } else {
+            ("", "false", "on", "0")
+        };
+        out.push_str(&format!(
+            "<form method='post' action='/insights/memory/sync/settings' class='mem-switch'>{csrf}{}{}{}\
+             <button type='submit' class='switch{class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button>\
+             <span>{label}</span></form>",
+            hidden("enabled", next),
+            hidden("weekday", day),
+            hidden("hour", &hour)
+        ));
+        let days: String = WEEKDAYS
+            .iter()
+            .map(|(code, d)| {
+                format!(
+                    "<option value='{code}'{}>{}</option>",
+                    if *d == set.weekday { " selected" } else { "" },
+                    escape(&weekday_label(ctx, *d))
+                )
+            })
+            .collect();
+        let hours: String = (0..24)
+            .map(|h| {
+                format!(
+                    "<option value='{h}'{}>{h:02}:00</option>",
+                    if h == set.hour { " selected" } else { "" }
+                )
+            })
+            .collect();
+        out.push_str(&format!(
+            "<form method='post' action='/insights/memory/sync/settings' class='mem-schedule'>{csrf}{}\
+             <select class='mem-select' name='weekday' aria-label='{}' onchange='this.form.requestSubmit()'>{days}</select>\
+             <select class='mem-select' name='hour' aria-label='{}' onchange='this.form.requestSubmit()'>{hours}</select>\
+             <noscript><button class='mem-btn' type='submit'>{}</button></noscript></form>",
+            hidden("enabled", keep),
+            escape(&ctx.t("Sync day")),
+            escape(&ctx.t("Sync hour")),
+            escape(&ctx.t("Save"))
+        ));
+        out.push_str(&format!(
+            "<form method='post' action='/insights/memory/sync/now' class='mem-inline'>{csrf}\
+             <button class='mem-btn' type='submit' title='{}'>{}{}</button></form>",
+            escape(&ctx.t("Run the weekly sync once, within a minute")),
+            icon("autorenew"),
+            escape(&ctx.t("Sync now"))
+        ));
+    }
+    let build = if build_all_running(&ctx.state.home_dir) {
+        format!(
+            "<button class='mem-btn mem-btn-primary' type='button' disabled>{}{}</button>",
+            spinner(),
+            escape(&ctx.t("Building profiles…"))
+        )
+    } else {
+        format!(
+            "<button class='mem-btn mem-btn-primary' type='submit'>{}{}</button>",
+            icon("auto_awesome"),
+            escape(&ctx.t("Build all profiles"))
+        )
+    };
+    out.push_str(&format!(
+        "<form method='post' action='/insights/memory/build' class='mem-inline'>{csrf}{}{}{build}</form>",
+        hidden("project", "all"),
+        hidden("from", "overview")
+    ));
+    out
+}
+
+/// The project header's Build (no profile yet) or Refresh (rebuild) button.
+fn head_actions(ctx: &UiCtx, p: &Project, built: bool) -> String {
+    if !p.checkout {
+        return format!(
+            "<p class='mem-muted'>{}</p>",
+            escape(&ctx.t("Set this project's local checkout on the Projects page to build its profile."))
+        );
+    }
+    if profile_build::is_running(&p.alias) {
+        return format!(
+            "<button class='mem-btn mem-btn-primary' type='button' disabled>{}{}</button>",
+            spinner(),
+            escape(&ctx.t("Working…"))
+        );
+    }
+    let (icon_name, label) = if built {
+        ("autorenew", ctx.t("Refresh profile"))
+    } else {
+        ("auto_awesome", ctx.t("Build profile"))
+    };
+    format!(
+        "<form method='post' action='/insights/memory/build' class='mem-inline'>{}{}{}\
+         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></form>\
+         <p class='mem-muted mem-hint'>{}</p>",
+        ctx.csrf_input(),
+        hidden("project", &p.alias),
+        hidden("from", "project"),
+        icon(icon_name),
+        escape(&label),
+        escape(&ctx.t("Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept."))
+    )
+}
+
+/// "Working…" while a run holds the project, else the last build or refresh result.
+fn job_line(ctx: &UiCtx, alias: &str) -> String {
+    if profile_build::is_running(alias) {
+        return format!(
+            "<div class='mem-job' role='status'>{}<p>{}</p></div>",
+            spinner(),
+            escape(&ctx.t("Working on this profile… This takes a few minutes; reload the page to see the result."))
+        );
+    }
+    let Some(job) = last_job(&ctx.state.home_dir, alias) else {
+        return String::new();
+    };
+    let when = ago(ctx, job.at);
+    let section = |k: SectionKey| section_title(ctx, k);
+    let error = |e: &str| match contains_secret(e) {
+        Some(_) => ctx.t("details hidden"),
+        None => e.to_string(),
+    };
+    let (ok, text) = match (&job.kind, &job.outcome) {
+        (JobKind::Build, JobOutcome::Failed(e)) => (
+            false,
+            ctx.tf("The last build failed {when}: {error}", &[("when", &when), ("error", &error(e))]),
+        ),
+        (JobKind::Build, _) => (true, ctx.tf("Profile built {when}. Read it before agents rely on it.", &[("when", &when)])),
+        (JobKind::Refresh(k), JobOutcome::Proposed) => (
+            true,
+            ctx.tf("Proposal raised for {section} {when}. Review it under Proposals.", &[("section", &section(*k)), ("when", &when)]),
+        ),
+        (JobKind::Refresh(k), JobOutcome::Failed(e)) => (
+            false,
+            ctx.tf(
+                "Refreshing {section} failed {when}: {error}",
+                &[("section", &section(*k)), ("when", &when), ("error", &error(e))],
+            ),
+        ),
+        (JobKind::Refresh(k), _) => (
+            true,
+            ctx.tf("Nothing new to propose for {section} ({when}).", &[("section", &section(*k)), ("when", &when)]),
+        ),
+    };
+    format!(
+        "<div class='mem-job{}' role='status'>{}<p>{}</p></div>",
+        if ok { "" } else { " mem-job-bad" },
+        icon(if ok { "check_circle" } else { "error" }),
+        escape(&text)
+    )
+}
+
+/// A section card's Edit (inline editor) and Refresh this section. `s` is `None`
+/// for a missing section and for one whose text is hidden as a secret: the editor
+/// then starts empty and never carries the hidden text.
+fn section_actions(ctx: &UiCtx, p: &Project, key: SectionKey, s: Option<&Section>) -> String {
+    let csrf = ctx.csrf_input();
+    let slug = key.slug();
+    let ids = format!("{}-{slug}", p.alias.bytes().filter(u8::is_ascii_alphanumeric).map(char::from).collect::<String>());
+    let refresh = if !p.checkout {
+        String::new()
+    } else if profile_build::is_running(&p.alias) {
+        format!(
+            "<button class='mem-btn' type='button' disabled>{}{}</button>",
+            spinner(),
+            escape(&ctx.t("Working…"))
+        )
+    } else {
+        format!(
+            "<form method='post' action='/insights/memory/section/refresh' class='mem-inline mem-refresh'>{csrf}{}{}\
+             <button class='mem-btn' type='submit' title='{}'>{}{}</button></form>",
+            hidden("project", &p.alias),
+            hidden("section", slug),
+            escape(&ctx.t("Ask the AI CLI for an update. It waits under Proposals; nothing changes until you approve it.")),
+            icon("autorenew"),
+            escape(&ctx.t("Refresh this section"))
+        )
+    };
+    let (summary, body) = s.map_or(("", ""), |s| (s.summary.as_str(), s.body.as_str()));
+    format!(
+        "<details class='mem-edit'><summary class='mem-btn'>{}{}</summary>\
+         <form method='post' action='/insights/memory/section/save' class='mem-editor'>{csrf}{}{}\
+         <label class='mem-label' for='mem-sum-{ids}'>{}</label>\
+         <input class='mem-input' id='mem-sum-{ids}' name='summary' maxlength='{SUMMARY_MAX}' value='{}'>\
+         <label class='mem-label' for='mem-body-{ids}'>{}</label>\
+         <textarea class='mem-textarea' id='mem-body-{ids}' name='body' maxlength='{BODY_MAX}'>{}</textarea>\
+         <div class='mem-editor-foot'><p class='mem-muted'>{}</p>\
+         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></div></form></details>{refresh}",
+        icon("edit"),
+        escape(&ctx.t("Edit")),
+        hidden("project", &p.alias),
+        hidden("section", slug),
+        escape(&ctx.t("Summary (one line)")),
+        escape(summary),
+        escape(&ctx.t("Details (Markdown)")),
+        escape(body),
+        escape(&ctx.t("Saving marks this section as written by a person; later syncs only propose changes to it.")),
+        icon("save"),
+        escape(&ctx.t("Save"))
+    )
+}
+
+/// Approve / Dismiss on a pending proposal; Apply on an approved one that was not
+/// applied and still fits the section.
+fn proposal_actions(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profile>) -> String {
+    let Some(id) = a["id"].as_str().filter(|id| valid_id(id)) else {
+        return String::new();
+    };
+    let Some(key) = proposal_key(a, alias) else {
+        return String::new();
+    };
+    let buttons = match a["status"].as_str() {
+        Some("pending") => format!(
+            "<button class='mem-btn' type='submit' name='decision' value='dismiss'>{}{}</button>\
+             <button class='mem-btn mem-btn-primary' type='submit' name='decision' value='approve'>{}{}</button>",
+            icon("close"),
+            escape(&ctx.t("Dismiss")),
+            icon("check"),
+            escape(&ctx.t("Approve"))
+        ),
+        Some("approved") => {
+            let t = &a["target"];
+            let applied = profile.and_then(|p| p.sections.get(&key)).is_some_and(|cur| {
+                cur.body == t["new"].as_str().unwrap_or("") && cur.summary == t["new_summary"].as_str().unwrap_or("")
+            });
+            if applied || !profile.is_some_and(|p| still_applies(p, key, a)) {
+                return String::new();
+            }
+            format!(
+                "<button class='mem-btn mem-btn-primary' type='submit' name='decision' value='approve'>{}{}</button>",
+                icon("check"),
+                escape(&ctx.t("Apply"))
+            )
+        }
+        _ => return String::new(),
+    };
+    format!(
+        "<form method='post' action='/insights/memory/proposal/decide' class='mem-inline mem-decide'>{}{}{}{buttons}</form>",
+        ctx.csrf_input(),
+        hidden("project", alias),
+        hidden("id", id)
+    )
+}
+
 const STYLE: &str = "<style>
 .mem-stack{display:flex;flex-direction:column;gap:1.25rem;min-width:0}
 .mem-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1rem;min-width:0}
@@ -1442,6 +2352,47 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-diff-new{background:color-mix(in srgb,var(--md-success-container) 30%,transparent)}
 .mem-diff-col h4{margin:0 0 .35rem;font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--md-on-surface-variant)}
 .mem-diff-sum{margin:0;font-size:.88rem;font-weight:500;overflow-wrap:anywhere}
+.mem-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .6rem;min-width:0}
+.mem-actions form{margin:0}
+.mem-bar .mem-actions{margin-left:auto}
+.mem-inline{display:inline-flex;align-items:center;gap:.5rem}
+.mem-switch{display:inline-flex;align-items:center;gap:.5rem;height:32px;font-size:.85rem;font-weight:500;color:var(--md-on-surface)}
+.mem-schedule{display:inline-flex;align-items:center;gap:.4rem}
+.mem-select{width:auto;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .6rem;border:1px solid var(--md-outline-variant);border-radius:10px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;cursor:pointer}
+.mem-btn{display:inline-flex;align-items:center;gap:.4rem;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .95rem;border:1px solid var(--md-outline-variant);border-radius:999px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;list-style:none;user-select:none}
+.mem-btn::-webkit-details-marker{display:none}
+.mem-btn:hover{background:var(--md-surface-container-high)}
+.mem-btn .icon{width:15px;height:15px;flex:0 0 15px}
+.mem-btn-primary{background:var(--md-primary);border-color:var(--md-primary);color:var(--md-on-primary)}
+.mem-btn-primary:hover{background:var(--md-primary);filter:brightness(1.08)}
+.mem-btn[disabled]{opacity:.7;cursor:default;filter:none}
+.mem-btn:focus-visible,.mem-select:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
+.mem-head .mem-actions{margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--md-outline-variant)}
+.mem-hint{font-size:.82rem}
+.mem-detail .mem-actions{margin:0 0 .9rem}
+.mem-refresh{order:1}
+.mem-edit{order:2;min-width:0}
+.mem-edit[open]{flex:1 1 100%}
+.mem-edit[open]>summary{background:var(--md-surface-container-high)}
+.mem-editor{display:flex;flex-direction:column;gap:.45rem;margin-top:.75rem;padding:1rem;border:1px solid color-mix(in srgb,var(--md-outline) 30%,transparent);border-radius:14px;background:transparent}
+.mem-label{font-size:.78rem;font-weight:600;color:var(--md-on-surface-variant)}
+.mem-label+.mem-input,.mem-label+.mem-textarea{margin-bottom:.35rem}
+.mem-input{display:block;width:100%;height:36px;box-sizing:border-box;flex:none;margin:0;padding:0 .75rem;border:1px solid color-mix(in srgb,var(--md-outline) 45%,transparent);border-radius:10px;background:var(--md-surface-container-lowest);color:var(--md-on-surface);font:inherit;font-size:.9rem}
+.mem-textarea{display:block;width:100%;height:260px;min-height:120px;box-sizing:border-box;flex:none;margin:0;padding:.6rem .75rem;border:1px solid color-mix(in srgb,var(--md-outline) 45%,transparent);border-radius:10px;background:var(--md-surface-container-lowest);color:var(--md-on-surface);font:.84rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+.mem-input:focus,.mem-textarea:focus{outline:2px solid var(--md-primary);outline-offset:0;border-color:transparent}
+.mem-editor-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.6rem 1rem}
+.mem-editor-foot p{flex:1 1 220px;font-size:.82rem}
+.mem-proposal .mem-actions{margin-top:.75rem;justify-content:flex-end}
+.mem-notice,.mem-job{display:flex;align-items:flex-start;gap:.6rem;padding:.75rem 1rem;border-radius:14px;font-size:.88rem;line-height:1.45}
+.mem-notice p,.mem-job p{margin:0;min-width:0;overflow-wrap:anywhere}
+.mem-notice .icon,.mem-job .icon{width:18px;height:18px;flex:0 0 18px}
+.mem-notice-ok{background:var(--md-success-container);color:var(--md-on-success-container)}
+.mem-notice-bad{background:var(--md-error-container);color:var(--md-on-error-container)}
+.mem-job{border:1px solid var(--md-outline-variant);background:var(--md-surface-container);color:var(--md-on-surface)}
+.mem-job-bad{border-color:transparent;background:var(--md-error-container);color:var(--md-on-error-container)}
+.mem-spin{display:inline-block;width:14px;height:14px;flex:0 0 14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:mem-spin .8s linear infinite}
+.mem-job .mem-spin{margin-top:.15rem}
+@keyframes mem-spin{to{transform:rotate(360deg)}}
 .mem-actions:empty{display:none}
 @media (prefers-reduced-motion:no-preference){
 a.mem-card{transition:transform .3s cubic-bezier(.32,.72,0,1),box-shadow .3s cubic-bezier(.32,.72,0,1),border-color .3s cubic-bezier(.32,.72,0,1)}
@@ -1592,7 +2543,8 @@ mod tests {
                 project: alias.into(),
                 title: format!("Update the {slug} section of the {alias} profile"),
                 summary: "s".into(),
-                timeout_seconds: 3600,
+                // Never expired by a page that looks at approvals with the real clock.
+                timeout_seconds: 10 * 365 * 24 * 3600,
                 target: Some(json!({
                     "section": slug, "alias": alias, "old": old, "new": new,
                     "old_summary": "old summary", "new_summary": "new summary",
@@ -1626,7 +2578,7 @@ mod tests {
         assert!(html.contains("project=beta'"), "neighbor link");
         assert!(html.contains("Pending proposals"));
         assert!(html.contains("class='card mem-subnav'"));
-        assert!(html.contains("<div class='mem-actions'></div>"));
+        assert!(html.contains("class='mem-actions'"));
         assert!(!html.contains("This profile is a draft"));
         // Missing sections still get a card.
         assert!(html.contains("Not written yet"));
@@ -1877,5 +2829,425 @@ mod tests {
         assert!(html.contains("new summary"));
         let main = sb.get("/insights?view=memory&project=alpha");
         assert!(main.contains("project=alpha&amp;page=proposals"));
+    }
+
+    // ---------------------------------------------------------------- Part B: actions
+
+    use axum::http::Method;
+    use loopx_core::profile_build::{self, Agent};
+    use loopx_core::profile_sync;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+
+    /// An agent that blocks until released (if gated) and then answers `reply`.
+    struct FakeAgent {
+        reply: String,
+        gate: Mutex<Option<mpsc::Receiver<()>>>,
+        calls: AtomicUsize,
+    }
+
+    impl FakeAgent {
+        fn new(reply: String) -> Arc<Self> {
+            Arc::new(Self { reply, gate: Mutex::new(None), calls: AtomicUsize::new(0) })
+        }
+        fn gated(reply: String) -> (Arc<Self>, mpsc::Sender<()>) {
+            let (tx, rx) = mpsc::channel();
+            (Arc::new(Self { reply, gate: Mutex::new(Some(rx)), calls: AtomicUsize::new(0) }), tx)
+        }
+    }
+
+    impl Agent for FakeAgent {
+        fn run(&self, _prompt: &str) -> Result<String, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let gate = self.gate.lock().unwrap().take();
+            if let Some(rx) = gate {
+                let _ = rx.recv_timeout(std::time::Duration::from_secs(20));
+            }
+            Ok(self.reply.clone())
+        }
+    }
+
+    /// A whole profile as the agent would reply with it.
+    fn full_reply(alias: &str, text: &str) -> String {
+        let all: Vec<(SectionKey, Section)> =
+            SectionKey::ALL.into_iter().map(|k| (k, section(&format!("{text} {}", k.slug()), text))).collect();
+        let mut p = profile(alias, &all);
+        p.status = Status::Draft;
+        project_profile::render(&p)
+    }
+
+    fn one_section_reply(alias: &str, key: SectionKey, text: &str) -> String {
+        let mut p = profile(alias, &[(key, section(&format!("{text} summary"), text))]);
+        p.status = Status::Draft;
+        project_profile::render(&p)
+    }
+
+    impl Sb {
+        fn with_agent(mut self, agent: Arc<FakeAgent>) -> Self {
+            self.state = self.state.with_profile_agent(agent);
+            self
+        }
+        fn post(&self, url: &str, body: &str) -> crate::ui::routes::UiResponse {
+            let req = crate::ui::routes::UiRequest::new(Method::POST, url)
+                .with_header("content-type", "application/x-www-form-urlencoded")
+                .with_body(format!("csrf_token=tok&{body}"));
+            self.state.registry.dispatch(&self.state, &req).unwrap()
+        }
+        fn post_to(&self, url: &str, body: &str) -> String {
+            let r = self.post(url, body);
+            assert_eq!(r.status, 303, "{url} {body}");
+            r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("location")).unwrap().1.clone()
+        }
+        fn store(&self) -> PathBuf {
+            self.state.home_dir.join("profile_sync.json")
+        }
+        fn load(&self, alias: &str) -> Profile {
+            project_profile::load(alias, Some(&self.root())).unwrap().unwrap()
+        }
+    }
+
+    fn wait_idle(alias: &str) {
+        for _ in 0..400 {
+            if !profile_build::is_running(alias) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("{alias} is still running");
+    }
+
+    const ROUTES: [&str; 6] = [
+        "/insights/memory/build",
+        "/insights/memory/section/save",
+        "/insights/memory/section/refresh",
+        "/insights/memory/proposal/decide",
+        "/insights/memory/sync/settings",
+        "/insights/memory/sync/now",
+    ];
+
+    #[test]
+    fn every_memory_post_route_requires_csrf() {
+        let sb = Sb::new(&[("alpha", true)]);
+        for url in ROUTES {
+            let req = crate::ui::routes::UiRequest::new(Method::POST, url)
+                .with_header("content-type", "application/x-www-form-urlencoded")
+                .with_body("project=alpha");
+            let r = sb.state.registry.dispatch(&sb.state, &req).unwrap();
+            assert_eq!(r.status, 403, "{url}");
+            let wrong = crate::ui::routes::UiRequest::new(Method::POST, url)
+                .with_header("content-type", "application/x-www-form-urlencoded")
+                .with_body("csrf_token=nope&project=alpha");
+            assert_eq!(sb.state.registry.dispatch(&sb.state, &wrong).unwrap().status, 403, "{url}");
+        }
+        assert!(!sb.store().exists());
+    }
+
+    #[test]
+    fn save_section_marks_human_and_rejects_secret_text() {
+        let sb = Sb::new(&[("save-a", true)]);
+        sb.save(&profile("save-a", &[(SectionKey::Features, section("Old sum", "Old body"))]));
+        let loc = sb.post_to(
+            "/insights/memory/section/save",
+            "project=save-a&section=features&summary=New+sum&body=Line+one%0D%0ALine+two",
+        );
+        assert_eq!(loc, "/insights?view=memory&project=save-a&page=features&notice=saved");
+        let s = &sb.load("save-a").sections[&SectionKey::Features];
+        assert_eq!(s.origin, Origin::Human);
+        assert_eq!((s.summary.as_str(), s.body.as_str()), ("New sum", "Line one\nLine two"));
+        let html = sb.get(&loc);
+        assert!(html.contains("mem-notice") && html.contains("Section saved"), "{html}");
+
+        let secret = "glpat-abcdefghijklmnop1234";
+        for body in [format!("summary=x&body=key+{secret}"), format!("summary=key+{secret}&body=x")] {
+            let loc = sb.post_to("/insights/memory/section/save", &format!("project=save-a&section=features&{body}"));
+            assert!(loc.ends_with("&notice=secret"), "{loc}");
+            assert!(!loc.contains("glpat"), "{loc}");
+            let html = sb.get(&loc);
+            assert!(!html.contains("glpat-"), "never echoed");
+            assert!(html.contains("looks like it contains a secret"), "{html}");
+        }
+        let s = &sb.load("save-a").sections[&SectionKey::Features];
+        assert_eq!(s.summary, "New sum", "a refused save writes nothing");
+    }
+
+    #[test]
+    fn save_rejects_unknown_alias_and_slug_and_oversize() {
+        let sb = Sb::new(&[("save-b", true), ("save-none", true)]);
+        sb.save(&profile("save-b", &[(SectionKey::Stack, section("S", "B"))]));
+        let before = std::fs::read_to_string(project_profile::profile_path("save-b", Some(&sb.root()))).unwrap();
+        let unknown = sb.post_to("/insights/memory/section/save", "project=ghost&section=stack&summary=a&body=b");
+        assert_eq!(unknown, "/insights?view=memory&notice=bad-input");
+        let slug = sb.post_to("/insights/memory/section/save", "project=save-b&section=lessons&summary=a&body=b");
+        assert_eq!(slug, "/insights?view=memory&project=save-b&notice=bad-input");
+        let long_sum = "a".repeat(301);
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project=save-b&section=stack&summary={long_sum}&body=b"));
+        assert!(loc.ends_with("page=stack&notice=too-long"), "{loc}");
+        let long_body = "b".repeat(20_001);
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project=save-b&section=stack&summary=a&body={long_body}"));
+        assert!(loc.ends_with("notice=too-long"), "{loc}");
+        let after = std::fs::read_to_string(project_profile::profile_path("save-b", Some(&sb.root()))).unwrap();
+        assert_eq!(before, after);
+        let none = sb.post_to("/insights/memory/section/save", "project=save-none&section=stack&summary=a&body=b");
+        assert!(none.ends_with("notice=no-profile"), "{none}");
+        assert!(project_profile::load("save-none", Some(&sb.root())).unwrap().is_none(), "no profile is created");
+    }
+
+    #[test]
+    fn build_starts_in_background_and_returns_immediately() {
+        let (agent, release) = FakeAgent::gated(full_reply("build-a", "Built"));
+        let sb = Sb::new(&[("build-a", true)]).with_agent(agent.clone());
+        let started = std::time::Instant::now();
+        let loc = sb.post_to("/insights/memory/build", "project=build-a&from=project");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the request did not wait for the agent");
+        assert_eq!(loc, "/insights?view=memory&project=build-a&notice=build-started");
+        assert!(profile_build::is_running("build-a"));
+        let page = sb.get(&loc);
+        assert!(page.contains("Building the profile"), "{page}");
+        assert!(page.contains("Working on this profile"), "{page}");
+        // A second click while the first runs.
+        let again = sb.post_to("/insights/memory/build", "project=build-a&from=overview");
+        assert_eq!(again, "/insights?view=memory&notice=busy");
+        release.send(()).unwrap();
+        wait_idle("build-a");
+        let p = sb.load("build-a");
+        assert_eq!(p.status, Status::Draft);
+        assert_eq!(agent.calls.load(Ordering::SeqCst), 1);
+        let page = sb.get("/insights?view=memory&project=build-a");
+        assert!(page.contains("Profile built"), "{page}");
+    }
+
+    #[test]
+    fn build_all_builds_every_tracked_checkout_and_refuses_a_second_click() {
+        let (agent, release) = FakeAgent::gated(full_reply("x", "Built"));
+        let sb = Sb::new(&[("all-a", true), ("all-b", true), ("all-issues", false)]).with_agent(agent.clone());
+        let loc = sb.post_to("/insights/memory/build", "project=all&from=overview");
+        assert_eq!(loc, "/insights?view=memory&notice=build-all-started");
+        assert_eq!(sb.post_to("/insights/memory/build", "project=all"), "/insights?view=memory&notice=busy");
+        assert!(sb.get("/insights?view=memory").contains("Building profiles"));
+        release.send(()).unwrap();
+        for _ in 0..400 {
+            if project_profile::load("all-b", Some(&sb.root())).ok().flatten().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        wait_idle("all-b");
+        assert!(sb.load("all-a").sections.len() == 10 && sb.load("all-b").sections.len() == 10);
+        assert!(project_profile::load("all-issues", Some(&sb.root())).unwrap().is_none());
+    }
+
+    #[test]
+    fn build_without_a_checkout_or_agent_is_refused() {
+        let sb = Sb::new(&[("nock", false)]).with_agent(FakeAgent::new(String::new()));
+        let loc = sb.post_to("/insights/memory/build", "project=nock&from=project");
+        assert_eq!(loc, "/insights?view=memory&project=nock&notice=no-checkout");
+        let plain = Sb::new(&[("noagent", true)]);
+        let loc = plain.post_to("/insights/memory/build", "project=noagent&from=project");
+        assert!(loc.ends_with("notice=no-agent"), "tests and goldens never start the real AI CLI: {loc}");
+    }
+
+    #[test]
+    fn refresh_section_creates_proposal_not_overwrite_for_human_section() {
+        let agent = FakeAgent::new(one_section_reply("refresh-h", SectionKey::Features, "Agent text"));
+        let sb = Sb::new(&[("refresh-h", true)]).with_agent(agent);
+        let mut human = section("Mine", "Written by me");
+        human.origin = Origin::Human;
+        sb.save(&profile("refresh-h", &[(SectionKey::Features, human)]));
+        let loc = sb.post_to("/insights/memory/section/refresh", "project=refresh-h&section=features");
+        assert_eq!(loc, "/insights?view=memory&project=refresh-h&page=features&notice=refresh-started");
+        wait_idle("refresh-h");
+        let s = &sb.load("refresh-h").sections[&SectionKey::Features];
+        assert_eq!((s.body.as_str(), s.origin), ("Written by me", Origin::Human), "not overwritten");
+        let all = approvals::all(&sb.approvals());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["kind"], profile_sync::KIND);
+        assert_eq!(all[0]["target"]["new"], "Agent text");
+        let page = sb.get("/insights?view=memory&project=refresh-h&page=proposals");
+        assert!(page.contains("Agent text") && page.contains("action='/insights/memory/proposal/decide'"), "{page}");
+        assert!(page.contains("Proposal raised"), "{page}");
+        let bad = sb.post_to("/insights/memory/section/refresh", "project=refresh-h&section=nope");
+        assert!(bad.ends_with("notice=bad-input"), "{bad}");
+    }
+
+    fn real_proposal(sb: &Sb, alias: &str, key: SectionKey, new: &str) -> String {
+        let agent = FakeAgent::new(one_section_reply(alias, key, new));
+        let work = sb.dir.path().join("repos").join(alias);
+        profile_sync::propose_refresh(alias, key, &work, &*agent, now(), Some(&sb.root()), &sb.approvals())
+            .unwrap()
+            .unwrap()
+            .id
+    }
+
+    #[test]
+    fn decide_approve_applies_and_dismiss_does_not_write() {
+        let sb = Sb::new(&[("decide-a", true)]);
+        sb.save(&profile("decide-a", &[(SectionKey::Stack, section("Old", "Old stack")), (SectionKey::Gotchas, section("G", "Old gotchas"))]));
+        let id = real_proposal(&sb, "decide-a", SectionKey::Stack, "New stack");
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project=decide-a&id={id}&decision=approve"));
+        assert_eq!(loc, "/insights?view=memory&project=decide-a&page=proposals&notice=approved");
+        let p = sb.load("decide-a");
+        assert_eq!(p.sections[&SectionKey::Stack].body, "New stack");
+        assert_eq!(approvals::get(&sb.approvals(), &id).unwrap()["status"], "approved");
+
+        let id2 = real_proposal(&sb, "decide-a", SectionKey::Gotchas, "New gotchas");
+        let before = std::fs::read_to_string(project_profile::profile_path("decide-a", Some(&sb.root()))).unwrap();
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project=decide-a&id={id2}&decision=dismiss"));
+        assert!(loc.ends_with("notice=dismissed"), "{loc}");
+        assert_eq!(approvals::get(&sb.approvals(), &id2).unwrap()["status"], "denied");
+        let after = std::fs::read_to_string(project_profile::profile_path("decide-a", Some(&sb.root()))).unwrap();
+        assert_eq!(before, after);
+        let again = sb.post_to("/insights/memory/proposal/decide", &format!("project=decide-a&id={id2}&decision=approve"));
+        assert!(again.ends_with("notice=already-decided"), "{again}");
+        let bad = sb.post_to("/insights/memory/proposal/decide", &format!("project=decide-a&id={id2}&decision=yes"));
+        assert!(bad.ends_with("notice=bad-input"), "{bad}");
+    }
+
+    #[test]
+    fn decide_approve_after_section_changed_shows_notice_and_does_not_clobber() {
+        let sb = Sb::new(&[("decide-c", true)]);
+        sb.save(&profile("decide-c", &[(SectionKey::Stack, section("Old", "Old stack"))]));
+        let id = real_proposal(&sb, "decide-c", SectionKey::Stack, "Agent stack");
+        // A person edits the section after the proposal was raised.
+        sb.post_to("/insights/memory/section/save", "project=decide-c&section=stack&summary=Mine&body=Hand+written");
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project=decide-c&id={id}&decision=approve"));
+        assert!(loc.ends_with("page=proposals&notice=changed"), "{loc}");
+        assert_eq!(sb.load("decide-c").sections[&SectionKey::Stack].body, "Hand written");
+        assert_eq!(approvals::get(&sb.approvals(), &id).unwrap()["status"], "pending", "not marked approved");
+        assert!(sb.get(&loc).contains("changed since the proposal was raised"));
+    }
+
+    #[test]
+    fn decide_rejects_id_of_other_alias_or_kind() {
+        let sb = Sb::new(&[("rej-a", true), ("rej-b", true)]);
+        sb.save(&profile("rej-a", &[(SectionKey::Stack, section("S", "B"))]));
+        let other = propose(&sb, "rej-b", "stack", "B", "x");
+        let mr = approvals::create(
+            &sb.approvals(),
+            &NewApproval { kind: "mr".into(), project: "rej-a".into(), title: "t".into(), ..Default::default() },
+            now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for id in [other.as_str(), mr.as_str(), "../../etc/passwd", "apr_missing"] {
+            let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project=rej-a&id={}&decision=dismiss", crate::ui::pyfmt::quote(id, "")));
+            assert!(loc.ends_with("notice=bad-input"), "{id}: {loc}");
+        }
+        assert_eq!(approvals::get(&sb.approvals(), &other).unwrap()["status"], "pending");
+        assert_eq!(approvals::get(&sb.approvals(), &mr).unwrap()["status"], "pending");
+    }
+
+    #[test]
+    fn sync_settings_toggle_persists_and_corrupt_store_is_not_overwritten() {
+        let sb = Sb::new(&[("alpha", true)]);
+        let loc = sb.post_to("/insights/memory/sync/settings", "enabled=0&weekday=fri&hour=7");
+        assert_eq!(loc, "/insights?view=memory&notice=sync-off");
+        let s = profile_sync::load(&sb.store()).unwrap().settings;
+        assert_eq!((s.enabled, s.weekday, s.hour), (false, chrono::Weekday::Fri, 7));
+        let loc = sb.post_to("/insights/memory/sync/settings", "enabled=on&weekday=fri&hour=7");
+        assert!(loc.ends_with("notice=sync-on"), "{loc}");
+        let loc = sb.post_to("/insights/memory/sync/settings", "enabled=on&weekday=tue&hour=23");
+        assert!(loc.ends_with("notice=schedule-saved"), "{loc}");
+        let s = profile_sync::load(&sb.store()).unwrap().settings;
+        assert_eq!((s.enabled, s.weekday, s.hour), (true, chrono::Weekday::Tue, 23));
+        for bad in ["enabled=on&weekday=funday&hour=7", "enabled=on&weekday=mon&hour=24", "enabled=on&weekday=mon&hour=x"] {
+            assert!(sb.post_to("/insights/memory/sync/settings", bad).ends_with("notice=bad-input"), "{bad}");
+        }
+        std::fs::write(sb.store(), "{corrupt").unwrap();
+        let loc = sb.post_to("/insights/memory/sync/settings", "enabled=0&weekday=mon&hour=9");
+        assert!(loc.ends_with("notice=store-bad"), "{loc}");
+        assert_eq!(std::fs::read_to_string(sb.store()).unwrap(), "{corrupt");
+        assert!(sb.post_to("/insights/memory/sync/now", "").ends_with("notice=store-bad"));
+        assert_eq!(std::fs::read_to_string(sb.store()).unwrap(), "{corrupt");
+    }
+
+    #[test]
+    fn sync_now_sets_flag() {
+        let sb = Sb::new(&[("alpha", true)]);
+        sb.post_to("/insights/memory/sync/settings", "enabled=0&weekday=mon&hour=9");
+        let loc = sb.post_to("/insights/memory/sync/now", "");
+        assert_eq!(loc, "/insights?view=memory&notice=sync-requested");
+        let store = profile_sync::load(&sb.store()).unwrap();
+        assert!(store.sync_requested && !store.settings.enabled, "works with the switch off");
+    }
+
+    #[test]
+    fn redirects_never_contain_raw_input() {
+        let sb = Sb::new(&[("alpha", true)]);
+        sb.save(&profile("alpha", &[(SectionKey::Stack, section("S", "B"))]));
+        let evil = "%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E%2F%2Fevil.example";
+        let mut seen = Vec::new();
+        for (url, body) in [
+            ("/insights/memory/build", format!("project={evil}&from={evil}")),
+            ("/insights/memory/build", format!("project=alpha&from={evil}")),
+            ("/insights/memory/section/save", format!("project=alpha&section={evil}&summary=a&body=b")),
+            ("/insights/memory/section/save", format!("project={evil}&section=stack&summary=a&body=b")),
+            ("/insights/memory/section/refresh", format!("project=alpha&section={evil}")),
+            ("/insights/memory/proposal/decide", format!("project=alpha&id={evil}&decision={evil}")),
+            ("/insights/memory/sync/settings", format!("enabled={evil}&weekday={evil}&hour={evil}")),
+            ("/insights/memory/sync/now", format!("project={evil}")),
+        ] {
+            seen.push(sb.post_to(url, &body));
+        }
+        for loc in seen {
+            assert!(loc.starts_with("/insights?view=memory"), "{loc}");
+            for bad in ["<", ">", "\"", "script", "evil", "//"] {
+                assert!(!loc.contains(bad), "{loc}");
+            }
+        }
+    }
+
+    #[test]
+    fn notices_are_whitelisted_and_translated() {
+        let sb = Sb::new(&[("alpha", true)]);
+        let html = sb.get("/insights?view=memory&notice=sync-requested");
+        assert!(html.contains("Sync requested"), "{html}");
+        let html = sb.get("/insights?view=memory&notice=%3Cb%3Ehello%3C%2Fb%3E");
+        assert!(!html.contains("class='mem-notice") && !html.contains("hello"), "unknown codes show nothing");
+        let req = crate::ui::routes::UiRequest::get("/insights?view=memory&notice=sync-requested").with_header("cookie", "loop_lang=fr");
+        let r = sb.state.registry.dispatch(&sb.state, &req).unwrap();
+        let fr = String::from_utf8(r.body).unwrap();
+        assert!(fr.contains("class='mem-notice") && !fr.contains("Sync requested. It starts within a minute."), "{fr}");
+    }
+
+    #[test]
+    fn pages_carry_the_controls() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        sb.save(&profile("alpha", &[(SectionKey::Stack, section("S <b>", "Body"))]));
+        let id = propose(&sb, "alpha", "stack", "Body", "New");
+        let overview = sb.get("/insights?view=memory");
+        for needle in [
+            "action='/insights/memory/sync/settings'",
+            "role='switch'",
+            "aria-checked='true'",
+            "name='weekday'",
+            "name='hour'",
+            "action='/insights/memory/sync/now'",
+            "name='project' value='all'",
+        ] {
+            assert!(overview.contains(needle), "{needle}: {overview}");
+        }
+        let bar = &overview[overview.find("class='mem-bar'").unwrap()..];
+        let bar = &bar[..bar.find("class='mem-grid'").unwrap()];
+        assert!(!bar.contains("daemon-action-form"), "{bar}");
+        let main = sb.get("/insights?view=memory&project=alpha");
+        assert!(main.contains("action='/insights/memory/build'") && main.contains("Refresh profile"), "{main}");
+        assert!(sb.get("/insights?view=memory&project=beta").contains("Build profile"));
+        let sub = sb.get("/insights?view=memory&project=alpha&page=stack");
+        assert!(sub.contains("action='/insights/memory/section/save'") && sub.contains("class='mem-input'") && sub.contains("class='mem-textarea'"), "{sub}");
+        assert!(sub.contains("value='S &lt;b&gt;'"), "prefilled and escaped: {sub}");
+        assert!(sub.contains("action='/insights/memory/section/refresh'"), "{sub}");
+        let props = sb.get("/insights?view=memory&project=alpha&page=proposals");
+        assert!(props.contains(&format!("name='id' value='{id}'")) && props.contains("value='approve'") && props.contains("value='dismiss'"), "{props}");
+    }
+
+    #[test]
+    fn a_redacted_section_editor_is_not_prefilled() {
+        let sb = Sb::new(&[("alpha", true)]);
+        sb.save(&profile("alpha", &[(SectionKey::Secrets, section("names", "TOKEN glpat-abcdefghijklmnop1234"))]));
+        let html = sb.get("/insights?view=memory&project=alpha&page=secrets");
+        assert!(!html.contains("glpat-"), "{html}");
+        assert!(html.contains("action='/insights/memory/section/save'"));
     }
 }

@@ -106,6 +106,47 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-diff-new{background:color-mix(in srgb,var(--md-success-container) 30%,transparent)}
 .mem-diff-col h4{margin:0 0 .35rem;font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--md-on-surface-variant)}
 .mem-diff-sum{margin:0;font-size:.88rem;font-weight:500;overflow-wrap:anywhere}
+.mem-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .6rem;min-width:0}
+.mem-actions form{margin:0}
+.mem-bar .mem-actions{margin-left:auto}
+.mem-inline{display:inline-flex;align-items:center;gap:.5rem}
+.mem-switch{display:inline-flex;align-items:center;gap:.5rem;height:32px;font-size:.85rem;font-weight:500;color:var(--md-on-surface)}
+.mem-schedule{display:inline-flex;align-items:center;gap:.4rem}
+.mem-select{width:auto;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .6rem;border:1px solid var(--md-outline-variant);border-radius:10px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;cursor:pointer}
+.mem-btn{display:inline-flex;align-items:center;gap:.4rem;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .95rem;border:1px solid var(--md-outline-variant);border-radius:999px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;list-style:none;user-select:none}
+.mem-btn::-webkit-details-marker{display:none}
+.mem-btn:hover{background:var(--md-surface-container-high)}
+.mem-btn .icon{width:15px;height:15px;flex:0 0 15px}
+.mem-btn-primary{background:var(--md-primary);border-color:var(--md-primary);color:var(--md-on-primary)}
+.mem-btn-primary:hover{background:var(--md-primary);filter:brightness(1.08)}
+.mem-btn[disabled]{opacity:.7;cursor:default;filter:none}
+.mem-btn:focus-visible,.mem-select:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
+.mem-head .mem-actions{margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--md-outline-variant)}
+.mem-hint{font-size:.82rem}
+.mem-detail .mem-actions{margin:0 0 .9rem}
+.mem-refresh{order:1}
+.mem-edit{order:2;min-width:0}
+.mem-edit[open]{flex:1 1 100%}
+.mem-edit[open]>summary{background:var(--md-surface-container-high)}
+.mem-editor{display:flex;flex-direction:column;gap:.45rem;margin-top:.75rem;padding:1rem;border:1px solid color-mix(in srgb,var(--md-outline) 30%,transparent);border-radius:14px;background:transparent}
+.mem-label{font-size:.78rem;font-weight:600;color:var(--md-on-surface-variant)}
+.mem-label+.mem-input,.mem-label+.mem-textarea{margin-bottom:.35rem}
+.mem-input{display:block;width:100%;height:36px;box-sizing:border-box;flex:none;margin:0;padding:0 .75rem;border:1px solid color-mix(in srgb,var(--md-outline) 45%,transparent);border-radius:10px;background:var(--md-surface-container-lowest);color:var(--md-on-surface);font:inherit;font-size:.9rem}
+.mem-textarea{display:block;width:100%;height:260px;min-height:120px;box-sizing:border-box;flex:none;margin:0;padding:.6rem .75rem;border:1px solid color-mix(in srgb,var(--md-outline) 45%,transparent);border-radius:10px;background:var(--md-surface-container-lowest);color:var(--md-on-surface);font:.84rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+.mem-input:focus,.mem-textarea:focus{outline:2px solid var(--md-primary);outline-offset:0;border-color:transparent}
+.mem-editor-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.6rem 1rem}
+.mem-editor-foot p{flex:1 1 220px;font-size:.82rem}
+.mem-proposal .mem-actions{margin-top:.75rem;justify-content:flex-end}
+.mem-notice,.mem-job{display:flex;align-items:flex-start;gap:.6rem;padding:.75rem 1rem;border-radius:14px;font-size:.88rem;line-height:1.45}
+.mem-notice p,.mem-job p{margin:0;min-width:0;overflow-wrap:anywhere}
+.mem-notice .icon,.mem-job .icon{width:18px;height:18px;flex:0 0 18px}
+.mem-notice-ok{background:var(--md-success-container);color:var(--md-on-success-container)}
+.mem-notice-bad{background:var(--md-error-container);color:var(--md-on-error-container)}
+.mem-job{border:1px solid var(--md-outline-variant);background:var(--md-surface-container);color:var(--md-on-surface)}
+.mem-job-bad{border-color:transparent;background:var(--md-error-container);color:var(--md-on-error-container)}
+.mem-spin{display:inline-block;width:14px;height:14px;flex:0 0 14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:mem-spin .8s linear infinite}
+.mem-job .mem-spin{margin-top:.15rem}
+@keyframes mem-spin{to{transform:rotate(360deg)}}
 .mem-actions:empty{display:none}
 @media (prefers-reduced-motion:no-preference){
 a.mem-card{transition:transform .3s cubic-bezier(.32,.72,0,1),box-shadow .3s cubic-bezier(.32,.72,0,1),border-color .3s cubic-bezier(.32,.72,0,1)}
