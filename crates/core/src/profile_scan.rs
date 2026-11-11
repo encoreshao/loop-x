@@ -523,14 +523,14 @@ pub fn digest_issues(instance: &str, project_id: &str, alias: &str) -> IssueDige
 }
 
 /// Where [`gitlab_cache::sync_issue`] keeps this project's issue files.
-fn issues_dir_for(instance: &str, project_id: &str) -> std::path::PathBuf {
+pub(crate) fn issues_dir_for(instance: &str, project_id: &str) -> std::path::PathBuf {
     gitlab_cache::project_path(instance, project_id)
         .parent()
         .map(|p| p.join("issues"))
         .unwrap_or_default()
 }
 
-fn digest_from(
+pub(crate) fn digest_from(
     issues_dir: &Path,
     project_id: &str,
     alias: &str,

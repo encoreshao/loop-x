@@ -94,17 +94,29 @@ Project: {}\nKind: {} #{}\nTitle: {}\nTagged by: @{}\n\n<untrusted>\n### Todo me
 
 /// Run the agent once (sealed, no tools) and return the reply text.
 pub fn run_agent(prompt: &str) -> Result<String, String> {
+    run_sealed(prompt, 240.0)
+}
+
+/// The sealed AI CLI call behind [`run_agent`] with its own time limit: no tools,
+/// no writes, no network. Shared with the project profile builder.
+pub fn run_sealed(prompt: &str, timeout_seconds: f64) -> Result<String, String> {
     let mut log = |_: &str| {};
-    invoke_sealed(prompt, 240.0, None, &mut log, &SealedHooks::default())
-        .map(|o| o.text.trim().to_string())
-        .map_err(|e| e.class_name().to_string())
-        .and_then(|t| {
-            if t.is_empty() {
-                Err("empty reply".to_string())
-            } else {
-                Ok(t)
-            }
-        })
+    invoke_sealed(
+        prompt,
+        timeout_seconds,
+        None,
+        &mut log,
+        &SealedHooks::default(),
+    )
+    .map(|o| o.text.trim().to_string())
+    .map_err(|e| e.class_name().to_string())
+    .and_then(|t| {
+        if t.is_empty() {
+            Err("empty reply".to_string())
+        } else {
+            Ok(t)
+        }
+    })
 }
 
 /// Claim a todo for drafting: refuses a todo a reply makes no sense for, or one
