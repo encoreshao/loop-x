@@ -552,6 +552,40 @@ fn seed_google(home: &Path, fixture: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Seeds `fixture.profile` (`{alias, sections: {<section slug>: <body>}}`) as
+/// the alias's saved project profile under `<home>/memory`, where the
+/// `project_profile.read` tool looks.
+fn seed_profile(home: &Path, fixture: &Value) -> Result<(), String> {
+    use crate::project_profile::{Origin, Profile, Section, SectionKey, Status};
+    let Some(cfg) = fixture.get("profile").filter(|v| v.is_object()) else {
+        return Ok(());
+    };
+    let alias = cfg["alias"].as_str().ok_or("profile.alias is required")?;
+    let mut sections = std::collections::BTreeMap::new();
+    for (slug, body) in cfg["sections"].as_object().into_iter().flatten() {
+        let key = SectionKey::from_slug(slug).ok_or_else(|| format!("unknown section {slug}"))?;
+        sections.insert(
+            key,
+            Section {
+                summary: String::new(),
+                body: body.as_str().unwrap_or_default().to_string(),
+                last_verified: None,
+                sources: vec![],
+                origin: Origin::Agent,
+            },
+        );
+    }
+    let profile = Profile {
+        alias: alias.to_string(),
+        generated_at: None,
+        head_sha: None,
+        status: Status::Approved,
+        links: vec![],
+        sections,
+    };
+    crate::project_profile::save(&profile, Some(&home.join("memory"))).map_err(|e| e.to_string())
+}
+
 /// The sandbox's Creator folders under `<root>/user`, seeded from
 /// `fixture.creator.catalogs` (`[{id, catalog}]`, video-scout catalogs) and
 /// `fixture.creator.videos` (`[{slug, project, mp4?}]`, finished projects). The
@@ -623,6 +657,7 @@ fn stub_run(
     let effects: Effects = Effects::default();
     let reads: Effects = Effects::default();
     seed_google(&root.join("home"), &fixture)?;
+    seed_profile(&root.join("home"), &fixture)?;
     let (scout_dir, videos_dir) = seed_creator(&root.join("user"), &fixture)?;
     let accounts = vec![
         crate::connectors::Account::new("gl", "gitlab")
@@ -816,7 +851,8 @@ mod tests {
     fn real_cases_load() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/chat");
         let all = load_cases(&dir, None).unwrap();
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 12);
+        assert!(all.iter().any(|c| c.name == "profile-read"));
         for name in [
             "creator-find-videos",
             "creator-generate-stops-at-approval",
@@ -1231,6 +1267,19 @@ expect: {{}}
         assert_eq!(out["status"], "pending_approval", "{out}");
         assert!(out.get("auto_approved").is_none(), "{out}");
         assert!(!fx.dir.path().join("home/creator/jobs").exists());
+    }
+
+    #[test]
+    fn stub_serves_a_seeded_profile_from_the_sandbox_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = json!({"issue": {"iid": 1}, "profile": {
+            "alias": "shop", "sections": {"overview": "A synthetic Rails shop."}}});
+        let fx = StubFx { dir, fixture };
+        let out = fx.call("project_profile.read", json!({"alias": "shop"}));
+        assert!(out.to_string().contains("synthetic Rails shop"), "{out}");
+        let none = fx.call("project_profile.read", json!({"alias": "other"}));
+        assert_eq!(none["result"], json!({"profile": null}), "{none}");
+        assert_eq!(fx.log()[0]["status"], "ok");
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub mod gitlab;
 pub mod gsheets;
 pub mod mail;
 pub mod pending;
+pub mod profile;
 pub mod rss;
 pub mod settings;
 pub mod slides;
@@ -489,6 +490,7 @@ pub fn tools() -> &'static [Tool] {
         all.extend(gitlab::tools());
         all.extend(gsheets::tools());
         all.extend(mail::tools());
+        all.extend(profile::tools());
         all.extend(rss::tools());
         all.extend(slides::tools());
         all.extend(web::tools());
@@ -1354,7 +1356,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 37);
+        assert_eq!(names.len(), 38);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1385,6 +1387,7 @@ mod tests {
         assert_eq!(tool_mode("mail.send"), Some(Mode::Write));
         assert_eq!(tool_mode("mail.search"), Some(Mode::Read));
         assert_eq!(tool_mode("docs.save"), Some(Mode::Local));
+        assert_eq!(tool_mode("project_profile.read"), Some(Mode::Read));
         assert_eq!(tool_mode("nope"), None);
         assert_eq!(
             write_tool_names(),

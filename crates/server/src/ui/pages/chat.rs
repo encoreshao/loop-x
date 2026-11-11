@@ -99,6 +99,7 @@ pub const TOOL_LABELS: &[(&str, &str)] = &[
     ("mail.send", "Sending email"),
     ("calendar.create_event", "Creating event"),
     ("docs.save", "Saving document"),
+    ("project_profile.read", "Reading project profile"),
     ("web.search", "Searching the web"),
     ("gdocs.list_templates", "Listing templates"),
     ("gsheets.list_templates", "Listing templates"),

@@ -13,6 +13,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- The issue loop reads each project's saved profile and, for issues that span projects, its graph neighbors: `loopx memory-store profile <alias>` prints the profile (or `(no profile yet)`) and `loopx memory-store graph [alias] [--all]` prints the linked projects as JSON; the dashboard chat gets a read-only `project_profile.read` tool. Output that looks like it holds a secret value is refused.
+
 - **Todos** view on the Issues page (after Tasks): your GitLab to-do list, including issues where you were only mentioned or tagged. Sync is off until you switch it on, then fetches every 5 or 10 minutes into a local cache (the first enable imports only the last 2 days). **Mark done** syncs back to GitLab (one at a time or ticked in bulk, staying on the view you were in), **Open** jumps to the exact comment that raised the todo, and **Analyze & draft reply** drafts a comment you read in a **Review** popup and confirm before anything is posted. The Daily Digest lists the important cached todos when sync is on.
 - The landing page (Office or Dashboard) now leads with **Human in the LoopX**: a pill with a small orbiting-dot loop, the line "Agents do the work. You make the calls.", and shorter cards that say what each view is for (watch and ask in the Office; review, approve and steer in the Dashboard). The "Choose your view" heading is gone.
 

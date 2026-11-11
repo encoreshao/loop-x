@@ -32,6 +32,18 @@ pub enum EdgeKind {
 }
 
 impl EdgeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EdgeKind::DependsOn => "depends-on",
+            EdgeKind::Calls => "calls",
+            EdgeKind::SharesSecret => "shares-secret",
+            EdgeKind::SharesService => "shares-service",
+            EdgeKind::IssueLink => "issue-link",
+            EdgeKind::SharesPeople => "shares-people",
+            EdgeKind::Declared => "declared",
+        }
+    }
+
     fn undirected(self) -> bool {
         matches!(
             self,

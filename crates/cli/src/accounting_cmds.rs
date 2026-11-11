@@ -134,11 +134,47 @@ pub fn learning(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-const MEMORY_USAGE: &str = "Usage: memory_store.py add <alias> <issue_iid> <lesson> [tags_comma_separated] [category]\n       memory_store.py get <alias> <issue_iid>\n       memory_store.py list <alias>\n       memory_store.py setup <alias>";
+const MEMORY_USAGE: &str = "Usage: memory_store.py add <alias> <issue_iid> <lesson> [tags_comma_separated] [category]\n       memory_store.py get <alias> <issue_iid>\n       memory_store.py list <alias>\n       memory_store.py setup <alias>\n       memory_store.py profile <alias>\n       memory_store.py graph [alias] [--all]";
 
 fn setup_text(alias: &str, root: Option<&std::path::Path>) -> String {
     memory_store::read_setup_knowledge(alias, root)
         .unwrap_or_else(|| "(no setup knowledge yet)".to_string())
+}
+
+/// `memory-store profile <alias>`: the profile markdown, or the placeholder.
+fn profile_output(alias: &str, root: Option<&std::path::Path>) -> Result<String, String> {
+    match loopx_core::profile_read::profile_text(alias, root) {
+        Ok(Some(text)) => Ok(text),
+        Ok(None) => Ok(loopx_core::profile_read::NO_PROFILE.to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// `memory-store graph [alias] [--all]`, over the code-changing projects.
+fn graph_output(alias: Option<&str>, all: bool) -> Result<String, String> {
+    let tracked = loopx_core::profile_sync::tracked_projects();
+    let digests = tracked
+        .iter()
+        .map(|t| {
+            (
+                t.alias.clone(),
+                loopx_core::profile_scan::digest_issues(&t.instance, &t.project_id, &t.alias),
+            )
+        })
+        .collect();
+    let aliases: Vec<String> = tracked.into_iter().map(|t| t.alias).collect();
+    loopx_core::profile_read::graph_json(alias, all, &aliases, &digests, None)
+        .map_err(|e| e.to_string())
+}
+
+fn print_or_fail(out: Result<String, String>) -> ExitCode {
+    match out {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => fail(&e),
+    }
 }
 
 pub fn memory_store(args: &[String]) -> ExitCode {
@@ -205,7 +241,16 @@ pub fn memory_store(args: &[String]) -> ExitCode {
             println!("{}", setup_text(alias, None));
             ExitCode::SUCCESS
         }
-        ("add" | "get" | "list" | "setup", _) => fail(MEMORY_USAGE),
+        ("profile", [alias, ..]) => print_or_fail(profile_output(alias, None)),
+        ("graph", rest) => {
+            let all = rest.iter().any(|a| a == "--all");
+            let alias = rest
+                .iter()
+                .find(|a| !a.starts_with("--"))
+                .map(String::as_str);
+            print_or_fail(graph_output(alias, all))
+        }
+        ("add" | "get" | "list" | "setup" | "profile", _) => fail(MEMORY_USAGE),
         (other, _) => fail(&format!("Unknown command: {other}")),
     }
 }

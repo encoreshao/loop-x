@@ -94,6 +94,7 @@ pub mod policy;
 pub mod proc;
 pub mod profile_build;
 pub mod profile_graph;
+pub mod profile_read;
 pub mod profile_scan;
 pub mod profile_sync;
 pub mod project_profile;

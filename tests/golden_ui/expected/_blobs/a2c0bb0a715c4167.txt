@@ -26,8 +26,8 @@ window.__loopTextReveal = function(onRender) {
 };
 
 
-window.__loopToolLabels = {"gitlab.read_issue": "Lecture du ticket", "gitlab.list_issues": "Liste des tickets", "gitlab.list_users": "Liste des utilisateurs", "gitlab.comment": "Commentaire sur le ticket", "github.read_issue": "Lecture du ticket", "github.read_pr": "Lecture de la pull request", "github.comment": "Commentaire en cours", "rss.read_feed": "Lecture du flux", "calendar.list_events": "Lecture de l'agenda", "calendar.free_busy": "Lecture de l'agenda", "mail.search": "Recherche de courriels", "mail.read": "Lecture du courriel", "mail.send": "Envoi du courriel", "calendar.create_event": "Cr\u00e9ation de l'\u00e9v\u00e9nement", "docs.save": "Enregistrement du document", "web.search": "Recherche sur le web", "gdocs.list_templates": "Liste des mod\u00e8les", "gsheets.list_templates": "Liste des mod\u00e8les", "gdocs.template_info": "Lecture du mod\u00e8le", "gsheets.template_info": "Lecture du mod\u00e8le", "gdocs.read": "Lecture du document", "gsheets.read": "Lecture de la feuille de calcul", "gdocs.create": "Cr\u00e9ation du document", "gdocs.create_from_template": "Cr\u00e9ation du document", "gsheets.create": "Cr\u00e9ation de la feuille de calcul", "gsheets.create_from_template": "Cr\u00e9ation de la feuille de calcul", "gdocs.edit": "Modification du document", "gsheets.edit": "Modification de la feuille de calcul", "slides.edit_deck": "Modification de la pr\u00e9sentation", "creator.list_sources": "Liste des sources", "creator.list_videos": "Liste des vid\u00e9os", "creator.start_scout": "Lancement de la recherche", "creator.generate": "Cr\u00e9ation de la vid\u00e9o"};
-window.__loopToolStatusText = "Analyse des r\u00e9sultats\u2026";
+window.__loopToolLabels = {"gitlab.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "gitlab.list_issues": "\u6b63\u5728\u5217\u51fa\u8bae\u9898", "gitlab.list_users": "\u6b63\u5728\u5217\u51fa\u7528\u6237", "gitlab.comment": "\u6b63\u5728\u8bc4\u8bba\u8bae\u9898", "github.read_issue": "\u6b63\u5728\u8bfb\u53d6\u8bae\u9898", "github.read_pr": "\u6b63\u5728\u8bfb\u53d6\u62c9\u53d6\u8bf7\u6c42", "github.comment": "\u6b63\u5728\u8bc4\u8bba", "rss.read_feed": "\u6b63\u5728\u8bfb\u53d6\u8ba2\u9605\u6e90", "calendar.list_events": "\u6b63\u5728\u8bfb\u53d6\u65e5\u5386", "calendar.free_busy": "\u6b63\u5728\u8bfb\u53d6\u65e5\u5386", "mail.search": "\u6b63\u5728\u641c\u7d22\u90ae\u4ef6", "mail.read": "\u6b63\u5728\u8bfb\u53d6\u90ae\u4ef6", "mail.send": "\u6b63\u5728\u53d1\u9001\u90ae\u4ef6", "calendar.create_event": "\u6b63\u5728\u521b\u5efa\u65e5\u7a0b", "docs.save": "\u6b63\u5728\u4fdd\u5b58\u6587\u6863", "project_profile.read": "\u6b63\u5728\u8bfb\u53d6\u9879\u76ee\u6863\u6848", "web.search": "\u6b63\u5728\u641c\u7d22\u7f51\u9875", "gdocs.list_templates": "\u6b63\u5728\u5217\u51fa\u6a21\u677f", "gsheets.list_templates": "\u6b63\u5728\u5217\u51fa\u6a21\u677f", "gdocs.template_info": "\u6b63\u5728\u8bfb\u53d6\u6a21\u677f", "gsheets.template_info": "\u6b63\u5728\u8bfb\u53d6\u6a21\u677f", "gdocs.read": "\u6b63\u5728\u8bfb\u53d6\u6587\u6863", "gsheets.read": "\u6b63\u5728\u8bfb\u53d6\u7535\u5b50\u8868\u683c", "gdocs.create": "\u6b63\u5728\u521b\u5efa\u6587\u6863", "gdocs.create_from_template": "\u6b63\u5728\u521b\u5efa\u6587\u6863", "gsheets.create": "\u6b63\u5728\u521b\u5efa\u7535\u5b50\u8868\u683c", "gsheets.create_from_template": "\u6b63\u5728\u521b\u5efa\u7535\u5b50\u8868\u683c", "gdocs.edit": "\u6b63\u5728\u7f16\u8f91\u6587\u6863", "gsheets.edit": "\u6b63\u5728\u7f16\u8f91\u7535\u5b50\u8868\u683c", "slides.edit_deck": "\u6b63\u5728\u7f16\u8f91\u6f14\u793a\u6587\u7a3f", "creator.list_sources": "\u6b63\u5728\u5217\u51fa\u6765\u6e90", "creator.list_videos": "\u6b63\u5728\u5217\u51fa\u89c6\u9891", "creator.start_scout": "\u6b63\u5728\u542f\u52a8\u641c\u5bfb", "creator.generate": "\u6b63\u5728\u5236\u4f5c\u89c6\u9891"};
+window.__loopToolStatusText = "\u6b63\u5728\u5206\u6790\u7ed3\u679c\u2026";
 window.__loopToolChips = function(host, getSession) {
   function svgIcon(name, cls) {
     var ns = 'http://www.w3.org/2000/svg';
@@ -142,23 +142,23 @@ window.__loopPendingCard = function(ev, session) {
   card.setAttribute('data-pending-session', String(session || ''));
   var head = el('div', 'pending-card-head');
   head.appendChild(icon('schedule'));
-  head.appendChild(el('span', '', "En attente de votre approbation"));
+  head.appendChild(el('span', '', "\u7b49\u5f85\u4f60\u7684\u6279\u51c6"));
   card.appendChild(head);
   card.appendChild(el('div', 'pending-card-tool', String(ev.tool || '')));
   if (ev.summary) card.appendChild(el('div', 'pending-card-summary', String(ev.summary)));
-  if (String(ev.tool || '') === 'creator.generate') card.appendChild(el('div', 'pending-card-summary', "En approuvant, vous confirmez poss\u00e9der cette vid\u00e9o ou avoir l\u2019autorisation de la r\u00e9utiliser."));
+  if (String(ev.tool || '') === 'creator.generate') card.appendChild(el('div', 'pending-card-summary', "\u6279\u51c6\u5373\u8868\u793a\u4f60\u786e\u8ba4\u62e5\u6709\u6b64\u89c6\u9891\u6216\u5df2\u83b7\u51c6\u91cd\u65b0\u4f7f\u7528\u3002"));
   card.appendChild(el('pre', 'pending-card-args', JSON.stringify(ev.args || {}, null, 2)));
   var actions = el('div', 'pending-card-actions');
   var approve = el('button', 'btn btn-primary');
   approve.type = 'button';
   approve.setAttribute('data-pending-approve', '');
   approve.appendChild(icon('check'));
-  approve.appendChild(document.createTextNode("Approuver"));
+  approve.appendChild(document.createTextNode("\u6279\u51c6"));
   var reject = el('button', 'btn btn-neutral');
   reject.type = 'button';
   reject.setAttribute('data-pending-reject', '');
   reject.appendChild(icon('close'));
-  reject.appendChild(document.createTextNode("Rejeter"));
+  reject.appendChild(document.createTextNode("\u62d2\u7edd"));
   actions.appendChild(approve);
   actions.appendChild(reject);
   card.appendChild(actions);
@@ -189,7 +189,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.json(); })
       .then(function(data) {
         var ok = data && data.ok;
-        if (status) status.textContent = ok ? (approving ? "Approuv\u00e9." : "Rejet\u00e9.") : ((data && data.error) || "Une erreur s'est produite - r\u00e9essayez.");
+        if (status) status.textContent = ok ? (approving ? "\u5df2\u6279\u51c6\u3002" : "\u5df2\u62d2\u7edd\u3002") : ((data && data.error) || "\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002");
         card.classList.add('is-handled');
         var actions = card.querySelector('.pending-card-actions');
         if (actions) actions.remove();
@@ -203,7 +203,7 @@ if (!window.__loopPendingCardClicks) {
         card.dispatchEvent(new CustomEvent('loop-chat-refresh', { bubbles: true }));
       })
       .catch(function() {
-        if (status) status.textContent = "Une erreur s'est produite - r\u00e9essayez.";
+        if (status) status.textContent = "\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002";
         card.removeAttribute('data-busy');
         buttons.forEach(function(b) { b.disabled = false; });
       });
@@ -241,22 +241,6 @@ if (!window.__loopPendingCardClicks) {
   document.documentElement.setAttribute('data-accent', accent || 'indigo');
   var font = localStorage.getItem('loop-dashboard-font');
   document.documentElement.setAttribute('data-font', font || 'system');
-  var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
-  (function __loopScheduleRefresh() {
-    setTimeout(function() {
-      if (window.__loopChatStreaming) { __loopScheduleRefresh(); return; }
-      if (document.documentElement.classList.contains('ai-panel-open')) { __loopScheduleRefresh(); return; }
-      location.reload();
-    }, refreshSeconds * 1000);
-  })();
-})();
-(function() {
-  document.addEventListener('DOMContentLoaded', function() {
-    var refreshSeconds = parseInt(localStorage.getItem('loop-dashboard-refresh-interval'), 10) || 30;
-    var labels = {5: '5s', 11: '11s', 30: '30s', 60: '1 min', 300: '5 min'};
-    var el = document.getElementById('refresh-note-text');
-    if (el) el.textContent = "actualisation auto toutes les {interval}".replace('{interval}', labels[refreshSeconds] || (refreshSeconds + 's'));
-  });
 })();
 (function() {
   function closeAll(except) {
@@ -487,12 +471,12 @@ if (!window.__loopPendingCardClicks) {
       var docTitle = docPanel.querySelector('[data-doc-title]');
       var docBody = docPanel.querySelector('[data-doc-body]');
       var docDownload = docPanel.querySelector('[data-doc-download]');
-      var docFailed = "Impossible de charger le document.";
+      var docFailed = "\u65e0\u6cd5\u52a0\u8f7d\u6587\u6863\u3002";
       var docCopy = docPanel.querySelector('[data-doc-copy]');
       var docCopyIcon = docPanel.querySelector('[data-doc-copy-icon] use');
       var docCopyLabel = docPanel.querySelector('[data-doc-copy-label]');
       var docCopyText = docCopyLabel.textContent;
-      var docCopiedText = "Copi\u00e9";
+      var docCopiedText = "\u5df2\u590d\u5236";
       var docRaw = '';
       var docCopyTimer = null;
       function resetCopy() {
@@ -563,9 +547,9 @@ if (!window.__loopPendingCardClicks) {
       var fileRoot = document.documentElement;
       var fileTabs = filePanel.querySelector('[data-file-tabs]');
       var fileBody = filePanel.querySelector('[data-file-body]');
-      var fileLoading = "Chargement\u2026";
-      var fileFailed = "Impossible de charger l'aper\u00e7u.";
-      var fileNouns = { doc: "Document", sheet: "Feuille de calcul", deck: "Pr\u00e9sentation" };
+      var fileLoading = "\u6b63\u5728\u52a0\u8f7d\u2026";
+      var fileFailed = "\u65e0\u6cd5\u52a0\u8f7d\u9884\u89c8\u3002";
+      var fileNouns = { doc: "\u6587\u6863", sheet: "\u7535\u5b50\u8868\u683c", deck: "\u6f14\u793a\u6587\u7a3f" };
       var files = [];
       var activeFile = null;
       var fileSeq = 0;
@@ -753,7 +737,7 @@ if (!window.__loopPendingCardClicks) {
       li.className = 'message-row ' + (className === 'message-bubble-user' ? 'message-row-user' : 'message-row-loop');
       li.innerHTML =
         "<div class='message-bubble " + className + "'>" +
-        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u00e0 l&#x27;instant" + "</span></div>" +
+        "<div class='message-meta'>" + whoHtml + "<span class='message-time'>" + "\u521a\u521a" + "</span></div>" +
         "<div class='message-text'></div>" +
         "</div>";
       li.querySelector('.message-text').textContent = text;
@@ -854,10 +838,10 @@ if (!window.__loopPendingCardClicks) {
       var editor = document.createElement('form');
       editor.className = 'message-edit-form';
       editor.innerHTML =
-        "<textarea class='message-edit-input' aria-label='" + "Modifier le message" + "'></textarea>" +
+        "<textarea class='message-edit-input' aria-label='" + "\u7f16\u8f91\u6d88\u606f" + "'></textarea>" +
         "<div class='message-edit-actions'>" +
-        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "Annuler" + "</button>" +
-        "<button type='submit' class='btn btn-primary'>" + "Envoyer" + "</button>" +
+        "<button type='button' class='btn btn-neutral' data-edit-cancel>" + "\u53d6\u6d88" + "</button>" +
+        "<button type='submit' class='btn btn-primary'>" + "\u53d1\u9001" + "</button>" +
         "</div>";
       var editInput = editor.querySelector('textarea');
       editInput.value = textEl.getAttribute('data-raw') || textEl.innerText;
@@ -894,7 +878,7 @@ if (!window.__loopPendingCardClicks) {
       var copyBtn = ev.target.closest('[data-copy-message]');
       if (copyBtn) {
         var textEl = copyBtn.closest('.message-row').querySelector('.message-text');
-        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("Copi\u00e9", true); }, function() { flashIcon(copyBtn, 'error'); });
+        copyMessage(textEl).then(function() { flashIcon(copyBtn, 'check'); if (window.loopxToast) window.loopxToast("\u5df2\u590d\u5236", true); }, function() { flashIcon(copyBtn, 'error'); });
         return;
       }
       var editBtn = ev.target.closest('[data-edit-message]');
@@ -918,7 +902,7 @@ if (!window.__loopPendingCardClicks) {
     // While a reply is being written the send button is the stop button.
     var activeStop = null;
     function setSendMode(button, stop) {
-      var label = stop ? "Arr\u00eater" : "Envoyer";
+      var label = stop ? "\u505c\u6b62" : "\u53d1\u9001";
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
       var use = button.querySelector('svg.icon use');
@@ -937,7 +921,7 @@ if (!window.__loopPendingCardClicks) {
       // First message of an empty thread: leave the centered hero for
       // the session layout (thread + composer pinned to the bottom).
       if (chatPage) chatPage.classList.remove('is-empty');
-      appendBubble('message-bubble-user', "<span class='k'>" + "Vous" + "</span>", text);
+      appendBubble('message-bubble-user', "<span class='k'>" + "\u4f60" + "</span>", text);
       input.value = '';
       autoGrow();
       setSendMode(button, true);
@@ -956,7 +940,7 @@ if (!window.__loopPendingCardClicks) {
         var thinking = document.createElement('li');
         thinking.className = 'message-row message-row-loop ai-thinking-row';
         thinking.innerHTML = "<div class='ai-thinking' role='status'><span class='ai-thinking-avatar'><svg class='icon' aria-hidden='true'><use href='#i-auto_awesome'/></svg></span><div class='ai-thinking-body'><span class='ai-thinking-label'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span><span class='ai-thinking-bar'></span></div></div>";
-        thinking.querySelector('.ai-thinking-label').textContent = "R\u00e9flexion\u2026";
+        thinking.querySelector('.ai-thinking-label').textContent = "\u601d\u8003\u4e2d\u2026";
         ul.appendChild(thinking);
         scrollToBottom();
         var textEl = null;
@@ -1031,7 +1015,7 @@ if (!window.__loopPendingCardClicks) {
         if (source) source.close();
         if (activeKey) postStop(activeKey);
         reveal.stop();
-        var stopped = "(r\u00e9ponse arr\u00eat\u00e9e)";
+        var stopped = "\uff08\u56de\u590d\u5df2\u505c\u6b62\uff09";
         pending.show(accumulated ? accumulated + ' ' + stopped : stopped, false);
         resetSendButton();
         stopStreamingFlag();
@@ -1068,7 +1052,7 @@ if (!window.__loopPendingCardClicks) {
         });
         source.addEventListener('error', function(ev) {
           if (aborted) return;
-          var message = "Une erreur s'est produite - r\u00e9essayez.";
+          var message = "\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002";
           try { message = JSON.parse(ev.data) || message; } catch (e) {}
           reveal.stop();
           if (accumulated === '') {
@@ -1079,7 +1063,7 @@ if (!window.__loopPendingCardClicks) {
             // answer that will simply vanish on the next reload (nothing
             // partial was ever saved via append_message), so this marks
             // it visibly rather than leaving the bubble unchanged.
-            pending.show(accumulated + ' ' + "(r\u00e9ponse interrompue)", false);
+            pending.show(accumulated + ' ' + "\uff08\u56de\u590d\u5df2\u4e2d\u65ad\uff09", false);
           }
           resetSendButton();
           stopStreamingFlag();
@@ -1096,7 +1080,7 @@ if (!window.__loopPendingCardClicks) {
             return;
           }
           if (!result.ok) {
-            pending.show(result.data.error || "Une erreur s'est produite.", false);
+            pending.show(result.data.error || "\u51fa\u4e86\u70b9\u95ee\u9898\u3002", false);
             resetSendButton();
             stopStreamingFlag();
             return;
@@ -1123,7 +1107,7 @@ if (!window.__loopPendingCardClicks) {
           });
         })
         .catch(function() {
-          pending.show("Une erreur s'est produite - r\u00e9essayez.", false);
+          pending.show("\u51fa\u4e86\u70b9\u95ee\u9898\uff0c\u8bf7\u91cd\u8bd5\u3002", false);
           if (aborted) return;
           resetSendButton();
           stopStreamingFlag();
@@ -1174,7 +1158,7 @@ if (!window.__loopPendingCardClicks) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;
     var text = bubble.querySelector('.field-error-bubble-text');
-    if (text) text.textContent = field.validationMessage || "Veuillez remplir ce champ.";
+    if (text) text.textContent = field.validationMessage || "\u8bf7\u586b\u5199\u6b64\u5b57\u6bb5\u3002";
     var rect = field.getBoundingClientRect();
     bubble.style.left = rect.left + 'px';
     bubble.style.top = (rect.bottom + 6) + 'px';
@@ -1252,7 +1236,7 @@ if (!window.__loopPendingCardClicks) {
       .then(function(response) { return response.text(); })
       .then(function(html) { el.innerHTML = html; })
       .catch(function() {
-        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "Impossible de charger cette section." + "</p>";
+        el.innerHTML = "<p class='inline-error'><svg class='icon' aria-hidden='true'><use href='#i-error'/></svg> " + "\u65e0\u6cd5\u52a0\u8f7d\u6b64\u90e8\u5206\u3002" + "</p>";
       });
   }
   // Exposed globally so _render_shell's lazy_refresh auto-refresh timer
@@ -1405,7 +1389,7 @@ if (!window.__loopPendingCardClicks) {
         if (button) {
           button.className = 'switch ' + (enabled ? 'is-on' : 'is-off');
           button.setAttribute('aria-checked', enabled ? 'true' : 'false');
-          var label = (enabled ? "Arr\u00eater le suivi de #{iid}" : "Suivre \u00e0 nouveau #{iid}").replace('{iid}', issueIid);
+          var label = (enabled ? "\u505c\u6b62\u8ddf\u8e2a #{iid}" : "\u91cd\u65b0\u8ddf\u8e2a #{iid}").replace('{iid}', issueIid);
           button.setAttribute('aria-label', label);
           button.setAttribute('title', label);
         }
@@ -1438,7 +1422,7 @@ if (!window.__loopPendingCardClicks) {
         if (window.loopxToast) window.loopxToast(form.getAttribute(enabled ? 'data-toast-on' : 'data-toast-off'), true);
         form.setAttribute('action', form.getAttribute('action').replace(/\/(enable|disable)$/, '/' + (enabled ? 'disable' : 'enable')));
         if (button) setSwitch(button, enabled, form.getAttribute(enabled ? 'data-label-on' : 'data-label-off'));
-        var perIssue = "Arr\u00eater le suivi de #{iid}", perIssueOff = "Suivre \u00e0 nouveau #{iid}";
+        var perIssue = "\u505c\u6b62\u8ddf\u8e2a #{iid}", perIssueOff = "\u91cd\u65b0\u8ddf\u8e2a #{iid}";
         document.querySelectorAll('.issue-tracking-toggle').forEach(function(f) {
           var b = f.querySelector('button[type="submit"]');
           var iid = f.getAttribute('data-issue-iid');
@@ -1456,13 +1440,13 @@ if (!window.__loopPendingCardClicks) {
   // a toast, then swaps in the card's fresh markup with the same sections open - no reload,
   // nothing folds. A [data-pick-folder] button opens a folder picker that fills the card's
   // checkout, repository and branch.
-  var cardFailed = "Impossible d'enregistrer";
+  var cardFailed = "\u65e0\u6cd5\u4fdd\u5b58";
   var T = {
-    title: "Choisir un dossier", use: "Utiliser ce dossier",
-    up: "Dossier parent", cancel: "Annuler",
-    loading: "Chargement\u2026", none: "Aucun dossier ici",
-    failed: "Impossible de lire ce dossier", choose: "Choisir",
-    favorites: "Favoris", filter: "Filtrer", git: "D\u00e9p\u00f4t Git"
+    title: "\u9009\u62e9\u6587\u4ef6\u5939", use: "\u4f7f\u7528\u6b64\u6587\u4ef6\u5939",
+    up: "\u4e0a\u4e00\u7ea7", cancel: "\u53d6\u6d88",
+    loading: "\u6b63\u5728\u52a0\u8f7d\u2026", none: "\u8fd9\u91cc\u6ca1\u6709\u6587\u4ef6\u5939",
+    failed: "\u65e0\u6cd5\u8bfb\u53d6\u6b64\u6587\u4ef6\u5939", choose: "\u9009\u62e9",
+    favorites: "\u4e2a\u4eba\u6536\u85cf", filter: "\u7b5b\u9009", git: "Git \u4ed3\u5e93"
   };
   function toast(message, ok) { if (window.loopxToast && message) window.loopxToast(message, ok); }
   function post(url, data) {
