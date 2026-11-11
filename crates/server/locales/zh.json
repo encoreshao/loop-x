@@ -1275,6 +1275,7 @@
   "AI account folder (optional)": "AI 账户文件夹（可选）",
   "Run this loop on another Claude Code, Codex or Grok account: that account's config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME). Blank uses your default account.": "让此循环使用另一个 Claude Code、Codex 或 Grok 账户运行：填写该账户的配置文件夹（CLAUDE_CONFIG_DIR、CODEX_HOME 或 GROK_HOME）。留空则使用默认账户。",
   "Save account": "保存账户",
+  "Review the proposed {section} change to the {project} profile": "查看对 {project} 项目档案 {section} 部分的修改建议",
   "Approve the fix for {project} #{iid}: {title}": "批准 {project} #{iid} 的修复：{title}",
   "{project} #{iid} was escalated to you ({reason})": "{project} #{iid} 已上报给你（{reason}）",
   "Sign-in needs attention: {label} - {message}": "登录需要处理：{label} - {message}",

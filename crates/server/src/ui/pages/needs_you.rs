@@ -72,6 +72,10 @@ fn text(item: &Value, key: &str) -> String {
 fn headline(ctx: &UiCtx, item: &Value) -> String {
     let f = |k: &str| text(item, k);
     match item["kind"].as_str() {
+        Some("approval") if item["approval_kind"] == "profile-section" => ctx.tf(
+            "Review the proposed {section} change to the {project} profile",
+            &[("section", &f("section")), ("project", &f("project"))],
+        ),
         Some("approval") => ctx.tf(
             "Approve the fix for {project} #{iid}: {title}",
             &[("project", &f("project")), ("iid", &f("issue_iid")), ("title", &f("issue_title"))],
@@ -782,6 +786,25 @@ mod tests {
         assert!(html.contains("Nothing needs you right now."), "{html}");
         assert!(html.contains("id='needs-you-bell'") && !html.contains("<span class='needs-you-count'>"), "{html}");
         assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 0}"#);
+    }
+
+    #[test]
+    fn a_profile_proposal_reads_as_a_profile_review_not_an_issue_fix() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let new = NewApproval {
+            kind: "profile-section".into(),
+            project: "web".into(),
+            title: "Update the stack section of the web profile".into(),
+            summary: "s".into(),
+            timeout_seconds: 1800,
+            target: Some(serde_json::json!({"section": "stack", "alias": "web"})),
+            ..Default::default()
+        };
+        approvals::create(&d.path().join("outputs/approvals"), &new, chrono::Utc::now()).unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("Review the proposed stack change to the web profile"), "{html}");
+        assert!(!html.contains("Approve the fix for"), "{html}");
     }
 
     #[test]

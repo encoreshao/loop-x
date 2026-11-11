@@ -1275,6 +1275,7 @@
   "AI account folder (optional)": "AI アカウントのフォルダー（任意）",
   "Run this loop on another Claude Code, Codex or Grok account: that account's config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME). Blank uses your default account.": "このループを別の Claude Code、Codex または Grok アカウントで実行します。そのアカウントの設定フォルダー（CLAUDE_CONFIG_DIR、CODEX_HOME または GROK_HOME）を指定してください。空欄ならデフォルトのアカウントを使います。",
   "Save account": "アカウントを保存",
+  "Review the proposed {section} change to the {project} profile": "{project} プロフィールの {section} への変更案を確認",
   "Approve the fix for {project} #{iid}: {title}": "{project} #{iid} の修正を承認: {title}",
   "{project} #{iid} was escalated to you ({reason})": "{project} #{iid} があなたにエスカレーションされました（{reason}）",
   "Sign-in needs attention: {label} - {message}": "サインインの確認が必要です: {label} - {message}",

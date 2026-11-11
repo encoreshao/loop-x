@@ -1275,6 +1275,7 @@
   "AI account folder (optional)": "Dossier du compte IA (facultatif)",
   "Run this loop on another Claude Code, Codex or Grok account: that account's config folder (CLAUDE_CONFIG_DIR, CODEX_HOME or GROK_HOME). Blank uses your default account.": "Exécuter cette boucle avec un autre compte Claude Code, Codex ou Grok : le dossier de configuration de ce compte (CLAUDE_CONFIG_DIR, CODEX_HOME ou GROK_HOME). Laissez vide pour utiliser votre compte par défaut.",
   "Save account": "Enregistrer le compte",
+  "Review the proposed {section} change to the {project} profile": "Examiner la modification proposée de {section} dans le profil {project}",
   "Approve the fix for {project} #{iid}: {title}": "Approuver le correctif de {project} #{iid} : {title}",
   "{project} #{iid} was escalated to you ({reason})": "{project} #{iid} vous a été remonté ({reason})",
   "Sign-in needs attention: {label} - {message}": "Connexion à vérifier : {label} - {message}",

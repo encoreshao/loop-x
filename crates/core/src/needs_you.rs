@@ -104,6 +104,17 @@ fn approvals(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
             let project = crate::pydumps::py_str(&a["project"]);
             let iid = crate::pydumps::py_str(&a["issue_iid"]);
             let title = a["title"].as_str().unwrap_or("");
+            if a["kind"] == crate::profile_sync::KIND {
+                // A profile section proposal has no issue, branch or merge request.
+                let section = a["target"]["section"].as_str().unwrap_or("");
+                return item(
+                    format!("approval:{}", a["id"].as_str().unwrap_or("")),
+                    "approval",
+                    format!("Review the proposed {section} change to the {project} profile"),
+                    a["created_at"].as_str(),
+                    json!({"approval_id": a["id"], "project": project, "approval_kind": a["kind"], "section": section}),
+                );
+            }
             item(
                 format!("approval:{}", a["id"].as_str().unwrap_or("")),
                 "approval",
@@ -534,6 +545,30 @@ mod tests {
         )
         .unwrap();
         assert!(f.collect().is_empty());
+    }
+
+    #[test]
+    fn a_profile_proposal_is_not_worded_as_a_fix_for_an_issue() {
+        let f = Fx::new();
+        let new = crate::approvals::NewApproval {
+            kind: "profile-section".into(),
+            project: "web".into(),
+            title: "Update the stack section of the web profile".into(),
+            summary: "s".into(),
+            timeout_seconds: 1800,
+            target: Some(json!({"section": "stack", "alias": "web"})),
+            ..Default::default()
+        };
+        crate::approvals::create(&f.p("approvals"), &new, now()).unwrap();
+        let items = f.collect();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["kind"], "approval");
+        assert_eq!(items[0]["approval_kind"], "profile-section");
+        assert_eq!(items[0]["section"], "stack");
+        assert_eq!(
+            items[0]["title"],
+            "Review the proposed stack change to the web profile"
+        );
     }
 
     #[test]
