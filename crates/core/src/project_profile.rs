@@ -3,7 +3,7 @@
 //! save snapshots the previous file into `PROFILE.history/` (newest 20 kept).
 
 use crate::memory_store::{default_memory_root, parse_source_line};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Timelike, Utc};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -246,7 +246,10 @@ fn parse_link(line: &str) -> Result<Link, String> {
     let bad = || format!("malformed link line: {line:?}");
     let rest = line.strip_prefix("- `").ok_or_else(bad)?;
     let (to, rest) = rest.split_once("` | ").ok_or_else(bad)?;
-    let (kind, evidence) = rest.split_once(" | ").unwrap_or((rest, ""));
+    let (kind, evidence) = match rest.split_once(" | ") {
+        Some(pair) => pair,
+        None => (rest.strip_suffix(" |").unwrap_or(rest), ""),
+    };
     Ok(Link {
         to: to.to_string(),
         kind: kind.to_string(),
@@ -326,7 +329,8 @@ pub fn parse(text: &str) -> Result<Profile, String> {
         match b {
             Block::Links(ls) => {
                 for l in ls {
-                    let l = l.trim();
+                    // Keep trailing whitespace: an empty evidence renders as `kind | `.
+                    let l = l.trim_start();
                     if l.starts_with("- `") {
                         links.push(parse_link(l)?);
                     }
@@ -393,7 +397,16 @@ pub fn profile_path(alias: &str, root: Option<&Path>) -> PathBuf {
     project_dir(alias, root).join("PROFILE.md")
 }
 
+/// Aliases become a directory name: no separators, no `..`, not empty.
+fn check_alias(alias: &str) -> Result<(), String> {
+    if alias.is_empty() || alias.contains(['/', '\\', '\0']) || alias.contains("..") {
+        return Err(format!("invalid project alias: {alias:?}"));
+    }
+    Ok(())
+}
+
 pub fn load(alias: &str, root: Option<&Path>) -> Result<Option<Profile>, String> {
+    check_alias(alias)?;
     let path = profile_path(alias, root);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -407,6 +420,9 @@ pub fn load(alias: &str, root: Option<&Path>) -> Result<Option<Profile>, String>
 
 /// Newest first.
 pub fn history(alias: &str, root: Option<&Path>) -> Vec<PathBuf> {
+    if check_alias(alias).is_err() {
+        return Vec::new();
+    }
     let mut files: Vec<PathBuf> = std::fs::read_dir(history_dir(alias, root))
         .map(|rd| {
             rd.filter_map(|e| e.ok())
@@ -489,15 +505,42 @@ fn validate(p: &Profile) -> io::Result<()> {
     Ok(())
 }
 
+/// `p` as `render` + `parse` will give it back: whole-second timestamps,
+/// bodies trimmed with LF line ends, one-line summaries/kinds/evidence.
+fn normalised(p: &Profile) -> Profile {
+    let secs = |t: DateTime<Utc>| t.with_nanosecond(0).unwrap_or(t);
+    let mut n = p.clone();
+    n.generated_at = n.generated_at.map(secs);
+    for l in &mut n.links {
+        l.kind = one_line(&l.kind);
+        l.evidence = one_line(&l.evidence);
+    }
+    for s in n.sections.values_mut() {
+        s.summary = one_line(&s.summary);
+        s.body = s.body.trim().lines().collect::<Vec<_>>().join("\n");
+        s.last_verified = s.last_verified.map(secs);
+    }
+    n
+}
+
+/// Refuses (writes nothing) anything that would not read back as `p`, up to
+/// the normalisation `render` applies.
 pub fn save(p: &Profile, root: Option<&Path>) -> io::Result<()> {
+    check_alias(&p.alias).map_err(invalid)?;
     validate(p)?;
     let text = render(p);
-    parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let back = parse(&text).map_err(invalid)?;
+    if back != normalised(p) {
+        return Err(invalid(
+            "profile does not round-trip through its markdown form".into(),
+        ));
+    }
     snapshot_and_write(&p.alias, &text, root)
 }
 
 /// Make a history file the current profile (the current one is snapshotted first).
 pub fn restore(alias: &str, file: &Path, root: Option<&Path>) -> io::Result<()> {
+    check_alias(alias).map_err(invalid)?;
     let text = std::fs::read_to_string(file)?;
     parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     snapshot_and_write(alias, &text, root)
@@ -672,6 +715,13 @@ mod tests {
             |p| p.links[0].kind = "a | b".into(),
             |p| p.links[0].evidence = "a\nb".into(),
             |p| p.alias = String::new(),
+            |p| p.alias = "web\nstatus: draft".into(),
+            |p| p.alias = " web".into(),
+            |p| p.alias = "web ".into(),
+            |p| p.head_sha = Some("abc\ndef".into()),
+            |p| p.alias = "../x".into(),
+            |p| p.alias = "a/b".into(),
+            |p| p.alias = "a\\b".into(),
         ];
         for m in mutations {
             let mut p = sample("web");
@@ -708,6 +758,59 @@ mod tests {
         hostile_round_trip("a\n### Sources  \n- `p` sha256:abc\nb");
         hostile_round_trip("a\n<!-- links -->  \n- `x` | y | z\nb");
         hostile_round_trip("a\n### Sources\t\n\\<!-- links -->\t\nb");
+    }
+
+    #[test]
+    fn empty_kind_and_evidence_links_round_trip() {
+        let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        let mut p = sample("web");
+        p.links = vec![
+            Link {
+                to: "a".into(),
+                kind: "calls".into(),
+                evidence: String::new(),
+            },
+            Link {
+                to: "b".into(),
+                kind: String::new(),
+                evidence: "ev".into(),
+            },
+            Link {
+                to: "c".into(),
+                kind: String::new(),
+                evidence: String::new(),
+            },
+        ];
+        save(&p, r).unwrap();
+        assert_eq!(load("web", r).unwrap().unwrap().links, p.links);
+        // an editor stripping the trailing space is tolerated
+        let text = render(&p).replace("| calls | \n", "| calls |\n");
+        assert_eq!(parse(&text).unwrap().links, p.links);
+    }
+
+    #[test]
+    fn save_normalises_lossless_differences_and_rejects_traversal() {
+        let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        let mut p = sample("web");
+        p.sections.get_mut(&SectionKey::Stack).unwrap().body = "  padded \r\n body\n\n".into();
+        p.generated_at = Some(t(9) + chrono::Duration::milliseconds(5));
+        save(&p, r).unwrap();
+        let back = load("web", r).unwrap().unwrap();
+        assert_eq!(back.sections[&SectionKey::Stack].body, "padded \n body");
+        for bad in ["../x", "a/b", "a\\b", "..", ""] {
+            assert!(load(bad, r).is_err());
+            assert!(history(bad, r).is_empty());
+            assert!(restore(bad, &profile_path("web", r), r).is_err());
+        }
+        assert!(!root
+            .path()
+            .parent()
+            .unwrap()
+            .join("x")
+            .join("PROFILE.md")
+            .exists());
     }
 
     #[test]
