@@ -162,6 +162,10 @@ pub fn memory_store(args: &[String]) -> ExitCode {
             let category = rest.get(1).filter(|c| !c.is_empty()).map(String::as_str);
             match memory_store::add_task_memory(alias, issue_iid, lesson, &tags, category, None) {
                 Ok(r) => {
+                    if r.created {
+                        // Queue-only and best-effort: never fails the command.
+                        loopx_core::profile_sync::on_memory_added(alias, None);
+                    }
                     println!(
                         "{}",
                         dumps(&serde_json::json!({

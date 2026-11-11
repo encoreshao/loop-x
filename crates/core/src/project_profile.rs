@@ -58,7 +58,7 @@ impl SectionKey {
         }
     }
 
-    fn from_slug(slug: &str) -> Option<SectionKey> {
+    pub fn from_slug(slug: &str) -> Option<SectionKey> {
         Self::ALL.into_iter().find(|k| k.slug() == slug)
     }
 

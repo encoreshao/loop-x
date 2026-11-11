@@ -18,8 +18,8 @@ pub struct TickState {
     started: Option<DateTime<Utc>>,
 }
 
-/// Run the sync if it is due (a slot passed since the last run) or was requested.
-/// Returns whether it ran. Writes nothing unless it runs; with the weekly switch
+/// Process the event-driven queue, then run the sync if it is due (a slot passed since the last run) or was requested.
+/// Returns whether it did anything. Writes nothing unless it runs; with the weekly switch
 /// off only an explicit "Sync now" request runs.
 pub fn tick(
     store_path: &Path,
@@ -33,13 +33,31 @@ pub fn tick(
     let Ok(store) = sync::load_keeping_bad(store_path) else {
         return false;
     };
+    // Event-driven refreshes queued by finished runs go first (only while the
+    // weekly switch is on; the queue is never written otherwise).
+    let mut ran_queue = false;
+    let mut projects = Some(projects);
+    let mut loaded: Option<Vec<TrackedProject>> = None;
+    if store.settings.enabled && store.queued.values().any(|v| !v.is_empty()) {
+        let list = loaded.insert(projects.take().map_or_else(Vec::new, |f| f()));
+        let done = sync::process_queue(&store.queued, list, agent, now, root, approvals_dir);
+        let _ = sync::with_store(store_path, |s| {
+            for (alias, slug) in done {
+                if let Some(q) = s.queued.get_mut(&alias) {
+                    q.retain(|x| *x != slug);
+                }
+            }
+            s.queued.retain(|_, q| !q.is_empty());
+        });
+        ran_queue = true;
+    }
     let started = *state.started.get_or_insert(now);
     let baseline = store.status.last_run.unwrap_or(started);
     let due = store.settings.enabled && sync::next_run(&store.settings, baseline) <= now;
     if !due && !store.sync_requested {
-        return false;
+        return ran_queue;
     }
-    let mut list = projects();
+    let mut list = loaded.unwrap_or_else(|| projects.take().map_or_else(Vec::new, |f| f()));
     // Oldest-synced first, so a cap never starves the same projects every week.
     list.sort_by_key(|p| store.status.per_project.get(&p.alias).map(|s| s.at));
     list.truncate(store.settings.max_projects_per_run);
@@ -240,5 +258,36 @@ mod tests {
             "{nope"
         );
         assert_eq!(std::fs::read_to_string(f.store()).unwrap(), "{nope");
+    }
+
+    #[test]
+    fn tick_processes_the_event_queue_and_clears_it() {
+        let f = Fx::new();
+        let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
+        // Off the weekly schedule, no sync request: only the queue is pending.
+        sync::with_store(&f.store(), |s| {
+            s.queued
+                .insert("tick-app".into(), vec!["stack".into(), "gotchas".into()]);
+            s.queued.insert("other".into(), vec!["stack".into()]);
+        })
+        .unwrap();
+        assert!(f.tick(&a, local(11, 10, 0), &mut st));
+        let s = sync::load(&f.store()).unwrap();
+        assert!(s.queued.is_empty(), "{:?}", s.queued);
+        // Nothing left to do on the next look.
+        assert!(!f.tick(&a, local(11, 10, 1), &mut st));
+    }
+
+    #[test]
+    fn a_disabled_switch_leaves_the_queue_alone() {
+        let f = Fx::new();
+        let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
+        sync::with_store(&f.store(), |s| {
+            s.settings.enabled = false;
+            s.queued.insert("tick-app".into(), vec!["stack".into()]);
+        })
+        .unwrap();
+        assert!(!f.tick(&a, local(11, 10, 0), &mut st));
+        assert_eq!(sync::load(&f.store()).unwrap().queued.len(), 1);
     }
 }

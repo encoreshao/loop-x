@@ -540,6 +540,10 @@ pub struct SyncStore {
     pub status: SyncStatus,
     /// Set by "Sync now"; the tick runs once and clears it.
     pub sync_requested: bool,
+    /// Event-driven refreshes waiting for the next tick: alias -> section slugs.
+    /// Written by [`on_run_finished`] / [`on_memory_added`], drained by
+    /// [`process_queue`]. Absent in files written before this field existed.
+    pub queued: BTreeMap<String, Vec<String>>,
 }
 
 pub fn store_path() -> PathBuf {
@@ -602,6 +606,108 @@ pub fn next_run(settings: &SyncSettings, now: DateTime<Utc>) -> DateTime<Utc> {
         }
     }
     now + Duration::days(7)
+}
+
+/// Add `keys` to `alias`'s queue (deduped). Does nothing, and writes no file, when
+/// the weekly sync switch is off, the store is unreadable or `keys` is empty.
+fn enqueue(path: &Path, alias: &str, keys: &[SectionKey]) {
+    if keys.is_empty() || !load(path).is_ok_and(|s| s.settings.enabled) {
+        return;
+    }
+    let _ = with_store(path, |s| {
+        let q = s.queued.entry(alias.to_string()).or_default();
+        for k in keys {
+            if !q.iter().any(|x| x == k.slug()) {
+                q.push(k.slug().to_string());
+            }
+        }
+    });
+}
+
+fn never_fail(f: impl FnOnce()) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+}
+
+/// A run finished and its merge request changed `changed_files` (repo-relative):
+/// queue the profile sections whose sources include any of them. This ONLY queues
+/// (in `profile_sync.json`); it never calls the agent and never blocks the run,
+/// and the server tick refreshes the queue on its next look. With the weekly sync
+/// switch off it queues nothing and creates no file. It never fails or panics:
+/// every error is swallowed, so a hook problem cannot fail the run.
+pub fn on_run_finished(alias: &str, changed_files: &[String], root: Option<&Path>) {
+    on_run_finished_at(&store_path(), alias, changed_files, root);
+}
+
+pub fn on_run_finished_at(path: &Path, alias: &str, changed_files: &[String], root: Option<&Path>) {
+    never_fail(|| {
+        if changed_files.is_empty() {
+            return;
+        }
+        enqueue(
+            path,
+            alias,
+            &queue_event_refresh(alias, changed_files, root),
+        );
+    });
+}
+
+/// A run recorded a new task memory: queue the Gotchas section (same rules as
+/// [`on_run_finished`]). Nothing is queued for a project with no profile yet.
+pub fn on_memory_added(alias: &str, root: Option<&Path>) {
+    on_memory_added_at(&store_path(), alias, root);
+}
+
+pub fn on_memory_added_at(path: &Path, alias: &str, root: Option<&Path>) {
+    never_fail(|| {
+        if matches!(project_profile::load(alias, root), Ok(Some(_))) {
+            enqueue(path, alias, &[SectionKey::Gotchas]);
+        }
+    });
+}
+
+/// Refresh every queued (alias, section) through the same `propose_refresh_held`
+/// path the weekly sync uses (dedupe on the source hash included), skipping
+/// human-written sections. Returns the (alias, slug) pairs that are done and
+/// should leave the queue: handled, unknown, or belonging to an untracked project.
+/// A project whose single-flight slot is busy stays queued. The caller clears the
+/// result from the store.
+pub fn process_queue(
+    queued: &BTreeMap<String, Vec<String>>,
+    projects: &[TrackedProject],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+) -> Vec<(String, String)> {
+    let mut done = Vec::new();
+    for (alias, slugs) in queued {
+        let Some(p) = projects.iter().find(|p| &p.alias == alias) else {
+            done.extend(slugs.iter().map(|s| (alias.clone(), s.clone())));
+            continue;
+        };
+        let Some(_slot) = profile_build::try_acquire(alias) else {
+            continue;
+        };
+        let profile = project_profile::load(alias, root).ok().flatten();
+        let head = profile_scan::head_sha(&p.work_dir);
+        for slug in slugs {
+            done.push((alias.clone(), slug.clone()));
+            let (Some(profile), Some(key)) = (&profile, SectionKey::from_slug(slug)) else {
+                continue;
+            };
+            if !p.work_dir.is_dir()
+                || section_freshness(profile, key, &p.work_dir, head.as_deref())
+                    == Freshness::HumanEdited
+            {
+                continue;
+            }
+            never_fail(|| {
+                let _ =
+                    propose_refresh_held(alias, key, &p.work_dir, agent, now, root, approvals_dir);
+            });
+        }
+    }
+    done
 }
 
 #[derive(Debug, Clone)]
@@ -1482,5 +1588,128 @@ mod tests {
             load(&p).unwrap().status.per_project["a"].outcome,
             Outcome::Failed("x".into())
         );
+    }
+
+    // ---- event-driven queue ---------------------------------------------
+
+    fn qstore() -> (tempfile::TempDir, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("profile_sync.json");
+        (d, p)
+    }
+
+    #[test]
+    fn merged_mr_touching_a_section_source_queues_that_section() {
+        let f = Fx::new(Origin::Agent);
+        let (_d, p) = qstore();
+        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
+        assert_eq!(load(&p).unwrap().queued[&f.alias], vec!["stack"]);
+        // Deduped, and it survives a restart (reload from disk).
+        on_run_finished_at(&p, &f.alias, &["./Cargo.toml".into()], Some(f.root.path()));
+        assert_eq!(load(&p).unwrap().queued[&f.alias], vec!["stack"]);
+    }
+
+    #[test]
+    fn unrelated_files_queue_nothing() {
+        let f = Fx::new(Origin::Agent);
+        let (_d, p) = qstore();
+        on_run_finished_at(&p, &f.alias, &["README.md".into()], Some(f.root.path()));
+        on_run_finished_at(&p, &f.alias, &[], Some(f.root.path()));
+        assert!(!p.exists());
+    }
+
+    #[test]
+    fn new_task_memory_queues_gotchas() {
+        let f = Fx::new(Origin::Agent);
+        let (_d, p) = qstore();
+        on_memory_added_at(&p, &f.alias, Some(f.root.path()));
+        assert_eq!(load(&p).unwrap().queued[&f.alias], vec!["gotchas"]);
+        // No profile, nothing to refresh.
+        let (_d2, p2) = qstore();
+        on_memory_added_at(&p2, "no-such-alias", Some(f.root.path()));
+        assert!(!p2.exists());
+    }
+
+    #[test]
+    fn a_disabled_switch_queues_nothing_and_creates_no_file() {
+        let f = Fx::new(Origin::Agent);
+        let (_d, p) = qstore();
+        with_store(&p, |s| s.settings.enabled = false).unwrap();
+        let before = fs::read_to_string(&p).unwrap();
+        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
+        on_memory_added_at(&p, &f.alias, Some(f.root.path()));
+        assert_eq!(fs::read_to_string(&p).unwrap(), before);
+        let (_d2, p2) = qstore();
+        let off = SyncStore {
+            settings: SyncSettings {
+                enabled: false,
+                ..SyncSettings::default()
+            },
+            ..SyncStore::default()
+        };
+        // An absent file is "on"; only a stored "off" blocks, and writes nothing new.
+        fs::write(&p2, crate::pyjson::to_string_pretty(&off)).unwrap();
+        on_run_finished_at(&p2, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
+        assert!(load(&p2).unwrap().queued.is_empty());
+    }
+
+    #[test]
+    fn a_failing_hook_never_panics_and_old_files_without_the_field_load() {
+        let f = Fx::new(Origin::Agent);
+        let (d, p) = qstore();
+        // Corrupt store: the hook returns quietly and leaves the file alone.
+        fs::write(&p, "{nope").unwrap();
+        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
+        assert_eq!(fs::read_to_string(&p).unwrap(), "{nope");
+        // Unwritable location (parent is a file).
+        let blocked = d.path().join("profile_sync.json").join("x.json");
+        on_run_finished_at(
+            &blocked,
+            &f.alias,
+            &["Cargo.toml".into()],
+            Some(f.root.path()),
+        );
+        fs::write(&p, r#"{"sync_requested": true}"#).unwrap();
+        assert!(load(&p).unwrap().queued.is_empty());
+    }
+
+    #[test]
+    fn process_queue_refreshes_queued_sections_and_reports_them_done() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("changed\n");
+        let agent = Fake::new("New stack.");
+        let queued = BTreeMap::from([
+            (
+                f.alias.clone(),
+                vec!["stack".to_string(), "bogus".to_string()],
+            ),
+            ("untracked".to_string(), vec!["stack".to_string()]),
+        ]);
+        let projects = vec![TrackedProject {
+            alias: f.alias.clone(),
+            instance: "i".into(),
+            project_id: "g/p".into(),
+            work_dir: f.work.path().to_path_buf(),
+        }];
+        let done = process_queue(
+            &queued,
+            &projects,
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        );
+        assert_eq!(agent.calls(), 1);
+        assert_eq!(done.len(), 3);
+        // Run again: the same proposal is deduped, the agent is not asked twice.
+        process_queue(
+            &queued,
+            &projects,
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        );
+        assert_eq!(agent.calls(), 1);
     }
 }
