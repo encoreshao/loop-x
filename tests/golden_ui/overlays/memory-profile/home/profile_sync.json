@@ -1,0 +1,12 @@
+{
+  "settings": {"enabled": true, "weekday": "Mon", "hour": 9, "max_projects_per_run": 20},
+  "status": {
+    "last_run": "2026-01-12T09:00:00Z",
+    "per_project": {
+      "other": {"at": "2026-01-12T09:00:00Z", "outcome": {"Failed": "checkout not found"}},
+      "proj": {"at": "2026-01-12T09:00:00Z", "outcome": {"Proposed": 1}}
+    }
+  },
+  "sync_requested": false,
+  "queued": {}
+}

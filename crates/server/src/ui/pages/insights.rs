@@ -1,19 +1,18 @@
 //! The Insights hub (`/insights`: analytics, cost, budget, memory) and the
 //! Harness hub (`/harness`: gates, evals, audit): `_analytics_body`,
-//! `_cost_body`, `_budget_body`, `_memory_body`, `_gates_body`, `_evals_body`
-//! and `_audit_body` of `bin/web/dashboard_server.py`. None of these views has a
-//! POST route, and the flash query parameter is ignored by every one of them.
+//! `_cost_body`, `_budget_body`, `_gates_body`, `_evals_body` and `_audit_body` of
+//! `bin/web/dashboard_server.py`; the Memory view lives in `memory.rs`. None of these
+//! views has a POST route, and the flash query parameter is ignored by every one of them.
 
 use crate::ui::badge::default_badge;
 use crate::ui::consts;
 use crate::ui::hub::{hub_by_key, render_hub_page};
 use crate::ui::icons as glyphs;
-use crate::ui::markdown::{self, GitlabPrefixes};
-use crate::ui::pyfmt::{self, escape, escape_text};
+use crate::ui::pyfmt::{self, escape};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use loopx_core::{
     budget, cost, events, gate_stats, health, learning, ledger, loop_audit, loop_serialize,
-    memory_store, metrics, pydumps,
+    metrics, pydumps,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -58,7 +57,7 @@ fn insights(ctx: &UiCtx) -> UiResponse {
     let body = match key.as_str() {
         "cost" => cost_body(ctx),
         "budget" => budget_body(ctx),
-        "memory" => memory_body(ctx),
+        "memory" => super::memory::render(ctx),
         _ => analytics_body(ctx),
     };
     UiResponse::html(render_hub_page(
@@ -92,20 +91,20 @@ fn harness(ctx: &UiCtx) -> UiResponse {
 
 // ---------------------------------------------------------------- shared bits
 
-fn icon(name: &str) -> &'static str {
+pub(super) fn icon(name: &str) -> &'static str {
     consts::ds(name)
 }
 
-fn n_of(v: &Value) -> String {
+pub(super) fn n_of(v: &Value) -> String {
     pydumps::py_str(v)
 }
 
-fn f_of(v: &Value) -> Option<f64> {
+pub(super) fn f_of(v: &Value) -> Option<f64> {
     v.as_f64()
 }
 
 /// `f"{x:.Nf}"`.
-fn fixed(x: f64, places: usize) -> String {
+pub(super) fn fixed(x: f64, places: usize) -> String {
     format!("{x:.places$}")
 }
 
@@ -159,7 +158,7 @@ fn na_stat_tile(ctx: &UiCtx, icon: &str, label: &str, reason: &str) -> String {
     )
 }
 
-fn page_title(ctx: &UiCtx, title: &str, subtitle: &str) -> String {
+pub(super) fn page_title(ctx: &UiCtx, title: &str, subtitle: &str) -> String {
     format!(
         "<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{}</p>\n</div>\n",
         escape(&ctx.t(title)),
@@ -879,218 +878,8 @@ fn budget_body(ctx: &UiCtx) -> String {
     )
 }
 
-// --------------------------------------------------------------------- memory
-
-fn legacy_learnings(ctx: &UiCtx, instance: &str, project_id: &str) -> Vec<Value> {
-    let path = ctx
-        .state
-        .user_home
-        .join(".gitlab")
-        .join("cache")
-        .join(instance)
-        .join("projects")
-        .join(project_id.replace('/', "__"))
-        .join("project.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.get("_memory")?.get("fix_learnings")?.as_array().cloned())
-        .unwrap_or_default()
-}
-
-fn issue_pill(prefixes: &GitlabPrefixes, alias: &str, iid: &Value) -> String {
-    let safe = escape(&n_of(iid));
-    match prefixes.get(alias).filter(|b| !b.is_empty()) {
-        Some(base) => format!(
-            "<a class='pill pill-link' href='{base}/-/issues/{}' rel='noopener' target='_blank'>\
-             <svg class='icon' aria-hidden='true'><use href='#i-open_in_new'/></svg>#{safe}</a>",
-            n_of(iid)
-        ),
-        None => format!("<span class='pill pill-grey'>#{safe}</span>"),
-    }
-}
-
-fn tag_pills(tags: &Value) -> String {
-    tags.as_array()
-        .map(|a| {
-            a.iter()
-                .map(|t| format!("<span class='pill pill-grey'>{}</span>", escape(&n_of(t))))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn truthy(v: &Value) -> bool {
+pub(super) fn truthy(v: &Value) -> bool {
     loopx_core::loops_config::py_truthy(v)
-}
-
-fn memory_body(ctx: &UiCtx) -> String {
-    let st = ctx.state;
-    let root = st.home_dir.join("memory");
-    let projects: Value = std::fs::read_to_string(st.home_dir.join("projects.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or(Value::Null);
-    let default_instance = projects["gitlab_instance"].as_str().unwrap_or("").to_string();
-    // {alias: (legacy entries, task memories)}, in projects.json order.
-    let mut memory: Vec<(String, Vec<Value>, Vec<Value>)> = Vec::new();
-    if let Some(map) = projects.get("projects").and_then(Value::as_object) {
-        for (alias, project) in map {
-            let instance = project["instance"].as_str().unwrap_or(&default_instance);
-            let legacy = legacy_learnings(ctx, instance, &n_of(&project["project_id"]));
-            let tasks = memory_store::list_task_memories(alias, Some(&root))
-                .iter()
-                .map(memory_store::TaskMemory::to_value)
-                .collect();
-            memory.push((alias.clone(), legacy, tasks));
-        }
-    }
-    let report = learning::build_learning_report(Some(&st.events_dir), None, None, None, None);
-    let stats: std::collections::HashMap<String, Value> = report
-        .lessons
-        .iter()
-        .filter_map(|l| Some((l.lesson_id.as_str()?.to_string(), l.to_value())))
-        .collect();
-    let prefixes = crate::ui::gitlab::issue_url_prefixes(st);
-
-    let reuse_stats = |lesson_id: &Value| -> String {
-        if !truthy(lesson_id) {
-            return String::new();
-        }
-        let s = lesson_id.as_str().and_then(|id| stats.get(id));
-        match s.filter(|s| s["times_reused"].as_i64().unwrap_or(0) != 0) {
-            None => format!(
-                "<p class='learning-reuse-stats'>{}</p>",
-                escape(&ctx.t("Not yet reused"))
-            ),
-            Some(s) => {
-                let eff = f_of(&s["effectiveness_rate"])
-                    .map_or_else(|| ctx.t("pending"), |e| format!("{}%", fixed(e * 100.0, 0)));
-                let text = ctx.tf(
-                    "Reused {times}\u{d7} \u{b7} {successful} successful, {failed} failed (effectiveness: {effectiveness})",
-                    &[
-                        ("times", &n_of(&s["times_reused"])),
-                        ("successful", &n_of(&s["successful_reuses"])),
-                        ("failed", &n_of(&s["failed_reuses"])),
-                        ("effectiveness", &eff),
-                    ],
-                );
-                format!("<p class='learning-reuse-stats'>{}</p>", escape_text(&text))
-            }
-        }
-    };
-
-    let task_item = |alias: &str, e: &Value| -> String {
-        let category = if truthy(&e["category"]) {
-            format!("<span class='pill pill-grey'>{}</span>", escape(&n_of(&e["category"])))
-        } else {
-            String::new()
-        };
-        let meta = format!(
-            "<div class='pill-row'>{}{category}{}</div>",
-            issue_pill(&prefixes, alias, &e["issue_iid"]),
-            tag_pills(&e["tags"])
-        );
-        let description = &e["description"];
-        let description_html = if truthy(description) {
-            format!("<p class='history-entry-overview'>{}</p>", escape(&n_of(description)))
-        } else {
-            String::new()
-        };
-        let needs_review = e["flag"].as_str() == Some("needs_review");
-        let badge = if needs_review {
-            format!(
-                "<span class='pill pill-red' title='{}'><svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>{}</span>",
-                escape(&ctx.t("Reuse of this lesson preceded repeated failures; check it is still correct.")),
-                escape(&ctx.t("Needs review"))
-            )
-        } else {
-            String::new()
-        };
-        let data_attr = if needs_review { " data-needs-review='1'" } else { "" };
-        format!(
-            "<li class='learning-item'{data_attr}>{badge}{description_html}<div class='markdown'>{}</div>{meta}{}</li>",
-            markdown::render_markdown(e["body"].as_str().unwrap_or(""), &prefixes),
-            reuse_stats(&e["lesson_id"])
-        )
-    };
-    let legacy_item = |alias: &str, e: &Value| -> String {
-        let pill = match e.get("issue_iid") {
-            Some(iid) if !iid.is_null() => issue_pill(&prefixes, alias, iid),
-            _ => String::new(),
-        };
-        let meta = format!("{pill}{}", tag_pills(&e["tags"]));
-        let meta_html = if meta.is_empty() {
-            String::new()
-        } else {
-            format!("<div class='pill-row'>{meta}</div>")
-        };
-        format!(
-            "<li class='learning-item'><div class='markdown'>{}</div>{meta_html}</li>",
-            markdown::render_markdown(e["lesson"].as_str().unwrap_or(""), &prefixes)
-        )
-    };
-
-    let needs_review_count: usize = memory
-        .iter()
-        .map(|(_, _, tasks)| tasks.iter().filter(|e| e["flag"].as_str() == Some("needs_review")).count())
-        .sum();
-    let sections: String = memory
-        .iter()
-        .map(|(alias, legacy, tasks)| {
-            let tasks_html = if tasks.is_empty() {
-                format!("<p>{}</p>", escape(&ctx.t("(no task memory recorded yet)")))
-            } else {
-                format!(
-                    "<ul class='plain'>{}</ul>",
-                    tasks.iter().map(|e| task_item(alias, e)).collect::<String>()
-                )
-            };
-            let legacy_html = if legacy.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "<h4>{}</h4><ul class='plain'>{}</ul>",
-                    escape(&ctx.t("Legacy learnings")),
-                    legacy.iter().map(|e| legacy_item(alias, e)).collect::<String>()
-                )
-            };
-            format!(
-                "<div class='project-block'><h3>{}</h3>{tasks_html}{legacy_html}</div>",
-                escape(alias)
-            )
-        })
-        .collect();
-    let memory_html = if sections.is_empty() {
-        format!(
-            "\n<div class='empty-state'>\n<div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-folder_off'/></svg></div>\n\
-             <p class='empty-state-message'>{}</p>\n\
-             <a class='btn btn-primary empty-state-action' href='/loops/issue-loop?view=projects'>\n\
-             <svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> {}\n</a>\n</div>\n",
-            escape_text(&ctx.t("No projects configured yet, so there is no memory recorded.")),
-            escape_text(&ctx.t("Set up a project"))
-        )
-    } else {
-        sections
-    };
-
-    let style = "\n<style>\n\
-#memory-filter-needs-review:checked ~ .memory-list li.learning-item:not([data-needs-review]) { display: none; }\n\
-#memory-filter-needs-review { position: absolute; opacity: 0; pointer-events: none; }\n\
-#memory-filter-needs-review:checked + label.pill { outline: 2px solid var(--md-error, currentColor); }\n\
-#memory-filter-needs-review:focus-visible + label.pill { outline: 2px solid currentColor; }\n\
-label.memory-filter-chip { cursor: pointer; }\n\
-</style>\n";
-    format!(
-        "\n{}{style}<div class=\"grid\">\n<section class=\"card\">\n<div class=\"section-header\">{}<h2>{}</h2></div>\n\
-         <input type=\"checkbox\" id=\"memory-filter-needs-review\">\n\
-         <label class=\"pill pill-red memory-filter-chip\" for=\"memory-filter-needs-review\">{} ({needs_review_count})</label>\n\
-         <div class=\"memory-list\">\n{memory_html}\n</div>\n</section>\n</div>\n",
-        page_title(ctx, "Project Memory", "Task memory recorded per project by the automated review loop."),
-        icon("_SECTION_ICON_MEMORY"),
-        escape(&ctx.t("Project Memory")),
-        escape(&ctx.t("Needs review"))
-    )
 }
 
 // --------------------------------------------------------------------- gates

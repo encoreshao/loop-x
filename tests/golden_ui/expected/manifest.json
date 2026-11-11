@@ -1204,6 +1204,316 @@
    }
   },
   {
+   "id": "ins-memory-graph",
+   "path": "/insights?view=memory&graph=1",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-graph.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-graph.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-graph.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-graph.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-unknown",
+   "path": "/insights?view=memory&project=nope",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-unknown.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-unknown.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-unknown.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-unknown.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-lessons",
+   "path": "/insights?view=memory&project=proj&page=lessons",
+   "overlay": "insights-full",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-lessons.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-lessons.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-lessons.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-lessons.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile",
+   "path": "/insights?view=memory",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile-project",
+   "path": "/insights?view=memory&project=proj",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-project.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-project.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-project.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-project.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile-draft",
+   "path": "/insights?view=memory&project=other",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-draft.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-draft.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-draft.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-draft.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile-none",
+   "path": "/insights?view=memory&project=fresh-start",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-none.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-none.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-none.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-none.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile-features",
+   "path": "/insights?view=memory&project=proj&page=features",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-features.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-features.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-features.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-features.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile-stack",
+   "path": "/insights?view=memory&project=proj&page=stack",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-stack.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-stack.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-stack.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-stack.html"
+    }
+   }
+  },
+  {
+   "id": "ins-memory-profile-proposals",
+   "path": "/insights?view=memory&project=proj&page=proposals",
+   "overlay": "memory-profile",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/ins-memory-profile-proposals.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/ins-memory-profile-proposals.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/ins-memory-profile-proposals.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/ins-memory-profile-proposals.html"
+    }
+   }
+  },
+  {
    "id": "har-gates-full",
    "path": "/harness",
    "overlay": "insights-full",

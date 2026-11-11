@@ -321,7 +321,8 @@ fn add_source(scan: &mut Scan, rel: &str, full: &Path) {
     }
 }
 
-pub(crate) fn head_sha(work_dir: &Path) -> Option<String> {
+/// The checkout's `HEAD` sha, or `None` (not a repository, no git, or a 5 s timeout).
+pub fn head_sha(work_dir: &Path) -> Option<String> {
     use std::io::Read;
     let mut child = std::process::Command::new("git")
         .arg("-C")

@@ -1,0 +1,17 @@
+{
+  "id": "apr_golden00001",
+  "kind": "profile-section",
+  "run_id": "",
+  "project": "proj",
+  "issue_iid": null,
+  "title": "Update the features section of the proj profile",
+  "branch": "",
+  "target_branch": "",
+  "summary": "Proposed features summary: Ticket checkout, season passes, refunds and gift cards.",
+  "target": {"section": "features", "alias": "proj", "source_hash": "abc", "base_hash": "abc", "old": "Refunds are issued from the admin.", "old_summary": "Ticket checkout, season passes and refunds.", "new": "Refunds are issued from the admin.\nGift cards are sold at checkout.", "new_summary": "Ticket checkout, season passes, refunds and gift cards.", "sources": []},
+  "status": "pending",
+  "created_at": "2026-01-13T10:00:00Z",
+  "expires_at": "2036-01-11T10:00:00Z",
+  "decided_at": null,
+  "decided_by": null
+}

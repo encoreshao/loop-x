@@ -130,36 +130,16 @@
 <div class="main-scroll" id="main-scroll">
 <div class="wrap">
 
-<nav class='hub-tabs' aria-label='Page sections'><a class='hub-tab' href='/insights?view=analytics'>Analytics</a><a class='hub-tab' href='/insights?view=cost'>Cost</a><a class='hub-tab' href='/insights?view=budget'>Budget</a><a class='hub-tab active' href='/insights?view=memory' aria-current='page'>Memory</a></nav>
-<div class="page-title">
+<nav class='hub-tabs' aria-label='Page sections'><a class='hub-tab' href='/insights?view=analytics'>Analytics</a><a class='hub-tab' href='/insights?view=cost'>Cost</a><a class='hub-tab' href='/insights?view=budget'>Budget</a><a class='hub-tab active' href='/insights?view=memory' aria-current='page'>Memory</a></nav><style><!--@blob:016313162d2ec0fa--></style><div class="page-title">
 <h1>Project Memory</h1>
-<p class="subtitle">Task memory recorded per project by the automated review loop.</p>
+<p class="subtitle">What LoopX knows about each project: its profile, the lessons from past runs and the updates waiting for review.</p>
 </div>
-
-<style>
-#memory-filter-needs-review:checked ~ .memory-list li.learning-item:not([data-needs-review]) { display: none; }
-#memory-filter-needs-review { position: absolute; opacity: 0; pointer-events: none; }
-#memory-filter-needs-review:checked + label.pill { outline: 2px solid var(--md-error, currentColor); }
-#memory-filter-needs-review:focus-visible + label.pill { outline: 2px solid currentColor; }
-label.memory-filter-chip { cursor: pointer; }
-</style>
-<div class="grid">
-<section class="card">
-<div class="section-header"><svg class='icon' aria-hidden='true'><use href='#i-lightbulb'/></svg><h2>Project Memory</h2></div>
-<input type="checkbox" id="memory-filter-needs-review">
-<label class="pill pill-red memory-filter-chip" for="memory-filter-needs-review">Needs review (0)</label>
-<div class="memory-list">
-
 <div class='empty-state'>
 <div class='empty-state-icon'><svg class='icon' aria-hidden='true'><use href='#i-folder_off'/></svg></div>
 <p class='empty-state-message'>No projects configured yet, so there is no memory recorded.</p>
 <a class='btn btn-primary empty-state-action' href='/loops/issue-loop?view=projects'>
 <svg class='icon' aria-hidden='true'><use href='#i-settings'/></svg> Set up a project
 </a>
-</div>
-
-</div>
-</section>
 </div>
 
 </div>

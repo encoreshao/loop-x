@@ -851,7 +851,13 @@ pub struct TrackedProject {
 /// Every code-changing project of `projects.json` (the same list the Projects page
 /// and the GitLab loop work from). Empty when the config is missing or unreadable.
 pub fn tracked_projects() -> Vec<TrackedProject> {
-    let Ok(cfg) = crate::config::Config::load(&crate::config::default_config_path()) else {
+    tracked_projects_in(&crate::config::default_config_path())
+}
+
+/// [`tracked_projects`] read from an explicit `projects.json` (the dashboard passes
+/// its own home, so a sandboxed or test server never reads the default one).
+pub fn tracked_projects_in(config_path: &Path) -> Vec<TrackedProject> {
+    let Ok(cfg) = crate::config::Config::load(config_path) else {
         return Vec::new();
     };
     let mut out = Vec::new();

@@ -130,30 +130,11 @@
 <div class="main-scroll" id="main-scroll">
 <div class="wrap">
 
-<nav class='hub-tabs' aria-label='Sections de la page'><a class='hub-tab' href='/insights?view=analytics'>Analyses</a><a class='hub-tab' href='/insights?view=cost'>Coût</a><a class='hub-tab' href='/insights?view=budget'>Budget</a><a class='hub-tab active' href='/insights?view=memory' aria-current='page'>Mémoire</a></nav>
-<div class="page-title">
+<nav class='hub-tabs' aria-label='Sections de la page'><a class='hub-tab' href='/insights?view=analytics'>Analyses</a><a class='hub-tab' href='/insights?view=cost'>Coût</a><a class='hub-tab' href='/insights?view=budget'>Budget</a><a class='hub-tab active' href='/insights?view=memory' aria-current='page'>Mémoire</a></nav><style><!--@blob:016313162d2ec0fa--></style><div class="page-title">
 <h1>Mémoire du projet</h1>
-<p class="subtitle">Mémoire des tâches enregistrée par projet par la boucle de revue automatisée.</p>
+<p class="subtitle">Ce que LoopX sait de chaque projet : son profil, les leçons des exécutions passées et les mises à jour en attente de revue.</p>
 </div>
-
-<style>
-#memory-filter-needs-review:checked ~ .memory-list li.learning-item:not([data-needs-review]) { display: none; }
-#memory-filter-needs-review { position: absolute; opacity: 0; pointer-events: none; }
-#memory-filter-needs-review:checked + label.pill { outline: 2px solid var(--md-error, currentColor); }
-#memory-filter-needs-review:focus-visible + label.pill { outline: 2px solid currentColor; }
-label.memory-filter-chip { cursor: pointer; }
-</style>
-<div class="grid">
-<section class="card">
-<div class="section-header"><svg class='icon' aria-hidden='true'><use href='#i-lightbulb'/></svg><h2>Mémoire du projet</h2></div>
-<input type="checkbox" id="memory-filter-needs-review">
-<label class="pill pill-red memory-filter-chip" for="memory-filter-needs-review">À examiner (0)</label>
-<div class="memory-list">
-<div class='project-block'><h3>proj</h3><p>(aucune mémoire de tâche enregistrée pour l&#x27;instant)</p></div>
-</div>
-</section>
-</div>
-
+<div class='mem-stack'><div class='mem-bar'><nav class='mem-seg' aria-label='Vue de la mémoire'><a href='/insights?view=memory' class='is-active' aria-current='page'>Mémoire</a><a href='/insights?view=memory&amp;graph=1'>Graphe</a></nav><div class='mem-sync'><svg class='icon' aria-hidden='true'><use href='#i-schedule'/></svg><span>La synchronisation hebdomadaire n&#x27;a pas encore eu lieu</span><span class='mem-dot' aria-hidden='true'>·</span><span>Prochaine exécution 2026-01-19 09:00</span></div><div class='mem-actions'></div></div><div class='mem-grid'><a class='card mem-card' href='/insights?view=memory&amp;project=proj'><div class='mem-card-top'><span class='mem-ring mem-ring-none' style='--p:0' role='img' aria-label='0 sections à jour sur 10'><span>0</span></span><div class='mem-card-name'><h3>proj</h3><span class='mem-pill mem-pill-none'>Aucun profil</span></div></div><p class='mem-card-overview'>Pas encore de profil</p><div class='mem-chips'><span class='mem-chip'><svg class='icon' aria-hidden='true'><use href='#i-fact_check'/></svg>0 propositions en attente</span><span class='mem-chip'><svg class='icon' aria-hidden='true'><use href='#i-hub'/></svg>0 projets liés</span></div></a></div></div>
 </div>
 </div>
 </main>
