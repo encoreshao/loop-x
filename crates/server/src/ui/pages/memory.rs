@@ -53,16 +53,16 @@ pub fn register(_r: &mut Registry) {}
 
 pub fn render(ctx: &UiCtx) -> String {
     let q = ctx.query();
-    let projects = projects(ctx);
+    let m = model(ctx);
     let body = match q.first("project") {
-        None => overview(ctx, &projects, q.first("graph") == Some("1")),
-        Some(raw) => match projects.iter().find(|p| p.alias == raw) {
+        None => overview(ctx, &m, q.first("graph") == Some("1")),
+        Some(raw) => match m.projects.iter().find(|p| p.alias == raw) {
             None => unknown_project(ctx),
             Some(p) => match q.first("page") {
-                None => project_page(ctx, p, &projects),
+                None => project_page(ctx, p, &m),
                 Some(page) => match PAGES.iter().find(|s| **s == page) {
-                    Some(slug) => sub_page(ctx, p, slug),
-                    None => frame(ctx, p, None, &unknown_page(ctx, p)),
+                    Some(slug) => sub_page(ctx, p, slug, &m),
+                    None => frame(ctx, p, None, &unknown_page(ctx, p), &m),
                 },
             },
         },
@@ -72,12 +72,20 @@ pub fn render(ctx: &UiCtx) -> String {
 
 // ------------------------------------------------------------------ the data
 
+/// Everything one request needs, read once: each project with its parsed profile
+/// and freshness inputs, and the profile proposals.
+struct Model {
+    projects: Vec<Project>,
+    proposals: Vec<Value>,
+}
+
 struct Project {
     alias: String,
     instance: String,
     project_id: String,
-    /// The checkout, when the project changes code.
-    work_dir: Option<PathBuf>,
+    loaded: Loaded,
+    /// Only computed (from the checkout) when the profile parsed.
+    check: Check,
 }
 
 fn memory_root(ctx: &UiCtx) -> PathBuf {
@@ -88,41 +96,61 @@ fn approvals_dir(ctx: &UiCtx) -> PathBuf {
     ctx.state.repo_root.join("outputs").join("approvals")
 }
 
-/// Every tracked (code-changing) project of `projects.json`, then every other alias
-/// with a memory directory (a profile, lessons or setup notes), sorted.
+fn model(ctx: &UiCtx) -> Model {
+    Model {
+        projects: projects(ctx),
+        proposals: proposals(ctx),
+    }
+}
+
+/// Like the old Memory view, every alias of `projects.json` in its order (the
+/// code-changing ones with their checkout), then every other alias with a memory
+/// directory (a profile, lessons or setup notes), sorted.
 fn projects(ctx: &UiCtx) -> Vec<Project> {
     let config_path = ctx.state.home_dir.join("projects.json");
-    let mut out: Vec<Project> = profile_sync::tracked_projects_in(&config_path)
-        .into_iter()
-        .map(|t| Project {
-            alias: t.alias,
-            instance: t.instance,
-            project_id: t.project_id,
-            work_dir: Some(t.work_dir),
-        })
-        .collect();
+    let tracked = profile_sync::tracked_projects_in(&config_path);
     let config = loopx_core::config::Config::load(&config_path).ok();
+    let mut aliases: Vec<String> = config
+        .as_ref()
+        .and_then(|c| c.aliases().ok())
+        .unwrap_or_default();
     for alias in memory_store::all_aliases(Some(&memory_root(ctx))) {
-        if alias.starts_with('.') || out.iter().any(|p| p.alias == alias) {
-            continue;
+        if !alias.starts_with('.') && !aliases.contains(&alias) {
+            aliases.push(alias);
         }
-        let entry = config.as_ref().and_then(|c| c.project(&alias).ok());
-        let text = |k: &str| {
-            entry
-                .as_ref()
-                .and_then(|e| e.get(k))
-                .map(n_of)
-                .filter(|s| s != "None")
-                .unwrap_or_default()
-        };
-        out.push(Project {
-            instance: text("instance"),
-            project_id: text("project_id"),
-            work_dir: None,
-            alias,
-        });
     }
-    out
+    aliases
+        .into_iter()
+        .map(|alias| {
+            let (instance, project_id, work_dir) = match tracked.iter().find(|t| t.alias == alias) {
+                Some(t) => (t.instance.clone(), t.project_id.clone(), Some(t.work_dir.clone())),
+                None => {
+                    let entry = config.as_ref().and_then(|c| c.project(&alias).ok());
+                    let text = |k: &str| {
+                        entry
+                            .as_ref()
+                            .and_then(|e| e.get(k))
+                            .map(n_of)
+                            .filter(|s| s != "None")
+                            .unwrap_or_default()
+                    };
+                    (text("instance"), text("project_id"), None)
+                }
+            };
+            let loaded = load(ctx, &alias);
+            let check = match loaded {
+                Loaded::Ready(_) => check_for(work_dir),
+                _ => Check { work_dir: None, head: None },
+            };
+            Project {
+                alias,
+                instance,
+                project_id,
+                loaded,
+                check,
+            }
+        })
+        .collect()
 }
 
 enum Loaded {
@@ -145,12 +173,11 @@ struct Check {
     head: Option<String>,
 }
 
-fn check_for(p: &Project) -> Check {
-    let work_dir = p
-        .work_dir
-        .clone()
-        .filter(|w| !w.as_os_str().is_empty() && w.is_dir());
-    let head = work_dir.as_deref().and_then(profile_scan::head_sha);
+/// HEAD is read from the git files (`head_sha_fast`), never by spawning git:
+/// this runs for every project on every page load.
+fn check_for(work_dir: Option<PathBuf>) -> Check {
+    let work_dir = work_dir.filter(|w| !w.as_os_str().is_empty() && w.is_dir());
+    let head = work_dir.as_deref().and_then(profile_scan::head_sha_fast);
     Check { work_dir, head }
 }
 
@@ -196,7 +223,7 @@ fn pill(class: &str, label: &str) -> String {
 }
 
 /// The pending (and approved, not yet applied or kept for the record)
-/// `profile-section` proposals, newest first.
+/// `profile-section` proposals, newest first. Read once per request.
 fn proposals(ctx: &UiCtx) -> Vec<Value> {
     approvals::all(&approvals_dir(ctx))
         .into_iter()
@@ -220,11 +247,11 @@ fn pending_for(all: &[Value], alias: &str) -> usize {
 
 /// Directly linked projects per alias (profile-derived edges only; the issue
 /// digests the full graph adds come with the Graph view).
-fn neighbors(ctx: &UiCtx, projects: &[Project]) -> BTreeMap<String, Vec<(String, EdgeKind)>> {
+fn neighbors(projects: &[Project]) -> BTreeMap<String, Vec<(String, EdgeKind)>> {
     let profiles: Vec<Profile> = projects
         .iter()
-        .filter_map(|p| match load(ctx, &p.alias) {
-            Loaded::Ready(profile) => Some(profile),
+        .filter_map(|p| match &p.loaded {
+            Loaded::Ready(profile) => Some(profile.clone()),
             _ => None,
         })
         .collect();
@@ -430,7 +457,8 @@ fn empty_card(message: &str, link: Option<(&str, String)>) -> String {
 
 // ------------------------------------------------------------------ level 1
 
-fn overview(ctx: &UiCtx, projects: &[Project], graph: bool) -> String {
+fn overview(ctx: &UiCtx, m: &Model, graph: bool) -> String {
+    let projects = &m.projects;
     let title = format!(
         "<div class=\"page-title\">\n<h1>{}</h1>\n<p class=\"subtitle\">{}</p>\n</div>\n",
         escape(&ctx.t("Project Memory")),
@@ -461,12 +489,12 @@ fn overview(ctx: &UiCtx, projects: &[Project], graph: bool) -> String {
             escape(&ctx.t("The graph of how your projects connect is coming soon. Each project page already lists its linked projects."))
         )
     } else {
-        let all = proposals(ctx);
-        let links = neighbors(ctx, projects);
+        let all = &m.proposals;
+        let links = neighbors(projects);
         let status = store.as_ref().ok();
         let cards: String = projects
             .iter()
-            .map(|p| project_card(ctx, p, &all, &links, status))
+            .map(|p| project_card(ctx, p, all, &links, status))
             .collect();
         format!("<div class='mem-grid'>{cards}</div>")
     };
@@ -532,7 +560,7 @@ fn project_card(
     status: Option<&SyncStore>,
 ) -> String {
     let total = SectionKey::ALL.len();
-    let (ring_class, good, state_html, line, draft) = match load(ctx, &p.alias) {
+    let (ring_class, good, state_html, line, draft) = match &p.loaded {
         Loaded::Missing => ("none", 0, pill("none", &ctx.t("No profile")), ctx.t("No profile yet"), false),
         Loaded::Unreadable(_) => (
             "bad",
@@ -542,10 +570,10 @@ fn project_card(
             false,
         ),
         Loaded::Ready(profile) => {
-            let check = check_for(p);
+            let check = &p.check;
             let states: Vec<State> = SectionKey::ALL
                 .into_iter()
-                .map(|k| state_of(&profile, k, &check).0)
+                .map(|k| state_of(profile, k, check).0)
                 .collect();
             let worst = states.iter().copied().max().unwrap_or(State::Fresh);
             let good = states
@@ -590,13 +618,15 @@ fn project_card(
     {
         chips.push(chip(" mem-chip-bad", "error", &ctx.t("Last sync failed"), Some(msg)));
     }
-    let proposals_label = if pending == 1 {
-        ctx.t("1 pending proposal")
-    } else {
-        ctx.tf("{n} pending proposals", &[("n", &pending.to_string())])
-    };
-    let accent = if pending > 0 { " mem-chip-accent" } else { "" };
-    chips.push(chip(accent, "fact_check", &proposals_label, None));
+    // Only when something waits; the project page always shows the count.
+    if pending > 0 {
+        let proposals_label = if pending == 1 {
+            ctx.t("1 pending proposal")
+        } else {
+            ctx.tf("{n} pending proposals", &[("n", &pending.to_string())])
+        };
+        chips.push(chip(" mem-chip-accent", "fact_check", &proposals_label, None));
+    }
     let links_label = if n_links == 1 {
         ctx.t("1 linked project")
     } else {
@@ -713,8 +743,8 @@ fn subnav(ctx: &UiCtx, p: &Project, current: Option<&str>, pending: usize) -> St
 }
 
 /// The project frame: breadcrumb, title, the sub-nav and `content` beside it.
-fn frame(ctx: &UiCtx, p: &Project, page: Option<&str>, content: &str) -> String {
-    let pending = pending_for(&proposals(ctx), &p.alias);
+fn frame(ctx: &UiCtx, p: &Project, page: Option<&str>, content: &str, m: &Model) -> String {
+    let pending = pending_for(&m.proposals, &p.alias);
     let subtitle = [p.instance.as_str(), p.project_id.as_str()]
         .iter()
         .filter(|s| !s.is_empty())
@@ -752,9 +782,9 @@ fn head_line(ctx: &UiCtx, profile: &Profile, check: &Check) -> String {
     }
 }
 
-fn project_page(ctx: &UiCtx, p: &Project, projects: &[Project]) -> String {
-    let content = match load(ctx, &p.alias) {
-        Loaded::Unreadable(e) => error_card(ctx, &e),
+fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
+    let content = match &p.loaded {
+        Loaded::Unreadable(e) => error_card(ctx, e),
         Loaded::Missing => {
             let head = head_card(ctx, p, None);
             format!(
@@ -765,7 +795,7 @@ fn project_page(ctx: &UiCtx, p: &Project, projects: &[Project]) -> String {
             )
         }
         Loaded::Ready(profile) => {
-            let check = check_for(p);
+            let check = &p.check;
             let banner = if profile.status == Status::Draft {
                 format!(
                     "<div class='mem-banner' role='status'>{}<p><strong>{}</strong> {}</p></div>",
@@ -776,21 +806,21 @@ fn project_page(ctx: &UiCtx, p: &Project, projects: &[Project]) -> String {
             } else {
                 String::new()
             };
-            let links = neighbors(ctx, projects);
-            let pending = pending_for(&proposals(ctx), &p.alias);
+            let links = neighbors(&m.projects);
+            let pending = pending_for(&m.proposals, &p.alias);
             let cards: String = SectionKey::ALL
                 .into_iter()
-                .map(|k| summary_card(ctx, p, &profile, k, &check))
+                .map(|k| summary_card(ctx, p, profile, k, check))
                 .collect();
             format!(
                 "{banner}{}<div class='mem-pair'>{}{}</div><div class='mem-sections'>{cards}</div>",
-                head_card(ctx, p, Some((&profile, &check))),
+                head_card(ctx, p, Some((profile, check))),
                 neighbors_card(ctx, links.get(&p.alias)),
                 proposals_summary(ctx, p, pending)
             )
         }
     };
-    frame(ctx, p, None, &content)
+    frame(ctx, p, None, &content, m)
 }
 
 fn head_card(ctx: &UiCtx, p: &Project, profile: Option<(&Profile, &Check)>) -> String {
@@ -901,20 +931,19 @@ fn proposals_summary(ctx: &UiCtx, p: &Project, pending: usize) -> String {
     )
 }
 
-fn sub_page(ctx: &UiCtx, p: &Project, slug: &str) -> String {
+fn sub_page(ctx: &UiCtx, p: &Project, slug: &str, m: &Model) -> String {
     let content = match slug {
         "lessons" => lessons_card(ctx, p),
-        "proposals" => proposals_card(ctx, p),
-        _ => match load(ctx, &p.alias) {
-            Loaded::Unreadable(e) => error_card(ctx, &e),
+        "proposals" => proposals_card(ctx, p, &m.proposals),
+        _ => match &p.loaded {
+            Loaded::Unreadable(e) => error_card(ctx, e),
             Loaded::Missing => empty_card(&ctx.t("This project has no profile yet, so this section has not been written."),
                 Some((&project_url(&p.alias, None), ctx.t("Project summary"))),
             ),
             Loaded::Ready(profile) => {
-                let check = check_for(p);
                 let mut out: String = sections_of(slug)
                     .into_iter()
-                    .map(|k| detail_card(ctx, &profile, k, &check))
+                    .map(|k| detail_card(ctx, profile, k, &p.check))
                     .collect();
                 if slug == "stack" {
                     out.push_str(&setup_card(ctx, p));
@@ -923,7 +952,7 @@ fn sub_page(ctx: &UiCtx, p: &Project, slug: &str) -> String {
             }
         },
     };
-    frame(ctx, p, Some(slug), &content)
+    frame(ctx, p, Some(slug), &content, m)
 }
 
 fn detail_card(ctx: &UiCtx, profile: &Profile, key: SectionKey, check: &Check) -> String {
@@ -1040,9 +1069,9 @@ fn setup_card(ctx: &UiCtx, p: &Project) -> String {
     )
 }
 
-fn proposals_card(ctx: &UiCtx, p: &Project) -> String {
-    let mut items: Vec<Value> = proposals(ctx)
-        .into_iter()
+fn proposals_card(ctx: &UiCtx, p: &Project, all: &[Value]) -> String {
+    let mut items: Vec<&Value> = all
+        .iter()
         .filter(|a| proposal_alias(a) == p.alias)
         .collect();
     // Pending first; each group stays newest first.
@@ -1203,6 +1232,11 @@ fn lessons_card(ctx: &UiCtx, p: &Project) -> String {
     };
 
     let task_item = |e: &Value| -> String {
+        let description = &e["description"];
+        let body = e["body"].as_str().unwrap_or("");
+        // Lessons are agent-written text too: the same secret guard as the profile.
+        let secret = secret_in(&[&n_of(description), body, &n_of(&e["tags"])]);
+        let tags = if secret.is_some() { Value::Null } else { e["tags"].clone() };
         let category = if truthy(&e["category"]) {
             format!("<span class='pill pill-grey'>{}</span>", escape(&n_of(&e["category"])))
         } else {
@@ -1211,13 +1245,16 @@ fn lessons_card(ctx: &UiCtx, p: &Project) -> String {
         let meta = format!(
             "<div class='pill-row'>{}{category}{}</div>",
             issue_pill(&prefixes, alias, &e["issue_iid"]),
-            tag_pills(&e["tags"])
+            tag_pills(&tags)
         );
-        let description = &e["description"];
-        let description_html = if truthy(description) {
-            format!("<p class='history-entry-overview'>{}</p>", escape(&n_of(description)))
-        } else {
+        let description_html = if secret.is_some() || !truthy(description) {
             String::new()
+        } else {
+            format!("<p class='history-entry-overview'>{}</p>", escape(&n_of(description)))
+        };
+        let body_html = match &secret {
+            Some(kind) => redacted(ctx, kind),
+            None => format!("<div class='markdown'>{}</div>", markdown::render_markdown(body, &prefixes)),
         };
         let needs_review = e["flag"].as_str() == Some("needs_review");
         let badge = if needs_review {
@@ -1231,8 +1268,7 @@ fn lessons_card(ctx: &UiCtx, p: &Project) -> String {
         };
         let data_attr = if needs_review { " data-needs-review='1'" } else { "" };
         format!(
-            "<li class='learning-item'{data_attr}>{badge}{description_html}<div class='markdown'>{}</div>{meta}{}</li>",
-            markdown::render_markdown(e["body"].as_str().unwrap_or(""), &prefixes),
+            "<li class='learning-item'{data_attr}>{badge}{description_html}{body_html}{meta}{}</li>",
             reuse_stats(&e["lesson_id"])
         )
     };
@@ -1241,16 +1277,20 @@ fn lessons_card(ctx: &UiCtx, p: &Project) -> String {
             Some(iid) if !iid.is_null() => issue_pill(&prefixes, alias, iid),
             _ => String::new(),
         };
-        let meta = format!("{pill}{}", tag_pills(&e["tags"]));
+        let lesson = e["lesson"].as_str().unwrap_or("");
+        let secret = secret_in(&[lesson, &n_of(&e["tags"])]);
+        let tags = if secret.is_some() { Value::Null } else { e["tags"].clone() };
+        let meta = format!("{pill}{}", tag_pills(&tags));
         let meta_html = if meta.is_empty() {
             String::new()
         } else {
             format!("<div class='pill-row'>{meta}</div>")
         };
-        format!(
-            "<li class='learning-item'><div class='markdown'>{}</div>{meta_html}</li>",
-            markdown::render_markdown(e["lesson"].as_str().unwrap_or(""), &prefixes)
-        )
+        let body_html = match &secret {
+            Some(kind) => redacted(ctx, kind),
+            None => format!("<div class='markdown'>{}</div>", markdown::render_markdown(lesson, &prefixes)),
+        };
+        format!("<li class='learning-item'>{body_html}{meta_html}</li>")
     };
 
     let needs_review_count = tasks
@@ -1509,7 +1549,10 @@ mod tests {
         for alias in ["alpha", "beta", "orphan"] {
             assert!(html.contains(&format!("project={alias}'")), "missing {alias}");
         }
-        assert!(!html.contains("project=issues-only"), "issues-only project without memory is not listed");
+        // Like the old view: every projects.json alias, issues-only ones too.
+        assert!(html.contains("project=issues-only'"), "issues-only project is listed");
+        // No proposals anywhere: no "0 pending proposals" noise.
+        assert!(!html.contains("0 pending proposals"));
         assert!(html.contains("Alpha serves the shop."));
         assert!(html.contains("No profile yet"));
         // The Memory/Graph segmented toggle and the weekly sync line.
@@ -1735,13 +1778,78 @@ mod tests {
         assert!(html.contains("&lt;b&gt;markup&lt;/b&gt;") && !html.contains("<b>markup</b>"));
         assert!(html.contains("<span class='pill pill-grey'>#101</span>"));
         assert!(html.contains("<span class='pill pill-grey'>testing</span>"));
-        assert!(html.contains("Not yet reused") || html.contains("learning-reuse-stats") || !html.contains("lesson_id"));
+        // Both lessons have a lesson_id and no reuse events yet.
+        assert_eq!(html.matches("<p class='learning-reuse-stats'>Not yet reused</p>").count(), 2, "{html}");
         // The overview card counts the lessons.
         let overview = sb.get("/insights?view=memory");
         assert!(overview.contains("2 lessons"), "{overview}");
         // A project with none says so.
         let sb2 = Sb::new(&[("beta", true)]);
         assert!(sb2.get("/insights?view=memory&project=beta&page=lessons").contains("(no task memory recorded yet)"));
+    }
+
+
+    #[test]
+    fn issues_only_alias_with_legacy_learnings_still_shows_them() {
+        let sb = Sb::new(&[("legacy", false)]);
+        let cache = sb.dir.path().join("userhome/.gitlab/cache/main/projects/group__legacy");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("project.json"),
+            json!({"_memory": {"fix_learnings": [{"lesson": "LEGACY-LESSON keep **this**", "issue_iid": 7, "tags": ["old"]}]}}).to_string(),
+        )
+        .unwrap();
+        let overview = sb.get("/insights?view=memory");
+        assert!(overview.contains("project=legacy'"), "{overview}");
+        let html = sb.get("/insights?view=memory&project=legacy&page=lessons");
+        assert!(html.contains("Legacy learnings"), "{html}");
+        assert!(html.contains("LEGACY-LESSON keep <strong>this</strong>"));
+        assert!(html.contains("<span class='pill pill-grey'>#7</span>") && html.contains("<span class='pill pill-grey'>old</span>"));
+    }
+
+    #[test]
+    fn lessons_never_render_a_secret_value() {
+        let sb = Sb::new(&[("alpha", true)]);
+        let root = sb.root();
+        loopx_core::memory_store::add_task_memory("alpha", 5, "Use token glpat-abcdefghijklmnop1234 for the API.", &[], None, Some(&root)).unwrap();
+        loopx_core::memory_store::add_task_memory("alpha", 6, "A clean lesson.", &[], None, Some(&root)).unwrap();
+        let cache = sb.dir.path().join("userhome/.gitlab/cache/main/projects/group__alpha");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("project.json"),
+            json!({"_memory": {"fix_learnings": [{"lesson": "old xoxb-1234567890-abcdefghij token"}]}}).to_string(),
+        )
+        .unwrap();
+        let html = sb.get("/insights?view=memory&project=alpha&page=lessons");
+        assert!(!html.contains("glpat-") && !html.contains("xoxb-"), "{html}");
+        assert!(html.contains("looks like it contains a secret"));
+        assert!(html.contains("A clean lesson."));
+    }
+
+    #[test]
+    fn project_page_reads_head_from_the_checkout() {
+        let sb = Sb::new(&[("alpha", true)]);
+        let wd = sb.dir.path().join("repos/alpha");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&wd)
+                .args(["-c", "user.name=t", "-c", "user.email=t@e", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init", "--no-verify"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let mut p = profile("alpha", &[(SectionKey::Overview, section("A.", "a"))]);
+        p.head_sha = Some(head.clone());
+        sb.save(&p);
+        let html = sb.get("/insights?view=memory&project=alpha");
+        assert!(html.contains(&format!("Up to date with HEAD {}", &head[..8])), "{html}");
     }
 
     #[test]

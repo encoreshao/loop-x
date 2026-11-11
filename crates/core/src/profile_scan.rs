@@ -321,6 +321,52 @@ fn add_source(scan: &mut Scan, rel: &str, full: &Path) {
     }
 }
 
+/// The checkout's `HEAD` sha read straight from the git files, without spawning
+/// git: for page loads. `None` whenever the layout is not understood (no `.git`,
+/// an unreadable ref, a symbolic ref chain); callers then just show no HEAD.
+pub fn head_sha_fast(work_dir: &Path) -> Option<String> {
+    let read = |p: &Path| std::fs::read_to_string(p).ok();
+    let is_sha = |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    // `.git` is the git dir, or (a linked worktree, a submodule) a file naming it.
+    let dot = work_dir.join(".git");
+    let git_dir = if dot.is_dir() {
+        dot
+    } else {
+        let text = read(&dot)?;
+        let target = text.trim().strip_prefix("gitdir:")?.trim();
+        work_dir.join(target)
+    };
+    // A linked worktree keeps its branches in the shared ("common") git dir.
+    let common = read(&git_dir.join("commondir"))
+        .map(|c| git_dir.join(c.trim()))
+        .unwrap_or_else(|| git_dir.clone());
+    let head = read(&git_dir.join("HEAD"))?;
+    let head = head.trim();
+    let Some(name) = head.strip_prefix("ref:").map(str::trim) else {
+        return is_sha(head).then(|| head.to_string());
+    };
+    if !name.starts_with("refs/")
+        || name
+            .split('/')
+            .any(|c| c.is_empty() || c == "." || c == "..")
+    {
+        return None;
+    }
+    for dir in [&git_dir, &common] {
+        if let Some(text) = read(&dir.join(name)) {
+            let sha = text.trim();
+            return is_sha(sha).then(|| sha.to_string());
+        }
+    }
+    read(&common.join("packed-refs"))?
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+        .find_map(|l| {
+            let (sha, r) = l.split_once(' ')?;
+            (r.trim() == name && is_sha(sha)).then(|| sha.to_string())
+        })
+}
+
 /// The checkout's `HEAD` sha, or `None` (not a repository, no git, or a 5 s timeout).
 pub fn head_sha(work_dir: &Path) -> Option<String> {
     use std::io::Read;
@@ -652,6 +698,104 @@ mod tests {
         let p = root.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, text).unwrap();
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    fn repo_with_commit() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().join("repo");
+        fs::create_dir_all(&r).unwrap();
+        git(&r, &["init", "-q", "-b", "main"]);
+        write(&r, "a.txt", "a\n");
+        git(&r, &["add", "."]);
+        git(&r, &["commit", "-qm", "one", "--no-verify"]);
+        d
+    }
+
+    #[test]
+    fn head_sha_fast_reads_a_loose_branch_ref() {
+        let d = repo_with_commit();
+        let r = d.path().join("repo");
+        assert_eq!(head_sha_fast(&r), Some(git(&r, &["rev-parse", "HEAD"])));
+    }
+
+    #[test]
+    fn head_sha_fast_reads_packed_refs() {
+        let d = repo_with_commit();
+        let r = d.path().join("repo");
+        git(&r, &["pack-refs", "--all", "--prune"]);
+        assert!(!r.join(".git/refs/heads/main").exists());
+        assert_eq!(head_sha_fast(&r), Some(git(&r, &["rev-parse", "HEAD"])));
+    }
+
+    #[test]
+    fn head_sha_fast_reads_a_detached_head() {
+        let d = repo_with_commit();
+        let r = d.path().join("repo");
+        write(&r, "b.txt", "b\n");
+        git(&r, &["add", "."]);
+        git(&r, &["commit", "-qm", "two", "--no-verify"]);
+        git(&r, &["checkout", "-q", "--detach", "HEAD~1"]);
+        let want = git(&r, &["rev-parse", "HEAD"]);
+        assert_eq!(head_sha_fast(&r), Some(want));
+    }
+
+    #[test]
+    fn head_sha_fast_follows_a_linked_worktree() {
+        let d = repo_with_commit();
+        let r = d.path().join("repo");
+        let wt = d.path().join("wt");
+        git(
+            &r,
+            &["worktree", "add", "-q", "-b", "side", wt.to_str().unwrap()],
+        );
+        write(&wt, "c.txt", "c\n");
+        git(&wt, &["add", "."]);
+        git(&wt, &["commit", "-qm", "side", "--no-verify"]);
+        // The branch is then only in packed-refs of the common dir.
+        git(&r, &["pack-refs", "--all", "--prune"]);
+        let want = git(&wt, &["rev-parse", "HEAD"]);
+        assert_ne!(want, git(&r, &["rev-parse", "HEAD"]));
+        assert_eq!(head_sha_fast(&wt), Some(want));
+    }
+
+    #[test]
+    fn head_sha_fast_is_none_without_a_repository() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(head_sha_fast(d.path()), None);
+        assert_eq!(head_sha_fast(&d.path().join("missing")), None);
+        // An unborn branch has no sha yet.
+        let r = d.path().join("empty");
+        fs::create_dir_all(&r).unwrap();
+        git(&r, &["init", "-q"]);
+        assert_eq!(head_sha_fast(&r), None);
     }
 
     #[test]
