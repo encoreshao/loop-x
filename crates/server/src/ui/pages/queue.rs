@@ -180,6 +180,40 @@ fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
         .map(|status| progress_text(ctx.lang, &status))
 }
 
+/// One line per running loop or job, as the topbar pill sees them: the GitLab
+/// loop, each running queue entry, and the Creator / Fix now / Release MR jobs.
+/// `Loop name  progress`; used by the Terminal's running strip.
+pub fn running_summaries(ctx: &UiCtx) -> Vec<String> {
+    let snap = queue_for(ctx.state).snapshot(1);
+    let line = |name: &str, status: &serde_json::Value| {
+        let label = match name {
+            "mr-fix" => ctx.t("Fix now"),
+            "release-mr" => ctx.t("Release MR"),
+            n => loopx_core::loops_config::display_name(n),
+        };
+        format!("{label}  {}", progress_text(ctx.lang, status))
+    };
+    let mut out = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for name in std::iter::once("issue-loop").chain(snap.running.iter().map(|e| e.loop_name.as_str())) {
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.push(name);
+        match live_status(ctx, name) {
+            Some(status) => out.push(line(name, &status)),
+            None if name != "issue-loop" => out.push(format!(
+                "{}  {}",
+                loopx_core::loops_config::display_name(name),
+                ctx.t("Running")
+            )),
+            None => {}
+        }
+    }
+    out.extend(creator_running(ctx).iter().map(|(name, status)| line(name, status)));
+    out
+}
+
 /// `(css class, label, busy)` for the topbar pill: a running loop's progress,
 /// else the queue's counts.
 fn pill_parts(ctx: &UiCtx, snap: &Snapshot) -> (&'static str, String, bool) {

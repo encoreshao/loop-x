@@ -37,11 +37,19 @@ fn running_html(running: &[String]) -> String {
         .collect()
 }
 
+/// Everything running now: each running loop or job (what the topbar island shows),
+/// then what each GitLab agent is doing.
+fn running_lines(ctx: &UiCtx) -> Vec<String> {
+    let mut out = super::queue::running_summaries(ctx);
+    out.extend(live_trace::running_now(&ctx.state.status_path_for_loop("issue-loop")));
+    out
+}
+
 fn page(ctx: &UiCtx) -> UiResponse {
     let state = ctx.state;
     let rows = live_trace::recent(&state.events_dir, &state.status_path_for_loop("issue-loop"), FIRST_LOAD, None, &Filter::default());
     let cursor = rows.last().map(|l| l.at.clone()).unwrap_or_default();
-    let running = live_trace::running_now(&state.status_path_for_loop("issue-loop"));
+    let running = running_lines(ctx);
     let body_lines: String = rows.iter().map(line_html).collect();
     let empty = if rows.is_empty() {
         format!("<div class='term-empty'>{}</div>", pyfmt::escape(&ctx.t("No loop steps yet. They appear here as soon as a loop runs.")))
@@ -100,7 +108,7 @@ fn lines(ctx: &UiCtx) -> UiResponse {
     let state = ctx.state;
     let after = ctx.query().first("after").map(str::to_string).filter(|a| !a.is_empty());
     let rows = live_trace::recent(&state.events_dir, &state.status_path_for_loop("issue-loop"), 500, after.as_deref(), &Filter::default());
-    let running = live_trace::running_now(&state.status_path_for_loop("issue-loop"));
+    let running = running_lines(ctx);
     UiResponse::json(
         200,
         &json!({
@@ -158,6 +166,25 @@ mod tests {
             .unwrap();
         let none: serde_json::Value = serde_json::from_str(&none.body_text()).unwrap();
         assert_eq!(none["html"], "");
+    }
+
+    #[test]
+    fn a_running_loop_shows_in_the_running_strip_even_without_agent_activity() {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None)
+            .with_events_dir(&d.path().join("events"));
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        std::fs::write(
+            d.path().join("outputs/status.json"),
+            r#"{"state":"running","current_issue":"web #7","current_step":"verifying"}"#,
+        )
+        .unwrap();
+        let page = st.registry.dispatch(&st, &UiRequest::get("/terminal")).unwrap().body_text();
+        let now = page.split("id='term-now'>").nth(1).unwrap().split("</div></div>").next().unwrap();
+        assert!(now.contains("web #7") && !now.contains("Nothing is running"), "{now}");
+        let lines: serde_json::Value =
+            serde_json::from_str(&st.registry.dispatch(&st, &UiRequest::get("/terminal/lines")).unwrap().body_text()).unwrap();
+        assert_eq!(lines["running"].as_array().unwrap().len(), 1, "{lines}");
     }
 
     #[test]
