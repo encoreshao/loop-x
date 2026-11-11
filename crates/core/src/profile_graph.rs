@@ -110,23 +110,28 @@ fn is_ident(s: &str) -> bool {
 }
 
 const MAX_NAME_LEN: usize = 40;
-/// Token-like prefixes (compared on a segment start) and short segments that
-/// are token prefixes by themselves.
-const TOKEN_PREFIXES: [&str; 8] = [
-    "AKIA",
-    "ASIA",
-    "AIZA",
-    "XOX",
-    "GLPAT",
-    "EYJ",
-    "GITHUB_PAT",
-    "SG.",
-];
+/// Short first segments that are token prefixes by themselves.
 const TOKEN_SEGMENTS: [&str; 8] = ["SK", "PK", "RK", "SG", "GHP", "GHO", "GHS", "GHU"];
 
+/// Does the first segment (or the whole string) look like a credential prefix?
+fn token_prefixed(s: &str, first: &str) -> bool {
+    let long_alnum = |p: &str, min: usize| first.starts_with(p) && first.len() >= min;
+    s.starts_with("GITHUB_PAT_")
+        || first == "GLPAT"
+        || TOKEN_SEGMENTS.contains(&first)
+        || long_alnum("AKIA", 16)
+        || long_alnum("ASIA", 16)
+        || long_alnum("AIZA", 10)
+        || long_alnum("EYJ", 10)
+        || (first.len() == 4
+            && first.starts_with("XOX")
+            && first[3..].starts_with(['B', 'A', 'P', 'R', 'S']))
+}
+
 /// Conservative environment-variable shape: UPPER_SNAKE with at least one
-/// underscore, at most 40 chars, no long or digit-heavy segment, no token
-/// prefix. When in doubt it is NOT a name.
+/// underscore, at most 40 chars, digit ratio <= 40%, pure-letter segments up
+/// to 16 chars and mixed letter/digit segments up to 11, no token prefix.
+/// When in doubt it is NOT a name.
 fn is_upper_snake(s: &str) -> bool {
     if s.len() > MAX_NAME_LEN || !s.contains('_') {
         return false;
@@ -135,24 +140,22 @@ fn is_upper_snake(s: &str) -> bool {
     if digits * 10 > s.len() * 4 {
         return false;
     }
-    let upper = s.to_ascii_uppercase();
-    if TOKEN_PREFIXES.iter().any(|p| upper.starts_with(p)) {
+    let first = s.split('_').next().unwrap_or("");
+    if token_prefixed(s, first) {
         return false;
     }
-    let mut first = true;
-    for seg in s.split('_') {
+    for (i, seg) in s.split('_').enumerate() {
+        let letters_only = seg.chars().all(|c| c.is_ascii_uppercase());
+        let max = if letters_only { 16 } else { 11 };
         let ok = !seg.is_empty()
-            && seg.len() <= 11
+            && seg.len() <= max
             && seg
                 .chars()
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-            && (!first || seg.starts_with(|c: char| c.is_ascii_uppercase()))
-            && !TOKEN_SEGMENTS.contains(&seg)
-            && !TOKEN_PREFIXES.iter().any(|p| seg.starts_with(p));
+            && (i > 0 || seg.starts_with(|c: char| c.is_ascii_uppercase()));
         if !ok {
             return false;
         }
-        first = false;
     }
     true
 }
@@ -961,7 +964,7 @@ mod tests {
             "A1B2C3D4E5F6G7H8_I9J0K1L2",
             "SK_LIVE",
             "XOXB_TOKEN",
-            "ABCDEFGHIJKL_X",
+            "ABCD1234EFGH5678_X",
             "AB_1234567",
         ];
         for n in bad {
@@ -1005,5 +1008,39 @@ mod tests {
         let set: BTreeSet<_> = r.iter().collect();
         assert_eq!(set.len(), 3, "{r:?}");
         assert_eq!(r[1], (5000, 5000), "first in order keeps its spot");
+    }
+
+    #[test]
+    fn legitimate_long_env_names_are_kept() {
+        for n in [
+            "ELASTICSEARCH_URL",
+            "AUTHENTICATION_SECRET",
+            "DIGITALOCEAN_ACCESS_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "POSTGRES_PASSWORD",
+            "CLOUDFLARE_API_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "SECRET_KEY_BASE",
+            "ASIAN_PAYMENTS_KEY",
+            "GITHUB_PATH_SECRET",
+        ] {
+            let e = shared_secret_edges(&[n]);
+            assert_eq!(e.len(), 1, "{n}");
+            assert_eq!(e[0].evidence, n);
+        }
+    }
+
+    #[test]
+    fn token_prefix_rules_match_the_first_segment_only() {
+        for n in [
+            "GITHUB_PAT_ABCDEF",
+            "AKIAIOSFODNN7EXAMPL_X",
+            "ASIAIOSFODNN7EXAMPL_X",
+            "XOXB_TOKEN",
+            "GLPAT_X",
+            "GHP_SOMETHING",
+        ] {
+            assert!(shared_secret_edges(&[n]).is_empty(), "{n}");
+        }
     }
 }
