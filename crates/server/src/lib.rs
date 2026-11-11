@@ -270,7 +270,10 @@ mod tests {
             .await
             .expect("an update within 15s")
             .unwrap();
-        assert_eq!(states, vec![None, Some("idle".to_string())]);
+        // The first event is the state at connect time (none, or already idle when the
+        // connection was slow); the change must show up in the next one.
+        assert_eq!(states.len(), 2);
+        assert_eq!(states[1], Some("idle".to_string()));
         let _ = stop_tx.send(());
         let _ = server.await;
     }

@@ -493,7 +493,19 @@ mod tests {
         let first = try_lock_poll(&path).expect("first poller gets the lock");
         assert!(try_lock_poll(&path).is_none());
         drop(first);
-        assert!(try_lock_poll(&path).is_some());
+        // A child another test is spawning right now can briefly share the closed
+        // descriptor's lock until it execs, so allow a moment for it to let go.
+        let freed = (0..100).any(|_| {
+            let got = try_lock_poll(&path).is_some();
+            if !got {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            got
+        });
+        assert!(
+            freed,
+            "the lock is free again once the first poller drops it"
+        );
     }
 
     #[test]

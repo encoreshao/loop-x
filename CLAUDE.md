@@ -92,6 +92,11 @@ cargo test --workspace
 (cd macos/LoopX && swift test)        # when the app changed
 ```
 
+`bin/scripts/ci-check.sh` runs exactly what GitHub CI runs (fmt, clippy, tests, loop
+audit, and fails if golden snapshots are changed but uncommitted). Run it before every
+push; the usual red CI is a page change whose `tests/golden_ui/expected/` snapshots were
+not regenerated and committed.
+
 Rust unit tests live next to the code; there is no Python test suite. Prefer real
 subprocesses and temp dirs over mocks; inject fakes through the existing seams
 (`UiState::explicit`, `chat_tools::Env::with_provider`, `Launchctl { command }`,
