@@ -111,6 +111,12 @@ background:radial-gradient(900px 520px at 50% 18%,color-mix(in srgb,var(--md-pri
 .chooser-brand{display:flex;justify-content:center}.chooser-brand .brand-name-img{height:76px;width:auto}\
 .chooser h1{margin:.6rem 0 0;font-size:clamp(2rem,5vw,2.9rem);font-weight:750;letter-spacing:-.02em;line-height:1.1}\
 .chooser-sub{margin:.55rem 0 0;font-size:1.05rem;color:var(--md-on-surface-variant)}\
+.chooser-human{display:inline-flex;align-items:center;gap:.55rem;margin:1.1rem 0 0;padding:.4rem .95rem .4rem .75rem;border-radius:999px;font-size:.88rem;font-weight:600;letter-spacing:.01em;\
+color:var(--md-on-primary-container);background:color-mix(in srgb,var(--md-primary-container) 80%,transparent);border:1px solid color-mix(in srgb,var(--md-primary) 28%,transparent)}\
+.chooser-human i{position:relative;width:16px;height:16px;border-radius:50%;border:2px solid var(--md-primary)}\
+.chooser-human i::after{content:'';position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:var(--md-primary)}\
+@media(prefers-reduced-motion:no-preference){.chooser-human i::after{animation:chooser-orbit 4s linear infinite}}\
+@keyframes chooser-orbit{from{transform:rotate(0) translateX(3px)}to{transform:rotate(360deg) translateX(3px)}}\
 .chooser-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.25rem;width:100%}\
 .chooser-card{display:flex;flex-direction:column;align-items:flex-start;gap:.5rem;box-sizing:border-box;padding:1.75rem;text-align:left;color:inherit;text-decoration:none;border-radius:28px;\
 border:1px solid color-mix(in srgb,var(--md-outline-variant) 70%,transparent);\
@@ -153,23 +159,25 @@ pub fn chooser_response(ctx: &UiCtx) -> UiResponse {
     );
     let body = format!(
         "{CHOOSER_CSS}<div class='chooser'><div class='chooser-lang'>{}</div><div class='chooser-inner'>\
-<div><div class='chooser-mark'>{}</div><h1 class='chooser-brand'>{}</h1><p class='chooser-sub'>{}</p></div>\
+<div><div class='chooser-mark'>{}</div><h1 class='chooser-brand'>{}</h1>\
+<p class='chooser-human'><i aria-hidden='true'></i><span>{}</span></p><p class='chooser-sub'>{}</p></div>\
 <div class='chooser-grid'>{}{}</div><p class='chooser-hint'>{}</p></div></div>",
         crate::ui::shell::lang_switch_html(ctx.lang),
         crate::ui::consts::ds("_BRAND_MARK_ICON"),
         brand_name,
-        h(&ctx.t("Choose your view")),
+        crate::ui::components::wordmark(&h(&ctx.t("Human in the LoopX"))),
+        h(&ctx.t("Agents do the work. You make the calls.")),
         card(
             "/office",
             ICON_OFFICE,
             ctx.t("Office"),
-            ctx.t("A 3D office with a chat")
+            ctx.t("Watch your agents work in a 3D office, and ask or approve in the chat.")
         ),
         card(
             "/?mode=dashboard",
             ICON_DASHBOARD,
             ctx.t("Dashboard"),
-            ctx.t("Loops, runs and settings")
+            ctx.t("Review runs, approve what needs you, and steer your loops.")
         ),
         h(&ctx.t("You can switch any time.")),
     );

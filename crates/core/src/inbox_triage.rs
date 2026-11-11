@@ -11,6 +11,7 @@ pub const BODY_LIMIT: usize = 4000;
 pub const PRIOR_LIMIT: usize = 1500;
 pub const PRIOR_COUNT: usize = 2;
 pub const REASON_LIMIT: usize = 200;
+pub const SUMMARY_LIMIT: usize = 240;
 pub const DRAFT_LIMIT: usize = 4000;
 const ERROR_VALUE_LIMIT: usize = 40;
 
@@ -28,6 +29,8 @@ pub struct Decision {
     pub id: String,
     pub category: String,
     pub reason: String,
+    /// What the email says, for the brief; empty when the AI gave none.
+    pub summary: String,
     pub draft_body: Option<String>,
     /// Set by [`apply_rules`]: urgent, but no draft to hand over.
     pub needs_manual_reply: bool,
@@ -462,6 +465,11 @@ pub fn parse_response(
         if reason.chars().count() > REASON_LIMIT {
             return err(reason_error(id));
         }
+        let summary = entry
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(|t| trim(t.trim(), SUMMARY_LIMIT))
+            .unwrap_or_default();
         let mut draft = entry.get("draft_body").cloned().filter(|v| !v.is_null());
         if draft
             .as_ref()
@@ -494,6 +502,7 @@ pub fn parse_response(
             id: id.to_string(),
             category: category.to_string(),
             reason,
+            summary,
             draft_body,
             needs_manual_reply: false,
         });
@@ -745,6 +754,28 @@ mod tests {
     }
 
     #[test]
+    fn parse_response_keeps_an_optional_trimmed_summary() {
+        let mut with = entry("m1", "urgent", "deadline", Value::Null);
+        with["summary"] = json!("  Alice asks for the revised quote by Friday.  ");
+        let mut long = entry("m2", "fyi", "r", Value::Null);
+        long["summary"] = json!("x".repeat(SUMMARY_LIMIT + 50));
+        let none = entry("m3", "fyi", "r", Value::Null);
+        let d =
+            parse_response(&resp(vec![with, long, none]), &[m(1), m(2), m(3)], &cats()).unwrap();
+        assert_eq!(d[0].summary, "Alice asks for the revised quote by Friday.");
+        assert_eq!(d[1].summary.chars().count(), SUMMARY_LIMIT);
+        assert_eq!(d[2].summary, "");
+    }
+
+    #[test]
+    fn parse_response_ignores_a_non_string_summary() {
+        let mut e = entry("m1", "fyi", "r", Value::Null);
+        e["summary"] = json!(5);
+        let d = parse_response(&resp(vec![e]), &[m(1)], &cats()).unwrap();
+        assert_eq!(d[0].summary, "");
+    }
+
+    #[test]
     fn parse_response_rejects_invalid() {
         let ok2 = entry("m2", "fyi", "r", Value::Null);
         let cases: Vec<(Vec<Value>, &str)> = vec![
@@ -842,6 +873,7 @@ mod tests {
             id: id.into(),
             category: cat.into(),
             reason: reason.into(),
+            summary: String::new(),
             draft_body: draft.map(Into::into),
             needs_manual_reply: false,
         }

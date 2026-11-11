@@ -38,6 +38,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
     let (config, config_error) = config_for_page(ctx);
     let body = match resolve_view(&hub, view.as_deref()).key.as_str() {
         "drafts" => drafts_body(ctx),
+        "history" => history_body(ctx),
         "setup" => format!(
             "{}{config_error}{}",
             flash_html(flash.as_deref(), flash_ok),
@@ -191,7 +192,7 @@ fn live_body(ctx: &UiCtx, config: &Value) -> String {
     let inboxes = inboxes_of(config);
     let setup = format!("{BASE}?view=setup");
     let head = format!(
-        "<div class='page-title'><h1>{}</h1><p class='subtitle'>{} <a href='{setup}'>{}</a> &middot; <a href='/inbox/history'>{}</a></p></div>",
+        "<div class='page-title'><h1>{}</h1><p class='subtitle'>{} <a href='{setup}'>{}</a> &middot; <a href='{BASE}?view=history'>{}</a></p></div>",
         e(&ctx.t("Inbox Triage")),
         e(&ctx.t("Status for every connected inbox. Drafts are saved to your mailbox and never delivered automatically - nothing is archived, deleted, or sent on your behalf.")),
         e(&ctx.t("Setup")),
@@ -212,14 +213,17 @@ fn live_body(ctx: &UiCtx, config: &Value) -> String {
         inboxes.len(),
         e(&ctx.t("Trigger a triage pass for every connected inbox right now, outside its normal schedule.")),
     );
+    let briefs = brief_records(ctx);
     for inbox in &inboxes {
-        cards.push_str(&status_card(ctx, inbox, &status_entry(&status, &s(inbox, "name")), &csrf));
+        let name = s(inbox, "name");
+        let latest = briefs.iter().find(|r| s(r, "inbox") == name);
+        cards.push_str(&status_card(ctx, inbox, &status_entry(&status, &name), &csrf, latest));
     }
     format!("{head}<div class='grid'>{cards}</div>")
 }
 
 /// `_inbox_status_card`.
-fn status_card(ctx: &UiCtx, inbox: &Value, entry: &Value, csrf: &str) -> String {
+fn status_card(ctx: &UiCtx, inbox: &Value, entry: &Value, csrf: &str, brief: Option<&Value>) -> String {
     let name = s(inbox, "name");
     let pause_label = if enabled(inbox) { ctx.t("Pause") } else { ctx.t("Resume") };
     let pause = post_button(&format!("/inbox/inboxes/{name}/pause"), &pause_label, csrf, "");
@@ -296,14 +300,141 @@ fn status_card(ctx: &UiCtx, inbox: &Value, entry: &Value, csrf: &str) -> String 
         Some(w) => crate::ui::ai_cli::warning_notice(ctx.lang, w),
         None => String::new(),
     };
+    let brief_html = match brief {
+        Some(record) => {
+            let entries: Vec<(String, &Value)> = record_entries(record, false);
+            let when = record.get("saved_at").map(saved_label).unwrap_or_default();
+            format!(
+                "<div class='inbox-section'><h3>{} <span class='inbox-count'>{}</span></h3><p class='section-subtitle'>{}</p>{}</div>",
+                e(&ctx.t("Latest brief")),
+                entries.len(),
+                e(&ctx.tf("From the run at {when}", &[("when", &when)])),
+                brief_groups(ctx, &entries)
+            )
+        }
+        None => format!(
+            "<div class='inbox-section'><h3>{}</h3><p class='section-subtitle'>{}</p></div>",
+            e(&ctx.t("Latest brief")),
+            e(&ctx.t("No brief yet - it appears after Inbox Triage reads new mail."))
+        ),
+    };
     format!(
-        "<div class='card'><div class='inbox-card-head'><div><div class='section-header'><h2>{}</h2>{}</div><p class='section-subtitle'>{meta}</p></div><div class='daemon-action-form'>{pause}</div></div>{error_html}{warning_html}<div class='inbox-section'><h3>{}</h3>{counts_html}</div><div class='inbox-section'><h3>{} <span class='inbox-count'>{}</span></h3>{urgent_html}</div></div>",
+        "<div class='card'><div class='inbox-card-head'><div><div class='section-header'><h2>{}</h2>{}</div><p class='section-subtitle'>{meta}</p></div><div class='daemon-action-form'>{pause}</div></div>{error_html}{warning_html}<div class='inbox-section'><h3>{}</h3>{counts_html}</div><div class='inbox-section'><h3>{} <span class='inbox-count'>{}</span></h3>{urgent_html}</div>{brief_html}</div>",
         e(&s(inbox, "label")),
         chip(ctx, inbox, entry),
         e(&ctx.t("Categories")),
         e(&ctx.t("Urgent")),
         urgent.len(),
     )
+}
+
+// ---- Brief and History ---------------------------------------------------------------------------
+
+fn brief_records(ctx: &UiCtx) -> Vec<Value> {
+    content_archive::load(&inbox_seen::output_dir_for(&ctx.state.repo_root).join("briefs.json"))
+}
+
+/// A run's emails, each with the inbox label to show beside it when `with_inbox`.
+fn record_entries(record: &Value, with_inbox: bool) -> Vec<(String, &Value)> {
+    let label = if with_inbox { s(record, "inbox_label") } else { String::new() };
+    record
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|entry| (label.clone(), entry)).collect())
+        .unwrap_or_default()
+}
+
+/// The brief: what each email says, urgent first, then mail that needs a reply, then what can wait.
+fn brief_groups(ctx: &UiCtx, entries: &[(String, &Value)]) -> String {
+    let groups = [
+        (ctx.t("Urgent - needs your reply"), "urgent"),
+        (ctx.t("Needs a reply"), "action"),
+        (ctx.t("Can wait"), ""),
+    ];
+    groups
+        .iter()
+        .filter_map(|(title, key)| {
+            let items: String = entries
+                .iter()
+                .filter(|(_, en)| {
+                    let category = s(en, "category");
+                    if key.is_empty() { category != "urgent" && category != "action" } else { category == *key }
+                })
+                .map(|(label, en)| brief_item(ctx, label, en))
+                .collect();
+            if items.is_empty() {
+                return None;
+            }
+            Some(format!("<h4 class='brief-group'>{}</h4><ul class='inbox-urgent-list'>{items}</ul>", e(title)))
+        })
+        .collect()
+}
+
+fn brief_item(ctx: &UiCtx, label: &str, entry: &Value) -> String {
+    let subject = s(entry, "subject");
+    let text = Some(s(entry, "brief")).filter(|t| !t.is_empty()).unwrap_or_else(|| {
+        if subject.is_empty() { ctx.t("(no subject)") } else { subject.clone() }
+    });
+    let who = [s(entry, "from"), label.to_string(), subject]
+        .into_iter()
+        .filter(|x| !x.is_empty())
+        .map(|x| e(&x))
+        .collect::<Vec<_>>()
+        .join(" &middot; ");
+    let link = s(entry, "draft_link");
+    let action = if link.starts_with("http://") || link.starts_with("https://") {
+        format!(
+            "<a class='btn btn-neutral' href=\"{}\" target='_blank' rel='noopener'>{} &#8599;</a>",
+            e(&link),
+            e(&ctx.t("Open draft"))
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<li><div class='inbox-urgent-text'><span class='inbox-urgent-subject'>{}</span><span class='inbox-urgent-from'>{who}</span></div>{action}</li>",
+        e(&text)
+    )
+}
+
+/// One card per day, newest first, with every inbox's brief for that day merged.
+fn history_body(ctx: &UiCtx) -> String {
+    let records = brief_records(ctx);
+    let mut days: Vec<(String, Vec<&Value>)> = Vec::new();
+    for record in &records {
+        let Ok(at) = DateTime::<FixedOffset>::parse_from_rfc3339(&s(record, "saved_at").replace('Z', "+00:00")) else {
+            continue;
+        };
+        let day = at.with_timezone(&Local).format("%Y-%m-%d").to_string();
+        match days.iter_mut().find(|(d, _)| *d == day) {
+            Some((_, group)) => group.push(record),
+            None => days.push((day, vec![record])),
+        }
+    }
+    if days.is_empty() {
+        return format!(
+            "<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p></section>",
+            e(&ctx.t("History")),
+            e(&ctx.t("No briefs yet. Each day's email brief is kept here after Inbox Triage reads new mail."))
+        );
+    }
+    days.iter()
+        .take(60)
+        .map(|(day, group)| {
+            let several = group.iter().any(|r| s(r, "inbox") != s(group[0], "inbox"));
+            // Records are newest first; a day reads oldest to newest.
+            let entries: Vec<(String, &Value)> = group.iter().rev().flat_map(|r| record_entries(r, several)).collect();
+            let total = entries.len();
+            let count = if total == 1 { ctx.t("1 email") } else { ctx.tf("{count} emails", &[("count", &total.to_string())]) };
+            format!(
+                "<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{}</section>",
+                e(day),
+                e(&count),
+                brief_groups(ctx, &entries)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 // ---- Drafts -------------------------------------------------------------------------------------
@@ -948,6 +1079,66 @@ mod tests {
         (dir, state)
     }
 
+    fn seed_briefs(state: &UiState) {
+        let path = inbox_seen::output_dir_for(&state.repo_root).join("briefs.json");
+        let record = |at: &str, inbox: &str, label: &str, entries: Value| {
+            json!({"saved_at": at, "inbox": inbox, "inbox_label": label, "entries": entries})
+        };
+        let mail = |from: &str, cat: &str, brief: &str| {
+            json!({"from": from, "subject": "Quote", "category": cat, "brief": brief, "draft_link": null})
+        };
+        content_archive::append(
+            &path,
+            &[
+                record("2026-09-28T09:00:00+00:00", "w", "Work", json!([mail("Carol", "fyi", "Sent the newsletter")])),
+                record(
+                    "2026-09-27T09:00:00+00:00",
+                    "h",
+                    "Home",
+                    json!([mail("Alice", "urgent", "Needs the revised quote by Friday <b>")]),
+                ),
+            ],
+            10,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn history_shows_each_days_brief_newest_day_first() {
+        let (_d, state) = sandbox();
+        seed_briefs(&state);
+        let req = UiRequest::get("/loops/inbox-triage-loop?view=history");
+        let html = history_body(&UiCtx::new(&state, &req));
+        let (a, b) = (html.find("2026-09-28").unwrap(), html.find("2026-09-27").unwrap());
+        assert!(a < b, "newest day first: {html}");
+        assert!(html.contains("Needs the revised quote by Friday &lt;b&gt;"), "{html}");
+        assert!(html.contains("Urgent - needs your reply") && html.contains("Can wait"), "{html}");
+        assert!(html.contains("1 email"), "{html}");
+    }
+
+    #[test]
+    fn an_empty_history_says_how_it_fills() {
+        let (_d, state) = sandbox();
+        let req = UiRequest::get("/");
+        assert!(history_body(&UiCtx::new(&state, &req)).contains("No briefs yet."));
+    }
+
+    #[test]
+    fn the_live_card_shows_that_inboxes_latest_brief() {
+        let (_d, state) = sandbox();
+        seed_briefs(&state);
+        let req = UiRequest::get("/");
+        let ctx = UiCtx::new(&state, &req);
+        let inbox = json!({"name": "h", "label": "Home", "account": "me@example.com", "provider": "gmail"});
+        let records = brief_records(&ctx);
+        let latest = records.iter().find(|r| s(r, "inbox") == "h");
+        let html = status_card(&ctx, &inbox, &json!({"state": "idle"}), "", latest);
+        assert!(html.contains("Latest brief") && html.contains("Needs the revised quote by Friday"), "{html}");
+        assert!(!html.contains("Sent the newsletter"), "another inbox's mail: {html}");
+        let none = status_card(&ctx, &inbox, &json!({"state": "idle"}), "", None);
+        assert!(none.contains("No brief yet"), "{none}");
+    }
+
     #[test]
     fn a_sign_in_check_newer_than_the_last_run_shows_on_the_inbox() {
         let run = |at: &str| json!({"inboxes": {"work": {"state": "idle", "last_run_at": at, "error": null}}});
@@ -1007,15 +1198,15 @@ mod tests {
         let english = loopx_core::ai_cli_safety::warning("codex", loopx_core::ai_cli_safety::CallSite::InboxTriage).unwrap();
         let entry = json!({"state": "idle", "ai_cli_warning": english});
         let req = UiRequest::get("/");
-        let en = status_card(&UiCtx::new(&state, &req), &inbox, &entry, "");
+        let en = status_card(&UiCtx::new(&state, &req), &inbox, &entry, "", None);
         assert!(en.contains("<div class='flash flash-warning'>"), "{en}");
         assert!(en.contains(&e(english)), "{en}");
         assert!(en.contains("href='/settings?tab=ai-cli'"), "{en}");
         let req = UiRequest::get("/").with_header("cookie", "loop_lang=ja");
-        let ja = status_card(&UiCtx::new(&state, &req), &inbox, &entry, "");
+        let ja = status_card(&UiCtx::new(&state, &req), &inbox, &entry, "", None);
         assert!(ja.contains("~/.codex/sessions"), "{ja}");
         assert!(!ja.contains("Codex gives the model a shell"), "{ja}");
-        let clean = status_card(&UiCtx::new(&state, &req), &inbox, &json!({"state": "idle", "ai_cli_warning": null}), "");
+        let clean = status_card(&UiCtx::new(&state, &req), &inbox, &json!({"state": "idle", "ai_cli_warning": null}), "", None);
         assert!(!clean.contains("flash-warning"), "{clean}");
     }
 
@@ -1026,10 +1217,10 @@ mod tests {
         let req = UiRequest::get("/");
         let ctx = UiCtx::new(&state, &req);
         let error = format!("{}: CalledProcessError: gemini exited 2", loopx_core::inbox_runner::AI_CALL_FAILED);
-        let failed = status_card(&ctx, &inbox, &json!({"state": "failed", "error": error}), "");
+        let failed = status_card(&ctx, &inbox, &json!({"state": "failed", "error": error}), "", None);
         assert!(failed.contains("AI call failed: CalledProcessError: gemini exited 2"), "{failed}");
         assert!(failed.contains("href='/settings?tab=ai-cli'"), "{failed}");
-        let other = status_card(&ctx, &inbox, &json!({"state": "failed", "error": "token expired"}), "");
+        let other = status_card(&ctx, &inbox, &json!({"state": "failed", "error": "token expired"}), "", None);
         assert!(!other.contains("tab=ai-cli"), "{other}");
     }
 

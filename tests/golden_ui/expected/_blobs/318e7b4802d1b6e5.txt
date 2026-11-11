@@ -2723,6 +2723,8 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .inbox-urgent-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; flex: 1 1 16rem; }
 .inbox-urgent-subject { font-weight: 500; overflow-wrap: anywhere; }
 .inbox-urgent-from { font-size: 0.8rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+.brief-group { margin: 1rem 0 0.5rem; font-size: 0.8rem; font-weight: 500; letter-spacing: 0.02em; color: var(--md-on-surface-variant); }
+.brief-group:first-of-type { margin-top: 0.25rem; }
 .stack-form input, .stack-form select, .stack-form textarea {
   padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--md-outline) 50%, transparent);
   background: var(--md-surface-container-low); color: var(--md-on-surface); font-family: inherit;
@@ -3284,12 +3286,14 @@ body:has(#office .office-motion) .app-toasts{bottom:52px}
 .rel-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem}
 .rel-error{margin:0;font-size:.88rem;color:var(--md-error,#ff453a)}
 .rel-empty{margin:0;font-size:.88rem;color:var(--md-on-surface-variant)}
-.rel-sub{margin:.25rem 0 0;font-size:.85rem;font-weight:600;color:var(--md-on-surface-variant)}
 .rel-jobs{display:flex;flex-direction:column;gap:.45rem;margin:0;padding:0;list-style:none}
-.rel-job{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;font-size:.85rem}
+.rel-job{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .75rem;font-size:.85rem}
+.rel-job .rel-when{min-width:9.5rem;font-variant-numeric:tabular-nums}
+.rel-job .rel-reason{flex:1 1 12rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rel-job .rel-view{margin-left:auto}
 .rel-when{font-variant-numeric:tabular-nums}
-.rel-view{font-weight:500;text-decoration:none;color:var(--md-primary)}
-.rel-view:hover{text-decoration:underline}
+.rel-view,.rel-mr{font-weight:500;text-decoration:none;color:var(--md-primary)}
+.rel-view:hover,.rel-mr:hover{text-decoration:underline}
 .rel-stop{margin:.75rem 0 0}
 .rel-job-project,.rel-reason,.rel-meta,.rel-when{color:var(--md-on-surface-variant)}
 .rel-meta{margin:0;font-size:.82rem}

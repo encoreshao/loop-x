@@ -171,6 +171,7 @@ pub fn builtin_loop_page(name: &str) -> Option<Hub> {
             "_SECTION_ICON_INBOX",
             vec![
                 v("live", "Live").refreshing(),
+                v("history", "History"),
                 v("drafts", "Drafts"),
                 v("setup", "Setup"),
             ],

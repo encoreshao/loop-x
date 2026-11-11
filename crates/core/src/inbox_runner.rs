@@ -43,6 +43,7 @@ const INSTRUCTION_FILES: [&str; 2] = [
 ];
 const REAUTH_FALLBACK: &str = "Sign-in expired - reconnect this inbox";
 const DRAFT_CAP: usize = 300;
+const BRIEF_CAP: usize = 2000;
 
 // ------------------------------------------------------------------ context
 
@@ -57,6 +58,8 @@ pub struct InboxCtx {
     pub status_path: PathBuf,
     pub history_dir: PathBuf,
     pub drafts_path: PathBuf,
+    /// Every run's email brief, for the Inbox Triage History page.
+    pub briefs_path: PathBuf,
     pub lock_path: PathBuf,
     pub state_dir: PathBuf,
     pub config_path: PathBuf,
@@ -74,6 +77,7 @@ impl InboxCtx {
             status_path: out.join("status.json"),
             history_dir: out.join("history"),
             drafts_path: out.join("drafts.json"),
+            briefs_path: out.join("briefs.json"),
             lock_path: out.join("run.lock"),
             state_dir: out.join("state"),
             config_path: inbox_config::default_config_path(),
@@ -255,6 +259,7 @@ pub fn invoke_sealed(
 pub struct UrgentItem {
     pub from: String,
     pub subject: String,
+    pub summary: String,
     pub draft_link: Option<String>,
     pub needs_manual_reply: bool,
     pub draft_failed: bool,
@@ -267,6 +272,8 @@ pub struct Row {
     pub subject: String,
     pub category: String,
     pub reason: String,
+    /// What the email says (the AI's brief line); empty when it gave none.
+    pub summary: String,
     pub draft_link: Option<String>,
 }
 
@@ -637,12 +644,14 @@ fn triage_inbox_inner(
             subject: message.subject.clone(),
             category: d.category.clone(),
             reason: d.reason.clone(),
+            summary: d.summary.clone(),
             draft_link: link.clone(),
         });
         if d.category == "urgent" {
             urgent.push(UrgentItem {
                 from: message.from.clone(),
                 subject: message.subject.clone(),
+                summary: d.summary.clone(),
                 draft_link: link,
                 needs_manual_reply: d.needs_manual_reply,
                 draft_failed,
@@ -766,16 +775,87 @@ pub fn write_history(
     Ok(path)
 }
 
-fn count(o: &Outcome, key: &str) -> i64 {
-    o.counts.get(key).and_then(Value::as_i64).unwrap_or(0)
+/// The sender's name without the address: `Alice <a@x.com>` -> `Alice`.
+pub fn sender_name(from: &str) -> String {
+    let name = from
+        .split('<')
+        .next()
+        .unwrap_or(from)
+        .trim()
+        .trim_matches('"')
+        .trim();
+    if name.is_empty() {
+        from.trim().trim_matches(['<', '>']).to_string()
+    } else {
+        name.to_string()
+    }
 }
 
-fn other_count(o: &Outcome) -> i64 {
-    o.counts
-        .iter()
-        .filter(|(k, _)| *k != "urgent" && *k != "action")
-        .filter_map(|(_, v)| v.as_i64())
-        .sum()
+/// What a brief line says about one email: the AI's summary, else its reason.
+pub fn brief_text(row: &Row) -> String {
+    match (row.subject.trim(), brief_text_only(row).as_str()) {
+        ("", w) => w.to_string(),
+        (s, "") => s.to_string(),
+        (s, w) => format!("{s}: {w}"),
+    }
+}
+
+/// The email brief for Slack: what each email says, urgent first, then mail
+/// that needs a reply, then what can wait.
+fn brief_sections(outcomes: &[&Outcome]) -> Vec<slack_report::Section> {
+    use slack_report::{Item, Link, Section};
+    let several = outcomes.len() > 1;
+    let (mut urgent, mut action, mut rest) = (Vec::new(), Vec::new(), Vec::new());
+    for o in outcomes {
+        // `urgent` was filled in row order, so the two walk together.
+        let mut flags = o.urgent.iter();
+        for row in &o.rows {
+            let sender = sender_name(&row.from);
+            let title = if several {
+                format!("{sender} ({})", o.label)
+            } else {
+                sender
+            };
+            let mut text = brief_text(row);
+            let link = row.draft_link.as_ref().map(|l| Link {
+                text: "Open draft".into(),
+                url: Some(l.clone()),
+            });
+            if row.category == "urgent" {
+                let flag = flags.next();
+                if link.is_none() {
+                    text.push_str(if flag.is_some_and(|f| f.draft_failed) {
+                        " (couldn't write a draft - please reply yourself)"
+                    } else {
+                        " (reply needed)"
+                    });
+                }
+            }
+            let item = Item {
+                title,
+                text,
+                url: None,
+                link,
+            };
+            match row.category.as_str() {
+                "urgent" => urgent.push(item),
+                "action" => action.push(item),
+                _ => rest.push(item),
+            }
+        }
+    }
+    [
+        ("Urgent - needs your reply", urgent),
+        ("Needs a reply", action),
+        ("Can wait", rest),
+    ]
+    .into_iter()
+    .filter(|(_, items)| !items.is_empty())
+    .map(|(heading, items)| Section::List {
+        heading: format!("{heading} ({})", items.len()),
+        items,
+    })
+    .collect()
 }
 
 /// One bundle's share of the run as a Slack report: totals, an inbox table,
@@ -787,7 +867,6 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
         .iter()
         .any(|o| o.status == "needs_reauth" || o.overflow);
     let n = outcomes.len();
-    let total = |k: fn(&Outcome) -> i64| outcomes.iter().map(|o| k(o)).sum::<i64>();
     let at = now.with_timezone(&Local).format("%H:%M");
     let status = Status {
         state: if failed {
@@ -802,82 +881,15 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
             _ => format!("Checked {n} inboxes at {at}"),
         },
     };
-    let (urgent_n, action_n, other_n) = (
-        total(|o| count(o, "urgent")),
-        total(|o| count(o, "action")),
-        total(other_count),
-    );
-    let all_mail = urgent_n + action_n + other_n;
-    let summary = if all_mail == 0 {
-        if n == 1 {
-            "No new mail.".to_string()
-        } else {
-            "No new mail in any inbox.".to_string()
-        }
+    let any_mail = outcomes.iter().any(|o| !o.rows.is_empty());
+    let summary = if any_mail {
+        None
+    } else if n == 1 {
+        Some("No new mail.".to_string())
     } else {
-        let parts: Vec<String> = [
-            (urgent_n, "urgent"),
-            (action_n, "need a reply"),
-            (other_n, "can wait"),
-        ]
-        .into_iter()
-        .filter(|(k, _)| *k > 0)
-        .map(|(k, what)| format!("{k} {what}"))
-        .collect();
-        format!(
-            "{all_mail} new {}: {}.",
-            if all_mail == 1 { "email" } else { "emails" },
-            parts.join(", ")
-        )
+        Some("No new mail in any inbox.".to_string())
     };
-    let urgent: Vec<Item> = outcomes
-        .iter()
-        .flat_map(|o| &o.urgent)
-        .map(|item| {
-            let (text, link) = match (&item.draft_link, item.draft_failed) {
-                (Some(l), _) => (
-                    item.subject.clone(),
-                    Some(Link {
-                        text: "Open draft".into(),
-                        url: Some(l.clone()),
-                    }),
-                ),
-                (None, true) => (
-                    format!(
-                        "{} (couldn't write a draft - please reply yourself)",
-                        item.subject
-                    ),
-                    None,
-                ),
-                (None, false) => (format!("{} (reply needed)", item.subject), None),
-            };
-            Item {
-                title: item.from.clone(),
-                text,
-                url: None,
-                link,
-            }
-        })
-        .collect();
-    let rows = outcomes
-        .iter()
-        .map(|o| {
-            let state = match o.status.as_str() {
-                "quiet" => "Nothing new",
-                "needs_reauth" => "Sign in again",
-                "failed" => "Couldn't check",
-                _ if o.urgent.iter().any(|u| u.draft_link.is_some()) => "Drafts ready",
-                _ => "New mail",
-            };
-            vec![
-                o.label.clone(),
-                count(o, "urgent").to_string(),
-                count(o, "action").to_string(),
-                other_count(o).to_string(),
-                state.to_string(),
-            ]
-        })
-        .collect();
+    let sections_of_mail = brief_sections(outcomes);
     let mut needs = Vec::new();
     for o in outcomes {
         let mut note = |text: String| {
@@ -903,23 +915,7 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
             ));
         }
     }
-    let mut sections = Vec::new();
-    if !urgent.is_empty() {
-        sections.push(Section::List {
-            heading: "Urgent - needs your reply".into(),
-            items: urgent,
-        });
-    }
-    // One inbox is already named in the status line; a table is for comparing several.
-    if n > 1 {
-        sections.push(Section::Table {
-            heading: "By inbox".into(),
-            columns: ["Inbox", "Urgent", "Need a reply", "Can wait", "Result"]
-                .map(String::from)
-                .to_vec(),
-            rows,
-        });
-    }
+    let mut sections = sections_of_mail;
     if !needs.is_empty() {
         sections.push(Section::Callout {
             heading: if needs.len() == 1 {
@@ -934,7 +930,7 @@ pub fn digest_report(outcomes: &[&Outcome], now: DateTime<Utc>) -> slack_report:
     Report {
         title: "Inbox Triage".into(),
         status: Some(status),
-        summary: Some(summary),
+        summary,
         fields: Vec::new(),
         sections,
         footer: vec![Link {
@@ -1004,6 +1000,45 @@ pub fn save_drafts(outcome: &Outcome, inbox: &Value, now: DateTime<Utc>, drafts_
             e.kind()
         );
     }
+}
+
+/// Keep this run's brief (one line per email) so the History page can show a
+/// day's mail any time and a weekly report can be built from it. Best-effort.
+pub fn save_brief(outcome: &Outcome, inbox: &Value, now: DateTime<Utc>, path: &Path) {
+    if outcome.rows.is_empty() {
+        return;
+    }
+    let entries: Vec<Value> = outcome
+        .rows
+        .iter()
+        .map(|r| {
+            json!({"received": r.date, "from": sender_name(&r.from), "subject": r.subject,
+                   "category": r.category, "brief": brief_text_only(r), "draft_link": r.draft_link})
+        })
+        .collect();
+    let record = json!({
+        "saved_at": isoformat_utc(now),
+        "inbox": outcome.name,
+        "inbox_label": outcome.label,
+        "account": inbox.get("account").and_then(Value::as_str).unwrap_or_default(),
+        "entries": entries,
+    });
+    if let Err(e) = content_archive::append(path, &[record], BRIEF_CAP) {
+        eprintln!(
+            "inbox_triage_runner: saving the brief for {} failed: {}",
+            outcome.name,
+            e.kind()
+        );
+    }
+}
+
+/// The summary alone (no subject), falling back to the reason.
+fn brief_text_only(row: &Row) -> String {
+    [row.summary.trim(), row.reason.trim()]
+        .into_iter()
+        .find(|t| !t.is_empty())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Write this inbox's terminal `failed` state ourselves when the normal
@@ -1127,6 +1162,7 @@ fn run_one_inbox(
         );
     }
     save_drafts(&outcome, inbox, now, &ctx.drafts_path);
+    save_brief(&outcome, inbox, now, &ctx.briefs_path);
     outcome
 }
 

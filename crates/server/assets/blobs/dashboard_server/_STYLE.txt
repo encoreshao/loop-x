@@ -2723,6 +2723,8 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .inbox-urgent-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; flex: 1 1 16rem; }
 .inbox-urgent-subject { font-weight: 500; overflow-wrap: anywhere; }
 .inbox-urgent-from { font-size: 0.8rem; color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+.brief-group { margin: 1rem 0 0.5rem; font-size: 0.8rem; font-weight: 500; letter-spacing: 0.02em; color: var(--md-on-surface-variant); }
+.brief-group:first-of-type { margin-top: 0.25rem; }
 .stack-form input, .stack-form select, .stack-form textarea {
   padding: 0.4rem 0.6rem; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--md-outline) 50%, transparent);
   background: var(--md-surface-container-low); color: var(--md-on-surface); font-family: inherit;

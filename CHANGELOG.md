@@ -13,6 +13,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- The landing page (Office or Dashboard) now leads with **Human in the LoopX**: a pill with a small orbiting-dot loop, the line "Agents do the work. You make the calls.", and shorter cards that say what each view is for (watch and ask in the Office; review, approve and steer in the Dashboard). The "Choose your view" heading is gone.
+
+- Inbox Triage writes an email brief: the Slack digest now says what each email is about (who wrote, what they want, any deadline), grouped as urgent, needs a reply and can wait, instead of counting emails. The same brief shows on each inbox's Live card, and a new **History** tab keeps every day's brief (all inboxes merged, newest day first) for review and for building weekly reports later. The AI writes one `summary` per email in the same call, so there is no extra cost.
+
 - Fix now (MR Review → Merge requests) shows its steps (reading the merge request and feedback, preparing the worktree, the agent fixing, checking and pushing, replying) in the header Agents pill, on the Agents page and on the Mac island, and posts one Slack message when it finishes, naming the merge request by its title and listing what the run did.
 
 - Creator → Showcase: choose a promo template (the inspire-showcase skill's calm, cinematic, minimal, punchy and tour recipes) from cards with a cover and a sample clip; the choice is kept with the job, so a retry makes the same video, and the agent scaffolds with it instead of asking. Names and descriptions follow the page language, and Play sample opens the clip in a popup, in the browser and in the Mac app.

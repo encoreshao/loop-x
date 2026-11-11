@@ -732,6 +732,7 @@ fn outcome_ok() -> Outcome {
     o.urgent = vec![UrgentItem {
         from: "Alice <a@x.com>".into(),
         subject: "Prod | down".into(),
+        summary: "Database outage since 08:00, customers affected".into(),
         draft_link: Some("https://mail/m1".into()),
         needs_manual_reply: false,
         draft_failed: false,
@@ -742,6 +743,7 @@ fn outcome_ok() -> Outcome {
         subject: "Prod | down".into(),
         category: "urgent".into(),
         reason: "outage".into(),
+        summary: "Database outage since 08:00, customers affected".into(),
         draft_link: Some("https://mail/m1".into()),
     }];
     o.cost_usd = Some(0.01);
@@ -789,6 +791,7 @@ fn digest_covers_every_status() {
         status: "quiet".into(),
         counts: Map::new(),
         urgent: vec![],
+        rows: vec![],
         ..outcome_ok()
     };
     let reauth = Outcome {
@@ -796,6 +799,7 @@ fn digest_covers_every_status() {
         status: "needs_reauth".into(),
         error: Some("expired".into()),
         urgent: vec![],
+        rows: vec![],
         ..outcome_ok()
     };
     let failed = Outcome {
@@ -803,6 +807,7 @@ fn digest_covers_every_status() {
         status: "failed".into(),
         error: Some("AI triage failed: x".into()),
         urgent: vec![],
+        rows: vec![],
         overflow: true,
         ..outcome_ok()
     };
@@ -817,22 +822,13 @@ fn digest_covers_every_status() {
     );
     let text = slack_report::plain_text(&report);
     assert!(text.starts_with("*Inbox Triage* :x: "), "{text}");
-    assert!(
-        text.contains("\n18 new emails: 3 urgent, 6 need a reply, 9 can wait.\n"),
-        "{text}"
-    );
+    assert!(!text.contains("new emails:"), "no counts line: {text}");
+    assert!(!text.contains("By inbox"), "no counts table: {text}");
+    assert!(text.contains("Urgent - needs your reply (1)"), "{text}");
     assert!(
         text.contains(
-            "\u{2022} *Alice &lt;a@x.com&gt;* \u{2014} Prod | down <https://mail/m1|Open draft>"
+            "\u{2022} *Alice (Work)* \u{2014} Prod | down: Database outage since 08:00, customers affected <https://mail/m1|Open draft>"
         ),
-        "{text}"
-    );
-    assert!(
-        text.contains("Work   1       2             3         Drafts ready"),
-        "{text}"
-    );
-    assert!(
-        text.contains("Quiet  0       0             0         Nothing new"),
         "{text}"
     );
     assert!(
@@ -861,11 +857,13 @@ fn digest_covers_every_status() {
 fn digest_manual_reply_and_overflow() {
     let mut o = outcome_ok();
     o.urgent[0].draft_link = None;
+    o.rows[0].draft_link = None;
     o.urgent[0].needs_manual_reply = true;
     o.overflow = true;
     let text = slack_report::plain_text(&digest_report(&[&o], now()));
     assert!(
-        text.contains("Prod | down (reply needed)") && text.contains("more than 50 new emails"),
+        text.contains("customers affected (reply needed)")
+            && text.contains("more than 50 new emails"),
         "{text}"
     );
     o.urgent[0].draft_failed = true;
@@ -873,18 +871,108 @@ fn digest_manual_reply_and_overflow() {
         .contains("couldn't write a draft - please reply yourself"));
 }
 
+fn brief_row(from: &str, cat: &str, summary: &str, reason: &str) -> Row {
+    Row {
+        date: "2026-09-27T08:00:00+00:00".into(),
+        from: from.into(),
+        subject: "Quote".into(),
+        category: cat.into(),
+        reason: reason.into(),
+        summary: summary.into(),
+        draft_link: None,
+    }
+}
+
+#[test]
+fn the_brief_groups_what_each_email_says_by_urgency_and_drops_the_counts() {
+    let mut o = outcome_ok();
+    o.urgent.clear();
+    o.rows = vec![
+        brief_row(
+            "Bob <b@x.com>",
+            "fyi",
+            "Newsletter about pricing changes",
+            "bulk",
+        ),
+        brief_row("Carol <c@x.com>", "action", "", "asks a question"),
+        brief_row(
+            "Dan <d@x.com>",
+            "action",
+            "Wants the contract signed by Friday",
+            "r",
+        ),
+    ];
+    let text = slack_report::plain_text(&digest_report(&[&o], now()));
+    assert!(
+        !text.contains("new email") && !text.contains("can wait."),
+        "{text}"
+    );
+    let (needs, wait) = (
+        text.find("Needs a reply (2)").unwrap(),
+        text.find("Can wait (1)").unwrap(),
+    );
+    assert!(needs < wait, "{text}");
+    assert!(
+        text.contains("*Dan* \u{2014} Quote: Wants the contract signed by Friday"),
+        "{text}"
+    );
+    assert!(
+        text.contains("*Carol* \u{2014} Quote: asks a question"),
+        "a missing summary falls back to the reason: {text}"
+    );
+    assert!(
+        text.contains("*Bob* \u{2014} Quote: Newsletter about pricing changes"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("b@x.com"),
+        "addresses stay out of the brief: {text}"
+    );
+}
+
+#[test]
+fn a_quiet_run_says_so_instead_of_showing_an_empty_brief() {
+    let q = Outcome::new(&inbox(), "quiet", None);
+    let text = slack_report::plain_text(&digest_report(&[&q], now()));
+    assert!(text.contains("No new mail."), "{text}");
+}
+
+#[test]
+fn the_brief_is_saved_for_the_history_page() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("briefs.json");
+    let mut o = outcome_ok();
+    o.rows.push(brief_row("Bob <b@x.com>", "fyi", "", "bulk"));
+    save_brief(&o, &inbox(), now(), &path);
+    save_brief(
+        &Outcome::new(&inbox(), "quiet", None),
+        &inbox(),
+        now(),
+        &path,
+    );
+    let saved: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(saved.len(), 1, "a quiet run saves nothing");
+    assert_eq!(saved[0]["saved_at"], "2026-09-27T09:00:00+00:00");
+    assert_eq!(saved[0]["inbox_label"], "Work");
+    assert_eq!(saved[0]["entries"][0]["from"], "Alice");
+    assert_eq!(
+        saved[0]["entries"][0]["brief"],
+        "Database outage since 08:00, customers affected"
+    );
+    assert_eq!(saved[0]["entries"][1]["brief"], "bulk");
+}
+
 #[test]
 fn digest_escapes_untrusted_text_for_slack() {
     let mut o = outcome_ok();
     o.label = "<!channel> & co".into();
-    o.urgent[0].from = "<https://evil|Open>".into();
-    o.urgent[0].subject = "a>b".into();
+    o.rows[0].from = "<https://evil|Open>".into();
+    o.rows[0].subject = "a>b".into();
+    o.rows[0].summary = String::new();
+    o.rows[0].reason = String::new();
     let text = slack_report::plain_text(&digest_report(&[&o], now()));
     assert!(text.contains("&lt;!channel&gt; &amp; co"), "{text}");
-    assert!(
-        text.contains("*&lt;https://evil|Open&gt;* \u{2014} a&gt;b"),
-        "{text}"
-    );
+    assert!(text.contains("\u{2014} a&gt;b"), "{text}");
     assert!(!text.contains("<!channel>") && !text.contains("<https://evil"));
     assert_eq!(slack_escape("<&>"), "&lt;&amp;&gt;");
 }
@@ -1192,7 +1280,7 @@ fn run_all_sends_one_digest_for_the_run() {
     assert!(posts[0].0.contains("Checked 2 inboxes"), "{}", posts[0].0);
     let blocks = posts[0].1.as_ref().unwrap().to_string();
     assert!(
-        blocks.contains("\"Work\"") && blocks.contains("\"Home\""),
+        blocks.contains("(Work)") && blocks.contains("(Home)"),
         "{blocks}"
     );
 }
