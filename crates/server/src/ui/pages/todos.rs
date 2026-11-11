@@ -153,19 +153,14 @@ fn save_settings(ctx: &UiCtx) -> UiResponse {
     }
 }
 
+/// One fetch now, whether or not automatic sync is on: the user asked for it.
 fn refresh(ctx: &UiCtx) -> UiResponse {
-    match todos::load(&store_path(ctx)) {
-        Ok(s) if s.settings.enabled => {}
-        Ok(_) => return back(false, &ctx.t("Turn on todo sync first.")),
-        Err(_) => return back(false, &ctx.t("The saved todos could not be read.")),
+    if todos::load(&store_path(ctx)).is_err() {
+        return back(false, &ctx.t("The saved todos could not be read."));
     }
     let fetched = crate::todos_tick::fetch_sources(todos_sync::sources_from_config(gitlab_config(ctx).as_ref()));
     let now = ctx.state.now();
-    match locked(ctx, |s| {
-        if s.settings.enabled {
-            todos_sync::apply_fetched(s, fetched, now);
-        }
-    }) {
+    match locked(ctx, |s| todos_sync::apply_fetched(s, fetched, now)) {
         Ok(()) => back(true, &ctx.t("Todos refreshed.")),
         Err(r) => r,
     }
@@ -185,13 +180,18 @@ fn mark_done(ctx: &UiCtx) -> UiResponse {
 }
 
 const STYLE: &str = "<style>
-.todo-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin-bottom:1rem}
+.todo-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1rem;margin-bottom:1rem}
+.card.todo-settings{padding:.6rem 1rem}
+.todo-settings .todo-bar{margin-bottom:0}
+.todo-btn{display:inline-flex;align-items:center;gap:.4rem;height:32px;box-sizing:border-box;padding:0 .9rem;border:1px solid var(--md-outline-variant,rgba(128,128,128,.35));border-radius:999px;background:var(--md-surface,transparent);color:inherit;font:inherit;font-size:.85rem;cursor:pointer;transition:background .2s cubic-bezier(.32,.72,0,1)}
+.todo-btn:hover{background:var(--md-surface-variant,rgba(128,128,128,.15))}
+.todo-btn .icon{width:16px;height:16px}
 .todo-form{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem}
 .todo-field{height:34px;box-sizing:border-box;padding:0 .75rem;border:1px solid var(--md-outline-variant,rgba(128,128,128,.3));border-radius:10px;background:var(--md-surface,transparent);color:inherit;font:inherit}
 .todo-check{display:inline-flex;align-items:center;gap:.5rem;height:34px}
 .todo-seg{display:inline-flex;padding:2px;border-radius:999px;background:var(--md-surface-variant,rgba(128,128,128,.12))}
-.todo-seg a{height:30px;line-height:30px;padding:0 .9rem;border-radius:999px;text-decoration:none;color:inherit;font-size:.85rem}
-.todo-seg a.is-active{background:var(--md-surface,#fff);box-shadow:0 1px 2px rgba(0,0,0,.18);color:var(--md-primary,#0a84ff)}
+.todo-seg a,.todo-seg button{border:0;background:transparent;font:inherit;cursor:pointer;height:30px;line-height:30px;padding:0 .9rem;border-radius:999px;text-decoration:none;color:inherit;font-size:.85rem}
+.todo-seg a.is-active,.todo-seg button.is-active{background:var(--md-surface,#fff);box-shadow:0 1px 2px rgba(0,0,0,.18);color:var(--md-primary,#0a84ff)}
 .todo-list{display:flex;flex-direction:column}
 .todo-row{display:flex;gap:1rem;align-items:flex-start;justify-content:space-between;padding:.9rem 0;border-top:1px solid var(--md-outline-variant,rgba(128,128,128,.25))}
 .todo-row:first-child{border-top:0}
@@ -239,8 +239,8 @@ fn ago(ctx: &UiCtx, now: DateTime<Utc>, then: DateTime<Utc>) -> String {
 
 fn settings_card(ctx: &UiCtx, store: &TodoStore) -> String {
     let csrf = ctx.csrf_input();
-    let checked = if store.settings.enabled { " checked" } else { "" };
-    let sel = |m: u32| if store.settings.interval_minutes == m { " selected" } else { "" };
+    let enabled = store.settings.enabled;
+    let interval = store.settings.interval_minutes;
     let last = store
         .instances
         .values()
@@ -248,29 +248,28 @@ fn settings_card(ctx: &UiCtx, store: &TodoStore) -> String {
         .max()
         .map(|t| ctx.tf("Last fetched {when}", &[("when", &ago(ctx, ctx.state.now(), t))]))
         .unwrap_or_else(|| ctx.t("Not fetched yet"));
-    let refresh = if store.settings.enabled {
-        format!(
-            "<form method='post' action='/todos/refresh' class='todo-form'>{csrf}<button class='btn' type='submit' style='height:34px'>{} {}</button></form>",
-            icon("refresh"),
-            pyfmt::escape(&ctx.t("Refresh now"))
-        )
-    } else {
-        String::new()
+    let label = pyfmt::escape(&ctx.t("Sync my GitLab todos"));
+    // The switch posts the opposite of what it shows; the interval buttons keep it as it is.
+    let (switch_class, checked, next) = if enabled { ("is-on", "true", "0") } else { ("", "false", "on") };
+    let keep = if enabled { "on" } else { "0" };
+    let seg = |m: u32, text: String| {
+        let active = if interval == m { " class='is-active'" } else { "" };
+        format!("<button type='submit' name='interval_minutes' value='{m}'{active}>{}</button>", pyfmt::escape(&text))
     };
     format!(
-        "<section class='card'><div class='todo-bar'>\
-<form method='post' action='/todos/settings' class='todo-form'>{csrf}\
-<label class='todo-check'><input type='checkbox' name='enabled' value='on'{checked}> {sync}</label>\
-<label class='todo-check'>{every} <select class='todo-field' name='interval_minutes'><option value='5'{s5}>{m5}</option><option value='10'{s10}>{m10}</option></select></label>\
-<button class='btn btn-primary' type='submit' style='height:34px'>{save}</button></form>\
-{refresh}<span class='todo-meta'>{last}</span></div></section>",
-        sync = pyfmt::escape(&ctx.t("Sync my GitLab todos")),
+        "<section class='card todo-settings'><div class='todo-bar'>\
+<div class='loop-toggle'><form method='post' action='/todos/settings' class='daemon-action-form'>{csrf}\
+<input type='hidden' name='enabled' value='{next}'><input type='hidden' name='interval_minutes' value='{interval}'>\
+<button type='submit' class='switch {switch_class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button></form>\
+<span class='loop-toggle-text'>{label}</span></div>\
+<form method='post' action='/todos/settings' class='todo-seg' title=\"{every}\">{csrf}<input type='hidden' name='enabled' value='{keep}'>{s5}{s10}</form>\
+<form method='post' action='/todos/refresh' class='todo-form'>{csrf}<button class='todo-btn' type='submit'>{ricon} {refresh}</button></form>\
+<span class='todo-meta'>{last}</span></div></section>",
         every = pyfmt::escape(&ctx.t("Fetch every")),
-        s5 = sel(5),
-        s10 = sel(10),
-        m5 = pyfmt::escape(&ctx.t("5 minutes")),
-        m10 = pyfmt::escape(&ctx.t("10 minutes")),
-        save = pyfmt::escape(&ctx.t("Save")),
+        s5 = seg(5, ctx.t("5 minutes")),
+        s10 = seg(10, ctx.t("10 minutes")),
+        ricon = icon("refresh"),
+        refresh = pyfmt::escape(&ctx.t("Refresh now")),
         last = pyfmt::escape(&last),
     )
 }
@@ -401,10 +400,11 @@ pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
         }
     };
     let mut out = format!("{STYLE}{title}{}{}", flash_html(flash, flash_ok), settings_card(ctx, &store));
-    if !store.settings.enabled {
+    let cached = store.instances.values().any(|i| !i.todos.is_empty());
+    if !store.settings.enabled && !cached {
         out.push_str(&format!(
             "<section class='card'><p>{}</p></section>",
-            pyfmt::escape(&ctx.t("Sync is off. Turn it on above to fetch your GitLab todos every few minutes. Nothing is fetched or stored while it is off."))
+            pyfmt::escape(&ctx.t("Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off."))
         ));
         return out;
     }
@@ -694,5 +694,38 @@ mod tests {
         assert_eq!(r.status, 303);
         assert_eq!(loopx_core::approvals::get(&approvals_dir(&sb), &id).unwrap()["status"], "denied");
         assert!(sb.get("/loops/issue-loop?view=todos").contains("action='/todos/work/1/draft'"));
+    }
+
+    #[test]
+    fn sync_is_a_switch_with_no_save_button_and_the_interval_saves_on_click() {
+        let sb = Sb::new();
+        let off = sb.get("/loops/issue-loop?view=todos");
+        assert!(off.contains("role='switch'") && off.contains("aria-checked='false'"), "{off}");
+        let card = &off[off.find("todo-settings").unwrap()..];
+        let card = &card[..card.find("</section>").unwrap()];
+        assert!(!card.contains("type='checkbox'") && !card.contains("Save"), "{card}");
+        // The switch posts the opposite of its state.
+        assert!(off.contains("name='enabled' value='on'"), "{off}");
+        sb.seed(true, vec![]);
+        let on = sb.get("/loops/issue-loop?view=todos");
+        assert!(on.contains("aria-checked='true'") && on.contains("name='enabled' value='0'"), "{on}");
+        // Each interval button posts itself and keeps the switch as it is.
+        assert!(on.contains("name='interval_minutes' value='10'"), "{on}");
+        assert!(on.contains("name='enabled' value='on'"), "{on}");
+    }
+
+    #[test]
+    fn refresh_now_fetches_once_even_while_sync_is_off_and_last_fetched_follows_it() {
+        let sb = Sb::new();
+        let r = sb.post("/todos/refresh", "");
+        let loc = r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("location")).unwrap().1.clone();
+        assert!(loc.contains("ok=1"), "{loc}");
+        let s = todos::load(&sb.store_path()).unwrap();
+        assert!(!s.settings.enabled);
+        assert!(s.instances["work"].last_error.is_some(), "the unreachable GitLab is recorded");
+        let html = sb.get("/loops/issue-loop?view=todos");
+        let refresh = html.find("action='/todos/refresh'").unwrap();
+        let last = html.find("Not fetched yet").or_else(|| html.find("Last fetched")).unwrap();
+        assert!(refresh < last, "{html}");
     }
 }

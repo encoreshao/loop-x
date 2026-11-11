@@ -1796,7 +1796,6 @@
   "The saved todos could not be read.": "无法读取已保存的待办。",
   "Saved. The first fetch starts within a minute.": "已保存。首次获取将在一分钟内开始。",
   "Saved. Todo sync is off.": "已保存。待办同步已关闭。",
-  "Turn on todo sync first.": "请先开启待办同步。",
   "Todos refreshed.": "待办已刷新。",
   "Marked done in GitLab.": "已在 GitLab 中标记为完成。",
   "GitLab did not accept it: {error}": "GitLab 未接受：{error}",
@@ -1821,7 +1820,6 @@
   "Open in GitLab": "在 GitLab 中打开",
   "Todos": "待办",
   "Your GitLab to-do list: mentions, assignments and review requests, including issues you were only tagged on.": "你的 GitLab 待办列表：提及、指派和评审请求，包括仅被标记的议题。",
-  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes. Nothing is fetched or stored while it is off.": "同步已关闭。在上方开启后，将每隔几分钟获取你的 GitLab 待办。关闭期间不会获取或存储任何内容。",
   "{instance}: {error}": "{instance}：{error}",
   "Nothing here yet.": "这里还没有内容。",
   "Drafting a reply. It will appear here for you to review.": "正在起草回复，完成后会显示在这里供你审阅。",
@@ -1831,5 +1829,6 @@
   "Analyze & draft reply": "分析并起草回复",
   "Drafting a reply…": "正在起草回复…",
   "Approve & post reply": "批准并发布回复",
-  "Reply posted.": "回复已发布。"
+  "Reply posted.": "回复已发布。",
+  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "同步已关闭。在上方开启后，将每隔几分钟获取你的 GitLab 待办；也可以使用“立即刷新”只获取一次。关闭期间不会自动获取任何内容。"
 }

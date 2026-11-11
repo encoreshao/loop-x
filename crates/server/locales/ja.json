@@ -1796,7 +1796,6 @@
   "The saved todos could not be read.": "保存されたToDoを読み込めませんでした。",
   "Saved. The first fetch starts within a minute.": "保存しました。最初の取得は1分以内に始まります。",
   "Saved. Todo sync is off.": "保存しました。ToDo同期はオフです。",
-  "Turn on todo sync first.": "先にToDo同期をオンにしてください。",
   "Todos refreshed.": "ToDoを更新しました。",
   "Marked done in GitLab.": "GitLabで完了にしました。",
   "GitLab did not accept it: {error}": "GitLabが受け付けませんでした: {error}",
@@ -1821,7 +1820,6 @@
   "Open in GitLab": "GitLabで開く",
   "Todos": "ToDo",
   "Your GitLab to-do list: mentions, assignments and review requests, including issues you were only tagged on.": "GitLabのToDoリスト: メンション、アサイン、レビュー依頼。タグ付けされただけのIssueも含みます。",
-  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes. Nothing is fetched or stored while it is off.": "同期はオフです。上でオンにすると、数分ごとにGitLabのToDoを取得します。オフの間は何も取得・保存しません。",
   "{instance}: {error}": "{instance}: {error}",
   "Nothing here yet.": "まだ何もありません。",
   "Drafting a reply. It will appear here for you to review.": "返信を下書き中です。確認用にここに表示されます。",
@@ -1831,5 +1829,6 @@
   "Analyze & draft reply": "分析して返信を下書き",
   "Drafting a reply…": "返信を下書き中…",
   "Approve & post reply": "承認して返信を投稿",
-  "Reply posted.": "返信を投稿しました。"
+  "Reply posted.": "返信を投稿しました。",
+  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "同期はオフです。上でオンにすると数分ごとにGitLabのToDoを取得します。1回だけ取得するには「今すぐ更新」を使ってください。オフの間は自動では何も取得しません。"
 }

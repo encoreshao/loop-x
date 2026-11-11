@@ -1796,7 +1796,6 @@
   "The saved todos could not be read.": "Impossible de lire les tâches enregistrées.",
   "Saved. The first fetch starts within a minute.": "Enregistré. La première récupération démarre d'ici une minute.",
   "Saved. Todo sync is off.": "Enregistré. La synchronisation des tâches est désactivée.",
-  "Turn on todo sync first.": "Activez d'abord la synchronisation des tâches.",
   "Todos refreshed.": "Tâches actualisées.",
   "Marked done in GitLab.": "Marquée comme terminée dans GitLab.",
   "GitLab did not accept it: {error}": "GitLab l'a refusé : {error}",
@@ -1821,7 +1820,6 @@
   "Open in GitLab": "Ouvrir dans GitLab",
   "Todos": "Tâches",
   "Your GitLab to-do list: mentions, assignments and review requests, including issues you were only tagged on.": "Votre liste de tâches GitLab : mentions, assignations et demandes de relecture, y compris les tickets où l'on vous a seulement tagué.",
-  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes. Nothing is fetched or stored while it is off.": "La synchronisation est désactivée. Activez-la ci-dessus pour récupérer vos tâches GitLab toutes les quelques minutes. Rien n'est récupéré ni stocké tant qu'elle est désactivée.",
   "{instance}: {error}": "{instance} : {error}",
   "Nothing here yet.": "Rien ici pour l'instant.",
   "Drafting a reply. It will appear here for you to review.": "Rédaction d'une réponse. Elle apparaîtra ici pour relecture.",
@@ -1831,5 +1829,6 @@
   "Analyze & draft reply": "Analyser et rédiger une réponse",
   "Drafting a reply…": "Rédaction d'une réponse…",
   "Approve & post reply": "Approuver et publier la réponse",
-  "Reply posted.": "Réponse publiée."
+  "Reply posted.": "Réponse publiée.",
+  "Sync is off. Turn it on above to fetch your GitLab todos every few minutes, or use Refresh now for a single fetch. Nothing is fetched automatically while it is off.": "La synchronisation est désactivée. Activez-la ci-dessus pour récupérer vos tâches GitLab toutes les quelques minutes, ou utilisez Actualiser maintenant pour une seule récupération. Rien n'est récupéré automatiquement tant qu'elle est désactivée."
 }
