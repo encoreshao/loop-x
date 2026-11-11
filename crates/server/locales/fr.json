@@ -1955,8 +1955,6 @@
   "No tracked project has a checkout to build a profile from.": "Aucun projet suivi n'a de copie locale à partir de laquelle créer un profil.",
   "This dashboard does not start AI runs, so nothing was started.": "Ce tableau de bord ne lance pas d'exécutions IA : rien n'a été lancé.",
   "Section saved. It is now marked as written by a person.": "Section enregistrée. Elle est désormais marquée comme écrite par une personne.",
-  "Not saved: the text looks like it contains a secret value. Remove it and save again.": "Non enregistré : le texte semble contenir une valeur secrète. Retirez-la et enregistrez à nouveau.",
-  "Not saved: a summary can be up to 300 characters and the details up to 20,000.": "Non enregistré : un résumé peut faire jusqu'à 300 caractères et les détails jusqu'à 20 000.",
   "This project has no profile yet. Build a profile first.": "Ce projet n'a pas encore de profil. Créez d'abord un profil.",
   "The profile file could not be read, so nothing was changed.": "Le fichier de profil n'a pas pu être lu : rien n'a été modifié.",
   "The section could not be saved.": "La section n'a pas pu être enregistrée.",
@@ -2001,5 +1999,16 @@
   "Summary (one line)": "Résumé (une ligne)",
   "Details (Markdown)": "Détails (Markdown)",
   "Saving marks this section as written by a person; later syncs only propose changes to it.": "Enregistrer marque cette section comme écrite par une personne ; les synchronisations suivantes ne feront que proposer des modifications.",
-  "Apply": "Appliquer"
+  "Apply": "Appliquer",
+  "Nothing was saved: the text looks like it contains a secret value. Remove it and save again.": "Rien n'a été enregistré : le texte semble contenir une valeur secrète. Retirez-la et enregistrez à nouveau.",
+  "Nothing was saved: a summary can be up to 300 characters and the details up to 20,000. Your text is still in the editor below.": "Rien n'a été enregistré : un résumé peut faire jusqu'à 300 caractères et les détails jusqu'à 20 000. Votre texte est toujours dans l'éditeur ci-dessous.",
+  "Approved, not applied": "Approuvée, non appliquée",
+  "Approved, but not applied yet. Apply it to write it into the profile.": "Approuvée mais pas encore appliquée. Appliquez-la pour l'écrire dans le profil.",
+  "The section changed after this was approved, so it was not applied.": "La section a changé après l'approbation : elle n'a pas été appliquée.",
+  "Rebuild this profile?": "Recréer ce profil ?",
+  "This runs one AI pass on this project and puts its approved profile back to Draft for review. Sections you edited are kept.": "Cela lance une passe IA sur ce projet et remet son profil approuvé en brouillon pour relecture. Les sections que vous avez modifiées sont conservées.",
+  "This runs one AI pass for the 1 tracked project and puts an approved profile back to Draft for review. Sections you edited are kept.": "Cela lance une passe IA pour le projet suivi et remet un profil approuvé en brouillon pour relecture. Les sections que vous avez modifiées sont conservées.",
+  "This runs one AI pass for each of the {n} tracked projects and puts approved profiles back to Draft for review. Sections you edited are kept.": "Cela lance une passe IA pour chacun des {n} projets suivis et remet les profils approuvés en brouillon pour relecture. Les sections que vous avez modifiées sont conservées.",
+  "Build all profiles?": "Créer tous les profils ?",
+  "Build": "Créer"
 }

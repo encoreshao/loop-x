@@ -1955,8 +1955,6 @@
   "No tracked project has a checkout to build a profile from.": "プロフィールを作成できるチェックアウトを持つ追跡中のプロジェクトがありません。",
   "This dashboard does not start AI runs, so nothing was started.": "このダッシュボードは AI の実行を開始しないため、何も開始されませんでした。",
   "Section saved. It is now marked as written by a person.": "セクションを保存しました。人が書いたものとしてマークされます。",
-  "Not saved: the text looks like it contains a secret value. Remove it and save again.": "保存されませんでした：テキストに秘密の値が含まれているようです。削除してからもう一度保存してください。",
-  "Not saved: a summary can be up to 300 characters and the details up to 20,000.": "保存されませんでした：概要は 300 文字まで、詳細は 20,000 文字までです。",
   "This project has no profile yet. Build a profile first.": "このプロジェクトにはまだプロフィールがありません。先にプロフィールを作成してください。",
   "The profile file could not be read, so nothing was changed.": "プロフィールファイルを読み込めなかったため、何も変更されていません。",
   "The section could not be saved.": "セクションを保存できませんでした。",
@@ -2001,5 +1999,16 @@
   "Summary (one line)": "概要（1 行）",
   "Details (Markdown)": "詳細（Markdown）",
   "Saving marks this section as written by a person; later syncs only propose changes to it.": "保存するとこのセクションは人が書いたものとしてマークされ、以降の同期では変更の提案のみが行われます。",
-  "Apply": "適用"
+  "Apply": "適用",
+  "Nothing was saved: the text looks like it contains a secret value. Remove it and save again.": "何も保存されていません：テキストに秘密の値が含まれているようです。削除してからもう一度保存してください。",
+  "Nothing was saved: a summary can be up to 300 characters and the details up to 20,000. Your text is still in the editor below.": "何も保存されていません：概要は 300 文字まで、詳細は 20,000 文字までです。入力したテキストは下のエディタに残っています。",
+  "Approved, not applied": "承認済み・未反映",
+  "Approved, but not applied yet. Apply it to write it into the profile.": "承認済みですが、まだ反映されていません。「適用」でプロフィールに書き込みます。",
+  "The section changed after this was approved, so it was not applied.": "承認後にセクションが変更されたため、反映されませんでした。",
+  "Rebuild this profile?": "このプロフィールを作り直しますか？",
+  "This runs one AI pass on this project and puts its approved profile back to Draft for review. Sections you edited are kept.": "このプロジェクトで AI を 1 回実行し、承認済みのプロフィールをレビュー用の下書きに戻します。編集したセクションは保持されます。",
+  "This runs one AI pass for the 1 tracked project and puts an approved profile back to Draft for review. Sections you edited are kept.": "追跡中の 1 件のプロジェクトで AI を 1 回実行し、承認済みのプロフィールをレビュー用の下書きに戻します。編集したセクションは保持されます。",
+  "This runs one AI pass for each of the {n} tracked projects and puts approved profiles back to Draft for review. Sections you edited are kept.": "追跡中の {n} 件のプロジェクトそれぞれで AI を 1 回実行し、承認済みのプロフィールをレビュー用の下書きに戻します。編集したセクションは保持されます。",
+  "Build all profiles?": "すべてのプロフィールを作成しますか？",
+  "Build": "作成"
 }

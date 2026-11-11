@@ -887,7 +887,7 @@ fn head_card(ctx: &UiCtx, p: &Project, profile: Option<(&Profile, &Check)>) -> S
         .collect();
     format!(
         "<section class='card mem-head'><dl>{dl}</dl><div class='mem-actions'>{}</div></section>",
-        head_actions(ctx, p, profile.is_some())
+        head_actions(ctx, p, profile.map(|(p, _)| p))
     )
 }
 
@@ -1136,10 +1136,29 @@ fn proposal_item(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profile>)
     let text = |k: &str| t[k].as_str().unwrap_or("").to_string();
     let slug = text("section");
     let title = SectionKey::from_slug(&slug).map_or_else(|| slug.clone(), |k| section_title(ctx, k));
+    let id = a["id"].as_str().unwrap_or("");
+    let key = proposal_key(a, alias);
+    let unapplied = a["status"] == "approved" && !profile_sync::is_applied(alias, id, Some(&memory_root(ctx)));
     let status = if a["status"] == "pending" {
         pill("review", &ctx.t("Pending"))
+    } else if unapplied {
+        pill("stale", &ctx.t("Approved, not applied"))
     } else {
         pill("fresh", &ctx.t("Approved"))
+    };
+    // Why an approved proposal is not in the profile, and what to do about it.
+    let note = match (unapplied, key) {
+        (true, Some(key)) if profile.is_some_and(|p| still_applies(p, key, a)) => format!(
+            "<p class='mem-muted mem-unapplied'>{}</p>",
+            escape(&ctx.t("Approved, but not applied yet. Apply it to write it into the profile."))
+        ),
+        (true, Some(key)) => format!(
+            "<p class='mem-muted mem-unapplied'>{} <a href='{}'>{}</a></p>",
+            escape(&ctx.t("The section changed after this was approved, so it was not applied.")),
+            escape(&project_url(alias, Some(page_of(key)))),
+            escape(&ctx.t("Refresh this section"))
+        ),
+        _ => String::new(),
     };
     let created = a["created_at"].as_str().and_then(|s| s.get(..10)).unwrap_or("");
     let when = if created.is_empty() {
@@ -1178,7 +1197,7 @@ fn proposal_item(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profile>)
         }
     };
     format!(
-        "<article class='mem-proposal'><div class='mem-proposal-head'><h3>{}</h3>{status}{when}</div>{diff}<div class='mem-actions'>{}</div></article>",
+        "<article class='mem-proposal'><div class='mem-proposal-head'><h3>{}</h3>{status}{when}</div>{diff}{note}<div class='mem-actions'>{}</div></article>",
         escape(&title),
         proposal_actions(ctx, alias, a, profile)
     )
@@ -1487,8 +1506,8 @@ impl Notice {
             Notice::NothingToBuild => ctx.t("No tracked project has a checkout to build a profile from."),
             Notice::NoAgent => ctx.t("This dashboard does not start AI runs, so nothing was started."),
             Notice::Saved => ctx.t("Section saved. It is now marked as written by a person."),
-            Notice::Secret => ctx.t("Not saved: the text looks like it contains a secret value. Remove it and save again."),
-            Notice::TooLong => ctx.t("Not saved: a summary can be up to 300 characters and the details up to 20,000."),
+            Notice::Secret => ctx.t("Nothing was saved: the text looks like it contains a secret value. Remove it and save again."),
+            Notice::TooLong => ctx.t("Nothing was saved: a summary can be up to 300 characters and the details up to 20,000. Your text is still in the editor below."),
             Notice::NoProfile => ctx.t("This project has no profile yet. Build a profile first."),
             Notice::Unreadable => ctx.t("The profile file could not be read, so nothing was changed."),
             Notice::SaveFailed => ctx.t("The section could not be saved."),
@@ -1763,15 +1782,18 @@ fn save_section(ctx: &UiCtx) -> UiResponse {
         return back(Back::Project(&alias, None), Notice::BadInput);
     };
     let to = || Back::Project(&alias, Some(page_of(key)));
-    let summary = form.first("summary").unwrap_or("");
-    let body = form.first("body").unwrap_or("");
-    if summary.chars().count() > SUMMARY_MAX || body.chars().count() > BODY_MAX {
-        return back(to(), Notice::TooLong);
-    }
+    // Browsers send CRLF: count and check the text as it will be stored.
+    let summary = form.first("summary").unwrap_or("").replace("\r\n", "\n");
+    let body = form.first("body").unwrap_or("").replace("\r\n", "\n");
+    let (summary, body) = (summary.as_str(), body.as_str());
     // The profile's own save does not reject secrets; a person's paste must not
-    // land in a file agents read.
+    // land in a file agents read. Checked first, so rejected secret text is never kept.
     if contains_secret(summary).is_some() || contains_secret(body).is_some() {
         return back(to(), Notice::Secret);
+    }
+    if summary.chars().count() > SUMMARY_MAX || body.chars().count() > BODY_MAX {
+        keep_draft(&ctx.state.home_dir, &alias, key, summary, body, ctx.state.now());
+        return back(to(), Notice::TooLong);
     }
     let root = memory_root(ctx);
     let _w = WRITES.lock().unwrap_or_else(|e| e.into_inner());
@@ -1787,7 +1809,10 @@ fn save_section(ctx: &UiCtx) -> UiResponse {
         Ok(p)
     });
     match saved {
-        Ok(_) => back(to(), Notice::Saved),
+        Ok(_) => {
+            drop_draft(&ctx.state.home_dir, &alias, key);
+            back(to(), Notice::Saved)
+        }
         Err(_) => back(to(), Notice::SaveFailed),
     }
 }
@@ -1969,6 +1994,64 @@ fn sync_now(ctx: &UiCtx) -> UiResponse {
 
 // ---- controls
 
+/// The button that asks before a costly build. It is a link to the same page with
+/// `confirm=...`, which renders the dialog already open, so it works without
+/// JavaScript; with JavaScript it opens the dialog in place.
+fn confirm_opener(dialog: &str, href: &str, icon_name: &str, label: &str) -> String {
+    format!(
+        "<a class='mem-btn mem-btn-primary' href='{}' onclick=\"document.getElementById('{dialog}').showModal();return false\">{}{}</a>",
+        escape(href),
+        icon(icon_name),
+        escape(label)
+    )
+}
+
+/// A confirm sheet whose primary button posts the build form; Cancel closes it
+/// (or, without JavaScript, goes back to `cancel`).
+fn confirm_dialog(ctx: &UiCtx, id: &str, open: bool, title: &str, text: &str, fields: &str, cancel: &str) -> String {
+    format!(
+        "<dialog id='{id}' class='mem-dialog'{}><form method='post' action='/insights/memory/build'>{}{fields}\
+         <h2>{}</h2><p>{}</p><div class='mem-dialog-actions'>\
+         <a class='mem-btn' href='{}' onclick=\"this.closest('dialog').close();return false\">{}</a>\
+         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></div></form></dialog>",
+        if open { " open" } else { "" },
+        ctx.csrf_input(),
+        escape(title),
+        escape(text),
+        escape(cancel),
+        escape(&ctx.t("Cancel")),
+        icon("auto_awesome"),
+        escape(&ctx.t("Build"))
+    )
+}
+
+/// A refused (too long) edit, kept for a while so the editor shows it again.
+/// Never holds text that looked like a secret: that check runs first.
+type DraftKey = (PathBuf, String, SectionKey);
+/// (key, kept at, summary, body)
+type Draft = (DraftKey, DateTime<Utc>, String, String);
+static DRAFTS: Mutex<Vec<Draft>> = Mutex::new(Vec::new());
+const DRAFT_MINUTES: i64 = 30;
+
+fn keep_draft(home: &Path, alias: &str, key: SectionKey, summary: &str, body: &str, now: DateTime<Utc>) {
+    let mut drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
+    drafts.retain(|((h, a, k), at, _, _)| !(h == home && a == alias && *k == key) && now - *at < Duration::minutes(DRAFT_MINUTES));
+    drafts.push(((home.to_path_buf(), alias.to_string(), key), now, summary.to_string(), body.to_string()));
+}
+
+fn kept_draft(home: &Path, alias: &str, key: SectionKey, now: DateTime<Utc>) -> Option<(String, String)> {
+    let drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
+    drafts
+        .iter()
+        .find(|((h, a, k), at, _, _)| h == home && a == alias && *k == key && now - *at < Duration::minutes(DRAFT_MINUTES))
+        .map(|(_, _, s, b)| (s.clone(), b.clone()))
+}
+
+fn drop_draft(home: &Path, alias: &str, key: SectionKey) {
+    let mut drafts = DRAFTS.lock().unwrap_or_else(|e| e.into_inner());
+    drafts.retain(|((h, a, k), _, _, _)| !(h == home && a == alias && *k == key));
+}
+
 fn spinner() -> &'static str {
     "<span class='mem-spin' aria-hidden='true'></span>"
 }
@@ -2057,22 +2140,39 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
             escape(&ctx.t("Building profiles…"))
         )
     } else {
+        // One AI pass per project, and approved profiles go back to Draft: ask first.
+        let n = tracked_list(ctx)
+            .iter()
+            .filter(|t| !t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+            .count();
+        let text = if n == 1 {
+            ctx.t("This runs one AI pass for the 1 tracked project and puts an approved profile back to Draft for review. Sections you edited are kept.")
+        } else {
+            ctx.tf(
+                "This runs one AI pass for each of the {n} tracked projects and puts approved profiles back to Draft for review. Sections you edited are kept.",
+                &[("n", &n.to_string())],
+            )
+        };
         format!(
-            "<button class='mem-btn mem-btn-primary' type='submit'>{}{}</button>",
-            icon("auto_awesome"),
-            escape(&ctx.t("Build all profiles"))
+            "{}{}",
+            confirm_opener("mem-build-all", &format!("{BASE}&confirm=build-all"), "auto_awesome", &ctx.t("Build all profiles")),
+            confirm_dialog(
+                ctx,
+                "mem-build-all",
+                ctx.query().first("confirm") == Some("build-all"),
+                &ctx.t("Build all profiles?"),
+                &text,
+                &format!("{}{}", hidden("project", "all"), hidden("from", "overview")),
+                BASE
+            )
         )
     };
-    out.push_str(&format!(
-        "<form method='post' action='/insights/memory/build' class='mem-inline'>{csrf}{}{}{build}</form>",
-        hidden("project", "all"),
-        hidden("from", "overview")
-    ));
+    out.push_str(&build);
     out
 }
 
 /// The project header's Build (no profile yet) or Refresh (rebuild) button.
-fn head_actions(ctx: &UiCtx, p: &Project, built: bool) -> String {
+fn head_actions(ctx: &UiCtx, p: &Project, profile: Option<&Profile>) -> String {
     if !p.checkout {
         return format!(
             "<p class='mem-muted'>{}</p>",
@@ -2086,21 +2186,39 @@ fn head_actions(ctx: &UiCtx, p: &Project, built: bool) -> String {
             escape(&ctx.t("Working…"))
         );
     }
-    let (icon_name, label) = if built {
+    let (icon_name, label) = if profile.is_some() {
         ("autorenew", ctx.t("Refresh profile"))
     } else {
         ("auto_awesome", ctx.t("Build profile"))
     };
-    format!(
-        "<form method='post' action='/insights/memory/build' class='mem-inline'>{}{}{}\
-         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></form>\
-         <p class='mem-muted mem-hint'>{}</p>",
-        ctx.csrf_input(),
-        hidden("project", &p.alias),
-        hidden("from", "project"),
-        icon(icon_name),
-        escape(&label),
+    let hint = format!(
+        "<p class='mem-muted mem-hint'>{}</p>",
         escape(&ctx.t("Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept."))
+    );
+    let fields = format!("{}{}", hidden("project", &p.alias), hidden("from", "project"));
+    // Rebuilding an approved profile puts it back to Draft: ask first.
+    if profile.is_some_and(|p| p.status == Status::Approved) {
+        let back_to = project_url(&p.alias, None);
+        return format!(
+            "{}{hint}{}",
+            confirm_opener("mem-build-project", &format!("{back_to}&confirm=build"), icon_name, &label),
+            confirm_dialog(
+                ctx,
+                "mem-build-project",
+                ctx.query().first("confirm") == Some("build"),
+                &ctx.t("Rebuild this profile?"),
+                &ctx.t("This runs one AI pass on this project and puts its approved profile back to Draft for review. Sections you edited are kept."),
+                &fields,
+                &back_to
+            )
+        );
+    }
+    format!(
+        "<form method='post' action='/insights/memory/build' class='mem-inline'>{}{fields}\
+         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></form>{hint}",
+        ctx.csrf_input(),
+        icon(icon_name),
+        escape(&label)
     )
 }
 
@@ -2178,9 +2296,13 @@ fn section_actions(ctx: &UiCtx, p: &Project, key: SectionKey, s: Option<&Section
             escape(&ctx.t("Refresh this section"))
         )
     };
-    let (summary, body) = s.map_or(("", ""), |s| (s.summary.as_str(), s.body.as_str()));
+    let draft = kept_draft(&ctx.state.home_dir, &p.alias, key, ctx.state.now());
+    let (summary, body) = match &draft {
+        Some((summary, body)) => (summary.as_str(), body.as_str()),
+        None => s.map_or(("", ""), |s| (s.summary.as_str(), s.body.as_str())),
+    };
     format!(
-        "<details class='mem-edit'><summary class='mem-btn'>{}{}</summary>\
+        "<details class='mem-edit'{}><summary class='mem-btn'>{}{}</summary>\
          <form method='post' action='/insights/memory/section/save' class='mem-editor'>{csrf}{}{}\
          <label class='mem-label' for='mem-sum-{ids}'>{}</label>\
          <input class='mem-input' id='mem-sum-{ids}' name='summary' maxlength='{SUMMARY_MAX}' value='{}'>\
@@ -2188,6 +2310,7 @@ fn section_actions(ctx: &UiCtx, p: &Project, key: SectionKey, s: Option<&Section
          <textarea class='mem-textarea' id='mem-body-{ids}' name='body' maxlength='{BODY_MAX}'>{}</textarea>\
          <div class='mem-editor-foot'><p class='mem-muted'>{}</p>\
          <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></div></form></details>{refresh}",
+        if draft.is_some() { " open" } else { "" },
         icon("edit"),
         escape(&ctx.t("Edit")),
         hidden("project", &p.alias),
@@ -2221,10 +2344,7 @@ fn proposal_actions(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profil
             escape(&ctx.t("Approve"))
         ),
         Some("approved") => {
-            let t = &a["target"];
-            let applied = profile.and_then(|p| p.sections.get(&key)).is_some_and(|cur| {
-                cur.body == t["new"].as_str().unwrap_or("") && cur.summary == t["new_summary"].as_str().unwrap_or("")
-            });
+            let applied = profile_sync::is_applied(alias, id, Some(&memory_root(ctx)));
             if applied || !profile.is_some_and(|p| still_applies(p, key, a)) {
                 return String::new();
             }
@@ -2393,6 +2513,14 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-spin{display:inline-block;width:14px;height:14px;flex:0 0 14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:mem-spin .8s linear infinite}
 .mem-job .mem-spin{margin-top:.15rem}
 @keyframes mem-spin{to{transform:rotate(360deg)}}
+.mem-dialog{position:fixed;inset:0;z-index:1000;width:min(480px,calc(100vw - 2rem));height:fit-content;max-width:none;margin:auto;padding:1.25rem 1.4rem;box-sizing:border-box;border:1px solid var(--md-outline-variant);border-radius:16px;background:var(--md-surface);color:var(--md-on-surface);box-shadow:0 24px 60px rgba(0,0,0,.28)}
+.mem-dialog::backdrop{background:rgba(0,0,0,.35);backdrop-filter:blur(4px)}
+.mem-dialog h2{margin:0 0 .5rem;font-size:1.05rem}
+.mem-dialog p{margin:0;font-size:.9rem;line-height:1.5;color:var(--md-on-surface-variant)}
+.mem-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:.5rem;margin-top:1.1rem}
+a.mem-btn{text-decoration:none}
+.mem-unapplied{margin:.6rem 0 0;font-size:.85rem}
+.mem-unapplied a{color:var(--md-primary);font-weight:500}
 .mem-actions:empty{display:none}
 @media (prefers-reduced-motion:no-preference){
 a.mem-card{transition:transform .3s cubic-bezier(.32,.72,0,1),box-shadow .3s cubic-bezier(.32,.72,0,1),border-color .3s cubic-bezier(.32,.72,0,1)}
@@ -3249,5 +3377,103 @@ mod tests {
         let html = sb.get("/insights?view=memory&project=alpha&page=secrets");
         assert!(!html.contains("glpat-"), "{html}");
         assert!(html.contains("action='/insights/memory/section/save'"));
+    }
+
+    // ---------------------------------------------------------------- fix round 1
+
+    #[test]
+    fn build_all_asks_for_confirmation_first() {
+        let sb = Sb::new(&[("conf-a", true), ("conf-b", true), ("conf-issues", false)]);
+        let html = sb.get("/insights?view=memory");
+        let bar = &html[html.find("class='mem-bar'").unwrap()..];
+        let bar = &bar[..bar.find("class='mem-grid'").unwrap()];
+        // The opener is a link (no JS: it opens the dialog server-side), not a POST.
+        assert!(bar.contains("href='/insights?view=memory&amp;confirm=build-all'"), "{bar}");
+        let dialog = &bar[bar.find("<dialog").expect("a confirm dialog")..];
+        let before_dialog = &bar[..bar.find("<dialog").unwrap()];
+        assert!(!before_dialog.contains("name='project' value='all'"), "Build all does not post directly");
+        assert!(dialog.contains("name='project' value='all'") && dialog.contains("action='/insights/memory/build'"));
+        assert!(dialog.contains("2 tracked projects"), "{dialog}");
+        assert!(dialog.contains("Cancel"));
+        assert!(!bar.contains("<dialog id='mem-build-all' class='mem-dialog' open"), "closed until asked");
+        let asked = sb.get("/insights?view=memory&confirm=build-all");
+        assert!(asked.contains("<dialog id='mem-build-all' class='mem-dialog' open"), "{asked}");
+        // The route itself is unchanged and still needs CSRF.
+        let req = crate::ui::routes::UiRequest::new(Method::POST, "/insights/memory/build")
+            .with_header("content-type", "application/x-www-form-urlencoded")
+            .with_body("project=all");
+        assert_eq!(sb.state.registry.dispatch(&sb.state, &req).unwrap().status, 403);
+    }
+
+    #[test]
+    fn rebuilding_an_approved_profile_asks_first_and_a_draft_does_not() {
+        let sb = Sb::new(&[("conf-ok", true), ("conf-draft", true), ("conf-none", true)]);
+        sb.save(&profile("conf-ok", &[(SectionKey::Stack, section("S", "B"))]));
+        let mut d = profile("conf-draft", &[(SectionKey::Stack, section("S", "B"))]);
+        d.status = Status::Draft;
+        sb.save(&d);
+        let approved = sb.get("/insights?view=memory&project=conf-ok");
+        assert!(approved.contains("id='mem-build-project'") && approved.contains("confirm=build'"), "{approved}");
+        assert!(approved.contains("back to Draft"), "{approved}");
+        assert!(sb.get("/insights?view=memory&project=conf-ok&confirm=build").contains("<dialog id='mem-build-project' class='mem-dialog' open"));
+        for alias in ["conf-draft", "conf-none"] {
+            let html = sb.get(&format!("/insights?view=memory&project={alias}"));
+            assert!(!html.contains("id='mem-build-project'"), "{alias}");
+            assert!(html.contains(&format!("name='project' value='{alias}'")), "{alias} posts directly");
+        }
+    }
+
+    #[test]
+    fn an_approved_proposal_that_was_not_applied_says_so() {
+        let sb = Sb::new(&[("unapplied", true)]);
+        sb.save(&profile("unapplied", &[(SectionKey::Stack, section("Old", "Old stack")), (SectionKey::Gotchas, section("G", "Old gotchas"))]));
+        let fits = real_proposal(&sb, "unapplied", SectionKey::Stack, "New stack");
+        let stale = real_proposal(&sb, "unapplied", SectionKey::Gotchas, "New gotchas");
+        for id in [&fits, &stale] {
+            approvals::decide(&sb.approvals(), id, "approve", "me", now()).unwrap();
+        }
+        sb.post_to("/insights/memory/section/save", "project=unapplied&section=gotchas&summary=Mine&body=Hand");
+        let html = sb.get("/insights?view=memory&project=unapplied&page=proposals");
+        assert_eq!(html.matches("Approved, not applied").count(), 2, "{html}");
+        assert!(html.contains("value='approve'"), "the one that still fits keeps Apply");
+        assert!(html.contains("changed after this was approved"), "{html}");
+        assert!(html.contains("href='/insights?view=memory&amp;project=unapplied&amp;page=gotchas'"), "{html}");
+        // Applied ones are plain Approved.
+        sb.post_to("/insights/memory/proposal/decide", &format!("project=unapplied&id={fits}&decision=approve"));
+        let html = sb.get("/insights?view=memory&project=unapplied&page=proposals");
+        assert_eq!(html.matches("Approved, not applied").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn save_counts_length_after_crlf_normalisation() {
+        let sb = Sb::new(&[("crlf", true)]);
+        sb.save(&profile("crlf", &[(SectionKey::Stack, section("S", "B"))]));
+        // 24,000 characters as submitted, 18,000 once CRLF becomes LF.
+        let body = "ab%0D%0A".repeat(6000);
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project=crlf&section=stack&summary=s&body={body}"));
+        assert!(loc.ends_with("notice=saved"), "{loc}");
+        assert_eq!(sb.load("crlf").sections[&SectionKey::Stack].body.matches('\n').count(), 5999);
+    }
+
+    #[test]
+    fn a_too_long_save_keeps_the_typed_text_but_a_secret_is_never_kept() {
+        let sb = Sb::new(&[("keep", true)]);
+        sb.save(&profile("keep", &[(SectionKey::Stack, section("Stored summary", "Stored body"))]));
+        let long = "x".repeat(301);
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project=keep&section=stack&summary={long}&body=Typed+body"));
+        assert!(loc.ends_with("notice=too-long"), "{loc}");
+        let html = sb.get(&loc);
+        assert!(html.contains(&long) && html.contains("Typed body"), "the typed text is back in the editor");
+        assert!(html.contains("<details class='mem-edit' open>"), "{html}");
+        assert!(html.contains("Nothing was saved"), "{html}");
+        // A secret is refused first and never kept, even when it is also too long.
+        let secret = "glpat-abcdefghijklmnop1234";
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project=keep&section=stack&summary={long}&body={secret}"));
+        assert!(loc.ends_with("notice=secret"), "{loc}");
+        assert!(!sb.get(&loc).contains("glpat-"));
+        // A successful save drops the kept draft.
+        sb.post_to("/insights/memory/section/save", "project=keep&section=stack&summary=Done&body=Saved");
+        let html = sb.get("/insights?view=memory&project=keep&page=stack");
+        assert!(!html.contains(&long) && !html.contains("<details class='mem-edit' open>"), "{html}");
     }
 }

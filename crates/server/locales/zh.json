@@ -1955,8 +1955,6 @@
   "No tracked project has a checkout to build a profile from.": "没有任何跟踪的项目具有可用于生成档案的本地检出。",
   "This dashboard does not start AI runs, so nothing was started.": "此仪表板不会启动 AI 运行，因此未启动任何任务。",
   "Section saved. It is now marked as written by a person.": "章节已保存，现已标记为由人编写。",
-  "Not saved: the text looks like it contains a secret value. Remove it and save again.": "未保存：文本中似乎包含机密值。请删除后再次保存。",
-  "Not saved: a summary can be up to 300 characters and the details up to 20,000.": "未保存：摘要最多 300 个字符，详情最多 20,000 个字符。",
   "This project has no profile yet. Build a profile first.": "此项目还没有档案。请先生成档案。",
   "The profile file could not be read, so nothing was changed.": "无法读取档案文件，因此未做任何更改。",
   "The section could not be saved.": "无法保存该章节。",
@@ -2001,5 +1999,16 @@
   "Summary (one line)": "摘要（一行）",
   "Details (Markdown)": "详情（Markdown）",
   "Saving marks this section as written by a person; later syncs only propose changes to it.": "保存后此章节将标记为由人编写；之后的同步只会对其提出修改提案。",
-  "Apply": "应用"
+  "Apply": "应用",
+  "Nothing was saved: the text looks like it contains a secret value. Remove it and save again.": "未保存任何内容：文本中似乎包含机密值。请删除后再次保存。",
+  "Nothing was saved: a summary can be up to 300 characters and the details up to 20,000. Your text is still in the editor below.": "未保存任何内容：摘要最多 300 个字符，详情最多 20,000 个字符。你输入的文本仍在下方编辑器中。",
+  "Approved, not applied": "已批准，未应用",
+  "Approved, but not applied yet. Apply it to write it into the profile.": "已批准，但尚未应用。点击“应用”将其写入档案。",
+  "The section changed after this was approved, so it was not applied.": "该章节在批准后已被修改，因此未应用。",
+  "Rebuild this profile?": "要重新生成此档案吗？",
+  "This runs one AI pass on this project and puts its approved profile back to Draft for review. Sections you edited are kept.": "这会对此项目运行一次 AI，并将已批准的档案改回草稿以供审阅。你编辑过的章节会被保留。",
+  "This runs one AI pass for the 1 tracked project and puts an approved profile back to Draft for review. Sections you edited are kept.": "这会对 1 个跟踪的项目运行一次 AI，并将已批准的档案改回草稿以供审阅。你编辑过的章节会被保留。",
+  "This runs one AI pass for each of the {n} tracked projects and puts approved profiles back to Draft for review. Sections you edited are kept.": "这会对 {n} 个跟踪的项目各运行一次 AI，并将已批准的档案改回草稿以供审阅。你编辑过的章节会被保留。",
+  "Build all profiles?": "要生成所有档案吗？",
+  "Build": "生成"
 }

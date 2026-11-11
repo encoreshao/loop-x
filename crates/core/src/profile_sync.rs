@@ -471,6 +471,11 @@ refresh the section to get a new proposal"
     Ok(ApplyOutcome::Applied)
 }
 
+/// Whether [`apply_proposal`] wrote this proposal (its marker file exists).
+pub fn is_applied(alias: &str, id: &str, root: Option<&Path>) -> bool {
+    applied_marker(alias, id, root).is_ok_and(|m| m.exists())
+}
+
 fn applied_marker(
     alias: &str,
     id: &str,
