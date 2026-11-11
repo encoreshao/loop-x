@@ -1,14 +1,18 @@
 //! Project graph: edges derived from profiles and issue digests, plus a
 //! deterministic force-directed layout. Pure functions: no IO, no clock, no RNG.
 //!
-//! Name parsing rule (Secrets / Integrations section bodies are free markdown):
-//! a *name* is either a backticked span that is a bare identifier
-//! (`[A-Za-z_][A-Za-z0-9_.-]*`, at least 2 chars), or the first word of a
-//! `-`/`*` bullet when that word (trailing `:`, `,`, en/em dash stripped) is
-//! such an identifier. A span or word containing `=` is a value-carrying
-//! assignment and is ignored entirely; nothing after `=` is ever read.
-//! Secret names are kept as written; service names are lower-cased. The word
-//! `unknown` is skipped. Evidence for shared secrets/services is the NAME only.
+//! Name parsing rule (Secrets / Integrations section bodies are free markdown).
+//! A *candidate* is a backticked span, or the first word of a `-`/`*` bullet
+//! (trailing `.,:;` and en/em dashes stripped). A candidate containing `=` is a
+//! value-carrying assignment and is ignored entirely; nothing after `=` is read.
+//! - Secrets: ONLY UPPER_SNAKE names (`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$`, at least
+//!   one underscore), kept as written. Anything else (bare words, lowercase
+//!   backticked values) is not a name.
+//! - Integrations: bare identifiers (`[A-Za-z_][A-Za-z0-9_.-]*`, 2+ chars),
+//!   lower-cased, minus a stop list of filler words (none, n/a, tbd, see, ...).
+//! - Document frequency: a name present in more than max(3, one third of) the
+//!   profiles that have that section carries no signal and creates no edge.
+//! Evidence for shared secrets/services is the NAME only, never a value.
 
 use crate::profile_scan::IssueDigest;
 use crate::profile_sync::Freshness;
@@ -66,6 +70,8 @@ pub struct Graph {
 const MAX_EVIDENCE: usize = 200;
 const MIN_SHARED_PEOPLE: usize = 2;
 
+/// Exact alias first, then a UNIQUE match by path suffix, then a UNIQUE match
+/// by last path segment. More than one candidate is ambiguous: unresolved.
 fn resolve(target: &str, tracked: &BTreeSet<String>) -> Option<String> {
     let t = target.trim().trim_matches('/');
     if t.is_empty() {
@@ -75,14 +81,21 @@ fn resolve(target: &str, tracked: &BTreeSet<String>) -> Option<String> {
         return Some(t.to_string());
     }
     let tl = t.to_lowercase();
-    let last = tl.rsplit('/').next().unwrap_or(&tl);
-    tracked
-        .iter()
-        .find(|a| {
-            let al = a.to_lowercase();
-            al == tl || tl.ends_with(&format!("/{al}")) || al == last
-        })
-        .cloned()
+    let unique = |pred: &dyn Fn(&str) -> bool| -> Result<Option<String>, ()> {
+        let found: Vec<&String> = tracked.iter().filter(|a| pred(&a.to_lowercase())).collect();
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(Some(found[0].clone())),
+            _ => Err(()),
+        }
+    };
+    match unique(&|al| al == tl || tl.ends_with(&format!("/{al}"))) {
+        Ok(Some(a)) => return Some(a),
+        Err(()) => return None,
+        Ok(None) => {}
+    }
+    let last = tl.rsplit('/').next().unwrap_or(&tl).to_string();
+    unique(&|al| al == last).ok().flatten()
 }
 
 fn is_ident(s: &str) -> bool {
@@ -92,27 +105,64 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
-fn parse_names(body: &str, lower: bool) -> BTreeSet<String> {
+fn is_upper_snake(s: &str) -> bool {
+    let mut parts = s.split('_');
+    let first = parts.next().unwrap_or("");
+    let ok_part = |p: &str| {
+        !p.is_empty()
+            && p.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    };
+    let mut rest = 0;
+    let mut ok = first.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && ok_part(first);
+    for p in parts {
+        rest += 1;
+        ok &= ok_part(p);
+    }
+    ok && rest >= 1
+}
+
+const STOP_WORDS: [&str; 13] = [
+    "none", "n/a", "na", "tbd", "todo", "unknown", "etc", "see", "uses", "stored", "no", "not",
+    "the",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NameKind {
+    Secret,
+    Service,
+}
+
+fn parse_names(body: &str, kind: NameKind) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    let mut add = |s: &str| {
-        if is_ident(s) && !s.eq_ignore_ascii_case("unknown") {
-            out.insert(if lower {
-                s.to_lowercase()
-            } else {
-                s.to_string()
-            });
+    let mut add = |raw: &str| {
+        if raw.contains('=') {
+            return;
+        }
+        let w = raw.trim().trim_end_matches(['.', ',', ':', ';', '–', '—']);
+        match kind {
+            NameKind::Secret => {
+                if is_upper_snake(w) {
+                    out.insert(w.to_string());
+                }
+            }
+            NameKind::Service => {
+                let l = w.to_lowercase();
+                if is_ident(w) && !STOP_WORDS.contains(&l.as_str()) {
+                    out.insert(l);
+                }
+            }
         }
     };
     for line in body.lines() {
         let line = line.trim();
         for (i, span) in line.split('`').enumerate() {
             if i % 2 == 1 {
-                add(span.trim());
+                add(span);
             }
         }
         if let Some(rest) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
             let word = rest.split_whitespace().next().unwrap_or("");
-            let word = word.trim_end_matches([':', ',', '–', '—']);
             if !word.starts_with('`') {
                 add(word);
             }
@@ -121,11 +171,30 @@ fn parse_names(body: &str, lower: bool) -> BTreeSet<String> {
     out
 }
 
-fn section_names(p: &Profile, key: SectionKey, lower: bool) -> BTreeSet<String> {
-    p.sections
-        .get(&key)
-        .map(|s| parse_names(&s.body, lower))
-        .unwrap_or_default()
+/// Per-alias name sets for one section kind, with names present in too many
+/// profiles removed (see the module header).
+fn name_sets(
+    by_alias: &BTreeMap<&str, &Profile>,
+    key: SectionKey,
+    kind: NameKind,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (alias, p) in by_alias {
+        if let Some(sec) = p.sections.get(&key) {
+            sets.insert(alias.to_string(), parse_names(&sec.body, kind));
+        }
+    }
+    let cutoff = std::cmp::max(3, sets.len() / 3);
+    let mut freq: BTreeMap<String, usize> = BTreeMap::new();
+    for names in sets.values() {
+        for n in names {
+            *freq.entry(n.clone()).or_default() += 1;
+        }
+    }
+    for names in sets.values_mut() {
+        names.retain(|n| freq[n] <= cutoff);
+    }
+    sets
 }
 
 fn people_of(p: Option<&Profile>, d: Option<&IssueDigest>) -> BTreeSet<String> {
@@ -160,7 +229,12 @@ fn people_of(p: Option<&Profile>, d: Option<&IssueDigest>) -> BTreeSet<String> {
 }
 
 fn cap(s: &str) -> String {
-    s.chars().take(MAX_EVIDENCE).collect()
+    if s.chars().count() <= MAX_EVIDENCE {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(MAX_EVIDENCE - 1).collect();
+    out.push('…');
+    out
 }
 
 pub fn derive(
@@ -203,7 +277,7 @@ pub fn derive(
             let Some(to) = resolve(&l.to, &tracked_set) else {
                 continue;
             };
-            let kind = match l.kind.trim() {
+            let kind = match l.kind.trim().to_lowercase().as_str() {
                 "depends-on" => EdgeKind::DependsOn,
                 "calls" => EdgeKind::Calls,
                 _ => EdgeKind::Declared,
@@ -212,25 +286,32 @@ pub fn derive(
         }
     }
 
-    // 2. shared secret / service names, 4. shared people
+    // 2. shared secret / service names, 4. shared people (parsed once per alias)
+    let secrets = name_sets(&by_alias, SectionKey::Secrets, NameKind::Secret);
+    let services = name_sets(&by_alias, SectionKey::Integrations, NameKind::Service);
+    let people: BTreeMap<&String, BTreeSet<String>> = tracked_set
+        .iter()
+        .map(|a| {
+            (
+                a,
+                people_of(by_alias.get(a.as_str()).copied(), digests.get(a.as_str())),
+            )
+        })
+        .collect();
     let aliases: Vec<&String> = tracked_set.iter().collect();
     for (i, a) in aliases.iter().enumerate() {
         for b in &aliases[i + 1..] {
-            for (key, kind, lower) in [
-                (SectionKey::Secrets, EdgeKind::SharesSecret, false),
-                (SectionKey::Integrations, EdgeKind::SharesService, true),
+            for (sets, kind) in [
+                (&secrets, EdgeKind::SharesSecret),
+                (&services, EdgeKind::SharesService),
             ] {
-                if let (Some(pa), Some(pb)) = (by_alias.get(a.as_str()), by_alias.get(b.as_str())) {
-                    let na = section_names(pa, key, lower);
-                    let nb = section_names(pb, key, lower);
-                    for name in na.intersection(&nb) {
+                if let (Some(na), Some(nb)) = (sets.get(a.as_str()), sets.get(b.as_str())) {
+                    for name in na.intersection(nb) {
                         add(a, b, kind, name, 0.5);
                     }
                 }
             }
-            let pa = people_of(by_alias.get(a.as_str()).copied(), digests.get(a.as_str()));
-            let pb = people_of(by_alias.get(b.as_str()).copied(), digests.get(b.as_str()));
-            let shared: Vec<String> = pa.intersection(&pb).cloned().collect();
+            let shared: Vec<String> = people[a].intersection(&people[b]).cloned().collect();
             if shared.len() >= MIN_SHARED_PEOPLE {
                 add(
                     a,
@@ -300,6 +381,10 @@ pub fn derive(
         .collect();
     layout_with_edges(&mut nodes, &edges);
     Graph { nodes, edges }
+}
+
+fn round1(v: f64) -> f32 {
+    ((v * 10.0).round() / 10.0) as f32
 }
 
 /// Deterministic layout without edge information (pure repulsion).
@@ -407,8 +492,8 @@ pub fn layout_with_edges(nodes: &mut [Node], edges: &[Edge]) {
     let scale = if span > 1e-9 { 900.0 / span } else { 1.0 };
     let (cx, cy) = ((minx + maxx) / 2.0, (miny + maxy) / 2.0);
     for (nd, p) in nodes.iter_mut().zip(&pos) {
-        nd.x = ((500.0 + (p.0 - cx) * scale).clamp(0.0, 1000.0)) as f32;
-        nd.y = ((500.0 + (p.1 - cy) * scale).clamp(0.0, 1000.0)) as f32;
+        nd.x = round1((500.0 + (p.0 - cx) * scale).clamp(0.0, 1000.0));
+        nd.y = round1((500.0 + (p.1 - cy) * scale).clamp(0.0, 1000.0));
     }
 }
 
@@ -692,5 +777,105 @@ mod tests {
         layout(&mut two);
         assert!(two.iter().all(|n| n.x.is_finite() && n.y.is_finite()));
         assert_ne!((two[0].x, two[0].y), (two[1].x, two[1].y));
+    }
+
+    fn with_section(alias: &str, key: SectionKey, body: &str) -> Profile {
+        let mut p = profile(alias);
+        p.sections.insert(key, section(body));
+        p
+    }
+
+    #[test]
+    fn filler_words_do_not_create_edges() {
+        for key in [SectionKey::Secrets, SectionKey::Integrations] {
+            let a = with_section("a", key, "- None");
+            let b = with_section("b", key, "- None.\n- TBD\n- See docs\n- `ruby`");
+            let c = with_section("c", key, "- none\n- `ruby`");
+            let g = derive(&[a, b, c], &none(), &t(&["a", "b", "c"]));
+            let shared: Vec<_> = g
+                .edges
+                .iter()
+                .filter(|e| matches!(e.kind, EdgeKind::SharesSecret | EdgeKind::SharesService))
+                .collect();
+            if key == SectionKey::Secrets {
+                assert!(shared.is_empty(), "{shared:?}");
+            } else {
+                assert!(shared.iter().all(|e| e.evidence == "ruby"), "{shared:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn secrets_only_accept_upper_snake_names() {
+        let a = with_section(
+            "a",
+            SectionKey::Secrets,
+            "- `hunter2hunter2`\n- `token`\n- API_KEY=abc\n- DB_URL – main",
+        );
+        let b = with_section(
+            "b",
+            SectionKey::Secrets,
+            "- `hunter2hunter2`\n- `token`\n- `API_KEY=abc`\n- `DB_URL`",
+        );
+        let g = derive(&[a, b], &none(), &t(&["a", "b"]));
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].evidence, "DB_URL");
+    }
+
+    #[test]
+    fn names_in_most_profiles_carry_no_signal() {
+        let ps: Vec<Profile> = ["a", "b", "c", "d", "e", "f"]
+            .iter()
+            .map(|a| with_section(a, SectionKey::Secrets, "- COMMON_KEY\n- RARE_KEY"))
+            .collect();
+        let g = derive(&ps, &none(), &t(&["a", "b", "c", "d", "e", "f"]));
+        assert!(g.edges.iter().all(|e| !e.evidence.contains("COMMON")));
+        // RARE_KEY is just as common here, so nothing at all
+        assert!(g.edges.is_empty(), "{:?}", g.edges);
+        let mut ps2 = ps;
+        for p in ps2.iter_mut().skip(2) {
+            p.sections
+                .insert(SectionKey::Secrets, section("- OTHER_ONE"));
+        }
+        let g2 = derive(&ps2, &none(), &t(&["a", "b", "c", "d", "e", "f"]));
+        assert_eq!(g2.edges.len(), 1);
+        assert_eq!(g2.edges[0].evidence, "COMMON_KEY; RARE_KEY");
+    }
+
+    #[test]
+    fn ambiguous_alias_match_is_unresolved() {
+        let mut a = profile("a");
+        a.links = vec![link("x/billing", "calls", "e")];
+        let g = derive(&[a], &none(), &t(&["a", "g1/billing", "g2/billing"]));
+        assert!(g.edges.is_empty());
+        let mut a = profile("a");
+        a.links = vec![
+            link("g1/billing", "calls", "e"),
+            link("billing", "calls", "f"),
+        ];
+        let g = derive(&[a], &none(), &t(&["a", "g1/billing", "g2/billing"]));
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(g.edges[0].to, "g1/billing");
+        assert_eq!(g.edges[0].evidence, "e");
+    }
+
+    #[test]
+    fn link_kind_is_case_insensitive_and_trimmed() {
+        let mut a = profile("a");
+        a.links = vec![link("b", " Depends-On ", "x")];
+        let g = derive(&[a], &none(), &t(&["a", "b"]));
+        assert_eq!(g.edges[0].kind, EdgeKind::DependsOn);
+    }
+
+    #[test]
+    fn truncated_evidence_ends_with_ellipsis_and_coordinates_have_one_decimal() {
+        let mut a = profile("a");
+        a.links = vec![link("b", "calls", &"x".repeat(500))];
+        let g = derive(&[a], &none(), &t(&["a", "b", "c"]));
+        assert!(g.edges[0].evidence.ends_with('…'));
+        for n in &g.nodes {
+            assert_eq!((n.x * 10.0).round(), n.x * 10.0);
+            assert_eq!((n.y * 10.0).round(), n.y * 10.0);
+        }
     }
 }
