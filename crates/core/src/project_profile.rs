@@ -635,6 +635,7 @@ pub fn contains_secret(text: &str) -> Option<String> {
             "private_key",
             "privatekey",
             "credential",
+            "authorization",
         ]
         .iter()
         .any(|w| name.contains(w));
@@ -645,6 +646,9 @@ pub fn contains_secret(text: &str) -> Option<String> {
             continue;
         }
         let v = &c[2];
+        if v.starts_with('/') || v.starts_with("~/") {
+            continue;
+        }
         if v.chars().any(|ch| ch.is_ascii_alphabetic()) && v.chars().any(|ch| ch.is_ascii_digit()) {
             return Some("secret assignment with a long value".to_string());
         }
@@ -1091,5 +1095,21 @@ mod tests {
         assert!(contains_secret(&format!("pass: {v}")).is_some());
         assert!(contains_secret(&format!("MY_AUTH={v}")).is_some());
         assert!(contains_secret(&format!("GITLAB_TOKEN={v}")).is_some());
+    }
+
+    #[test]
+    fn flags_raw_authorization_and_skips_path_values() {
+        let v = "Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk";
+        assert!(contains_secret(&format!("Authorization: {v}")).is_some());
+        assert!(contains_secret(&format!("{{\"authorization\": \"{v}\"}}")).is_some());
+        assert_eq!(
+            contains_secret("pwd: /Users/dev/worktrees/issue7-abc123"),
+            None
+        );
+        assert_eq!(contains_secret("pwd: ~/worktrees/issue7-abc123xyz"), None);
+        assert_eq!(
+            contains_secret("GITLAB_TOKEN=/run/secrets/tok3n-file-abc"),
+            None
+        );
     }
 }
