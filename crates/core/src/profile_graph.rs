@@ -71,8 +71,8 @@ pub struct Graph {
 const MAX_EVIDENCE: usize = 200;
 const MIN_SHARED_PEOPLE: usize = 2;
 
-/// Exact alias first, then a UNIQUE match by path suffix, then a UNIQUE match
-/// by last path segment. More than one candidate is ambiguous: unresolved.
+/// Exact alias first, then a UNIQUE match by path suffix, then a UNIQUE alias
+/// whose own last segment equals the target's last segment. More than one candidate is ambiguous: unresolved.
 fn resolve(target: &str, tracked: &BTreeSet<String>) -> Option<String> {
     let t = target.trim().trim_matches('/');
     if t.is_empty() {
@@ -95,8 +95,11 @@ fn resolve(target: &str, tracked: &BTreeSet<String>) -> Option<String> {
         Err(()) => return None,
         Ok(None) => {}
     }
+    // Last path segment of the target against the alias's own last segment.
     let last = tl.rsplit('/').next().unwrap_or(&tl).to_string();
-    unique(&|al| al == last).ok().flatten()
+    unique(&|al| al.rsplit('/').next() == Some(last.as_str()))
+        .ok()
+        .flatten()
 }
 
 fn is_ident(s: &str) -> bool {
@@ -106,21 +109,52 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
 }
 
+const MAX_NAME_LEN: usize = 40;
+/// Token-like prefixes (compared on a segment start) and short segments that
+/// are token prefixes by themselves.
+const TOKEN_PREFIXES: [&str; 8] = [
+    "AKIA",
+    "ASIA",
+    "AIZA",
+    "XOX",
+    "GLPAT",
+    "EYJ",
+    "GITHUB_PAT",
+    "SG.",
+];
+const TOKEN_SEGMENTS: [&str; 8] = ["SK", "PK", "RK", "SG", "GHP", "GHO", "GHS", "GHU"];
+
+/// Conservative environment-variable shape: UPPER_SNAKE with at least one
+/// underscore, at most 40 chars, no long or digit-heavy segment, no token
+/// prefix. When in doubt it is NOT a name.
 fn is_upper_snake(s: &str) -> bool {
-    let mut parts = s.split('_');
-    let first = parts.next().unwrap_or("");
-    let ok_part = |p: &str| {
-        !p.is_empty()
-            && p.chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-    };
-    let mut rest = 0;
-    let mut ok = first.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && ok_part(first);
-    for p in parts {
-        rest += 1;
-        ok &= ok_part(p);
+    if s.len() > MAX_NAME_LEN || !s.contains('_') {
+        return false;
     }
-    ok && rest >= 1
+    let digits = s.chars().filter(|c| c.is_ascii_digit()).count();
+    if digits * 10 > s.len() * 4 {
+        return false;
+    }
+    let upper = s.to_ascii_uppercase();
+    if TOKEN_PREFIXES.iter().any(|p| upper.starts_with(p)) {
+        return false;
+    }
+    let mut first = true;
+    for seg in s.split('_') {
+        let ok = !seg.is_empty()
+            && seg.len() <= 11
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            && (!first || seg.starts_with(|c: char| c.is_ascii_uppercase()))
+            && !TOKEN_SEGMENTS.contains(&seg)
+            && !TOKEN_PREFIXES.iter().any(|p| seg.starts_with(p));
+        if !ok {
+            return false;
+        }
+        first = false;
+    }
+    true
 }
 
 const STOP_WORDS: [&str; 13] = [
@@ -149,7 +183,7 @@ fn parse_names(body: &str, kind: NameKind) -> BTreeSet<String> {
             }
             NameKind::Service => {
                 let l = w.to_lowercase();
-                if is_ident(w) && !STOP_WORDS.contains(&l.as_str()) {
+                if w.len() <= MAX_NAME_LEN && is_ident(w) && !STOP_WORDS.contains(&l.as_str()) {
                     out.insert(l);
                 }
             }
@@ -384,8 +418,22 @@ pub fn derive(
     Graph { nodes, edges }
 }
 
-fn round1(v: f64) -> f32 {
-    ((v * 10.0).round() / 10.0) as f32
+/// Rounds points to tenths; the points are visited in `order` and a point whose
+/// rounded value is already taken is nudged by 0.1 until it is free.
+fn unique_tenths(points: &[(f64, f64)], order: &[usize]) -> Vec<(i32, i32)> {
+    let mut out = vec![(0, 0); points.len()];
+    let mut used: BTreeSet<(i32, i32)> = BTreeSet::new();
+    for &i in order {
+        let (mut x, y) = (
+            (points[i].0 * 10.0).round() as i32,
+            (points[i].1 * 10.0).round() as i32,
+        );
+        while !used.insert((x, y)) {
+            x += if x >= 10_000 { -1 } else { 1 };
+        }
+        out[i] = (x, y);
+    }
+    out
 }
 
 /// Deterministic layout without edge information (pure repulsion).
@@ -492,9 +540,18 @@ pub fn layout_with_edges(nodes: &mut [Node], edges: &[Edge]) {
     let span = (maxx - minx).max(maxy - miny);
     let scale = if span > 1e-9 { 900.0 / span } else { 1.0 };
     let (cx, cy) = ((minx + maxx) / 2.0, (miny + maxy) / 2.0);
-    for (nd, p) in nodes.iter_mut().zip(&pos) {
-        nd.x = round1((500.0 + (p.0 - cx) * scale).clamp(0.0, 1000.0));
-        nd.y = round1((500.0 + (p.1 - cy) * scale).clamp(0.0, 1000.0));
+    let fitted: Vec<(f64, f64)> = pos
+        .iter()
+        .map(|p| {
+            (
+                (500.0 + (p.0 - cx) * scale).clamp(0.0, 1000.0),
+                (500.0 + (p.1 - cy) * scale).clamp(0.0, 1000.0),
+            )
+        })
+        .collect();
+    for (nd, (x, y)) in nodes.iter_mut().zip(unique_tenths(&fitted, &order)) {
+        nd.x = x as f32 / 10.0;
+        nd.y = y as f32 / 10.0;
     }
 }
 
@@ -878,5 +935,75 @@ mod tests {
             assert_eq!((n.x * 10.0).round(), n.x * 10.0);
             assert_eq!((n.y * 10.0).round(), n.y * 10.0);
         }
+    }
+
+    fn shared_secret_edges(names: &[&str]) -> Vec<Edge> {
+        let body = names
+            .iter()
+            .map(|n| format!("- `{n}`\n- {n} – x"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let a = with_section("a", SectionKey::Secrets, &body);
+        let b = with_section("b", SectionKey::Secrets, &body);
+        derive(&[a, b], &none(), &t(&["a", "b"])).edges
+    }
+
+    #[test]
+    fn token_shaped_upper_snake_values_are_not_names() {
+        let long = format!(
+            "{}_{}",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        );
+        let bad = [
+            "AKIAIOSFODNN7_EXAMPLE",
+            "GLPAT_ABCDEFGHIJKLMNOPQRST12",
+            long.as_str(),
+            "A1B2C3D4E5F6G7H8_I9J0K1L2",
+            "SK_LIVE",
+            "XOXB_TOKEN",
+            "ABCDEFGHIJKL_X",
+            "AB_1234567",
+        ];
+        for n in bad {
+            assert!(shared_secret_edges(&[n]).is_empty(), "{n}");
+        }
+        let e = shared_secret_edges(&["GITLAB_TOKEN", "DATABASE_URL", "STRIPE_API_KEY"]);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].evidence, "DATABASE_URL; GITLAB_TOKEN; STRIPE_API_KEY");
+        let mixed = shared_secret_edges(&["AKIAIOSFODNN7_EXAMPLE", "DATABASE_URL"]);
+        assert_eq!(mixed[0].evidence, "DATABASE_URL");
+    }
+
+    #[test]
+    fn suffix_ambiguity_and_unique_resolution() {
+        let mut a = profile("a");
+        a.links = vec![link("x/g/billing", "calls", "e")];
+        let g = derive(&[a], &none(), &t(&["a", "billing", "g/billing"]));
+        assert!(g.edges.is_empty(), "both aliases are suffixes");
+        let mut a = profile("a");
+        a.links = vec![link("x/billing", "calls", "e")];
+        let g = derive(&[a], &none(), &t(&["a", "p/billing", "q/billing"]));
+        assert!(g.edges.is_empty(), "same last segment twice");
+        let mut a = profile("a");
+        a.links = vec![
+            link("x/g/billing", "calls", "e"),
+            link("y/ledger", "calls", "f"),
+        ];
+        let g = derive(
+            &[a],
+            &none(),
+            &t(&["a", "g/billing", "p/ledger", "q/other"]),
+        );
+        let to: Vec<&str> = g.edges.iter().map(|e| e.to.as_str()).collect();
+        assert_eq!(to, ["g/billing", "p/ledger"]);
+    }
+
+    #[test]
+    fn rounded_coordinates_never_collide() {
+        let pts = [(500.04, 500.04), (500.0, 500.0), (500.01, 499.98)];
+        let r = unique_tenths(&pts, &[1, 0, 2]);
+        let set: BTreeSet<_> = r.iter().collect();
+        assert_eq!(set.len(), 3, "{r:?}");
+        assert_eq!(r[1], (5000, 5000), "first in order keeps its spot");
     }
 }
