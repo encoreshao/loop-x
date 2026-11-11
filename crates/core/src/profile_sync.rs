@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The approval kind of a profile section proposal.
 pub const KIND: &str = "profile-section";
@@ -543,8 +544,27 @@ pub struct SyncStore {
     /// Event-driven refreshes waiting for the next tick: alias -> section slugs.
     /// Written by [`on_run_finished`] / [`on_memory_added`], drained by
     /// [`process_queue`]. Absent in files written before this field existed.
-    pub queued: BTreeMap<String, Vec<String>>,
+    pub queued: QueuedMap,
 }
+
+/// One section waiting for an event-driven refresh.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QueuedSection {
+    /// The section slug.
+    pub section: String,
+    /// When the event was queued (refreshed when the same event repeats).
+    pub queued_at: DateTime<Utc>,
+    /// Queued by a new task memory: that event is itself the trigger, so the
+    /// section is refreshed without waiting for a source file to change.
+    #[serde(default)]
+    pub memory: bool,
+}
+
+pub type QueuedMap = BTreeMap<String, Vec<QueuedSection>>;
+
+/// A queued source-bearing section that never goes stale (the MR was closed, or
+/// never merged) is dropped after this many days.
+pub const QUEUE_MAX_AGE_DAYS: i64 = 14;
 
 pub fn store_path() -> PathBuf {
     home_dir().join("profile_sync.json")
@@ -608,17 +628,26 @@ pub fn next_run(settings: &SyncSettings, now: DateTime<Utc>) -> DateTime<Utc> {
     now + Duration::days(7)
 }
 
-/// Add `keys` to `alias`'s queue (deduped). Does nothing, and writes no file, when
-/// the weekly sync switch is off, the store is unreadable or `keys` is empty.
-fn enqueue(path: &Path, alias: &str, keys: &[SectionKey]) {
+/// Add `keys` to `alias`'s queue (deduped, `queued_at` refreshed). Does nothing,
+/// and writes no file, when the weekly sync switch is off, the store is
+/// unreadable or `keys` is empty.
+fn enqueue(path: &Path, alias: &str, keys: &[SectionKey], memory: bool, now: DateTime<Utc>) {
     if keys.is_empty() || !load(path).is_ok_and(|s| s.settings.enabled) {
         return;
     }
     let _ = with_store(path, |s| {
         let q = s.queued.entry(alias.to_string()).or_default();
         for k in keys {
-            if !q.iter().any(|x| x == k.slug()) {
-                q.push(k.slug().to_string());
+            match q.iter_mut().find(|x| x.section == k.slug()) {
+                Some(x) => {
+                    x.queued_at = now;
+                    x.memory |= memory;
+                }
+                None => q.push(QueuedSection {
+                    section: k.slug().to_string(),
+                    queued_at: now,
+                    memory,
+                }),
             }
         }
     });
@@ -635,79 +664,180 @@ fn never_fail(f: impl FnOnce()) {
 /// switch off it queues nothing and creates no file. It never fails or panics:
 /// every error is swallowed, so a hook problem cannot fail the run.
 pub fn on_run_finished(alias: &str, changed_files: &[String], root: Option<&Path>) {
-    on_run_finished_at(&store_path(), alias, changed_files, root);
+    on_run_finished_at(&store_path(), alias, changed_files, root, Utc::now());
 }
 
-pub fn on_run_finished_at(path: &Path, alias: &str, changed_files: &[String], root: Option<&Path>) {
+pub fn on_run_finished_at(
+    path: &Path,
+    alias: &str,
+    changed_files: &[String],
+    root: Option<&Path>,
+    now: DateTime<Utc>,
+) {
     never_fail(|| {
         if changed_files.is_empty() {
             return;
         }
-        enqueue(
-            path,
-            alias,
-            &queue_event_refresh(alias, changed_files, root),
-        );
+        let keys = queue_event_refresh(alias, changed_files, root);
+        enqueue(path, alias, &keys, false, now);
     });
 }
 
 /// A run recorded a new task memory: queue the Gotchas section (same rules as
 /// [`on_run_finished`]). Nothing is queued for a project with no profile yet.
 pub fn on_memory_added(alias: &str, root: Option<&Path>) {
-    on_memory_added_at(&store_path(), alias, root);
+    on_memory_added_at(&store_path(), alias, root, Utc::now());
 }
 
-pub fn on_memory_added_at(path: &Path, alias: &str, root: Option<&Path>) {
+pub fn on_memory_added_at(path: &Path, alias: &str, root: Option<&Path>, now: DateTime<Utc>) {
     never_fail(|| {
         if matches!(project_profile::load(alias, root), Ok(Some(_))) {
-            enqueue(path, alias, &[SectionKey::Gotchas]);
+            enqueue(path, alias, &[SectionKey::Gotchas], true, now);
         }
     });
 }
 
-/// Refresh every queued (alias, section) through the same `propose_refresh_held`
-/// path the weekly sync uses (dedupe on the source hash included), skipping
-/// human-written sections. Returns the (alias, slug) pairs that are done and
-/// should leave the queue: handled, unknown, or belonging to an untracked project.
-/// A project whose single-flight slot is busy stays queued. The caller clears the
-/// result from the store.
+/// Run `cmd` with no stdin and its output captured, killing it after `timeout`.
+/// The stdout text on a clean exit, else `None` (failure, timeout, spawn error).
+pub(crate) fn run_bounded(cmd: &mut std::process::Command, timeout: Duration) -> Option<String> {
+    let out = crate::proc::run(cmd, None, Some(timeout)).ok()?;
+    (!out.timed_out && out.success()).then_some(out.stdout)
+}
+
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Files the issue branch changed against its target: `git diff --name-only -z
+/// target...branch` in `repo` (read-only, bounded, NUL-split so unusual paths are
+/// not quoted), falling back to `origin/target`. Empty when git fails.
+pub fn branch_changed_files(repo: &str, target: &str, branch: &str) -> Vec<String> {
+    let diff = |base: &str| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(repo)
+            .args(["diff", "--name-only", "-z", &format!("{base}...{branch}")])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE");
+        run_bounded(&mut cmd, GIT_TIMEOUT)
+    };
+    diff(target)
+        .or_else(|| diff(&format!("origin/{target}")))
+        .map(|t| {
+            t.split('\0')
+                .filter(|f| !f.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Compute the branch diff and queue the affected sections, all in a detached
+/// thread: the caller never waits and never sees an error or panic.
+pub fn queue_branch_refresh(alias: &str, repo: &str, target: &str, branch: &str) {
+    let (alias, repo, target, branch) = (
+        alias.to_string(),
+        repo.to_string(),
+        target.to_string(),
+        branch.to_string(),
+    );
+    let _ = std::thread::Builder::new()
+        .name("profile-queue".into())
+        .spawn(move || queue_branch_refresh_blocking(&alias, &repo, &target, &branch));
+}
+
+/// [`queue_branch_refresh`] on the calling thread (bounded by the git timeout);
+/// for a short-lived process that would exit before a detached thread finished.
+pub fn queue_branch_refresh_blocking(alias: &str, repo: &str, target: &str, branch: &str) {
+    never_fail(|| {
+        on_run_finished(alias, &branch_changed_files(repo, target, branch), None);
+    });
+}
+
+/// What [`process_queue`] decided.
+#[derive(Debug, Default)]
+pub struct QueueResult {
+    /// (alias, slug) pairs to remove from the queue: proposed, failed, unknown,
+    /// untracked or aged out.
+    pub done: Vec<(String, String)>,
+    /// (alias, one-line sanitised message) for entries dropped on a failure, for
+    /// the status store so it is not silent.
+    pub failures: Vec<(String, String)>,
+}
+
+/// Refresh queued (alias, section) entries through the same `propose_refresh_held`
+/// path the weekly sync uses (dedupe on the source hash included). An entry is
+/// proposed only when its section is `Stale`, or it was queued by a new task
+/// memory (that event is the trigger). A source-bearing section that is still
+/// `Fresh` stays queued, since at merge-request time the checkout does not have
+/// the change yet, until it is [`QUEUE_MAX_AGE_DAYS`] old. Human-written sections
+/// are dropped. A project whose single-flight slot is busy stays queued.
 pub fn process_queue(
-    queued: &BTreeMap<String, Vec<String>>,
+    queued: &QueuedMap,
     projects: &[TrackedProject],
     agent: &dyn Agent,
     now: DateTime<Utc>,
     root: Option<&Path>,
     approvals_dir: &Path,
-) -> Vec<(String, String)> {
-    let mut done = Vec::new();
-    for (alias, slugs) in queued {
+) -> QueueResult {
+    let mut res = QueueResult::default();
+    for (alias, entries) in queued {
+        let all_done = |res: &mut QueueResult| {
+            res.done
+                .extend(entries.iter().map(|e| (alias.clone(), e.section.clone())));
+        };
         let Some(p) = projects.iter().find(|p| &p.alias == alias) else {
-            done.extend(slugs.iter().map(|s| (alias.clone(), s.clone())));
+            all_done(&mut res);
             continue;
         };
+        if !p.work_dir.is_dir() {
+            all_done(&mut res);
+            res.failures
+                .push((alias.clone(), "checkout not found".into()));
+            continue;
+        }
         let Some(_slot) = profile_build::try_acquire(alias) else {
             continue;
         };
-        let profile = project_profile::load(alias, root).ok().flatten();
+        let Some(profile) = project_profile::load(alias, root).ok().flatten() else {
+            all_done(&mut res);
+            continue;
+        };
         let head = profile_scan::head_sha(&p.work_dir);
-        for slug in slugs {
-            done.push((alias.clone(), slug.clone()));
-            let (Some(profile), Some(key)) = (&profile, SectionKey::from_slug(slug)) else {
+        for e in entries {
+            let Some(key) = SectionKey::from_slug(&e.section) else {
+                res.done.push((alias.clone(), e.section.clone()));
                 continue;
             };
-            if !p.work_dir.is_dir()
-                || section_freshness(profile, key, &p.work_dir, head.as_deref())
-                    == Freshness::HumanEdited
-            {
+            let fresh = section_freshness(&profile, key, &p.work_dir, head.as_deref());
+            let go = match fresh {
+                Freshness::HumanEdited => {
+                    res.done.push((alias.clone(), e.section.clone()));
+                    continue;
+                }
+                Freshness::Stale(_) => true,
+                _ => e.memory,
+            };
+            if !go {
+                if now - e.queued_at >= chrono::Duration::days(QUEUE_MAX_AGE_DAYS) {
+                    res.done.push((alias.clone(), e.section.clone()));
+                }
                 continue;
             }
-            never_fail(|| {
-                let _ =
-                    propose_refresh_held(alias, key, &p.work_dir, agent, now, root, approvals_dir);
-            });
+            res.done.push((alias.clone(), e.section.clone()));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                propose_refresh_held(alias, key, &p.work_dir, agent, now, root, approvals_dir)
+            }));
+            let err = match r {
+                Ok(Ok(_)) => continue,
+                Ok(Err(e)) => e,
+                Err(_) => "internal error".into(),
+            };
+            if let Outcome::Failed(line) = failure(&err) {
+                res.failures.push((alias.clone(), line));
+            }
         }
     }
-    done
+    res
 }
 
 #[derive(Debug, Clone)]
@@ -1598,23 +1728,64 @@ mod tests {
         (d, p)
     }
 
+    fn slugs(p: &Path, alias: &str) -> Vec<String> {
+        load(p).unwrap().queued[alias]
+            .iter()
+            .map(|q| q.section.clone())
+            .collect()
+    }
+
+    fn projects_of(f: &Fx) -> Vec<TrackedProject> {
+        vec![TrackedProject {
+            alias: f.alias.clone(),
+            instance: "i".into(),
+            project_id: "g/p".into(),
+            work_dir: f.work.path().to_path_buf(),
+        }]
+    }
+
+    fn queue(alias: &str, slug: &str, at: DateTime<Utc>, memory: bool) -> QueuedMap {
+        BTreeMap::from([(
+            alias.to_string(),
+            vec![QueuedSection {
+                section: slug.into(),
+                queued_at: at,
+                memory,
+            }],
+        )])
+    }
+
+    fn run_queue(f: &Fx, q: &QueuedMap, agent: &dyn Agent) -> QueueResult {
+        process_queue(
+            q,
+            &projects_of(f),
+            agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        )
+    }
+
     #[test]
     fn merged_mr_touching_a_section_source_queues_that_section() {
         let f = Fx::new(Origin::Agent);
         let (_d, p) = qstore();
-        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
-        assert_eq!(load(&p).unwrap().queued[&f.alias], vec!["stack"]);
+        let r = Some(f.root.path());
+        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], r, now());
+        assert_eq!(slugs(&p, &f.alias), vec!["stack"]);
+        assert_eq!(load(&p).unwrap().queued[&f.alias][0].queued_at, now());
         // Deduped, and it survives a restart (reload from disk).
-        on_run_finished_at(&p, &f.alias, &["./Cargo.toml".into()], Some(f.root.path()));
-        assert_eq!(load(&p).unwrap().queued[&f.alias], vec!["stack"]);
+        on_run_finished_at(&p, &f.alias, &["./Cargo.toml".into()], r, now());
+        assert_eq!(slugs(&p, &f.alias), vec!["stack"]);
     }
 
     #[test]
     fn unrelated_files_queue_nothing() {
         let f = Fx::new(Origin::Agent);
         let (_d, p) = qstore();
-        on_run_finished_at(&p, &f.alias, &["README.md".into()], Some(f.root.path()));
-        on_run_finished_at(&p, &f.alias, &[], Some(f.root.path()));
+        let r = Some(f.root.path());
+        on_run_finished_at(&p, &f.alias, &["README.md".into()], r, now());
+        on_run_finished_at(&p, &f.alias, &[], r, now());
         assert!(!p.exists());
     }
 
@@ -1622,94 +1793,167 @@ mod tests {
     fn new_task_memory_queues_gotchas() {
         let f = Fx::new(Origin::Agent);
         let (_d, p) = qstore();
-        on_memory_added_at(&p, &f.alias, Some(f.root.path()));
-        assert_eq!(load(&p).unwrap().queued[&f.alias], vec!["gotchas"]);
+        on_memory_added_at(&p, &f.alias, Some(f.root.path()), now());
+        assert_eq!(slugs(&p, &f.alias), vec!["gotchas"]);
+        assert!(load(&p).unwrap().queued[&f.alias][0].memory);
         // No profile, nothing to refresh.
         let (_d2, p2) = qstore();
-        on_memory_added_at(&p2, "no-such-alias", Some(f.root.path()));
+        on_memory_added_at(&p2, "no-such-alias", Some(f.root.path()), now());
         assert!(!p2.exists());
     }
 
     #[test]
     fn a_disabled_switch_queues_nothing_and_creates_no_file() {
         let f = Fx::new(Origin::Agent);
+        let r = Some(f.root.path());
         let (_d, p) = qstore();
         with_store(&p, |s| s.settings.enabled = false).unwrap();
         let before = fs::read_to_string(&p).unwrap();
-        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
-        on_memory_added_at(&p, &f.alias, Some(f.root.path()));
+        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], r, now());
+        on_memory_added_at(&p, &f.alias, r, now());
         assert_eq!(fs::read_to_string(&p).unwrap(), before);
-        let (_d2, p2) = qstore();
-        let off = SyncStore {
-            settings: SyncSettings {
-                enabled: false,
-                ..SyncSettings::default()
-            },
-            ..SyncStore::default()
-        };
-        // An absent file is "on"; only a stored "off" blocks, and writes nothing new.
-        fs::write(&p2, crate::pyjson::to_string_pretty(&off)).unwrap();
-        on_run_finished_at(&p2, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
-        assert!(load(&p2).unwrap().queued.is_empty());
+        assert!(load(&p).unwrap().queued.is_empty());
     }
 
     #[test]
     fn a_failing_hook_never_panics_and_old_files_without_the_field_load() {
         let f = Fx::new(Origin::Agent);
+        let r = Some(f.root.path());
         let (d, p) = qstore();
-        // Corrupt store: the hook returns quietly and leaves the file alone.
         fs::write(&p, "{nope").unwrap();
-        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], Some(f.root.path()));
+        on_run_finished_at(&p, &f.alias, &["Cargo.toml".into()], r, now());
         assert_eq!(fs::read_to_string(&p).unwrap(), "{nope");
-        // Unwritable location (parent is a file).
         let blocked = d.path().join("profile_sync.json").join("x.json");
-        on_run_finished_at(
-            &blocked,
-            &f.alias,
-            &["Cargo.toml".into()],
-            Some(f.root.path()),
-        );
+        on_run_finished_at(&blocked, &f.alias, &["Cargo.toml".into()], r, now());
         fs::write(&p, r#"{"sync_requested": true}"#).unwrap();
         assert!(load(&p).unwrap().queued.is_empty());
     }
 
     #[test]
-    fn process_queue_refreshes_queued_sections_and_reports_them_done() {
+    fn a_fresh_source_bearing_section_stays_queued_without_an_agent_call() {
+        let f = Fx::new(Origin::Agent);
+        let agent = Fake::new("New stack.");
+        let q = queue(&f.alias, "stack", now() - chrono::Duration::days(1), false);
+        let r = run_queue(&f, &q, &agent);
+        assert_eq!(agent.calls(), 0);
+        assert!(r.done.is_empty() && r.failures.is_empty());
+    }
+
+    #[test]
+    fn once_the_source_changes_the_queued_section_is_proposed_once_and_removed() {
         let f = Fx::new(Origin::Agent);
         f.touch_cargo("changed\n");
         let agent = Fake::new("New stack.");
-        let queued = BTreeMap::from([
-            (
-                f.alias.clone(),
-                vec!["stack".to_string(), "bogus".to_string()],
-            ),
-            ("untracked".to_string(), vec!["stack".to_string()]),
-        ]);
-        let projects = vec![TrackedProject {
-            alias: f.alias.clone(),
-            instance: "i".into(),
-            project_id: "g/p".into(),
-            work_dir: f.work.path().to_path_buf(),
-        }];
-        let done = process_queue(
-            &queued,
-            &projects,
-            &agent,
-            now(),
-            Some(f.root.path()),
-            f.apr.path(),
-        );
+        let q = queue(&f.alias, "stack", now(), false);
+        let r = run_queue(&f, &q, &agent);
         assert_eq!(agent.calls(), 1);
-        assert_eq!(done.len(), 3);
-        // Run again: the same proposal is deduped, the agent is not asked twice.
-        process_queue(
-            &queued,
-            &projects,
-            &agent,
-            now(),
-            Some(f.root.path()),
-            f.apr.path(),
-        );
+        assert_eq!(r.done, vec![(f.alias.clone(), "stack".to_string())]);
+        // Replaying the same queue is deduped by the proposal hash.
+        run_queue(&f, &q, &agent);
         assert_eq!(agent.calls(), 1);
+    }
+
+    #[test]
+    fn an_entry_older_than_fourteen_days_that_is_still_fresh_is_dropped() {
+        let f = Fx::new(Origin::Agent);
+        let agent = Fake::new("New stack.");
+        let q = queue(&f.alias, "stack", now() - chrono::Duration::days(15), false);
+        let r = run_queue(&f, &q, &agent);
+        assert_eq!(agent.calls(), 0);
+        assert_eq!(r.done, vec![(f.alias.clone(), "stack".to_string())]);
+        let young = queue(&f.alias, "stack", now() - chrono::Duration::days(13), false);
+        assert!(run_queue(&f, &young, &agent).done.is_empty());
+    }
+
+    #[test]
+    fn gotchas_from_a_new_memory_are_proposed_without_being_stale() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.sourceless();
+        let (_d, p) = qstore();
+        on_memory_added_at(&p, &f.alias, Some(f.root.path()), now());
+        let q = load(&p).unwrap().queued;
+        let r = run_queue(&f, &q, &agent);
+        assert_eq!(agent.calls(), 1);
+        assert_eq!(r.done, vec![(f.alias.clone(), "gotchas".to_string())]);
+        // A sourceless section queued by files (not a memory) waits like any fresh one.
+        let other = queue(&f.alias, "gotchas", now(), false);
+        let a2 = Fake::new("x").for_section("gotchas");
+        assert!(run_queue(&f, &other, &a2).done.is_empty());
+        assert_eq!(a2.calls(), 0);
+    }
+
+    #[test]
+    fn a_failed_agent_drops_the_entry_and_reports_the_failure() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("changed\n");
+        let q = queue(&f.alias, "stack", now(), false);
+        let r = run_queue(&f, &q, &Refuse);
+        assert_eq!(r.done, vec![(f.alias.clone(), "stack".to_string())]);
+        assert_eq!(r.failures.len(), 1);
+        assert_eq!(r.failures[0].0, f.alias);
+        assert!(
+            r.failures[0].1.contains("not signed in"),
+            "{:?}",
+            r.failures
+        );
+    }
+
+    #[test]
+    fn unknown_slugs_and_untracked_projects_are_dropped() {
+        let f = Fx::new(Origin::Agent);
+        let agent = Fake::new("x");
+        let mut q = queue(&f.alias, "bogus", now(), false);
+        q.extend(queue("untracked", "stack", now(), false));
+        assert_eq!(run_queue(&f, &q, &agent).done.len(), 2);
+        assert_eq!(agent.calls(), 0);
+    }
+
+    #[test]
+    fn a_hung_command_is_killed_at_the_timeout() {
+        let t = std::time::Instant::now();
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30");
+        assert!(run_bounded(&mut cmd, std::time::Duration::from_millis(200)).is_none());
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        let mut ok = std::process::Command::new("echo");
+        ok.arg("hi");
+        assert_eq!(
+            run_bounded(&mut ok, std::time::Duration::from_secs(5)).as_deref(),
+            Some("hi\n")
+        );
+    }
+
+    #[test]
+    fn branch_changed_files_lists_the_branch_diff_and_is_empty_on_failure() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().to_str().unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env_remove("GIT_INDEX_FILE")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        fs::write(d.path().join("a.txt"), "a").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "base"]);
+        git(&["checkout", "-qb", "loop/issue-1"]);
+        fs::write(d.path().join("Cargo.toml"), "x").unwrap();
+        fs::write(d.path().join("caf\u{e9} \"q\".txt"), "x").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "fix"]);
+        let mut got = branch_changed_files(dir, "main", "loop/issue-1");
+        got.sort();
+        assert_eq!(got, vec!["Cargo.toml", "caf\u{e9} \"q\".txt"]);
+        assert!(branch_changed_files(dir, "nope", "loop/issue-1").is_empty());
+        assert!(branch_changed_files("/does/not/exist", "main", "x").is_empty());
     }
 }

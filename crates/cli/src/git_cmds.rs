@@ -47,11 +47,29 @@ pub fn mr_open(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     match Command::new(&argv[0]).args(&argv[1..]).status() {
-        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) if status.success() => {
+            queue_profile_refresh(repo_path, target_branch, branch);
+            ExitCode::SUCCESS
+        }
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(e) => {
             eprintln!("failed to run git: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+/// The agent opened this merge request itself (non-gated run): queue the profile
+/// sections its branch touches. Best-effort and bounded (this process exits right
+/// after, so it runs inline rather than on a detached thread); never changes the
+/// exit code.
+fn queue_profile_refresh(repo_path: &str, target: &str, branch: &str) {
+    let want = std::fs::canonicalize(repo_path).unwrap_or_else(|_| repo_path.into());
+    let alias = loopx_core::profile_sync::tracked_projects()
+        .into_iter()
+        .find(|p| std::fs::canonicalize(&p.work_dir).unwrap_or(p.work_dir.clone()) == want)
+        .map(|p| p.alias);
+    if let Some(alias) = alias {
+        loopx_core::profile_sync::queue_branch_refresh_blocking(&alias, repo_path, target, branch);
     }
 }

@@ -40,12 +40,22 @@ pub fn tick(
     let mut loaded: Option<Vec<TrackedProject>> = None;
     if store.settings.enabled && store.queued.values().any(|v| !v.is_empty()) {
         let list = loaded.insert(projects.take().map_or_else(Vec::new, |f| f()));
-        let done = sync::process_queue(&store.queued, list, agent, now, root, approvals_dir);
+        let res = sync::process_queue(&store.queued, list, agent, now, root, approvals_dir);
         let _ = sync::with_store(store_path, |s| {
-            for (alias, slug) in done {
+            for (alias, slug) in res.done {
                 if let Some(q) = s.queued.get_mut(&alias) {
-                    q.retain(|x| *x != slug);
+                    q.retain(|x| x.section != slug);
                 }
+            }
+            // A dropped-on-failure entry leaves a note, so it is not silent.
+            for (alias, msg) in res.failures {
+                s.status.per_project.insert(
+                    alias,
+                    ProjectSync {
+                        at: now,
+                        outcome: sync::Outcome::Failed(msg),
+                    },
+                );
             }
             s.queued.retain(|_, q| !q.is_empty());
         });
@@ -266,9 +276,14 @@ mod tests {
         let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
         // Off the weekly schedule, no sync request: only the queue is pending.
         sync::with_store(&f.store(), |s| {
+            let q = |slug: &str| sync::QueuedSection {
+                section: slug.into(),
+                queued_at: local(11, 9, 0),
+                memory: false,
+            };
             s.queued
-                .insert("tick-app".into(), vec!["stack".into(), "gotchas".into()]);
-            s.queued.insert("other".into(), vec!["stack".into()]);
+                .insert("tick-app".into(), vec![q("stack"), q("gotchas")]);
+            s.queued.insert("other".into(), vec![q("stack")]);
         })
         .unwrap();
         assert!(f.tick(&a, local(11, 10, 0), &mut st));
@@ -284,10 +299,56 @@ mod tests {
         let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
         sync::with_store(&f.store(), |s| {
             s.settings.enabled = false;
-            s.queued.insert("tick-app".into(), vec!["stack".into()]);
+            s.queued.insert(
+                "tick-app".into(),
+                vec![sync::QueuedSection {
+                    section: "stack".into(),
+                    queued_at: local(11, 9, 0),
+                    memory: false,
+                }],
+            );
         })
         .unwrap();
         assert!(!f.tick(&a, local(11, 10, 0), &mut st));
         assert_eq!(sync::load(&f.store()).unwrap().queued.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_queue_entry_is_recorded_in_the_status() {
+        let f = Fx::new();
+        let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
+        sync::with_store(&f.store(), |s| {
+            s.queued.insert(
+                "tick-app".into(),
+                vec![sync::QueuedSection {
+                    section: "stack".into(),
+                    queued_at: local(11, 9, 0),
+                    memory: false,
+                }],
+            );
+        })
+        .unwrap();
+        // The checkout is gone: the entry is dropped and the status says why.
+        let gone = f.work.path().join("missing");
+        let list = vec![TrackedProject {
+            work_dir: gone,
+            ..f.projects()[0].clone()
+        }];
+        let ran = tick(
+            &f.store(),
+            || list,
+            &a,
+            local(11, 10, 0),
+            &mut st,
+            Some(f.dir.path()),
+            &f.dir.path().join("approvals"),
+        );
+        assert!(ran);
+        let s = sync::load(&f.store()).unwrap();
+        assert!(s.queued.is_empty());
+        assert!(matches!(
+            s.status.per_project["tick-app"].outcome,
+            Outcome::Failed(_)
+        ));
     }
 }

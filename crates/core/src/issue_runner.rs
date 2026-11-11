@@ -1989,12 +1989,9 @@ pub fn finalize_gated_issue(
         None => log("no merge request URL in the push output; its description was not set"),
     }
     // Queue profile sections whose source files this MR changed; the dashboard tick
-    // refreshes them later. Queue-only, best-effort: it never fails or delays the run.
-    crate::profile_sync::on_run_finished(
-        alias,
-        &branch_changed_files(&local_path, &target, &branch),
-        None,
-    );
+    // refreshes them later. Queue-only and detached: the diff and the queue write run on
+    // their own bounded thread, so the run never waits for them and never fails on them.
+    crate::profile_sync::queue_branch_refresh(alias, &local_path, &target, &branch);
     emit(
         "issue.completed",
         json!({"outcome": "mr_opened", "gated": true, "action": "fix", "mr_url": mr_url, "mr_title": title}),
@@ -2013,21 +2010,6 @@ pub fn finalize_gated_issue(
         format!("*Finished* {issue_label}: MR opened \u{2192} {link}{setup_note}"),
     );
     "mr_opened".to_string()
-}
-
-/// Files the issue branch changed against its target (`git diff --name-only
-/// target...branch` in the checkout, read-only). Empty when git fails.
-fn branch_changed_files(local_path: &str, target: &str, branch: &str) -> Vec<String> {
-    let diff = |base: &str| {
-        git_out(
-            local_path,
-            &["diff", "--name-only", &format!("{base}...{branch}")],
-        )
-    };
-    diff(target)
-        .or_else(|| diff(&format!("origin/{target}")))
-        .map(|t| t.lines().map(str::to_string).collect())
-        .unwrap_or_default()
 }
 
 /// The "## Screenshots" section for the handoff's screenshot pairs: uploads
@@ -3743,40 +3725,6 @@ pub fn main(ctx: &RunCtx, argv: &[String], invoker: Invoker) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn branch_changed_files_lists_the_branch_diff_and_is_empty_on_failure() {
-        let d = tempfile::tempdir().unwrap();
-        let dir = d.path().to_str().unwrap();
-        let git = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(args)
-                .env_remove("GIT_DIR")
-                .env_remove("GIT_WORK_TREE")
-                .env_remove("GIT_INDEX_FILE")
-                .status()
-                .unwrap()
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        git(&["init", "-q", "-b", "main"]);
-        std::fs::write(d.path().join("a.txt"), "a").unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "-qm", "base"]);
-        git(&["checkout", "-qb", "loop/issue-1"]);
-        std::fs::write(d.path().join("Cargo.toml"), "x").unwrap();
-        git(&["add", "-A"]);
-        git(&["commit", "-qm", "fix"]);
-        assert_eq!(
-            branch_changed_files(dir, "main", "loop/issue-1"),
-            vec!["Cargo.toml"]
-        );
-        assert!(branch_changed_files(dir, "nope", "loop/issue-1").is_empty());
-        assert!(branch_changed_files("/does/not/exist", "main", "x").is_empty());
-    }
-
     use super::*;
     use crate::loop_result::VerificationResult;
 
