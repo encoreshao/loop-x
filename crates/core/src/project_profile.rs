@@ -1,6 +1,11 @@
 //! Per-project profile: `<memory root>/<alias>/PROFILE.md`, a markdown file of
 //! fixed sections (each with provenance) plus links to other projects. Every
 //! save snapshots the previous file into `PROFILE.history/` (newest 20 kept).
+//!
+//! Concurrency: any read-modify-write of a profile (an `edit_section` + `save`
+//! from the UI, a build, a sync) must go through [`update_locked`], which takes
+//! the per-alias directory lock shared with `memory_store`; a bare `load` then
+//! `save` can lose a concurrent edit.
 
 use crate::memory_store::{default_memory_root, parse_source_line};
 use chrono::{DateTime, SecondsFormat, Timelike, Utc};
@@ -536,6 +541,26 @@ pub fn save(p: &Profile, root: Option<&Path>) -> io::Result<()> {
         ));
     }
     snapshot_and_write(&p.alias, &text, root)
+}
+
+/// Load, change and save under the alias directory's lock (the same lock
+/// `memory_store` takes for its per-project writes). `f` gets the current
+/// profile, if any, and returns the one to save. Keep `f` quick: never hold
+/// this across a model call.
+pub fn update_locked(
+    alias: &str,
+    root: Option<&Path>,
+    f: impl FnOnce(Option<Profile>) -> Result<Profile, String>,
+) -> Result<Profile, String> {
+    check_alias(alias)?;
+    let dir = project_dir(alias, root);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::file_lock::with_lock(&dir, || {
+        let p = f(load(alias, root)?)?;
+        save(&p, root).map_err(|e| e.to_string())?;
+        Ok(p)
+    })
+    .map_err(|e| e.to_string())?
 }
 
 /// Make a history file the current profile (the current one is snapshotted first).
@@ -1111,5 +1136,41 @@ mod tests {
             contains_secret("GITLAB_TOKEN=/run/secrets/tok3n-file-abc"),
             None
         );
+    }
+
+    #[test]
+    fn concurrent_update_locked_calls_lose_no_update() {
+        let root = tempfile::tempdir().unwrap();
+        let mut base = sample("app");
+        base.sections.clear();
+        save(&base, Some(root.path())).unwrap();
+        let keys = [
+            SectionKey::Overview,
+            SectionKey::Stack,
+            SectionKey::Gotchas,
+            SectionKey::People,
+        ];
+        let handles: Vec<_> = keys
+            .into_iter()
+            .map(|k| {
+                let r = root.path().to_path_buf();
+                std::thread::spawn(move || {
+                    update_locked("app", Some(&r), |cur| {
+                        let mut p = cur.expect("exists");
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        edit_section(&mut p, k, &format!("s-{}", k.slug()), "b", t(1));
+                        Ok(p)
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let got = load("app", Some(root.path())).unwrap().unwrap();
+        for k in keys {
+            assert_eq!(got.sections[&k].summary, format!("s-{}", k.slug()), "{k:?}");
+        }
     }
 }
