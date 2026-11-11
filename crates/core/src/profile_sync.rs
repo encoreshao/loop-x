@@ -8,6 +8,14 @@
 //! time it was proposed. Nothing in the profile changes until the person approves
 //! and [`apply_proposal`] runs.
 //!
+//! Weekly sync: [`sync_all`] walks the tracked projects (see [`tracked_projects`]:
+//! every code-changing entry of `projects.json`; issues-only entries have no checkout
+//! and are left out, and an entry whose checkout is gone is reported as failed) and
+//! drafts a missing profile or proposes a refresh for each STALE section only. The
+//! schedule, the last result per project and a "sync now" flag live in
+//! `<home>/profile_sync.json`. A failure is kept in that status (needs_you.rs has no
+//! generic notification hook; the overview page shows the status).
+//!
 //! Expiry: `approvals::expire_overdue` times out any pending approval past its
 //! `expires_at`. A profile proposal is not time-boxed (nobody is blocked waiting for
 //! it, unlike a run waiting to open an MR), so it is created with a timeout of ten
@@ -28,13 +36,16 @@
 //! same approval twice is a no-op that writes nothing.
 
 use crate::approvals::{self, NewApproval};
-use crate::profile_build::{defang, fenced_data, guard_prompt, sources_for, Agent};
+use crate::config::home_dir;
+use crate::profile_build::{self, defang, fenced_data, guard_prompt, sources_for, Agent};
 use crate::profile_scan::{self, IssueDigest};
 use crate::project_profile::{self, Origin, Profile, Section, SectionKey, Source};
 use crate::sha256;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// The approval kind of a profile section proposal.
 pub const KIND: &str = "profile-section";
@@ -262,10 +273,25 @@ pub fn propose_refresh(
     root: Option<&Path>,
     approvals_dir: &Path,
 ) -> Result<Option<Proposal>, String> {
-    let profile = project_profile::load(alias, root)?
-        .ok_or_else(|| format!("{alias} has no profile yet; build it first"))?;
     let _guard = crate::profile_build::try_acquire(alias)
         .ok_or_else(|| format!("a profile run for {alias} is already in progress"))?;
+    propose_refresh_held(alias, key, work_dir, agent, now, root, approvals_dir)
+}
+
+/// [`propose_refresh`] for a caller that already holds the alias's single-flight
+/// slot (the weekly sync holds it across a whole project).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn propose_refresh_held(
+    alias: &str,
+    key: SectionKey,
+    work_dir: &Path,
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+) -> Result<Option<Proposal>, String> {
+    let profile = project_profile::load(alias, root)?
+        .ok_or_else(|| format!("{alias} has no profile yet; build it first"))?;
     let scan = profile_scan::scan_repo(work_dir, &[])?;
     let old = profile.sections.get(&key);
     let sources = fresh_sources(key, old, &scan, work_dir);
@@ -458,6 +484,245 @@ fn applied_marker(
         .map(Path::to_path_buf)
         .unwrap_or_default();
     Ok(dir.join("PROFILE.applied").join(safe))
+}
+
+// ---- weekly sync ---------------------------------------------------------
+
+/// How many projects one run touches unless the store says otherwise.
+const DEFAULT_MAX_PROJECTS: usize = 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SyncSettings {
+    pub enabled: bool,
+    pub weekday: chrono::Weekday,
+    /// Local hour, 0..=23.
+    pub hour: u32,
+    /// Budget cap: a huge fleet cannot run away.
+    pub max_projects_per_run: usize,
+}
+
+impl Default for SyncSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weekday: chrono::Weekday::Mon,
+            hour: 9,
+            max_projects_per_run: DEFAULT_MAX_PROJECTS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum Outcome {
+    Skipped,
+    Drafted,
+    Proposed(usize),
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProjectSync {
+    pub at: DateTime<Utc>,
+    pub outcome: Outcome,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SyncStatus {
+    pub last_run: Option<DateTime<Utc>>,
+    pub per_project: BTreeMap<String, ProjectSync>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncStore {
+    pub settings: SyncSettings,
+    pub status: SyncStatus,
+    /// Set by "Sync now"; the tick runs once and clears it.
+    pub sync_requested: bool,
+}
+
+pub fn store_path() -> PathBuf {
+    home_dir().join("profile_sync.json")
+}
+
+/// A missing file is the default (sync on, nothing run); an unreadable one is an
+/// `Err` the caller must not overwrite.
+pub fn load(path: &Path) -> Result<SyncStore, String> {
+    if !path.exists() {
+        return Ok(SyncStore::default());
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| format!("{} is not valid: {e}", path.display()))
+}
+
+/// [`load`], first keeping a copy of an unreadable file as `<name>.bad`.
+pub fn load_keeping_bad(path: &Path) -> Result<SyncStore, String> {
+    load(path).inspect_err(|_| {
+        let _ = std::fs::copy(path, path.with_extension("json.bad"));
+    })
+}
+
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Load, change and save under one process-wide lock. A corrupt file is an `Err`
+/// and is left untouched.
+pub fn with_store<R>(path: &Path, f: impl FnOnce(&mut SyncStore) -> R) -> Result<R, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut store = load(path)?;
+    let out = f(&mut store);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.tmp"));
+    std::fs::write(&tmp, crate::pyjson::to_string_pretty(&store)).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// The first scheduled slot (weekday at `hour`:00 local) strictly after `now`.
+pub fn next_run(settings: &SyncSettings, now: DateTime<Utc>) -> DateTime<Utc> {
+    use chrono::{Datelike, Duration, Local, TimeZone};
+    let local_now = now.with_timezone(&Local);
+    let hour = settings.hour.min(23);
+    for add in 0..=15 {
+        let day = local_now.date_naive() + Duration::days(add);
+        if day.weekday() != settings.weekday {
+            continue;
+        }
+        let Some(at) = day
+            .and_hms_opt(hour, 0, 0)
+            .and_then(|n| Local.from_local_datetime(&n).earliest())
+        else {
+            continue;
+        };
+        if at.with_timezone(&Utc) > now {
+            return at.with_timezone(&Utc);
+        }
+    }
+    now + Duration::days(7)
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackedProject {
+    pub alias: String,
+    pub instance: String,
+    pub project_id: String,
+    pub work_dir: PathBuf,
+}
+
+/// Every code-changing project of `projects.json` (the same list the Projects page
+/// and the GitLab loop work from). Empty when the config is missing or unreadable.
+pub fn tracked_projects() -> Vec<TrackedProject> {
+    let Ok(cfg) = crate::config::Config::load(&crate::config::default_config_path()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for alias in cfg.aliases().unwrap_or_default() {
+        let Ok(p) = cfg.project(&alias) else { continue };
+        if !crate::config::changes_code(&p) {
+            continue;
+        }
+        let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        out.push(TrackedProject {
+            instance: text("instance"),
+            project_id: text("project_id"),
+            work_dir: PathBuf::from(text("local_path")),
+            alias,
+        });
+    }
+    out
+}
+
+/// A failure line safe to store and show: one line, bounded, no file content.
+fn failure(msg: &str) -> Outcome {
+    let line = msg.lines().next().unwrap_or("").trim();
+    Outcome::Failed(line.chars().take(200).collect())
+}
+
+fn sync_project(
+    p: &TrackedProject,
+    all_aliases: &[String],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+) -> Outcome {
+    if !p.work_dir.is_dir() {
+        return Outcome::Failed("checkout not found".into());
+    }
+    let Some(_slot) = profile_build::try_acquire(&p.alias) else {
+        return Outcome::Skipped;
+    };
+    let profile = match project_profile::load(&p.alias, root) {
+        Ok(p) => p,
+        Err(e) => return failure(&e),
+    };
+    let Some(profile) = profile else {
+        return match profile_build::build_profile(
+            &p.alias,
+            &p.work_dir,
+            &p.instance,
+            &p.project_id,
+            all_aliases,
+            agent,
+            now,
+            root,
+        ) {
+            Ok(_) => Outcome::Drafted,
+            Err(e) => failure(&e),
+        };
+    };
+    let head = profile_scan::head_sha(&p.work_dir);
+    let stale: Vec<SectionKey> = SectionKey::ALL
+        .into_iter()
+        .filter(|k| {
+            matches!(
+                section_freshness(&profile, *k, &p.work_dir, head.as_deref()),
+                Freshness::Stale(_)
+            )
+        })
+        .collect();
+    if stale.is_empty() {
+        return Outcome::Skipped;
+    }
+    let (mut raised, mut first_err) = (0, None);
+    for key in stale {
+        match propose_refresh_held(&p.alias, key, &p.work_dir, agent, now, root, approvals_dir) {
+            Ok(Some(_)) => raised += 1,
+            Ok(None) => {}
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    match first_err {
+        Some(e) if raised == 0 => failure(&e),
+        _ => Outcome::Proposed(raised),
+    }
+}
+
+/// One pass over `projects`. A project's failure or panic is its own outcome and
+/// the rest still run. Nothing here writes the status store; the caller does.
+pub fn sync_all(
+    projects: &[TrackedProject],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+) -> Vec<(String, Outcome)> {
+    let aliases: Vec<String> = projects.iter().map(|p| p.alias.clone()).collect();
+    projects
+        .iter()
+        .map(|p| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sync_project(p, &aliases, agent, now, root, approvals_dir)
+            }))
+            .unwrap_or_else(|_| Outcome::Failed("internal error".into()));
+            (p.alias.clone(), outcome)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -978,5 +1243,244 @@ mod tests {
         );
         assert!(queue_event_refresh(&f.alias, &["README.md".into()], root).is_empty());
         assert!(queue_event_refresh("nope", &["Cargo.toml".into()], root).is_empty());
+    }
+
+    // ---- weekly sync -----------------------------------------------------
+
+    fn tp(f: &Fx) -> TrackedProject {
+        TrackedProject {
+            alias: f.alias.clone(),
+            instance: "work".into(),
+            project_id: "grp/app".into(),
+            work_dir: f.work.path().to_path_buf(),
+        }
+    }
+
+    fn run_sync(f: &Fx, agent: &dyn Agent) -> Vec<(String, Outcome)> {
+        sync_all(&[tp(f)], agent, now(), Some(f.root.path()), f.apr.path())
+    }
+
+    struct Boom;
+    impl Agent for Boom {
+        fn run(&self, _: &str) -> Result<String, String> {
+            panic!("agent exploded");
+        }
+    }
+
+    struct Refuse;
+    impl Agent for Refuse {
+        fn run(&self, _: &str) -> Result<String, String> {
+            Err("the AI CLI is not signed in".into())
+        }
+    }
+
+    fn local(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
+        use chrono::{Local, TimeZone};
+        Local
+            .with_ymd_and_hms(y, m, d, h, min, 0)
+            .earliest()
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn next_run_is_following_configured_weekday() {
+        let s = SyncSettings::default();
+        assert_eq!(
+            (s.enabled, s.weekday, s.hour),
+            (true, chrono::Weekday::Mon, 9)
+        );
+        assert_eq!(s.max_projects_per_run, 20);
+        // Wednesday 2026-11-11 -> Monday 2026-11-16, 09:00 local.
+        assert_eq!(
+            next_run(&s, local(2026, 11, 11, 10, 0)),
+            local(2026, 11, 16, 9, 0)
+        );
+        // Monday before the hour: the same day.
+        assert_eq!(
+            next_run(&s, local(2026, 11, 16, 8, 59)),
+            local(2026, 11, 16, 9, 0)
+        );
+        // Exactly at the slot: strictly in the future, so next week.
+        assert_eq!(
+            next_run(&s, local(2026, 11, 16, 9, 0)),
+            local(2026, 11, 23, 9, 0)
+        );
+        let fri = SyncSettings {
+            weekday: chrono::Weekday::Fri,
+            hour: 17,
+            ..SyncSettings::default()
+        };
+        assert_eq!(
+            next_run(&fri, local(2026, 11, 11, 10, 0)),
+            local(2026, 11, 13, 17, 0)
+        );
+    }
+
+    #[test]
+    fn unchanged_project_is_skipped_without_calling_agent() {
+        let f = Fx::new(Origin::Agent);
+        let agent = Fake::new("New.");
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Skipped)]
+        );
+        assert_eq!(agent.calls(), 0);
+        assert!(approvals::all(f.apr.path()).is_empty());
+    }
+
+    #[test]
+    fn a_stale_section_gets_one_proposal_and_nothing_else() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let agent = Fake::new("New stack text.");
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Proposed(1))]
+        );
+        assert_eq!(agent.calls(), 1);
+        assert_eq!(approvals::all(f.apr.path()).len(), 1);
+        assert_eq!(
+            f.profile().sections[&SectionKey::Stack].body,
+            "Old stack text."
+        );
+        // The same drift again is deduped: no new proposal.
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Proposed(0))]
+        );
+        assert_eq!(approvals::all(f.apr.path()).len(), 1);
+    }
+
+    #[test]
+    fn a_human_edited_section_is_not_proposed_over_by_the_sync() {
+        let f = Fx::new(Origin::Human);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let agent = Fake::new("New.");
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Skipped)]
+        );
+        assert_eq!(agent.calls(), 0);
+    }
+
+    #[test]
+    fn untracked_profile_gets_first_draft() {
+        let f = Fx::new(Origin::Agent);
+        let fresh = format!("{}-new", f.alias);
+        let work = tempfile::tempdir().unwrap();
+        fs::write(work.path().join("Cargo.toml"), CARGO_V1).unwrap();
+        let p = TrackedProject {
+            alias: fresh.clone(),
+            instance: "work".into(),
+            project_id: "grp/new".into(),
+            work_dir: work.path().to_path_buf(),
+        };
+        let agent = Fake::new("Rust stack.");
+        let out = sync_all(&[p], &agent, now(), Some(f.root.path()), f.apr.path());
+        assert_eq!(out, vec![(fresh.clone(), Outcome::Drafted)]);
+        assert_eq!(agent.calls(), 1);
+        let saved = project_profile::load(&fresh, Some(f.root.path()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, project_profile::Status::Draft);
+    }
+
+    #[test]
+    fn one_failing_project_does_not_stop_the_others() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let gone = TrackedProject {
+            alias: format!("{}-gone", f.alias),
+            instance: "work".into(),
+            project_id: "grp/gone".into(),
+            work_dir: f.work.path().join("does-not-exist"),
+        };
+        let g = Fx::new(Origin::Agent);
+        g.touch_cargo("[package]\nname = \"app3\"\n");
+        let agent = Fake::new("New stack text.");
+        let out = sync_all(
+            &[gone.clone(), tp(&f), tp(&g)],
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        );
+        assert_eq!(out[0].0, gone.alias);
+        assert!(matches!(&out[0].1, Outcome::Failed(m) if m.contains("checkout not found")));
+        assert_eq!(out[1].1, Outcome::Proposed(1));
+        // g's profile lives in g's root, so under f's root it has none: a failed draft
+        // attempt must not stop anything either way.
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn an_agent_error_or_panic_becomes_a_failure_and_the_loop_continues() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let out = run_sync(&f, &Refuse);
+        assert!(matches!(&out[0].1, Outcome::Failed(m) if m.contains("not signed in")));
+        let out = run_sync(&f, &Boom);
+        assert!(matches!(&out[0].1, Outcome::Failed(_)), "{out:?}");
+        if let Outcome::Failed(m) = &out[0].1 {
+            assert!(!m.contains("Cargo.toml") && !m.contains("name = "), "{m}");
+        }
+        // The slot was released by the unwind.
+        assert!(crate::profile_build::try_acquire(&f.alias).is_some());
+    }
+
+    #[test]
+    fn concurrent_sync_for_same_alias_runs_once() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let held = crate::profile_build::try_acquire(&f.alias).unwrap();
+        let agent = Fake::new("New.");
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Skipped)]
+        );
+        assert_eq!(agent.calls(), 0);
+        drop(held);
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Proposed(1))]
+        );
+    }
+
+    #[test]
+    fn corrupt_status_file_is_kept_as_bad() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("profile_sync.json");
+        fs::write(&p, "{nope").unwrap();
+        assert!(load_keeping_bad(&p).is_err());
+        assert_eq!(
+            fs::read_to_string(d.path().join("profile_sync.json.bad")).unwrap(),
+            "{nope"
+        );
+        assert!(with_store(&p, |s| s.sync_requested = true).is_err());
+        assert_eq!(fs::read_to_string(&p).unwrap(), "{nope");
+    }
+
+    #[test]
+    fn a_missing_store_is_the_default_and_with_store_round_trips() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("profile_sync.json");
+        let s = load(&p).unwrap();
+        assert!(s.settings.enabled && !s.sync_requested && s.status.last_run.is_none());
+        assert!(!p.exists());
+        with_store(&p, |s| {
+            s.status.per_project.insert(
+                "a".into(),
+                ProjectSync {
+                    at: now(),
+                    outcome: Outcome::Failed("x".into()),
+                },
+            );
+        })
+        .unwrap();
+        assert_eq!(
+            load(&p).unwrap().status.per_project["a"].outcome,
+            Outcome::Failed("x".into())
+        );
     }
 }

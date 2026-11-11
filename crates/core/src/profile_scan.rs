@@ -321,7 +321,7 @@ fn add_source(scan: &mut Scan, rel: &str, full: &Path) {
     }
 }
 
-fn head_sha(work_dir: &Path) -> Option<String> {
+pub(crate) fn head_sha(work_dir: &Path) -> Option<String> {
     use std::io::Read;
     let mut child = std::process::Command::new("git")
         .arg("-C")
