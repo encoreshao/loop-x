@@ -92,6 +92,7 @@ pub mod oauth;
 pub mod parallel;
 pub mod policy;
 pub mod proc;
+pub mod profile_scan;
 pub mod project_profile;
 pub mod prompt;
 pub mod providers;
