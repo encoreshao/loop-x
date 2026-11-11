@@ -566,6 +566,83 @@ pub fn edit_section(
     entry.origin = Origin::Human;
 }
 
+// ---- secret guard ----------------------------------------------------
+
+/// Describes the first secret-looking thing in `text` by kind only. The
+/// returned string never contains any part of the matched text.
+pub fn contains_secret(text: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    static PATTERNS: OnceLock<Vec<(&'static str, regex::Regex)>> = OnceLock::new();
+    static ASSIGN: OnceLock<regex::Regex> = OnceLock::new();
+    let patterns = PATTERNS.get_or_init(|| {
+        let table: [(&str, &str); 7] = [
+            ("private key block", r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY"),
+            ("GitLab token", r"glpat-[A-Za-z0-9_\-]{10,}"),
+            ("Slack token", r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+            ("AWS access key", r"\bAKIA[0-9A-Z]{16}\b"),
+            (
+                "GitHub token",
+                r"\bgh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}",
+            ),
+            ("API key", r"\bsk-[A-Za-z0-9_\-]{20,}"),
+            (
+                "Slack webhook URL",
+                r"hooks\.slack\.com/services/[A-Za-z0-9/]{10,}",
+            ),
+        ];
+        table
+            .into_iter()
+            .map(|(k, r)| (k, regex::Regex::new(r).expect("static regex")))
+            .collect()
+    });
+    for (kind, re) in patterns {
+        if re.is_match(text) {
+            return Some((*kind).to_string());
+        }
+    }
+    let assign = ASSIGN.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)([A-Za-z0-9_.\-]*(?:token|secret|password|passwd|api_?key|private_?key|credential|auth)[A-Za-z0-9_.\-]*)\s*[=:]\s*["']?([A-Za-z0-9+/_\-]{20,})"#,
+        )
+        .expect("static regex")
+    });
+    for c in assign.captures_iter(text) {
+        let v = &c[2];
+        if v.chars().any(|ch| ch.is_ascii_alphabetic()) && v.chars().any(|ch| ch.is_ascii_digit()) {
+            return Some("secret assignment with a long value".to_string());
+        }
+    }
+    None
+}
+
+/// Rejects a profile whose text fields would persist a secret value. Errors
+/// name the field and the kind of secret, never the matched text.
+pub fn validate_draft(p: &Profile) -> Result<(), String> {
+    let check = |field: String, text: &str| -> Result<(), String> {
+        match contains_secret(text) {
+            Some(kind) => Err(format!(
+                "{field} contains what looks like a secret ({kind})"
+            )),
+            None => Ok(()),
+        }
+    };
+    if let Some(sha) = &p.head_sha {
+        check("head_sha".into(), sha)?;
+    }
+    for (key, sec) in &p.sections {
+        let slug = key.slug();
+        check(format!("section {slug} summary"), &sec.summary)?;
+        check(format!("section {slug} body"), &sec.body)?;
+    }
+    for (i, l) in p.links.iter().enumerate() {
+        let n = i + 1;
+        check(format!("link {n} evidence"), &l.evidence)?;
+        check(format!("link {n} to"), &l.to)?;
+        check(format!("link {n} kind"), &l.kind)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,5 +908,84 @@ mod tests {
         );
         // the v2 file was snapshotted by the restore
         assert_eq!(history("web", r).len(), 2);
+    }
+
+    fn fake(parts: &[&str]) -> String {
+        parts.concat()
+    }
+
+    #[test]
+    fn rejects_private_key_block() {
+        let t = fake(&["-----BEGIN RSA ", "PRIVATE KEY-----\nMIIE"]);
+        assert_eq!(contains_secret(&t).as_deref(), Some("private key block"));
+    }
+
+    #[test]
+    fn rejects_gitlab_pat_glpat_prefix() {
+        let t = fake(&["token is glpat-", "abcDEF123456ghiJKL78"]);
+        assert_eq!(contains_secret(&t).as_deref(), Some("GitLab token"));
+    }
+
+    #[test]
+    fn rejects_aws_style_key() {
+        let t = fake(&["key AKIA", "IOSFODNN7EXAMPLE here"]);
+        assert_eq!(contains_secret(&t).as_deref(), Some("AWS access key"));
+    }
+
+    #[test]
+    fn rejects_long_high_entropy_assignment() {
+        let t = fake(&["TOKEN=", "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0"]);
+        assert!(contains_secret(&t).is_some());
+        assert!(contains_secret("api_key: \"Zx9Qw8Er7Ty6Ui5Op4As3Df2Gh1Jk\"").is_some());
+    }
+
+    #[test]
+    fn accepts_secret_name_without_value() {
+        assert_eq!(
+            contains_secret("GITLAB_TOKEN \u{2013} set in ~/.gitlab/config.json"),
+            None
+        );
+        assert_eq!(contains_secret("export GITLAB_TOKEN=$GITLAB_TOKEN"), None);
+    }
+
+    #[test]
+    fn accepts_commit_sha_paths_and_prose() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(contains_secret(&format!("head {sha}")), None);
+        assert_eq!(
+            contains_secret("see crates/core/src/project_profile.rs"),
+            None
+        );
+        assert_eq!(contains_secret("The auth module handles login."), None);
+    }
+
+    #[test]
+    fn error_message_never_contains_the_value() {
+        let value = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6";
+        let mut p = sample("web");
+        p.sections.get_mut(&SectionKey::ALL[0]).unwrap().body = format!("SECRET_TOKEN={value}");
+        let err = validate_draft(&p).unwrap_err();
+        assert!(!err.contains(value) && !err.contains("a1b2c3"), "{err}");
+        assert!(err.contains(SectionKey::ALL[0].slug()));
+        let glpat = fake(&["glpat-", "abcDEF123456ghiJKL78"]);
+        let d = contains_secret(&glpat).unwrap();
+        assert!(!d.contains("abcDEF"));
+    }
+
+    #[test]
+    fn validate_draft_checks_summary_links_and_passes_clean() {
+        assert!(validate_draft(&sample("web")).is_ok());
+        let secret = fake(&["glpat-", "abcDEF123456ghiJKL78"]);
+        let mut p = sample("web");
+        p.sections.get_mut(&SectionKey::ALL[1]).unwrap().summary = secret.clone();
+        assert!(validate_draft(&p).unwrap_err().contains("summary"));
+        let mut p = sample("web");
+        p.links.clear();
+        p.links.push(Link {
+            to: "x".into(),
+            kind: "uses".into(),
+            evidence: secret,
+        });
+        assert!(validate_draft(&p).unwrap_err().contains("link 1 evidence"));
     }
 }
