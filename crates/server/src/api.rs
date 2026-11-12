@@ -228,6 +228,23 @@ async fn decide(
     let decision = body["decision"].as_str().unwrap_or("");
     let by = body["by"].as_str().unwrap_or("api");
     let notes = body["notes"].as_str();
+    // A profile proposal is applied when approved (and approved only while it
+    // still applies); a refusal leaves it pending.
+    let profile = decision == "approve"
+        && approvals::get(&s.paths.approvals_dir, &id)
+            .is_some_and(|a| a["kind"] == loopx_core::profile_sync::KIND);
+    if profile {
+        return match loopx_core::profile_sync::approve_and_apply(
+            &id,
+            by,
+            Some(&s.paths.memory_root),
+            &s.paths.approvals_dir,
+            Utc::now(),
+        ) {
+            Ok(a) => Json(a).into_response(),
+            Err(e) => json_error(StatusCode::CONFLICT, &e),
+        };
+    }
     match approvals::decide_with_notes(&s.paths.approvals_dir, &id, decision, notes, by, Utc::now())
     {
         Ok(a) => Json(a).into_response(),
@@ -455,6 +472,68 @@ mod tests {
         let (_, v, _) = call(router(s), get_req("/api/approvals")).await;
         assert_eq!(v["pending"], json!([]));
         assert_eq!(v["recent"][0]["status"], "approved");
+    }
+
+    #[tokio::test]
+    async fn approving_a_profile_proposal_applies_it() {
+        use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+        let d = tempfile::tempdir().unwrap();
+        let mut st = Arc::try_unwrap(state(d.path())).ok().unwrap();
+        st.paths.memory_root = d.path().join("memory");
+        let s = Arc::new(st);
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            SectionKey::Stack,
+            Section {
+                summary: "s".into(),
+                body: "Old.".into(),
+                last_verified: None,
+                sources: vec![],
+                origin: Origin::Agent,
+            },
+        );
+        let p = Profile {
+            alias: "api-profile-web".into(),
+            generated_at: None,
+            head_sha: None,
+            status: Status::Approved,
+            links: vec![],
+            sections,
+        };
+        project_profile::save(&p, Some(&s.paths.memory_root)).unwrap();
+        let id = approvals::create(
+            &s.paths.approvals_dir,
+            &approvals::NewApproval {
+                kind: loopx_core::profile_sync::KIND.into(),
+                project: "api-profile-web".into(),
+                timeout_seconds: 3600,
+                target: Some(
+                    json!({"section": "stack", "alias": "api-profile-web", "old": "Old.", "old_summary": "s",
+                    "new": "New.", "new_summary": "n", "sources": []}),
+                ),
+                ..Default::default()
+            },
+            Utc::now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (code, v, _) = call(
+            router(s.clone()),
+            decide_req(
+                &id,
+                json!({"decision": "approve", "by": "mac"}),
+                &[("x-loopx-token", "secret-token")],
+            ),
+        )
+        .await;
+        assert_eq!(code, 200, "{v}");
+        assert_eq!(v["status"], "approved");
+        let back = project_profile::load("api-profile-web", Some(&s.paths.memory_root))
+            .unwrap()
+            .unwrap();
+        assert_eq!(back.sections[&SectionKey::Stack].body, "New.");
     }
 
     #[tokio::test]

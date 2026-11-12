@@ -321,6 +321,17 @@ fn post_approval(ctx: &UiCtx) -> UiResponse {
     let decision = form.first("decision").unwrap_or("");
     let notes = form.first("notes").map(str::trim).filter(|n| !n.is_empty());
     let dir = paths(ctx.state).approvals_dir;
+    // A profile proposal is only worth approving if it is applied: the shared
+    // helper approves it only while it still applies, then writes it.
+    let profile = decision == "approve"
+        && loopx_core::approvals::get(&dir, id).is_some_and(|a| a["kind"] == loopx_core::profile_sync::KIND);
+    if profile {
+        let root = memory_root(ctx.state);
+        return match loopx_core::profile_sync::approve_and_apply(id, "dashboard", Some(&root), &dir, Utc::now()) {
+            Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Proposal approved and applied to the profile."), PATH),
+            Err(e) => UiResponse::flash_redirect(false, &e, PATH),
+        };
+    }
     match loopx_core::approvals::decide_with_notes(&dir, id, decision, notes, "dashboard", Utc::now()) {
         Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Decision recorded; the loop picks it up within seconds."), PATH),
         Err(e) => UiResponse::flash_redirect(false, &e.to_string(), PATH),
@@ -495,6 +506,55 @@ mod tests {
         a["id"].as_str().unwrap().to_string()
     }
 
+    /// A profile with a Stack section and a pending proposal to change it.
+    fn profile_proposal(dir: &std::path::Path, memory: &std::path::Path) -> String {
+        use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            SectionKey::Stack,
+            Section { summary: "s".into(), body: "Old.".into(), last_verified: None, sources: vec![], origin: Origin::Agent },
+        );
+        let p = Profile { alias: "ny-profile-web".into(), generated_at: None, head_sha: None, status: Status::Approved, links: vec![], sections };
+        project_profile::save(&p, Some(memory)).unwrap();
+        let a = approvals::create(
+            dir,
+            &NewApproval {
+                kind: loopx_core::profile_sync::KIND.into(),
+                project: "ny-profile-web".into(),
+                title: "Update the stack section of the web profile".into(),
+                timeout_seconds: 3600,
+                target: Some(serde_json::json!({"section": "stack", "alias": "ny-profile-web", "old": "Old.", "old_summary": "s",
+                    "new": "New.", "new_summary": "n", "sources": []})),
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        a["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn approving_a_profile_proposal_here_applies_it() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let apr = d.path().join("outputs/approvals");
+        let memory = d.path().join("memory");
+        let id = profile_proposal(&apr, &memory);
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id}&decision=approve"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"), "{:?}", r.header("location"));
+        let p = loopx_core::project_profile::load("ny-profile-web", Some(&memory)).unwrap().unwrap();
+        assert_eq!(p.sections[&loopx_core::project_profile::SectionKey::Stack].body, "New.");
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "approved");
+        // A stale one is refused and stays pending, so it is not silently lost.
+        let id2 = profile_proposal(&apr, &memory);
+        let mut p = loopx_core::project_profile::load("ny-profile-web", Some(&memory)).unwrap().unwrap();
+        p.sections.get_mut(&loopx_core::project_profile::SectionKey::Stack).unwrap().body = "Edited.".into();
+        loopx_core::project_profile::save(&p, Some(&memory)).unwrap();
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id2}&decision=approve"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+        assert_eq!(approvals::get(&apr, &id2).unwrap()["status"], "pending");
+    }
+
     // ---- merge-request review threads -------------------------------------
 
     use loopx_core::mr_feedback::{Branch, MrGitlab, RoundDeps, Snapshot, Workspace};
@@ -573,7 +633,7 @@ mod tests {
         let replies: Replies = Arc::default();
         let posted = replies.clone();
         let st = state(dir).with_mr_feedback_deps(Arc::new(move |_ctx, _definition, alias, iid| {
-            assert_eq!((alias, iid), ("web", "7"));
+            assert_eq!((alias, iid), ("ny-profile-web", "7"));
             Ok(Some(RoundDeps {
                 gitlab: Box::new(FakeGitlab { replies: posted.clone() }),
                 invoke: Box::new(|_| panic!("no agent runs in these tests")),
@@ -614,11 +674,11 @@ mod tests {
                 }),
             },
         );
-        t.save("web", 7, Some(&dir.join("memory"))).unwrap();
+        t.save("ny-profile-web", 7, Some(&dir.join("memory"))).unwrap();
     }
 
     fn thread(dir: &Path) -> ThreadState {
-        IssueThreads::load("web", 7, Some(&dir.join("memory"))).threads["d1"].clone()
+        IssueThreads::load("ny-profile-web", 7, Some(&dir.join("memory"))).threads["d1"].clone()
     }
 
     const ID: &str = "id=mr_thread%3Aweb%3A7%3Ad1";

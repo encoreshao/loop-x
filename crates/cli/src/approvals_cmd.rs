@@ -2,7 +2,7 @@
 //! the dashboard server and the Mac app use).
 
 use chrono::Utc;
-use loopx_core::{approvals, pyjson};
+use loopx_core::{approvals, profile_sync, pyjson};
 use serde_json::Value;
 use std::process::ExitCode;
 
@@ -35,7 +35,15 @@ fn by(args: &[String]) -> String {
 }
 
 fn dispatch(args: &[String]) -> Result<String, String> {
-    let dir = approvals::default_dir();
+    dispatch_in(args, &approvals::default_dir(), None)
+}
+
+/// [`dispatch`] against explicit stores (`memory_root` `None`: the default one).
+fn dispatch_in(
+    args: &[String],
+    dir: &std::path::Path,
+    memory_root: Option<&std::path::Path>,
+) -> Result<String, String> {
     let now = Utc::now();
     match args.first().map(String::as_str) {
         Some("list") => {
@@ -45,19 +53,27 @@ fn dispatch(args: &[String]) -> Result<String, String> {
                 Some("pending")
             };
             Ok(pyjson::to_string_pretty(&Value::Array(approvals::list(
-                &dir, status, now,
+                dir, status, now,
             ))))
         }
         Some("show") => {
             let id = args.get(1).ok_or(USAGE)?;
-            approvals::expire_overdue(&dir, now);
-            approvals::get(&dir, id)
+            approvals::expire_overdue(dir, now);
+            approvals::get(dir, id)
                 .map(|a| pyjson::to_string_pretty(&a))
                 .ok_or_else(|| format!("no approval {id}"))
         }
         Some(cmd @ ("approve" | "deny")) => {
             let id = args.get(1).ok_or(USAGE)?;
-            approvals::decide(&dir, id, cmd, &by(args), now)
+            // A profile proposal is applied when approved, and approved only
+            // while it still applies.
+            if cmd == "approve"
+                && approvals::get(dir, id).is_some_and(|a| a["kind"] == profile_sync::KIND)
+            {
+                return profile_sync::approve_and_apply(id, &by(args), memory_root, dir, now)
+                    .map(|a| pyjson::to_string_pretty(&a));
+            }
+            approvals::decide(dir, id, cmd, &by(args), now)
                 .map(|a| pyjson::to_string_pretty(&a))
                 .map_err(|e| e.to_string())
         }
@@ -65,7 +81,7 @@ fn dispatch(args: &[String]) -> Result<String, String> {
             let id = args.get(1).ok_or(USAGE)?;
             let notes = flag(args, "--notes");
             approvals::decide_with_notes(
-                &dir,
+                dir,
                 id,
                 "request_changes",
                 notes.as_deref(),
@@ -102,5 +118,57 @@ mod tests {
         assert!(dispatch(&["request-changes".into()])
             .unwrap_err()
             .starts_with("Usage:"));
+    }
+
+    #[test]
+    fn approving_a_profile_proposal_applies_it() {
+        use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+        let d = tempfile::tempdir().unwrap();
+        let (apr, memory) = (d.path().join("approvals"), d.path().join("memory"));
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            SectionKey::Stack,
+            Section {
+                summary: "s".into(),
+                body: "Old.".into(),
+                last_verified: None,
+                sources: vec![],
+                origin: Origin::Agent,
+            },
+        );
+        let p = Profile {
+            alias: "web".into(),
+            generated_at: None,
+            head_sha: None,
+            status: Status::Approved,
+            links: vec![],
+            sections,
+        };
+        project_profile::save(&p, Some(&memory)).unwrap();
+        let id = approvals::create(
+            &apr,
+            &approvals::NewApproval {
+                kind: profile_sync::KIND.into(),
+                project: "web".into(),
+                timeout_seconds: 3600,
+                target: Some(serde_json::json!({"section": "stack", "alias": "web",
+                    "old": "Old.", "old_summary": "s", "new": "New.", "new_summary": "n", "sources": []})),
+                ..Default::default()
+            },
+            Utc::now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let args: Vec<String> = ["approve", id.as_str()]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        dispatch_in(&args, &apr, Some(&memory)).unwrap();
+        let back = project_profile::load("web", Some(&memory))
+            .unwrap()
+            .unwrap();
+        assert_eq!(back.sections[&SectionKey::Stack].body, "New.");
     }
 }
