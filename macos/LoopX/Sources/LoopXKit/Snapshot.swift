@@ -39,19 +39,52 @@ public struct LoopStatus: Codable, Equatable, Sendable {
     public var currentIssue: String?
     public var currentStep: String?
     public var lastExitCode: Int?
+    /// A project profile job's fields (`profile:<alias>`, `profile-sync`): `build`, `refresh` or `sync`,
+    /// the project, step `step` of `steps`, and the step's name. Absent for every other entry.
+    public var kind: String?
+    public var alias: String?
+    public var step: Int?
+    public var steps: Int?
+    public var stepName: String?
 
     enum CodingKeys: String, CodingKey {
-        case state, pid
+        case state, pid, kind, alias, step, steps
         case updatedAt = "updated_at"
         case currentIssue = "current_issue"
         case currentStep = "current_step"
         case lastExitCode = "last_exit_code"
+        case stepName = "step_name"
     }
 
     public init(state: String, updatedAt: String? = nil, pid: Int? = nil, currentIssue: String? = nil,
-                currentStep: String? = nil, lastExitCode: Int? = nil) {
+                currentStep: String? = nil, lastExitCode: Int? = nil, kind: String? = nil, alias: String? = nil,
+                step: Int? = nil, steps: Int? = nil, stepName: String? = nil) {
         self.state = state; self.updatedAt = updatedAt; self.pid = pid
         self.currentIssue = currentIssue; self.currentStep = currentStep; self.lastExitCode = lastExitCode
+        self.kind = kind; self.alias = alias; self.step = step; self.steps = steps; self.stepName = stepName
+    }
+
+    // Tolerant: a field of the wrong type is dropped, never the whole entry (or snapshot).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = try c.decode(String.self, forKey: .state)
+        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
+        pid = try? c.decodeIfPresent(Int.self, forKey: .pid)
+        currentIssue = try? c.decodeIfPresent(String.self, forKey: .currentIssue)
+        currentStep = try? c.decodeIfPresent(String.self, forKey: .currentStep)
+        lastExitCode = try? c.decodeIfPresent(Int.self, forKey: .lastExitCode)
+        kind = try? c.decodeIfPresent(String.self, forKey: .kind)
+        alias = try? c.decodeIfPresent(String.self, forKey: .alias)
+        step = try? c.decodeIfPresent(Int.self, forKey: .step)
+        steps = try? c.decodeIfPresent(Int.self, forKey: .steps)
+        stepName = try? c.decodeIfPresent(String.self, forKey: .stepName)
+    }
+
+    /// A profile job's progress for the island: "3/5 Asking the AI" (a sync: "2/3 web").
+    /// `nil` when the entry has no step fields, so older backends read as before.
+    public var stepProgress: String? {
+        guard let step, let steps, steps > 0, step > 0, let name = stepName, !name.isEmpty else { return nil }
+        return "\(step)/\(steps) \(name)"
     }
 
     /// `stale` is the backend's name for a `running` status whose pid died; treat it like `failed`.

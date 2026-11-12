@@ -30,7 +30,8 @@ public enum TaskNotifications {
         for (name, l) in s.loops {
             // A loop waiting its turn shows once, as queued, not also as idle.
             if waiting.contains(name), state(l.state) == .idle { continue }
-            let detail = [l.currentIssue, l.currentStep].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            let detail = l.stepProgress
+                ?? [l.currentIssue, l.currentStep].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
             out.append(NotchTask(id: "loop:\(name)", name: name, state: state(l.state),
                                  detail: detail.isEmpty ? nil : detail))
         }
@@ -56,7 +57,9 @@ public enum TaskNotifications {
         guard let old else { return [] }
         let before = Dictionary(uniqueKeysWithValues: tasks(in: old).map { ($0.id, $0) })
         var out: [TaskNotification] = []
-        for t in tasks(in: new) {
+        // A project profile job comes and goes with each project of a sync: no banner for it
+        // (its failures reach Needs you).
+        for t in tasks(in: new) where !LoopNames.isProfileJob(t.name) {
             let prev = before[t.id]?.state ?? .idle
             guard prev != t.state else { continue }
             switch (prev, t.state) {

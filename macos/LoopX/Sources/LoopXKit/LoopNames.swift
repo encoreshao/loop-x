@@ -14,6 +14,7 @@ public enum LoopNames {
         "linkedin-autopilot-loop": "LinkedIn",
         "release-mr": "Release MR",
         "mr-fix": "Fix now",
+        "profile-sync": "Profile sync",
         // The Creator page's jobs, shown beside the loops while they run (see the snapshot's creator entries).
         "creator-find-videos": "Find Videos",
         "creator-generate-video": "Generate Video",
@@ -26,10 +27,16 @@ public enum LoopNames {
 
     /// Jobs listed beside the loops but not runnable as loops: the Creator page's (Find videos, Generate video)
     /// and the MR Review page's release MR, which needs a project and two branches.
-    public static func isCreatorJob(_ id: String) -> Bool { id.hasPrefix("creator-") || id == "release-mr" || id == "mr-fix" }
+    public static func isCreatorJob(_ id: String) -> Bool {
+        id.hasPrefix("creator-") || id == "release-mr" || id == "mr-fix" || isProfileJob(id)
+    }
+
+    /// A running project profile job: a build or section refresh (`profile:<alias>`) or the weekly sync.
+    public static func isProfileJob(_ id: String) -> Bool { id.hasPrefix("profile:") || id == "profile-sync" }
 
     public static func display(_ id: String) -> String {
         if let name = named[id] { return name }
+        if id.hasPrefix("profile:") { return "Profile · " + id.dropFirst("profile:".count) }
         let base = id.hasSuffix("-loop") ? String(id.dropLast("-loop".count)) : id
         return titleCase(base) ?? id
     }
@@ -65,5 +72,7 @@ public enum LoopNames {
     ]
 
     /// The SF Symbol a loop's tile shows on the island; any other loop gets a generic one.
-    public static func symbol(_ id: String) -> String { symbols[id] ?? "repeat" }
+    public static func symbol(_ id: String) -> String {
+        isProfileJob(id) ? "person.text.rectangle" : symbols[id] ?? "repeat"
+    }
 }
