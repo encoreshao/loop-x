@@ -57,10 +57,15 @@ pub fn graph_json(
     digests: &BTreeMap<String, IssueDigest>,
     root: Option<&Path>,
 ) -> Result<String, ReadError> {
+    // One unreadable profile must not hide the whole graph: it is left out and
+    // named (alias only, never its content) under `skipped`.
     let mut profiles = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     for a in tracked {
-        if let Some(p) = project_profile::load(a, root).map_err(ReadError::Invalid)? {
-            profiles.push(p);
+        match project_profile::load(a, root) {
+            Ok(Some(p)) => profiles.push(p),
+            Ok(None) => {}
+            Err(_) => skipped.push(a.clone()),
         }
     }
     let g = profile_graph::derive(&profiles, digests, tracked);
@@ -84,6 +89,7 @@ pub fn graph_json(
                 "alias": n.alias, "has_profile": n.freshness.is_some(), "activity": n.activity,
             })).collect::<Vec<_>>(),
             "edges": edges,
+            "skipped": skipped,
         }),
         Some(a) => {
             let mut neighbors: Vec<String> = edges
@@ -95,7 +101,7 @@ pub fn graph_json(
                 .collect();
             neighbors.sort();
             neighbors.dedup();
-            json!({"alias": a, "neighbors": neighbors, "edges": edges})
+            json!({"alias": a, "neighbors": neighbors, "edges": edges, "skipped": skipped})
         }
     };
     guard(serde_json::to_string_pretty(&value).unwrap_or_default())
@@ -245,6 +251,34 @@ mod tests {
         let text = graph_json(None, false, &tracked, &digests, Some(d.path())).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["nodes"].as_array().unwrap().len(), 3);
+        assert!(!v["edges"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_profile_is_skipped_not_fatal_and_its_text_never_shown() {
+        let d = tempfile::tempdir().unwrap();
+        let (tracked, digests) = graph_fixture(d.path());
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let path = project_profile::profile_path("docs", Some(d.path()));
+        std::fs::write(
+            &path,
+            format!("---\nalias: docs\n---\n<!-- section: {token} -->\n"),
+        )
+        .unwrap();
+        let err = profile_text("docs", Some(d.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("glpat") && !err.contains("abcDEF"), "{err}");
+        for alias in [None, Some("web")] {
+            let text = graph_json(alias, false, &tracked, &digests, Some(d.path())).unwrap();
+            assert!(!text.contains("glpat"), "{text}");
+            let v: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(v["skipped"], json!(["docs"]));
+        }
+        let v: Value = serde_json::from_str(
+            &graph_json(None, false, &tracked, &digests, Some(d.path())).unwrap(),
+        )
+        .unwrap();
         assert!(!v["edges"].as_array().unwrap().is_empty());
     }
 }

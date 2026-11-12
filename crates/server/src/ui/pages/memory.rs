@@ -740,7 +740,8 @@ fn project_card(
         .and_then(|s| s.status.per_project.get(&p.alias))
         .map(|s| &s.outcome)
     {
-        chips.push(chip(" mem-chip-bad", "error", &ctx.t("Last sync failed"), Some(msg)));
+        let msg = shown_failure(ctx, msg);
+        chips.push(chip(" mem-chip-bad", "error", &ctx.t("Last sync failed"), Some(&msg)));
     }
     // Only when something waits; the project page always shows the count.
     if pending > 0 {
@@ -1443,7 +1444,10 @@ fn head_card(ctx: &UiCtx, p: &Project, profile: Option<(&Profile, &Check)>) -> S
     if let Ok(store) = sync_store(ctx) {
         if let Some(s) = store.status.per_project.get(&p.alias) {
             let text = match &s.outcome {
-                Outcome::Failed(msg) => ctx.tf("Last sync failed {when}: {error}", &[("when", &ago(ctx, s.at)), ("error", msg)]),
+                Outcome::Failed(msg) => ctx.tf(
+                    "Last sync failed {when}: {error}",
+                    &[("when", &ago(ctx, s.at)), ("error", &shown_failure(ctx, msg))],
+                ),
                 Outcome::Skipped => ctx.tf("Checked {when}, nothing to update", &[("when", &ago(ctx, s.at))]),
                 Outcome::Drafted => ctx.tf("Drafted {when}", &[("when", &ago(ctx, s.at))]),
                 Outcome::Proposed(1) => ctx.tf("Proposed 1 update {when}", &[("when", &ago(ctx, s.at))]),
@@ -2224,9 +2228,19 @@ fn build_all_running(home: &Path) -> bool {
         .any(|h| h == home)
 }
 
-/// One line, bounded: what a failed job shows.
+/// One line, bounded: what a failed job shows (secret-checked before the cut).
 fn failure_line(e: &str) -> String {
-    e.lines().next().unwrap_or("").trim().chars().take(200).collect()
+    profile_sync::safe_failure_line(e)
+}
+
+/// A stored failure message as shown: files written before failures were
+/// guarded may still quote something secret-shaped.
+fn shown_failure(ctx: &UiCtx, msg: &str) -> String {
+    if contains_secret(msg).is_some() || msg == profile_sync::DETAILS_HIDDEN {
+        ctx.t("details hidden")
+    } else {
+        msg.to_string()
+    }
 }
 
 /// Everything a background job needs, owned (the request is gone by then).
@@ -2874,10 +2888,7 @@ fn job_line(ctx: &UiCtx, alias: &str) -> String {
     };
     let when = ago(ctx, job.at);
     let section = |k: SectionKey| section_title(ctx, k);
-    let error = |e: &str| match contains_secret(e) {
-        Some(_) => ctx.t("details hidden"),
-        None => e.to_string(),
-    };
+    let error = |e: &str| shown_failure(ctx, e);
     let (ok, text) = match (&job.kind, &job.outcome) {
         (JobKind::Build, JobOutcome::Failed(e)) => (
             false,
@@ -3555,6 +3566,30 @@ mod tests {
         let overview = sb.get("/insights?view=memory");
         assert!(overview.contains("Unreadable"), "{overview}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_malformed_line_or_failure_with_a_token_is_never_shown() {
+        let sb = Sb::new(&[("alpha", true), ("beta", true)]);
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let path = project_profile::profile_path("alpha", Some(&sb.root()));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("---\nalias: alpha\n---\n<!-- section: stack origin: {token} verified: - summary: x -->\n")).unwrap();
+        sb.save(&profile("beta", &[(SectionKey::Overview, section("B.", "b"))]));
+        // A failure stored by an older version, before failures were guarded.
+        loopx_core::profile_sync::with_store(&sb.state.home_dir.join("profile_sync.json"), |s| {
+            s.status.per_project.insert(
+                "beta".into(),
+                loopx_core::profile_sync::ProjectSync { at: now(), outcome: loopx_core::profile_sync::Outcome::Failed(format!("bad {token}")) },
+            );
+        })
+        .unwrap();
+        for url in ["/insights?view=memory", "/insights?view=memory&project=alpha", "/insights?view=memory&project=beta"] {
+            let html = sb.get(url);
+            assert!(!html.contains("glpat-") && !html.contains("abcDEF"), "{url} leaked the token");
+        }
+        assert!(sb.get("/insights?view=memory&project=alpha").contains("on line 4"));
+        assert!(sb.get("/insights?view=memory&project=beta").contains("details hidden"));
     }
 
     #[test]

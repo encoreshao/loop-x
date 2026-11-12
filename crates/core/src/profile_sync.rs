@@ -229,6 +229,7 @@ fn fresh_sources(
 /// section, so it comes back once HEAD moves).
 fn already_raised(
     approvals_dir: &Path,
+    profile: &Profile,
     alias: &str,
     key: SectionKey,
     hash: &str,
@@ -247,12 +248,15 @@ fn already_raised(
         };
         match a["status"].as_str() {
             Some("pending") => a_base == base,
+            // Approved but not applied yet: blocks only while it still can be
+            // applied (the section still holds its old text).
             Some("approved") => {
                 a_base == base
                     && a["id"]
                         .as_str()
                         .and_then(|id| applied_marker(alias, id, root).ok())
                         .is_some_and(|m| !m.exists())
+                    && proposal_still_applies(profile, key, a)
             }
             Some("denied") => t["source_hash"] == hash,
             _ => false,
@@ -303,7 +307,7 @@ pub fn propose_refresh_held(
     } else {
         base.clone()
     };
-    if already_raised(approvals_dir, alias, key, &hash, &base, root) {
+    if already_raised(approvals_dir, &profile, alias, key, &hash, &base, root) {
         return Ok(None);
     }
     let prompt = section_prompt(alias, key, old, &scan);
@@ -471,6 +475,71 @@ refresh the section to get a new proposal"
     Ok(ApplyOutcome::Applied)
 }
 
+/// Whether `profile`'s `key` section still holds the text proposal `a` replaces
+/// (the comparison [`apply_proposal`] makes under the lock).
+pub fn proposal_still_applies(profile: &Profile, key: SectionKey, a: &Value) -> bool {
+    let t = &a["target"];
+    let old = t["old"].as_str().unwrap_or("");
+    let old_summary = t["old_summary"].as_str().unwrap_or("");
+    match profile.sections.get(&key) {
+        Some(cur) => cur.body == old && cur.summary == old_summary,
+        None => old.is_empty() && old_summary.is_empty(),
+    }
+}
+
+/// Approve a profile proposal and write it into the profile, for every place a
+/// person can approve one (the Needs-you page, the Mac app's API, the CLI). Like
+/// the Memory page: a pending proposal is approved only while its section still
+/// holds the old text, so an approval is never recorded for a change that cannot
+/// be applied; an approved-but-unapplied one is applied now. Returns the
+/// approval as stored. Errors are content-free.
+pub fn approve_and_apply(
+    id: &str,
+    by: &str,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+    now: DateTime<Utc>,
+) -> Result<Value, String> {
+    let a = approvals::get(approvals_dir, id).ok_or_else(|| format!("no approval {id}"))?;
+    if a["kind"] != KIND {
+        return Err(format!("approval {id} is not a profile proposal"));
+    }
+    let alias = a["target"]["alias"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let key = a["target"]["section"]
+        .as_str()
+        .and_then(SectionKey::from_slug)
+        .ok_or("the proposal names no known section")?;
+    // No build or refresh may rewrite the profile between the check and the apply.
+    let _slot = profile_build::try_acquire(&alias).ok_or_else(|| {
+        format!("a profile run for {alias} is in progress; try again when it finishes")
+    })?;
+    match a["status"].as_str() {
+        Some("pending") => {
+            let profile = project_profile::load(&alias, root)?
+                .ok_or_else(|| format!("{alias} has no profile"))?;
+            if !proposal_still_applies(&profile, key, &a) {
+                return Err(format!(
+                    "the {} section changed since this proposal was raised; refresh the section to get a new proposal",
+                    key.slug()
+                ));
+            }
+            approvals::decide(approvals_dir, id, "approve", by, now).map_err(|e| e.to_string())?;
+        }
+        Some("approved") => {}
+        other => {
+            return Err(format!(
+                "proposal {id} was already decided ({})",
+                other.unwrap_or("?")
+            ))
+        }
+    }
+    apply_proposal(id, root, approvals_dir)?;
+    approvals::get(approvals_dir, id).ok_or_else(|| format!("no approval {id}"))
+}
+
 /// Whether [`apply_proposal`] wrote this proposal (its marker file exists).
 pub fn is_applied(alias: &str, id: &str, root: Option<&Path>) -> bool {
     applied_marker(alias, id, root).is_ok_and(|m| m.exists())
@@ -576,6 +645,15 @@ pub fn store_path() -> PathBuf {
     home_dir().join("profile_sync.json")
 }
 
+/// The store that belongs with a memory root: `<home>/memory` keeps its store at
+/// `<home>/profile_sync.json`. Only with no root at all is the process home used,
+/// so a caller that injects a root never reads or writes the real one.
+pub fn store_path_for(root: Option<&Path>) -> PathBuf {
+    root.and_then(Path::parent)
+        .map(|h| h.join("profile_sync.json"))
+        .unwrap_or_else(store_path)
+}
+
 /// A missing file is the default (sync on, nothing run); an unreadable one is an
 /// `Err` the caller must not overwrite.
 pub fn load(path: &Path) -> Result<SyncStore, String> {
@@ -669,8 +747,18 @@ fn never_fail(f: impl FnOnce()) {
 /// and the server tick refreshes the queue on its next look. With the weekly sync
 /// switch off it queues nothing and creates no file. It never fails or panics:
 /// every error is swallowed, so a hook problem cannot fail the run.
+/// The store is the one beside `root` ([`store_path_for`]); nothing is resolved at
+/// all when no file changed.
 pub fn on_run_finished(alias: &str, changed_files: &[String], root: Option<&Path>) {
-    on_run_finished_at(&store_path(), alias, changed_files, root, Utc::now());
+    if changed_files.is_empty() {
+        return;
+    }
+    never_fail(|| {
+        let keys = queue_event_refresh(alias, changed_files, root);
+        if !keys.is_empty() {
+            enqueue(&store_path_for(root), alias, &keys, false, Utc::now());
+        }
+    });
 }
 
 pub fn on_run_finished_at(
@@ -692,7 +780,17 @@ pub fn on_run_finished_at(
 /// A run recorded a new task memory: queue the Gotchas section (same rules as
 /// [`on_run_finished`]). Nothing is queued for a project with no profile yet.
 pub fn on_memory_added(alias: &str, root: Option<&Path>) {
-    on_memory_added_at(&store_path(), alias, root, Utc::now());
+    never_fail(|| {
+        if matches!(project_profile::load(alias, root), Ok(Some(_))) {
+            enqueue(
+                &store_path_for(root),
+                alias,
+                &[SectionKey::Gotchas],
+                true,
+                Utc::now(),
+            );
+        }
+    });
 }
 
 pub fn on_memory_added_at(path: &Path, alias: &str, root: Option<&Path>, now: DateTime<Utc>) {
@@ -739,23 +837,39 @@ pub fn branch_changed_files(repo: &str, target: &str, branch: &str) -> Vec<Strin
 
 /// Compute the branch diff and queue the affected sections, all in a detached
 /// thread: the caller never waits and never sees an error or panic.
-pub fn queue_branch_refresh(alias: &str, repo: &str, target: &str, branch: &str) {
+/// `root` is the run's memory root (`None`: the default one).
+pub fn queue_branch_refresh(
+    alias: &str,
+    repo: &str,
+    target: &str,
+    branch: &str,
+    root: Option<&Path>,
+) {
     let (alias, repo, target, branch) = (
         alias.to_string(),
         repo.to_string(),
         target.to_string(),
         branch.to_string(),
     );
+    let root = root.map(Path::to_path_buf);
     let _ = std::thread::Builder::new()
         .name("profile-queue".into())
-        .spawn(move || queue_branch_refresh_blocking(&alias, &repo, &target, &branch));
+        .spawn(move || {
+            queue_branch_refresh_blocking(&alias, &repo, &target, &branch, root.as_deref())
+        });
 }
 
 /// [`queue_branch_refresh`] on the calling thread (bounded by the git timeout);
 /// for a short-lived process that would exit before a detached thread finished.
-pub fn queue_branch_refresh_blocking(alias: &str, repo: &str, target: &str, branch: &str) {
+pub fn queue_branch_refresh_blocking(
+    alias: &str,
+    repo: &str,
+    target: &str,
+    branch: &str,
+    root: Option<&Path>,
+) {
     never_fail(|| {
-        on_run_finished(alias, &branch_changed_files(repo, target, branch), None);
+        on_run_finished(alias, &branch_changed_files(repo, target, branch), root);
     });
 }
 
@@ -883,10 +997,21 @@ pub fn tracked_projects_in(config_path: &Path) -> Vec<TrackedProject> {
     out
 }
 
-/// A failure line safe to store and show: one line, bounded, no file content.
-fn failure(msg: &str) -> Outcome {
+/// Shown instead of a failure message that quotes something secret-shaped.
+pub const DETAILS_HIDDEN: &str = "details hidden";
+
+/// A failure line safe to store and show: one line, bounded. The whole message
+/// is checked for secrets BEFORE it is cut, so no partial secret survives.
+pub fn safe_failure_line(msg: &str) -> String {
+    if project_profile::contains_secret(msg).is_some() {
+        return DETAILS_HIDDEN.to_string();
+    }
     let line = msg.lines().next().unwrap_or("").trim();
-    Outcome::Failed(line.chars().take(200).collect())
+    line.chars().take(200).collect()
+}
+
+fn failure(msg: &str) -> Outcome {
+    Outcome::Failed(safe_failure_line(msg))
 }
 
 fn sync_project(
@@ -1388,6 +1513,59 @@ mod tests {
             .propose_gotchas(&Fake::new("Newer.").for_section("gotchas"))
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn an_approved_proposal_that_can_no_longer_apply_does_not_block_a_new_one() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.sourceless();
+        let one = f.propose_gotchas(&agent).unwrap().unwrap();
+        f.decide(&one.id, "approved");
+        // The section changed before the approval was applied: it never will be.
+        let mut p = f.profile();
+        p.sections.get_mut(&SectionKey::Gotchas).unwrap().body = "Changed meanwhile.".into();
+        project_profile::save(&p, Some(f.root.path())).unwrap();
+        assert!(f.apply(&one.id).is_err());
+        let again = Fake::new("Newer.").for_section("gotchas");
+        assert!(f.propose_gotchas(&again).unwrap().is_some());
+        assert_eq!(again.calls(), 1);
+    }
+
+    #[test]
+    fn approve_and_apply_writes_the_section_and_marks_it_applied() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"renamed\"\n");
+        let prop = f.propose(&Fake::new("New stack text.")).unwrap().unwrap();
+        let a =
+            approve_and_apply(&prop.id, "cli", Some(f.root.path()), f.apr.path(), now()).unwrap();
+        assert_eq!(a["status"], "approved");
+        assert_eq!(
+            f.profile().sections[&SectionKey::Stack].body,
+            "New stack text."
+        );
+        assert!(is_applied(&f.alias, &prop.id, Some(f.root.path())));
+        // Deciding again is refused; nothing is written twice.
+        assert!(
+            approve_and_apply(&prop.id, "cli", Some(f.root.path()), f.apr.path(), now()).is_ok()
+        );
+    }
+
+    #[test]
+    fn approve_and_apply_leaves_a_stale_proposal_pending() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("x\n");
+        let prop = f.propose(&Fake::new("New.")).unwrap().unwrap();
+        let mut p = f.profile();
+        p.sections.get_mut(&SectionKey::Stack).unwrap().body = "Edited.".into();
+        project_profile::save(&p, Some(f.root.path())).unwrap();
+        let err = approve_and_apply(&prop.id, "cli", Some(f.root.path()), f.apr.path(), now())
+            .unwrap_err();
+        assert!(err.contains("changed since"), "{err}");
+        assert_eq!(
+            approvals::get(f.apr.path(), &prop.id).unwrap()["status"],
+            "pending"
+        );
+        assert_eq!(f.profile().sections[&SectionKey::Stack].body, "Edited.");
     }
 
     #[test]
@@ -1918,6 +2096,130 @@ mod tests {
         q.extend(queue("untracked", "stack", now(), false));
         assert_eq!(run_queue(&f, &q, &agent).done.len(), 2);
         assert_eq!(agent.calls(), 0);
+    }
+
+    /// Sets HOME / LOOP_ENGINEERING_HOME for one test and puts them back.
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl EnvGuard {
+        fn set(vars: &[(&'static str, Option<&Path>)]) -> EnvGuard {
+            let saved = vars
+                .iter()
+                .map(|(k, _)| (*k, std::env::var_os(k)))
+                .collect();
+            for (k, v) in vars {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+            EnvGuard(saved)
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.0 {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(files_under(&p));
+            }
+            out.push(p);
+        }
+        out
+    }
+
+    #[test]
+    fn hooks_with_an_injected_root_never_touch_the_process_home() {
+        let _lock = crate::connectors::testutil::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let poisoned = tempfile::tempdir().unwrap();
+        // A profile under the poisoned home too: a hook that ignored its root
+        // would find it and write `profile_sync.json` next to it.
+        let fake_home = poisoned.path().join(".loopx");
+        let p = Fx::new(Origin::Agent);
+        let mut prof = p.profile();
+        prof.alias = "web".into();
+        project_profile::save(&prof, Some(&fake_home.join("memory"))).unwrap();
+        let before = files_under(poisoned.path());
+        // The injected home: `<home>/memory` is the root, the store sits in `<home>`.
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("memory");
+        project_profile::save(&prof, Some(&root)).unwrap();
+        {
+            let _env = EnvGuard::set(&[
+                ("HOME", Some(poisoned.path())),
+                ("LOOP_ENGINEERING_HOME", None),
+            ]);
+            on_memory_added("web", Some(&root));
+            on_run_finished("web", &["Cargo.toml".to_string()], Some(&root));
+            on_run_finished("web", &[], None);
+            queue_branch_refresh_blocking("web", "/does/not/exist", "main", "b", Some(&root));
+        }
+        assert_eq!(
+            files_under(poisoned.path()),
+            before,
+            "nothing new under HOME"
+        );
+        let store = load(&home.path().join("profile_sync.json")).unwrap();
+        let q: Vec<&str> = store.queued["web"]
+            .iter()
+            .map(|e| e.section.as_str())
+            .collect();
+        assert_eq!(q, ["gotchas", "stack"]);
+    }
+
+    #[test]
+    fn a_failure_quoting_a_secret_is_hidden_even_past_the_cut() {
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        for msg in [
+            format!("bad line {token}"),
+            format!("{}{token}", "x".repeat(190)),
+            format!("first line\n{token}"),
+        ] {
+            assert_eq!(failure(&msg), Outcome::Failed(DETAILS_HIDDEN.into()));
+        }
+        assert_eq!(failure("plain\nmore"), Outcome::Failed("plain".into()));
+    }
+
+    #[test]
+    fn a_malformed_profile_fails_the_sync_without_quoting_it() {
+        let f = Fx::new(Origin::Agent);
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let path = project_profile::profile_path(&f.alias, Some(f.root.path()));
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            text.replace("origin: agent", &format!("origin: {token}")),
+        )
+        .unwrap();
+        let p = TrackedProject {
+            alias: f.alias.clone(),
+            instance: String::new(),
+            project_id: String::new(),
+            work_dir: f.work.path().to_path_buf(),
+        };
+        let out = sync_all(
+            &[p],
+            &Fake::new("x"),
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        );
+        match &out[0].1 {
+            Outcome::Failed(m) => assert!(!m.contains("glpat") && !m.contains("abcDEF"), "{m}"),
+            o => panic!("{o:?}"),
+        }
     }
 
     #[test]

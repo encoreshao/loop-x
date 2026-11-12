@@ -284,4 +284,20 @@ mod tests {
         memory_store::save_setup_knowledge("web", "# Setup\n", Some(root.path())).unwrap();
         assert_eq!(setup_text("web", Some(root.path())), "# Setup\n");
     }
+
+    #[test]
+    fn profile_errors_on_stderr_never_quote_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let path = loopx_core::project_profile::profile_path("web", Some(root.path()));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!("---\nalias: web\n---\n<!-- links -->\n- `{token}\n"),
+        )
+        .unwrap();
+        let err = profile_output("web", Some(root.path())).unwrap_err();
+        assert!(!err.contains("glpat") && !err.contains("abcDEF"), "{err}");
+        assert!(err.contains("line 5"), "{err}");
+    }
 }

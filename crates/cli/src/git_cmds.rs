@@ -70,6 +70,8 @@ fn queue_profile_refresh(repo_path: &str, target: &str, branch: &str) {
         .find(|p| std::fs::canonicalize(&p.work_dir).unwrap_or(p.work_dir.clone()) == want)
         .map(|p| p.alias);
     if let Some(alias) = alias {
-        loopx_core::profile_sync::queue_branch_refresh_blocking(&alias, repo_path, target, branch);
+        loopx_core::profile_sync::queue_branch_refresh_blocking(
+            &alias, repo_path, target, branch, None,
+        );
     }
 }

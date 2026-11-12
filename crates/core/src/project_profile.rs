@@ -219,36 +219,38 @@ pub fn render(p: &Profile) -> String {
     out
 }
 
+/// Parse errors name the line and what was wrong with it, never the text: a
+/// profile line can carry anything (a pasted secret included), and these
+/// messages reach logs, stderr, the dashboard and the chat.
 fn parse_time(v: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(v.trim())
         .map(|t| t.with_timezone(&Utc))
-        .map_err(|e| format!("bad timestamp {v:?}: {e}"))
+        .map_err(|_| "bad timestamp".to_string())
 }
 
 type Marker = (SectionKey, Origin, Option<DateTime<Utc>>, String);
 
 fn parse_marker(rest: &str) -> Result<Marker, String> {
     // rest: "<slug> origin: X verified: V summary: S"
-    let bad = || format!("malformed section marker: {rest:?}");
+    let bad = || "malformed section marker".to_string();
     let (slug, rest) = rest.split_once(" origin: ").ok_or_else(bad)?;
     let (origin, rest) = rest.split_once(" verified: ").ok_or_else(bad)?;
     let (verified, summary) = rest.split_once(" summary: ").ok_or_else(bad)?;
-    let key =
-        SectionKey::from_slug(slug.trim()).ok_or_else(|| format!("unknown section {slug:?}"))?;
+    let key = SectionKey::from_slug(slug.trim()).ok_or("unknown section")?;
     let origin = match origin.trim() {
         "agent" => Origin::Agent,
         "human" => Origin::Human,
-        o => return Err(format!("unknown origin {o:?}")),
+        _ => return Err("unknown origin".into()),
     };
     let verified = match verified.trim() {
         "-" => None,
-        v => Some(parse_time(v)?),
+        v => Some(parse_time(v).map_err(|_| "bad verified timestamp".to_string())?),
     };
     Ok((key, origin, verified, summary.trim().to_string()))
 }
 
 fn parse_link(line: &str) -> Result<Link, String> {
-    let bad = || format!("malformed link line: {line:?}");
+    let bad = || "malformed link".to_string();
     let rest = line.strip_prefix("- `").ok_or_else(bad)?;
     let (to, rest) = rest.split_once("` | ").ok_or_else(bad)?;
     let (kind, evidence) = match rest.split_once(" | ") {
@@ -268,19 +270,19 @@ enum Block {
         Origin,
         Option<DateTime<Utc>>,
         String,
-        Vec<String>,
+        Vec<(usize, String)>,
     ),
-    Links(Vec<String>),
+    Links(Vec<(usize, String)>),
 }
 
 pub fn parse(text: &str) -> Result<Profile, String> {
-    let mut lines = text.lines();
-    if lines.next().map(str::trim) != Some("---") {
+    let mut lines = text.lines().enumerate().map(|(i, l)| (i + 1, l));
+    if lines.next().map(|(_, l)| l.trim()) != Some("---") {
         return Err("missing frontmatter".into());
     }
     let (mut alias, mut generated_at, mut head_sha, mut status) = (None, None, None, Status::Draft);
     let mut closed = false;
-    for line in lines.by_ref() {
+    for (n, line) in lines.by_ref() {
         if line.trim() == "---" {
             closed = true;
             break;
@@ -291,13 +293,16 @@ pub fn parse(text: &str) -> Result<Profile, String> {
         let v = v.trim();
         match k.trim() {
             "alias" => alias = Some(v.to_string()),
-            "generated_at" => generated_at = Some(parse_time(v)?),
+            "generated_at" => {
+                generated_at =
+                    Some(parse_time(v).map_err(|_| format!("bad generated_at on line {n}"))?)
+            }
             "head_sha" => head_sha = Some(v.to_string()),
             "status" => {
                 status = match v {
                     "draft" => Status::Draft,
                     "approved" => Status::Approved,
-                    o => return Err(format!("unknown status {o:?}")),
+                    _ => return Err(format!("unknown status on line {n}")),
                 }
             }
             _ => {}
@@ -309,19 +314,19 @@ pub fn parse(text: &str) -> Result<Profile, String> {
     let alias = alias.filter(|a| !a.is_empty()).ok_or("missing alias")?;
 
     let mut blocks: Vec<Block> = Vec::new();
-    for line in lines {
+    for (n, line) in lines {
         if let Some(rest) = line
             .strip_prefix("<!-- section: ")
             .and_then(|r| r.strip_suffix(" -->"))
         {
-            let (k, o, v, s) = parse_marker(rest)?;
+            let (k, o, v, s) = parse_marker(rest).map_err(|e| format!("{e} on line {n}"))?;
             blocks.push(Block::Section(k, o, v, s, Vec::new()));
         } else if line.trim_end() == "<!-- links -->" {
             blocks.push(Block::Links(Vec::new()));
         } else {
             match blocks.last_mut() {
                 Some(Block::Section(.., body)) | Some(Block::Links(body)) => {
-                    body.push(line.to_string())
+                    body.push((n, line.to_string()))
                 }
                 None => {}
             }
@@ -333,15 +338,16 @@ pub fn parse(text: &str) -> Result<Profile, String> {
     for b in blocks {
         match b {
             Block::Links(ls) => {
-                for l in ls {
+                for (n, l) in ls {
                     // Keep trailing whitespace: an empty evidence renders as `kind | `.
                     let l = l.trim_start();
                     if l.starts_with("- `") {
-                        links.push(parse_link(l)?);
+                        links.push(parse_link(l).map_err(|e| format!("{e} on line {n}"))?);
                     }
                 }
             }
             Block::Section(key, origin, last_verified, summary, ls) => {
+                let ls: Vec<String> = ls.into_iter().map(|(_, l)| l).collect();
                 let mut ls: &[String] = &ls;
                 if ls.first().is_some_and(|l| l.starts_with("## ")) {
                     ls = &ls[1..];
@@ -404,7 +410,8 @@ pub fn profile_path(alias: &str, root: Option<&Path>) -> PathBuf {
 
 /// Aliases become a directory name: no separators, no `..`, not empty.
 fn check_alias(alias: &str) -> Result<(), String> {
-    if alias.is_empty() || alias.contains(['/', '\\', '\0']) || alias.contains("..") {
+    if alias.is_empty() || alias == "." || alias.contains(['/', '\\', '\0']) || alias.contains("..")
+    {
         return Err(format!("invalid project alias: {alias:?}"));
     }
     Ok(())
@@ -418,9 +425,20 @@ pub fn load(alias: &str, root: Option<&Path>) -> Result<Option<Profile>, String>
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
-    parse(&text)
-        .map(Some)
-        .map_err(|e| format!("{}: {e}", path.display()))
+    let p = parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    same_alias(&p, alias)?;
+    Ok(Some(p))
+}
+
+/// A `PROFILE.md` whose frontmatter names another project (copied or moved by
+/// hand) is refused: saving it would write that other project's profile.
+fn same_alias(p: &Profile, alias: &str) -> Result<(), String> {
+    if p.alias != alias {
+        return Err(format!(
+            "the profile in the {alias} folder belongs to another project (its alias does not match the folder); move or fix it by hand"
+        ));
+    }
+    Ok(())
 }
 
 /// Newest first.
@@ -557,18 +575,25 @@ pub fn update_locked(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     crate::file_lock::with_lock(&dir, || {
         let p = f(load(alias, root)?)?;
+        same_alias(&p, alias)?;
         save(&p, root).map_err(|e| e.to_string())?;
         Ok(p)
     })
     .map_err(|e| e.to_string())?
 }
 
-/// Make a history file the current profile (the current one is snapshotted first).
+/// Make a history file the current profile (the current one is snapshotted first),
+/// under the alias lock. Refused when the file is for another project or would
+/// persist a secret.
 pub fn restore(alias: &str, file: &Path, root: Option<&Path>) -> io::Result<()> {
     check_alias(alias).map_err(invalid)?;
     let text = std::fs::read_to_string(file)?;
-    parse(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    snapshot_and_write(alias, &text, root)
+    let p = parse(&text).map_err(invalid)?;
+    same_alias(&p, alias).map_err(invalid)?;
+    validate_draft(&p).map_err(invalid)?;
+    let dir = project_dir(alias, root);
+    std::fs::create_dir_all(&dir)?;
+    crate::file_lock::with_lock(&dir, || snapshot_and_write(alias, &text, root))?
 }
 
 pub fn edit_section(
@@ -974,6 +999,85 @@ mod tests {
         );
         // the v2 file was snapshotted by the restore
         assert_eq!(history("web", r).len(), 2);
+    }
+
+    #[test]
+    fn a_profile_copied_into_another_projects_folder_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        save(&sample("a"), r).unwrap();
+        let a_path = profile_path("a", r);
+        let a_text = std::fs::read_to_string(&a_path).unwrap();
+        let b_path = profile_path("b", r);
+        std::fs::create_dir_all(b_path.parent().unwrap()).unwrap();
+        std::fs::copy(&a_path, &b_path).unwrap();
+        let err = load("b", r).unwrap_err();
+        assert!(err.contains("belongs to another project"), "{err}");
+        // Neither an update nor a restore writes into A (or B) through it.
+        let mut called = false;
+        let res = update_locked("b", r, |p| {
+            called = true;
+            p.ok_or_else(|| "none".to_string())
+        });
+        assert!(res.is_err());
+        assert!(!called);
+        assert!(restore("b", &a_path, r).is_err());
+        assert_eq!(std::fs::read_to_string(&a_path).unwrap(), a_text);
+        assert_eq!(std::fs::read_to_string(&b_path).unwrap(), a_text);
+        assert!(history("a", r).is_empty());
+    }
+
+    #[test]
+    fn restore_refuses_a_file_with_a_secret_and_takes_the_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        save(&sample("web"), r).unwrap();
+        let mut bad = sample("web");
+        bad.sections.get_mut(&SectionKey::Gotchas).unwrap().body =
+            fake(&["token glpat-", "abcDEF123456ghiJKL78"]);
+        let file = root.path().join("old.md");
+        std::fs::write(&file, render(&bad)).unwrap();
+        let err = restore("web", &file, r).unwrap_err().to_string();
+        assert!(!err.contains("glpat-"), "{err}");
+        assert_eq!(load("web", r).unwrap().unwrap(), sample("web"));
+    }
+
+    #[test]
+    fn dot_is_not_an_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        assert!(check_alias(".").is_err());
+        assert!(load(".", r).is_err());
+        let mut p = sample(".");
+        p.alias = ".".into();
+        assert!(save(&p, r).is_err());
+        assert!(!root.path().join("PROFILE.md").exists());
+    }
+
+    #[test]
+    fn parse_and_load_errors_never_quote_the_file() {
+        let token = fake(&["glpat-", "abcDEF123456ghiJKL78"]);
+        let bad_files = [
+            format!("---\nalias: web\n---\n<!-- section: stack origin: {token} verified: - summary: x -->\n"),
+            format!("---\nalias: web\n---\n<!-- section: {token} origin: agent verified: - summary: x -->\n"),
+            format!("---\nalias: web\n---\n<!-- section: stack {token} -->\n"),
+            format!("---\nalias: web\n---\n<!-- section: stack origin: agent verified: {token} summary: x -->\n"),
+            format!("---\nalias: web\ngenerated_at: {token}\n---\n"),
+            format!("---\nalias: web\nstatus: {token}\n---\n"),
+            format!("---\nalias: web\n---\n<!-- links -->\n- `{token}\n"),
+        ];
+        let root = tempfile::tempdir().unwrap();
+        let r = Some(root.path());
+        let path = profile_path("web", r);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for text in bad_files {
+            let e = parse(&text).unwrap_err();
+            assert!(!e.contains("glpat") && !e.contains("abcDEF"), "{e}");
+            assert!(e.contains("line "), "{e}");
+            std::fs::write(&path, &text).unwrap();
+            let e = load("web", r).unwrap_err();
+            assert!(!e.contains("glpat") && !e.contains("abcDEF"), "{e}");
+        }
     }
 
     fn fake(parts: &[&str]) -> String {

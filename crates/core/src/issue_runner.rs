@@ -1991,7 +1991,13 @@ pub fn finalize_gated_issue(
     // Queue profile sections whose source files this MR changed; the dashboard tick
     // refreshes them later. Queue-only and detached: the diff and the queue write run on
     // their own bounded thread, so the run never waits for them and never fails on them.
-    crate::profile_sync::queue_branch_refresh(alias, &local_path, &target, &branch);
+    crate::profile_sync::queue_branch_refresh(
+        alias,
+        &local_path,
+        &target,
+        &branch,
+        ctx.memory_root.as_deref(),
+    );
     emit(
         "issue.completed",
         json!({"outcome": "mr_opened", "gated": true, "action": "fix", "mr_url": mr_url, "mr_title": title}),
@@ -2893,7 +2899,7 @@ fn run_doctor(
         match memory_store::add_task_memory(issue.alias, iid, lesson, &tags, Some("setup"), memory)
         {
             // A new lesson may belong in the profile's Gotchas (queue-only, best-effort).
-            Ok(r) if r.created => crate::profile_sync::on_memory_added(issue.alias, None),
+            Ok(r) if r.created => crate::profile_sync::on_memory_added(issue.alias, memory),
             Ok(_) => {}
             Err(e) => log(&format!("recording its learning failed: {e}")),
         }
@@ -3811,7 +3817,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
-            memory_root: None,
+            memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
         };
@@ -3903,7 +3909,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
-            memory_root: None,
+            memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
         };
@@ -3975,7 +3981,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
-            memory_root: None,
+            memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
         };
@@ -4047,7 +4053,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
-            memory_root: None,
+            memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
         };
@@ -4302,7 +4308,7 @@ mod tests {
             exe: "loopx".into(),
             config_path: None,
             fakes: None,
-            memory_root: None,
+            memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
         };

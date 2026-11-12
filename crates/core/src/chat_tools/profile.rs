@@ -123,4 +123,20 @@ mod tests {
         );
         assert!(r.get("error").is_some(), "{r}");
     }
+
+    #[test]
+    fn a_malformed_profile_errors_without_quoting_the_line() {
+        let d = tempfile::tempdir().unwrap();
+        let e = env(d.path());
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let path = e.home_dir.join("memory/web/PROFILE.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("---\nalias: web\nstatus: {token}\n---\n")).unwrap();
+        let r = run(&e, "project_profile.read", r#"{"alias": "web"}"#, "");
+        assert!(r.get("error").is_some(), "{r}");
+        assert!(
+            !r.to_string().contains("glpat") && !r.to_string().contains("abcDEF"),
+            "{r}"
+        );
+    }
 }
