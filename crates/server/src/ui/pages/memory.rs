@@ -33,6 +33,7 @@ use chrono::{DateTime, Duration, Local, Utc};
 use loopx_core::profile_graph::{self, Edge, EdgeKind, Graph};
 use loopx_core::profile_build;
 use loopx_core::profile_progress::{JobKind as ProfileJobKind, ProfileJob};
+use loopx_core::profile_notify::{self, BuildDone, Finished, RowResult};
 use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
 use loopx_core::profile_scan::IssueDigest;
@@ -68,6 +69,7 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/proposal/decide", decide);
     r.post("/insights/memory/sync/settings", sync_settings);
     r.post("/insights/memory/sync/now", sync_now);
+    r.post("/insights/memory/sync/slack", slack_settings);
 }
 
 pub fn render(ctx: &UiCtx) -> String {
@@ -2029,9 +2031,11 @@ enum Notice {
     StoreBad,
     ProfileApproved,
     ApproveSecret,
+    SlackOn,
+    SlackOff,
 }
 
-const NOTICES: [(Notice, &str); 26] = [
+const NOTICES: [(Notice, &str); 28] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2058,6 +2062,8 @@ const NOTICES: [(Notice, &str); 26] = [
     (Notice::StoreBad, "store-bad"),
     (Notice::ProfileApproved, "profile-approved"),
     (Notice::ApproveSecret, "approve-secret"),
+    (Notice::SlackOn, "slack-on"),
+    (Notice::SlackOff, "slack-off"),
 ];
 
 impl Notice {
@@ -2086,6 +2092,8 @@ impl Notice {
                 | Notice::ScheduleSaved
                 | Notice::SyncRequested
                 | Notice::ProfileApproved
+                | Notice::SlackOn
+                | Notice::SlackOff
         )
     }
 
@@ -2117,6 +2125,8 @@ impl Notice {
             Notice::StoreBad => ctx.t("The sync settings file could not be read, so nothing was changed."),
             Notice::ProfileApproved => ctx.t("Profile approved. It is no longer marked as a draft."),
             Notice::ApproveSecret => ctx.t("Not approved: a section looks like it contains a secret value. Edit it out, then approve again."),
+            Notice::SlackOn => ctx.t("Slack messages for profile builds are on."),
+            Notice::SlackOff => ctx.t("Slack messages for profile builds are off."),
         }
     }
 }
@@ -2274,11 +2284,23 @@ struct JobEnv {
     activity: PathBuf,
     fixed_now: Option<DateTime<Utc>>,
     agent: ProfileAgent,
+    /// The sync store holding the `notify_slack` switch.
+    store: PathBuf,
+    /// Where a finished job's Slack message goes; `None` sends nothing.
+    notifier: Option<profile_notify::Notifier>,
 }
 
 impl JobEnv {
     fn now(&self) -> DateTime<Utc> {
         self.fixed_now.unwrap_or_else(Utc::now)
+    }
+
+    /// The job's one Slack message: sent after its live record is gone, when the
+    /// switch is on. Never fails or panics (see `profile_notify::send_if_enabled`).
+    fn notify(&self, f: &Finished) {
+        if let Some(n) = &self.notifier {
+            profile_notify::send_if_enabled(&self.store, f, &**n);
+        }
     }
 }
 
@@ -2297,13 +2319,26 @@ fn job_env(ctx: &UiCtx) -> Option<JobEnv> {
         activity: crate::ui::profile_jobs::base(ctx),
         fixed_now: ctx.state.fixed_now,
         agent,
+        store: store_path(ctx),
+        notifier: ctx.state.profile_notifier.clone().or_else(|| {
+            ctx.state
+                .spawn_processes
+                .then(|| profile_notify::slack_sender(slack_config(ctx)))
+        }),
     })
 }
 
-fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) {
+/// This dashboard's Slack config (`~/.slack/config.json`).
+fn slack_config(ctx: &UiCtx) -> PathBuf {
+    ctx.state.user_home.join(".slack").join("config.json")
+}
+
+/// Build one profile; its live record is gone by the time this returns. Gives
+/// what it wrote, or the fixed reason it failed with.
+fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) -> Result<BuildDone, &'static str> {
     forget(&env.home, &t.alias);
+    let job = ProfileJob::start(&env.activity, ProfileJobKind::Build, &t.alias);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let job = ProfileJob::start(&env.activity, ProfileJobKind::Build, &t.alias);
         profile_build::build_profile_with_progress(
             &t.alias,
             &t.work_dir,
@@ -2317,11 +2352,14 @@ fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) {
         )
     }))
     .unwrap_or_else(|_| Err("internal error".into()));
-    let outcome = match res {
-        Ok(_) => JobOutcome::Built,
-        Err(e) => JobOutcome::Failed(failure_line(&e)),
+    let fixed = job.failure();
+    drop(job);
+    let (outcome, done) = match res {
+        Ok(p) => (JobOutcome::Built, Ok(BuildDone::of(&p))),
+        Err(e) => (JobOutcome::Failed(failure_line(&e)), Err(fixed.unwrap_or_else(|| profile_notify::reason(&e)))),
     };
     record(&env.home, &t.alias, Job { at: env.now(), kind: JobKind::Build, outcome });
+    done
 }
 
 // ---- handlers
@@ -2356,7 +2394,9 @@ fn build(ctx: &UiCtx) -> UiResponse {
     forget(&ctx.state.home_dir, &alias);
     std::thread::spawn(move || {
         let _slot = slot;
-        run_build(&env, &t, &aliases);
+        let began = std::time::Instant::now();
+        let result = run_build(&env, &t, &aliases);
+        env.notify(&Finished::Build { alias: t.alias.clone(), result, took: began.elapsed() });
     });
     back(to(), Notice::BuildStarted)
 }
@@ -2381,12 +2421,21 @@ fn build_all(ctx: &UiCtx) -> UiResponse {
     };
     std::thread::spawn(move || {
         let _guard = guard;
+        let began = std::time::Instant::now();
+        let mut rows = Vec::new();
         for t in &list {
             let Some(_slot) = profile_build::try_acquire(&t.alias) else {
+                rows.push((t.alias.clone(), RowResult::Busy));
                 continue;
             };
-            run_build(&env, t, &aliases);
+            let row = match run_build(&env, t, &aliases) {
+                Ok(_) => RowResult::Built,
+                Err(why) => RowResult::Failed(why),
+            };
+            rows.push((t.alias.clone(), row));
         }
+        // One message for the whole pass, not one per project.
+        env.notify(&Finished::BuildAll { rows, took: began.elapsed() });
     });
     back(Back::Overview, Notice::BuildAllStarted)
 }
@@ -2463,8 +2512,9 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
     let data_root = ctx.state.home_dir.join("data");
     std::thread::spawn(move || {
         let _slot = slot;
+        let began = std::time::Instant::now();
+        let job = ProfileJob::start(&env.activity, ProfileJobKind::Refresh(key), &t.alias);
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let job = ProfileJob::start(&env.activity, ProfileJobKind::Refresh(key), &t.alias);
             let digest = if t.instance.is_empty() || t.project_id.is_empty() {
                 profile_scan::digest_for("", "", &t.alias, Some(&env.root))
             } else {
@@ -2483,12 +2533,15 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
             )
         }))
         .unwrap_or_else(|_| Err("internal error".into()));
-        let outcome = match res {
-            Ok(Some(_)) => JobOutcome::Proposed,
-            Ok(None) => JobOutcome::NothingNew,
-            Err(e) => JobOutcome::Failed(failure_line(&e)),
+        let fixed = job.failure();
+        drop(job);
+        let (outcome, result) = match res {
+            Ok(Some(_)) => (JobOutcome::Proposed, Ok(true)),
+            Ok(None) => (JobOutcome::NothingNew, Ok(false)),
+            Err(e) => (JobOutcome::Failed(failure_line(&e)), Err(fixed.unwrap_or_else(|| profile_notify::reason(&e)))),
         };
         record(&env.home, &t.alias, Job { at: env.now(), kind: JobKind::Refresh(key), outcome });
+        env.notify(&Finished::Refresh { alias: t.alias.clone(), section: key, result, took: began.elapsed() });
     });
     back(to(), Notice::RefreshStarted)
 }
@@ -2638,6 +2691,21 @@ fn sync_settings(ctx: &UiCtx) -> UiResponse {
         Ok(true) if enabled => back(Back::Overview, Notice::SyncOn),
         Ok(true) => back(Back::Overview, Notice::SyncOff),
         Ok(false) => back(Back::Overview, Notice::ScheduleSaved),
+    }
+}
+
+/// The "Slack messages for profile builds" switch: `notify=on` or `notify=0`,
+/// anything else is refused. Only that setting changes.
+fn slack_settings(ctx: &UiCtx) -> UiResponse {
+    let on = match ctx.form().first("notify") {
+        Some("on" | "1") => true,
+        Some("0") => false,
+        _ => return back(Back::Overview, Notice::BadInput),
+    };
+    match profile_sync::with_store(&store_path(ctx), |s| s.settings.notify_slack = on) {
+        Err(_) => back(Back::Overview, Notice::StoreBad),
+        Ok(()) if on => back(Back::Overview, Notice::SlackOn),
+        Ok(()) => back(Back::Overview, Notice::SlackOff),
     }
 }
 
@@ -2853,6 +2921,7 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
             icon("autorenew"),
             escape(&ctx.t("Sync now"))
         ));
+        out.push_str(&slack_switch(ctx, set.notify_slack));
     }
     let build = if build_all_running(&ctx.state.home_dir) {
         format!(
@@ -2890,6 +2959,28 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
     };
     out.push_str(&build);
     out
+}
+
+/// The "Slack messages for profile builds" switch (saves on click, like the
+/// weekly one), and a hint pointing to Connectors when no webhook is set up.
+fn slack_switch(ctx: &UiCtx, on: bool) -> String {
+    let label = escape(&ctx.t("Slack messages for profile builds"));
+    let (class, checked, next) = if on { (" is-on", "true", "0") } else { ("", "false", "on") };
+    let hint = if profile_notify::webhook_configured(&slack_config(ctx)) {
+        String::new()
+    } else {
+        format!(
+            "<a class='mem-slack-hint' href='/connectors'>{}</a>",
+            escape(&ctx.t("No Slack webhook configured — set it up in Connectors"))
+        )
+    };
+    format!(
+        "<div class='mem-slack'><form method='post' action='/insights/memory/sync/slack' class='mem-switch'>{}{}\
+         <button type='submit' class='switch{class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button>\
+         <span>{label}</span></form>{hint}</div>",
+        ctx.csrf_input(),
+        hidden("notify", next)
+    )
 }
 
 /// The project header's Build (no profile yet) or Refresh (rebuild) button.
@@ -3361,6 +3452,9 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-inline{display:inline-flex;align-items:center;gap:.5rem}
 .mem-switch{display:inline-flex;align-items:center;gap:.5rem;height:32px;font-size:.85rem;font-weight:500;color:var(--md-on-surface)}
 .mem-schedule{display:inline-flex;align-items:center;gap:.4rem}
+.mem-slack{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.15rem .6rem;min-width:0}
+.mem-slack-hint{display:inline-flex;align-items:center;min-height:24px;font-size:.78rem;line-height:1.3;color:var(--md-on-surface-variant);text-decoration:none;border-radius:6px;transition:color .25s cubic-bezier(0.32,0.72,0,1)}
+.mem-slack-hint:hover,.mem-slack-hint:focus-visible{color:var(--md-primary);text-decoration:underline}
 .mem-select{width:auto;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .6rem;border:1px solid var(--md-outline-variant);border-radius:10px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;cursor:pointer}
 .mem-btn{display:inline-flex;align-items:center;gap:.4rem;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .95rem;border:1px solid var(--md-outline-variant);border-radius:999px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;list-style:none;user-select:none}
 .mem-btn::-webkit-details-marker{display:none}
@@ -3952,7 +4046,7 @@ mod tests {
         panic!("{alias} is still running");
     }
 
-    const ROUTES: [&str; 7] = [
+    const ROUTES: [&str; 8] = [
         "/insights/memory/build",
         "/insights/memory/approve",
         "/insights/memory/section/save",
@@ -3960,6 +4054,7 @@ mod tests {
         "/insights/memory/proposal/decide",
         "/insights/memory/sync/settings",
         "/insights/memory/sync/now",
+        "/insights/memory/sync/slack",
     ];
 
     #[test]
@@ -4387,6 +4482,7 @@ mod tests {
             ("/insights/memory/proposal/decide", format!("project=alpha&id={evil}&decision={evil}")),
             ("/insights/memory/sync/settings", format!("enabled={evil}&weekday={evil}&hour={evil}")),
             ("/insights/memory/sync/now", format!("project={evil}")),
+            ("/insights/memory/sync/slack", format!("notify={evil}")),
             ("/insights/memory/approve", format!("project={evil}")),
         ] {
             seen.push(sb.post_to(url, &body));
@@ -4927,5 +5023,173 @@ mod tests {
         assert!(html.contains("data-wheel-hint='Use Ctrl/⌘ + scroll to zoom'"), "{html}");
         let script = crate::ui::assets::text("memory/graph.js").unwrap();
         assert!(script.contains("ev.ctrlKey || ev.metaKey"));
+    }
+
+    // ---------------------------------------------------------------- Slack messages
+
+    use loopx_core::slack_report::Report;
+
+    /// Every message a job handed over, with whether its live record was already
+    /// gone at that moment.
+    #[derive(Default)]
+    struct Outbox(Mutex<Vec<(Report, bool)>>);
+
+    impl Outbox {
+        fn titles(&self) -> Vec<String> {
+            self.0.lock().unwrap().iter().map(|(r, _)| r.title.clone()).collect()
+        }
+        fn text(&self, i: usize) -> String {
+            loopx_core::slack_report::plain_text(&self.0.lock().unwrap()[i].0)
+        }
+    }
+
+    impl Sb {
+        fn with_outbox(mut self) -> (Self, Arc<Outbox>) {
+            let out = Arc::new(Outbox::default());
+            let (o, base) = (out.clone(), loopx_core::agent_activity::beside(&self.state.status_path_for_loop("issue-loop")));
+            self.state = self.state.with_profile_notifier(Arc::new(move |r: &Report| {
+                let clean = loopx_core::profile_progress::running(&base).is_empty();
+                o.0.lock().unwrap().push((r.clone(), clean));
+                true
+            }));
+            (self, out)
+        }
+    }
+
+    #[test]
+    fn a_finished_build_sends_one_message_after_its_record_is_gone() {
+        let alias = "slack-a";
+        let (sb, out) = Sb::new(&[(alias, true)]).with_agent(FakeAgent::new(full_reply(alias, "Built"))).with_outbox();
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        wait_idle(alias);
+        assert_eq!(out.titles(), [format!("Project profile built \u{b7} {alias}")]);
+        assert!(out.0.lock().unwrap()[0].1, "the pill was cleared first");
+        let text = out.text(0);
+        assert!(text.contains("10 sections written") && text.contains("Draft ready for review"), "{text}");
+        assert!(!text.contains("Built overview"), "no profile text: {text}");
+    }
+
+    #[test]
+    fn a_failed_build_sends_the_fixed_reason_only() {
+        let alias = "slack-b";
+        let (mut sb, out) = Sb::new(&[(alias, true)]).with_outbox();
+        sb.state = sb.state.with_profile_agent(Arc::new(FailingAgent("FileNotFoundError")));
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        wait_idle(alias);
+        assert_eq!(out.titles(), [format!("Project profile build failed \u{b7} {alias}")]);
+        let text = out.text(0);
+        assert!(text.contains("The AI command could not be started"), "{text}");
+        assert!(!text.contains("FileNotFoundError"), "{text}");
+    }
+
+    #[test]
+    fn a_section_refresh_sends_one_message() {
+        let alias = "slack-r";
+        let (sb, out) = Sb::new(&[(alias, true)])
+            .with_agent(FakeAgent::new(one_section_reply(alias, SectionKey::Stack, "Fresh")))
+            .with_outbox();
+        sb.save(&profile(alias, &[(SectionKey::Stack, section("Old", "Old body"))]));
+        sb.post_to("/insights/memory/section/refresh", &format!("project={alias}&section=stack"));
+        wait_idle(alias);
+        assert_eq!(out.titles(), [format!("Profile section proposed \u{b7} {alias} \u{b7} Stack")]);
+        assert!(out.0.lock().unwrap()[0].1);
+        assert!(!out.text(0).contains("Fresh"), "no section text");
+    }
+
+    #[test]
+    fn build_all_sends_one_summary_at_the_end() {
+        let (sb, out) = Sb::new(&[("slack-all-a", true), ("slack-all-b", true)])
+            .with_agent(FakeAgent::new(full_reply("x", "Built")))
+            .with_outbox();
+        sb.post_to("/insights/memory/build", "project=all&from=overview");
+        for _ in 0..400 {
+            if !super::build_all_running(&sb.state.home_dir) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert_eq!(out.titles(), ["Project profiles built: 2 ok, 0 failed"]);
+        let text = out.text(0);
+        assert!(text.contains("slack-all-a \u{2014} ok") && text.contains("slack-all-b \u{2014} ok"), "{text}");
+    }
+
+    #[test]
+    fn a_sender_that_panics_changes_nothing_about_the_job() {
+        let alias = "slack-p";
+        let mut sb = Sb::new(&[(alias, true)]).with_agent(FakeAgent::new(full_reply(alias, "Built")));
+        sb.state = sb.state.with_profile_notifier(Arc::new(|_: &Report| panic!("slack exploded")));
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        wait_idle(alias);
+        assert_eq!(sb.load(alias).status, Status::Draft);
+        assert!(matches!(last_job(&sb.state.home_dir, alias).map(|j| j.outcome), Some(JobOutcome::Built)));
+        let base = loopx_core::agent_activity::beside(&sb.state.status_path_for_loop("issue-loop"));
+        assert!(loopx_core::profile_progress::running(&base).is_empty());
+    }
+
+    #[test]
+    fn with_no_webhook_the_real_sender_skips_and_the_job_is_unchanged() {
+        let alias = "slack-n";
+        let mut sb = Sb::new(&[(alias, true)]).with_agent(FakeAgent::new(full_reply(alias, "Built")));
+        let config = sb.state.user_home.join(".slack").join("config.json");
+        sb.state = sb.state.with_profile_notifier(loopx_core::profile_notify::slack_sender(config));
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        wait_idle(alias);
+        assert!(matches!(last_job(&sb.state.home_dir, alias).map(|j| j.outcome), Some(JobOutcome::Built)));
+    }
+
+    #[test]
+    fn the_slack_switch_saves_on_click_and_turns_messages_off() {
+        let alias = "slack-s";
+        let (sb, out) = Sb::new(&[(alias, true)]).with_agent(FakeAgent::new(full_reply(alias, "Built"))).with_outbox();
+        let loc = sb.post_to("/insights/memory/sync/slack", "notify=0");
+        assert_eq!(loc, "/insights?view=memory&notice=slack-off");
+        let s = profile_sync::load(&sb.store()).unwrap().settings;
+        assert!(!s.notify_slack && s.enabled, "only the Slack switch changed");
+        assert!(sb.get(&loc).contains("Slack messages for profile builds are off."));
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        wait_idle(alias);
+        assert!(out.titles().is_empty(), "switched off: nothing sent");
+        assert_eq!(sb.post_to("/insights/memory/sync/slack", "notify=on"), "/insights?view=memory&notice=slack-on");
+        assert!(profile_sync::load(&sb.store()).unwrap().settings.notify_slack);
+        for bad in ["notify=maybe", "", "notify="] {
+            assert!(sb.post_to("/insights/memory/sync/slack", bad).ends_with("notice=bad-input"), "{bad}");
+        }
+        std::fs::write(sb.store(), "{corrupt").unwrap();
+        assert!(sb.post_to("/insights/memory/sync/slack", "notify=0").ends_with("notice=store-bad"));
+        assert_eq!(std::fs::read_to_string(sb.store()).unwrap(), "{corrupt");
+    }
+
+    #[test]
+    fn the_overview_shows_the_slack_switch_and_a_hint_without_a_webhook() {
+        let sb = Sb::new(&[("slack-v", true)]);
+        let html = sb.get("/insights?view=memory");
+        assert!(html.contains("action='/insights/memory/sync/slack'"), "{html}");
+        assert!(html.contains("aria-label='Slack messages for profile builds'"), "{html}");
+        assert!(html.contains("No Slack webhook configured"), "{html}");
+        assert!(html.contains("href='/connectors'"), "{html}");
+        let slack = sb.state.user_home.join(".slack");
+        std::fs::create_dir_all(&slack).unwrap();
+        std::fs::write(slack.join("config.json"), r#"{"webhook_url": "keychain:loop/slack"}"#).unwrap();
+        let html = sb.get("/insights?view=memory");
+        assert!(!html.contains("No Slack webhook configured"), "{html}");
+        sb.post_to("/insights/memory/sync/slack", "notify=0");
+        let off = sb.get("/insights?view=memory");
+        let form = off.split("action='/insights/memory/sync/slack'").nth(1).unwrap();
+        assert!(form.split("</form>").next().unwrap().contains("aria-checked='false'"), "{off}");
+    }
+
+    #[test]
+    fn the_slack_switch_and_hint_are_translated() {
+        let sb = Sb::new(&[("slack-fr", true)]);
+        let req = crate::ui::routes::UiRequest::get("/insights?view=memory").with_header("cookie", "loop_lang=fr");
+        let fr = String::from_utf8(sb.state.registry.dispatch(&sb.state, &req).unwrap().body).unwrap();
+        assert!(!fr.contains("Slack messages for profile builds"), "{fr}");
+        assert!(!fr.contains("No Slack webhook configured"), "{fr}");
+        assert!(fr.contains("aria-label='Messages Slack pour les profils de projet'"), "{fr}");
+        assert!(fr.contains("Aucun webhook Slack configuré — configurez-le dans Connecteurs"), "{fr}");
+        sb.post_to("/insights/memory/sync/slack", "notify=0");
+        let req = crate::ui::routes::UiRequest::get("/insights?view=memory&notice=slack-off").with_header("cookie", "loop_lang=fr");
+        let fr = String::from_utf8(sb.state.registry.dispatch(&sb.state, &req).unwrap().body).unwrap();
+        assert!(fr.contains("Les messages Slack pour les profils de projet sont désactivés."), "{fr}");
     }
 }

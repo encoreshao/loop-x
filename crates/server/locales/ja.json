@@ -2062,5 +2062,9 @@
   "{progress} · +{count} more": "{progress} · ほか {count} 件",
   "Profile builds": "プロフィール",
   "Progress": "進捗",
-  "Project profile builds show here too while they run.": "プロジェクトのプロフィール作成も、実行中はここに表示されます。"
+  "Project profile builds show here too while they run.": "プロジェクトのプロフィール作成も、実行中はここに表示されます。",
+  "Slack messages for profile builds": "プロフィール作成の Slack 通知",
+  "Slack messages for profile builds are on.": "プロフィール作成の Slack 通知はオンです。",
+  "Slack messages for profile builds are off.": "プロフィール作成の Slack 通知はオフです。",
+  "No Slack webhook configured — set it up in Connectors": "Slack Webhook が未設定です — コネクタで設定してください"
 }

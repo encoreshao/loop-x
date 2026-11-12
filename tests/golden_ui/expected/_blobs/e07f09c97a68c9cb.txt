@@ -115,6 +115,9 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-inline{display:inline-flex;align-items:center;gap:.5rem}
 .mem-switch{display:inline-flex;align-items:center;gap:.5rem;height:32px;font-size:.85rem;font-weight:500;color:var(--md-on-surface)}
 .mem-schedule{display:inline-flex;align-items:center;gap:.4rem}
+.mem-slack{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.15rem .6rem;min-width:0}
+.mem-slack-hint{display:inline-flex;align-items:center;min-height:24px;font-size:.78rem;line-height:1.3;color:var(--md-on-surface-variant);text-decoration:none;border-radius:6px;transition:color .25s cubic-bezier(0.32,0.72,0,1)}
+.mem-slack-hint:hover,.mem-slack-hint:focus-visible{color:var(--md-primary);text-decoration:underline}
 .mem-select{width:auto;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .6rem;border:1px solid var(--md-outline-variant);border-radius:10px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;cursor:pointer}
 .mem-btn{display:inline-flex;align-items:center;gap:.4rem;height:32px;box-sizing:border-box;flex:0 0 auto;margin:0;padding:0 .95rem;border:1px solid var(--md-outline-variant);border-radius:999px;background:var(--md-surface);color:var(--md-on-surface);font:inherit;font-size:.85rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;list-style:none;user-select:none}
 .mem-btn::-webkit-details-marker{display:none}

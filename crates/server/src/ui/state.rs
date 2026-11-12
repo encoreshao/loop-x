@@ -133,6 +133,10 @@ pub struct UiState {
     /// `None` is the real sealed AI CLI, started only when `spawn_processes` is on;
     /// tests inject a fake (and then the job always runs).
     pub profile_agent: Option<ProfileAgent>,
+    /// Memory → a build or refresh that ends: where its Slack message goes.
+    /// `None` is the default webhook in `<user_home>/.slack/config.json`, used only
+    /// when `spawn_processes` is on; tests inject a recorder.
+    pub profile_notifier: Option<loopx_core::profile_notify::Notifier>,
     pub registry: Arc<Registry>,
 }
 
@@ -199,6 +203,7 @@ impl UiState {
             spawn_processes: true,
             mr_feedback_deps: None,
             profile_agent: None,
+            profile_notifier: None,
             registry: Arc::new(Registry::with_pages()),
         }
     }
@@ -236,6 +241,7 @@ impl UiState {
             spawn_processes: false,
             mr_feedback_deps: None,
             profile_agent: None,
+            profile_notifier: None,
             registry: Arc::new(Registry::with_pages()),
         }
     }
@@ -273,6 +279,12 @@ impl UiState {
     /// The agent the Memory page's builds and refreshes run (tests).
     pub fn with_profile_agent(mut self, agent: ProfileAgent) -> Self {
         self.profile_agent = Some(agent);
+        self
+    }
+
+    /// Where the Memory page's finished jobs send their Slack message (tests).
+    pub fn with_profile_notifier(mut self, notifier: loopx_core::profile_notify::Notifier) -> Self {
+        self.profile_notifier = Some(notifier);
         self
     }
 
