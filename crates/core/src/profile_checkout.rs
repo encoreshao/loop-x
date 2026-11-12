@@ -302,6 +302,18 @@ pub fn register_test_remote(instance: &str, project_id: &str, remote: Remote) {
     all.push(((instance.to_string(), project_id.to_string()), remote));
 }
 
+/// [`remote_for`] could not use GitLab for this project's instance.
+pub const NOT_CONFIGURED: &str = "GitLab is not set up for this project's instance";
+/// GitLab refused the token, or the project is not visible to it.
+pub const CANNOT_READ: &str = "GitLab token cannot read this repository";
+
+/// Whether `msg` says GitLab access cannot work for this project (not set up, or
+/// the token cannot read it) rather than something that went wrong this time.
+/// The weekly sync skips such a project quietly instead of failing every week.
+pub fn is_access_problem(msg: &str) -> bool {
+    msg == NOT_CONFIGURED || msg == CANNOT_READ
+}
+
 /// The clone URL, default branch and credentials of a GitLab project, from the
 /// instance configured in `~/.gitlab/config.json`.
 pub fn remote_for(instance: &str, project_id: &str) -> Result<Remote, String> {
@@ -314,12 +326,12 @@ pub fn remote_for(instance: &str, project_id: &str) -> Result<Remote, String> {
     }
     let cfg = crate::gitlab::load_config();
     let client = crate::gitlab::Client::from_config(cfg.as_ref(), Some(instance), None)
-        .map_err(|e| crate::profile_sync::safe_failure_line(&e.to_string()))?;
+        .map_err(|_| NOT_CONFIGURED.to_string())?;
     let project = client.get_project(project_id).map_err(|e| match e {
         crate::gitlab::GitlabError::Http {
             status: 401 | 403 | 404,
             ..
-        } => "GitLab token cannot read this repository".to_string(),
+        } => CANNOT_READ.to_string(),
         other => crate::profile_sync::safe_failure_line(&other.to_string()),
     })?;
     let text = |k: &str| project.get(k).and_then(|v| v.as_str()).unwrap_or("");

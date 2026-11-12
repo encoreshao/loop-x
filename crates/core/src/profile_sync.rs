@@ -1312,6 +1312,7 @@ fn sync_project(
                 };
                 &cloned
             }
+            Err(e) if crate::profile_checkout::is_access_problem(&e) => return Outcome::Skipped,
             Err(e) => {
                 early(&e);
                 return failure(&e);
@@ -3207,5 +3208,42 @@ mod tests {
             crate::profile_wiki::list(&m.project.alias, Some(&root))[0].content,
             "v2 changed"
         );
+    }
+
+    #[test]
+    fn a_managed_project_gitlab_cannot_serve_is_skipped_not_failed_every_week() {
+        let mut m = managed("noaccess");
+        m.project.instance = "no-such-instance-xyz".into();
+        let root = m.root();
+        let out = sync_all(
+            std::slice::from_ref(&m.project),
+            &Fake::new("x"),
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(out[0].1, Outcome::Skipped);
+        assert!(!m.project.work_dir.exists());
+        // A project that is reachable but whose clone fails is still a failure.
+        let mut bad = managed("badclone");
+        bad.project.project_id = "grp/badclone-url".into();
+        crate::profile_checkout::register_test_remote(
+            "work",
+            "grp/badclone-url",
+            crate::profile_checkout::Remote {
+                url: "file:///nope".into(),
+                branch: "main".into(),
+                auth_env: vec![],
+            },
+        );
+        let root = bad.root();
+        let out = sync_all(
+            std::slice::from_ref(&bad.project),
+            &Fake::new("x"),
+            now(),
+            Some(&root),
+            bad.apr.path(),
+        );
+        assert!(matches!(out[0].1, Outcome::Failed(_)), "{:?}", out[0].1);
     }
 }
