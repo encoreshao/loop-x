@@ -282,6 +282,10 @@ pub fn report(f: &Finished) -> Option<Report> {
             let ok = count(|r| *r == RowResult::Built);
             let failed = count(|r| matches!(r, RowResult::Failed(_)));
             let busy = count(|r| *r == RowResult::Busy);
+            if ok == 0 && failed == 0 {
+                // Everything was skipped: nothing was built, so nothing to report.
+                return None;
+            }
             let mut title = format!("Project profiles built: {ok} ok, {failed} failed");
             if busy > 0 {
                 title.push_str(&format!(", {busy} skipped"));
@@ -585,6 +589,36 @@ mod tests {
         );
         assert_eq!(bad.status.as_ref().unwrap().state, State::Failed);
         assert!(text(&bad).contains("The AI call failed"));
+    }
+
+    #[test]
+    fn build_all_with_every_row_busy_sends_nothing() {
+        let rows = vec![
+            ("a".to_string(), RowResult::Busy),
+            ("b".to_string(), RowResult::Busy),
+        ];
+        assert!(report(&Finished::BuildAll {
+            rows,
+            took: secs(5)
+        })
+        .is_none());
+        assert!(report(&Finished::BuildAll {
+            rows: Vec::new(),
+            took: secs(5)
+        })
+        .is_none());
+        let mixed = report(&Finished::BuildAll {
+            rows: vec![
+                ("a".to_string(), RowResult::Built),
+                ("b".to_string(), RowResult::Busy),
+            ],
+            took: secs(5),
+        })
+        .unwrap();
+        assert_eq!(
+            mixed.title,
+            "Project profiles built: 1 ok, 0 failed, 1 skipped"
+        );
     }
 
     #[test]
