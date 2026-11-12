@@ -797,6 +797,7 @@ mod tests {
                 loopx_home: Path::new("/Users/u/.loopx"),
                 exe: EXE,
             },
+            Path::new("/Users/u/.claude/skills/video-scout"),
         )
         .unwrap();
         assert!(rules(flag(&creator, "--disallowedTools")).contains(&"Read(//Users/u/.loopx/**)"));

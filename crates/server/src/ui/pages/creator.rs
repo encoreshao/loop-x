@@ -648,9 +648,18 @@ fn media(ctx: &UiCtx) -> UiResponse {
     serve_file(ctx, &path)
 }
 
+/// Where the installed inspire-video keeps its code (`templates/`, `scripts/`): a clone or
+/// a plugin copy. The data folder, which then holds none of it, when it is not installed.
+fn engine_root(ctx: &UiCtx) -> std::path::PathBuf {
+    let home = &ctx.state.user_home;
+    loopx_core::creator::skills::engine(home)
+        .map(|e| e.root)
+        .unwrap_or_else(|| spawn::generate_dir(home))
+}
+
 /// A promo template's cover image or sample clip, from the skill folder.
 fn template_file(ctx: &UiCtx) -> UiResponse {
-    let skill = spawn::generate_dir(&ctx.state.user_home);
+    let skill = engine_root(ctx);
     match templates::file(&skill, ctx.param("id"), ctx.param("kind")) {
         Some(path) => serve_file(ctx, &path),
         None => UiResponse::not_found(ctx.lang),
@@ -1580,7 +1589,7 @@ fn platform_picker(ctx: &UiCtx) -> String {
 /// The promo template: a card per recipe the skill ships, with its cover, a one-line
 /// description and its sample clip. Empty for a skill from before templates.
 fn template_picker(ctx: &UiCtx) -> String {
-    let skill = spawn::generate_dir(&ctx.state.user_home);
+    let skill = engine_root(ctx);
     let list = templates::list(&skill);
     if list.is_empty() {
         return String::new();
@@ -1728,8 +1737,15 @@ fn voice_picker(ctx: &UiCtx) -> String {
     let mut hint = ctx.t("Narrated videos use a synthetic voice, and the publish text says so.");
     if !ready {
         hint.push(' ');
-        hint.push_str(&ctx.t(
-            "Cloned voices need CosyVoice 3. Set it up once with bash ~/.inspire-video/scripts/showcase/setup_cosyvoice.sh.",
+        // The script lives with the skill's code, which a plugin install keeps outside ~/.inspire-video.
+        let script = engine_root(ctx).join("scripts/showcase/setup_cosyvoice.sh");
+        let script = match script.strip_prefix(&ctx.state.user_home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => script.display().to_string(),
+        };
+        hint.push_str(&ctx.tf(
+            "Cloned voices need CosyVoice 3. Set it up once with bash {script}.",
+            &[("script", &script)],
         ));
     }
     format!(
@@ -3165,6 +3181,31 @@ mod tests {
         assert_eq!(fx.get("/creator/template/calm/preview").status, 200);
         assert_eq!(fx.get("/creator/template/cinematic/preview").status, 404);
         assert_eq!(fx.get("/creator/template/nope/cover").status, 404);
+    }
+
+    #[test]
+    fn a_plugin_install_serves_its_templates_and_setup_script_from_the_plugin_copy() {
+        let fx = Fx::new();
+        let config = fx.user().join(".claude");
+        let root = config.join("plugins/cache/inspire-video/inspire-video/abc123");
+        for skill in ["inspire-video", "inspire-showcase"] {
+            let d = root.join("skills").join(skill);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("SKILL.md"), "x").unwrap();
+        }
+        std::fs::create_dir_all(root.join("templates/covers")).unwrap();
+        std::fs::write(root.join("templates/calm.yaml"), "id: calm\nname: Calm\n").unwrap();
+        std::fs::write(root.join("templates/covers/calm.png"), b"png").unwrap();
+        let record = serde_json::json!({"plugins": {"inspire-video@inspire-video": [{"installPath": root}]}});
+        std::fs::write(config.join("plugins/installed_plugins.json"), record.to_string()).unwrap();
+        let body = fx.get("/creator?tab=showcase").body_text();
+        assert!(body.contains("name='template' value='calm'"), "{body}");
+        assert_eq!(fx.get("/creator/template/calm/cover").status, 200);
+        // The CosyVoice setup script ships with the code, not in the data folder.
+        assert!(
+            body.contains("bash ~/.claude/plugins/cache/inspire-video/inspire-video/abc123/scripts/showcase/setup_cosyvoice.sh"),
+            "{body}"
+        );
     }
 
     #[test]

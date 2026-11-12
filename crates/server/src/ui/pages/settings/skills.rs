@@ -8,7 +8,9 @@ use crate::ui::template::{Scope, Template};
 use loopx_core::settings_store as store;
 
 /// (name, description, installed-marker path relative to the user's home, code-path users).
-/// An empty users list marks a skill the Creator page and chat use (see `creator_skill_detail`).
+/// An empty users list marks a skill the Creator page and chat use (see `creator_skill_detail`):
+/// it installs in several ways, so `creator_skill_file` finds it and the marker is only where
+/// a hand install would put it.
 const SKILLS: [(&str, &str, &str, &[&str]); 4] = [
     (
         "gitlab-config",
@@ -31,7 +33,7 @@ const SKILLS: [(&str, &str, &str, &[&str]); 4] = [
     (
         "inspire-video",
         "Turns a talk, interview or video URL into a polished 9:16 bilingual inspirational short video.",
-        ".inspire-video/SKILL.md",
+        ".inspire-video/skills/inspire-video/SKILL.md",
         &[],
     ),
     (
@@ -42,29 +44,37 @@ const SKILLS: [(&str, &str, &str, &[&str]); 4] = [
     ),
 ];
 
-/// Used-by list, requirements and manual setup steps for the Creator skills. They are not
-/// installed from the page: cloning and running an install script stays a deliberate
-/// terminal action.
-fn creator_skill_detail(ctx: &UiCtx, name: &str) -> (String, String, String) {
+/// A Creator skill's `SKILL.md`, wherever it is installed: a Claude Code plugin, a clone
+/// or a link under `~/.claude/skills`. `None` when it is not installed.
+fn creator_skill_file(user_home: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    use loopx_core::creator::skills::{self, Engine};
+    if name == "video-scout" {
+        return skills::scout_skill(user_home).map(|dir| dir.join("SKILL.md"));
+    }
+    skills::engine(user_home)
+        .filter(|engine| engine.has_skill(name))
+        .map(|engine| engine.root.join(Engine::skill_file(name)))
+}
+
+/// Used-by list, requirements and the repository to install as a plugin for the Creator
+/// skills. They are not installed from the page: adding a plugin stays a deliberate action
+/// in Claude Code.
+fn creator_skill_detail(ctx: &UiCtx, name: &str) -> (String, String, &'static str) {
     let li = |t: String| format!("<li>{}</li>", pyfmt::escape(&t));
     let used = format!("{}{}", li(ctx.t("Creator page")), li(ctx.t("Chat")));
     if name == "video-scout" {
-        (
-            used,
-            ctx.t("Web search and fetch (no extra tools)"),
-            "git clone https://github.com/encoreshao/video-scout ~/.claude/skills/video-scout".to_string(),
-        )
+        (used, ctx.t("Web search and fetch (no extra tools)"), "video-scout")
     } else if name == "inspire-showcase" {
         (
             used,
-            ctx.t("The inspire-video repository (it holds both skills), plus Chrome and Playwright for website promos"),
-            "git clone https://github.com/encoreshao/inspire-video ~/.inspire-video".to_string(),
+            ctx.t("The inspire-video plugin (it holds both skills), plus Chrome and Playwright for website promos"),
+            "inspire-video",
         )
     } else {
         (
             used,
-            ctx.t("python 3, node + npm, ffmpeg/ffprobe, yt-dlp, Remotion (installed by its install.sh)"),
-            "git clone https://github.com/encoreshao/inspire-video ~/.inspire-video".to_string(),
+            ctx.t("python 3, node + npm and ffmpeg/ffprobe; yt-dlp, Remotion and its other packages are installed on first use"),
+            "inspire-video",
         )
     }
 }
@@ -79,9 +89,11 @@ pub fn skills_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
     let csrf = ctx.csrf_input();
     let mut rows = String::new();
     for (name, description, check, used_by) in SKILLS {
-        let path = ctx.state.user_home.join(check);
         let creator = used_by.is_empty();
-        let status_cell = if path.exists() {
+        let found = if creator { creator_skill_file(&ctx.state.user_home, name) } else { None };
+        let installed = found.is_some() || (!creator && ctx.state.user_home.join(check).exists());
+        let path = found.unwrap_or_else(|| ctx.state.user_home.join(check));
+        let status_cell = if installed {
             format!(
                 "<span class='pill pill-green'>{}{}</span>",
                 consts::ds("_CHECK_ICON"),
@@ -114,25 +126,20 @@ pub fn skills_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
             .collect();
         let mut extra = String::new();
         if creator {
-            let (users, requirements, clone_url) = creator_skill_detail(ctx, name);
+            let (users, requirements, repo) = creator_skill_detail(ctx, name);
             used = users;
             extra.push_str(&format!(
                 "<p><strong>{}</strong> {}</p>",
                 pyfmt::escape(&ctx.t("Requires")),
                 pyfmt::escape(&requirements)
             ));
-            if !path.exists() {
+            if !installed {
                 extra.push_str(&format!(
-                    "<p><strong>{}</strong></p><p><code>{}</code></p>",
-                    pyfmt::escape(&ctx.t("Set up in a terminal")),
-                    pyfmt::escape(&clone_url)
+                    "<p><strong>{}</strong></p>\
+<p><code>/plugin marketplace add encoreshao/{repo}</code></p>\
+<p><code>/plugin install {repo}@{repo}</code></p>",
+                    pyfmt::escape(&ctx.t("Set up in Claude Code"))
                 ));
-                if name.starts_with("inspire-") {
-                    extra.push_str(&format!(
-                        "<p>{}</p><p><code>bash ~/.inspire-video/install.sh</code></p>",
-                        pyfmt::escape(&ctx.t("Then run the install script:"))
-                    ));
-                }
             }
         }
         rows.push_str(&format!(
@@ -254,29 +261,59 @@ mod tests {
         let none = page(user.path());
         assert!(none.contains("video-scout") && none.contains("inspire-video"), "{none}");
         assert!(none.contains("not installed"), "{none}");
-        assert!(none.contains("git clone https://github.com/encoreshao/video-scout ~/.claude/skills/video-scout"), "{none}");
-        assert!(none.contains("git clone https://github.com/encoreshao/inspire-video ~/.inspire-video"), "{none}");
-        assert!(none.contains("bash ~/.inspire-video/install.sh"), "{none}");
+        // Both are Claude Code plugins now: the page shows the two commands for each.
+        for repo in ["video-scout", "inspire-video"] {
+            assert!(none.contains(&format!("/plugin marketplace add encoreshao/{repo}")), "{none}");
+            assert!(none.contains(&format!("/plugin install {repo}@{repo}")), "{none}");
+        }
+        assert!(!none.contains("git clone") && !none.contains("install.sh"), "{none}");
         assert!(none.contains("Creator page"), "{none}");
         assert_eq!(none.matches("action='/skills/install'").count(), 1, "{none}");
 
         let scout = user.path().join(".claude/skills/video-scout");
         std::fs::create_dir_all(&scout).unwrap();
         std::fs::write(scout.join("SKILL.md"), "x").unwrap();
-        let inspire = user.path().join(".inspire-video");
-        std::fs::create_dir_all(&inspire).unwrap();
-        std::fs::write(inspire.join("SKILL.md"), "x").unwrap();
-        // The repository root alone (an older clone) does not install the showcase skill.
+        let inspire = user.path().join(".inspire-video/skills");
+        std::fs::create_dir_all(inspire.join("inspire-video")).unwrap();
+        std::fs::write(inspire.join("inspire-video/SKILL.md"), "x").unwrap();
+        // An older clone has no showcase skill yet.
         let older = page(user.path());
         assert_eq!(older.matches("pill pill-green").count(), 2, "{older}");
-        assert!(older.contains("inspire-showcase"), "{older}");
-        let showcase = inspire.join("skills/inspire-showcase");
-        std::fs::create_dir_all(&showcase).unwrap();
-        std::fs::write(showcase.join("SKILL.md"), "x").unwrap();
+        assert!(older.contains("/plugin install inspire-video@inspire-video"), "{older}");
+        assert!(!older.contains("/plugin install video-scout@video-scout"), "{older}");
+        std::fs::create_dir_all(inspire.join("inspire-showcase")).unwrap();
+        std::fs::write(inspire.join("inspire-showcase/SKILL.md"), "x").unwrap();
         let both = page(user.path());
         assert_eq!(both.matches("pill pill-green").count(), 3, "{both}");
-        assert!(!both.contains("bash ~/.inspire-video/install.sh"), "{both}");
+        assert!(!both.contains("/plugin install"), "{both}");
         // gitlab-config keeps its restart-the-dashboard setup button.
         assert!(both.contains("Set up &amp; restart dashboard"), "{both}");
+    }
+
+    #[test]
+    fn skills_installed_as_plugins_are_installed_and_show_where_they_are() {
+        let user = tempfile::tempdir().unwrap();
+        let config = user.path().join(".claude");
+        let scout = config.join("plugins/cache/video-scout/video-scout/1.0.0");
+        let inspire = config.join("plugins/cache/inspire-video/inspire-video/abc123");
+        for file in [
+            scout.join("skills/video-scout/SKILL.md"),
+            inspire.join("skills/inspire-video/SKILL.md"),
+            inspire.join("skills/inspire-showcase/SKILL.md"),
+        ] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "x").unwrap();
+        }
+        let record = serde_json::json!({"version": 2, "plugins": {
+            "video-scout@video-scout": [{"installPath": scout}],
+            "inspire-video@inspire-video": [{"installPath": inspire}],
+        }});
+        std::fs::write(config.join("plugins/installed_plugins.json"), record.to_string()).unwrap();
+        let html = page(user.path());
+        assert_eq!(html.matches("pill pill-green").count(), 3, "{html}");
+        assert!(!html.contains("/plugin install"), "{html}");
+        for file in ["1.0.0/skills/video-scout/SKILL.md", "abc123/skills/inspire-showcase/SKILL.md"] {
+            assert!(html.contains(file), "{file}: {html}");
+        }
     }
 }

@@ -47,6 +47,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Creator works with the video-scout and inspire-video skills however they are installed, including as Claude Code plugins (`/plugin install video-scout@video-scout`, `/plugin install inspire-video@inspire-video`): jobs read the skill from the plugin copy, a clone or a link under `~/.claude/skills` instead of the fixed `~/.claude/skills/<name>` path, a plugin copy of inspire-video is prepared with its own `scripts/prepare.sh` before each video job (videos, projects and voices stay in `~/.inspire-video`), and Settings → Skills shows where each skill was found and the two plugin commands when one is missing.
 - Fix now leaves one comment on the merge request per run instead of a plan note, a finish note, a reply in every thread and a screenshots note: the start note is rewritten into a single summary with **Fixed** (what each reviewer wanted and the outcome), **Not changed** (questions, risks and skipped items with the answer or reason) and the screenshots. If the note cannot be edited, the summary is posted as a new note.
 
 - Slack messages about a merge request now show its title: the issue loop's "MR opened" message and report list, and the review-thread "needs you" alert.

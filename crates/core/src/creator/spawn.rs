@@ -4,6 +4,7 @@
 //! refused rather than started with its full tool access.
 
 use super::jobs::{self, JobKind, JobRecord};
+use super::skills::{self, Engine};
 use super::VideoOptions;
 use std::path::{Path, PathBuf};
 
@@ -233,7 +234,7 @@ pub(crate) fn common_denied(f: &Fence<'_>) -> Vec<String> {
     for p in ["CLAUDE.md", "CLAUDE.local.md", ".mcp.json"] {
         t.push(format!("Edit(/{}/{p})", f.cwd.display()));
     }
-    // Readable (the skills live under ~/.claude/skills), never writable.
+    // Readable (a skill may live under ~/.claude), never writable.
     for p in [".claude/**", "Library/**"] {
         t.push(format!("Edit(/{h}/{p})"));
     }
@@ -313,30 +314,27 @@ fn strs(a: &[&str]) -> Vec<String> {
     a.iter().map(|s| s.to_string()).collect()
 }
 
-/// The inspire-video job: only the skill's own `scripts/` (which drive yt-dlp,
-/// ffmpeg, ffprobe and `npx remotion` themselves) and writes under `output/` that
-/// are not code. No media tool directly (their flags open and write arbitrary
-/// files), no web tools, no browser cookies, no path escapes out of `scripts/`.
-pub fn generate_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>, String> {
-    video_argv(cli, prompt, f, "inspire-video")
-}
-
-/// The inspire-showcase job: the same fence as [`generate_argv`] (its pipeline is also
-/// `python3 scripts/showcase/*.py`, which that fence already covers), reading its own skill.
-pub fn showcase_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>, String> {
-    video_argv(cli, prompt, f, "inspire-showcase")
-}
-
-fn video_argv(
+/// The inspire-video and inspire-showcase jobs (both run `python3 scripts/...` in the
+/// same engine): only the skill's own `scripts/` (which drive yt-dlp, ffmpeg, ffprobe
+/// and `npx remotion` themselves) and writes under `output/` that are not code. No media
+/// tool directly (their flags open and write arbitrary files), no web tools, no browser
+/// cookies, no path escapes out of `scripts/`.
+///
+/// `f.cwd` is the engine root and `data` the folder that really holds `output/`: the
+/// same folder for a clone. A plugin copy only links `output/` to the data folder, so the
+/// file tools are let into the real one and the whole copy stays read-only (Claude checks
+/// a link's own path as well as where it leads).
+pub fn video_argv(
     cli: &str,
     prompt: &str,
     f: &Fence<'_>,
-    skill_name: &str,
+    data: &Path,
 ) -> Result<Vec<String>, String> {
     require_claude(cli)?;
     let c = f.cwd.display();
-    let h = f.user_home.display();
-    let skill = format!("/{h}/.claude/skills/{skill_name}");
+    let out = data.join("output");
+    let o = out.display();
+    let linked = data != f.cwd;
     let mut allowed = strs(&[
         "Bash(python scripts/*)",
         "Bash(python3 scripts/*)",
@@ -344,11 +342,8 @@ fn video_argv(
         "Bash(ls *)",
         "Bash(cd *)",
     ]);
-    allowed.push(format!("Read({skill}/**)"));
-    // Claude checks a symlink's resolved path too, and the skill dir under
-    // ~/.claude/skills is a symlink to the job's own folder.
     allowed.push(format!("Read(/{c}/**)"));
-    allowed.push(format!("Edit(/{c}/output/**)"));
+    allowed.push(format!("Edit(/{o}/**)"));
     let mut denied = denied_tools(f);
     denied.extend(strs(&[
         "Bash(python* scripts/*../*)",
@@ -356,13 +351,18 @@ fn video_argv(
         "Bash(python* *--file*)",
         "Bash(python* *--cookies*)",
     ]));
-    // The skill dir is also reachable through its ~/.claude/skills symlink.
-    for root in [format!("/{c}"), skill] {
+    let mut roots = vec![format!("/{c}")];
+    if linked {
+        allowed.push(format!("Read(/{o}/**)"));
+        denied.push(format!("Edit(/{c}/**)"));
+        roots.push(format!("/{o}"));
+    }
+    for root in roots {
         denied.push(format!("Read({root}/cookies.json)"));
         denied.push(format!("Read({root}/**/*cookies*)"));
     }
     for ext in ["py", "js", "ts"] {
-        denied.push(format!("Edit(/{c}/output/**/*.{ext})"));
+        denied.push(format!("Edit(/{o}/**/*.{ext})"));
     }
     Ok(claude_argv(
         prompt,
@@ -372,7 +372,7 @@ fn video_argv(
             allowed,
             denied,
             budget_usd: GENERATE_BUDGET_USD,
-            extra_dirs: Vec::new(),
+            extra_dirs: if linked { vec![out] } else { Vec::new() },
         },
     ))
 }
@@ -380,13 +380,24 @@ fn video_argv(
 /// The video-scout job: web search/fetch and writes only under `~/.video-scout`; no
 /// shell at all. yt-dlp is not offered: its flags (abbreviations, bundled short
 /// options, `--use-postprocessor Exec`) read, write and run arbitrary things, so the
-/// skill falls back to watch pages, oEmbed and page transcripts.
-pub fn scout_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>, String> {
+/// skill falls back to watch pages, oEmbed and page transcripts. `skill_dir` is the
+/// folder the job reads the skill from (see [`skills::scout_skill`]).
+pub fn scout_argv(
+    cli: &str,
+    prompt: &str,
+    f: &Fence<'_>,
+    skill_dir: &Path,
+) -> Result<Vec<String>, String> {
     require_claude(cli)?;
     let c = f.cwd.display();
-    let h = f.user_home.display();
     let mut allowed = strs(&["WebSearch", "WebFetch"]);
-    allowed.push(format!("Read(/{h}/.claude/skills/video-scout/**)"));
+    allowed.push(format!("Read(/{}/**)", skill_dir.display()));
+    // Claude checks where a link leads too, and a hand install is often a link.
+    if let Ok(real) = skill_dir.canonicalize() {
+        if real != skill_dir {
+            allowed.push(format!("Read(/{}/**)", real.display()));
+        }
+    }
     allowed.push(format!("Edit(/{c}/**)"));
     let mut denied = denied_tools(f);
     // Courtesy only, not a boundary: WebFetch can still reach other local names.
@@ -409,9 +420,34 @@ pub fn scout_argv(cli: &str, prompt: &str, f: &Fence<'_>) -> Result<Vec<String>,
     ))
 }
 
-/// Where the inspire-video skill lives and its jobs run.
+/// Runs the skill's own first step for a plugin copy, which a job's shell rules refuse:
+/// `scripts/prepare.sh` links `output/` and `voices/` to the data folder (`$1`) and
+/// installs what a fresh copy is missing (Python packages, `npm install`), printing what
+/// it does into the job log. The agent (`"$@"` after the shift) starts only if it worked.
+const PREPARE_WRAPPER: &str =
+    r#"INSPIRE_VIDEO_HOME="$1" bash scripts/prepare.sh || exit $?; shift; exec "$@""#;
+
+/// `argv` run behind [`PREPARE_WRAPPER`] for a plugin copy; unchanged for a clone, whose
+/// install script already did all of it.
+fn with_prepare(engine: &Engine, argv: Vec<String>) -> Vec<String> {
+    if !engine.plugin {
+        return argv;
+    }
+    let mut wrapped = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        PREPARE_WRAPPER.to_string(),
+        "sh".to_string(),
+        engine.data.display().to_string(),
+    ];
+    wrapped.extend(argv);
+    wrapped
+}
+
+/// Where inspire-video keeps its videos, projects, uploads and voices. Its code may live
+/// elsewhere: see [`skills::engine`].
 pub fn generate_dir(user_home: &Path) -> PathBuf {
-    user_home.join(".inspire-video")
+    skills::data_dir(user_home)
 }
 
 /// Where video-scout writes its reports and catalogs, and its jobs run.
@@ -536,10 +572,9 @@ fn start_showcase_with(
     }
     let url = url.map(super::valid_source_url).transpose()?;
     let platforms = super::parse_platforms(platforms)?;
-    let skill = generate_dir(env.user_home);
-    check_installed(&skill, JobKind::Showcase)?;
-    let narration = super::voices::resolve(&skill, env.user_home, voice)?;
-    let template = super::templates::resolve(&skill, template)?;
+    let engine = installed_engine(env.user_home, JobKind::Showcase)?;
+    let narration = super::voices::resolve(&engine.data, env.user_home, voice)?;
+    let template = super::templates::resolve(&engine.root, template)?;
     let Some(folder) = folder else {
         // Link only: a link run before restarts that job, with the platforms now picked.
         let url = url.unwrap_or_default();
@@ -560,9 +595,9 @@ fn start_showcase_with(
             spawn,
         );
     };
-    // Screenshots are copied under the skill folder first: the agent may read nothing else.
+    // Screenshots are copied under the skill's output folder first: the agent may read nothing else.
     let folder = PathBuf::from(crate::worktree::expand_home(folder, env.user_home));
-    let staged = super::uploads::stage(&skill, &folder)?;
+    let staged = super::uploads::stage(&engine.data, &folder)?;
     let key = url.clone().unwrap_or_else(|| folder_key(&folder));
     let options = VideoOptions {
         platforms,
@@ -581,7 +616,7 @@ fn start_showcase_with(
         spawn,
     );
     if started.is_err() {
-        let _ = std::fs::remove_dir_all(skill.join(&staged));
+        let _ = std::fs::remove_dir_all(engine.data.join(&staged));
     }
     started
 }
@@ -682,14 +717,13 @@ fn launch_video(
     restart_id: Option<&str>,
     spawn: &SpawnFull<'_>,
 ) -> Result<JobRecord, String> {
-    let cwd = generate_dir(env.user_home);
-    check_installed(&cwd, kind)?;
-    let showcase = kind == JobKind::Showcase;
+    let engine = installed_engine(env.user_home, kind)?;
+    let cwd = engine.root.clone();
     let resume = restart_id.is_some();
-    let prompt = if showcase {
-        jobs::showcase_prompt(key, true, resume, options)
+    let prompt = if kind == JobKind::Showcase {
+        jobs::showcase_prompt(&engine, key, true, resume, options)
     } else {
-        jobs::generate_prompt(key, true, resume, options)
+        jobs::generate_prompt(&engine, key, true, resume, options)
     };
     let fence = Fence {
         cwd: &cwd,
@@ -698,11 +732,7 @@ fn launch_video(
         exe: env.exe,
     };
     // Built up front so an unsupported CLI is refused before any job is recorded.
-    let argv = if showcase {
-        showcase_argv(env.cli, &prompt, &fence)?
-    } else {
-        generate_argv(env.cli, &prompt, &fence)?
-    };
+    let argv = with_prepare(&engine, video_argv(env.cli, &prompt, &fence, &engine.data)?);
     let run = |log: &Path| spawn(&argv, &cwd, log);
     match restart_id {
         Some(id) => jobs::restart_with(jobs_dir, id, Some(options), &run),
@@ -710,21 +740,23 @@ fn launch_video(
     }
 }
 
-/// The skill a video job runs is on disk (inspire-showcase ships inside the same clone).
-fn check_installed(skill_dir: &Path, kind: JobKind) -> Result<(), String> {
-    if !skill_dir.is_dir() {
+/// How to install either skill, for a job that found none.
+const INSTALL_HINT: &str = "install it in Claude Code with `/plugin marketplace add \
+    encoreshao/{repo}` and then `/plugin install {repo}@{repo}` (see Settings -> Skills)";
+
+/// The installed engine, when it carries the skill a `kind` job runs.
+fn installed_engine(user_home: &Path, kind: JobKind) -> Result<Engine, String> {
+    let hint = INSTALL_HINT.replace("{repo}", "inspire-video");
+    let engine = skills::engine(user_home)
+        .ok_or_else(|| format!("the inspire-video skill is not installed: {hint}"))?;
+    if kind == JobKind::Showcase && !engine.has_skill("inspire-showcase") {
         return Err(format!(
-            "the inspire-video skill is not installed ({} is missing)",
-            skill_dir.display()
+            "the inspire-showcase skill is not installed ({} has no {}): update inspire-video",
+            engine.root.display(),
+            Engine::skill_file("inspire-showcase")
         ));
     }
-    if kind == JobKind::Showcase && !skill_dir.join("skills/inspire-showcase/SKILL.md").is_file() {
-        return Err(format!(
-            "the inspire-showcase skill is not installed ({} is missing); update ~/.inspire-video",
-            skill_dir.join("skills/inspire-showcase").display()
-        ));
-    }
-    Ok(())
+    Ok(engine)
 }
 
 fn start_scout_with(
@@ -742,15 +774,21 @@ fn start_scout_with(
             "the search request must be at most {MAX_QUERY_CHARS} characters"
         ));
     }
+    let skill = skills::scout_skill(env.user_home).ok_or_else(|| {
+        format!(
+            "the video-scout skill is not installed: {}",
+            INSTALL_HINT.replace("{repo}", "video-scout")
+        )
+    })?;
     let cwd = scout_dir(env.user_home);
-    let prompt = jobs::scout_prompt(query);
+    let prompt = jobs::scout_prompt(&skill, query);
     let fence = Fence {
         cwd: &cwd,
         user_home: env.user_home,
         loopx_home: env.loopx_home,
         exe: env.exe,
     };
-    let argv = scout_argv(env.cli, &prompt, &fence)?;
+    let argv = scout_argv(env.cli, &prompt, &fence, &skill)?;
     std::fs::create_dir_all(&cwd).map_err(|e| format!("cannot create {}: {e}", cwd.display()))?;
     jobs::start(jobs_dir, JobKind::Scout, query, &|log| {
         spawn(&argv, &cwd, log)
@@ -760,12 +798,22 @@ fn start_scout_with(
 #[cfg(test)]
 mod tests {
     use super::super::default_platforms;
+    use super::super::skills::testing::{install_clone, install_plugin, write};
     use super::*;
     use std::cell::RefCell;
 
     const HOME: &str = "/Users/u";
     const LOOPX_HOME: &str = "/sandbox/lx";
     const EXE: &str = "/opt/bin/loopx";
+    const SCOUT_SKILL: &str =
+        "/Users/u/.claude/plugins/cache/video-scout/video-scout/1.0.0/skills/video-scout";
+
+    /// video-scout installed by hand in `home`; returns the skill folder.
+    fn install_scout(home: &Path) -> PathBuf {
+        let dir = home.join(".claude/skills/video-scout");
+        write(&dir.join("SKILL.md"), "x");
+        dir
+    }
 
     fn fence(cwd: &Path) -> Fence<'_> {
         Fence {
@@ -823,7 +871,7 @@ mod tests {
 
     /// What both jobs share: no MCP, prompts for anything not allowed, no bare tool
     /// that reaches outside the job, and the credential/loopx denies.
-    fn assert_fenced(argv: &[String], skill: &str, tools: &str, budget: &str) {
+    fn assert_fenced(argv: &[String], skill_dir: &str, tools: &str, budget: &str) {
         // A step-by-step stream for the Job log panel, not one text block at the end.
         assert_eq!(flag(argv, "--output-format"), "stream-json");
         assert!(argv.contains(&"--verbose".to_string()));
@@ -864,10 +912,7 @@ mod tests {
                 assert!(!rule.contains(tool), "{tool} allowed: {rule}");
             }
         }
-        assert_has(
-            &allow,
-            &[format!("Read(/{HOME}/.claude/skills/{skill}/**)")],
-        );
+        assert_has(&allow, &[format!("Read(/{skill_dir}/**)")]);
         let deny = denied(argv);
         let mut must: Vec<String> = [
             "Bash(yt-dlp*)",
@@ -913,11 +958,12 @@ mod tests {
         must.push(format!("Read(/{LOOPX_HOME}/**)"));
         must.push(format!("Edit(/{HOME}/.claude/**)"));
         assert_has(&deny, &must);
-        // The skills themselves are read from ~/.claude/skills.
+        // A skill may be read from ~/.claude (a link, a clone or a plugin copy).
         for tree in [
             format!("Read(/{HOME}/.claude/**)"),
             format!("Read(/{HOME}/.claude/skills/**)"),
-            format!("Read(/{HOME}/.claude/skills/{skill}/**)"),
+            format!("Read(/{HOME}/.claude/plugins/**)"),
+            format!("Read(/{skill_dir}/**)"),
         ] {
             assert!(!deny.contains(&tree.as_str()), "{tree} denied");
         }
@@ -934,8 +980,13 @@ mod tests {
     #[test]
     fn generate_argv_allows_bash_but_denies_gitlab_and_slack_tools() {
         let cwd = generate_dir(Path::new(HOME));
-        let argv = generate_argv("claude", "THE PROMPT", &fence(&cwd)).unwrap();
-        assert_fenced(&argv, "inspire-video", "Bash,Read,Write,Edit", "8.00");
+        let argv = video_argv("claude", "THE PROMPT", &fence(&cwd), &cwd).unwrap();
+        assert_fenced(
+            &argv,
+            &cwd.display().to_string(),
+            "Bash,Read,Write,Edit",
+            "8.00",
+        );
         let allow = allowed(&argv);
         let c = cwd.display();
         let bash: Vec<&str> = allow
@@ -1007,10 +1058,11 @@ mod tests {
     #[test]
     fn scout_argv_allows_only_the_scout_tools_and_denies_gitlab_and_slack_tools() {
         let cwd = scout_dir(Path::new(HOME));
-        let argv = scout_argv("claude", "THE PROMPT", &fence(&cwd)).unwrap();
+        let argv =
+            scout_argv("claude", "THE PROMPT", &fence(&cwd), Path::new(SCOUT_SKILL)).unwrap();
         assert_fenced(
             &argv,
-            "video-scout",
+            SCOUT_SKILL,
             "WebSearch,WebFetch,Read,Write,Edit",
             "2.00",
         );
@@ -1043,10 +1095,10 @@ mod tests {
         let home = Path::new(HOME);
         for cli in ["codex", "gemini", "kimi", "cursor", "grok", "nope"] {
             let gd = generate_dir(home);
-            let e = generate_argv(cli, "p", &fence(&gd)).unwrap_err();
+            let e = video_argv(cli, "p", &fence(&gd), &gd).unwrap_err();
             assert!(e.contains("Claude"), "{cli}: {e}");
             let sd = scout_dir(home);
-            assert!(scout_argv(cli, "p", &fence(&sd)).is_err());
+            assert!(scout_argv(cli, "p", &fence(&sd), Path::new(SCOUT_SKILL)).is_err());
         }
     }
 
@@ -1074,7 +1126,7 @@ mod tests {
     fn start_generate_without_rights_creates_no_job() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let jobs_dir = d.path().join("jobs");
         let calls = Calls::default();
         let e = start_generate_with(
@@ -1095,7 +1147,7 @@ mod tests {
     fn start_generate_launches_claude_in_the_skill_dir() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let jobs_dir = d.path().join("jobs");
         let calls = Calls::default();
         let rec = start_generate_with(
@@ -1115,6 +1167,7 @@ mod tests {
         assert_eq!(
             argv.last().unwrap(),
             &jobs::generate_prompt(
+                &skills::engine(&home).unwrap(),
                 "https://example.com/v",
                 true,
                 false,
@@ -1127,9 +1180,7 @@ mod tests {
     }
 
     fn install_showcase(home: &Path) {
-        let d = generate_dir(home).join("skills/inspire-showcase");
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("SKILL.md"), "x").unwrap();
+        install_clone(home, true);
     }
 
     #[test]
@@ -1137,7 +1188,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         install_showcase(&home);
         let calls = Calls::default();
         let rec = start_showcase_with(
@@ -1158,6 +1209,7 @@ mod tests {
         assert_eq!(
             argv.last().unwrap(),
             &jobs::showcase_prompt(
+                &skills::engine(&home).unwrap(),
                 "https://example.com/app",
                 true,
                 false,
@@ -1167,7 +1219,7 @@ mod tests {
         assert_eq!(cwd, &generate_dir(&home));
         let joined = argv.join(" ");
         assert!(
-            joined.contains(".claude/skills/inspire-showcase"),
+            joined.contains("First read skills/inspire-showcase/SKILL.md"),
             "{joined}"
         );
         assert!(joined.contains("Bash(python3 scripts/*)"), "{joined}");
@@ -1180,7 +1232,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         install_showcase(&home);
         std::fs::create_dir_all(&jobs_dir).unwrap();
         let id = "20261105T000000-show0000";
@@ -1207,7 +1259,7 @@ mod tests {
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
         let calls = Calls::default();
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let go = |url: &str, rights: bool| {
             start_showcase_with(
                 &jobs_dir,
@@ -1244,7 +1296,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         install_showcase(&home);
         let folder = shots_folder(d.path());
         let calls = Calls::default();
@@ -1286,7 +1338,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         install_showcase(&home);
         let folder = shots_folder(d.path());
         let calls = Calls::default();
@@ -1336,7 +1388,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         install_showcase(&home);
         let calls = Calls::default();
         let go = |url: Option<&str>, folder: Option<&str>, cli: &str, platforms: &[String]| {
@@ -1499,7 +1551,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let calls = Calls::default();
         let opts = VideoOptions {
             platforms: vec!["douyin".into(), "facebook".into()],
@@ -1580,6 +1632,7 @@ mod tests {
         let home = d.path().join("home");
         let jobs_dir = d.path().join("jobs");
         let calls = Calls::default();
+        let skill = install_scout(&home);
         let rec = start_scout_with(
             &jobs_dir,
             &env("claude", &home),
@@ -1590,15 +1643,160 @@ mod tests {
         assert_eq!((rec.kind, rec.key.as_str()), (JobKind::Scout, "stoicism"));
         assert!(scout_dir(&home).is_dir());
         let calls = calls.borrow();
-        assert_eq!(calls[0].1, scout_dir(&home));
-        assert_eq!(calls[0].0.last().unwrap(), &jobs::scout_prompt("stoicism"));
+        let (argv, cwd, _) = &calls[0];
+        assert_eq!(cwd, &scout_dir(&home));
+        assert_eq!(
+            argv.last().unwrap(),
+            &jobs::scout_prompt(&skill, "stoicism")
+        );
+        assert_has(&allowed(argv), &[format!("Read(/{}/**)", skill.display())]);
+    }
+
+    #[test]
+    fn start_scout_needs_the_skill_installed_and_says_how() {
+        let d = tempfile::tempdir().unwrap();
+        let jobs_dir = d.path().join("jobs");
+        let calls = Calls::default();
+        let e = start_scout_with(
+            &jobs_dir,
+            &env("claude", d.path()),
+            "stoicism",
+            &recorder(&calls),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("video-scout") && e.contains("/plugin install video-scout@video-scout"),
+            "{e}"
+        );
+        assert!(calls.borrow().is_empty());
+        assert!(jobs::list_jobs(&jobs_dir).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_scout_skill_behind_a_link_is_readable_where_the_link_leads_too() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("src/skills/video-scout");
+        write(&real.join("SKILL.md"), "x");
+        let link = d.path().join("video-scout");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let cwd = scout_dir(Path::new(HOME));
+        let argv = scout_argv("claude", "p", &fence(&cwd), &link).unwrap();
+        assert_has(
+            &allowed(&argv),
+            &[
+                format!("Read(/{}/**)", link.display()),
+                format!("Read(/{}/**)", real.display()),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_plugin_copy_is_prepared_first_and_writes_only_into_the_data_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let jobs_dir = d.path().join("jobs");
+        let root = install_plugin(
+            &home.join(".claude"),
+            "inspire-video",
+            &["inspire-video", "inspire-showcase"],
+        );
+        let data = generate_dir(&home);
+        let calls = Calls::default();
+        start_generate_with(
+            &jobs_dir,
+            &env("claude", &home),
+            "https://example.com/v",
+            true,
+            &VideoOptions::default(),
+            &recorder(&calls),
+        )
+        .unwrap();
+        // Screenshots are staged in the data folder: the copy's output/ link may not exist yet.
+        let folder = shots_folder(d.path());
+        let shots = start_showcase_with(
+            &jobs_dir,
+            &env("claude", &home),
+            None,
+            Some(folder.to_str().unwrap()),
+            &default_platforms(),
+            "none",
+            "",
+            true,
+            &recorder(&calls),
+        )
+        .unwrap();
+        let staged = shots.options.screenshots.unwrap();
+        assert!(data.join(&staged).join("01-home.png").is_file());
+        assert!(!root.join("output").exists());
+
+        let calls = calls.borrow();
+        let (argv, cwd, _) = &calls[0];
+        // The job runs in the versioned copy, behind the skill's own prepare step.
+        assert_eq!(cwd, &root);
+        assert_eq!(
+            argv[..5],
+            [
+                "/bin/sh",
+                "-c",
+                PREPARE_WRAPPER,
+                "sh",
+                data.to_str().unwrap()
+            ]
+        );
+        assert!(PREPARE_WRAPPER.starts_with(r#"INSPIRE_VIDEO_HOME="$1" bash scripts/prepare.sh"#));
+        let agent = &argv[5..];
+        assert_eq!(agent[0], "claude");
+        assert_eq!(flag(agent, "--tools"), "Bash,Read,Write,Edit");
+        let (r, o) = (root.display(), data.join("output").display().to_string());
+        assert_has(
+            &allowed(agent),
+            &[format!("Edit(/{o}/**)"), format!("Read(/{o}/**)")],
+        );
+        assert!(
+            !allowed(agent)
+                .iter()
+                .any(|a| a.starts_with(&format!("Edit(/{r}"))),
+            "the copy is writable"
+        );
+        assert_has(
+            &denied(agent),
+            &[
+                format!("Edit(/{r}/**)"),
+                format!("Edit(/{o}/**/*.py)"),
+                format!("Read(/{o}/**/*cookies*)"),
+                format!("Read(/{r}/cookies.json)"),
+            ],
+        );
+        let dirs: Vec<&String> = agent
+            .iter()
+            .zip(agent.iter().skip(1))
+            .filter(|(flag, _)| *flag == "--add-dir")
+            .map(|(_, dir)| dir)
+            .collect();
+        assert_eq!(dirs, [&r.to_string(), &o]);
+        assert_eq!(
+            agent.last().unwrap(),
+            &jobs::generate_prompt(
+                &skills::engine(&home).unwrap(),
+                "https://example.com/v",
+                true,
+                false,
+                &VideoOptions::default()
+            )
+        );
     }
 
     #[test]
     fn unsupported_cli_or_blank_input_creates_no_job() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
+        install_scout(&home);
         let jobs_dir = d.path().join("jobs");
         let calls = Calls::default();
         let spawn = recorder(&calls);
@@ -1630,7 +1828,7 @@ mod tests {
     fn start_generate_refuses_an_unsafe_url_before_any_job() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let jobs_dir = d.path().join("jobs");
         let calls = Calls::default();
         for url in [
@@ -1678,6 +1876,7 @@ mod tests {
         assert!(e.contains(&MAX_QUERY_CHARS.to_string()), "{e}");
         assert!(calls.borrow().is_empty());
         assert!(jobs::list_jobs(&jobs_dir).is_empty());
+        install_scout(&home);
         let fits = "é".repeat(MAX_QUERY_CHARS);
         start_scout_with(&jobs_dir, &env("claude", &home), &fits, &recorder(&calls)).unwrap();
     }
@@ -1724,6 +1923,45 @@ mod tests {
             resolve_program("sh", "/bin:/usr/bin", Some(home.path())),
             "sh"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_copys_prepare_step_runs_before_the_agent_and_a_failure_stops_the_job() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("copy");
+        let engine = Engine {
+            root: root.clone(),
+            data: d.path().join("data"),
+            plugin: true,
+        };
+        let agent = vec!["echo".to_string(), "agent ran".to_string()];
+        let run = |script: &str, log: &str| {
+            write(&root.join("scripts/prepare.sh"), script);
+            let log = d.path().join(log);
+            let argv = with_prepare(&engine, agent.clone());
+            let pid = spawn_agent_in(&argv, &root, &log, "/usr/bin:/bin", None).unwrap();
+            wait_dead(pid);
+            std::fs::read_to_string(&log).unwrap()
+        };
+        // The data folder reaches the script the way the skill reads it.
+        assert_eq!(
+            run("echo \"data=$INSPIRE_VIDEO_HOME\"\n", "ok.log"),
+            format!(
+                "data={}\nagent ran\n\nloopx-exit=0\n",
+                engine.data.display()
+            )
+        );
+        assert_eq!(
+            run("echo 'npm install failed' >&2\nexit 3\n", "bad.log"),
+            "npm install failed\n\nloopx-exit=3\n"
+        );
+        // A clone needs none of it.
+        let clone = Engine {
+            plugin: false,
+            ..engine.clone()
+        };
+        assert_eq!(with_prepare(&clone, agent.clone()), agent);
     }
 
     #[cfg(unix)]
@@ -1926,7 +2164,7 @@ mod tests {
     fn a_duplicate_link_restarts_its_earlier_job_instead_of_adding_a_record() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let jobs_dir = d.path().join("jobs");
         finished_generate(
             &jobs_dir,
@@ -1950,6 +2188,7 @@ mod tests {
         assert_eq!(
             calls[0].0.last().unwrap(),
             &jobs::generate_prompt(
+                &skills::engine(&home).unwrap(),
                 "https://example.com/v",
                 true,
                 true,
@@ -1963,7 +2202,7 @@ mod tests {
     fn retrying_a_job_restarts_that_record_with_the_resume_prompt() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
-        std::fs::create_dir_all(generate_dir(&home)).unwrap();
+        install_clone(&home, false);
         let jobs_dir = d.path().join("jobs");
         finished_generate(
             &jobs_dir,

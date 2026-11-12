@@ -90,8 +90,8 @@ pub fn resolve(
                 .ok_or_else(|| format!("no voice profile named {name}"))?;
             if !cosyvoice_ready(user_home) {
                 return Err(
-                    "cloned voices need CosyVoice 3: run `bash scripts/showcase/setup_cosyvoice.sh` \
-                     in ~/.inspire-video first (about 9 GB)"
+                    "cloned voices need CosyVoice 3: run the inspire-video skill's \
+                     `scripts/showcase/setup_cosyvoice.sh` first (about 9 GB)"
                         .to_string(),
                 );
             }

@@ -5,6 +5,7 @@ pub mod logfmt;
 pub mod notify;
 pub mod progress;
 pub mod scout;
+pub mod skills;
 pub mod spawn;
 pub mod state;
 pub mod templates;
