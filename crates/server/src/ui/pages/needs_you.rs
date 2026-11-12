@@ -90,8 +90,7 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
         ),
         Some("loop_failed") => ctx.tf("{loop} failed its last run", &[("loop", &f("loop"))]),
         Some("profile_sync_failed") => {
-            let message = f("message");
-            let error = if message == "details hidden" { ctx.t("details hidden") } else { message };
+            let error = crate::ui::profile_jobs::failure_text(ctx, &f("message"));
             ctx.tf("Profile sync failed for {alias}: {error}", &[("alias", &f("project")), ("error", &error)])
         }
         Some("mr_thread") => ctx.tf(
@@ -584,6 +583,29 @@ mod tests {
         let r = post(&st, "/needs-you/dismiss", "csrf_token=tok&id=profile_sync:web");
         assert!(r.header("location").unwrap_or_default().contains("ok=1"));
         assert!(!get(&st, "/needs-you").contains("failed for web"));
+    }
+
+    #[test]
+    fn a_profile_sync_whose_cli_could_not_start_says_so_in_every_language() {
+        use loopx_core::profile_sync::{safe_failure_line, with_store, Outcome, ProjectSync};
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        with_store(&d.path().join("profile_sync.json"), |s| {
+            s.status.per_project.insert(
+                "web".into(),
+                ProjectSync { at: chrono::Utc::now(), outcome: Outcome::Failed(safe_failure_line("FileNotFoundError")) },
+            );
+        })
+        .unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(
+            html.contains("Profile sync failed for web: the AI command could not be started \u{2014} check Settings \u{2192} AI CLI"),
+            "{html}"
+        );
+        assert!(!html.contains("FileNotFoundError"), "{html}");
+        let req = crate::ui::routes::UiRequest::get("/needs-you").with_header("cookie", "loop_lang=ja");
+        let ja = st.registry.dispatch(&st, &req).unwrap().body_text();
+        assert!(ja.contains("AI コマンドを起動できませんでした"), "{ja}");
     }
 
     // ---- merge-request review threads -------------------------------------

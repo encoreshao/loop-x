@@ -1988,6 +1988,7 @@
   "Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept.": "扫描本地检出并请 AI CLI 生成草稿。由人编写的章节会被保留。",
   "Working on this profile… This takes a few minutes; reload the page to see the result.": "正在处理此档案… 需要几分钟；刷新页面即可查看结果。",
   "details hidden": "详情已隐藏",
+  "the AI command could not be started — check Settings → AI CLI": "无法启动 AI 命令 — 请检查 设置 → AI CLI",
   "The last build failed {when}: {error}": "上次生成于 {when} 失败：{error}",
   "Profile built {when}. Read it before agents rely on it.": "档案已于 {when} 生成。请在智能体依赖它之前阅读。",
   "Proposal raised for {section} {when}. Review it under Proposals.": "已于 {when} 为 {section} 提出提案。请在“提案”中审阅。",

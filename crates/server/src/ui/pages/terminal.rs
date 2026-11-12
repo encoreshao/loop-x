@@ -222,6 +222,27 @@ mod tests {
     }
 
     #[test]
+    fn a_build_whose_cli_could_not_start_says_so_in_the_trace() {
+        use loopx_core::profile_progress::{JobKind, ProfileJob, Progress, Step};
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None)
+            .with_events_dir(&d.path().join("events"));
+        let base = loopx_core::agent_activity::beside(&d.path().join("outputs/status.json"));
+        let job = ProfileJob::start(&base, JobKind::Build, "web");
+        job.step(4, 5, Step::Ai);
+        job.fail("FileNotFoundError");
+        drop(job);
+        let lines: serde_json::Value =
+            serde_json::from_str(&st.registry.dispatch(&st, &UiRequest::get("/terminal/lines")).unwrap().body_text()).unwrap();
+        let html = lines["html"].as_str().unwrap();
+        assert!(
+            html.contains("failed at step 4/5 (Asking the AI): the AI command could not be started \u{2014} check Settings \u{2192} AI CLI"),
+            "{html}"
+        );
+        assert!(!html.contains("FileNotFoundError"), "{html}");
+    }
+
+    #[test]
     fn an_empty_ledger_says_so() {
         let d = tempfile::tempdir().unwrap();
         let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None)

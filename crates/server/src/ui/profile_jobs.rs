@@ -18,6 +18,18 @@ pub fn base(ctx: &UiCtx) -> std::path::PathBuf {
     loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("issue-loop"))
 }
 
+/// A stored profile failure as shown: the fixed reasons a person can act on are
+/// translated; anything else is shown as stored (already one safe line).
+pub fn failure_text(ctx: &UiCtx, msg: &str) -> String {
+    if msg == profile_progress::CLI_NOT_STARTED {
+        ctx.t("the AI command could not be started — check Settings → AI CLI")
+    } else if msg == loopx_core::profile_sync::DETAILS_HIDDEN {
+        ctx.t("details hidden")
+    } else {
+        msg.to_string()
+    }
+}
+
 /// The translated name of what the job is doing now.
 pub fn step_name(ctx: &UiCtx, job: &JobView) -> String {
     match job.step_kind() {

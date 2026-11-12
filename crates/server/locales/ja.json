@@ -1988,6 +1988,7 @@
   "Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept.": "チェックアウトをスキャンし、AI CLI に下書きを依頼します。人が書いたセクションは保持されます。",
   "Working on this profile… This takes a few minutes; reload the page to see the result.": "このプロフィールを処理中です… 数分かかります。結果を見るにはページを再読み込みしてください。",
   "details hidden": "詳細は非表示",
+  "the AI command could not be started — check Settings → AI CLI": "AI コマンドを起動できませんでした — 設定 → AI CLI を確認してください",
   "The last build failed {when}: {error}": "前回の作成は {when} に失敗しました：{error}",
   "Profile built {when}. Read it before agents rely on it.": "プロフィールを {when} に作成しました。エージェントが利用する前に確認してください。",
   "Proposal raised for {section} {when}. Review it under Proposals.": "{section} の提案を {when} に作成しました。「提案」で確認してください。",

@@ -121,8 +121,20 @@ pub trait Progress {
     fn fail(&self, err: &str);
 }
 
+/// The reason when the AI CLI could not be started at all (not installed, or not
+/// on the dashboard's or the login shell's `PATH`).
+pub const CLI_NOT_STARTED: &str =
+    "the AI command could not be started \u{2014} check Settings \u{2192} AI CLI";
+
+/// Whether `err` says the AI CLI could not be started: the sealed call's
+/// `FileNotFoundError` (`inbox_runner::AiFail::NotStarted`, what
+/// `todos_draft::run_sealed` returns), or the reason itself.
+pub fn is_cli_not_started(err: &str) -> bool {
+    err.trim() == "FileNotFoundError" || err == CLI_NOT_STARTED
+}
+
 /// Every reason a failure line can give: nothing else is ever written.
-pub const FAIL_REASONS: [&str; 11] = [
+pub const FAIL_REASONS: [&str; 12] = [
     crate::profile_sync::DETAILS_HIDDEN,
     "already running",
     "checkout missing",
@@ -131,6 +143,7 @@ pub const FAIL_REASONS: [&str; 11] = [
     "no profile yet",
     "internal error",
     "the AI call failed",
+    CLI_NOT_STARTED,
     "the draft was rejected",
     "could not save",
     "error",
@@ -143,7 +156,9 @@ pub fn failure_reason(step: Option<Step>, err: &str) -> &'static str {
         return crate::profile_sync::DETAILS_HIDDEN;
     }
     let e = err.to_lowercase();
-    if e.contains("already in progress") {
+    if is_cli_not_started(err) {
+        CLI_NOT_STARTED
+    } else if e.contains("already in progress") {
         "already running"
     } else if e.contains("checkout") && (e.contains("missing") || e.contains("not found")) {
         "checkout missing"
@@ -813,6 +828,31 @@ mod tests {
         for (step, err) in [(None, "anything"), (Some(Step::Ai), "timeout")] {
             assert!(FAIL_REASONS.contains(&failure_reason(step, err)));
         }
+    }
+
+    #[test]
+    fn a_cli_that_could_not_be_started_says_so_at_any_step() {
+        // `todos_draft::run_sealed` reports a CLI that could not be spawned by
+        // the class name `FileNotFoundError`.
+        for step in [None, Some(Step::Start), Some(Step::Ai)] {
+            assert_eq!(failure_reason(step, "FileNotFoundError"), CLI_NOT_STARTED);
+        }
+        assert!(FAIL_REASONS.contains(&CLI_NOT_STARTED));
+        assert_eq!(
+            failure_reason(Some(Step::Ai), "TimeoutExpired"),
+            "the AI call failed"
+        );
+        let d = tempfile::tempdir().unwrap();
+        let job = ProfileJob::start(&base(d.path()), JobKind::Build, "web");
+        job.step(4, 5, Step::Ai);
+        job.fail("FileNotFoundError");
+        drop(job);
+        let failed: Vec<Value> = trace(d.path())
+            .into_iter()
+            .filter(|l| l["phase"] == "failed")
+            .collect();
+        assert_eq!(failed[0]["reason"], CLI_NOT_STARTED);
+        assert!(!failed[0].to_string().contains("FileNotFoundError"));
     }
 
     #[test]

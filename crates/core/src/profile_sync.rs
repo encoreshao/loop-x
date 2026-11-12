@@ -1107,6 +1107,9 @@ pub fn safe_failure_line(msg: &str) -> String {
     if project_profile::contains_secret(msg).is_some() {
         return DETAILS_HIDDEN.to_string();
     }
+    if crate::profile_progress::is_cli_not_started(msg) {
+        return crate::profile_progress::CLI_NOT_STARTED.to_string();
+    }
     let line = msg.lines().next().unwrap_or("").trim();
     line.chars().take(200).collect()
 }
@@ -2583,6 +2586,17 @@ mod tests {
             assert_eq!(failure(&msg), Outcome::Failed(DETAILS_HIDDEN.into()));
         }
         assert_eq!(failure("plain\nmore"), Outcome::Failed("plain".into()));
+    }
+
+    #[test]
+    fn a_cli_that_could_not_be_started_is_kept_as_the_fixed_reason() {
+        use crate::profile_progress::CLI_NOT_STARTED;
+        assert_eq!(safe_failure_line("FileNotFoundError"), CLI_NOT_STARTED);
+        assert_eq!(
+            failure("FileNotFoundError"),
+            Outcome::Failed(CLI_NOT_STARTED.into())
+        );
+        assert_eq!(safe_failure_line("TimeoutExpired"), "TimeoutExpired");
     }
 
     #[test]
