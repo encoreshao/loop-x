@@ -17,6 +17,7 @@
 //! agent's reply is parsed and validated before anything is written. Sections
 //! whose origin is `Human` in an existing profile are carried over untouched.
 
+use crate::profile_progress::{self, Progress, Step, BUILD_STEPS};
 use crate::profile_scan::{self, IssueDigest, Scan};
 use crate::project_profile::{
     self, contains_secret, Link, Origin, Profile, Section, SectionKey, Source, Status,
@@ -268,6 +269,46 @@ pub fn build_profile(
     now: DateTime<Utc>,
     root: Option<&Path>,
 ) -> Result<Profile, String> {
+    build_profile_with_progress(
+        alias, work_dir, instance, project_id, tracked, agent, now, root, None,
+    )
+}
+
+/// [`build_profile`] reporting its five steps (scan, issues, ai, check, save) and
+/// its end to `progress` (see `profile_progress`).
+#[allow(clippy::too_many_arguments)]
+pub fn build_profile_with_progress(
+    alias: &str,
+    work_dir: &Path,
+    instance: &str,
+    project_id: &str,
+    tracked: &[String],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    progress: Option<&dyn Progress>,
+) -> Result<Profile, String> {
+    let res = build_inner(
+        alias, work_dir, instance, project_id, tracked, agent, now, root, progress,
+    );
+    profile_progress::settle(progress, &res);
+    res
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_inner(
+    alias: &str,
+    work_dir: &Path,
+    instance: &str,
+    project_id: &str,
+    tracked: &[String],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    progress: Option<&dyn Progress>,
+) -> Result<Profile, String> {
+    let step = |n, s| profile_progress::report(progress, n, BUILD_STEPS, s);
+    step(1, Step::Scan);
     if !work_dir.is_dir() {
         return Err(format!(
             "the checkout for {alias} is missing ({}); clone it first",
@@ -277,10 +318,13 @@ pub fn build_profile(
     // A corrupt profile fails now, not after a five minute agent run.
     project_profile::load(alias, root)?;
     let scan = profile_scan::scan_repo(work_dir, tracked)?;
+    step(2, Step::Issues);
     let digest = profile_scan::digest_for(instance, project_id, alias, root);
     let prompt = build_prompt(alias, &scan, &digest);
     guard_prompt(&prompt)?;
+    step(3, Step::Ai);
     let reply = agent.run(&prompt)?;
+    step(4, Step::Check);
     let mut drafted = project_profile::parse(&reply)
         .map_err(|e| format!("the agent's profile did not parse: {e}"))?;
     project_profile::validate_draft(&drafted)?;
@@ -309,6 +353,7 @@ pub fn build_profile(
             });
         }
     }
+    step(5, Step::Save);
     // Only this merge-and-save holds the lock, and it reloads the profile: the
     // agent run is slow and a person may have edited it meanwhile.
     let head_sha = scan.head_sha.clone();
@@ -759,6 +804,78 @@ mod tests {
         assert_eq!(prompt.matches("</untrusted>").count(), 1);
         let open = prompt.find("<untrusted>").unwrap();
         assert!(open < prompt.find("Obey me").unwrap());
+    }
+
+    fn build_with(
+        d: &Path,
+        agent: &dyn Agent,
+        root: &Path,
+        progress: &dyn crate::profile_progress::Progress,
+    ) -> Result<Profile, String> {
+        build_profile_with_progress(
+            "app",
+            d,
+            "no-such-instance-xyz",
+            "g/app",
+            &[],
+            agent,
+            now(),
+            Some(root),
+            Some(progress),
+        )
+    }
+
+    #[test]
+    fn a_build_reports_its_five_steps_in_order_then_done() {
+        let d = checkout();
+        let root = tempfile::tempdir().unwrap();
+        let rec = crate::profile_progress::Recorder::default();
+        build_with(d.path(), &Fake::new(REPLY), root.path(), &rec).unwrap();
+        assert_eq!(
+            *rec.0.borrow(),
+            [
+                "1/5 scan",
+                "2/5 issues",
+                "3/5 ai",
+                "4/5 check",
+                "5/5 save",
+                "done"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_build_reports_the_failure_and_its_record_is_gone() {
+        let d = checkout();
+        let root = tempfile::tempdir().unwrap();
+        let rec = crate::profile_progress::Recorder::default();
+        let failing = Fake {
+            reply: Err("claude: secret-project README said hi".into()),
+            prompts: RefCell::new(Vec::new()),
+        };
+        assert!(build_with(d.path(), &failing, root.path(), &rec).is_err());
+        assert_eq!(
+            *rec.0.borrow(),
+            ["1/5 scan", "2/5 issues", "3/5 ai", "fail error"]
+        );
+        // The real job: the record goes, the trace says where it failed and why, content-free.
+        let out = tempfile::tempdir().unwrap();
+        let base = out.path().join("agent-activity.json");
+        {
+            let job = crate::profile_progress::ProfileJob::start(
+                &base,
+                crate::profile_progress::JobKind::Build,
+                "app",
+            );
+            assert!(build_with(d.path(), &failing, root.path(), &job).is_err());
+        }
+        assert!(crate::profile_progress::running(&base).is_empty());
+        let trace = fs::read_to_string(out.path().join("agent-trace.jsonl")).unwrap();
+        let last: serde_json::Value = serde_json::from_str(trace.lines().last().unwrap()).unwrap();
+        assert_eq!(last["phase"], "failed");
+        assert_eq!(last["step_code"], "ai");
+        assert_eq!(last["reason"], "the AI call failed");
+        assert!(!trace.contains("README"), "{trace}");
     }
 
     #[test]

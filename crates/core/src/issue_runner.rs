@@ -6289,6 +6289,37 @@ mod tests {
     }
 
     #[test]
+    fn an_issue_call_never_watches_or_removes_a_profile_jobs_record() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let job = crate::profile_progress::ProfileJob::start(
+            &ctx.activity_file,
+            crate::profile_progress::JobKind::Build,
+            "web",
+        );
+        // A profile record untouched for longer than the stall limit.
+        let old = std::time::SystemTime::now() - crate::agent_activity::STALL_AFTER * 2;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(job.file())
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let argv = vec![
+            script_cli(d.path(), "echo '{\"result\":\"ok\"}'"),
+            "-p".into(),
+            "P".into(),
+        ];
+        // Ok: not stopped as stalled by the profile record's age.
+        run_cli(&ctx, "claude", &argv, 30.0, Some(("web", "3")), &[], None).unwrap();
+        assert!(job.file().exists(), "the profile job's record is its own");
+        assert_ne!(
+            job.file(),
+            crate::agent_activity::for_task(&ctx.activity_file, "web", "3")
+        );
+    }
+
+    #[test]
     fn a_claude_call_that_goes_quiet_is_stopped_early() {
         let d = tempfile::tempdir().unwrap();
         let mut ctx = claude_ctx(d.path());

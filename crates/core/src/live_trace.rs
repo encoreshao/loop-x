@@ -52,6 +52,8 @@ pub enum Source {
     Step,
     /// A tool an agent is using right now (the agent hooks' trace).
     Agent,
+    /// A step of a project profile build, section refresh or sync.
+    Profile,
 }
 
 impl Source {
@@ -59,6 +61,7 @@ impl Source {
         match self {
             Source::Step => "step",
             Source::Agent => "agent",
+            Source::Profile => "profile",
         }
     }
 }
@@ -242,6 +245,9 @@ impl Filter {
 /// One agent hook record as a trace line. Tool results are skipped: the line that
 /// announced the tool is the step.
 fn describe_agent(rec: &Value) -> Option<TraceLine> {
+    if crate::profile_progress::is_profile_record(rec) {
+        return describe_profile(rec);
+    }
     let detail = s(rec, "detail");
     let tool = s(rec, "tool");
     let (level, text) = match s(rec, "event") {
@@ -266,6 +272,65 @@ fn describe_agent(rec: &Value) -> Option<TraceLine> {
         time: local_time(&at),
         at,
         scope: s(rec, "label").to_string(),
+        level,
+        text,
+    })
+}
+
+/// One profile job's trace line (see `profile_progress`): only its step code,
+/// counts, alias, section slug and a reason from the fixed list are shown;
+/// anything malformed is dropped.
+fn describe_profile(rec: &Value) -> Option<TraceLine> {
+    use crate::profile_progress::{Step, FAIL_REASONS};
+    let label = s(rec, "label");
+    let kind = s(rec, "kind");
+    let n = |k: &str| rec.get(k).and_then(Value::as_u64);
+    let (step, steps) = (n("step")?, n("steps")?);
+    let code = Step::from_code(s(rec, "step_code"))?;
+    if label.is_empty() || !matches!(kind, "build" | "refresh" | "sync") {
+        return None;
+    }
+    let name = match code {
+        Step::Project => s(rec, "alias").to_string(),
+        c => c.name().to_string(),
+    };
+    let section = crate::project_profile::SectionKey::from_slug(s(rec, "section"));
+    let (level, text) = match s(rec, "phase") {
+        "start" => (
+            Level::Info,
+            match (kind, section) {
+                ("build", _) => "building the profile".to_string(),
+                ("refresh", Some(k)) => format!("refreshing the {} section", k.slug()),
+                ("refresh", None) => "refreshing a section".to_string(),
+                _ => "profile sync started".to_string(),
+            },
+        ),
+        "step" if code == Step::Project => (Level::Info, format!("project {step}/{steps}: {name}")),
+        "step" => (Level::Info, format!("step {step}/{steps}: {name}")),
+        "done" => (Level::Ok, "finished".to_string()),
+        "failed" => {
+            let reason = s(rec, "reason");
+            let reason = if FAIL_REASONS.contains(&reason) {
+                reason
+            } else {
+                "error"
+            };
+            (
+                Level::Err,
+                format!("failed at step {step}/{steps} ({name}): {reason}"),
+            )
+        }
+        "interrupted" => (Level::Err, "stopped before finishing".to_string()),
+        _ => return None,
+    };
+    let at = DateTime::parse_from_rfc3339(s(rec, "at"))
+        .map(|t| events::fmt_timestamp(t.with_timezone(&chrono::Utc)))
+        .unwrap_or_else(|_| s(rec, "at").to_string());
+    Some(TraceLine {
+        source: Source::Profile,
+        time: local_time(&at),
+        at,
+        scope: label.to_string(),
         level,
         text,
     })
@@ -333,11 +398,23 @@ pub fn recent(
     lines.split_off(skip)
 }
 
-/// What is running right now, one line per active agent: `label  Tool: detail`.
+/// What is running right now, one line per active agent (`label  Tool: detail`)
+/// and per profile job (`Profile · web  Asking the AI · step 3 of 5`).
 pub fn running_now(status: &Path) -> Vec<String> {
+    let mut out = agents_running_now(status);
+    out.extend(
+        crate::profile_progress::running(&agent_activity::beside(status))
+            .iter()
+            .map(|j| format!("{}  {}", j.label(), j.step_text())),
+    );
+    out
+}
+
+/// [`running_now`] without the profile jobs (a page that lists those itself, translated).
+pub fn agents_running_now(status: &Path) -> Vec<String> {
     agent_activity::read_all(&agent_activity::beside(status))
         .iter()
-        .filter(|a| s(a, "event") != "Stop")
+        .filter(|a| s(a, "event") != "Stop" && !crate::profile_progress::is_profile_record(a))
         .map(|a| {
             let what = [s(a, "tool"), s(a, "detail")]
                 .iter()
@@ -529,6 +606,179 @@ mod tests {
             }),
             (false, true)
         );
+    }
+
+    fn profile_line(
+        phase: &str,
+        kind: &str,
+        step: u64,
+        steps: u64,
+        code: &str,
+        extra: Value,
+    ) -> Value {
+        let mut v = json!({"at": "2026-11-09T12:00:00+00:00", "label": "Profile \u{b7} web", "event": "Profile",
+            "tool": "profile", "detail": "x", "kind": kind, "section": null, "alias": "web",
+            "step": step, "steps": steps, "step_code": code, "phase": phase});
+        if let Some(o) = extra.as_object() {
+            for (k, val) in o {
+                v[k] = val.clone();
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn profile_job_lines_read_as_steps_scoped_to_the_job() {
+        let l = describe_agent(&profile_line("step", "build", 3, 5, "ai", json!({}))).unwrap();
+        assert_eq!(l.source, Source::Profile);
+        assert_eq!(l.scope, "Profile \u{b7} web");
+        assert_eq!(
+            (l.level, l.text.as_str()),
+            (Level::Info, "step 3/5: Asking the AI")
+        );
+        let start =
+            describe_agent(&profile_line("start", "build", 0, 5, "start", json!({}))).unwrap();
+        assert_eq!(start.text, "building the profile");
+        let refresh = describe_agent(&profile_line(
+            "start",
+            "refresh",
+            0,
+            4,
+            "start",
+            json!({"section": "stack"}),
+        ))
+        .unwrap();
+        assert_eq!(refresh.text, "refreshing the stack section");
+        let done = describe_agent(&profile_line("done", "build", 5, 5, "save", json!({}))).unwrap();
+        assert_eq!((done.level, done.text.as_str()), (Level::Ok, "finished"));
+        let sync = describe_agent(&profile_line(
+            "step",
+            "sync",
+            2,
+            3,
+            "project",
+            json!({"label": "Profile sync", "alias": "api"}),
+        ))
+        .unwrap();
+        assert_eq!(
+            (sync.scope.as_str(), sync.text.as_str()),
+            ("Profile sync", "project 2/3: api")
+        );
+    }
+
+    #[test]
+    fn a_profile_failure_is_an_error_with_only_a_known_reason() {
+        let l = describe_agent(&profile_line(
+            "failed",
+            "build",
+            3,
+            5,
+            "ai",
+            json!({"reason": "the AI call failed"}),
+        ))
+        .unwrap();
+        assert_eq!(l.level, Level::Err);
+        assert_eq!(
+            l.text,
+            "failed at step 3/5 (Asking the AI): the AI call failed"
+        );
+        let odd = describe_agent(&profile_line(
+            "failed",
+            "build",
+            3,
+            5,
+            "ai",
+            json!({"reason": "cat ~/.ssh/id_rsa"}),
+        ))
+        .unwrap();
+        assert_eq!(odd.text, "failed at step 3/5 (Asking the AI): error");
+        let stopped = describe_agent(&profile_line(
+            "interrupted",
+            "build",
+            2,
+            5,
+            "issues",
+            json!({}),
+        ))
+        .unwrap();
+        assert_eq!(
+            (stopped.level, stopped.text.as_str()),
+            (Level::Err, "stopped before finishing")
+        );
+        assert!(Filter {
+            attention: true,
+            ..Default::default()
+        }
+        .matches(&l));
+    }
+
+    #[test]
+    fn malformed_profile_lines_are_ignored() {
+        for bad in [
+            profile_line("step", "build", 3, 5, "rm -rf", json!({})),
+            profile_line("step", "nope", 3, 5, "ai", json!({})),
+            profile_line("wat", "build", 3, 5, "ai", json!({})),
+            profile_line("step", "build", 3, 5, "ai", json!({"step": "three"})),
+            profile_line("step", "build", 3, 5, "ai", json!({"label": ""})),
+        ] {
+            assert!(describe_agent(&bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn profile_lines_filter_as_their_own_source_and_show_by_default() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        let status = d.path().join("outputs/status.json");
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+        let body = [
+            profile_line("step", "build", 1, 5, "scan", json!({"at": now})),
+            agent_rec(&now, "PreToolUse", "Bash", "cargo test"),
+        ]
+        .iter()
+        .map(|v| v.to_string() + "\n")
+        .collect::<String>();
+        std::fs::write(d.path().join("outputs/agent-trace.jsonl"), body).unwrap();
+        let events = d.path().join("events");
+        assert_eq!(
+            recent(&events, &status, 10, None, &Filter::default()).len(),
+            2
+        );
+        let only = recent(
+            &events,
+            &status,
+            10,
+            None,
+            &Filter {
+                source: Some(Source::Profile),
+                ..Default::default()
+            },
+        );
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].text, "step 1/5: Scanning repo");
+        assert_eq!(Source::Profile.css(), "profile");
+    }
+
+    #[test]
+    fn running_now_names_profile_jobs_and_the_agents_only_list_leaves_them_out() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs")).unwrap();
+        let status = d.path().join("outputs/status.json");
+        let base = agent_activity::beside(&status);
+        let job = crate::profile_progress::ProfileJob::start(
+            &base,
+            crate::profile_progress::JobKind::Build,
+            "web",
+        );
+        crate::profile_progress::Progress::step(&job, 3, 5, crate::profile_progress::Step::Ai);
+        agent_activity::start(&agent_activity::for_task(&base, "api", "2"), "api #2", "t").unwrap();
+        let all = running_now(&status);
+        assert!(
+            all.contains(&"Profile \u{b7} web  Asking the AI \u{b7} step 3 of 5".to_string()),
+            "{all:?}"
+        );
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(agents_running_now(&status), ["api #2  thinking"]);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str = "Usage: loopx watch [--follow|-f] [--lines N] [--scope TEXT] [--agents|--steps] [--attention] [--grep TEXT] [--events-dir DIR]";
+const USAGE: &str = "Usage: loopx watch [--follow|-f] [--lines N] [--scope TEXT] [--agents|--steps|--profiles] [--attention] [--grep TEXT] [--events-dir DIR]";
 
 fn print(lines: &[TraceLine]) {
     let width = lines
@@ -43,6 +43,7 @@ pub fn run(args: &[String]) -> ExitCode {
             },
             "--agents" => filter.source = Some(Source::Agent),
             "--steps" => filter.source = Some(Source::Step),
+            "--profiles" => filter.source = Some(Source::Profile),
             "--attention" => filter.attention = true,
             "--events-dir" => match it.next() {
                 Some(v) => dir = Some(PathBuf::from(v)),

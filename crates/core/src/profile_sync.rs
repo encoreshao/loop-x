@@ -38,6 +38,7 @@
 use crate::approvals::{self, NewApproval};
 use crate::config::home_dir;
 use crate::profile_build::{self, defang, fenced_data, guard_prompt, sources_for, Agent};
+use crate::profile_progress::{self, JobKind, ProfileJob, Progress, Step, REFRESH_STEPS};
 use crate::profile_scan::{self, IssueDigest};
 use crate::project_profile::{self, Origin, Profile, Section, SectionKey, Source};
 use crate::sha256;
@@ -308,6 +309,62 @@ pub fn propose_refresh_held(
     root: Option<&Path>,
     approvals_dir: &Path,
 ) -> Result<Option<Proposal>, String> {
+    propose_refresh_held_with_progress(
+        alias,
+        key,
+        work_dir,
+        digest,
+        agent,
+        now,
+        root,
+        approvals_dir,
+        None,
+    )
+}
+
+/// [`propose_refresh_held`] reporting its four steps (scan, ai, check, proposal)
+/// and its end to `progress` (see `profile_progress`).
+#[allow(clippy::too_many_arguments)]
+pub fn propose_refresh_held_with_progress(
+    alias: &str,
+    key: SectionKey,
+    work_dir: &Path,
+    digest: &IssueDigest,
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+    progress: Option<&dyn Progress>,
+) -> Result<Option<Proposal>, String> {
+    let res = propose_inner(
+        alias,
+        key,
+        work_dir,
+        digest,
+        agent,
+        now,
+        root,
+        approvals_dir,
+        progress,
+    );
+    profile_progress::settle(progress, &res);
+    res
+}
+
+#[allow(clippy::too_many_arguments)]
+fn propose_inner(
+    alias: &str,
+    key: SectionKey,
+    work_dir: &Path,
+    digest: &IssueDigest,
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+    progress: Option<&dyn Progress>,
+) -> Result<Option<Proposal>, String> {
+    let step = |n, s| profile_progress::report(progress, n, REFRESH_STEPS, s);
+    step(1, Step::Scan);
     let profile = project_profile::load(alias, root)?
         .ok_or_else(|| format!("{alias} has no profile yet; build it first"))?;
     let scan = profile_scan::scan_repo(work_dir, &[])?;
@@ -324,7 +381,9 @@ pub fn propose_refresh_held(
     }
     let prompt = section_prompt(alias, key, old, &scan, digest);
     guard_prompt(&prompt)?;
+    step(2, Step::Ai);
     let reply = agent.run(&prompt)?;
+    step(3, Step::Check);
     let mut drafted = project_profile::parse(&reply)
         .map_err(|e| format!("the agent's section did not parse: {e}"))?;
     let new = drafted
@@ -345,6 +404,7 @@ pub fn propose_refresh_held(
     );
     project_profile::validate_draft(&check)?;
 
+    step(4, Step::Proposal);
     let old_body = old.map(|s| s.body.clone()).unwrap_or_default();
     let old_summary = old.map(|s| s.summary.clone()).unwrap_or_default();
     let target = json!({
@@ -911,6 +971,20 @@ pub fn process_queue(
     root: Option<&Path>,
     approvals_dir: &Path,
 ) -> QueueResult {
+    process_queue_with_progress(queued, projects, agent, now, root, approvals_dir, None)
+}
+
+/// [`process_queue`] where each refresh is a live job under `activity` (the shared
+/// `outputs/agent-activity.json` the dashboard reads; `None` writes no records).
+pub fn process_queue_with_progress(
+    queued: &QueuedMap,
+    projects: &[TrackedProject],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+    activity: Option<&Path>,
+) -> QueueResult {
     let mut res = QueueResult::default();
     for (alias, entries) in queued {
         let all_done = |res: &mut QueueResult| {
@@ -958,10 +1032,11 @@ pub fn process_queue(
             }
             res.done.push((alias.clone(), e.section.clone()));
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let job = activity.map(|b| ProfileJob::start(b, JobKind::Refresh(key), alias));
                 let digest = digest.get_or_init(|| {
                     profile_scan::digest_for(&p.instance, &p.project_id, alias, root)
                 });
-                propose_refresh_held(
+                propose_refresh_held_with_progress(
                     alias,
                     key,
                     &p.work_dir,
@@ -970,6 +1045,7 @@ pub fn process_queue(
                     now,
                     root,
                     approvals_dir,
+                    job.as_ref().map(|j| j as &dyn Progress),
                 )
             }));
             let err = match r {
@@ -1046,7 +1122,9 @@ fn sync_project(
     now: DateTime<Utc>,
     root: Option<&Path>,
     approvals_dir: &Path,
+    activity: Option<&Path>,
 ) -> Outcome {
+    let job = |kind| activity.map(|b| ProfileJob::start(b, kind, &p.alias));
     if !p.work_dir.is_dir() {
         return Outcome::Failed("checkout not found".into());
     }
@@ -1058,7 +1136,8 @@ fn sync_project(
         Err(e) => return failure(&e),
     };
     let Some(profile) = profile else {
-        return match profile_build::build_profile(
+        let job = job(JobKind::Build);
+        return match profile_build::build_profile_with_progress(
             &p.alias,
             &p.work_dir,
             &p.instance,
@@ -1067,6 +1146,7 @@ fn sync_project(
             agent,
             now,
             root,
+            job.as_ref().map(|j| j as &dyn Progress),
         ) {
             Ok(_) => Outcome::Drafted,
             Err(e) => failure(&e),
@@ -1088,7 +1168,8 @@ fn sync_project(
     let (mut raised, mut first_err) = (0, None);
     let digest = profile_scan::digest_for(&p.instance, &p.project_id, &p.alias, root);
     for key in stale {
-        match propose_refresh_held(
+        let job = job(JobKind::Refresh(key));
+        match propose_refresh_held_with_progress(
             &p.alias,
             key,
             &p.work_dir,
@@ -1097,6 +1178,7 @@ fn sync_project(
             now,
             root,
             approvals_dir,
+            job.as_ref().map(|j| j as &dyn Progress),
         ) {
             Ok(Some(_)) => raised += 1,
             Ok(None) => {}
@@ -1120,17 +1202,41 @@ pub fn sync_all(
     root: Option<&Path>,
     approvals_dir: &Path,
 ) -> Vec<(String, Outcome)> {
+    sync_all_with_progress(projects, agent, now, root, approvals_dir, None)
+}
+
+/// [`sync_all`] with live records under `activity` (the shared
+/// `outputs/agent-activity.json` the dashboard reads): one "Profile sync" record
+/// counting projects, and one record per project build or section refresh while
+/// it runs. `None` writes no records.
+pub fn sync_all_with_progress(
+    projects: &[TrackedProject],
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+    activity: Option<&Path>,
+) -> Vec<(String, Outcome)> {
     let aliases: Vec<String> = projects.iter().map(|p| p.alias.clone()).collect();
-    projects
+    let overall = activity.map(|b| ProfileJob::start(b, JobKind::Sync, ""));
+    let out = projects
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
+            if let Some(j) = &overall {
+                j.project(i + 1, projects.len(), &p.alias);
+            }
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                sync_project(p, &aliases, agent, now, root, approvals_dir)
+                sync_project(p, &aliases, agent, now, root, approvals_dir, activity)
             }))
             .unwrap_or_else(|_| Outcome::Failed("internal error".into()));
             (p.alias.clone(), outcome)
         })
-        .collect()
+        .collect();
+    if let Some(j) = &overall {
+        j.done();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1980,6 +2086,182 @@ mod tests {
                 memory,
             }],
         )])
+    }
+
+    /// Answers like `Fake` and, on every call, notes which profile jobs are live.
+    struct Peek {
+        inner: Fake,
+        base: PathBuf,
+        seen: RefCell<Vec<Vec<crate::profile_progress::JobView>>>,
+    }
+
+    impl Agent for Peek {
+        fn run(&self, prompt: &str) -> Result<String, String> {
+            self.seen
+                .borrow_mut()
+                .push(crate::profile_progress::running(&self.base));
+            self.inner.run(prompt)
+        }
+    }
+
+    fn peek(inner: Fake, out: &Path) -> Peek {
+        Peek {
+            inner,
+            base: out.join("agent-activity.json"),
+            seen: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn trace_phases(out: &Path) -> Vec<String> {
+        fs::read_to_string(out.join("agent-trace.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .map(|v| {
+                format!(
+                    "{} {} {}/{} {}",
+                    v["kind"].as_str().unwrap(),
+                    v["phase"].as_str().unwrap(),
+                    v["step"],
+                    v["steps"],
+                    v["step_code"].as_str().unwrap()
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_section_refresh_reports_its_four_steps_then_done() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let rec = crate::profile_progress::Recorder::default();
+        let p = propose_refresh_held_with_progress(
+            &f.alias,
+            SectionKey::Stack,
+            f.work.path(),
+            &IssueDigest::default(),
+            &Fake::new("New stack text."),
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+            Some(&rec),
+        )
+        .unwrap();
+        assert!(p.is_some());
+        assert_eq!(
+            *rec.0.borrow(),
+            ["1/4 scan", "2/4 ai", "3/4 check", "4/4 proposal", "done"]
+        );
+    }
+
+    #[test]
+    fn the_sync_keeps_one_overall_record_and_one_per_project_job_then_cleans_up() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let gone = TrackedProject {
+            alias: format!("{}-gone", f.alias),
+            instance: "work".into(),
+            project_id: "grp/gone".into(),
+            work_dir: f.work.path().join("does-not-exist"),
+        };
+        let out = tempfile::tempdir().unwrap();
+        let agent = peek(Fake::new("New stack text."), out.path());
+        let res = sync_all_with_progress(
+            &[gone, tp(&f)],
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+            Some(&agent.base),
+        );
+        assert_eq!(res[1].1, Outcome::Proposed(1));
+        let seen = agent.seen.borrow();
+        assert_eq!(seen.len(), 1, "one agent call");
+        let live: Vec<(String, String, usize, usize, String)> = seen[0]
+            .iter()
+            .map(|j| {
+                (
+                    j.kind.clone(),
+                    j.alias.clone(),
+                    j.step,
+                    j.steps,
+                    j.step_code.clone(),
+                )
+            })
+            .collect();
+        assert!(
+            live.contains(&("sync".into(), f.alias.clone(), 2, 2, "project".into())),
+            "{live:?}"
+        );
+        assert!(
+            live.contains(&("refresh".into(), f.alias.clone(), 2, 4, "ai".into())),
+            "{live:?}"
+        );
+        assert_eq!(live.len(), 2, "{live:?}");
+        assert!(crate::profile_progress::running(&agent.base).is_empty());
+        let phases = trace_phases(out.path());
+        assert_eq!(phases.first().unwrap(), "sync start 0/0 start");
+        assert!(
+            phases.contains(&"sync step 1/2 project".to_string()),
+            "{phases:?}"
+        );
+        assert!(
+            phases.contains(&"refresh done 4/4 proposal".to_string()),
+            "{phases:?}"
+        );
+        assert_eq!(
+            phases.last().unwrap(),
+            "sync done 2/2 project",
+            "{phases:?}"
+        );
+    }
+
+    #[test]
+    fn a_sync_without_an_activity_base_writes_no_records() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let out = tempfile::tempdir().unwrap();
+        let agent = peek(Fake::new("New stack text."), out.path());
+        sync_all(&[tp(&f)], &agent, now(), Some(f.root.path()), f.apr.path());
+        assert!(agent.seen.borrow()[0].is_empty());
+        assert!(!out.path().join("agent-trace.jsonl").exists());
+    }
+
+    #[test]
+    fn a_queued_refresh_shows_as_a_live_refresh_job() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let out = tempfile::tempdir().unwrap();
+        let agent = peek(Fake::new("New stack text."), out.path());
+        let q = BTreeMap::from([(
+            f.alias.clone(),
+            vec![QueuedSection {
+                section: "stack".into(),
+                queued_at: now(),
+                memory: false,
+            }],
+        )]);
+        let res = process_queue_with_progress(
+            &q,
+            &projects_of(&f),
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+            Some(&agent.base),
+        );
+        assert!(res.failures.is_empty(), "{:?}", res.failures);
+        let seen = agent.seen.borrow();
+        assert_eq!(seen[0].len(), 1);
+        assert_eq!(
+            (
+                seen[0][0].kind.as_str(),
+                seen[0][0].section.as_deref(),
+                seen[0][0].step
+            ),
+            ("refresh", Some("stack"), 2)
+        );
+        assert!(crate::profile_progress::running(&agent.base).is_empty());
     }
 
     fn run_queue(f: &Fx, q: &QueuedMap, agent: &dyn Agent) -> QueueResult {

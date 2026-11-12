@@ -121,7 +121,7 @@ pub fn trace_path(activity_file: &Path) -> PathBuf {
 /// The trace stops growing at this size: the old file moves to `.old` and a new one starts.
 const TRACE_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
-fn append_trace(activity_file: &Path, record: &Value) -> std::io::Result<()> {
+pub(crate) fn append_trace(activity_file: &Path, record: &Value) -> std::io::Result<()> {
     let path = trace_path(activity_file);
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > TRACE_MAX_BYTES) {
         let _ = std::fs::rename(&path, path.with_extension("jsonl.old"));
