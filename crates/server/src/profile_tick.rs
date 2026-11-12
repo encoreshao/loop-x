@@ -5,7 +5,9 @@
 use chrono::{DateTime, Utc};
 use loopx_core::approvals;
 use loopx_core::profile_build::{Agent, SealedAgent};
+use loopx_core::profile_notify::{self, Finished};
 use loopx_core::profile_sync::{self as sync, ProjectSync, TrackedProject};
+use loopx_core::slack_report::Report;
 use std::path::Path;
 
 /// How often the thread looks at the schedule.
@@ -32,6 +34,41 @@ pub fn tick(
     approvals_dir: &Path,
     activity: Option<&Path>,
 ) -> bool {
+    tick_with_notify(
+        store_path,
+        projects,
+        agent,
+        now,
+        state,
+        root,
+        approvals_dir,
+        activity,
+        None,
+    )
+}
+
+/// [`tick`] that also hands one Slack message per pass to `notify` (see
+/// `loopx_core::profile_notify`): one for a queue batch that raised a proposal or
+/// failed, one for a sync that drafted, proposed or failed anything. Each is sent
+/// after the pass's live records are gone and its status is written, and only
+/// while the store's `notify_slack` switch is on; nothing it does can fail the tick.
+#[allow(clippy::too_many_arguments)]
+pub fn tick_with_notify(
+    store_path: &Path,
+    projects: impl FnOnce() -> Vec<TrackedProject>,
+    agent: &dyn Agent,
+    now: DateTime<Utc>,
+    state: &mut TickState,
+    root: Option<&Path>,
+    approvals_dir: &Path,
+    activity: Option<&Path>,
+    notify: Option<&dyn Fn(&Report) -> bool>,
+) -> bool {
+    let send = |f: &Finished| {
+        if let Some(n) = notify {
+            profile_notify::send_if_enabled(store_path, f, n);
+        }
+    };
     let Ok(store) = sync::load_keeping_bad(store_path) else {
         return false;
     };
@@ -42,7 +79,8 @@ pub fn tick(
     let mut loaded: Option<Vec<TrackedProject>> = None;
     if store.settings.enabled && store.queued.values().any(|v| !v.is_empty()) {
         let list = loaded.insert(projects.take().map_or_else(Vec::new, |f| f()));
-        let res = sync::process_queue_with_progress(
+        let began = std::time::Instant::now();
+        let mut res = sync::process_queue_with_progress(
             &store.queued,
             list,
             agent,
@@ -51,6 +89,7 @@ pub fn tick(
             approvals_dir,
             activity,
         );
+        let rows = std::mem::take(&mut res.rows);
         let _ = sync::with_store(store_path, |s| {
             for (alias, slug) in res.done {
                 // Only the entry this pass worked on: one queued again meanwhile
@@ -75,6 +114,10 @@ pub fn tick(
             }
             s.queued.retain(|_, q| !q.is_empty());
         });
+        send(&Finished::Queue {
+            rows,
+            took: began.elapsed(),
+        });
         ran_queue = true;
     }
     let started = *state.started.get_or_insert(now);
@@ -97,13 +140,19 @@ pub fn tick(
     if claimed.is_err() {
         return ran_queue;
     }
+    let began = std::time::Instant::now();
     let results = sync::sync_all_with_progress(&list, agent, now, root, approvals_dir, activity);
+    let took = began.elapsed();
     let _ = sync::with_store(store_path, |s| {
-        for (alias, outcome) in results {
+        for (alias, outcome) in results.iter().cloned() {
             s.status
                 .per_project
                 .insert(alias, ProjectSync { at: now, outcome });
         }
+    });
+    send(&Finished::Sync {
+        outcomes: results,
+        took,
     });
     true
 }
@@ -113,13 +162,16 @@ pub fn tick(
 /// `outputs/agent-activity.json`, which the Agents and Terminal pages and the Mac
 /// app read).
 pub fn start_profile_sync(activity: std::path::PathBuf) {
+    // Finished passes go to the default Slack webhook, like Creator jobs; with
+    // none configured nothing is sent.
+    let notify = profile_notify::slack_sender(loopx_core::slack::default_config_path());
     // A job cut short by the last server's exit left its record: drop it now, so
     // nothing shows a profile job running that no process is doing.
     loopx_core::profile_progress::sweep_stale(&activity);
     std::thread::spawn(move || {
         let mut state = TickState::default();
         loop {
-            tick(
+            tick_with_notify(
                 &sync::store_path(),
                 sync::tracked_projects,
                 &SealedAgent,
@@ -128,6 +180,7 @@ pub fn start_profile_sync(activity: std::path::PathBuf) {
                 None,
                 &approvals::default_dir(),
                 Some(&activity),
+                Some(&*notify),
             );
             std::thread::sleep(LOOK_EVERY);
         }
@@ -549,5 +602,149 @@ mod tests {
         assert_eq!(a.1.get(), 1);
         let s = sync::load(&f.store()).unwrap();
         assert_eq!(s.queued[&f.alias], vec![entry(local(11, 9, 30))]);
+    }
+
+    /// An agent that answers with a whole valid profile.
+    struct Drafts;
+    impl Agent for Drafts {
+        fn run(&self, _: &str) -> Result<String, String> {
+            use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+            let sections = SectionKey::ALL
+                .into_iter()
+                .map(|k| {
+                    (
+                        k,
+                        Section {
+                            summary: format!("About {}", k.slug()),
+                            body: "Plain text.".into(),
+                            last_verified: None,
+                            sources: vec![],
+                            origin: Origin::Agent,
+                        },
+                    )
+                })
+                .collect();
+            Ok(project_profile::render(&Profile {
+                alias: "x".into(),
+                generated_at: None,
+                head_sha: None,
+                status: Status::Draft,
+                links: vec![],
+                sections,
+            }))
+        }
+    }
+
+    type Sent = std::cell::RefCell<Vec<loopx_core::slack_report::Report>>;
+
+    fn tick_notify(f: &Fx, list: Vec<TrackedProject>, agent: &dyn Agent, sent: &Sent) -> bool {
+        let send = |r: &loopx_core::slack_report::Report| {
+            sent.borrow_mut().push(r.clone());
+            true
+        };
+        tick_with_notify(
+            &f.store(),
+            || list,
+            agent,
+            local(11, 10, 0),
+            &mut TickState::default(),
+            Some(f.dir.path()),
+            &f.dir.path().join("approvals"),
+            Some(&f.activity()),
+            Some(&send),
+        )
+    }
+
+    #[test]
+    fn a_sync_that_did_something_sends_one_summary_after_its_record_is_gone() {
+        let f = Fx::new();
+        with_a_file(&f);
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(second.path().join("README.md"), "hi\n").unwrap();
+        let mut list = f.projects();
+        list.push(TrackedProject {
+            alias: format!("{}-b", f.alias),
+            work_dir: second.path().to_path_buf(),
+            ..list[0].clone()
+        });
+        list.push(TrackedProject {
+            alias: format!("{}-gone", f.alias),
+            work_dir: f.work.path().join("missing"),
+            ..list[0].clone()
+        });
+        sync::with_store(&f.store(), |s| s.sync_requested = true).unwrap();
+        let sent = Sent::default();
+        assert!(tick_notify(&f, list, &Drafts, &sent));
+        let sent = sent.borrow();
+        assert_eq!(sent.len(), 1, "one message for the whole pass");
+        assert_eq!(
+            sent[0].title,
+            "Weekly profile sync: 2 drafted, 0 proposals, 1 failed of 3 projects"
+        );
+        let text = loopx_core::slack_report::plain_text(&sent[0]);
+        assert!(
+            text.contains("-gone \u{2014} failed: checkout missing"),
+            "{text}"
+        );
+        assert!(
+            !text.contains(&f.work.path().display().to_string()),
+            "{text}"
+        );
+        assert!(loopx_core::profile_progress::running(&f.activity()).is_empty());
+    }
+
+    #[test]
+    fn a_sync_with_nothing_to_do_or_the_switch_off_sends_nothing() {
+        let f = Fx::new();
+        sync::with_store(&f.store(), |s| s.sync_requested = true).unwrap();
+        // The project's checkout is busy with another run: Skipped.
+        let _busy = loopx_core::profile_build::try_acquire(&f.alias).unwrap();
+        let sent = Sent::default();
+        assert!(tick_notify(&f, f.projects(), &Drafts, &sent));
+        assert!(sent.borrow().is_empty());
+        drop(_busy);
+        // Something to say, but the switch is off.
+        with_a_file(&f);
+        sync::with_store(&f.store(), |s| {
+            s.sync_requested = true;
+            s.settings.notify_slack = false;
+        })
+        .unwrap();
+        let before = sync::load(&f.store()).unwrap().settings;
+        assert!(tick_notify(&f, f.projects(), &Drafts, &sent));
+        assert!(sent.borrow().is_empty());
+        assert_eq!(sync::load(&f.store()).unwrap().settings, before);
+    }
+
+    #[test]
+    fn a_queue_batch_that_failed_sends_one_message_and_a_quiet_one_none() {
+        let f = Fx::new();
+        let q = |slug: &str| sync::QueuedSection {
+            section: slug.into(),
+            queued_at: local(11, 9, 0),
+            memory: false,
+        };
+        sync::with_store(&f.store(), |s| {
+            s.queued.insert(f.alias.clone(), vec![q("stack")]);
+        })
+        .unwrap();
+        let gone = vec![TrackedProject {
+            work_dir: f.work.path().join("missing"),
+            ..f.projects()[0].clone()
+        }];
+        let sent = Sent::default();
+        assert!(tick_notify(&f, gone, &Drafts, &sent));
+        assert_eq!(sent.borrow().len(), 1);
+        assert_eq!(
+            sent.borrow()[0].title,
+            "Profile updates from recent runs: 0 proposals, 1 failed"
+        );
+        // A queued entry for a project with no profile is dropped quietly.
+        sync::with_store(&f.store(), |s| {
+            s.queued.insert(f.alias.clone(), vec![q("stack")]);
+        })
+        .unwrap();
+        assert!(tick_notify(&f, f.projects(), &Drafts, &sent));
+        assert_eq!(sent.borrow().len(), 1, "nothing new to say");
     }
 }
