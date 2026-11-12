@@ -733,7 +733,7 @@ fn project_card(
         .filter(|t| t.to_value()["flag"].as_str() == Some("needs_review"))
         .count();
     let mut chips = Vec::new();
-    if profile_build::is_running(&p.alias) {
+    if busy(ctx, &p.alias) {
         chips.push(chip(" mem-chip-accent", "autorenew", &ctx.t("Working…"), None));
     }
     if draft {
@@ -2209,6 +2209,12 @@ fn record(home: &Path, alias: &str, job: Job) {
     jobs.push(((home.to_path_buf(), alias.to_string()), job));
 }
 
+/// Forget the last result for `alias`: a new build makes it out of date.
+fn forget(home: &Path, alias: &str) {
+    let mut jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
+    jobs.retain(|((h, a), _)| !(h == home && a == alias));
+}
+
 fn last_job(home: &Path, alias: &str) -> Option<Job> {
     let jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
     jobs.iter()
@@ -2252,10 +2258,10 @@ fn failure_line(e: &str) -> String {
 /// A stored failure message as shown: files written before failures were
 /// guarded may still quote something secret-shaped.
 fn shown_failure(ctx: &UiCtx, msg: &str) -> String {
-    if contains_secret(msg).is_some() || msg == profile_sync::DETAILS_HIDDEN {
+    if contains_secret(msg).is_some() {
         ctx.t("details hidden")
     } else {
-        msg.to_string()
+        crate::ui::profile_jobs::failure_text(ctx, msg)
     }
 }
 
@@ -2295,6 +2301,7 @@ fn job_env(ctx: &UiCtx) -> Option<JobEnv> {
 }
 
 fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) {
+    forget(&env.home, &t.alias);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let job = ProfileJob::start(&env.activity, ProfileJobKind::Build, &t.alias);
         profile_build::build_profile_with_progress(
@@ -2345,6 +2352,8 @@ fn build(ctx: &UiCtx) -> UiResponse {
         return back(to(), Notice::Busy);
     };
     let aliases: Vec<String> = tracked_list(ctx).into_iter().map(|t| t.alias).collect();
+    // Cleared on the click, so the page it redirects to never shows the old failure.
+    forget(&ctx.state.home_dir, &alias);
     std::thread::spawn(move || {
         let _slot = slot;
         run_build(&env, &t, &aliases);
@@ -2891,7 +2900,7 @@ fn head_actions(ctx: &UiCtx, p: &Project, profile: Option<&Profile>) -> String {
             escape(&ctx.t("Set this project's local checkout on the Projects page to build its profile."))
         );
     }
-    if profile_build::is_running(&p.alias) {
+    if busy(ctx, &p.alias) {
         return format!(
             "<button class='mem-btn mem-btn-primary' type='button' disabled>{}{}</button>",
             spinner(),
@@ -2934,11 +2943,29 @@ fn head_actions(ctx: &UiCtx, p: &Project, profile: Option<&Profile>) -> String {
     )
 }
 
-/// "Working…" while a run holds the project, else the last build or refresh result.
+/// The live record of a job working on `alias` (a build or refresh in any
+/// process whose pid is alive), read fresh on every render.
+fn live_job(ctx: &UiCtx, alias: &str) -> Option<loopx_core::profile_progress::JobView> {
+    loopx_core::profile_progress::running_for(&crate::ui::profile_jobs::base(ctx), alias)
+}
+
+/// Whether a job works on `alias`: its live record, or this process's own guard
+/// (held from the click until the job ends, also before the record is written).
+fn busy(ctx: &UiCtx, alias: &str) -> bool {
+    profile_build::is_running(alias) || live_job(ctx, alias).is_some()
+}
+
+/// A failed build or refresh is no longer shown once it is this old.
+const FAILURE_SHOWN_FOR: Duration = Duration::hours(24);
+
+/// "Working…" while a job works on the project (its live record first, so a page
+/// opened again mid-run still says so), else the last build or refresh result;
+/// a failure is dropped after [`FAILURE_SHOWN_FOR`].
 fn job_line(ctx: &UiCtx, alias: &str) -> String {
-    if profile_build::is_running(alias) {
+    let live = live_job(ctx, alias);
+    if live.is_some() || profile_build::is_running(alias) {
         // What the running job is doing now, from its live record.
-        let step = loopx_core::profile_progress::running_for(&crate::ui::profile_jobs::base(ctx), alias)
+        let step = live
             .map(|j| format!("<br>{}", escape(&crate::ui::profile_jobs::step_detail(ctx, &j))))
             .unwrap_or_default();
         return format!(
@@ -2950,6 +2977,9 @@ fn job_line(ctx: &UiCtx, alias: &str) -> String {
     let Some(job) = last_job(&ctx.state.home_dir, alias) else {
         return String::new();
     };
+    if matches!(job.outcome, JobOutcome::Failed(_)) && ctx.state.now() - job.at >= FAILURE_SHOWN_FOR {
+        return String::new();
+    }
     let when = ago(ctx, job.at);
     let section = |k: SectionKey| section_title(ctx, k);
     let error = |e: &str| shown_failure(ctx, e);
@@ -2992,7 +3022,7 @@ fn section_actions(ctx: &UiCtx, p: &Project, key: SectionKey, s: Option<&Section
     let ids = format!("{}-{slug}", p.alias.bytes().filter(u8::is_ascii_alphanumeric).map(char::from).collect::<String>());
     let refresh = if !p.checkout {
         String::new()
-    } else if profile_build::is_running(&p.alias) {
+    } else if busy(ctx, &p.alias) {
         format!(
             "<button class='mem-btn' type='button' disabled>{}{}</button>",
             spinner(),
@@ -4085,6 +4115,82 @@ mod tests {
         assert!(loopx_core::profile_progress::running(&base).is_empty());
         let trace = std::fs::read_to_string(base.with_file_name("agent-trace.jsonl")).unwrap();
         assert!(trace.lines().last().unwrap().contains("\"phase\":\"done\""), "{trace}");
+    }
+
+    use super::{last_job, record, Job, JobKind, JobOutcome, ProfileJob, ProfileJobKind};
+
+    /// An agent whose AI call fails with `err` (what `todos_draft::run_sealed` returns).
+    struct FailingAgent(&'static str);
+
+    impl Agent for FailingAgent {
+        fn run(&self, _prompt: &str) -> Result<String, String> {
+            Err(self.0.to_string())
+        }
+    }
+
+    fn failed_build(sb: &Sb, alias: &str, at: chrono::DateTime<Utc>) {
+        record(&sb.state.home_dir, alias, Job { at, kind: JobKind::Build, outcome: JobOutcome::Failed("TimeoutExpired".into()) });
+    }
+
+    #[test]
+    fn a_build_whose_cli_could_not_start_says_so_on_the_memory_page() {
+        let alias = "nocli-a";
+        let mut sb = Sb::new(&[(alias, true)]);
+        sb.state = sb.state.with_profile_agent(Arc::new(FailingAgent("FileNotFoundError")));
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        wait_idle(alias);
+        let page = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(
+            page.contains("The last build failed just now: the AI command could not be started \u{2014} check Settings \u{2192} AI CLI"),
+            "{page}"
+        );
+        assert!(!page.contains("FileNotFoundError"), "{page}");
+        let req = crate::ui::routes::UiRequest::get(&format!("/insights?view=memory&project={alias}")).with_header("cookie", "loop_lang=fr");
+        let fr = String::from_utf8(sb.state.registry.dispatch(&sb.state, &req).unwrap().body).unwrap();
+        assert!(fr.contains("La commande IA n&#x27;a pas pu"), "{fr}");
+    }
+
+    #[test]
+    fn a_live_job_record_shows_as_running_over_an_older_failure() {
+        let alias = "rec-a";
+        let sb = Sb::new(&[(alias, true)]);
+        failed_build(&sb, alias, now() - chrono::Duration::minutes(8));
+        // A job this page did not start (no in-process guard), alive by its pid.
+        let base = loopx_core::agent_activity::beside(&sb.state.status_path_for_loop("issue-loop"));
+        let job = ProfileJob::start(&base, ProfileJobKind::Build, alias);
+        loopx_core::profile_progress::Progress::step(&job, 3, 5, loopx_core::profile_progress::Step::Ai);
+        let page = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(page.contains("Working on this profile") && page.contains("Asking the AI \u{b7} step 3 of 5"), "{page}");
+        assert!(!page.contains("The last build failed"), "{page}");
+        drop(job);
+        let page = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(page.contains("The last build failed 8m ago"), "{page}");
+        assert!(!page.contains("Working on this profile"), "{page}");
+    }
+
+    #[test]
+    fn starting_a_build_clears_the_last_failure() {
+        let alias = "clear-a";
+        let (agent, release) = FakeAgent::gated(full_reply(alias, "Built"));
+        let sb = Sb::new(&[(alias, true)]).with_agent(agent);
+        failed_build(&sb, alias, now() - chrono::Duration::minutes(8));
+        sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        assert!(last_job(&sb.state.home_dir, alias).is_none(), "the old failure is gone once a build starts");
+        let page = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(page.contains("Working on this profile") && !page.contains("The last build failed"), "{page}");
+        release.send(()).unwrap();
+        wait_idle(alias);
+    }
+
+    #[test]
+    fn a_failure_older_than_a_day_is_no_longer_shown() {
+        let alias = "old-a";
+        let sb = Sb::new(&[(alias, true)]);
+        failed_build(&sb, alias, now() - chrono::Duration::hours(23));
+        assert!(sb.get(&format!("/insights?view=memory&project={alias}")).contains("The last build failed 23h ago"));
+        failed_build(&sb, alias, now() - chrono::Duration::hours(25));
+        let page = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(!page.contains("The last build failed"), "{page}");
     }
 
     #[test]
