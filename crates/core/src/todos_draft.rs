@@ -100,23 +100,26 @@ pub fn run_agent(prompt: &str) -> Result<String, String> {
 /// The sealed AI CLI call behind [`run_agent`] with its own time limit: no tools,
 /// no writes, no network. Shared with the project profile builder.
 pub fn run_sealed(prompt: &str, timeout_seconds: f64) -> Result<String, String> {
+    run_sealed_with(prompt, timeout_seconds, &SealedHooks::default())
+}
+
+/// [`run_sealed`] with the sealed call's seams (tests).
+fn run_sealed_with(
+    prompt: &str,
+    timeout_seconds: f64,
+    hooks: &SealedHooks<'_>,
+) -> Result<String, String> {
     let mut log = |_: &str| {};
-    invoke_sealed(
-        prompt,
-        timeout_seconds,
-        None,
-        &mut log,
-        &SealedHooks::default(),
-    )
-    .map(|o| o.text.trim().to_string())
-    .map_err(|e| e.class_name().to_string())
-    .and_then(|t| {
-        if t.is_empty() {
-            Err("empty reply".to_string())
-        } else {
-            Ok(t)
-        }
-    })
+    invoke_sealed(prompt, timeout_seconds, None, &mut log, hooks)
+        .map(|o| o.text.trim().to_string())
+        .map_err(|e| e.class_name().to_string())
+        .and_then(|t| {
+            if t.is_empty() {
+                Err("empty reply".to_string())
+            } else {
+                Ok(t)
+            }
+        })
 }
 
 /// Claim a todo for drafting: refuses a todo a reply makes no sense for, or one
@@ -299,6 +302,41 @@ mod tests {
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap()
+    }
+
+    /// Todos drafts and profile builds share `run_sealed`, so a dashboard started
+    /// with launchd's bare PATH finds a CLI that only the login shell knows, and
+    /// a CLI found nowhere fails as "could not be started".
+    #[test]
+    fn the_shared_sealed_call_finds_a_cli_only_the_login_shell_path_has() {
+        let d = tempfile::tempdir().unwrap();
+        crate::agents::testutil::script(
+            d.path(),
+            "loopx-fake-todos-cli",
+            r#"cat >/dev/null; echo '{"result":"drafted reply"}'"#,
+        );
+        crate::runner_util::seed_cli_launch_path(&format!("{}:/usr/bin:/bin", d.path().display()));
+        let cli_fn = || "claude".to_string();
+        let found = |_: Option<f64>| vec!["loopx-fake-todos-cli".to_string()];
+        let hooks = SealedHooks {
+            runner: None,
+            cli_fn: Some(&cli_fn),
+            command_fn: Some(&found),
+        };
+        assert_eq!(
+            run_sealed_with("p", 30.0, &hooks),
+            Ok("drafted reply".into())
+        );
+        let missing = |_: Option<f64>| vec!["loopx-no-such-todos-cli".to_string()];
+        let hooks = SealedHooks {
+            runner: None,
+            cli_fn: Some(&cli_fn),
+            command_fn: Some(&missing),
+        };
+        assert_eq!(
+            run_sealed_with("p", 30.0, &hooks),
+            Err("FileNotFoundError".into())
+        );
     }
 
     fn store_with(action: &str) -> TodoStore {

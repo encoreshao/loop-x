@@ -7,6 +7,8 @@ use crate::{loop_notify, slack};
 use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// How much of a failed invocation's output goes into an event's `data`.
 pub const STDERR_EXCERPT_CHARS: usize = 800;
@@ -62,6 +64,75 @@ pub fn resolved_program(cli: &str) -> String {
                 .map(|n| n.to_string())
         })
         .unwrap_or_else(|| cli.to_string())
+}
+
+/// How long [`cli_launch_path`] reuses the login shell's answer before asking
+/// again, so a CLI installed while the dashboard runs is found within minutes.
+pub const LAUNCH_PATH_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// The shell asked for the user's `PATH`. Unit tests never start the real login
+/// shell (it reads the real home): theirs does not exist, so they fall back to
+/// the current `PATH`.
+#[cfg(not(test))]
+const LOGIN_SHELL: &str = "/bin/zsh";
+#[cfg(test)]
+const LOGIN_SHELL: &str = "/nonexistent/loopx-test-login-shell";
+
+/// A computed value reused for a time-to-live. Callers waiting while it is
+/// computed get the fresh value instead of computing it again.
+pub struct TtlCache {
+    ttl: Duration,
+    slot: Mutex<Option<(Instant, String)>>,
+}
+
+impl TtlCache {
+    pub const fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            slot: Mutex::new(None),
+        }
+    }
+
+    /// The cached value when it is younger than the TTL at `now`, else
+    /// `compute()`'s, which is kept from `now` on.
+    pub fn get(&self, now: Instant, compute: impl FnOnce() -> String) -> String {
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, value)) = slot.as_ref() {
+            if now.saturating_duration_since(*at) < self.ttl {
+                return value.clone();
+            }
+        }
+        let value = compute();
+        *slot = Some((now, value.clone()));
+        value
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed(&self, now: Instant, value: &str) {
+        *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, value.to_string()));
+    }
+}
+
+static LAUNCH_PATH: TtlCache = TtlCache::new(LAUNCH_PATH_TTL);
+
+/// The `PATH` an AI CLI is started with from any process: the user's login-shell
+/// `PATH` in front of ours. A dashboard started by the Mac app or launchd has a
+/// bare `PATH` (no `~/.local/bin`, nvm or Homebrew) where `claude` is not found.
+/// The login shell is asked at most once per [`LAUNCH_PATH_TTL`] (and never waits
+/// longer than its own command timeout); without an answer this is our `PATH`.
+pub fn cli_launch_path() -> String {
+    LAUNCH_PATH.get(Instant::now(), || {
+        crate::ai_cli_health::login_shell_path(
+            LOGIN_SHELL,
+            &std::env::var("PATH").unwrap_or_default(),
+        )
+    })
+}
+
+/// Make [`cli_launch_path`] answer `path` (tests: no login shell runs).
+#[cfg(test)]
+pub(crate) fn seed_cli_launch_path(path: &str) {
+    LAUNCH_PATH.seed(Instant::now(), path);
 }
 
 /// The last `max_chars` characters of `s`.
@@ -184,6 +255,50 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::cell::RefCell;
+
+    #[test]
+    fn the_launch_path_is_computed_once_within_its_ttl_and_again_after_it() {
+        let cache = TtlCache::new(Duration::from_secs(600));
+        let calls = RefCell::new(0);
+        let compute = || {
+            *calls.borrow_mut() += 1;
+            format!("/login/{}:/usr/bin", calls.borrow())
+        };
+        let t0 = Instant::now();
+        assert_eq!(cache.get(t0, compute), "/login/1:/usr/bin");
+        assert_eq!(
+            cache.get(t0 + Duration::from_secs(599), compute),
+            "/login/1:/usr/bin"
+        );
+        assert_eq!(*calls.borrow(), 1, "reused within the TTL");
+        assert_eq!(
+            cache.get(t0 + Duration::from_secs(600), compute),
+            "/login/2:/usr/bin"
+        );
+        assert_eq!(*calls.borrow(), 2, "asked again once the TTL is over");
+        // A caller whose clock reading predates the stored value (it waited for
+        // the lock) reuses it.
+        assert_eq!(
+            cache.get(t0 + Duration::from_secs(1), compute),
+            "/login/2:/usr/bin"
+        );
+        assert_eq!(*calls.borrow(), 2);
+    }
+
+    #[test]
+    fn the_launch_path_puts_the_login_shell_path_first() {
+        let d = tempfile::tempdir().unwrap();
+        let shell = crate::agents::testutil::script(
+            d.path(),
+            "fake-zsh",
+            "printf '\\n__LOOPX_PATH__/only/in/login:/usr/bin\\n'",
+        );
+        let cache = TtlCache::new(LAUNCH_PATH_TTL);
+        let got = cache.get(Instant::now(), || {
+            crate::ai_cli_health::login_shell_path(&shell.display().to_string(), "/usr/bin:/bin")
+        });
+        assert_eq!(got, "/only/in/login:/usr/bin:/bin");
+    }
 
     #[test]
     fn tail_and_head_count_characters() {

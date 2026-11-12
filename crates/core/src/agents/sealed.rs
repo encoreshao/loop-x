@@ -194,9 +194,40 @@ fn real_runner(
     timeout: f64,
     cwd: &Path,
 ) -> std::io::Result<ProcOutput> {
+    run_on_path(
+        argv,
+        input,
+        timeout,
+        cwd,
+        &crate::runner_util::cli_launch_path(),
+    )
+}
+
+/// Start `argv` with `path` (the login shell's `PATH` in front of ours): a bare
+/// program is looked up on it and started by its absolute path, and the CLI gets
+/// it as its `PATH` so its own children (node) are found too. The dashboard runs
+/// with launchd's bare `PATH`, where `claude` in `~/.local/bin` is not found.
+fn run_on_path(
+    argv: &[String],
+    input: &str,
+    timeout: f64,
+    cwd: &Path,
+    path: &str,
+) -> std::io::Result<ProcOutput> {
     let (program, args) = argv.split_first().expect("non-empty command");
-    let mut cmd = Command::new(program);
+    let resolved = if program.contains('/') {
+        None
+    } else {
+        crate::doctor::find_on_path(program, path)
+    };
+    let mut cmd = match resolved {
+        Some(p) => Command::new(p),
+        None => Command::new(program),
+    };
     cmd.args(args).current_dir(cwd);
+    if !path.is_empty() {
+        cmd.env("PATH", path);
+    }
     proc::run(
         &mut cmd,
         Some(input),
@@ -549,6 +580,76 @@ mod tests {
         )
         .unwrap();
         assert!(r.text.starts_with("loop-sealed-"));
+    }
+
+    #[test]
+    fn a_cli_only_on_the_login_shell_path_is_found_and_runs_with_that_path() {
+        let d = tempfile::tempdir().unwrap();
+        let login_bin = d.path().join("login-bin");
+        std::fs::create_dir_all(&login_bin).unwrap();
+        // The CLI prints the PATH it was started with, as its own children see it.
+        script(
+            &login_bin,
+            "loopx-fake-login-cli",
+            r#"cat >/dev/null; printf '{"result":"%s"}' "$PATH""#,
+        );
+        let shell = script(
+            d.path(),
+            "fake-zsh",
+            &format!(
+                "printf '\\n__LOOPX_PATH__{}:/usr/bin\\n'",
+                login_bin.display()
+            ),
+        );
+        let path =
+            crate::ai_cli_health::login_shell_path(&shell.display().to_string(), "/usr/bin:/bin");
+        assert!(crate::doctor::find_on_path("loopx-fake-login-cli", "/usr/bin:/bin").is_none());
+        let scratch = tempfile::tempdir().unwrap();
+        let out = run_on_path(
+            &["loopx-fake-login-cli".to_string()],
+            "prompt",
+            30.0,
+            scratch.path(),
+            &path,
+        )
+        .expect("found on the login shell's PATH");
+        assert_eq!(out.code, Some(0));
+        let v: Value = serde_json::from_str(&out.stdout).unwrap();
+        assert_eq!(
+            v["result"],
+            format!("{}:/usr/bin:/bin", login_bin.display())
+        );
+    }
+
+    #[test]
+    fn a_cli_found_nowhere_fails_as_not_started_with_the_settings_hint() {
+        let command_fn = |_: Option<f64>| vec!["loopx-no-such-cli-anywhere".to_string()];
+        let cli_fn = claude;
+        let mut logs: Vec<String> = vec![];
+        let e = sealed_call(
+            "p",
+            5.0,
+            &mut |m| logs.push(m.into()),
+            None,
+            &SealedHooks {
+                runner: None,
+                cli_fn: Some(&cli_fn),
+                command_fn: Some(&command_fn),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(e.1, SealedFailKind::NotStarted);
+        assert!(
+            e.0.starts_with("could not start loopx-no-such-cli-anywhere (claude CLI): "),
+            "{}",
+            e.0
+        );
+        assert!(
+            e.0.ends_with("Switch CLI in Settings -> AI CLI."),
+            "{}",
+            e.0
+        );
+        assert_eq!(logs, ["FAILED (could not start claude)"]);
     }
 
     #[test]
