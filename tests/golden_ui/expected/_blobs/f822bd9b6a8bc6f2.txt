@@ -152,6 +152,13 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-job-bad{border-color:transparent;background:var(--md-error-container);color:var(--md-on-error-container)}
 .mem-spin{display:inline-block;width:14px;height:14px;flex:0 0 14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:mem-spin .8s linear infinite}
 .mem-job .mem-spin{margin-top:.15rem}
+.mem-job-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:.55rem}
+.mem-progress{height:6px;border-radius:999px;background:var(--md-outline-variant);overflow:hidden;width:100%;box-sizing:border-box}
+.mem-progress>span{display:block;height:100%;border-radius:999px;background:var(--md-primary);transition:width 350ms cubic-bezier(0.32,0.72,0,1)}
+.mem-progress-card{margin-top:.75rem;height:4px}
+.mem-sync-run{display:inline-flex;align-items:center;gap:.4rem;color:var(--md-on-surface)}
+.mem-live-banner{margin-bottom:.75rem}
+.mem-live-banner a{color:inherit;font-weight:600;margin-left:.35rem;text-decoration:underline}
 @keyframes mem-spin{to{transform:rotate(360deg)}}
 .mem-dialog{position:fixed;inset:0;z-index:1000;width:min(480px,calc(100vw - 2rem));height:fit-content;max-width:none;margin:auto;padding:1.25rem 1.4rem;box-sizing:border-box;border:1px solid var(--md-outline-variant);border-radius:16px;background:var(--md-surface);color:var(--md-on-surface);box-shadow:0 24px 60px rgba(0,0,0,.28)}
 .mem-dialog::backdrop{background:rgba(0,0,0,.35);backdrop-filter:blur(4px)}
