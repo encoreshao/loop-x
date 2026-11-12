@@ -2063,8 +2063,8 @@
   "Profile builds": "档案",
   "Progress": "进度",
   "Project profile builds show here too while they run.": "项目档案的生成在运行时也会显示在这里。",
-  "Slack messages for profile builds": "项目档案构建的 Slack 消息",
-  "Slack messages for profile builds are on.": "项目档案构建的 Slack 消息已开启。",
-  "Slack messages for profile builds are off.": "项目档案构建的 Slack 消息已关闭。",
+  "Slack messages for profile jobs": "项目档案任务的 Slack 消息",
+  "Slack messages for profile jobs are on.": "项目档案任务的 Slack 消息已开启。",
+  "Slack messages for profile jobs are off.": "项目档案任务的 Slack 消息已关闭。",
   "No Slack webhook configured — set it up in Connectors": "尚未配置 Slack Webhook — 请在连接器中设置"
 }

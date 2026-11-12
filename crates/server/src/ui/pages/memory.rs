@@ -2125,8 +2125,8 @@ impl Notice {
             Notice::StoreBad => ctx.t("The sync settings file could not be read, so nothing was changed."),
             Notice::ProfileApproved => ctx.t("Profile approved. It is no longer marked as a draft."),
             Notice::ApproveSecret => ctx.t("Not approved: a section looks like it contains a secret value. Edit it out, then approve again."),
-            Notice::SlackOn => ctx.t("Slack messages for profile builds are on."),
-            Notice::SlackOff => ctx.t("Slack messages for profile builds are off."),
+            Notice::SlackOn => ctx.t("Slack messages for profile jobs are on."),
+            Notice::SlackOff => ctx.t("Slack messages for profile jobs are off."),
         }
     }
 }
@@ -2694,7 +2694,7 @@ fn sync_settings(ctx: &UiCtx) -> UiResponse {
     }
 }
 
-/// The "Slack messages for profile builds" switch: `notify=on` or `notify=0`,
+/// The "Slack messages for profile jobs" switch: `notify=on` or `notify=0`,
 /// anything else is refused. Only that setting changes.
 fn slack_settings(ctx: &UiCtx) -> UiResponse {
     let on = match ctx.form().first("notify") {
@@ -2961,10 +2961,10 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
     out
 }
 
-/// The "Slack messages for profile builds" switch (saves on click, like the
+/// The "Slack messages for profile jobs" switch (saves on click, like the
 /// weekly one), and a hint pointing to Connectors when no webhook is set up.
 fn slack_switch(ctx: &UiCtx, on: bool) -> String {
-    let label = escape(&ctx.t("Slack messages for profile builds"));
+    let label = escape(&ctx.t("Slack messages for profile jobs"));
     let (class, checked, next) = if on { (" is-on", "true", "0") } else { ("", "false", "on") };
     let hint = if profile_notify::webhook_configured(&slack_config(ctx)) {
         String::new()
@@ -5145,7 +5145,7 @@ mod tests {
         assert_eq!(loc, "/insights?view=memory&notice=slack-off");
         let s = profile_sync::load(&sb.store()).unwrap().settings;
         assert!(!s.notify_slack && s.enabled, "only the Slack switch changed");
-        assert!(sb.get(&loc).contains("Slack messages for profile builds are off."));
+        assert!(sb.get(&loc).contains("Slack messages for profile jobs are off."));
         sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
         wait_idle(alias);
         assert!(out.titles().is_empty(), "switched off: nothing sent");
@@ -5164,7 +5164,7 @@ mod tests {
         let sb = Sb::new(&[("slack-v", true)]);
         let html = sb.get("/insights?view=memory");
         assert!(html.contains("action='/insights/memory/sync/slack'"), "{html}");
-        assert!(html.contains("aria-label='Slack messages for profile builds'"), "{html}");
+        assert!(html.contains("aria-label='Slack messages for profile jobs'"), "{html}");
         assert!(html.contains("No Slack webhook configured"), "{html}");
         assert!(html.contains("href='/connectors'"), "{html}");
         let slack = sb.state.user_home.join(".slack");
@@ -5183,13 +5183,13 @@ mod tests {
         let sb = Sb::new(&[("slack-fr", true)]);
         let req = crate::ui::routes::UiRequest::get("/insights?view=memory").with_header("cookie", "loop_lang=fr");
         let fr = String::from_utf8(sb.state.registry.dispatch(&sb.state, &req).unwrap().body).unwrap();
-        assert!(!fr.contains("Slack messages for profile builds"), "{fr}");
+        assert!(!fr.contains("Slack messages for profile jobs"), "{fr}");
         assert!(!fr.contains("No Slack webhook configured"), "{fr}");
-        assert!(fr.contains("aria-label='Messages Slack pour les profils de projet'"), "{fr}");
+        assert!(fr.contains("aria-label='Messages Slack pour les tâches de profil'"), "{fr}");
         assert!(fr.contains("Aucun webhook Slack configuré — configurez-le dans Connecteurs"), "{fr}");
         sb.post_to("/insights/memory/sync/slack", "notify=0");
         let req = crate::ui::routes::UiRequest::get("/insights?view=memory&notice=slack-off").with_header("cookie", "loop_lang=fr");
         let fr = String::from_utf8(sb.state.registry.dispatch(&sb.state, &req).unwrap().body).unwrap();
-        assert!(fr.contains("Les messages Slack pour les profils de projet sont désactivés."), "{fr}");
+        assert!(fr.contains("Les messages Slack pour les tâches de profil sont désactivés."), "{fr}");
     }
 }

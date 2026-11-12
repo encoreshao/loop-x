@@ -2063,8 +2063,8 @@
   "Profile builds": "Profils",
   "Progress": "Progression",
   "Project profile builds show here too while they run.": "Les créations de profils de projet s'affichent aussi ici pendant leur exécution.",
-  "Slack messages for profile builds": "Messages Slack pour les profils de projet",
-  "Slack messages for profile builds are on.": "Les messages Slack pour les profils de projet sont activés.",
-  "Slack messages for profile builds are off.": "Les messages Slack pour les profils de projet sont désactivés.",
+  "Slack messages for profile jobs": "Messages Slack pour les tâches de profil",
+  "Slack messages for profile jobs are on.": "Les messages Slack pour les tâches de profil sont activés.",
+  "Slack messages for profile jobs are off.": "Les messages Slack pour les tâches de profil sont désactivés.",
   "No Slack webhook configured — set it up in Connectors": "Aucun webhook Slack configuré — configurez-le dans Connecteurs"
 }
