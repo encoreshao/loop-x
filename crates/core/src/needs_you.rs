@@ -9,7 +9,11 @@
 //! here too, with the plan, the reviewer's comment and why it stopped; the
 //! user decides it (`mr_feedback::decide_thread`).
 //!
-//! Escalations, failing loops, dead sign-ins and review threads can be dismissed
+//! A project whose last weekly profile sync failed (`<home>/profile_sync.json`,
+//! next to the memory root) waits here too, with the guarded failure line only.
+//!
+//! Escalations, failing loops, dead sign-ins, review threads and profile sync
+//! failures can be dismissed
 //! (`needs_you_dismissed.json`: `{<item id>: <UTC ISO>}`); a newer escalation
 //! of the same issue, a newer failure, or a sign-in that recovers and breaks
 //! again brings them back. Reconnecting clears a sign-in on its own
@@ -89,7 +93,10 @@ fn item(id: String, kind: &str, title: String, since: Option<&str>, fields: Valu
         "kind": kind,
         "title": title,
         "since": since,
-        "dismissable": matches!(kind, "escalated" | "loop_failed" | "sign_in" | "mr_thread"),
+        "dismissable": matches!(
+            kind,
+            "escalated" | "loop_failed" | "sign_in" | "mr_thread" | "profile_sync_failed"
+        ),
     });
     if let (Some(v), Value::Object(f)) = (v.as_object_mut(), fields) {
         v.extend(f);
@@ -237,6 +244,46 @@ fn failed_loops(src: &Sources, dismissed: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// Projects whose last profile sync failed, from the sync store beside the
+/// memory root (never the process home). Only the stored, guarded failure line
+/// is shown, and a secret-shaped one is replaced.
+fn profile_sync_failures(src: &Sources, dismissed: &Value) -> Vec<Value> {
+    use crate::profile_sync::{self, Outcome, DETAILS_HIDDEN};
+    let Some(home) = src.memory_root.parent() else {
+        return Vec::new();
+    };
+    let Ok(store) = profile_sync::load(&home.join("profile_sync.json")) else {
+        return Vec::new();
+    };
+    store
+        .status
+        .per_project
+        .iter()
+        .filter_map(|(alias, s)| {
+            let Outcome::Failed(msg) = &s.outcome else {
+                return None;
+            };
+            let id = format!("profile_sync:{alias}");
+            let at = s.at.to_rfc3339();
+            if dismissed_since(dismissed, &id, Some(&at)) {
+                return None;
+            }
+            let message = if crate::project_profile::contains_secret(msg).is_some() {
+                DETAILS_HIDDEN.to_string()
+            } else {
+                profile_sync::safe_failure_line(msg)
+            };
+            Some(item(
+                id,
+                "profile_sync_failed",
+                format!("Profile sync failed for {alias}: {message}"),
+                Some(&at),
+                json!({"project": alias, "message": message}),
+            ))
+        })
+        .collect()
+}
+
 /// Review threads in `needs_you`, from every issue's thread state.
 fn mr_threads(src: &Sources, dismissed: &Value) -> Vec<Value> {
     use crate::mr_threads::{IssueThreads, ThreadStatus};
@@ -311,6 +358,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     items.extend(sign_ins(src, &dismissed));
     items.extend(failed_loops(src, &dismissed));
     items.extend(mr_threads(src, &dismissed));
+    items.extend(profile_sync_failures(src, &dismissed));
     // Oldest first; an item with no time goes last.
     items.sort_by_key(|i| {
         let since = i["since"].as_str().and_then(parse);
@@ -321,9 +369,15 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
 
 /// Hide a dismissable item until it happens again.
 pub fn dismiss(path: &Path, id: &str, now: DateTime<Utc>) -> Result<(), String> {
-    if !["escalated:", "loop_failed:", "sign_in:", "mr_thread:"]
-        .iter()
-        .any(|p| id.starts_with(p))
+    if ![
+        "escalated:",
+        "loop_failed:",
+        "sign_in:",
+        "mr_thread:",
+        "profile_sync:",
+    ]
+    .iter()
+    .any(|p| id.starts_with(p))
     {
         return Err(format!("{id} can't be dismissed"));
     }
@@ -654,6 +708,64 @@ mod tests {
         assert!(f.collect().is_empty());
         f.loops["rss-loop"]["updated_at"] = json!("2026-10-31T13:00:00+00:00");
         assert_eq!(f.ids(), ["loop_failed:rss-loop"]);
+    }
+
+    #[test]
+    fn a_failed_profile_sync_waits_until_dismissed_or_it_fails_again() {
+        use crate::profile_sync::{with_store, Outcome, ProjectSync};
+        let f = Fx::new();
+        let store = f.p("profile_sync.json");
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let at = |h: u32| Utc.with_ymd_and_hms(2026, 10, 31, h, 0, 0).unwrap();
+        with_store(&store, |s| {
+            s.status.per_project.insert(
+                "web".into(),
+                ProjectSync {
+                    at: at(9),
+                    outcome: Outcome::Failed("checkout not found".into()),
+                },
+            );
+            s.status.per_project.insert(
+                "api".into(),
+                ProjectSync {
+                    at: at(9),
+                    outcome: Outcome::Failed(format!("bad {token}")),
+                },
+            );
+            s.status.per_project.insert(
+                "docs".into(),
+                ProjectSync {
+                    at: at(9),
+                    outcome: Outcome::Skipped,
+                },
+            );
+        })
+        .unwrap();
+        let items = f.collect();
+        let ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["profile_sync:api", "profile_sync:web"]);
+        assert_eq!(
+            items[1]["title"],
+            "Profile sync failed for web: checkout not found"
+        );
+        assert_eq!(items[1]["kind"], "profile_sync_failed");
+        assert_eq!(items[1]["project"], "web");
+        assert_eq!(items[1]["dismissable"], true);
+        assert!(!serde_json::to_string(&items).unwrap().contains("glpat"));
+        assert_eq!(items[0]["message"], "details hidden");
+        dismiss(&f.p("dismissed.json"), "profile_sync:web", now()).unwrap();
+        assert_eq!(f.ids(), ["profile_sync:api"]);
+        with_store(&store, |s| {
+            s.status.per_project.insert(
+                "web".into(),
+                ProjectSync {
+                    at: at(13),
+                    outcome: Outcome::Failed("again".into()),
+                },
+            );
+        })
+        .unwrap();
+        assert_eq!(f.ids(), ["profile_sync:api", "profile_sync:web"]);
     }
 
     #[test]

@@ -61,6 +61,7 @@ pub const PAGES: [&str; 11] = [
 
 pub fn register(r: &mut Registry) {
     r.post("/insights/memory/build", build);
+    r.post("/insights/memory/approve", approve_profile);
     r.post("/insights/memory/section/save", save_section);
     r.post("/insights/memory/section/refresh", refresh_section);
     r.post("/insights/memory/proposal/decide", decide);
@@ -416,7 +417,8 @@ fn sync_store(ctx: &UiCtx) -> Result<SyncStore, String> {
 
 // ------------------------------------------------------------------ helpers
 
-fn project_url(alias: &str, page: Option<&str>) -> String {
+/// A project's Memory page (`page`: one of its sub-pages).
+pub(crate) fn project_url(alias: &str, page: Option<&str>) -> String {
     let mut url = format!("{BASE}&project={}", quote(alias, ""));
     if let Some(page) = page {
         url.push_str("&page=");
@@ -1403,10 +1405,16 @@ fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
             let check = &p.check;
             let banner = if profile.status == Status::Draft {
                 format!(
-                    "<div class='mem-banner' role='status'>{}<p><strong>{}</strong> {}</p></div>",
+                    "<div class='mem-banner' role='status'>{}<p><strong>{}</strong> {}</p>\
+                     <form method='post' action='/insights/memory/approve' class='mem-inline mem-banner-action'>{}{}\
+                     <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></form></div>",
                     icon("edit_note"),
                     escape(&ctx.t("This profile is a draft.")),
-                    escape(&ctx.t("Read each section before agents rely on it."))
+                    escape(&ctx.t("Read each section before agents rely on it.")),
+                    ctx.csrf_input(),
+                    hidden("project", &p.alias),
+                    icon("check_circle"),
+                    escape(&ctx.t("Approve profile"))
                 )
             } else {
                 String::new()
@@ -2018,9 +2026,11 @@ enum Notice {
     ScheduleSaved,
     SyncRequested,
     StoreBad,
+    ProfileApproved,
+    ApproveSecret,
 }
 
-const NOTICES: [(Notice, &str); 24] = [
+const NOTICES: [(Notice, &str); 26] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2045,6 +2055,8 @@ const NOTICES: [(Notice, &str); 24] = [
     (Notice::ScheduleSaved, "schedule-saved"),
     (Notice::SyncRequested, "sync-requested"),
     (Notice::StoreBad, "store-bad"),
+    (Notice::ProfileApproved, "profile-approved"),
+    (Notice::ApproveSecret, "approve-secret"),
 ];
 
 impl Notice {
@@ -2072,6 +2084,7 @@ impl Notice {
                 | Notice::SyncOff
                 | Notice::ScheduleSaved
                 | Notice::SyncRequested
+                | Notice::ProfileApproved
         )
     }
 
@@ -2101,6 +2114,8 @@ impl Notice {
             Notice::ScheduleSaved => ctx.t("Weekly sync schedule saved."),
             Notice::SyncRequested => ctx.t("Sync requested. It starts within a minute."),
             Notice::StoreBad => ctx.t("The sync settings file could not be read, so nothing was changed."),
+            Notice::ProfileApproved => ctx.t("Profile approved. It is no longer marked as a draft."),
+            Notice::ApproveSecret => ctx.t("Not approved: a section looks like it contains a secret value. Edit it out, then approve again."),
         }
     }
 }
@@ -2545,6 +2560,34 @@ fn decide(ctx: &UiCtx) -> UiResponse {
         Ok(_) => back(to(), Notice::Approved),
         Err(e) if e.contains("changed since") => back(to(), Notice::Changed),
         Err(_) => back(to(), Notice::ApplyFailed),
+    }
+}
+
+/// Approve a draft profile: it stops being marked a draft. Refused (value-free)
+/// while any of its text looks like a secret.
+fn approve_profile(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, None);
+    let root = memory_root(ctx);
+    let _w = WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    match project_profile::load(&alias, Some(&root)) {
+        Ok(Some(p)) if project_profile::validate_draft(&p).is_err() => return back(to(), Notice::ApproveSecret),
+        Ok(Some(_)) => {}
+        Ok(None) => return back(to(), Notice::NoProfile),
+        Err(_) => return back(to(), Notice::Unreadable),
+    }
+    let saved = project_profile::update_locked(&alias, Some(&root), |existing| {
+        let mut p = existing.ok_or_else(|| "no profile".to_string())?;
+        project_profile::validate_draft(&p)?;
+        p.status = Status::Approved;
+        Ok(p)
+    });
+    match saved {
+        Ok(_) => back(to(), Notice::ProfileApproved),
+        Err(_) => back(to(), Notice::SaveFailed),
     }
 }
 
@@ -3212,6 +3255,9 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-banner{display:flex;align-items:flex-start;gap:.7rem;padding:.85rem 1.1rem;border-radius:14px;background:var(--md-warning-container);color:var(--md-on-warning-container)}
 .mem-banner p{margin:0;line-height:1.45}
 .mem-banner .icon{width:20px;height:20px;flex:0 0 20px}
+.mem-banner p{flex:1 1 auto}
+.mem-banner-action{flex:0 0 auto;align-self:center}
+.mem-banner-action .icon{width:16px;height:16px;flex:0 0 16px}
 .mem-head dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.5rem 1.25rem;margin:0;font-size:.9rem}
 .mem-head dt{color:var(--md-on-surface-variant)}
 .mem-head dd{margin:0;overflow-wrap:anywhere}
@@ -3864,14 +3910,52 @@ mod tests {
         panic!("{alias} is still running");
     }
 
-    const ROUTES: [&str; 6] = [
+    const ROUTES: [&str; 7] = [
         "/insights/memory/build",
+        "/insights/memory/approve",
         "/insights/memory/section/save",
         "/insights/memory/section/refresh",
         "/insights/memory/proposal/decide",
         "/insights/memory/sync/settings",
         "/insights/memory/sync/now",
     ];
+
+    #[test]
+    fn a_draft_profile_can_be_approved_from_its_banner() {
+        let sb = Sb::new(&[("appr-a", true)]);
+        let mut a = profile("appr-a", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.status = Status::Draft;
+        sb.save(&a);
+        let html = sb.get("/insights?view=memory&project=appr-a");
+        assert!(html.contains("action='/insights/memory/approve'"), "{html}");
+        assert!(html.contains("Approve profile"));
+        let loc = sb.post_to("/insights/memory/approve", "project=appr-a");
+        assert!(loc.ends_with("notice=profile-approved"), "{loc}");
+        let back = sb.load("appr-a");
+        assert_eq!(back.status, Status::Approved);
+        assert_eq!(back.sections, a.sections);
+        let html = sb.get("/insights?view=memory&project=appr-a");
+        assert!(!html.contains("This profile is a draft") && !html.contains("Approve profile"), "{html}");
+        // Unknown project: nothing changes.
+        assert!(sb.post_to("/insights/memory/approve", "project=nope").ends_with("notice=bad-input"));
+    }
+
+    #[test]
+    fn a_draft_holding_a_secret_is_not_approved() {
+        let sb = Sb::new(&[("appr-b", true)]);
+        let mut a = profile("appr-b", &[(SectionKey::Overview, section("A.", "a"))]);
+        a.status = Status::Draft;
+        sb.save(&a);
+        // Written by hand into the file (a save through the page refuses secrets).
+        let path = project_profile::profile_path("appr-b", Some(&sb.root()));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        std::fs::write(&path, text.replace("\na\n", &format!("\nuse {token}\n"))).unwrap();
+        let loc = sb.post_to("/insights/memory/approve", "project=appr-b");
+        assert!(loc.ends_with("notice=approve-secret"), "{loc}");
+        assert!(!loc.contains("glpat"));
+        assert_eq!(sb.load("appr-b").status, Status::Draft);
+    }
 
     #[test]
     fn every_memory_post_route_requires_csrf() {
@@ -4135,6 +4219,7 @@ mod tests {
             ("/insights/memory/proposal/decide", format!("project=alpha&id={evil}&decision={evil}")),
             ("/insights/memory/sync/settings", format!("enabled={evil}&weekday={evil}&hour={evil}")),
             ("/insights/memory/sync/now", format!("project={evil}")),
+            ("/insights/memory/approve", format!("project={evil}")),
         ] {
             seen.push(sb.post_to(url, &body));
         }

@@ -2034,5 +2034,10 @@
   "Zoom out": "Zoom arrière",
   "Zoom": "Zoom",
   "Use Ctrl/⌘ + scroll to zoom": "Utilisez Ctrl/⌘ + défilement pour zoomer",
-  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "Faites glisser pour déplacer ; Ctrl/⌘ + défilement ou pincement pour zoomer. Sélectionnez un projet ou un lien pour en voir la raison."
+  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "Faites glisser pour déplacer ; Ctrl/⌘ + défilement ou pincement pour zoomer. Sélectionnez un projet ou un lien pour en voir la raison.",
+  "Approve profile": "Approuver le profil",
+  "Profile approved. It is no longer marked as a draft.": "Profil approuvé. Il n'est plus marqué comme brouillon.",
+  "Not approved: a section looks like it contains a secret value. Edit it out, then approve again.": "Non approuvé : une section semble contenir une valeur secrète. Retirez-la, puis approuvez à nouveau.",
+  "Profile sync failed for {alias}: {error}": "La synchronisation du profil de {alias} a échoué : {error}",
+  "Open the project's memory": "Ouvrir la mémoire du projet"
 }

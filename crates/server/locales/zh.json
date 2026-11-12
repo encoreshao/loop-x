@@ -2034,5 +2034,10 @@
   "Zoom out": "缩小",
   "Zoom": "缩放",
   "Use Ctrl/⌘ + scroll to zoom": "使用 Ctrl/⌘ + 滚动来缩放",
-  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "拖动以移动；Ctrl/⌘ + 滚动或双指缩放。选择项目或关联可查看原因。"
+  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "拖动以移动；Ctrl/⌘ + 滚动或双指缩放。选择项目或关联可查看原因。",
+  "Approve profile": "批准档案",
+  "Profile approved. It is no longer marked as a draft.": "档案已批准，不再标记为草稿。",
+  "Not approved: a section looks like it contains a secret value. Edit it out, then approve again.": "未批准：某个部分似乎包含机密值。请删除后再批准。",
+  "Profile sync failed for {alias}: {error}": "{alias} 的档案同步失败：{error}",
+  "Open the project's memory": "打开项目记忆"
 }

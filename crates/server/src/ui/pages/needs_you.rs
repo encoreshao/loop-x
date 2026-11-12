@@ -89,6 +89,11 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
             &[("label", &f("label")), ("message", &f("message"))],
         ),
         Some("loop_failed") => ctx.tf("{loop} failed its last run", &[("loop", &f("loop"))]),
+        Some("profile_sync_failed") => {
+            let message = f("message");
+            let error = if message == "details hidden" { ctx.t("details hidden") } else { message };
+            ctx.tf("Profile sync failed for {alias}: {error}", &[("alias", &f("project")), ("error", &error)])
+        }
         Some("mr_thread") => ctx.tf(
             "{project} #{iid}: a review thread on the merge request needs you ({reason})",
             &[("project", &f("project")), ("iid", &f("issue_iid")), ("reason", &f("reason"))],
@@ -117,9 +122,13 @@ fn link(ctx: &UiCtx, item: &Value) -> String {
         Some("sign_in") if text(item, "probe") == "ai_cli" => (crate::ui::ai_cli::SETTINGS_HREF.to_string(), ctx.t("Open AI CLI settings")),
         Some("sign_in") => ("/connectors".to_string(), ctx.t("Reconnect")),
         Some("loop_failed") => ("/runs?view=logs".to_string(), ctx.t("See the log")),
+        Some("profile_sync_failed") => (
+            crate::ui::pages::memory::project_url(&text(item, "project"), None),
+            ctx.t("Open the project's memory"),
+        ),
         _ => return String::new(),
     };
-    format!("<a class='btn btn-neutral' href='{href}'>{}</a>", pyfmt::escape(&label))
+    format!("<a class='btn btn-neutral' href='{}'>{}</a>", pyfmt::escape(&href), pyfmt::escape(&label))
 }
 
 fn actions(ctx: &UiCtx, item: &Value) -> String {
@@ -553,6 +562,28 @@ mod tests {
         let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id2}&decision=approve"));
         assert!(r.header("location").unwrap_or_default().contains("ok=0"));
         assert_eq!(approvals::get(&apr, &id2).unwrap()["status"], "pending");
+    }
+
+    #[test]
+    fn a_failed_profile_sync_is_listed_with_a_link_to_its_memory_page() {
+        use loopx_core::profile_sync::{with_store, Outcome, ProjectSync};
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        with_store(&d.path().join("profile_sync.json"), |s| {
+            s.status.per_project.insert("web".into(), ProjectSync { at: chrono::Utc::now(), outcome: Outcome::Failed("checkout not found".into()) });
+            s.status.per_project.insert("api".into(), ProjectSync { at: chrono::Utc::now(), outcome: Outcome::Failed(format!("x {token}")) });
+        })
+        .unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("Profile sync failed for web: checkout not found"), "{html}");
+        assert!(html.contains("Profile sync failed for api: details hidden"), "{html}");
+        assert!(!html.contains("glpat"));
+        assert!(html.contains("href='/insights?view=memory&amp;project=web'"), "{html}");
+        assert!(html.contains("value='profile_sync:web'"), "dismiss form");
+        let r = post(&st, "/needs-you/dismiss", "csrf_token=tok&id=profile_sync:web");
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"));
+        assert!(!get(&st, "/needs-you").contains("failed for web"));
     }
 
     // ---- merge-request review threads -------------------------------------

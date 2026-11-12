@@ -2034,5 +2034,10 @@
   "Zoom out": "縮小",
   "Zoom": "ズーム",
   "Use Ctrl/⌘ + scroll to zoom": "Ctrl/⌘ + スクロールでズーム",
-  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "ドラッグで移動、Ctrl/⌘ + スクロールまたはピンチでズーム。プロジェクトやリンクを選ぶと根拠が表示されます。"
+  "Drag to move; Ctrl/⌘ + scroll or pinch to zoom. Select a project or a link to see why.": "ドラッグで移動、Ctrl/⌘ + スクロールまたはピンチでズーム。プロジェクトやリンクを選ぶと根拠が表示されます。",
+  "Approve profile": "プロフィールを承認",
+  "Profile approved. It is no longer marked as a draft.": "プロフィールを承認しました。下書きの表示は外れました。",
+  "Not approved: a section looks like it contains a secret value. Edit it out, then approve again.": "承認していません: 秘密の値を含むように見えるセクションがあります。削除してから、もう一度承認してください。",
+  "Profile sync failed for {alias}: {error}": "{alias} のプロフィール同期に失敗しました: {error}",
+  "Open the project's memory": "プロジェクトのメモリを開く"
 }
