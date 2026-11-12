@@ -173,6 +173,14 @@ pub(crate) fn fenced_data(scan: &Scan, digest: &IssueDigest) -> String {
         "Lessons from past runs (task memories)",
         digest.lessons.iter().cloned(),
     );
+    for w in &digest.wiki {
+        data.push_str(&format!(
+            "### Wiki page {} ({})\n{}\n\n",
+            defang(&w.title),
+            defang(&w.url),
+            defang(&w.text)
+        ));
+    }
     list(
         &mut data,
         "Issues mentioning other projects",

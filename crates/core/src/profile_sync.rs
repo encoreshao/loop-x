@@ -651,6 +651,10 @@ pub struct SyncSettings {
     /// Post a Slack message when a profile job ends (see `profile_notify`). On by
     /// default, also for a file written before this field existed.
     pub notify_slack: bool,
+    /// Let Memory profile a project that has no local checkout from a loopx-managed
+    /// shallow clone (see `profile_checkout`). On by default, also for a file
+    /// written before this field existed.
+    pub clone_for_memory: bool,
 }
 
 impl Default for SyncSettings {
@@ -661,6 +665,7 @@ impl Default for SyncSettings {
             hour: 9,
             max_projects_per_run: DEFAULT_MAX_PROJECTS,
             notify_slack: true,
+            clone_for_memory: true,
         }
     }
 }
@@ -709,6 +714,10 @@ pub struct QueuedSection {
     /// section is refreshed without waiting for a source file to change.
     #[serde(default)]
     pub memory: bool,
+    /// Queued by a person's own action (a wiki page they added): processed even
+    /// while the weekly sync switch is off.
+    #[serde(default)]
+    pub forced: bool,
 }
 
 pub type QueuedMap = BTreeMap<String, Vec<QueuedSection>>;
@@ -795,6 +804,18 @@ fn enqueue(path: &Path, alias: &str, keys: &[SectionKey], memory: bool, now: Dat
     if keys.is_empty() || !load(path).is_ok_and(|s| s.settings.enabled) {
         return;
     }
+    enqueue_always(path, alias, keys, memory, false, now);
+}
+
+/// [`enqueue`] without the weekly-switch gate (for `forced`, a person's own action).
+fn enqueue_always(
+    path: &Path,
+    alias: &str,
+    keys: &[SectionKey],
+    memory: bool,
+    forced: bool,
+    now: DateTime<Utc>,
+) {
     let _ = with_store(path, |s| {
         let q = s.queued.entry(alias.to_string()).or_default();
         for k in keys {
@@ -802,13 +823,37 @@ fn enqueue(path: &Path, alias: &str, keys: &[SectionKey], memory: bool, now: Dat
                 Some(x) => {
                     x.queued_at = now;
                     x.memory |= memory;
+                    x.forced |= forced;
                 }
                 None => q.push(QueuedSection {
                     section: k.slug().to_string(),
                     queued_at: now,
                     memory,
+                    forced,
                 }),
             }
+        }
+    });
+}
+
+/// A wiki page was added or changed: queue the sections it can change, to be
+/// refreshed as proposals even while the weekly switch is off. Nothing is queued
+/// for a project with no profile yet (its first build reads the page anyway).
+pub fn queue_wiki_refresh(alias: &str, root: Option<&Path>) {
+    queue_wiki_refresh_at(&store_path_for(root), alias, root, Utc::now());
+}
+
+pub fn queue_wiki_refresh_at(path: &Path, alias: &str, root: Option<&Path>, now: DateTime<Utc>) {
+    never_fail(|| {
+        if matches!(project_profile::load(alias, root), Ok(Some(_))) {
+            enqueue_always(
+                path,
+                alias,
+                &crate::profile_wiki::WIKI_SECTIONS,
+                true,
+                true,
+                now,
+            );
         }
     });
 }
@@ -1002,7 +1047,7 @@ pub fn process_queue_with_progress(
             all_done(&mut res);
             continue;
         };
-        if !p.work_dir.is_dir() {
+        if !p.managed && !p.work_dir.is_dir() {
             all_done(&mut res);
             res.failures
                 .push((alias.clone(), "checkout not found".into()));
@@ -1015,6 +1060,32 @@ pub fn process_queue_with_progress(
         }
         let Some(_slot) = profile_build::try_acquire(alias) else {
             continue;
+        };
+        let cloned;
+        let p = if p.managed {
+            match crate::profile_checkout::prepare(p, &home_of(root), std::time::SystemTime::now())
+            {
+                Ok(done) => {
+                    cloned = TrackedProject {
+                        work_dir: done.dir,
+                        ..p.clone()
+                    };
+                    &cloned
+                }
+                Err(e) => {
+                    all_done(&mut res);
+                    let line = safe_failure_line(&e);
+                    res.rows.push(crate::profile_notify::QueueRow {
+                        alias: alias.clone(),
+                        section: None,
+                        failed: Some(crate::profile_notify::reason(&line)),
+                    });
+                    res.failures.push((alias.clone(), line));
+                    continue;
+                }
+            }
+        } else {
+            p
         };
         let Some(profile) = project_profile::load(alias, root).ok().flatten() else {
             all_done(&mut res);
@@ -1093,7 +1164,11 @@ pub struct TrackedProject {
     pub alias: String,
     pub instance: String,
     pub project_id: String,
+    /// The checkout to scan. For a `managed` project this is the loopx-owned clone
+    /// directory, which may not exist yet: call `profile_checkout::prepare` first.
     pub work_dir: PathBuf,
+    /// No `local_path`: profiled from `<home>/checkouts/<alias>`, never the issue loop's.
+    pub managed: bool,
 }
 
 /// Every code-changing project of `projects.json` (the same list the Projects page
@@ -1108,19 +1183,36 @@ pub fn tracked_projects_in(config_path: &Path) -> Vec<TrackedProject> {
     let Ok(cfg) = crate::config::Config::load(config_path) else {
         return Vec::new();
     };
+    let home = config_path.parent().unwrap_or(Path::new(""));
+    let clone_on = load(&home.join("profile_sync.json"))
+        .map(|s| s.settings.clone_for_memory)
+        .unwrap_or(true);
     let mut out = Vec::new();
     for alias in cfg.aliases().unwrap_or_default() {
         let Ok(p) = cfg.project(&alias) else { continue };
-        if !crate::config::changes_code(&p) {
-            continue;
-        }
         let text = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        out.push(TrackedProject {
-            instance: text("instance"),
-            project_id: text("project_id"),
-            work_dir: PathBuf::from(text("local_path")),
-            alias,
-        });
+        if crate::config::changes_code(&p) {
+            out.push(TrackedProject {
+                instance: text("instance"),
+                project_id: text("project_id"),
+                work_dir: PathBuf::from(text("local_path")),
+                managed: false,
+                alias,
+            });
+        } else if clone_on
+            && crate::project_profile::check_alias(&alias).is_ok()
+            && crate::config::memory_clone_enabled(&p)
+            && !text("instance").is_empty()
+            && !text("project_id").is_empty()
+        {
+            out.push(TrackedProject {
+                instance: text("instance"),
+                project_id: text("project_id"),
+                work_dir: crate::profile_checkout::managed_dir(home, &alias),
+                managed: true,
+                alias,
+            });
+        }
     }
     out
 }
@@ -1139,6 +1231,25 @@ pub fn safe_failure_line(msg: &str) -> String {
     }
     let line = msg.lines().next().unwrap_or("").trim();
     line.chars().take(200).collect()
+}
+
+/// Refetch the project's saved wiki pages; a changed one queues its sections.
+fn refresh_wiki(p: &TrackedProject, root: Option<&Path>, store: &Path, now: DateTime<Utc>) {
+    if p.instance.is_empty() || crate::profile_wiki::list(&p.alias, root).is_empty() {
+        return;
+    }
+    let fetch = crate::profile_wiki::gitlab_fetch(&p.instance);
+    let found = crate::profile_wiki::refresh_pages(&p.alias, root, now, &fetch);
+    if !found.changed.is_empty() {
+        queue_wiki_refresh_at(store, &p.alias, root, now);
+    }
+}
+
+/// The home directory a `root` (`<home>/memory`) sits in; the process home with no root.
+fn home_of(root: Option<&Path>) -> PathBuf {
+    root.and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::config::home_dir)
 }
 
 fn failure(msg: &str) -> Outcome {
@@ -1161,13 +1272,53 @@ fn sync_project(
             profile_progress::log_failure(b, JobKind::Build, &p.alias, err);
         }
     };
-    if !p.work_dir.is_dir() {
+    if !p.managed && !p.work_dir.is_dir() {
         early("checkout not found");
         return Outcome::Failed("checkout not found".into());
     }
-    // Busy with another run: a benign skip, not a failure line.
+    // Busy with another run: a benign skip, not a failure line. Taken before any
+    // clone so two jobs for one project never clone it at once.
     let Some(_slot) = profile_build::try_acquire(&p.alias) else {
         return Outcome::Skipped;
+    };
+    // Saved wiki pages first: a changed page queues its sections, and the check
+    // below must not hide it.
+    refresh_wiki(p, root, &store_path_for(root), now);
+    // A managed project whose remote branch has not moved since the profile was
+    // written has nothing new: no clone, no fetch, no scan.
+    if p.managed
+        && project_profile::load(&p.alias, root)
+            .ok()
+            .flatten()
+            .and_then(|pr| pr.head_sha)
+            .is_some_and(|saved| {
+                crate::profile_checkout::unchanged_since(
+                    &p.instance,
+                    &p.project_id,
+                    &saved,
+                    &crate::profile_checkout::remote_for,
+                )
+            })
+    {
+        return Outcome::Skipped;
+    }
+    let cloned;
+    let p = if p.managed {
+        match crate::profile_checkout::prepare(p, &home_of(root), std::time::SystemTime::now()) {
+            Ok(done) => {
+                cloned = TrackedProject {
+                    work_dir: done.dir,
+                    ..p.clone()
+                };
+                &cloned
+            }
+            Err(e) => {
+                early(&e);
+                return failure(&e);
+            }
+        }
+    } else {
+        p
     };
     let profile = match project_profile::load(&p.alias, root) {
         Ok(p) => p,
@@ -1863,6 +2014,7 @@ mod tests {
             instance: "work".into(),
             project_id: "grp/app".into(),
             work_dir: f.work.path().to_path_buf(),
+            managed: false,
         }
     }
 
@@ -1985,6 +2137,7 @@ mod tests {
             instance: "work".into(),
             project_id: "grp/new".into(),
             work_dir: work.path().to_path_buf(),
+            managed: false,
         };
         let agent = Fake::new("Rust stack.");
         let out = sync_all(&[p], &agent, now(), Some(f.root.path()), f.apr.path());
@@ -2005,6 +2158,7 @@ mod tests {
             instance: "work".into(),
             project_id: "grp/gone".into(),
             work_dir: f.work.path().join("does-not-exist"),
+            managed: false,
         };
         let g = Fx::new(Origin::Agent);
         g.touch_cargo("[package]\nname = \"app3\"\n");
@@ -2115,6 +2269,7 @@ mod tests {
             instance: "i".into(),
             project_id: "g/p".into(),
             work_dir: f.work.path().to_path_buf(),
+            managed: false,
         }]
     }
 
@@ -2125,6 +2280,7 @@ mod tests {
                 section: slug.into(),
                 queued_at: at,
                 memory,
+                forced: false,
             }],
         )])
     }
@@ -2204,6 +2360,7 @@ mod tests {
             instance: "work".into(),
             project_id: "grp/gone".into(),
             work_dir: f.work.path().join("does-not-exist"),
+            managed: false,
         };
         let out = tempfile::tempdir().unwrap();
         let agent = peek(Fake::new("New stack text."), out.path());
@@ -2312,6 +2469,7 @@ mod tests {
                 section: "stack".into(),
                 queued_at: now(),
                 memory: false,
+                forced: false,
             }],
         )]);
         let res = process_queue_with_progress(
@@ -2660,6 +2818,7 @@ mod tests {
             instance: String::new(),
             project_id: String::new(),
             work_dir: f.work.path().to_path_buf(),
+            managed: false,
         };
         let out = sync_all(
             &[p],
@@ -2721,5 +2880,332 @@ mod tests {
         assert_eq!(got, vec!["Cargo.toml", "caf\u{e9} \"q\".txt"]);
         assert!(branch_changed_files(dir, "nope", "loop/issue-1").is_empty());
         assert!(branch_changed_files("/does/not/exist", "main", "x").is_empty());
+    }
+
+    // ---- tracked projects: local checkouts and managed clones --------------
+
+    fn write_projects(dir: &Path, projects: serde_json::Value) -> PathBuf {
+        let path = dir.join("projects.json");
+        let cfg = serde_json::json!({"worktree_root": "/wt", "projects": projects});
+        fs::write(&path, cfg.to_string()).unwrap();
+        path
+    }
+
+    #[test]
+    fn issues_only_project_with_instance_and_id_is_tracked_managed() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = write_projects(
+            home.path(),
+            serde_json::json!({"scraper": {"instance": "work", "project_id": "acme/shop/scraper"}}),
+        );
+        let list = tracked_projects_in(&cfg);
+        assert_eq!(list.len(), 1);
+        assert!(list[0].managed);
+        assert_eq!(
+            list[0].work_dir,
+            crate::profile_checkout::managed_dir(home.path(), "scraper")
+        );
+        assert_eq!(list[0].project_id, "acme/shop/scraper");
+    }
+
+    #[test]
+    fn local_path_project_stays_unmanaged() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = write_projects(
+            home.path(),
+            serde_json::json!({"api": {"local_path": "/code/api", "instance": "work", "project_id": "g/api"}}),
+        );
+        let list = tracked_projects_in(&cfg);
+        assert_eq!(list.len(), 1);
+        assert!(!list[0].managed);
+        assert_eq!(list[0].work_dir, PathBuf::from("/code/api"));
+    }
+
+    #[test]
+    fn memory_clone_false_excludes_project() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = write_projects(
+            home.path(),
+            serde_json::json!({"s": {"instance": "work", "project_id": "g/s", "memory_clone": false}}),
+        );
+        assert!(tracked_projects_in(&cfg).is_empty());
+    }
+
+    #[test]
+    fn global_switch_off_excludes_managed_only() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = write_projects(
+            home.path(),
+            serde_json::json!({
+                "s": {"instance": "work", "project_id": "g/s"},
+                "api": {"local_path": "/code/api"}
+            }),
+        );
+        with_store(&home.path().join("profile_sync.json"), |st| {
+            st.settings.clone_for_memory = false
+        })
+        .unwrap();
+        let list = tracked_projects_in(&cfg);
+        assert_eq!(
+            list.iter().map(|t| t.alias.as_str()).collect::<Vec<_>>(),
+            ["api"]
+        );
+    }
+
+    #[test]
+    fn issues_only_without_project_id_is_excluded() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = write_projects(
+            home.path(),
+            serde_json::json!({"s": {"instance": "work"}, "t": {"project_id": "g/t"}}),
+        );
+        assert!(tracked_projects_in(&cfg).is_empty());
+    }
+
+    #[test]
+    fn settings_file_without_clone_for_memory_defaults_on() {
+        let s: SyncSettings = serde_json::from_str(r#"{"enabled": true}"#).unwrap();
+        assert!(s.clone_for_memory);
+        assert!(SyncSettings::default().clone_for_memory);
+    }
+
+    #[test]
+    fn changes_code_still_false_for_issues_only() {
+        let p = serde_json::json!({"instance": "work", "project_id": "g/s"});
+        assert!(!crate::config::changes_code(&p));
+    }
+
+    // ---- managed checkouts in the sync paths ---------------------------------
+
+    use crate::profile_checkout::tests as co;
+
+    /// A managed project over a local bare repo holding `Cargo.toml`; its home has a
+    /// `memory` root like the real layout.
+    struct Managed {
+        _fx: co::Fixture,
+        home: tempfile::TempDir,
+        apr: tempfile::TempDir,
+        project: TrackedProject,
+    }
+
+    fn managed(tag: &str) -> Managed {
+        let fx = co::fixture();
+        std::fs::write(fx.work.join("Cargo.toml"), CARGO_V1).unwrap();
+        co::commit(&fx, "Cargo.toml");
+        let home = tempfile::tempdir().unwrap();
+        let pid = format!("grp/{tag}");
+        crate::profile_checkout::register_test_remote("work", &pid, co::remote(&fx));
+        let alias = format!("managed-{tag}");
+        let project = TrackedProject {
+            alias: alias.clone(),
+            instance: "work".into(),
+            project_id: pid,
+            work_dir: crate::profile_checkout::managed_dir(home.path(), &alias),
+            managed: true,
+        };
+        Managed {
+            _fx: fx,
+            home,
+            apr: tempfile::tempdir().unwrap(),
+            project,
+        }
+    }
+
+    impl Managed {
+        fn root(&self) -> PathBuf {
+            self.home.path().join("memory")
+        }
+    }
+
+    #[test]
+    fn managed_project_is_cloned_then_profile_drafted() {
+        let m = managed("draft");
+        let agent = Fake::new("Rust stack.");
+        let root = m.root();
+        let out = sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(out, vec![(m.project.alias.clone(), Outcome::Drafted)]);
+        assert!(m.project.work_dir.join("Cargo.toml").is_file());
+        assert!(project_profile::load(&m.project.alias, Some(&root))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn managed_clone_failure_is_a_failed_outcome_without_secret() {
+        let m = managed("fail");
+        let mut p = m.project.clone();
+        p.project_id = "grp/glpat-aaaaaaaaaaaaaaaaaaaa".into();
+        let bad = crate::profile_checkout::Remote {
+            url: "file:///nope/glpat-aaaaaaaaaaaaaaaaaaaa".into(),
+            branch: "main".into(),
+            auth_env: vec![],
+        };
+        crate::profile_checkout::register_test_remote("work", &p.project_id, bad);
+        let root = m.root();
+        let out = sync_all(
+            &[p.clone()],
+            &Fake::new("x"),
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(out.len(), 1);
+        match &out[0].1 {
+            Outcome::Failed(msg) => assert!(!msg.contains("glpat-"), "{msg}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_checkout_missing_still_reports_checkout_not_found() {
+        let f = Fx::new(Origin::Agent);
+        let mut p = tp(&f);
+        p.work_dir = f.work.path().join("gone");
+        let out = sync_all(
+            &[p],
+            &Fake::new("x"),
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        );
+        assert_eq!(out[0].1, Outcome::Failed("checkout not found".into()));
+    }
+
+    #[test]
+    fn queue_runner_clones_managed_project_before_refresh() {
+        let m = managed("queue");
+        let root = m.root();
+        let agent = Fake::new("Rust stack.");
+        sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        std::fs::remove_dir_all(&m.project.work_dir).unwrap();
+        let q = queue(&m.project.alias, "stack", now(), true);
+        let res = process_queue(
+            &q,
+            std::slice::from_ref(&m.project),
+            &Fake::new("New."),
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert!(m.project.work_dir.join("Cargo.toml").is_file());
+        assert_eq!(res.done.len(), 1);
+        assert!(res.failures.is_empty(), "{:?}", res.failures);
+    }
+
+    #[test]
+    fn a_managed_project_whose_remote_tip_is_unchanged_is_skipped_without_cloning() {
+        let m = managed("tip");
+        let root = m.root();
+        let agent = Fake::new("Rust stack.");
+        let first = sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(first[0].1, Outcome::Drafted);
+        std::fs::remove_dir_all(&m.project.work_dir).unwrap();
+        let again = sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(again[0].1, Outcome::Skipped);
+        assert!(
+            !m.project.work_dir.exists(),
+            "no clone for an unchanged repository"
+        );
+        assert_eq!(agent.calls(), 1);
+        // A new commit on the remote: the check falls through to the clone and scan.
+        co::commit(&m._fx, "NEW.md");
+        sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert!(m.project.work_dir.join("NEW.md").is_file());
+    }
+
+    #[test]
+    fn a_wiki_refresh_is_queued_forced_even_with_the_switch_off_and_only_for_a_profile() {
+        let f = Fx::new(Origin::Agent);
+        let store = f.root.path().join("sync.json");
+        with_store(&store, |s| s.settings.enabled = false).unwrap();
+        queue_wiki_refresh_at(&store, "no-profile-yet", Some(f.root.path()), now());
+        assert!(load(&store).unwrap().queued.is_empty());
+        queue_wiki_refresh_at(&store, &f.alias, Some(f.root.path()), now());
+        let q = load(&store).unwrap().queued;
+        let slugs: Vec<&str> = q[&f.alias].iter().map(|x| x.section.as_str()).collect();
+        assert_eq!(slugs, ["overview", "stack", "integrations", "conventions"]);
+        assert!(q[&f.alias].iter().all(|x| x.forced && x.memory));
+        // Ordinary event queueing still respects the switch.
+        on_memory_added_at(&store, &f.alias, Some(f.root.path()), now());
+        assert!(!load(&store).unwrap().queued[&f.alias]
+            .iter()
+            .any(|x| x.section == "gotchas"));
+    }
+
+    #[test]
+    fn a_changed_wiki_page_queues_its_sections_even_when_the_repository_is_unchanged() {
+        let mut m = managed("wiki");
+        m.project.instance = "wiki-inst-a".into();
+        let remote = crate::profile_checkout::remote_for("work", &m.project.project_id).unwrap();
+        crate::profile_checkout::register_test_remote("wiki-inst-a", &m.project.project_id, remote);
+        let root = m.root();
+        let agent = Fake::new("Rust stack.");
+        let first = sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(first[0].1, Outcome::Drafted);
+        let url = "https://gl.example.com/grp/wiki/-/wikis/Runbook";
+        let v1 = |_: &crate::profile_wiki::WikiRef| Ok(("Runbook".to_string(), "v1".to_string()));
+        crate::profile_wiki::add_page(&m.project.alias, url, "", Some(&root), now(), &v1).unwrap();
+        crate::profile_wiki::register_test_fetch(
+            "wiki-inst-a",
+            Box::new(|_| Ok(("Runbook".to_string(), "v2 changed".to_string()))),
+        );
+        let again = sync_all(
+            std::slice::from_ref(&m.project),
+            &agent,
+            now(),
+            Some(&root),
+            m.apr.path(),
+        );
+        assert_eq!(
+            again[0].1,
+            Outcome::Skipped,
+            "the repository did not change"
+        );
+        let queued = load(&m.home.path().join("profile_sync.json"))
+            .unwrap()
+            .queued;
+        assert!(queued[&m.project.alias]
+            .iter()
+            .any(|x| x.section == "overview" && x.forced));
+        assert_eq!(
+            crate::profile_wiki::list(&m.project.alias, Some(&root))[0].content,
+            "v2 changed"
+        );
     }
 }

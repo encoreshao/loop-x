@@ -410,7 +410,7 @@ pub fn profile_path(alias: &str, root: Option<&Path>) -> PathBuf {
 }
 
 /// Aliases become a directory name: no separators, no `..`, not empty.
-fn check_alias(alias: &str) -> Result<(), String> {
+pub(crate) fn check_alias(alias: &str) -> Result<(), String> {
     if alias.is_empty() || alias == "." || alias.contains(['/', '\\', '\0']) || alias.contains("..")
     {
         return Err(format!("invalid project alias: {alias:?}"));

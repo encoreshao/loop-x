@@ -70,6 +70,10 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/sync/settings", sync_settings);
     r.post("/insights/memory/sync/now", sync_now);
     r.post("/insights/memory/sync/slack", slack_settings);
+    r.post("/insights/memory/sync/clone", clone_settings);
+    r.post("/insights/memory/checkout/reclone", reclone);
+    r.post("/insights/memory/wiki/add", wiki_add);
+    r.post("/insights/memory/wiki/remove", wiki_remove);
     r.get("/insights/memory/jobs", jobs_status);
 }
 
@@ -231,8 +235,11 @@ struct Project {
     instance: String,
     project_id: String,
     loaded: Loaded,
-    /// A tracked project whose checkout exists: Build and Refresh can scan it.
+    /// A tracked project whose checkout exists (or that Memory clones itself on the
+    /// first build): Build and Refresh can scan it.
     checkout: bool,
+    /// No `local_path`: Memory keeps its own read-only clone (see `profile_checkout`).
+    managed: bool,
     /// Only computed (from the checkout) when the profile parsed.
     check: Check,
 }
@@ -320,6 +327,7 @@ fn projects(ctx: &UiCtx) -> Vec<Project> {
     alias_list(ctx, config.as_ref())
         .into_iter()
         .map(|alias| {
+            let managed = tracked.iter().any(|t| t.alias == alias && t.managed);
             let (instance, project_id, work_dir) = match tracked.iter().find(|t| t.alias == alias) {
                 Some(t) => (t.instance.clone(), t.project_id.clone(), Some(t.work_dir.clone())),
                 None => {
@@ -336,7 +344,7 @@ fn projects(ctx: &UiCtx) -> Vec<Project> {
                 }
             };
             let loaded = load(ctx, &alias);
-            let checkout = work_dir.as_ref().is_some_and(|w| !w.as_os_str().is_empty() && w.is_dir());
+            let checkout = managed || work_dir.as_ref().is_some_and(|w| !w.as_os_str().is_empty() && w.is_dir());
             let check = match loaded {
                 Loaded::Ready(_) => check_for(work_dir),
                 _ => Check { work_dir: None, head: None },
@@ -347,6 +355,7 @@ fn projects(ctx: &UiCtx) -> Vec<Project> {
                 project_id,
                 loaded,
                 checkout,
+                managed,
                 check,
             }
         })
@@ -1535,7 +1544,7 @@ fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
     let content = match &p.loaded {
         Loaded::Unreadable(e) => error_card(ctx, e),
         Loaded::Missing => {
-            let head = head_card(ctx, p, None);
+            let head = format!("{}{}", head_card(ctx, p, None), wiki_card(ctx, p));
             format!(
                 "{head}{}",
                 empty_card(&ctx.t("No profile has been built for this project yet. The weekly sync drafts one for every tracked project."),
@@ -1567,9 +1576,9 @@ fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
                 .into_iter()
                 .map(|k| summary_card(ctx, p, profile, k, check))
                 .collect();
+            let head = format!("{}{}", head_card(ctx, p, Some((profile, check))), wiki_card(ctx, p));
             format!(
-                "{banner}{}<div class='mem-pair'>{}{}</div><div class='mem-sections'>{cards}</div>",
-                head_card(ctx, p, Some((profile, check))),
+                "{banner}{head}<div class='mem-pair'>{}{}</div><div class='mem-sections'>{cards}</div>",
                 neighbors_card(ctx, links.get(&p.alias)),
                 proposals_summary(ctx, p, pending)
             )
@@ -1644,6 +1653,52 @@ fn summary_card(ctx: &UiCtx, p: &Project, profile: &Profile, key: SectionKey, ch
         escape(&ctx.tf("More about {section}", &[("section", &title)])),
         escape(&ctx.t("More")),
         icon("arrow_forward")
+    )
+}
+
+/// The wiki pages saved for a project and the form that adds one from a link.
+fn wiki_card(ctx: &UiCtx, p: &Project) -> String {
+    let csrf = ctx.csrf_input();
+    let ids: String = p.alias.bytes().filter(u8::is_ascii_alphanumeric).map(char::from).collect();
+    let pages = loopx_core::profile_wiki::list(&p.alias, Some(&memory_root(ctx)));
+    let list = if pages.is_empty() {
+        format!("<p class='mem-muted'>{}</p>", escape(&ctx.t("No wiki pages added yet.")))
+    } else {
+        let rows: String = pages
+            .iter()
+            .map(|w| {
+                format!(
+                    "<li><a href='{}' target='_blank' rel='noopener noreferrer'>{}</a>\
+                     <span class='mem-muted'>{}</span>\
+                     <form method='post' action='/insights/memory/wiki/remove' class='mem-inline'>{csrf}{}{}\
+                     <button class='mem-btn' type='submit' title='{}'>{}</button></form></li>",
+                    escape(&w.url),
+                    escape(&w.title),
+                    escape(&ago(ctx, w.fetched_at)),
+                    hidden("project", &p.alias),
+                    hidden("page", &w.id),
+                    escape(&ctx.t("Forget this page; the profile keeps what it already says")),
+                    escape(&ctx.t("Remove"))
+                )
+            })
+            .collect();
+        format!("<ul class='mem-wiki-list'>{rows}</ul>")
+    };
+    format!(
+        "<section class='card mem-wiki'><div class='section-header'>{}<h2>{}</h2></div>{list}\
+         <form method='post' action='/insights/memory/wiki/add' class='mem-editor'>{csrf}{}\
+         <label class='mem-label' for='mem-wiki-{ids}'>{}</label>\
+         <input class='mem-input' id='mem-wiki-{ids}' name='url' type='url' maxlength='500' required \
+          placeholder='https://gitlab.example.com/group/project/-/wikis/Page'>\
+         <div class='mem-editor-foot'><p class='mem-muted'>{}</p>\
+         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></div></form></section>",
+        icon("link"),
+        escape(&ctx.t("Wiki pages")),
+        hidden("project", &p.alias),
+        escape(&ctx.t("Wiki page link")),
+        escape(&ctx.t("Paste the link of one wiki page. It is read through GitLab, kept as a short note, and the profile sections it can change are proposed for your approval. The weekly sync checks it again.")),
+        icon("auto_awesome"),
+        escape(&ctx.t("Add wiki page"))
     )
 }
 
@@ -2172,9 +2227,19 @@ enum Notice {
     ApproveSecret,
     SlackOn,
     SlackOff,
+    CloneOn,
+    CloneOff,
+    Recloned,
+    WikiAdded,
+    WikiUnchanged,
+    WikiRemoved,
+    WikiBadLink,
+    WikiOtherProject,
+    WikiSecret,
+    WikiFailed,
 }
 
-const NOTICES: [(Notice, &str); 28] = [
+const NOTICES: [(Notice, &str); 38] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2203,6 +2268,16 @@ const NOTICES: [(Notice, &str); 28] = [
     (Notice::ApproveSecret, "approve-secret"),
     (Notice::SlackOn, "slack-on"),
     (Notice::SlackOff, "slack-off"),
+    (Notice::CloneOn, "clone-on"),
+    (Notice::CloneOff, "clone-off"),
+    (Notice::Recloned, "recloned"),
+    (Notice::WikiAdded, "wiki-added"),
+    (Notice::WikiUnchanged, "wiki-unchanged"),
+    (Notice::WikiRemoved, "wiki-removed"),
+    (Notice::WikiBadLink, "wiki-bad-link"),
+    (Notice::WikiOtherProject, "wiki-other-project"),
+    (Notice::WikiSecret, "wiki-secret"),
+    (Notice::WikiFailed, "wiki-failed"),
 ];
 
 impl Notice {
@@ -2233,6 +2308,12 @@ impl Notice {
                 | Notice::ProfileApproved
                 | Notice::SlackOn
                 | Notice::SlackOff
+                | Notice::CloneOn
+                | Notice::CloneOff
+                | Notice::Recloned
+                | Notice::WikiAdded
+                | Notice::WikiUnchanged
+                | Notice::WikiRemoved
         )
     }
 
@@ -2266,6 +2347,16 @@ impl Notice {
             Notice::ApproveSecret => ctx.t("Not approved: a section looks like it contains a secret value. Edit it out, then approve again."),
             Notice::SlackOn => ctx.t("Slack messages for profile jobs are on."),
             Notice::SlackOff => ctx.t("Slack messages for profile jobs are off."),
+            Notice::CloneOn => ctx.t("Memory will clone projects that have no local checkout."),
+            Notice::CloneOff => ctx.t("Memory no longer clones projects that have no local checkout."),
+            Notice::Recloned => ctx.t("The clone was removed. The next build or refresh clones it again."),
+            Notice::WikiAdded => ctx.t("Wiki page saved. Updates to the profile appear under Proposals shortly."),
+            Notice::WikiUnchanged => ctx.t("That wiki page is already saved with the same text."),
+            Notice::WikiRemoved => ctx.t("Wiki page removed. The profile keeps what it already says."),
+            Notice::WikiBadLink => ctx.t("That is not a link to one wiki page of this project."),
+            Notice::WikiOtherProject => ctx.t("That wiki page belongs to another project."),
+            Notice::WikiSecret => ctx.t("Not saved: the wiki page looks like it contains a secret value."),
+            Notice::WikiFailed => ctx.t("The wiki page could not be fetched or saved. Check the link and the GitLab token."),
         }
     }
 }
@@ -2308,10 +2399,16 @@ fn tracked_list(ctx: &UiCtx) -> Vec<TrackedProject> {
     profile_sync::tracked_projects_in(&ctx.state.home_dir.join("projects.json"))
 }
 
+/// A project Build and Refresh can scan: it has a checkout, or Memory clones one
+/// the first time it runs.
+fn buildable(t: &TrackedProject) -> bool {
+    t.managed || (!t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+}
+
 fn checkout_of(ctx: &UiCtx, alias: &str) -> Option<TrackedProject> {
     tracked_list(ctx)
         .into_iter()
-        .find(|t| t.alias == alias && !t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+        .find(|t| t.alias == alias && buildable(t))
 }
 
 fn store_path(ctx: &UiCtx) -> PathBuf {
@@ -2478,9 +2575,10 @@ fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) -> Result<Bui
     forget(&env.home, &t.alias);
     let job = ProfileJob::start(&env.activity, ProfileJobKind::Build, &t.alias);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let dir = loopx_core::profile_checkout::prepare(t, &env.home, std::time::SystemTime::now())?.dir;
         profile_build::build_profile_with_progress(
             &t.alias,
-            &t.work_dir,
+            &dir,
             &t.instance,
             &t.project_id,
             aliases,
@@ -2547,7 +2645,7 @@ fn build_all(ctx: &UiCtx) -> UiResponse {
     let aliases: Vec<String> = all.iter().map(|t| t.alias.clone()).collect();
     let list: Vec<TrackedProject> = all
         .into_iter()
-        .filter(|t| !t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+        .filter(buildable)
         .collect();
     if list.is_empty() {
         return back(Back::Overview, Notice::NothingToBuild);
@@ -2654,6 +2752,7 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
         let began = std::time::Instant::now();
         let job = ProfileJob::start(&env.activity, ProfileJobKind::Refresh(key), &t.alias);
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let dir = loopx_core::profile_checkout::prepare(&t, &env.home, std::time::SystemTime::now())?.dir;
             let digest = if t.instance.is_empty() || t.project_id.is_empty() {
                 profile_scan::digest_for("", "", &t.alias, Some(&env.root))
             } else {
@@ -2662,7 +2761,7 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
             profile_sync::propose_refresh_held_with_progress(
                 &t.alias,
                 key,
-                &t.work_dir,
+                &dir,
                 &digest,
                 &*env.agent,
                 env.now(),
@@ -2845,6 +2944,91 @@ fn slack_settings(ctx: &UiCtx) -> UiResponse {
         Err(_) => back(Back::Overview, Notice::StoreBad),
         Ok(()) if on => back(Back::Overview, Notice::SlackOn),
         Ok(()) => back(Back::Overview, Notice::SlackOff),
+    }
+}
+
+/// The "Clone projects without a local checkout" switch: `clone=on` or `clone=0`,
+/// anything else is refused. Only that setting changes.
+fn clone_settings(ctx: &UiCtx) -> UiResponse {
+    let on = match ctx.form().first("clone") {
+        Some("on" | "1") => true,
+        Some("0") => false,
+        _ => return back(Back::Overview, Notice::BadInput),
+    };
+    match profile_sync::with_store(&store_path(ctx), |s| s.settings.clone_for_memory = on) {
+        Err(_) => back(Back::Overview, Notice::StoreBad),
+        Ok(()) if on => back(Back::Overview, Notice::CloneOn),
+        Ok(()) => back(Back::Overview, Notice::CloneOff),
+    }
+}
+
+/// Delete a managed project's clone so the next build or refresh clones it afresh.
+/// Only ever the loopx-owned directory: a project with its own `local_path` is refused.
+fn reclone(ctx: &UiCtx) -> UiResponse {
+    let Some(alias) = known_alias(ctx, ctx.form().first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    if !tracked_list(ctx).iter().any(|t| t.alias == alias && t.managed) {
+        return back(Back::Overview, Notice::BadInput);
+    }
+    let Some(_slot) = profile_build::try_acquire(&alias) else {
+        return back(Back::Project(&alias, None), Notice::Busy);
+    };
+    let _ = std::fs::remove_dir_all(loopx_core::profile_checkout::managed_dir(&ctx.state.home_dir, &alias));
+    back(Back::Project(&alias, None), Notice::Recloned)
+}
+
+/// The wiki notice for an `add_page` failure (never the raw text).
+fn wiki_failure(e: &str) -> Notice {
+    if e.contains("another project") {
+        Notice::WikiOtherProject
+    } else if e.contains("secret") {
+        Notice::WikiSecret
+    } else if e.contains("not a web link") || e.contains("not a wiki link") || e.contains("open one wiki page") {
+        Notice::WikiBadLink
+    } else {
+        Notice::WikiFailed
+    }
+}
+
+/// Save the wiki page behind a pasted link for a project and queue the sections it
+/// can change as proposals (processed even while the weekly switch is off).
+fn wiki_add(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, None);
+    let project = loopx_core::config::Config::load(&ctx.state.home_dir.join("projects.json"))
+        .ok()
+        .and_then(|c| c.project(&alias).ok());
+    let text = |k: &str| project.as_ref().map(|p| n_of(&p[k])).filter(|v| v != "None").unwrap_or_default();
+    let (instance, project_id) = (text("instance"), text("project_id"));
+    if instance.is_empty() {
+        return back(to(), Notice::WikiFailed);
+    }
+    let root = memory_root(ctx);
+    let fetch = loopx_core::profile_wiki::gitlab_fetch(&instance);
+    let url = form.first("url").unwrap_or("");
+    match loopx_core::profile_wiki::add_page(&alias, url, &project_id, Some(&root), Utc::now(), &fetch) {
+        Ok(a) if a.changed => {
+            profile_sync::queue_wiki_refresh(&alias, Some(&root));
+            back(to(), Notice::WikiAdded)
+        }
+        Ok(_) => back(to(), Notice::WikiUnchanged),
+        Err(e) => back(to(), wiki_failure(&e)),
+    }
+}
+
+/// Forget one saved wiki page (the profile keeps what it already says).
+fn wiki_remove(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    match loopx_core::profile_wiki::remove(&alias, form.first("page").unwrap_or(""), Some(&memory_root(ctx))) {
+        Ok(_) => back(Back::Project(&alias, None), Notice::WikiRemoved),
+        Err(_) => back(Back::Project(&alias, None), Notice::BadInput),
     }
 }
 
@@ -3061,6 +3245,7 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
             escape(&ctx.t("Sync now"))
         ));
         out.push_str(&slack_switch(ctx, set.notify_slack));
+        out.push_str(&clone_switch(ctx, set.clone_for_memory));
     }
     let build = if build_all_running(&ctx.state.home_dir) {
         format!(
@@ -3072,7 +3257,7 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
         // One AI pass per project, and approved profiles go back to Draft: ask first.
         let n = tracked_list(ctx)
             .iter()
-            .filter(|t| !t.work_dir.as_os_str().is_empty() && t.work_dir.is_dir())
+            .filter(|t| buildable(t))
             .count();
         let text = if n == 1 {
             ctx.t("This runs one AI pass for the 1 tracked project and puts an approved profile back to Draft for review. Sections you edited are kept.")
@@ -3122,8 +3307,45 @@ fn slack_switch(ctx: &UiCtx, on: bool) -> String {
     )
 }
 
-/// The project header's Build (no profile yet) or Refresh (rebuild) button.
+/// The "Clone projects without a local checkout" switch (saves on click).
+fn clone_switch(ctx: &UiCtx, on: bool) -> String {
+    let label = escape(&ctx.t("Clone projects without a local checkout"));
+    let (class, checked, next) = if on { (" is-on", "true", "0") } else { ("", "false", "on") };
+    format!(
+        "<div class='mem-slack'><form method='post' action='/insights/memory/sync/clone' class='mem-switch'>{}{}\
+         <button type='submit' class='switch{class}' role='switch' aria-checked='{checked}' aria-label='{label}' title='{label}'><span class='switch-thumb'></span></button>\
+         <span>{label}</span></form></div>",
+        ctx.csrf_input(),
+        hidden("clone", next)
+    )
+}
+
+/// What a managed project's header adds: that Memory reads its own clone, and a
+/// Re-clone button that deletes it.
+fn managed_note(ctx: &UiCtx, p: &Project) -> String {
+    if !p.managed {
+        return String::new();
+    }
+    format!(
+        "<p class='mem-muted mem-hint'>{}</p>\
+         <form method='post' action='/insights/memory/checkout/reclone' class='mem-inline'>{}{}\
+         <button class='mem-btn' type='submit' title='{}'>{}{}</button></form>",
+        escape(&ctx.t("Cloned for Memory: a read-only copy of this repository that the AI CLI reads like any checkout.")),
+        ctx.csrf_input(),
+        hidden("project", &p.alias),
+        escape(&ctx.t("Delete the copy; the next build or refresh clones it again")),
+        icon("autorenew"),
+        escape(&ctx.t("Re-clone"))
+    )
+}
+
+/// The project header's actions, plus the managed-clone note.
 fn head_actions(ctx: &UiCtx, p: &Project, profile: Option<&Profile>) -> String {
+    format!("{}{}", head_actions_inner(ctx, p, profile), managed_note(ctx, p))
+}
+
+/// The project header's Build (no profile yet) or Refresh (rebuild) button.
+fn head_actions_inner(ctx: &UiCtx, p: &Project, profile: Option<&Profile>) -> String {
     if !p.checkout {
         return format!(
             "<p class='mem-muted'>{}</p>",
@@ -3610,6 +3832,10 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-btn:focus-visible,.mem-select:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-head .mem-actions{margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--md-outline-variant)}
 .mem-hint{font-size:.82rem}
+.mem-wiki-list{list-style:none;margin:0 0 .75rem;padding:0;display:flex;flex-direction:column;gap:.4rem}
+.mem-wiki-list li{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .75rem}
+.mem-wiki-list a{color:var(--md-primary);text-decoration:none;font-weight:500}
+.mem-wiki-list a:hover{text-decoration:underline}
 .mem-detail .mem-actions{margin:0 0 .9rem}
 .mem-refresh{order:1}
 .mem-edit{order:2;min-width:0}
@@ -3672,7 +3898,8 @@ mod tests {
     use loopx_core::project_profile::{self, Link, Origin, Profile, Section, SectionKey, Source, Status};
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::path::PathBuf;
+    use serde_json::Value;
+    use std::path::{Path, PathBuf};
 
     fn now() -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 11, 11, 12, 0, 0).unwrap()
@@ -3697,6 +3924,9 @@ mod tests {
                     std::fs::create_dir_all(&wd).unwrap();
                     std::fs::write(wd.join("README.md"), "hello\n").unwrap();
                     p["local_path"] = json!(wd.to_string_lossy());
+                } else {
+                    // Issues-only here means "no checkout at all"; managed clones have their own tests.
+                    p["memory_clone"] = json!(false);
                 }
                 map.insert((*alias).to_string(), p);
             }
@@ -4182,6 +4412,43 @@ mod tests {
         fn store(&self) -> PathBuf {
             self.state.home_dir.join("profile_sync.json")
         }
+        /// Add an issues-only project `alias` that Memory clones from a local bare
+        /// repository holding `README.md`; returns the clone directory.
+        fn add_managed(&self, alias: &str) -> PathBuf {
+            let git = |dir: &Path, args: &[&str]| {
+                let out = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(dir)
+                    .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                    .args(args)
+                    .env_remove("GIT_DIR")
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            };
+            let bare = self.dir.path().join(format!("{alias}.git"));
+            let work = self.dir.path().join(format!("{alias}-work"));
+            std::fs::create_dir_all(&bare).unwrap();
+            std::fs::create_dir_all(&work).unwrap();
+            git(&bare, &["init", "--bare", "-b", "main"]);
+            git(&work, &["init", "-b", "main"]);
+            std::fs::write(work.join("README.md"), "hello\n").unwrap();
+            git(&work, &["add", "."]);
+            git(&work, &["commit", "-m", "one"]);
+            let url = format!("file://{}", bare.display());
+            git(&work, &["push", &url, "main"]);
+            let project_id = format!("grp/{alias}");
+            loopx_core::profile_checkout::register_test_remote(
+                "work",
+                &project_id,
+                loopx_core::profile_checkout::Remote { url, branch: "main".into(), auth_env: vec![] },
+            );
+            let path = self.state.home_dir.join("projects.json");
+            let mut cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            cfg["projects"][alias] = json!({"instance": "work", "project_id": project_id});
+            std::fs::write(&path, cfg.to_string()).unwrap();
+            loopx_core::profile_checkout::managed_dir(&self.state.home_dir, alias)
+        }
         fn load(&self, alias: &str) -> Profile {
             project_profile::load(alias, Some(&self.root())).unwrap().unwrap()
         }
@@ -4197,7 +4464,7 @@ mod tests {
         panic!("{alias} is still running");
     }
 
-    const ROUTES: [&str; 8] = [
+    const ROUTES: [&str; 12] = [
         "/insights/memory/build",
         "/insights/memory/approve",
         "/insights/memory/section/save",
@@ -4206,6 +4473,10 @@ mod tests {
         "/insights/memory/sync/settings",
         "/insights/memory/sync/now",
         "/insights/memory/sync/slack",
+        "/insights/memory/sync/clone",
+        "/insights/memory/checkout/reclone",
+        "/insights/memory/wiki/add",
+        "/insights/memory/wiki/remove",
     ];
 
     #[test]
@@ -5523,5 +5794,188 @@ mod tests {
         assert!(finish.find("isDirty()").unwrap() < finish.find("location.reload()").unwrap());
         assert!(js.contains("dialog[open]") && js.contains("defaultValue"));
         assert!(js.contains("2 * 60 * 60 * 1000") && js.contains("15000"));
+    }
+
+    #[test]
+    fn a_managed_project_is_built_from_a_clone_made_on_the_click() {
+        let alias = "mgd-build";
+        let sb = Sb::new(&[("plain", true)]).with_agent(FakeAgent::new(full_reply(alias, "Built")));
+        let dir = sb.add_managed(alias);
+        assert!(!dir.exists());
+        let loc = sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        assert!(loc.ends_with("notice=build-started"), "{loc}");
+        wait_idle(alias);
+        assert!(dir.join("README.md").is_file(), "cloned into the managed dir");
+        assert_eq!(sb.load(alias).sections.len(), 10);
+    }
+
+    #[test]
+    fn a_managed_project_without_a_reachable_remote_fails_the_job_not_the_click() {
+        let alias = "mgd-bad";
+        let sb = Sb::new(&[]).with_agent(FakeAgent::new(full_reply(alias, "Built")));
+        let dir = sb.add_managed(alias);
+        let path = sb.state.home_dir.join("projects.json");
+        let mut cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        cfg["projects"][alias]["project_id"] = json!("grp/no-such-remote");
+        std::fs::write(&path, cfg.to_string()).unwrap();
+        let loc = sb.post_to("/insights/memory/build", &format!("project={alias}&from=project"));
+        assert!(loc.ends_with("notice=build-started"), "{loc}");
+        wait_idle(alias);
+        assert!(!dir.exists());
+        assert!(project_profile::load(alias, Some(&sb.root())).unwrap().is_none());
+    }
+
+    #[test]
+    fn build_all_includes_a_managed_project() {
+        let alias = "mgd-all";
+        let sb = Sb::new(&[("mgd-all-user", true)]).with_agent(FakeAgent::new(full_reply("x", "Built")));
+        sb.add_managed(alias);
+        assert_eq!(sb.post_to("/insights/memory/build", "project=all"), "/insights?view=memory&notice=build-all-started");
+        for _ in 0..400 {
+            if project_profile::load(alias, Some(&sb.root())).ok().flatten().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        wait_idle(alias);
+        assert!(project_profile::load(alias, Some(&sb.root())).unwrap().is_some());
+    }
+
+    #[test]
+    fn the_project_page_labels_a_managed_clone_and_offers_reclone_only_there() {
+        let sb = Sb::new(&[("mgd-plain", true)]);
+        sb.add_managed("mgd-label");
+        let managed = sb.get("/insights?view=memory&project=mgd-label");
+        assert!(managed.contains("Cloned for Memory"), "{managed}");
+        assert!(managed.contains("action='/insights/memory/checkout/reclone'"), "{managed}");
+        let plain = sb.get("/insights?view=memory&project=mgd-plain");
+        assert!(!plain.contains("Cloned for Memory") && !plain.contains("checkout/reclone"), "{plain}");
+    }
+
+    #[test]
+    fn reclone_deletes_only_the_managed_dir() {
+        let sb = Sb::new(&[("mgd-user", true)]);
+        let dir = sb.add_managed("mgd-rc");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stale"), "x").unwrap();
+        let loc = sb.post_to("/insights/memory/checkout/reclone", "project=mgd-rc");
+        assert!(loc.ends_with("notice=recloned"), "{loc}");
+        assert!(!dir.exists());
+        // A user-owned checkout is never removed; unknown aliases are refused.
+        let user = sb.dir.path().join("repos").join("mgd-user");
+        assert!(sb.post_to("/insights/memory/checkout/reclone", "project=mgd-user").ends_with("notice=bad-input"));
+        assert!(user.join("README.md").is_file());
+        assert!(sb.post_to("/insights/memory/checkout/reclone", "project=nope").ends_with("notice=bad-input"));
+    }
+
+    #[test]
+    fn the_clone_switch_saves_on_click_and_hides_managed_projects_when_off() {
+        let sb = Sb::new(&[("sw-user", true)]);
+        sb.add_managed("sw-mgd");
+        let html = sb.get("/insights?view=memory");
+        assert!(html.contains("action='/insights/memory/sync/clone'"), "{html}");
+        assert!(html.contains("aria-label='Clone projects without a local checkout'"), "{html}");
+        let loc = sb.post_to("/insights/memory/sync/clone", "clone=0");
+        assert_eq!(loc, "/insights?view=memory&notice=clone-off");
+        let s = profile_sync::load(&sb.store()).unwrap().settings;
+        assert!(!s.clone_for_memory && s.enabled && s.notify_slack, "only the clone switch changed");
+        assert!(!profile_sync::tracked_projects_in(&sb.state.home_dir.join("projects.json")).iter().any(|t| t.managed));
+        assert_eq!(sb.post_to("/insights/memory/sync/clone", "clone=on"), "/insights?view=memory&notice=clone-on");
+        assert!(profile_sync::load(&sb.store()).unwrap().settings.clone_for_memory);
+        for bad in ["clone=maybe", "", "clone="] {
+            assert!(sb.post_to("/insights/memory/sync/clone", bad).ends_with("notice=bad-input"), "{bad}");
+        }
+        std::fs::write(sb.store(), "{corrupt").unwrap();
+        assert!(sb.post_to("/insights/memory/sync/clone", "clone=0").ends_with("notice=store-bad"));
+        assert_eq!(std::fs::read_to_string(sb.store()).unwrap(), "{corrupt");
+    }
+
+    /// Point project `alias` at instance `inst` and answer every wiki fetch for it with `body`.
+    fn wiki_sandbox(sb: &Sb, alias: &str, inst: &str, body: &'static str) {
+        let path = sb.state.home_dir.join("projects.json");
+        let mut cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        cfg["projects"][alias]["instance"] = json!(inst);
+        std::fs::write(&path, cfg.to_string()).unwrap();
+        loopx_core::profile_wiki::register_test_fetch(
+            inst,
+            Box::new(move |r| {
+                if body == "down" {
+                    Err("down".into())
+                } else {
+                    Ok((format!("Page {}", r.slug), body.to_string()))
+                }
+            }),
+        );
+    }
+
+    fn wiki_link(alias: &str) -> String {
+        format!("https://gl.example.com/group/{alias}/-/wikis/Runbook")
+    }
+
+    fn enc(url: &str) -> String {
+        url.replace(':', "%3A").replace('/', "%2F")
+    }
+
+    #[test]
+    fn a_pasted_wiki_link_is_saved_and_queues_the_sections_it_can_change() {
+        let alias = "wiki-ok";
+        let sb = Sb::new(&[(alias, true)]);
+        sb.save(&profile(alias, &[(SectionKey::Overview, section("S.", "B"))]));
+        wiki_sandbox(&sb, alias, "wiki-inst-ok", "Restart with make up.");
+        let url = enc(&wiki_link(alias));
+        let loc = sb.post_to("/insights/memory/wiki/add", &format!("project={alias}&url={url}"));
+        assert!(loc.ends_with("notice=wiki-added"), "{loc}");
+        let pages = loopx_core::profile_wiki::list(alias, Some(&sb.root()));
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].content, "Restart with make up.");
+        let queued = profile_sync::load(&sb.store()).unwrap().queued;
+        assert!(queued[alias].iter().any(|q| q.section == "overview" && q.forced), "{queued:?}");
+        let html = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(html.contains("Page Runbook"), "{html}");
+        assert!(html.contains("action='/insights/memory/wiki/remove'"), "{html}");
+        // The same text again changes nothing.
+        let loc = sb.post_to("/insights/memory/wiki/add", &format!("project={alias}&url={url}"));
+        assert!(loc.ends_with("notice=wiki-unchanged"), "{loc}");
+    }
+
+    #[test]
+    fn a_wiki_link_that_cannot_be_used_says_why_and_saves_nothing() {
+        let alias = "wiki-bad";
+        let sb = Sb::new(&[(alias, true)]);
+        wiki_sandbox(&sb, alias, "wiki-inst-bad", "text");
+        let post = |url: &str| sb.post_to("/insights/memory/wiki/add", &format!("project={alias}&url={}", enc(url)));
+        assert!(post("https://gl.example.com/group/wiki-bad").ends_with("notice=wiki-bad-link"));
+        assert!(post("https://gl.example.com/other/proj/-/wikis/x").ends_with("notice=wiki-other-project"));
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        wiki_sandbox(&sb, alias, "wiki-inst-bad", Box::leak(format!("use {token}").into_boxed_str()));
+        assert!(post(&wiki_link(alias)).ends_with("notice=wiki-secret"));
+        wiki_sandbox(&sb, alias, "wiki-inst-bad", "down");
+        assert!(post(&wiki_link(alias)).ends_with("notice=wiki-failed"));
+        assert!(loopx_core::profile_wiki::list(alias, Some(&sb.root())).is_empty());
+        assert!(sb.post_to("/insights/memory/wiki/add", "project=nope&url=x").ends_with("notice=bad-input"));
+    }
+
+    #[test]
+    fn a_saved_wiki_page_can_be_removed_and_odd_ids_are_refused() {
+        let alias = "wiki-rm";
+        let sb = Sb::new(&[(alias, true)]);
+        wiki_sandbox(&sb, alias, "wiki-inst-rm", "text");
+        sb.post_to("/insights/memory/wiki/add", &format!("project={alias}&url={}", enc(&wiki_link(alias))));
+        let id = loopx_core::profile_wiki::list(alias, Some(&sb.root()))[0].id.clone();
+        assert!(sb.post_to("/insights/memory/wiki/remove", &format!("project={alias}&page=..%2Fx")).ends_with("notice=bad-input"));
+        let loc = sb.post_to("/insights/memory/wiki/remove", &format!("project={alias}&page={id}"));
+        assert!(loc.ends_with("notice=wiki-removed"), "{loc}");
+        assert!(loopx_core::profile_wiki::list(alias, Some(&sb.root())).is_empty());
+        assert!(sb.post_to("/insights/memory/wiki/remove", &format!("project=nope&page={id}")).ends_with("notice=bad-input"));
+    }
+
+    #[test]
+    fn the_project_page_offers_the_wiki_form_with_or_without_a_profile() {
+        let sb = Sb::new(&[("wiki-form", true)]);
+        let html = sb.get("/insights?view=memory&project=wiki-form");
+        assert!(html.contains("action='/insights/memory/wiki/add'"), "{html}");
+        assert!(html.contains("name='url'"), "{html}");
+        sb.save(&profile("wiki-form", &[(SectionKey::Overview, section("S.", "B"))]));
+        assert!(sb.get("/insights?view=memory&project=wiki-form").contains("action='/insights/memory/wiki/add'"));
     }
 }

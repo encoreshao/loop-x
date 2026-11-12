@@ -72,16 +72,32 @@ pub fn tick_with_notify(
     let Ok(store) = sync::load_keeping_bad(store_path) else {
         return false;
     };
-    // Event-driven refreshes queued by finished runs go first (only while the
-    // weekly switch is on; the queue is never written otherwise).
+    // Event-driven refreshes queued by finished runs go first (they are only
+    // queued while the weekly switch is on, apart from a person's own wiki adds).
     let mut ran_queue = false;
     let mut projects = Some(projects);
     let mut loaded: Option<Vec<TrackedProject>> = None;
-    if store.settings.enabled && store.queued.values().any(|v| !v.is_empty()) {
+    // With the switch off only entries a person asked for (a wiki page they added)
+    // are processed; the rest of the queue waits.
+    let eligible: sync::QueuedMap = if store.settings.enabled {
+        store.queued.clone()
+    } else {
+        store
+            .queued
+            .iter()
+            .map(|(a, q)| {
+                (
+                    a.clone(),
+                    q.iter().filter(|x| x.forced).cloned().collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    };
+    if eligible.values().any(|v| !v.is_empty()) {
         let list = loaded.insert(projects.take().map_or_else(Vec::new, |f| f()));
         let began = std::time::Instant::now();
         let mut res = sync::process_queue_with_progress(
-            &store.queued,
+            &eligible,
             list,
             agent,
             now,
@@ -240,6 +256,7 @@ mod tests {
                 instance: "work".into(),
                 project_id: "g/app".into(),
                 work_dir: self.work.path().to_path_buf(),
+                managed: false,
             }]
         }
         fn tick_with(&self, agent: &dyn Agent, now: DateTime<Utc>) -> bool {
@@ -429,6 +446,7 @@ mod tests {
                 section: slug.into(),
                 queued_at: local(11, 9, 0),
                 memory: false,
+                forced: false,
             };
             s.queued
                 .insert(f.alias.clone(), vec![q("stack"), q("gotchas")]);
@@ -454,6 +472,7 @@ mod tests {
                     section: "stack".into(),
                     queued_at: local(11, 9, 0),
                     memory: false,
+                    forced: false,
                 }],
             );
         })
@@ -473,6 +492,7 @@ mod tests {
                     section: "stack".into(),
                     queued_at: local(11, 9, 0),
                     memory: false,
+                    forced: false,
                 }],
             );
         })
@@ -481,6 +501,7 @@ mod tests {
         let gone = f.work.path().join("missing");
         let list = vec![TrackedProject {
             work_dir: gone,
+            managed: false,
             ..f.projects()[0].clone()
         }];
         let ran = tick(
@@ -581,6 +602,7 @@ mod tests {
             section: "gotchas".into(),
             queued_at: at,
             memory: true,
+            forced: false,
         };
         let alias = f.alias.clone();
         sync::with_store(&f.store(), |s| {
@@ -665,11 +687,13 @@ mod tests {
         list.push(TrackedProject {
             alias: format!("{}-b", f.alias),
             work_dir: second.path().to_path_buf(),
+            managed: false,
             ..list[0].clone()
         });
         list.push(TrackedProject {
             alias: format!("{}-gone", f.alias),
             work_dir: f.work.path().join("missing"),
+            managed: false,
             ..list[0].clone()
         });
         sync::with_store(&f.store(), |s| s.sync_requested = true).unwrap();
@@ -723,6 +747,7 @@ mod tests {
             section: slug.into(),
             queued_at: local(11, 9, 0),
             memory: false,
+            forced: false,
         };
         sync::with_store(&f.store(), |s| {
             s.queued.insert(f.alias.clone(), vec![q("stack")]);
@@ -730,6 +755,7 @@ mod tests {
         .unwrap();
         let gone = vec![TrackedProject {
             work_dir: f.work.path().join("missing"),
+            managed: false,
             ..f.projects()[0].clone()
         }];
         let sent = Sent::default();
@@ -746,5 +772,31 @@ mod tests {
         .unwrap();
         assert!(tick_notify(&f, f.projects(), &Drafts, &sent));
         assert_eq!(sent.borrow().len(), 1, "nothing new to say");
+    }
+
+    #[test]
+    fn a_forced_entry_is_processed_with_the_switch_off_and_ordinary_ones_wait() {
+        let f = Fx::new();
+        let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
+        sync::with_store(&f.store(), |s| {
+            s.settings.enabled = false;
+            let q = |slug: &str, forced: bool| sync::QueuedSection {
+                section: slug.into(),
+                queued_at: local(11, 9, 0),
+                memory: true,
+                forced,
+            };
+            s.queued.insert(
+                f.alias.clone(),
+                vec![q("overview", true), q("gotchas", false)],
+            );
+            s.queued.insert("other".into(), vec![q("stack", false)]);
+        })
+        .unwrap();
+        assert!(f.tick(&a, local(11, 10, 0), &mut st));
+        let left = sync::load(&f.store()).unwrap().queued;
+        assert_eq!(left[&f.alias].len(), 1, "{left:?}");
+        assert_eq!(left[&f.alias][0].section, "gotchas");
+        assert_eq!(left["other"].len(), 1);
     }
 }

@@ -591,6 +591,17 @@ pub struct IssueDigest {
     /// The newest task-memory lessons (their one-line description), at most
     /// [`DIGEST_LESSONS`], each cut to [`LESSON_CHARS`] characters.
     pub lessons: Vec<String>,
+    /// Wiki pages a person pointed the project's Memory at (see `profile_wiki`),
+    /// capped and secret-free.
+    pub wiki: Vec<WikiExcerpt>,
+}
+
+/// One saved wiki page as a prompt sees it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WikiExcerpt {
+    pub title: String,
+    pub url: String,
+    pub text: String,
 }
 
 pub const DIGEST_LESSONS: usize = 20;
@@ -744,6 +755,7 @@ pub fn digest_issues_cached(
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let sig = dir_signature(&dir, &mut h)
         .and_then(|()| dir_signature(&mem_dir, &mut h))
+        .and_then(|()| dir_signature(&crate::profile_wiki::wiki_dir(alias, memory_root), &mut h))
         .map(|()| h);
     let key = (
         dir.clone(),
@@ -909,6 +921,7 @@ pub(crate) fn digest_from(
             .collect(),
         cross_refs: cross,
         lessons,
+        wiki: crate::profile_wiki::prompt_pages(alias, memory_root),
     }
 }
 

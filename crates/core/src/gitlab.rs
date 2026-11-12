@@ -228,6 +228,24 @@ impl Client {
         }
     }
 
+    /// Environment that lets `git` authenticate to this instance over HTTP without
+    /// the token touching argv, the remote URL or `.git/config`.
+    pub fn git_auth_env(&self) -> Vec<(String, String)> {
+        use base64::Engine;
+        let basic =
+            base64::engine::general_purpose::STANDARD.encode(format!("oauth2:{}", self.token));
+        vec![
+            ("GIT_CONFIG_COUNT".into(), "1".into()),
+            ("GIT_CONFIG_KEY_0".into(), "http.extraHeader".into()),
+            (
+                "GIT_CONFIG_VALUE_0".into(),
+                format!("Authorization: Basic {basic}"),
+            ),
+            ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+            ("GIT_ASKPASS".into(), "true".into()),
+        ]
+    }
+
     /// The API base (`https://host/api/v4`) of this client.
     pub fn api_base(&self) -> &str {
         &self.api_url
@@ -778,6 +796,22 @@ mod tests {
             "{}",
             requests[1]
         );
+    }
+
+    #[test]
+    fn git_auth_env_has_header_and_no_prompt() {
+        use base64::Engine;
+        let c = Client::with_token("https://gl.example.com", "glpat-abc".into());
+        let env: std::collections::HashMap<_, _> = c.git_auth_env().into_iter().collect();
+        assert_eq!(env["GIT_CONFIG_COUNT"], "1");
+        assert_eq!(env["GIT_CONFIG_KEY_0"], "http.extraHeader");
+        let want = base64::engine::general_purpose::STANDARD.encode("oauth2:glpat-abc");
+        assert_eq!(
+            env["GIT_CONFIG_VALUE_0"],
+            format!("Authorization: Basic {want}")
+        );
+        assert_eq!(env["GIT_TERMINAL_PROMPT"], "0");
+        assert_eq!(env["GIT_ASKPASS"], "true");
     }
 
     #[test]

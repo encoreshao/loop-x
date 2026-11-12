@@ -129,6 +129,10 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-btn:focus-visible,.mem-select:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-head .mem-actions{margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--md-outline-variant)}
 .mem-hint{font-size:.82rem}
+.mem-wiki-list{list-style:none;margin:0 0 .75rem;padding:0;display:flex;flex-direction:column;gap:.4rem}
+.mem-wiki-list li{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .75rem}
+.mem-wiki-list a{color:var(--md-primary);text-decoration:none;font-weight:500}
+.mem-wiki-list a:hover{text-decoration:underline}
 .mem-detail .mem-actions{margin:0 0 .9rem}
 .mem-refresh{order:1}
 .mem-edit{order:2;min-width:0}

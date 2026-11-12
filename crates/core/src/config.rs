@@ -21,6 +21,15 @@ pub fn changes_code(project: &Value) -> bool {
         .is_some_and(|p| !p.trim().is_empty())
 }
 
+/// Whether Memory may profile this project from a managed clone when it has no
+/// local checkout: false only when explicitly `"memory_clone": false`.
+pub fn memory_clone_enabled(project: &Value) -> bool {
+    project
+        .get("memory_clone")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error(

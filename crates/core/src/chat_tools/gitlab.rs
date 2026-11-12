@@ -56,7 +56,7 @@ fn netloc(url: &str) -> String {
     }
 }
 
-fn host(account: &Account) -> String {
+pub(super) fn host(account: &Account) -> String {
     netloc(account.setting("url"))
 }
 

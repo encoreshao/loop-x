@@ -185,12 +185,14 @@ fn profile_lifecycle_end_to_end() {
                 instance: "main".into(),
                 project_id: "group/web".into(),
                 work_dir: web_dir.clone(),
+                managed: false,
             },
             TrackedProject {
                 alias: "api".into(),
                 instance: "main".into(),
                 project_id: "group/api".into(),
                 work_dir: api_dir.clone(),
+                managed: false,
             },
         ]
     };
