@@ -21,6 +21,7 @@ pub struct TickState {
 /// Process the event-driven queue, then run the sync if it is due (a slot passed since the last run) or was requested.
 /// Returns whether it did anything. Writes nothing unless it runs; with the weekly switch
 /// off only an explicit "Sync now" request runs.
+#[allow(clippy::too_many_arguments)]
 pub fn tick(
     store_path: &Path,
     projects: impl FnOnce() -> Vec<TrackedProject>,
@@ -29,6 +30,7 @@ pub fn tick(
     state: &mut TickState,
     root: Option<&Path>,
     approvals_dir: &Path,
+    activity: Option<&Path>,
 ) -> bool {
     let Ok(store) = sync::load_keeping_bad(store_path) else {
         return false;
@@ -40,7 +42,15 @@ pub fn tick(
     let mut loaded: Option<Vec<TrackedProject>> = None;
     if store.settings.enabled && store.queued.values().any(|v| !v.is_empty()) {
         let list = loaded.insert(projects.take().map_or_else(Vec::new, |f| f()));
-        let res = sync::process_queue(&store.queued, list, agent, now, root, approvals_dir);
+        let res = sync::process_queue_with_progress(
+            &store.queued,
+            list,
+            agent,
+            now,
+            root,
+            approvals_dir,
+            activity,
+        );
         let _ = sync::with_store(store_path, |s| {
             for (alias, slug) in res.done {
                 // Only the entry this pass worked on: one queued again meanwhile
@@ -87,7 +97,7 @@ pub fn tick(
     if claimed.is_err() {
         return ran_queue;
     }
-    let results = sync::sync_all(&list, agent, now, root, approvals_dir);
+    let results = sync::sync_all_with_progress(&list, agent, now, root, approvals_dir, activity);
     let _ = sync::with_store(store_path, |s| {
         for (alias, outcome) in results {
             s.status
@@ -99,7 +109,10 @@ pub fn tick(
 }
 
 /// The dashboard daemon's profile sync loop. Changing the schedule needs no restart.
-pub fn start_profile_sync() {
+/// Each build and refresh it runs is a live job under `activity` (the checkout's
+/// `outputs/agent-activity.json`, which the Agents and Terminal pages and the Mac
+/// app read).
+pub fn start_profile_sync(activity: std::path::PathBuf) {
     std::thread::spawn(move || {
         let mut state = TickState::default();
         loop {
@@ -111,6 +124,7 @@ pub fn start_profile_sync() {
                 &mut state,
                 None,
                 &approvals::default_dir(),
+                Some(&activity),
             );
             std::thread::sleep(LOOK_EVERY);
         }
@@ -158,6 +172,9 @@ mod tests {
                 ),
             }
         }
+        fn activity(&self) -> std::path::PathBuf {
+            self.dir.path().join("outputs/agent-activity.json")
+        }
         fn store(&self) -> std::path::PathBuf {
             self.dir.path().join("profile_sync.json")
         }
@@ -178,6 +195,7 @@ mod tests {
                 &mut TickState::default(),
                 Some(self.dir.path()),
                 &self.dir.path().join("approvals"),
+                Some(&self.activity()),
             )
         }
         fn tick(&self, agent: &Counting, now: DateTime<Utc>, st: &mut TickState) -> bool {
@@ -189,6 +207,7 @@ mod tests {
                 st,
                 Some(self.dir.path()),
                 &self.dir.path().join("approvals"),
+                Some(&self.activity()),
             )
         }
     }
@@ -238,6 +257,47 @@ mod tests {
     }
 
     #[test]
+    fn a_sync_run_is_a_live_job_and_leaves_no_record_behind() {
+        let f = Fx::new();
+        with_a_file(&f);
+        sync::with_store(&f.store(), |s| s.sync_requested = true).unwrap();
+        let base = f.activity();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let a = During(
+            || {
+                seen.borrow_mut()
+                    .push(loopx_core::profile_progress::running(&base))
+            },
+            Cell::new(0),
+        );
+        assert!(f.tick_with(&a, local(11, 10, 0)));
+        let live = seen.borrow();
+        let kinds: Vec<(String, String)> = live[0]
+            .iter()
+            .map(|j| (j.kind.clone(), j.alias.clone()))
+            .collect();
+        assert!(
+            kinds.contains(&("sync".into(), f.alias.clone())),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("build".into(), f.alias.clone())),
+            "{kinds:?}"
+        );
+        assert!(loopx_core::profile_progress::running(&base).is_empty());
+        let trace =
+            std::fs::read_to_string(f.dir.path().join("outputs/agent-trace.jsonl")).unwrap();
+        assert!(
+            trace.contains("\"phase\":\"failed\"") && trace.contains("the AI call failed"),
+            "{trace}"
+        );
+        assert!(
+            !trace.contains("no AI CLI in tests"),
+            "the error text stays out: {trace}"
+        );
+    }
+
+    #[test]
     fn sync_now_runs_even_off_schedule_and_clears_the_flag() {
         let f = Fx::new();
         let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
@@ -281,6 +341,7 @@ mod tests {
             &mut st,
             Some(f.dir.path()),
             &f.dir.path().join("approvals"),
+            Some(&f.activity()),
         );
         assert!(ran);
         let s = sync::load(&f.store()).unwrap();
@@ -374,6 +435,7 @@ mod tests {
             &mut st,
             Some(f.dir.path()),
             &f.dir.path().join("approvals"),
+            Some(&f.activity()),
         );
         assert!(ran);
         let s = sync::load(&f.store()).unwrap();
@@ -418,6 +480,7 @@ mod tests {
             &mut TickState::default(),
             Some(f.dir.path()),
             &f.dir.path().join("approvals"),
+            Some(&f.activity()),
         );
         assert!(ran);
         assert_eq!(a.1.get(), 1, "the build ran");

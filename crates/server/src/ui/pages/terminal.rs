@@ -37,11 +37,11 @@ fn running_html(running: &[String]) -> String {
         .collect()
 }
 
-/// Everything running now: each running loop or job (what the topbar island shows),
-/// then what each GitLab agent is doing.
+/// Everything running now: each running loop or job (what the topbar island shows,
+/// project profile jobs included, translated), then what each GitLab agent is doing.
 fn running_lines(ctx: &UiCtx) -> Vec<String> {
     let mut out = super::queue::running_summaries(ctx);
-    out.extend(live_trace::running_now(&ctx.state.status_path_for_loop("issue-loop")));
+    out.extend(live_trace::agents_running_now(&ctx.state.status_path_for_loop("issue-loop")));
     out
 }
 
@@ -65,7 +65,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
 <input type='search' class='term-input' id='term-q' placeholder='{ph}' aria-label='{ph}'>\
 <select class='term-select' id='term-scope' aria-label='{scope_l}'><option value=''>{all_scopes}</option></select>\
 <div class='term-seg' role='group' aria-label='{src_l}'>\
-<button type='button' class='on' data-src=''>{all}</button><button type='button' data-src='step'>{steps}</button><button type='button' data-src='agent'>{agents}</button></div>\
+<button type='button' class='on' data-src=''>{all}</button><button type='button' data-src='step'>{steps}</button><button type='button' data-src='agent'>{agents}</button><button type='button' data-src='profile'>{profiles}</button></div>\
 <button type='button' class='term-btn' id='term-attn' aria-pressed='false'>{attn}</button></div>\
 <div class='term-now' id='term-now'>{now}</div>\
 <div class='term' id='term' role='log' aria-live='polite' data-after='{cursor}' data-pause='{pause}' data-resume='{resume}' data-idle='{idle}'>{empty}{lines}</div>\
@@ -77,6 +77,7 @@ fn page(ctx: &UiCtx) -> UiResponse {
         all = pyfmt::escape(&ctx.t("All")),
         steps = pyfmt::escape(&ctx.t("Steps")),
         agents = pyfmt::escape(&ctx.t("Agent tools")),
+        profiles = pyfmt::escape(&ctx.t("Profile builds")),
         attn = pyfmt::escape(&ctx.t("Needs attention")),
         title = pyfmt::escape(&ctx.t("Terminal")),
         live = pyfmt::escape(&ctx.t("Live")),
@@ -185,6 +186,39 @@ mod tests {
         let lines: serde_json::Value =
             serde_json::from_str(&st.registry.dispatch(&st, &UiRequest::get("/terminal/lines")).unwrap().body_text()).unwrap();
         assert_eq!(lines["running"].as_array().unwrap().len(), 1, "{lines}");
+    }
+
+    #[test]
+    fn a_running_profile_job_shows_once_translated_in_the_strip_and_its_steps_stream_in() {
+        use loopx_core::profile_progress::{JobKind, ProfileJob, Progress, Step};
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None)
+            .with_events_dir(&d.path().join("events"));
+        let base = loopx_core::agent_activity::beside(&d.path().join("outputs/status.json"));
+        let job = ProfileJob::start(&base, JobKind::Build, "web");
+        job.step(3, 5, Step::Ai);
+        let get = |path: &str, lang: &str| {
+            st.registry
+                .dispatch(&st, &UiRequest::get(path).with_header("cookie", &format!("loop_lang={lang}")))
+                .unwrap()
+                .body_text()
+        };
+        let page = get("/terminal", "en");
+        let now = page.split("id='term-now'>").nth(1).unwrap().split("<div class='term' ").next().unwrap();
+        assert_eq!(now.matches("Profile \u{b7} web").count(), 1, "{now}");
+        assert!(now.contains("Profile \u{b7} web \u{2014} Asking the AI (3/5)"), "{now}");
+        assert!(page.contains("data-src='profile'>Profile builds</button>"), "a filter for them");
+        assert!(page.contains("data-src='profile' data-scope='Profile \u{b7} web'"), "{page}");
+        assert!(page.contains("step 3/5: Asking the AI"), "{page}");
+        let fr: serde_json::Value = serde_json::from_str(&get("/terminal/lines", "fr")).unwrap();
+        assert_eq!(fr["running"], serde_json::json!(["Profil \u{b7} web \u{2014} Interrogation de l'IA (3/5)"]));
+        job.fail("boom glpat-abcdefghij0123456789");
+        drop(job);
+        let after: serde_json::Value = serde_json::from_str(&get("/terminal/lines", "en")).unwrap();
+        assert_eq!(after["running"], serde_json::json!([]));
+        let html = after["html"].as_str().unwrap();
+        assert!(html.contains("failed at step 3/5 (Asking the AI): details hidden"), "{html}");
+        assert!(!html.contains("glpat"), "{html}");
     }
 
     #[test]

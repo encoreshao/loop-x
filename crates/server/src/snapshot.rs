@@ -138,8 +138,12 @@ pub fn loop_statuses(outputs: &Path) -> Map<String, Value> {
         .get_mut("issue-loop")
         .filter(|d| d["state"] == "running")
     {
-        let all =
-            loopx_core::agent_activity::read_all(&loopx_core::agent_activity::beside(&legacy));
+        // Profile jobs write beside them but are listed as their own entries.
+        let all: Vec<Value> =
+            loopx_core::agent_activity::read_all(&loopx_core::agent_activity::beside(&legacy))
+                .into_iter()
+                .filter(|a| !loopx_core::profile_progress::is_profile_record(a))
+                .collect();
         if let Some(newest) = all.first() {
             doc["agent_activity"] = newest.clone();
             doc["agent_activities"] = Value::Array(all);
@@ -324,6 +328,13 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         now,
     ) {
         loops.insert("mr-fix".to_string(), entry);
+    }
+    // Running project profile jobs (a build, a section refresh, the sync): one
+    // entry each, `profile:<alias>` or `profile-sync`, with the step fields.
+    for job in loopx_core::profile_progress::running(&loopx_core::agent_activity::beside(
+        &paths.outputs.join("status.json"),
+    )) {
+        loops.insert(job.snapshot_key(), job.island_status());
     }
     let state = app_state(&loops, pending.len());
 
@@ -738,6 +749,75 @@ mod tests {
         assert!(s["loops"]["issue-loop"].get("agent_activity").is_none());
         let mut child = child;
         let _ = child.kill();
+    }
+
+    #[test]
+    fn a_running_profile_job_is_a_running_agent_with_its_step_for_the_island() {
+        use loopx_core::profile_progress::{JobKind, ProfileJob, Progress, Step};
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let base = loopx_core::agent_activity::beside(&p.outputs.join("status.json"));
+        let sync = ProfileJob::start(&base, JobKind::Sync, "");
+        sync.project(2, 3, "web");
+        let job = ProfileJob::start(&base, JobKind::Build, "web");
+        job.step(3, 5, Step::Ai);
+        let s = build_snapshot(&p, now());
+        let l = &s["loops"]["profile:web"];
+        assert_eq!(l["state"], "running", "{s}");
+        assert_eq!(l["current_issue"], "Profile \u{b7} web");
+        assert_eq!(l["current_step"], "Asking the AI \u{b7} step 3 of 5");
+        assert_eq!(
+            (
+                l["kind"].as_str(),
+                l["alias"].as_str(),
+                l["step"].as_u64(),
+                l["steps"].as_u64()
+            ),
+            (Some("build"), Some("web"), Some(3), Some(5))
+        );
+        assert_eq!(l["step_name"], "Asking the AI");
+        let all = &s["loops"]["profile-sync"];
+        assert_eq!(
+            (
+                all["kind"].as_str(),
+                all["step"].as_u64(),
+                all["steps"].as_u64()
+            ),
+            (Some("sync"), Some(2), Some(3))
+        );
+        assert_eq!(all["step_name"], "web");
+        assert_eq!(s["app_state"], "running");
+        assert_eq!(s["needs_you"]["count"], 0);
+        drop((job, sync));
+        let s = build_snapshot(&p, now());
+        assert!(
+            s["loops"].get("profile:web").is_none() && s["loops"].get("profile-sync").is_none(),
+            "{s}"
+        );
+        assert_eq!(s["app_state"], "idle");
+    }
+
+    #[test]
+    fn the_gitlab_loops_agent_list_leaves_out_profile_jobs() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        status::write_status(
+            &p.outputs.join("status.json"),
+            "running",
+            &[("pid", json!(std::process::id()))],
+        )
+        .unwrap();
+        let base = loopx_core::agent_activity::beside(&p.outputs.join("status.json"));
+        let _job = loopx_core::profile_progress::ProfileJob::start(
+            &base,
+            loopx_core::profile_progress::JobKind::Build,
+            "web",
+        );
+        let s = build_snapshot(&p, now());
+        assert!(
+            s["loops"]["issue-loop"].get("agent_activity").is_none(),
+            "{s}"
+        );
     }
 
     #[test]

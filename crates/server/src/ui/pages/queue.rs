@@ -7,7 +7,7 @@ use crate::ui::badge::{default_badge, progress_text};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
 use crate::ui::state::UiState;
-use crate::ui::{consts, icons, pyfmt};
+use crate::ui::{consts, icons, profile_jobs, pyfmt};
 use chrono::{Local, NaiveDateTime};
 use loopx_core::run_queue::{self, Entry, RunQueue, Snapshot};
 use serde_json::json;
@@ -73,6 +73,7 @@ fn agent_activity(ctx: &UiCtx) -> Option<String> {
     let base = loopx_core::agent_activity::beside(&ctx.state.status_path_for_loop("issue-loop"));
     let lines: Vec<String> = loopx_core::agent_activity::read_all(&base)
         .iter()
+        .filter(|a| !loopx_core::profile_progress::is_profile_record(a))
         .filter_map(|a| one_activity(ctx, a))
         .collect();
     (!lines.is_empty()).then(|| lines.join(" · "))
@@ -171,13 +172,24 @@ fn mr_fix_running(ctx: &UiCtx) -> Vec<(String, serde_json::Value)> {
 
 /// What a running loop is doing right now, from its status file: the GitLab loop
 /// first (it also runs outside the queue), then each running queue entry, then a
-/// running Creator job.
+/// running Creator job, then a project profile job. A profile job not shown is
+/// counted ("· +1 more").
 fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
-    std::iter::once("issue-loop")
+    let profiles = profile_jobs::running(ctx);
+    let (shown, rest) = match std::iter::once("issue-loop")
         .chain(snap.running.iter().map(|e| e.loop_name.as_str()))
         .find_map(|name| live_status(ctx, name))
         .or_else(|| creator_running(ctx).into_iter().next().map(|(_, doc)| doc))
         .map(|status| progress_text(ctx.lang, &status))
+    {
+        Some(text) => (text, profiles.len()),
+        None => (profile_jobs::progress_text(ctx, profiles.first()?), profiles.len() - 1),
+    };
+    Some(if rest > 0 {
+        ctx.tf("{progress} · +{count} more", &[("progress", &shown), ("count", &rest.to_string())])
+    } else {
+        shown
+    })
 }
 
 /// One line per running loop or job, as the topbar pill sees them: the GitLab
@@ -211,6 +223,7 @@ pub fn running_summaries(ctx: &UiCtx) -> Vec<String> {
         }
     }
     out.extend(creator_running(ctx).iter().map(|(name, status)| line(name, status)));
+    out.extend(profile_jobs::running(ctx).iter().map(|j| profile_jobs::progress_text(ctx, j)));
     out
 }
 
@@ -343,6 +356,40 @@ fn row(ctx: &UiCtx, e: &Entry, detail: &str, actions: &str) -> String {
     )
 }
 
+/// A running project profile job: its name linking to the project's Memory page,
+/// its kind, what it is doing ("Asking the AI · step 3 of 5") and a step bar.
+fn profile_row(ctx: &UiCtx, job: &loopx_core::profile_progress::JobView) -> String {
+    let since = chrono::DateTime::parse_from_rfc3339(&job.started_at)
+        .map(|t| (ctx.state.now() - t.with_timezone(&chrono::Utc)).num_seconds().max(0))
+        .ok();
+    let step = profile_jobs::step_detail(ctx, job);
+    let detail = match since {
+        Some(secs) => format!("{step} · {}", ctx.tf("running for {time}", &[("time", &short_age(secs))])),
+        None => step,
+    };
+    let bar = if job.steps > 0 {
+        let pct = (job.step.min(job.steps) * 100) / job.steps;
+        format!(
+            "<div class='queue-progress' role='progressbar' aria-label='{}' aria-valuemin='0' aria-valuenow='{}' aria-valuemax='{}'><span style='width:{pct}%'></span></div>",
+            pyfmt::escape(&ctx.t("Progress")),
+            job.step.min(job.steps),
+            job.steps,
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<div class='history-entry queue-row'><div class='history-entry-header'><strong><a href='{}'>{}</a></strong>\
+         <div class='pill-row'><span class='pill pill-blue'>{}</span><span class='pill pill-outline'>{}</span></div></div>\
+         <p class='history-entry-overview'>{}</p>{bar}</div>",
+        pyfmt::escape(&profile_jobs::href(job)),
+        pyfmt::escape(&profile_jobs::title(ctx, job)),
+        pyfmt::escape(&ctx.t("Running")),
+        pyfmt::escape(&profile_jobs::kind_label(ctx, job)),
+        pyfmt::escape(&detail),
+    )
+}
+
 fn section(ctx: &UiCtx, title: &str, empty: &str, rows: Vec<String>) -> String {
     let inner = if rows.is_empty() {
         format!("<p>{}</p>", pyfmt::escape(&ctx.t(empty)))
@@ -401,9 +448,11 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
         };
         row(ctx, &e, &detail, "")
     });
+    let profiles: Vec<String> = profile_jobs::running(ctx).iter().map(|j| profile_row(ctx, j)).collect();
     let running = outside
         .into_iter()
         .chain(creator)
+        .chain(profiles)
         .chain(snap.running.iter().map(|e| {
             let progress = live_status(ctx, &e.loop_name)
                 .map(|s| with_agent_activity(ctx, &e.loop_name, progress_text(ctx.lang, &s)));
@@ -464,7 +513,7 @@ fn fragment_html(ctx: &UiCtx) -> String {
 
 fn body_html(ctx: &UiCtx) -> String {
     format!(
-        "<h1>{}</h1><p>{}</p>{}<div id='queue-root' class='queue-root'>{}</div>{SCRIPT}",
+        "<h1>{}</h1><p>{}</p>{}<div id='queue-root' class='queue-root'>{}</div>{STYLE}{SCRIPT}",
         pyfmt::escape(&ctx.t("Agents")),
         pyfmt::escape(&ctx.t(
             "Loops that are due wait here and run one at a time; a run you start by hand goes first."
@@ -473,6 +522,14 @@ fn body_html(ctx: &UiCtx) -> String {
         fragment_html(ctx),
     )
 }
+
+/// The step bar of a running project profile job: a hairline track with the
+/// accent fill, eased as it moves.
+const STYLE: &str = "<style>\
+.queue-progress{height:4px;margin-top:.6rem;border-radius:999px;background:var(--md-surface-container-highest);overflow:hidden}\
+.queue-progress>span{display:block;height:100%;border-radius:inherit;background:var(--md-primary);transition:width .3s cubic-bezier(0.32,0.72,0,1)}\
+@media (prefers-reduced-motion:reduce){.queue-progress>span{transition:none}}\
+</style>";
 
 /// Refreshes the page every 3 s and presses the row buttons.
 const SCRIPT: &str = "<script>(function(){\
@@ -821,6 +878,88 @@ mod tests {
         );
         let pill = st.registry.dispatch(&st, &UiRequest::get("/queue/pill")).unwrap().body_text();
         assert!(pill.contains(r#""label": "Analyzing""#), "{pill}");
+    }
+
+    fn profile_job(d: &std::path::Path, alias: &str, n: usize) -> loopx_core::profile_progress::ProfileJob {
+        use loopx_core::profile_progress::{JobKind, ProfileJob, Progress, Step};
+        let base = loopx_core::agent_activity::beside(&d.join("outputs/status.json"));
+        let job = ProfileJob::start(&base, JobKind::Build, alias);
+        let step = [Step::Scan, Step::Issues, Step::Ai, Step::Check, Step::Save][n - 1];
+        job.step(n, 5, step);
+        job
+    }
+
+    fn get(st: &UiState, path: &str, lang: &str) -> String {
+        st.registry
+            .dispatch(st, &UiRequest::get(path).with_header("cookie", &format!("loop_lang={lang}")))
+            .unwrap()
+            .body_text()
+    }
+
+    #[test]
+    fn a_running_profile_build_shows_its_step_in_the_pill_and_as_an_agents_row() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let _job = profile_job(d.path(), "web", 3);
+        let pill: serde_json::Value = serde_json::from_str(&get(&st, "/queue/pill", "en")).unwrap();
+        assert_eq!(pill["label"], "Profile \u{b7} web \u{2014} Asking the AI (3/5)");
+        assert_eq!(pill["class"], "pill pill-blue");
+        assert!(pill["icon"].as_str().unwrap().contains("md-spinner"), "{pill}");
+        let html = get(&st, "/queue/fragment", "en");
+        assert!(!html.contains("Nothing is running"), "{html}");
+        assert!(html.contains("href='/insights?view=memory&amp;project=web'"), "{html}");
+        assert!(html.contains("Profile \u{b7} web") && html.contains("Profile build"), "{html}");
+        assert!(html.contains("Asking the AI \u{b7} step 3 of 5"), "{html}");
+        assert!(html.contains("class='queue-progress'") && html.contains("aria-valuenow='3' aria-valuemax='5'"), "{html}");
+        let shell = get(&st, "/runs", "en");
+        assert!(shell.contains("Profile \u{b7} web \u{2014} Asking the AI (3/5)"), "the header pill");
+    }
+
+    #[test]
+    fn profile_steps_are_translated() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let _job = profile_job(d.path(), "web", 3);
+        let pill: serde_json::Value = serde_json::from_str(&get(&st, "/queue/pill", "fr")).unwrap();
+        assert_eq!(pill["label"], "Profil \u{b7} web \u{2014} Interrogation de l'IA (3/5)");
+        let html = get(&st, "/queue/fragment", "fr");
+        assert!(!html.contains("Asking the AI") && !html.contains("Profile build"), "{html}");
+        assert!(html.contains("Interrogation de l&#x27;IA \u{b7} étape 3 sur 5"), "escaped in the page: {html}");
+    }
+
+    #[test]
+    fn a_second_profile_job_is_counted_in_the_pill() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let _a = profile_job(d.path(), "web", 3);
+        let _b = profile_job(d.path(), "api", 1);
+        let pill: serde_json::Value = serde_json::from_str(&get(&st, "/queue/pill", "en")).unwrap();
+        assert!(pill["title"].as_str().unwrap().ends_with(" \u{b7} +1 more"), "{pill}");
+        let html = get(&st, "/queue/fragment", "en");
+        assert_eq!(html.matches("Profile build").count(), 2, "{html}");
+    }
+
+    #[test]
+    fn a_profile_record_never_echoes_its_free_text_and_is_not_an_issue_agent() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        write_status(d.path(), "status.json", r#"{"state": "running", "current_step": "analyzing"}"#);
+        write_status(
+            d.path(),
+            "agent-activity/profile.web.json",
+            &serde_json::json!({"at": chrono::Utc::now().to_rfc3339(), "label": "<img src=x>", "event": "Profile",
+                "tool": "profile", "detail": "<b>README says hi</b>", "kind": "build", "section": null,
+                "alias": "web", "step": 2, "steps": 5, "step_code": "issues"})
+            .to_string(),
+        );
+        let html = get(&st, "/queue/fragment", "en");
+        assert!(html.contains("Reading issues \u{b7} step 2 of 5"), "{html}");
+        assert!(!html.contains("README") && !html.contains("img src"), "{html}");
+        assert!(!html.contains("Agent is"), "a profile job is not one of the issue loop's agents: {html}");
+        let gone = get(&st, "/queue/fragment", "en");
+        assert!(gone.contains("Profile build"));
+        std::fs::remove_file(d.path().join("outputs/agent-activity/profile.web.json")).unwrap();
+        assert!(!get(&st, "/queue/fragment", "en").contains("Profile build"));
     }
 
     #[test]

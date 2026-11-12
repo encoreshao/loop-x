@@ -82,6 +82,8 @@
     {"id": "runs-running-loop-runs", "path": "/runs?view=loop-runs", "overlay": "runs-running"},
     {"id": "runs-running-logs", "path": "/runs?view=logs", "overlay": "runs-running", "langs": ["en", "fr"]},
     {"id": "runs-incomplete-only", "path": "/runs", "overlay": "runs-incomplete-only"},
-    {"id": "runs-claude-logs", "path": "/runs?view=logs", "overlay": "runs-claude", "langs": ["en"]}
+    {"id": "runs-claude-logs", "path": "/runs?view=logs", "overlay": "runs-claude", "langs": ["en"]},
+    {"id": "agents-profile-running", "path": "/queue", "overlay": "profile-progress"},
+    {"id": "terminal-profile-running", "path": "/terminal", "overlay": "profile-progress"}
   ]
 }

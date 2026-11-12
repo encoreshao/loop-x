@@ -154,7 +154,9 @@ pub async fn serve(opts: ServeOptions, on_ready: impl FnOnce(u16)) -> Result<(),
     let state = AppState::new(opts.root.clone(), token);
     start_creator_slack_notifier(&state);
     todos_tick::start_todos_sync();
-    profile_tick::start_profile_sync();
+    profile_tick::start_profile_sync(loopx_core::agent_activity::beside(
+        &opts.root.join("outputs").join("status.json"),
+    ));
     on_ready(port);
     run_on(listener, state, termination()).await
 }

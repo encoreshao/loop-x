@@ -435,6 +435,7 @@ fn profile_lifecycle_end_to_end() {
     assert!(!get(&state, "/insights?view=memory&project=web&page=stack").contains(SECRET));
 
     // (h) the weekly tick, default settings (on), an injected clock.
+    let activity = base.join("outputs").join("agent-activity.json");
     assert!(!store.exists());
     let tick_at = |now: DateTime<Utc>, st: &mut TickState| {
         tick(
@@ -445,6 +446,7 @@ fn profile_lifecycle_end_to_end() {
             st,
             Some(&root),
             &approvals_dir,
+            Some(&activity),
         )
     };
     let mut st = TickState::default();
@@ -454,6 +456,15 @@ fn profile_lifecycle_end_to_end() {
     );
     let calls = agent.calls();
     assert!(tick_at(local(16, 9, 1), &mut st), "past next_run: runs");
+    assert!(
+        loopx_core::profile_progress::running(&activity).is_empty(),
+        "the sync's live records are gone once it ends"
+    );
+    let trace = std::fs::read_to_string(base.join("outputs/agent-trace.jsonl")).unwrap();
+    assert!(
+        trace.contains("\"kind\":\"sync\"") && trace.contains("\"phase\":\"done\""),
+        "{trace}"
+    );
     let s = sync::load(&store).unwrap();
     assert_eq!(s.status.last_run, Some(local(16, 9, 1)));
     assert!(s.settings.enabled);
@@ -483,7 +494,8 @@ fn profile_lifecycle_end_to_end() {
         local(11, 10, 0),
         &mut off_state,
         Some(&root),
-        &approvals_dir
+        &approvals_dir,
+        Some(&activity),
     ));
     assert!(!tick(
         &off_store,
@@ -492,7 +504,8 @@ fn profile_lifecycle_end_to_end() {
         local(30, 10, 0),
         &mut off_state,
         Some(&root),
-        &approvals_dir
+        &approvals_dir,
+        Some(&activity),
     ));
     assert_eq!(std::fs::read_to_string(&off_store).unwrap(), frozen);
     let nofile = base.join("off2").join("profile_sync.json");
@@ -506,7 +519,8 @@ fn profile_lifecycle_end_to_end() {
         local(30, 10, 0),
         &mut TickState::default(),
         Some(&root),
-        &approvals_dir
+        &approvals_dir,
+        Some(&activity),
     ));
     assert!(!nofile.exists());
 

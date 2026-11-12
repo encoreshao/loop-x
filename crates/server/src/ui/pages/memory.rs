@@ -32,6 +32,7 @@ use crate::ui::state::ProfileAgent;
 use chrono::{DateTime, Duration, Local, Utc};
 use loopx_core::profile_graph::{self, Edge, EdgeKind, Graph};
 use loopx_core::profile_build;
+use loopx_core::profile_progress::{JobKind as ProfileJobKind, ProfileJob};
 use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
 use loopx_core::profile_scan::IssueDigest;
@@ -2263,6 +2264,8 @@ struct JobEnv {
     home: PathBuf,
     root: PathBuf,
     approvals: PathBuf,
+    /// Where each job's live record goes (the Agents and Terminal pages, the Mac app).
+    activity: PathBuf,
     fixed_now: Option<DateTime<Utc>>,
     agent: ProfileAgent,
 }
@@ -2285,6 +2288,7 @@ fn job_env(ctx: &UiCtx) -> Option<JobEnv> {
         home: ctx.state.home_dir.clone(),
         root: memory_root(ctx),
         approvals: approvals_dir(ctx),
+        activity: crate::ui::profile_jobs::base(ctx),
         fixed_now: ctx.state.fixed_now,
         agent,
     })
@@ -2292,7 +2296,8 @@ fn job_env(ctx: &UiCtx) -> Option<JobEnv> {
 
 fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) {
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        profile_build::build_profile(
+        let job = ProfileJob::start(&env.activity, ProfileJobKind::Build, &t.alias);
+        profile_build::build_profile_with_progress(
             &t.alias,
             &t.work_dir,
             &t.instance,
@@ -2301,6 +2306,7 @@ fn run_build(env: &JobEnv, t: &TrackedProject, aliases: &[String]) {
             &*env.agent,
             env.now(),
             Some(&env.root),
+            Some(&job),
         )
     }))
     .unwrap_or_else(|_| Err("internal error".into()));
@@ -2449,12 +2455,13 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
     std::thread::spawn(move || {
         let _slot = slot;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let job = ProfileJob::start(&env.activity, ProfileJobKind::Refresh(key), &t.alias);
             let digest = if t.instance.is_empty() || t.project_id.is_empty() {
                 profile_scan::digest_for("", "", &t.alias, Some(&env.root))
             } else {
                 profile_scan::digest_issues_cached(&t.instance, &t.project_id, &t.alias, &gitlab_root, &data_root, Some(&env.root))
             };
-            profile_sync::propose_refresh_held(
+            profile_sync::propose_refresh_held_with_progress(
                 &t.alias,
                 key,
                 &t.work_dir,
@@ -2463,6 +2470,7 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
                 env.now(),
                 Some(&env.root),
                 &env.approvals,
+                Some(&job),
             )
         }))
         .unwrap_or_else(|_| Err("internal error".into()));
@@ -2929,8 +2937,12 @@ fn head_actions(ctx: &UiCtx, p: &Project, profile: Option<&Profile>) -> String {
 /// "Working…" while a run holds the project, else the last build or refresh result.
 fn job_line(ctx: &UiCtx, alias: &str) -> String {
     if profile_build::is_running(alias) {
+        // What the running job is doing now, from its live record.
+        let step = loopx_core::profile_progress::running_for(&crate::ui::profile_jobs::base(ctx), alias)
+            .map(|j| format!("<br>{}", escape(&crate::ui::profile_jobs::step_detail(ctx, &j))))
+            .unwrap_or_default();
         return format!(
-            "<div class='mem-job' role='status'>{}<p>{}</p></div>",
+            "<div class='mem-job' role='status'>{}<p>{}{step}</p></div>",
             spinner(),
             escape(&ctx.t("Working on this profile… This takes a few minutes; reload the page to see the result."))
         );
@@ -4046,6 +4058,56 @@ mod tests {
         assert_eq!(agent.calls.load(Ordering::SeqCst), 1);
         let page = sb.get("/insights?view=memory&project=build-a");
         assert!(page.contains("Profile built"), "{page}");
+    }
+
+    #[test]
+    fn a_running_build_is_a_live_agent_with_its_step_until_it_ends() {
+        let (agent, release) = FakeAgent::gated(full_reply("live-a", "Built"));
+        let sb = Sb::new(&[("live-a", true)]).with_agent(agent);
+        let base = loopx_core::agent_activity::beside(&sb.state.status_path_for_loop("issue-loop"));
+        sb.post_to("/insights/memory/build", "project=live-a&from=project");
+        let mut job = None;
+        for _ in 0..400 {
+            job = loopx_core::profile_progress::running_for(&base, "live-a").filter(|j| j.step_code == "ai");
+            if job.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let job = job.expect("the build reports that it is asking the AI");
+        assert_eq!((job.kind.as_str(), job.step, job.steps), ("build", 3, 5));
+        let agents = sb.get("/queue/fragment");
+        assert!(agents.contains("Asking the AI \u{b7} step 3 of 5"), "{agents}");
+        let page = sb.get("/insights?view=memory&project=live-a");
+        assert!(page.contains("Working on this profile") && page.contains("Asking the AI \u{b7} step 3 of 5"), "{page}");
+        release.send(()).unwrap();
+        wait_idle("live-a");
+        assert!(loopx_core::profile_progress::running(&base).is_empty());
+        let trace = std::fs::read_to_string(base.with_file_name("agent-trace.jsonl")).unwrap();
+        assert!(trace.lines().last().unwrap().contains("\"phase\":\"done\""), "{trace}");
+    }
+
+    #[test]
+    fn a_section_refresh_is_a_live_agent_too() {
+        let alias = "live-r";
+        let (agent, release) = FakeAgent::gated(one_section_reply(alias, SectionKey::Stack, "Fresh"));
+        let sb = Sb::new(&[(alias, true)]).with_agent(agent);
+        sb.save(&profile(alias, &[(SectionKey::Stack, section("Old", "Old body"))]));
+        let base = loopx_core::agent_activity::beside(&sb.state.status_path_for_loop("issue-loop"));
+        sb.post_to("/insights/memory/section/refresh", &format!("project={alias}&section=stack"));
+        let mut job = None;
+        for _ in 0..400 {
+            job = loopx_core::profile_progress::running_for(&base, alias).filter(|j| j.step_code == "ai");
+            if job.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let job = job.expect("the refresh reports that it is asking the AI");
+        assert_eq!((job.kind.as_str(), job.section.as_deref(), job.step, job.steps), ("refresh", Some("stack"), 2, 4));
+        release.send(()).unwrap();
+        wait_idle(alias);
+        assert!(loopx_core::profile_progress::running(&base).is_empty());
     }
 
     #[test]

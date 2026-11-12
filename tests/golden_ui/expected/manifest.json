@@ -2306,6 +2306,68 @@
      "file": "fr/issue-todos.html"
     }
    }
+  },
+  {
+   "id": "agents-profile-running",
+   "path": "/queue",
+   "overlay": "profile-progress",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/agents-profile-running.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/agents-profile-running.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/agents-profile-running.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/agents-profile-running.html"
+    }
+   }
+  },
+  {
+   "id": "terminal-profile-running",
+   "path": "/terminal",
+   "overlay": "profile-progress",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/terminal-profile-running.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/terminal-profile-running.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/terminal-profile-running.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/terminal-profile-running.html"
+    }
+   }
   }
  ]
 }

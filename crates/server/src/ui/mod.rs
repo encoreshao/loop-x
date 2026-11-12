@@ -33,6 +33,7 @@ pub mod markdown;
 pub mod nav;
 pub mod office;
 pub mod pages;
+pub mod profile_jobs;
 pub mod pyfmt;
 pub mod routes;
 pub mod shell;
