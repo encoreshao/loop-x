@@ -633,7 +633,7 @@ mod tests {
         let replies: Replies = Arc::default();
         let posted = replies.clone();
         let st = state(dir).with_mr_feedback_deps(Arc::new(move |_ctx, _definition, alias, iid| {
-            assert_eq!((alias, iid), ("ny-profile-web", "7"));
+            assert_eq!((alias, iid), ("web", "7"));
             Ok(Some(RoundDeps {
                 gitlab: Box::new(FakeGitlab { replies: posted.clone() }),
                 invoke: Box::new(|_| panic!("no agent runs in these tests")),
@@ -674,11 +674,11 @@ mod tests {
                 }),
             },
         );
-        t.save("ny-profile-web", 7, Some(&dir.join("memory"))).unwrap();
+        t.save("web", 7, Some(&dir.join("memory"))).unwrap();
     }
 
     fn thread(dir: &Path) -> ThreadState {
-        IssueThreads::load("ny-profile-web", 7, Some(&dir.join("memory"))).threads["d1"].clone()
+        IssueThreads::load("web", 7, Some(&dir.join("memory"))).threads["d1"].clone()
     }
 
     const ID: &str = "id=mr_thread%3Aweb%3A7%3Ad1";

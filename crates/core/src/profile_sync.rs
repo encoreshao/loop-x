@@ -183,8 +183,9 @@ fn section_prompt(
     key: SectionKey,
     old: Option<&Section>,
     scan: &profile_scan::Scan,
+    digest: &IssueDigest,
 ) -> String {
-    let data = fenced_data(scan, &IssueDigest::default());
+    let data = fenced_data(scan, digest);
     let current = old
         .map(|s| format!("{}\n\n{}", s.summary, s.body))
         .unwrap_or_else(|| "(none yet)".into());
@@ -273,6 +274,7 @@ pub fn propose_refresh(
     alias: &str,
     key: SectionKey,
     work_dir: &Path,
+    digest: &IssueDigest,
     agent: &dyn Agent,
     now: DateTime<Utc>,
     root: Option<&Path>,
@@ -280,7 +282,16 @@ pub fn propose_refresh(
 ) -> Result<Option<Proposal>, String> {
     let _guard = crate::profile_build::try_acquire(alias)
         .ok_or_else(|| format!("a profile run for {alias} is already in progress"))?;
-    propose_refresh_held(alias, key, work_dir, agent, now, root, approvals_dir)
+    propose_refresh_held(
+        alias,
+        key,
+        work_dir,
+        digest,
+        agent,
+        now,
+        root,
+        approvals_dir,
+    )
 }
 
 /// [`propose_refresh`] for a caller that already holds the alias's single-flight
@@ -291,6 +302,7 @@ pub fn propose_refresh_held(
     alias: &str,
     key: SectionKey,
     work_dir: &Path,
+    digest: &IssueDigest,
     agent: &dyn Agent,
     now: DateTime<Utc>,
     root: Option<&Path>,
@@ -310,7 +322,7 @@ pub fn propose_refresh_held(
     if already_raised(approvals_dir, &profile, alias, key, &hash, &base, root) {
         return Ok(None);
     }
-    let prompt = section_prompt(alias, key, old, &scan);
+    let prompt = section_prompt(alias, key, old, &scan, digest);
     guard_prompt(&prompt)?;
     let reply = agent.run(&prompt)?;
     let mut drafted = project_profile::parse(&reply)
@@ -923,6 +935,7 @@ pub fn process_queue(
             continue;
         };
         let head = profile_scan::head_sha(&p.work_dir);
+        let digest = std::cell::OnceCell::new();
         for e in entries {
             let Some(key) = SectionKey::from_slug(&e.section) else {
                 res.done.push((alias.clone(), e.section.clone()));
@@ -945,7 +958,19 @@ pub fn process_queue(
             }
             res.done.push((alias.clone(), e.section.clone()));
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                propose_refresh_held(alias, key, &p.work_dir, agent, now, root, approvals_dir)
+                let digest = digest.get_or_init(|| {
+                    profile_scan::digest_for(&p.instance, &p.project_id, alias, root)
+                });
+                propose_refresh_held(
+                    alias,
+                    key,
+                    &p.work_dir,
+                    digest,
+                    agent,
+                    now,
+                    root,
+                    approvals_dir,
+                )
             }));
             let err = match r {
                 Ok(Ok(_)) => continue,
@@ -1061,8 +1086,18 @@ fn sync_project(
         return Outcome::Skipped;
     }
     let (mut raised, mut first_err) = (0, None);
+    let digest = profile_scan::digest_for(&p.instance, &p.project_id, &p.alias, root);
     for key in stale {
-        match propose_refresh_held(&p.alias, key, &p.work_dir, agent, now, root, approvals_dir) {
+        match propose_refresh_held(
+            &p.alias,
+            key,
+            &p.work_dir,
+            &digest,
+            agent,
+            now,
+            root,
+            approvals_dir,
+        ) {
             Ok(Some(_)) => raised += 1,
             Ok(None) => {}
             Err(e) => {
@@ -1237,6 +1272,7 @@ mod tests {
                 &self.alias,
                 SectionKey::Gotchas,
                 self.work.path(),
+                &IssueDigest::default(),
                 a,
                 now(),
                 Some(self.root.path()),
@@ -1251,6 +1287,7 @@ mod tests {
                 &self.alias,
                 SectionKey::Stack,
                 self.work.path(),
+                &IssueDigest::default(),
                 agent,
                 now(),
                 Some(self.root.path()),
@@ -2017,6 +2054,37 @@ mod tests {
         on_run_finished_at(&blocked, &f.alias, &["Cargo.toml".into()], r, now());
         fs::write(&p, r#"{"sync_requested": true}"#).unwrap();
         assert!(load(&p).unwrap().queued.is_empty());
+    }
+
+    #[test]
+    fn a_memory_triggered_gotchas_refresh_sees_the_new_lesson_but_never_a_secret() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.sourceless();
+        let r = Some(f.root.path());
+        crate::memory_store::add_task_memory(
+            &f.alias,
+            7,
+            "Run the seed task before the specs",
+            &[],
+            None,
+            r,
+        )
+        .unwrap();
+        let secret = ["use glpat-", "abcDEF123456ghiJKL78 for the API"].concat();
+        crate::memory_store::add_task_memory(&f.alias, 8, &secret, &[], None, r).unwrap();
+        let q = queue(&f.alias, "gotchas", now(), true);
+        let res = run_queue(&f, &q, &agent);
+        assert!(res.failures.is_empty(), "{:?}", res.failures);
+        assert_eq!(agent.calls(), 1);
+        let prompt = agent.prompts.borrow()[0].clone();
+        assert!(
+            prompt.contains("Run the seed task before the specs"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("glpat") && !prompt.contains("abcDEF"));
+        // Inside the untrusted fence.
+        let fence = prompt.find("<untrusted>").unwrap();
+        assert!(prompt.find("Run the seed task").unwrap() > fence);
     }
 
     #[test]

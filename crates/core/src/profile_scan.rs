@@ -105,6 +105,17 @@ fn is_env_file(name: &str) -> bool {
     name.starts_with(".env") || name.ends_with(".env")
 }
 
+/// A checked-in env template (`.env.example`, `app.env.sample`, ...): the only
+/// env files hashed as sources. The real `.env` is a developer's own and must not
+/// make the Secrets section stale whenever a local value changes.
+pub(crate) fn is_env_template(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains(".env")
+        && [".example", ".sample", ".template", ".dist"]
+            .iter()
+            .any(|s| lower.ends_with(s))
+}
+
 fn walk(dir: &Path, rel: &str, depth: usize, out: &mut Vec<(String, bool)>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -182,7 +193,16 @@ fn redact(text: &str) -> (String, Vec<String>) {
     let mut names = Vec::new();
     let mut out: Vec<String> = Vec::new();
     let mut in_pem = false;
+    // Inside a redacted YAML block scalar (`password: |`): the indent of its key.
+    let mut block_of: Option<usize> = None;
+    let indent = |l: &str| l.len() - l.trim_start().len();
     for line in text.lines() {
+        if let Some(key_indent) = block_of {
+            if line.trim().is_empty() || indent(line) > key_indent {
+                continue;
+            }
+            block_of = None;
+        }
         if in_pem {
             if line.contains("-----END") {
                 in_pem = false;
@@ -204,6 +224,13 @@ fn redact(text: &str) -> (String, Vec<String>) {
                     names.push(key.to_string());
                 }
                 out.push(format!("{}[redacted]", &line[..start]));
+                let block = value.starts_with(['|', '>'])
+                    && value[1..]
+                        .chars()
+                        .all(|c| matches!(c, '-' | '+' | '0'..='9'));
+                if block {
+                    block_of = Some(indent(line));
+                }
                 continue;
             }
         }
@@ -282,15 +309,20 @@ fn escapes_repo(path: &str) -> bool {
 }
 
 fn path_dependency_siblings(file: &str, text: &str, out: &mut Vec<SiblingRef>) {
+    use std::sync::OnceLock;
+    static CARGO: OnceLock<Regex> = OnceLock::new();
+    static NPM: OnceLock<Regex> = OnceLock::new();
+    static GEM: OnceLock<Regex> = OnceLock::new();
+    let compiled = |cell: &'static OnceLock<Regex>, pattern: &str| -> &'static Regex {
+        cell.get_or_init(|| Regex::new(pattern).expect("static regex"))
+    };
     let name = file.rsplit('/').next().unwrap_or(file);
     let re = match name {
-        "Cargo.toml" => Some(r#"path\s*=\s*"([^"]+)""#),
-        "package.json" => Some(r#""(?:file|link):([^"]+)""#),
-        "Gemfile" => Some(r#"path:\s*['"]([^'"]+)['"]"#),
-        _ => None,
+        "Cargo.toml" => compiled(&CARGO, r#"path\s*=\s*"([^"]+)""#),
+        "package.json" => compiled(&NPM, r#""(?:file|link):([^"]+)""#),
+        "Gemfile" => compiled(&GEM, r#"path:\s*['"]([^'"]+)['"]"#),
+        _ => return,
     };
-    let Some(re) = re else { return };
-    let re = Regex::new(re).expect("static regex");
     for (i, line) in text.lines().enumerate() {
         for cap in re.captures_iter(line) {
             let p = &cap[1];
@@ -432,6 +464,7 @@ pub fn scan_repo(work_dir: &Path, tracked_aliases: &[String]) -> Result<Scan, St
         })
         .collect();
 
+    let mut readme_done = false;
     for (rel, is_dir) in &found {
         if scan.tree.len() < MAX_TREE {
             scan.tree.push(if *is_dir {
@@ -449,7 +482,19 @@ pub fn scan_repo(work_dir: &Path, tracked_aliases: &[String]) -> Result<Scan, St
         if ENTRY_NAMES.contains(&name) || rel.starts_with("bin/") && rel.matches('/').count() == 1 {
             scan.entry_points.push(rel.clone());
         }
-        if is_env_file(name) {
+        // The top-level README (the first one), redacted like a manifest: Overview.
+        if !readme_done && !rel.contains('/') && name.to_ascii_lowercase().starts_with("readme") {
+            readme_done = true;
+            if let Some(text) = read_capped(&full) {
+                add_source(&mut scan, rel, &full);
+                scan.manifests.push((rel.clone(), redact(&text).0));
+            }
+            continue;
+        }
+        if is_env_file(name) || is_env_template(name) {
+            if is_env_template(name) {
+                add_source(&mut scan, rel, &full);
+            }
             // Key names only; the content is never kept.
             if let Some(text) = read_capped(&full) {
                 for n in env_key_names(&text) {
@@ -543,7 +588,13 @@ pub struct IssueDigest {
     pub recent: Vec<(i64, String)>,
     /// Issues mentioning `group/project#N` or `group/project!N` of another project.
     pub cross_refs: Vec<CrossRef>,
+    /// The newest task-memory lessons (their one-line description), at most
+    /// [`DIGEST_LESSONS`], each cut to [`LESSON_CHARS`] characters.
+    pub lessons: Vec<String>,
 }
+
+pub const DIGEST_LESSONS: usize = 20;
+pub const LESSON_CHARS: usize = 200;
 
 fn ranked(counts: BTreeMap<String, usize>) -> Vec<(String, usize)> {
     let mut v: Vec<_> = counts.into_iter().collect();
@@ -630,6 +681,14 @@ impl DigestCache {
         d
     }
 
+    /// The cached digest for `key` when it was computed under `sig`.
+    pub fn hit(&self, key: &DigestKey, sig: u64) -> Option<IssueDigest> {
+        self.entries
+            .iter()
+            .find(|(k, s, _)| k == key && *s == sig)
+            .map(|(_, _, d)| d.clone())
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -690,13 +749,23 @@ pub fn digest_issues_cached(
         dir.clone(),
         format!("{alias}\u{0}{project_id}\u{0}{}", mem_dir.display()),
     );
-    let make = || digest_from(&dir, project_id, alias, memory_root);
-    // Computed outside the lock would let two requests race to fill it; the
-    // digest is cheap enough on a hit that holding the lock is fine.
+    // A hit is answered under the lock; a miss is computed OUTSIDE it (a cold
+    // digest can take seconds and must not stall every other page), then stored.
+    // Two requests racing on the same miss both compute it; harmless.
+    if let Some(sig) = sig {
+        let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(d) = guard
+            .get_or_insert_with(DigestCache::default)
+            .hit(&key, sig)
+        {
+            return d;
+        }
+    }
+    let d = digest_from(&dir, project_id, alias, memory_root);
     let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     guard
         .get_or_insert_with(DigestCache::default)
-        .get(key, sig, make)
+        .get(key, sig, || d)
 }
 
 /// Where [`gitlab_cache::sync_issue`] keeps this project's issue files.
@@ -745,7 +814,9 @@ pub(crate) fn digest_from(
                 .as_str()
                 .or_else(|| l.get("name").and_then(Value::as_str))
                 .unwrap_or("");
-            if !name.is_empty() {
+            // A secret-shaped item is dropped (the rest of the digest is kept), so
+            // it can never reach a prompt nor make the prompt guard refuse it.
+            if !name.is_empty() && contains_secret(name).is_none() {
                 *areas.entry(name.to_string()).or_default() += 1;
             }
         }
@@ -773,7 +844,9 @@ pub(crate) fn digest_from(
             .or_else(|| issue.get("created_at"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        recent.push((updated.to_string(), iid, title.to_string()));
+        if contains_secret(title).is_none() {
+            recent.push((updated.to_string(), iid, title.to_string()));
+        }
 
         let mut text = issue
             .get("description")
@@ -800,9 +873,27 @@ pub(crate) fn digest_from(
             }
         }
     }
+    let mut lessons = Vec::new();
+    // Newest first (list_task_memories sorts by modification time).
     for m in memory_store::list_task_memories(alias, memory_root) {
+        let v = m.to_value();
+        let text = v["description"]
+            .as_str()
+            .filter(|d| !d.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                m.body
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .to_string()
+            });
+        let text = text.trim();
+        if lessons.len() < DIGEST_LESSONS && !text.is_empty() && contains_secret(text).is_none() {
+            lessons.push(text.chars().take(LESSON_CHARS).collect());
+        }
         for t in m.tags {
-            if !t.is_empty() {
+            if !t.is_empty() && contains_secret(&t).is_none() {
                 *areas.entry(t).or_default() += 1;
             }
         }
@@ -817,7 +908,24 @@ pub(crate) fn digest_from(
             .map(|(_, i, t)| (i, t))
             .collect(),
         cross_refs: cross,
+        lessons,
     }
+}
+
+/// The digest the build and the refreshes use for a tracked project: its cached
+/// issues (none when the project names no instance or id) and its lessons.
+pub fn digest_for(
+    instance: &str,
+    project_id: &str,
+    alias: &str,
+    memory_root: Option<&Path>,
+) -> IssueDigest {
+    let dir = if instance.is_empty() || project_id.is_empty() {
+        std::path::PathBuf::new()
+    } else {
+        issues_dir_for(instance, project_id)
+    };
+    digest_from(&dir, project_id, alias, memory_root)
 }
 
 #[cfg(test)]
@@ -928,6 +1036,80 @@ mod tests {
         fs::create_dir_all(&r).unwrap();
         git(&r, &["init", "-q"]);
         assert_eq!(head_sha_fast(&r), None);
+    }
+
+    #[test]
+    fn the_readme_is_scanned_hashed_and_redacted() {
+        let d = tempfile::tempdir().unwrap();
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        write(
+            d.path(),
+            "README.md",
+            &format!("# Shop\nSells carts.\nexport GITLAB_TOKEN={token}\n"),
+        );
+        write(d.path(), "readme.txt", "second readme, ignored\n");
+        let s = scan_repo(d.path(), &[]).unwrap();
+        let readme: Vec<&(String, String)> = s
+            .manifests
+            .iter()
+            .filter(|(p, _)| p.to_ascii_lowercase().starts_with("readme"))
+            .collect();
+        assert_eq!(readme.len(), 1, "{:?}", s.manifests);
+        assert_eq!(readme[0].0, "README.md");
+        assert!(readme[0].1.contains("Sells carts."));
+        assert!(!readme[0].1.contains("glpat") && !readme[0].1.contains("abcDEF"));
+        assert!(s.sources.iter().any(|x| x.path == "README.md"));
+        assert!(!s.sources.iter().any(|x| x.path == "readme.txt"));
+    }
+
+    #[test]
+    fn yaml_block_scalar_secret_values_are_dropped_whole() {
+        let d = tempfile::tempdir().unwrap();
+        let body = ["s3cr3t-line-", "one\n"].concat();
+        write(
+            d.path(),
+            "docker-compose.yml",
+            &format!(
+                "services:\n  db:\n    environment:\n      DB_PASSWORD: |\n        {body}        s3cr3t-line-two\n\n        s3cr3t-line-three\n      PRIVATE_KEY: >-\n        folded-secret\n      KEEP: yes\n    image: pg\n"
+            ),
+        );
+        let s = scan_repo(d.path(), &[]).unwrap();
+        let text = &s
+            .manifests
+            .iter()
+            .find(|(p, _)| p == "docker-compose.yml")
+            .unwrap()
+            .1;
+        assert!(
+            !text.contains("s3cr3t") && !text.contains("folded-secret"),
+            "{text}"
+        );
+        assert!(
+            text.contains("KEEP: yes") && text.contains("image: pg"),
+            "{text}"
+        );
+        assert!(text.contains("DB_PASSWORD: [redacted]"), "{text}");
+        assert!(s.secret_names.iter().any(|r| r.name == "DB_PASSWORD"));
+        // Plain YAML: a block scalar at the top level too.
+        let (out, _) = redact("api_token: |+\n  aaa\n  bbb\nnext: 1\n");
+        assert_eq!(out, "api_token: [redacted]\nnext: 1");
+    }
+
+    #[test]
+    fn only_env_templates_are_sources_never_the_real_env() {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), ".env", "API_TOKEN=x\n");
+        write(d.path(), ".env.local", "API_TOKEN=y\n");
+        write(d.path(), ".env.example", "API_TOKEN=\n");
+        write(d.path(), "config/app.env.sample", "DB_URL=\n");
+        let s = scan_repo(d.path(), &[]).unwrap();
+        let paths: Vec<&str> = s.sources.iter().map(|x| x.path.as_str()).collect();
+        assert!(paths.contains(&".env.example"), "{paths:?}");
+        assert!(paths.contains(&"config/app.env.sample"), "{paths:?}");
+        assert!(
+            !paths.contains(&".env") && !paths.contains(&".env.local"),
+            "{paths:?}"
+        );
     }
 
     #[test]
@@ -1287,11 +1469,77 @@ mod tests {
     }
 
     #[test]
+    fn digest_keeps_lesson_text_but_drops_secret_shaped_items() {
+        let d = tempfile::tempdir().unwrap();
+        let issues = d.path().join("issues");
+        let mem = d.path().join("memory");
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        write(
+            &issues,
+            "1.json",
+            &json!({"iid": 1, "title": format!("leaked {token}"), "updated_at": "2026-01-02"})
+                .to_string(),
+        );
+        write(
+            &issues,
+            "2.json",
+            &json!({"iid": 2, "title": "Fine title", "updated_at": "2026-01-01"}).to_string(),
+        );
+        crate::memory_store::add_task_memory("p", 3, &"L".repeat(300), &[], None, Some(&mem))
+            .unwrap();
+        crate::memory_store::add_task_memory(
+            "p",
+            4,
+            &format!("never {token}"),
+            &[],
+            None,
+            Some(&mem),
+        )
+        .unwrap();
+        for i in 10..40 {
+            crate::memory_store::add_task_memory(
+                "p",
+                i,
+                &format!("lesson number {i}"),
+                &[],
+                None,
+                Some(&mem),
+            )
+            .unwrap();
+        }
+        let g = digest_from(&issues, "g/p", "p", Some(&mem));
+        assert_eq!(g.recent, vec![(2, "Fine title".to_string())]);
+        assert_eq!(g.lessons.len(), 20);
+        assert!(g.lessons.iter().all(|l| l.chars().count() <= 200));
+        assert!(!format!("{g:?}").contains("glpat"));
+        let all = digest_from(&issues, "g/p", "p", Some(&mem));
+        assert_eq!(all, g);
+    }
+
+    #[test]
     fn digest_issues_wrapper_reads_the_cache_under_a_temp_home() {
         let _g = crate::connectors::testutil::ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
+        // Put both back however the test ends.
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (k, v) in &self.0 {
+                    match v {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(
+            ["HOME", "LOOP_ENGINEERING_HOME"]
+                .into_iter()
+                .map(|k| (k, std::env::var_os(k)))
+                .collect(),
+        );
         std::env::set_var("HOME", home.path());
         std::env::set_var("LOOP_ENGINEERING_HOME", home.path().join("lx"));
         let issue = json!({"iid": 7, "title": "T", "labels": ["ui"], "author": {"username": "zed"},

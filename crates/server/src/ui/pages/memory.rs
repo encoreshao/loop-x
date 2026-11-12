@@ -2428,13 +2428,22 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
     let Some(slot) = profile_build::try_acquire(&alias) else {
         return back(to(), Notice::Busy);
     };
+    // The same issue digest (and lessons) the page reads, from this dashboard's roots.
+    let gitlab_root = ctx.state.user_home.join(".gitlab").join("cache");
+    let data_root = ctx.state.home_dir.join("data");
     std::thread::spawn(move || {
         let _slot = slot;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let digest = if t.instance.is_empty() || t.project_id.is_empty() {
+                profile_scan::digest_for("", "", &t.alias, Some(&env.root))
+            } else {
+                profile_scan::digest_issues_cached(&t.instance, &t.project_id, &t.alias, &gitlab_root, &data_root, Some(&env.root))
+            };
             profile_sync::propose_refresh_held(
                 &t.alias,
                 key,
                 &t.work_dir,
+                &digest,
                 &*env.agent,
                 env.now(),
                 Some(&env.root),
@@ -4011,7 +4020,7 @@ mod tests {
     fn real_proposal(sb: &Sb, alias: &str, key: SectionKey, new: &str) -> String {
         let agent = FakeAgent::new(one_section_reply(alias, key, new));
         let work = sb.dir.path().join("repos").join(alias);
-        profile_sync::propose_refresh(alias, key, &work, &*agent, now(), Some(&sb.root()), &sb.approvals())
+        profile_sync::propose_refresh(alias, key, &work, &Default::default(), &*agent, now(), Some(&sb.root()), &sb.approvals())
             .unwrap()
             .unwrap()
             .id

@@ -5,7 +5,8 @@
 //! the hashes taken at scan time so drift detection works from day one):
 //! Stack <- manifests; Structure <- entry points, CI and compose files;
 //! Integrations <- compose files, `.gitmodules` and files naming sibling repos;
-//! Secrets <- env files (names only, never values); Conventions <- CI config;
+//! Secrets <- env templates such as `.env.example` (names only, never values; the
+//! real `.env` is never a source); Conventions <- CI config;
 //! Overview <- README; Features, Gotchas, Activity and People have no file
 //! sources (Activity and People come from the issue digest). Links are the
 //! scan's sibling references (`depends-on`), never the agent's own claims.
@@ -168,6 +169,11 @@ pub(crate) fn fenced_data(scan: &Scan, digest: &IssueDigest) -> String {
     );
     list(
         &mut data,
+        "Lessons from past runs (task memories)",
+        digest.lessons.iter().cloned(),
+    );
+    list(
+        &mut data,
         "Issues mentioning other projects",
         digest
             .cross_refs
@@ -217,7 +223,7 @@ pub(crate) fn sources_for(key: SectionKey, scan: &Scan) -> Vec<Source> {
             SectionKey::Integrations => {
                 is_compose(path) || name == ".gitmodules" || sibling_files.contains(&path)
             }
-            SectionKey::Secrets => name.starts_with(".env") || name.ends_with(".env"),
+            SectionKey::Secrets => profile_scan::is_env_template(name),
             SectionKey::Conventions => scan.ci.iter().any(|p| p == path),
             SectionKey::Overview => name.to_ascii_lowercase().starts_with("readme"),
             _ => false,
@@ -271,12 +277,7 @@ pub fn build_profile(
     // A corrupt profile fails now, not after a five minute agent run.
     project_profile::load(alias, root)?;
     let scan = profile_scan::scan_repo(work_dir, tracked)?;
-    let digest = profile_scan::digest_from(
-        &profile_scan::issues_dir_for(instance, project_id),
-        project_id,
-        alias,
-        root,
-    );
+    let digest = profile_scan::digest_for(instance, project_id, alias, root);
     let prompt = build_prompt(alias, &scan, &digest);
     guard_prompt(&prompt)?;
     let reply = agent.run(&prompt)?;
@@ -454,6 +455,33 @@ mod tests {
         assert!(saved.links.iter().any(|l| l.to == "other-service"
             && l.kind == "depends-on"
             && l.evidence.contains(".gitlab-ci.yml")));
+    }
+
+    #[test]
+    fn readme_edits_make_overview_stale_and_local_env_edits_do_not_touch_secrets() {
+        use crate::profile_sync::{section_freshness, Freshness};
+        let d = checkout();
+        let root = tempfile::tempdir().unwrap();
+        let p = build(d.path(), &Fake::new(REPLY), root.path()).unwrap();
+        let overview = &p.sections[&SectionKey::Overview];
+        assert!(
+            overview.sources.iter().any(|s| s.path == "README.md"),
+            "{overview:?}"
+        );
+        let secrets = &p.sections[&SectionKey::Secrets];
+        let paths: Vec<&str> = secrets.sources.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, [".env.example"]);
+        let head = p.head_sha.clone();
+        write(d.path(), ".env", "API_TOKEN=another-local-value\n");
+        assert_eq!(
+            section_freshness(&p, SectionKey::Secrets, d.path(), head.as_deref()),
+            Freshness::Fresh
+        );
+        write(d.path(), "README.md", "# App\nNow it also ships.\n");
+        assert_eq!(
+            section_freshness(&p, SectionKey::Overview, d.path(), head.as_deref()),
+            Freshness::Stale(vec!["README.md".into()])
+        );
     }
 
     #[test]
