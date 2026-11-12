@@ -1947,7 +1947,6 @@
   "1 source changed since {date}": "1 source modifiée depuis le {date}",
   "1 source changed": "1 source modifiée",
   "Working…": "En cours…",
-  "Building the profile in the background. It takes a few minutes; reload this page to see it.": "Création du profil en arrière-plan. Cela prend quelques minutes ; rechargez cette page pour le voir.",
   "Building every tracked project's profile in the background, one after another.": "Création du profil de chaque projet suivi en arrière-plan, l'un après l'autre.",
   "A profile run for this project is already in progress. Try again when it finishes.": "Une tâche de profil est déjà en cours pour ce projet. Réessayez quand elle sera terminée.",
   "This project has no checkout to scan. Set its local path on the Projects page first.": "Ce projet n'a pas de copie locale à analyser. Définissez d'abord son chemin local sur la page Projets.",
@@ -1986,7 +1985,6 @@
   "Refresh profile": "Actualiser le profil",
   "Build profile": "Créer le profil",
   "Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept.": "Analyse la copie locale et demande un brouillon au CLI IA. Les sections écrites par une personne sont conservées.",
-  "Working on this profile… This takes a few minutes; reload the page to see the result.": "Traitement de ce profil en cours… Cela prend quelques minutes ; rechargez la page pour voir le résultat.",
   "details hidden": "détails masqués",
   "the AI command could not be started — check Settings → AI CLI": "La commande IA n'a pas pu être lancée — vérifiez Paramètres → AI CLI",
   "The last build failed {when}: {error}": "La dernière création a échoué {when} : {error}",
@@ -2066,5 +2064,9 @@
   "Slack messages for profile jobs": "Messages Slack pour les tâches de profil",
   "Slack messages for profile jobs are on.": "Les messages Slack pour les tâches de profil sont activés.",
   "Slack messages for profile jobs are off.": "Les messages Slack pour les tâches de profil sont désactivés.",
-  "No Slack webhook configured — set it up in Connectors": "Aucun webhook Slack configuré — configurez-le dans Connecteurs"
+  "No Slack webhook configured — set it up in Connectors": "Aucun webhook Slack configuré — configurez-le dans Connecteurs",
+  "Building the profile in the background. It takes a few minutes; this page updates by itself.": "Création du profil en arrière-plan. Cela prend quelques minutes ; cette page se met à jour toute seule.",
+  "Working on this profile… This page updates by itself while it runs.": "Traitement de ce profil en cours… Cette page se met à jour toute seule pendant l'exécution.",
+  "Finished — reload to see the result": "Terminé — rechargez pour voir le résultat",
+  "Reload": "Recharger"
 }

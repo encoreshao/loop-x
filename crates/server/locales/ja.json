@@ -1947,7 +1947,6 @@
   "1 source changed since {date}": "{date} 以降に 1 件のソースが変更されました",
   "1 source changed": "1 件のソースが変更されました",
   "Working…": "処理中…",
-  "Building the profile in the background. It takes a few minutes; reload this page to see it.": "バックグラウンドでプロフィールを作成しています。数分かかります。このページを再読み込みすると表示されます。",
   "Building every tracked project's profile in the background, one after another.": "追跡中のすべてのプロジェクトのプロフィールを、バックグラウンドで順番に作成しています。",
   "A profile run for this project is already in progress. Try again when it finishes.": "このプロジェクトのプロフィール処理はすでに実行中です。完了してからもう一度お試しください。",
   "This project has no checkout to scan. Set its local path on the Projects page first.": "このプロジェクトにはスキャンできるチェックアウトがありません。先にプロジェクトページでローカルパスを設定してください。",
@@ -1986,7 +1985,6 @@
   "Refresh profile": "プロフィールを更新",
   "Build profile": "プロフィールを作成",
   "Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept.": "チェックアウトをスキャンし、AI CLI に下書きを依頼します。人が書いたセクションは保持されます。",
-  "Working on this profile… This takes a few minutes; reload the page to see the result.": "このプロフィールを処理中です… 数分かかります。結果を見るにはページを再読み込みしてください。",
   "details hidden": "詳細は非表示",
   "the AI command could not be started — check Settings → AI CLI": "AI コマンドを起動できませんでした — 設定 → AI CLI を確認してください",
   "The last build failed {when}: {error}": "前回の作成は {when} に失敗しました：{error}",
@@ -2066,5 +2064,9 @@
   "Slack messages for profile jobs": "プロフィール処理の Slack 通知",
   "Slack messages for profile jobs are on.": "プロフィール処理の Slack 通知はオンです。",
   "Slack messages for profile jobs are off.": "プロフィール処理の Slack 通知はオフです。",
-  "No Slack webhook configured — set it up in Connectors": "Slack Webhook が未設定です — コネクタで設定してください"
+  "No Slack webhook configured — set it up in Connectors": "Slack Webhook が未設定です — コネクタで設定してください",
+  "Building the profile in the background. It takes a few minutes; this page updates by itself.": "バックグラウンドでプロフィールを作成しています。数分かかります。このページは自動で更新されます。",
+  "Working on this profile… This page updates by itself while it runs.": "このプロフィールを処理中です… 実行中、このページは自動で更新されます。",
+  "Finished — reload to see the result": "完了しました — 再読み込みして結果を確認してください",
+  "Reload": "再読み込み"
 }

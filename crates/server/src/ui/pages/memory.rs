@@ -70,25 +70,142 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/sync/settings", sync_settings);
     r.post("/insights/memory/sync/now", sync_now);
     r.post("/insights/memory/sync/slack", slack_settings);
+    r.get("/insights/memory/jobs", jobs_status);
 }
 
 pub fn render(ctx: &UiCtx) -> String {
     let q = ctx.query();
     let m = model(ctx);
+    let mut watched = None;
     let body = match q.first("project") {
         None => overview(ctx, &m, q.first("graph") == Some("1")),
         Some(raw) => match m.projects.iter().find(|p| p.alias == raw) {
             None => unknown_project(ctx),
-            Some(p) => match q.first("page") {
-                None => project_page(ctx, p, &m),
-                Some(page) => match PAGES.iter().find(|s| **s == page) {
-                    Some(slug) => sub_page(ctx, p, slug, &m),
-                    None => frame(ctx, p, None, &unknown_page(ctx, p), &m),
-                },
-            },
+            Some(p) => {
+                watched = Some(p.alias.as_str());
+                match q.first("page") {
+                    None => project_page(ctx, p, &m),
+                    Some(page) => match PAGES.iter().find(|s| **s == page) {
+                        Some(slug) => sub_page(ctx, p, slug, &m),
+                        None => frame(ctx, p, None, &unknown_page(ctx, p), &m),
+                    },
+                }
+            }
         },
     };
-    format!("{STYLE}{body}")
+    format!("{STYLE}{body}{}", live_marker(ctx, watched))
+}
+
+// ------------------------------------------------------------------ live updates
+
+/// The marker `live.js` starts from, and the script itself, on every Memory page.
+/// The script only polls when the page shows a running job (a `data-mem-job`
+/// element), or briefly after a Build or Refresh click sent the user here
+/// (`data-mem-watch`). `project` is a checked alias, never the raw query value.
+fn live_marker(ctx: &UiCtx, project: Option<&str>) -> String {
+    let started = ctx
+        .query()
+        .first("notice")
+        .and_then(Notice::from_code)
+        .is_some_and(|n| matches!(n, Notice::BuildStarted | Notice::BuildAllStarted | Notice::RefreshStarted));
+    let project = project.map_or_else(String::new, |a| format!(" data-mem-project='{}'", escape(a)));
+    let watch = if started { " data-mem-watch" } else { "" };
+    let script = crate::ui::assets::text("memory/live.js").unwrap_or("");
+    format!(
+        "<div hidden data-mem-live data-mem-url='/insights/memory/jobs'{project}{watch} data-mem-finished='{}' data-mem-reload='{}'></div><script>{script}</script>",
+        escape(&ctx.t("Finished — reload to see the result")),
+        escape(&ctx.t("Reload"))
+    )
+}
+
+/// How far a job is, 0 to 100, for a progress bar.
+fn job_percent(job: &loopx_core::profile_progress::JobView) -> usize {
+    if job.steps == 0 {
+        0
+    } else {
+        (job.step * 100 / job.steps).min(100)
+    }
+}
+
+/// A thin progress bar `live.js` moves in place; `label` is what a screen reader hears.
+fn progress_bar(class: &str, percent: usize, label: &str) -> String {
+    format!(
+        "<div class='mem-progress{class}' role='progressbar' aria-valuemin='0' aria-valuemax='100' aria-valuenow='{percent}' aria-label='{}' data-mem-progress><span style='width:{percent}%'></span></div>",
+        escape(label)
+    )
+}
+
+/// `GET /insights/memory/jobs`: what the page polls while a job runs. The same
+/// sources and filters as the page: live job records (live pid, not stale) and this
+/// process's own single-flight slots, the weekly sync's record, and the last failed
+/// build or refresh (dropped after 24h). Steps are translated for the request. An
+/// unknown `project` filter matches nothing and is never echoed.
+fn jobs_status(ctx: &UiCtx) -> UiResponse {
+    let config = loopx_core::config::Config::load(&ctx.state.home_dir.join("projects.json")).ok();
+    let aliases = alias_list(ctx, config.as_ref());
+    let wanted = ctx.query().first("project").map(str::to_string);
+    let shown = |alias: &str| match &wanted {
+        None => true,
+        Some(w) => w == alias && aliases.iter().any(|a| a == alias),
+    };
+    // Judged at the real time, like the page's own `live_job`.
+    let jobs = loopx_core::profile_progress::running(&crate::ui::profile_jobs::base(ctx));
+    let mut running: Vec<Value> = Vec::new();
+    for job in jobs.iter().filter(|j| !j.is_sync() && shown(&j.alias)) {
+        running.push(serde_json::json!({
+            "alias": job.alias,
+            "kind": job.kind,
+            "step": job.step,
+            "steps": job.steps,
+            "code": job.step_code,
+            "label": crate::ui::profile_jobs::step_detail(ctx, job),
+        }));
+    }
+    // A build this process started whose record is not written yet.
+    for alias in aliases.iter().filter(|a| shown(a)) {
+        if profile_build::is_running(alias) && !running.iter().any(|r| r["alias"] == alias.as_str()) {
+            running.push(serde_json::json!({
+                "alias": alias, "kind": "build", "step": 0, "steps": 0, "code": "start",
+                "label": ctx.t("Starting"),
+            }));
+        }
+    }
+    let sync = if wanted.is_some() {
+        None
+    } else {
+        jobs.iter().find(|j| j.is_sync()).map(|j| {
+            serde_json::json!({
+                "step": j.step,
+                "steps": j.steps,
+                "code": j.step_code,
+                "label": crate::ui::profile_jobs::progress_text(ctx, j),
+            })
+        })
+    };
+    let mut failed: Vec<Value> = Vec::new();
+    for alias in aliases.iter().filter(|a| shown(a)) {
+        if busy(ctx, alias) {
+            continue;
+        }
+        if let Some(Job { at, outcome: JobOutcome::Failed(e), .. }) = last_job(&ctx.state.home_dir, alias) {
+            if ctx.state.now() - at < FAILURE_SHOWN_FOR {
+                failed.push(serde_json::json!({"alias": alias, "reason": shown_failure(ctx, &e)}));
+            }
+        }
+    }
+    UiResponse::bytes(
+        200,
+        "application/json",
+        &[("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")],
+        serde_json::json!({
+            "running": running,
+            "sync": sync,
+            "build_all": wanted.is_none() && build_all_running(&ctx.state.home_dir),
+            "failed": failed,
+        })
+        .to_string()
+        .into_bytes(),
+    )
 }
 
 // ------------------------------------------------------------------ the data
@@ -667,10 +784,17 @@ fn sync_line(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
             vec![last, next]
         }
     };
-    let spans: Vec<String> = parts
+    let mut spans: Vec<String> = parts
         .iter()
         .map(|p| format!("<span>{}</span>", escape(p)))
         .collect();
+    if let Some(job) = loopx_core::profile_progress::running(&crate::ui::profile_jobs::base(ctx)).iter().find(|j| j.is_sync()) {
+        spans.push(format!(
+            "<span class='mem-sync-run' data-mem-job='sync'>{}<span data-mem-step>{}</span></span>",
+            spinner(),
+            escape(&crate::ui::profile_jobs::progress_text(ctx, job))
+        ));
+    }
     format!(
         "<div class='mem-sync'>{}{}</div>",
         icon("schedule"),
@@ -735,8 +859,15 @@ fn project_card(
         .filter(|t| t.to_value()["flag"].as_str() == Some("needs_review"))
         .count();
     let mut chips = Vec::new();
-    if busy(ctx, &p.alias) {
-        chips.push(chip(" mem-chip-accent", "autorenew", &ctx.t("Working…"), None));
+    let live = busy(ctx, &p.alias).then(|| live_job(ctx, &p.alias));
+    if live.is_some() {
+        let working = ctx.t("Working…");
+        chips.push(format!(
+            "<span class='mem-chip mem-chip-accent'>{}<span data-mem-chip data-mem-base='{}'>{}</span></span>",
+            icon("autorenew"),
+            escape(&working),
+            escape(&working)
+        ));
     }
     if draft {
         chips.push(chip(" mem-chip-warn", "edit_note", &ctx.t("Draft"), None));
@@ -779,9 +910,17 @@ fn project_card(
             None,
         ));
     }
+    let (job_attr, bar) = match &live {
+        Some(j) => {
+            let step = j.as_ref().map_or_else(|| ctx.t("Starting"), |j| crate::ui::profile_jobs::step_detail(ctx, j));
+            let percent = j.as_ref().map_or(0, job_percent);
+            (format!(" data-mem-job='{}'", escape(&p.alias)), progress_bar(" mem-progress-card", percent, &step))
+        }
+        None => (String::new(), String::new()),
+    };
     format!(
-        "<a class='card mem-card' href='{}'><div class='mem-card-top'>{ring}<div class='mem-card-name'><h3>{}</h3>{state_html}</div></div>\
-         <p class='mem-card-overview'>{}</p><div class='mem-chips'>{}</div></a>",
+        "<a class='card mem-card' href='{}'{job_attr}><div class='mem-card-top'>{ring}<div class='mem-card-name'><h3>{}</h3>{state_html}</div></div>\
+         <p class='mem-card-overview'>{}</p><div class='mem-chips'>{}</div>{bar}</a>",
         escape(&project_url(&p.alias, None)),
         escape(&p.alias),
         escape(&line),
@@ -2099,7 +2238,7 @@ impl Notice {
 
     fn message(self, ctx: &UiCtx) -> String {
         match self {
-            Notice::BuildStarted => ctx.t("Building the profile in the background. It takes a few minutes; reload this page to see it."),
+            Notice::BuildStarted => ctx.t("Building the profile in the background. It takes a few minutes; this page updates by itself."),
             Notice::BuildAllStarted => ctx.t("Building every tracked project's profile in the background, one after another."),
             Notice::Busy => ctx.t("A profile run for this project is already in progress. Try again when it finishes."),
             Notice::NoCheckout => ctx.t("This project has no checkout to scan. Set its local path on the Projects page first."),
@@ -2925,7 +3064,7 @@ fn overview_controls(ctx: &UiCtx, store: &Result<SyncStore, String>) -> String {
     }
     let build = if build_all_running(&ctx.state.home_dir) {
         format!(
-            "<button class='mem-btn mem-btn-primary' type='button' disabled>{}{}</button>",
+            "<button class='mem-btn mem-btn-primary' type='button' disabled data-mem-job='all'>{}{}</button>",
             spinner(),
             escape(&ctx.t("Building profiles…"))
         )
@@ -3055,14 +3194,19 @@ const FAILURE_SHOWN_FOR: Duration = Duration::hours(24);
 fn job_line(ctx: &UiCtx, alias: &str) -> String {
     let live = live_job(ctx, alias);
     if live.is_some() || profile_build::is_running(alias) {
-        // What the running job is doing now, from its live record.
-        let step = live
-            .map(|j| format!("<br>{}", escape(&crate::ui::profile_jobs::step_detail(ctx, &j))))
-            .unwrap_or_default();
+        // What the running job is doing now, from its live record (before the
+        // record is written, just "Starting").
+        let (step, percent) = match &live {
+            Some(j) => (crate::ui::profile_jobs::step_detail(ctx, j), job_percent(j)),
+            None => (ctx.t("Starting"), 0),
+        };
         return format!(
-            "<div class='mem-job' role='status'>{}<p>{}{step}</p></div>",
+            "<div class='mem-job' role='status' data-mem-job='{}'>{}<div class='mem-job-body'><p>{}<br><span data-mem-step>{}</span></p>{}</div></div>",
+            escape(alias),
             spinner(),
-            escape(&ctx.t("Working on this profile… This takes a few minutes; reload the page to see the result."))
+            escape(&ctx.t("Working on this profile… This page updates by itself while it runs.")),
+            escape(&step),
+            progress_bar("", percent, &step)
         );
     }
     let Some(job) = last_job(&ctx.state.home_dir, alias) else {
@@ -3489,6 +3633,13 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-job-bad{border-color:transparent;background:var(--md-error-container);color:var(--md-on-error-container)}
 .mem-spin{display:inline-block;width:14px;height:14px;flex:0 0 14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:mem-spin .8s linear infinite}
 .mem-job .mem-spin{margin-top:.15rem}
+.mem-job-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:.55rem}
+.mem-progress{height:6px;border-radius:999px;background:var(--md-outline-variant);overflow:hidden;width:100%;box-sizing:border-box}
+.mem-progress>span{display:block;height:100%;border-radius:999px;background:var(--md-primary);transition:width 350ms cubic-bezier(0.32,0.72,0,1)}
+.mem-progress-card{margin-top:.75rem;height:4px}
+.mem-sync-run{display:inline-flex;align-items:center;gap:.4rem;color:var(--md-on-surface)}
+.mem-live-banner{margin-bottom:.75rem}
+.mem-live-banner a{color:inherit;font-weight:600;margin-left:.35rem;text-decoration:underline}
 @keyframes mem-spin{to{transform:rotate(360deg)}}
 .mem-dialog{position:fixed;inset:0;z-index:1000;width:min(480px,calc(100vw - 2rem));height:fit-content;max-width:none;margin:auto;padding:1.25rem 1.4rem;box-sizing:border-box;border:1px solid var(--md-outline-variant);border-radius:16px;background:var(--md-surface);color:var(--md-on-surface);box-shadow:0 24px 60px rgba(0,0,0,.28)}
 .mem-dialog::backdrop{background:rgba(0,0,0,.35);backdrop-filter:blur(4px)}
@@ -5191,5 +5342,186 @@ mod tests {
         let req = crate::ui::routes::UiRequest::get("/insights?view=memory&notice=slack-off").with_header("cookie", "loop_lang=fr");
         let fr = String::from_utf8(sb.state.registry.dispatch(&sb.state, &req).unwrap().body).unwrap();
         assert!(fr.contains("Les messages Slack pour les tâches de profil sont désactivés."), "{fr}");
+    }
+
+    // ---------------------------------------------------------------- live updates
+
+    fn jobs_json(sb: &Sb, url: &str, lang: Option<&str>) -> (crate::ui::routes::UiResponse, serde_json::Value) {
+        let mut req = crate::ui::routes::UiRequest::get(url);
+        if let Some(l) = lang {
+            req = req.with_header("cookie", &format!("loop_lang={l}"));
+        }
+        let r = sb.state.registry.dispatch(&sb.state, &req).unwrap();
+        let v = serde_json::from_slice(&r.body).unwrap_or(serde_json::Value::Null);
+        (r, v)
+    }
+
+    fn activity_base(sb: &Sb) -> PathBuf {
+        loopx_core::agent_activity::beside(&sb.state.status_path_for_loop("issue-loop"))
+    }
+
+    #[test]
+    fn the_jobs_endpoint_lists_running_jobs_with_translated_steps() {
+        let sb = Sb::new(&[("live-j", true), ("other-j", true)]);
+        let base = activity_base(&sb);
+        let job = ProfileJob::start(&base, ProfileJobKind::Build, "live-j");
+        loopx_core::profile_progress::Progress::step(&job, 3, 5, loopx_core::profile_progress::Step::Ai);
+        let (r, v) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert_eq!(r.status, 200);
+        let ct = r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-type")).unwrap().1.clone();
+        assert!(ct.starts_with("application/json"), "{ct}");
+        assert!(r.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("cache-control") && v.contains("no-store")));
+        let running = v["running"].as_array().unwrap();
+        assert_eq!(running.len(), 1, "{v}");
+        assert_eq!(running[0]["alias"], "live-j");
+        assert_eq!(running[0]["kind"], "build");
+        assert_eq!((running[0]["step"].as_u64(), running[0]["steps"].as_u64()), (Some(3), Some(5)));
+        assert_eq!(running[0]["code"], "ai");
+        assert_eq!(running[0]["label"], "Asking the AI \u{b7} step 3 of 5");
+        assert!(v["sync"].is_null() && v["failed"].as_array().unwrap().is_empty(), "{v}");
+        let (_, fr) = jobs_json(&sb, "/insights/memory/jobs", Some("fr"));
+        assert_eq!(fr["running"][0]["label"], "Interrogation de l'IA \u{b7} étape 3 sur 5");
+        // Filtered to a known project.
+        let (_, only) = jobs_json(&sb, "/insights/memory/jobs?project=other-j", None);
+        assert!(only["running"].as_array().unwrap().is_empty(), "{only}");
+        let (_, mine) = jobs_json(&sb, "/insights/memory/jobs?project=live-j", None);
+        assert_eq!(mine["running"].as_array().unwrap().len(), 1);
+        drop(job);
+        let (_, gone) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert!(gone["running"].as_array().unwrap().is_empty(), "{gone}");
+    }
+
+    #[test]
+    fn the_jobs_endpoint_ignores_dead_and_stale_records() {
+        let sb = Sb::new(&[("dead-j", true), ("stale-j", true)]);
+        let base = activity_base(&sb);
+        let dead = ProfileJob::start(&base, ProfileJobKind::Build, "dead-j");
+        let stale = ProfileJob::start(&base, ProfileJobKind::Build, "stale-j");
+        let rewrite = |job: &ProfileJob, f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(job.file()).unwrap()).unwrap();
+            f(&mut v);
+            std::fs::write(job.file(), v.to_string()).unwrap();
+        };
+        let pid = {
+            let mut c = std::process::Command::new("true").spawn().unwrap();
+            c.wait().unwrap();
+            c.id()
+        };
+        rewrite(&dead, &|v| v["pid"] = serde_json::json!(pid));
+        rewrite(&stale, &|v| {
+            v["at"] = serde_json::json!((Utc::now() - chrono::Duration::hours(30)).to_rfc3339_opts(chrono::SecondsFormat::Secs, false))
+        });
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert!(v["running"].as_array().unwrap().is_empty(), "{v}");
+        drop((dead, stale));
+    }
+
+    #[test]
+    fn the_jobs_endpoint_reports_a_sync_and_failures_with_fixed_text() {
+        let sb = Sb::new(&[("fail-j", true), ("old-j", true)]);
+        let base = activity_base(&sb);
+        failed_build(&sb, "fail-j", now() - chrono::Duration::minutes(5));
+        failed_build(&sb, "old-j", now() - chrono::Duration::hours(25));
+        record(&sb.state.home_dir, "fail-j", Job { at: now(), kind: JobKind::Build, outcome: JobOutcome::Failed(loopx_core::profile_progress::CLI_NOT_STARTED.into()) });
+        let sync = ProfileJob::start(&base, ProfileJobKind::Sync, "");
+        sync.project(2, 3, "fail-j");
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert_eq!(v["sync"]["step"], 2, "{v}");
+        assert_eq!(v["sync"]["steps"], 3);
+        assert_eq!(v["sync"]["label"], "Profile sync \u{2014} fail-j (2/3)");
+        let failed = v["failed"].as_array().unwrap();
+        assert_eq!(failed.len(), 1, "the 25h old failure is dropped: {v}");
+        assert_eq!(failed[0]["alias"], "fail-j");
+        assert_eq!(failed[0]["reason"], "the AI command could not be started \u{2014} check Settings \u{2192} AI CLI");
+        drop(sync);
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert!(v["sync"].is_null(), "{v}");
+    }
+
+    #[test]
+    fn the_jobs_endpoint_never_echoes_an_unknown_project() {
+        let sb = Sb::new(&[("known-j", true)]);
+        let base = activity_base(&sb);
+        let job = ProfileJob::start(&base, ProfileJobKind::Build, "known-j");
+        let (r, v) = jobs_json(&sb, "/insights/memory/jobs?project=%3Cscript%3Ealert(1)%3C/script%3E", None);
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body.clone()).unwrap();
+        assert!(!body.contains("script") && !body.contains("alert"), "{body}");
+        assert!(v["running"].as_array().unwrap().is_empty(), "{v}");
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs?project=../../etc", None);
+        assert!(v["running"].as_array().unwrap().is_empty(), "{v}");
+        drop(job);
+    }
+
+    #[test]
+    fn the_jobs_endpoint_counts_a_build_whose_record_is_not_written_yet() {
+        let (agent, release) = FakeAgent::gated(full_reply("guard-j", "Built"));
+        let sb = Sb::new(&[("guard-j", true)]).with_agent(agent);
+        sb.post_to("/insights/memory/build", "project=guard-j&from=project");
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs?project=guard-j", None);
+        assert_eq!(v["running"][0]["alias"], "guard-j", "{v}");
+        release.send(()).unwrap();
+        wait_idle("guard-j");
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs?project=guard-j", None);
+        assert!(v["running"].as_array().unwrap().is_empty(), "{v}");
+    }
+
+    #[test]
+    fn memory_pages_carry_the_live_script_and_the_running_markers() {
+        let sb = Sb::new(&[("mark-j", true)]);
+        let base = activity_base(&sb);
+        let idle = sb.get("/insights?view=memory&project=mark-j");
+        assert!(idle.contains("data-mem-live") && idle.contains("data-mem-project='mark-j'"), "{idle}");
+        assert!(!idle.contains("data-mem-job="), "{idle}");
+        let job = ProfileJob::start(&base, ProfileJobKind::Build, "mark-j");
+        loopx_core::profile_progress::Progress::step(&job, 2, 5, loopx_core::profile_progress::Step::Issues);
+        let project = sb.get("/insights?view=memory&project=mark-j");
+        assert!(project.contains("data-mem-job='mark-j'"), "{project}");
+        assert!(project.contains("data-mem-step"), "{project}");
+        assert!(project.contains("role='progressbar' aria-valuemin='0' aria-valuemax='100' aria-valuenow='40'"), "{project}");
+        assert!(project.contains("Reading issues \u{b7} step 2 of 5"), "{project}");
+        assert!(project.contains("This page updates by itself while it runs."), "{project}");
+        assert!(!project.contains("reload the page to see the result"), "{project}");
+        let sub = sb.get("/insights?view=memory&project=mark-j&page=stack");
+        assert!(sub.contains("data-mem-job='mark-j'") && sub.contains("data-mem-live"), "{sub}");
+        let overview = sb.get("/insights?view=memory");
+        assert!(overview.contains("data-mem-job='mark-j'") && overview.contains("data-mem-live"), "{overview}");
+        assert!(overview.contains("data-mem-progress"), "{overview}");
+        // The overview has no per-project filter.
+        assert!(!overview.contains("data-mem-project='"), "{overview}");
+        let sync = ProfileJob::start(&base, ProfileJobKind::Sync, "");
+        sync.project(1, 2, "mark-j");
+        let overview = sb.get("/insights?view=memory");
+        assert!(overview.contains("data-mem-job='sync'") && overview.contains("Profile sync \u{2014} mark-j (1/2)"), "{overview}");
+        drop((job, sync));
+        // Other pages never get it.
+        let other = sb.get("/insights");
+        assert!(!other.contains("data-mem-live"), "{other}");
+    }
+
+    #[test]
+    fn a_started_notice_asks_the_script_to_watch() {
+        let sb = Sb::new(&[("watch-j", true)]);
+        let page = sb.get("/insights?view=memory&project=watch-j&notice=build-started");
+        assert!(page.contains("data-mem-watch"), "{page}");
+        assert!(!sb.get("/insights?view=memory&project=watch-j&notice=saved").contains("data-mem-watch data-mem-finished"));
+        assert!(!sb.get("/insights?view=memory&project=watch-j").contains("data-mem-watch data-mem-finished"));
+        let page = sb.get("/insights?view=memory&notice=build-all-started");
+        assert!(page.contains("data-mem-watch"), "{page}");
+    }
+
+    #[test]
+    fn the_live_script_is_safe_and_only_reloads_without_losing_typing() {
+        let js = crate::ui::assets::text("memory/live.js").unwrap();
+        for banned in ["innerHTML", "outerHTML", "insertAdjacentHTML", "eval(", "new Function", "document.write"] {
+            assert!(!js.contains(banned), "{banned}");
+        }
+        assert!(js.contains("document.hidden") && js.contains("visibilitychange"));
+        assert!(js.contains("textContent"));
+        // The reload goes through the dirty-input check; the check is what keeps typing.
+        let finish = js.split("function finish").nth(1).unwrap();
+        assert!(finish.find("isDirty()").unwrap() < finish.find("location.reload()").unwrap());
+        assert!(js.contains("dialog[open]") && js.contains("defaultValue"));
+        assert!(js.contains("2 * 60 * 60 * 1000") && js.contains("15000"));
     }
 }

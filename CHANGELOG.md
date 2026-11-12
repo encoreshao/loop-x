@@ -62,6 +62,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- The Memory page now updates by itself while a profile job runs: the step text and a progress bar move in place (also on the overview cards and the sync line), and the page reloads once when the job ends. If a section editor, dialog or typed text is open it is left alone and a "Finished — reload to see the result" banner appears instead. It used to say "reload the page to see the result" and stay on "Working…" until you left the page and came back.
 - Slack reports are no longer sent twice after a timed-out reply (a later layout is tried only when Slack answers with an HTTP error), a failed post no longer writes the webhook URL to the log, and a Build all profiles pass where every project was already running sends no "drafts ready" message.
 - The Terminal page's running strip no longer says "Nothing is running right now" while a loop or job is running: it lists everything the topbar island shows (the GitLab loop, queued loop runs, Creator, Fix now and Release MR jobs) with its step, above what each agent is doing.
 

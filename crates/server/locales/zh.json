@@ -1947,7 +1947,6 @@
   "1 source changed since {date}": "自 {date} 以来有 1 个来源发生变化",
   "1 source changed": "1 个来源发生变化",
   "Working…": "处理中…",
-  "Building the profile in the background. It takes a few minutes; reload this page to see it.": "正在后台生成档案，需要几分钟；刷新此页面即可查看。",
   "Building every tracked project's profile in the background, one after another.": "正在后台依次为每个跟踪的项目生成档案。",
   "A profile run for this project is already in progress. Try again when it finishes.": "此项目的档案任务已在进行中，请在完成后重试。",
   "This project has no checkout to scan. Set its local path on the Projects page first.": "此项目没有可扫描的本地检出。请先在“项目”页面设置其本地路径。",
@@ -1986,7 +1985,6 @@
   "Refresh profile": "刷新档案",
   "Build profile": "生成档案",
   "Scans the checkout and asks the AI CLI for a draft. Sections written by a person are kept.": "扫描本地检出并请 AI CLI 生成草稿。由人编写的章节会被保留。",
-  "Working on this profile… This takes a few minutes; reload the page to see the result.": "正在处理此档案… 需要几分钟；刷新页面即可查看结果。",
   "details hidden": "详情已隐藏",
   "the AI command could not be started — check Settings → AI CLI": "无法启动 AI 命令 — 请检查 设置 → AI CLI",
   "The last build failed {when}: {error}": "上次生成于 {when} 失败：{error}",
@@ -2066,5 +2064,9 @@
   "Slack messages for profile jobs": "项目档案任务的 Slack 消息",
   "Slack messages for profile jobs are on.": "项目档案任务的 Slack 消息已开启。",
   "Slack messages for profile jobs are off.": "项目档案任务的 Slack 消息已关闭。",
-  "No Slack webhook configured — set it up in Connectors": "尚未配置 Slack Webhook — 请在连接器中设置"
+  "No Slack webhook configured — set it up in Connectors": "尚未配置 Slack Webhook — 请在连接器中设置",
+  "Building the profile in the background. It takes a few minutes; this page updates by itself.": "正在后台生成档案，需要几分钟；此页面会自动更新。",
+  "Working on this profile… This page updates by itself while it runs.": "正在处理此档案… 运行期间此页面会自动更新。",
+  "Finished — reload to see the result": "已完成 — 刷新即可查看结果",
+  "Reload": "刷新"
 }
