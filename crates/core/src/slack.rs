@@ -99,7 +99,35 @@ fn post_with(req: ureq::Request, text: &str, blocks: Option<&Value>) -> Result<u
     {
         Ok(resp) => Ok(resp.status()),
         Err(ureq::Error::Status(code, _)) => Err(format!("HTTP Error {code}")),
-        Err(e) => Err(e.to_string()),
+        Err(ureq::Error::Transport(t)) => Err(transport_description(&t)),
+    }
+}
+
+/// A transport failure described without ureq's `Display`, which embeds the
+/// request URL (the secret webhook). Never starts with "HTTP Error ", so
+/// callers can tell "Slack answered with a status" from "outcome unknown".
+fn transport_description(t: &ureq::Transport) -> String {
+    use std::error::Error as _;
+    let timed_out = t
+        .source()
+        .and_then(|s| s.downcast_ref::<std::io::Error>())
+        .is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            )
+        });
+    if timed_out {
+        return "timeout".into();
+    }
+    match t.kind() {
+        ureq::ErrorKind::Dns => "connection failed (dns)".into(),
+        ureq::ErrorKind::ConnectionFailed => "connection failed".into(),
+        ureq::ErrorKind::InvalidUrl | ureq::ErrorKind::UnknownScheme => {
+            "invalid webhook URL".into()
+        }
+        ureq::ErrorKind::Io => "io error".into(),
+        _ => "transport error".into(),
     }
 }
 
@@ -112,6 +140,37 @@ mod tests {
         let p = d.path().join("config.json");
         std::fs::write(&p, body).unwrap();
         (d, p)
+    }
+
+    const SECRET_URL_PATH: &str = "/services/T000/B000/SECRETTOKEN";
+
+    fn assert_no_url(err: &str) {
+        for needle in ["127.0.0.1", "SECRETTOKEN", "/services", "http://"] {
+            assert!(!err.contains(needle), "leaked {needle}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_refused_connection_error_never_contains_the_webhook_url() {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{port}{SECRET_URL_PATH}");
+        let err = post_message(&url, "hi", None).unwrap_err();
+        assert_no_url(&err);
+        assert!(!err.starts_with("HTTP Error "), "{err}");
+    }
+
+    #[test]
+    fn a_timeout_error_says_timeout_and_never_contains_the_webhook_url() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}{SECRET_URL_PATH}", l.local_addr().unwrap());
+        let err = post_message_bounded(&url, "hi", None, std::time::Duration::from_millis(300))
+            .unwrap_err();
+        assert_eq!(err, "timeout");
+        assert_no_url(&err);
+        drop(l);
     }
 
     #[test]

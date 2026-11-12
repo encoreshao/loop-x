@@ -226,6 +226,12 @@ pub fn alert(title: &str, state: State, status: &str, summary: &str) -> Report {
 /// Slack's own posting function: `(webhook_url, text, blocks)`.
 pub type Post<'a> = &'a dyn Fn(&str, &str, Option<&Value>) -> Result<(), String>;
 
+/// True when `slack::post_with` reported an HTTP status from Slack (a real
+/// rejection), as opposed to a timeout or transport error whose outcome is unknown.
+fn is_status_error(e: &str) -> bool {
+    e.starts_with("HTTP Error ")
+}
+
 /// Post `report` to `bundle`'s webhook (or the default) with the selected
 /// template. Best-effort: a rejected layout is retried without the table
 /// block, then as plain text, and nothing here ever fails the run.
@@ -245,7 +251,15 @@ pub fn send_with(report: &Report, bundle: Option<&str>, config_path: &Path, post
     for attempt in attempts(report, selected_template(&config)) {
         match post(&url, &attempt.text, attempt.blocks.as_ref()) {
             Ok(()) => return true,
-            Err(e) => errors.push(e),
+            Err(e) => {
+                // Only a status answer proves Slack did not take the message;
+                // after a timeout it may have, and a retry would post twice.
+                let rejected = is_status_error(&e);
+                errors.push(e);
+                if !rejected {
+                    break;
+                }
+            }
         }
     }
     eprintln!("loopx: Slack report not sent: {}", errors.join("; then: "));
@@ -928,7 +942,7 @@ mod tests {
                 .borrow_mut()
                 .push((url.to_string(), blocks.is_some(), has_table));
             if blocks.is_some() {
-                Err("invalid_blocks".to_string())
+                Err("HTTP Error 400".to_string())
             } else {
                 Ok(())
             }
@@ -942,6 +956,43 @@ mod tests {
                 ("https://hooks/B".to_string(), false, false),
             ]
         );
+    }
+
+    #[test]
+    fn a_timeout_or_transport_error_is_not_retried() {
+        let (_d, p) = config(r#"{"webhook_url": "https://hooks/D"}"#);
+        for err in ["timeout", "io error", "connection failed (dns)"] {
+            let n = RefCell::new(0);
+            let post = |_u: &str, _t: &str, _b: Option<&Value>| {
+                *n.borrow_mut() += 1;
+                Err(err.to_string())
+            };
+            assert!(!send_with(&sample(), None, &p, &post));
+            assert_eq!(*n.borrow(), 1, "{err}");
+        }
+    }
+
+    #[test]
+    fn an_http_status_rejection_falls_through_to_the_next_attempt() {
+        let (_d, p) = config(r#"{"webhook_url": "https://hooks/D"}"#);
+        let n = RefCell::new(0);
+        let post = |_u: &str, _t: &str, _b: Option<&Value>| {
+            *n.borrow_mut() += 1;
+            if *n.borrow() < 2 {
+                Err("HTTP Error 400".to_string())
+            } else {
+                Ok(())
+            }
+        };
+        assert!(send_with(&sample(), None, &p, &post));
+        assert_eq!(*n.borrow(), 2);
+        let n3 = RefCell::new(0);
+        let all_bad = |_u: &str, _t: &str, _b: Option<&Value>| {
+            *n3.borrow_mut() += 1;
+            Err("HTTP Error 404".to_string())
+        };
+        assert!(!send_with(&sample(), None, &p, &all_bad));
+        assert_eq!(*n3.borrow(), 3);
     }
 
     #[test]
