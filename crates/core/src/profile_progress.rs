@@ -203,9 +203,20 @@ fn is_job_file_name(name: &str) -> bool {
             || name.starts_with("profile."))
 }
 
-/// The record's pid, when it names a live process.
-fn live_pid(v: &Value) -> bool {
-    crate::run_control::recorded_pid(v).is_some_and(crate::run_control::process_alive)
+/// A record untouched for this long is stale even when its pid is alive: after a
+/// crash the pid may have been given to an unrelated process. Longer than any
+/// single step (the AI call is capped at five minutes) by a wide margin.
+const MAX_AGE: chrono::Duration = chrono::Duration::hours(12);
+
+/// The record is live at `now`: its pid names a running process and its `at`
+/// (RFC 3339; missing or unreadable is stale) is less than [`MAX_AGE`] old.
+fn live_at(v: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let fresh = v
+        .get("at")
+        .and_then(Value::as_str)
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .is_some_and(|t| now - t.with_timezone(&chrono::Utc) < MAX_AGE);
+    fresh && crate::run_control::recorded_pid(v).is_some_and(crate::run_control::process_alive)
 }
 
 /// Remove the records of profile jobs whose process is gone (a server that was
@@ -223,7 +234,8 @@ pub fn sweep_stale(base: &Path) -> usize {
             .and_then(|n| n.to_str())
             .is_some_and(is_job_file_name);
         let stale = named
-            && agent_activity::read(&p).is_some_and(|v| is_profile_record(&v) && !live_pid(&v));
+            && agent_activity::read(&p)
+                .is_some_and(|v| is_profile_record(&v) && !live_at(&v, chrono::Utc::now()));
         if stale && std::fs::remove_file(&p).is_ok() {
             removed += 1;
         }
@@ -474,9 +486,15 @@ pub struct JobView {
 
 impl JobView {
     /// A profile record with sane fields, else `None` (any other or a malformed record).
-    /// A record whose process is gone (or that names none) is not running.
+    /// A record whose process is gone (or that names none), or that has not
+    /// changed for [`MAX_AGE`], is not running.
     pub fn from_record(v: &Value) -> Option<JobView> {
-        if !is_profile_record(v) || !live_pid(v) {
+        Self::from_record_at(v, chrono::Utc::now())
+    }
+
+    /// [`JobView::from_record`] judged at `now` (the dashboard's own clock).
+    pub fn from_record_at(v: &Value, now: chrono::DateTime<chrono::Utc>) -> Option<JobView> {
+        if !is_profile_record(v) || !live_at(v, now) {
             return None;
         }
         let s = |k: &str| v.get(k).and_then(Value::as_str);
@@ -580,9 +598,14 @@ impl JobView {
 /// Every running profile job under `base`, in a stable order: by when it started,
 /// then kind and alias (so rows do not swap places as steps advance).
 pub fn running(base: &Path) -> Vec<JobView> {
+    running_at(base, chrono::Utc::now())
+}
+
+/// [`running`] judged at `now` (the dashboard's own clock).
+pub fn running_at(base: &Path, now: chrono::DateTime<chrono::Utc>) -> Vec<JobView> {
     let mut jobs: Vec<JobView> = agent_activity::read_all(base)
         .iter()
-        .filter_map(JobView::from_record)
+        .filter_map(|v| JobView::from_record_at(v, now))
         .collect();
     jobs.sort_by(|a, b| {
         (&a.started_at, &a.kind, &a.alias).cmp(&(&b.started_at, &b.kind, &b.alias))
@@ -882,8 +905,19 @@ mod tests {
         f
     }
 
+    /// `minutes` ago, as a record timestamp.
+    fn ago(minutes: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::minutes(minutes))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    }
+
     fn rec(alias: &str, pid: Option<u32>, started: &str) -> Value {
-        let mut v = json!({"at": started, "started_at": started, "label": "x", "event": EVENT, "tool": TOOL,
+        let at = if started.starts_with("20") {
+            started.to_string()
+        } else {
+            ago(1)
+        };
+        let mut v = json!({"at": at, "started_at": started, "label": "x", "event": EVENT, "tool": TOOL,
             "detail": "x", "kind": "build", "section": null, "alias": alias, "step": 1, "steps": 5, "step_code": "scan"});
         if let Some(p) = pid {
             v["pid"] = json!(p);
@@ -914,6 +948,26 @@ mod tests {
         let mut aliases: Vec<String> = running(&b).into_iter().map(|j| j.alias).collect();
         aliases.sort();
         assert_eq!(aliases, ["live", "mine"]);
+    }
+
+    #[test]
+    fn a_live_pid_with_an_old_or_unreadable_time_is_a_recycled_pid() {
+        let d = tempfile::tempdir().unwrap();
+        let b = base(d.path());
+        let me = Some(std::process::id());
+        let mut old = rec("old", me, &ago(13 * 60));
+        old["at"] = json!(ago(13 * 60));
+        let old = seed(&b, "profile~old~1.json", old);
+        let mut garbled = rec("garbled", me, "x");
+        garbled["at"] = json!("yesterday");
+        let garbled = seed(&b, "profile~garbled~2.json", garbled);
+        let mut fresh = rec("fresh", me, &ago(1));
+        fresh["at"] = json!(ago(1));
+        let fresh = seed(&b, "profile~fresh~3.json", fresh);
+        let aliases: Vec<String> = running(&b).into_iter().map(|j| j.alias).collect();
+        assert_eq!(aliases, ["fresh"]);
+        assert_eq!(sweep_stale(&b), 2);
+        assert!(!old.exists() && !garbled.exists() && fresh.exists());
     }
 
     #[test]
@@ -969,19 +1023,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let b = base(d.path());
         let me = Some(std::process::id());
-        let mut late = rec("api", me, "2026-11-12T10:05:00+00:00");
-        late["at"] = json!("2026-11-12T10:09:00+00:00");
+        let (early, later) = (ago(10), ago(5));
+        let mut late = rec("api", me, &later);
+        late["at"] = json!(ago(1));
         seed(&b, "profile~api~1.json", late);
-        seed(
-            &b,
-            "profile~web~2.json",
-            rec("web", me, "2026-11-12T10:00:00+00:00"),
-        );
-        seed(
-            &b,
-            "profile~app~3.json",
-            rec("app", me, "2026-11-12T10:00:00+00:00"),
-        );
+        seed(&b, "profile~web~2.json", rec("web", me, &early));
+        seed(&b, "profile~app~3.json", rec("app", me, &early));
         let aliases: Vec<String> = running(&b).into_iter().map(|j| j.alias).collect();
         assert_eq!(
             aliases,

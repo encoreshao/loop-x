@@ -1135,8 +1135,8 @@ fn sync_project(
         early("checkout not found");
         return Outcome::Failed("checkout not found".into());
     }
+    // Busy with another run: a benign skip, not a failure line.
     let Some(_slot) = profile_build::try_acquire(&p.alias) else {
-        early("a profile run is already in progress");
         return Outcome::Skipped;
     };
     let profile = match project_profile::load(&p.alias, root) {
@@ -2233,6 +2233,29 @@ mod tests {
             phases.last().unwrap(),
             "sync done 2/2 project",
             "{phases:?}"
+        );
+    }
+
+    #[test]
+    fn a_project_another_run_is_busy_with_is_skipped_without_a_failure_line() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"app2\"\n");
+        let out = tempfile::tempdir().unwrap();
+        let agent = peek(Fake::new("New stack text."), out.path());
+        let _busy = profile_build::try_acquire(&f.alias).unwrap();
+        let res = sync_all_with_progress(
+            &[tp(&f)],
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+            Some(&agent.base),
+        );
+        assert_eq!(res[0].1, Outcome::Skipped);
+        let phases = trace_phases(out.path());
+        assert!(
+            !phases.iter().any(|p| p.contains("failed")),
+            "a busy project is not a failure: {phases:?}"
         );
     }
 

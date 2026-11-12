@@ -10,7 +10,7 @@ use loopx_core::profile_progress::{self, JobView, Step};
 /// Every running profile job, newest first, from the activity files beside the
 /// issue loop's status file (where the jobs write them).
 pub fn running(ctx: &UiCtx) -> Vec<JobView> {
-    profile_progress::running(&base(ctx))
+    profile_progress::running_at(&base(ctx), ctx.state.now())
 }
 
 /// The shared activity file the jobs write beside.

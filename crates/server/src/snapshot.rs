@@ -331,9 +331,10 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     }
     // Running project profile jobs (a build, a section refresh, the sync): one
     // entry each, `profile:<alias>` or `profile-sync`, with the step fields.
-    for job in loopx_core::profile_progress::running(&loopx_core::agent_activity::beside(
-        &paths.outputs.join("status.json"),
-    )) {
+    for job in loopx_core::profile_progress::running_at(
+        &loopx_core::agent_activity::beside(&paths.outputs.join("status.json")),
+        now,
+    ) {
         loops.insert(job.snapshot_key(), job.island_status());
     }
     let state = app_state(&loops, pending.len());

@@ -998,7 +998,7 @@ mod tests {
         write_status(
             d.path(),
             "agent-activity/profile-sync.json",
-            &serde_json::json!({"at": "2020-01-01T09:00:00+00:00", "started_at": "2020-01-01T09:00:00+00:00",
+            &serde_json::json!({"at": chrono::Utc::now().to_rfc3339(), "started_at": "2020-01-01T09:00:00+00:00",
                 "label": "Profile sync", "event": "Profile", "tool": "profile", "detail": "web", "kind": "sync",
                 "section": null, "alias": "web", "step": 1, "steps": 2, "step_code": "project", "pid": std::process::id()})
             .to_string(),
