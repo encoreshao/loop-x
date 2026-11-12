@@ -43,8 +43,14 @@ pub fn tick(
         let res = sync::process_queue(&store.queued, list, agent, now, root, approvals_dir);
         let _ = sync::with_store(store_path, |s| {
             for (alias, slug) in res.done {
+                // Only the entry this pass worked on: one queued again meanwhile
+                // (a newer `queued_at`) waits for the next look.
+                let seen = store
+                    .queued
+                    .get(&alias)
+                    .and_then(|q| q.iter().find(|x| x.section == slug));
                 if let Some(q) = s.queued.get_mut(&alias) {
-                    q.retain(|x| x.section != slug);
+                    q.retain(|x| x.section != slug || seen != Some(x));
                 }
             }
             // A dropped-on-failure entry leaves a note, so it is not silent.
@@ -71,10 +77,18 @@ pub fn tick(
     // Oldest-synced first, so a cap never starves the same projects every week.
     list.sort_by_key(|p| store.status.per_project.get(&p.alias).map(|s| s.at));
     list.truncate(store.settings.max_projects_per_run);
-    let results = sync::sync_all(&list, agent, now, root, approvals_dir);
-    let _ = sync::with_store(store_path, |s| {
+    // Claimed BEFORE the (paid, possibly hours-long) run: if this write fails the
+    // run does not start, so a stuck flag cannot re-run it every minute, and a
+    // "Sync now" pressed during the run is kept for the next look.
+    let claimed = sync::with_store(store_path, |s| {
         s.status.last_run = Some(now);
         s.sync_requested = false;
+    });
+    if claimed.is_err() {
+        return ran_queue;
+    }
+    let results = sync::sync_all(&list, agent, now, root, approvals_dir);
+    let _ = sync::with_store(store_path, |s| {
         for (alias, outcome) in results {
             s.status
                 .per_project
@@ -129,12 +143,19 @@ mod tests {
     struct Fx {
         dir: tempfile::TempDir,
         work: tempfile::TempDir,
+        /// Unique per test: the single-flight slot is process-wide.
+        alias: String,
     }
     impl Fx {
         fn new() -> Fx {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             Fx {
                 dir: tempfile::tempdir().unwrap(),
                 work: tempfile::tempdir().unwrap(),
+                alias: format!(
+                    "tick-app-{}",
+                    N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                ),
             }
         }
         fn store(&self) -> std::path::PathBuf {
@@ -142,11 +163,22 @@ mod tests {
         }
         fn projects(&self) -> Vec<TrackedProject> {
             vec![TrackedProject {
-                alias: "tick-app".into(),
+                alias: self.alias.clone(),
                 instance: "work".into(),
                 project_id: "g/app".into(),
                 work_dir: self.work.path().to_path_buf(),
             }]
+        }
+        fn tick_with(&self, agent: &dyn Agent, now: DateTime<Utc>) -> bool {
+            tick(
+                &self.store(),
+                || self.projects(),
+                agent,
+                now,
+                &mut TickState::default(),
+                Some(self.dir.path()),
+                &self.dir.path().join("approvals"),
+            )
         }
         fn tick(&self, agent: &Counting, now: DateTime<Utc>, st: &mut TickState) -> bool {
             tick(
@@ -195,7 +227,7 @@ mod tests {
         let s = sync::load(&f.store()).unwrap();
         assert_eq!(s.status.last_run, Some(local(16, 9, 1)));
         assert!(matches!(
-            s.status.per_project["tick-app"].outcome,
+            s.status.per_project[&f.alias].outcome,
             Outcome::Failed(_) | Outcome::Skipped | Outcome::Drafted
         ));
         // Same slot: not again.
@@ -213,7 +245,7 @@ mod tests {
         assert!(f.tick(&a, local(11, 10, 0), &mut st));
         let s = sync::load(&f.store()).unwrap();
         assert!(!s.sync_requested);
-        assert!(s.status.per_project.contains_key("tick-app"));
+        assert!(s.status.per_project.contains_key(&f.alias));
         assert!(!f.tick(&a, local(11, 10, 1), &mut st));
     }
 
@@ -254,7 +286,7 @@ mod tests {
         let s = sync::load(&f.store()).unwrap();
         // The never-synced project went first; the old one still has its old stamp.
         assert_eq!(s.status.per_project["tick-old"].at, local(1, 0, 0));
-        assert_eq!(s.status.per_project["tick-app"].at, local(11, 10, 0));
+        assert_eq!(s.status.per_project[&f.alias].at, local(11, 10, 0));
     }
 
     #[test]
@@ -282,7 +314,7 @@ mod tests {
                 memory: false,
             };
             s.queued
-                .insert("tick-app".into(), vec![q("stack"), q("gotchas")]);
+                .insert(f.alias.clone(), vec![q("stack"), q("gotchas")]);
             s.queued.insert("other".into(), vec![q("stack")]);
         })
         .unwrap();
@@ -300,7 +332,7 @@ mod tests {
         sync::with_store(&f.store(), |s| {
             s.settings.enabled = false;
             s.queued.insert(
-                "tick-app".into(),
+                f.alias.clone(),
                 vec![sync::QueuedSection {
                     section: "stack".into(),
                     queued_at: local(11, 9, 0),
@@ -319,7 +351,7 @@ mod tests {
         let (a, mut st) = (Counting(Cell::new(0)), TickState::default());
         sync::with_store(&f.store(), |s| {
             s.queued.insert(
-                "tick-app".into(),
+                f.alias.clone(),
                 vec![sync::QueuedSection {
                     section: "stack".into(),
                     queued_at: local(11, 9, 0),
@@ -347,8 +379,109 @@ mod tests {
         let s = sync::load(&f.store()).unwrap();
         assert!(s.queued.is_empty());
         assert!(matches!(
-            s.status.per_project["tick-app"].outcome,
+            s.status.per_project[&f.alias].outcome,
             Outcome::Failed(_)
         ));
+    }
+
+    /// Runs a hook on every agent call (to act while a run is in progress).
+    struct During<F: Fn()>(F, Cell<usize>);
+    impl<F: Fn()> Agent for During<F> {
+        fn run(&self, _: &str) -> Result<String, String> {
+            self.1.set(self.1.get() + 1);
+            (self.0)();
+            Err("no AI CLI in tests".into())
+        }
+    }
+
+    fn with_a_file(f: &Fx) {
+        std::fs::write(f.work.path().join("README.md"), "hi\n").unwrap();
+    }
+
+    #[test]
+    fn sync_now_pressed_during_a_run_is_kept_for_the_next_look() {
+        let f = Fx::new();
+        with_a_file(&f);
+        sync::with_store(&f.store(), |s| s.sync_requested = true).unwrap();
+        let store = f.store();
+        let a = During(
+            || {
+                sync::with_store(&store, |s| s.sync_requested = true).unwrap();
+            },
+            Cell::new(0),
+        );
+        let ran = tick(
+            &f.store(),
+            || f.projects(),
+            &a,
+            local(11, 10, 0),
+            &mut TickState::default(),
+            Some(f.dir.path()),
+            &f.dir.path().join("approvals"),
+        );
+        assert!(ran);
+        assert_eq!(a.1.get(), 1, "the build ran");
+        let s = sync::load(&f.store()).unwrap();
+        assert!(s.sync_requested, "the request made during the run survives");
+        assert_eq!(s.status.last_run, Some(local(11, 10, 0)));
+    }
+
+    #[test]
+    fn no_paid_run_starts_when_the_claim_cannot_be_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = Fx::new();
+        with_a_file(&f);
+        sync::with_store(&f.store(), |s| s.sync_requested = true).unwrap();
+        let ro = std::fs::Permissions::from_mode(0o555);
+        std::fs::set_permissions(f.dir.path(), ro).unwrap();
+        let a = Counting(Cell::new(0));
+        f.tick(&a, local(11, 10, 0), &mut TickState::default());
+        std::fs::set_permissions(f.dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(a.0.get(), 0, "no agent call");
+        assert!(sync::load(&f.store()).unwrap().sync_requested);
+    }
+
+    #[test]
+    fn an_entry_queued_again_during_the_queue_pass_is_kept() {
+        use loopx_core::project_profile::{self, Profile, Status};
+        let f = Fx::new();
+        with_a_file(&f);
+        project_profile::save(
+            &Profile {
+                alias: f.alias.clone(),
+                generated_at: None,
+                head_sha: None,
+                status: Status::Approved,
+                links: vec![],
+                sections: Default::default(),
+            },
+            Some(f.dir.path()),
+        )
+        .unwrap();
+        let entry = |at| sync::QueuedSection {
+            section: "gotchas".into(),
+            queued_at: at,
+            memory: true,
+        };
+        let alias = f.alias.clone();
+        sync::with_store(&f.store(), |s| {
+            s.queued.insert(alias.clone(), vec![entry(local(11, 9, 0))]);
+        })
+        .unwrap();
+        let store = f.store();
+        let a = During(
+            || {
+                sync::with_store(&store, |s| {
+                    s.queued
+                        .insert(alias.clone(), vec![entry(local(11, 9, 30))]);
+                })
+                .unwrap();
+            },
+            Cell::new(0),
+        );
+        f.tick_with(&a, local(11, 10, 0));
+        assert_eq!(a.1.get(), 1);
+        let s = sync::load(&f.store()).unwrap();
+        assert_eq!(s.queued[&f.alias], vec![entry(local(11, 9, 30))]);
     }
 }

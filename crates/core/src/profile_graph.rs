@@ -7,7 +7,12 @@
 //! value-carrying assignment and is ignored entirely; nothing after `=` is read.
 //! - Secrets: ONLY UPPER_SNAKE names (`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$`, at least
 //!   one underscore), kept as written. Anything else (bare words, lowercase
-//!   backticked values) is not a name.
+//!   backticked values) is not a name. A candidate shaped like a token value
+//!   rather than a variable name is dropped too: longer than 40 characters, more
+//!   than 40% digits, a pure-letter segment over 16 characters or a letter/digit
+//!   segment over 11, or a credential prefix (`GITHUB_PAT_`, a `GLPAT`, `SK`,
+//!   `PK`, `RK`, `SG` or `GH[POSU]` first segment, `AKIA`/`ASIA` 16+, `AIZA`/`EYJ`
+//!   10+, `XOX[BAPRS]`).
 //! - Integrations: bare identifiers (`[A-Za-z_][A-Za-z0-9_.-]*`, 2+ chars),
 //!   lower-cased, minus a stop list of filler words (none, n/a, tbd, see, ...).
 //! - Document frequency: a name present in more than max(3, one third of) the
@@ -455,7 +460,9 @@ thread_local! {
 }
 
 /// How many times [`layout_with_edges`] ran on this thread: lets a page test
-/// prove it never paid for a layout it does not draw.
+/// prove it never paid for a layout it does not draw. A test hook only: the
+/// server crate's tests use it, so it cannot be `#[cfg(test)]` here.
+#[doc(hidden)]
 pub fn layout_runs_on_this_thread() -> usize {
     LAYOUT_RUNS.with(|c| c.get())
 }
@@ -478,7 +485,9 @@ fn unique_tenths(points: &[(f64, f64)], order: &[usize]) -> Vec<(i32, i32)> {
     out
 }
 
-/// Deterministic layout without edge information (pure repulsion).
+/// Deterministic layout without edge information (pure repulsion). Tests only:
+/// pages lay out with [`layout_with_edges`].
+#[cfg(test)]
 pub fn layout(nodes: &mut [Node]) {
     layout_with_edges(nodes, &[]);
 }

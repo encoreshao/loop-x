@@ -270,12 +270,13 @@ impl UiState {
         self
     }
 
-    /// Replace what Needs-you decisions on review threads reach (tests).
+    /// The agent the Memory page's builds and refreshes run (tests).
     pub fn with_profile_agent(mut self, agent: ProfileAgent) -> Self {
         self.profile_agent = Some(agent);
         self
     }
 
+    /// Replace what Needs-you decisions on review threads reach (tests).
     pub fn with_mr_feedback_deps(mut self, deps: MrFeedbackDeps) -> Self {
         self.mr_feedback_deps = Some(deps);
         self
