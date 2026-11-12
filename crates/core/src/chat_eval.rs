@@ -851,8 +851,9 @@ mod tests {
     fn real_cases_load() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/chat");
         let all = load_cases(&dir, None).unwrap();
-        assert_eq!(all.len(), 12);
+        assert_eq!(all.len(), 13);
         assert!(all.iter().any(|c| c.name == "profile-read"));
+        assert!(all.iter().any(|c| c.name == "wiki-add-waits-for-approval"));
         for name in [
             "creator-find-videos",
             "creator-generate-stops-at-approval",
