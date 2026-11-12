@@ -177,15 +177,89 @@ fn safe_name(s: &str) -> String {
         .collect()
 }
 
+/// The most steps (or projects) a record may claim; more is a broken record.
+const MAX_STEPS: usize = 1000;
+
 /// A job's activity file beside the shared `base` (`outputs/agent-activity.json`):
-/// `agent-activity/profile.<alias>.json`, or `agent-activity/profile-sync.json`.
-/// Issue files are `<alias>-<iid>.json` with a numeric iid, so the two never meet.
+/// `agent-activity/profile~<alias>~<hash>.json` (the hash of the raw alias keeps
+/// two aliases that clean up alike apart), or `agent-activity/profile-sync.json`.
+/// Issue files are `<alias>-<iid>.json` and never hold a `~`, so the two never meet.
 pub fn job_file(base: &Path, kind: JobKind, alias: &str) -> PathBuf {
     let dir = base.with_file_name("agent-activity");
     match kind {
         JobKind::Sync => dir.join("profile-sync.json"),
-        _ => dir.join(format!("profile.{}.json", safe_name(alias))),
+        _ => {
+            let hash = crate::sha256::hex(&crate::sha256::sha256(alias.as_bytes()));
+            dir.join(format!("profile~{}~{}.json", safe_name(alias), &hash[..8]))
+        }
     }
+}
+
+/// Whether `name` is a profile job's file name (this layout or the first one).
+fn is_job_file_name(name: &str) -> bool {
+    name.ends_with(".json")
+        && (name == "profile-sync.json"
+            || name.starts_with("profile~")
+            || name.starts_with("profile."))
+}
+
+/// The record's pid, when it names a live process.
+fn live_pid(v: &Value) -> bool {
+    crate::run_control::recorded_pid(v).is_some_and(crate::run_control::process_alive)
+}
+
+/// Remove the records of profile jobs whose process is gone (a server that was
+/// killed or restarted mid-job never ran their cleanup). Only profile job files
+/// holding a profile record without a live pid are removed; issue files and live
+/// jobs are never touched. Returns how many went.
+pub fn sweep_stale(base: &Path) -> usize {
+    let Ok(rd) = std::fs::read_dir(base.with_file_name("agent-activity")) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for p in rd.filter_map(Result::ok).map(|e| e.path()) {
+        let named = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(is_job_file_name);
+        let stale = named
+            && agent_activity::read(&p).is_some_and(|v| is_profile_record(&v) && !live_pid(&v));
+        if stale && std::fs::remove_file(&p).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// A job that failed before it started (a missing checkout, a busy project, an
+/// unreadable profile): one `failed` trace line with a fixed reason, no record.
+pub fn log_failure(base: &Path, kind: JobKind, alias: &str, err: &str) {
+    let section = match kind {
+        JobKind::Refresh(k) => json!(k.slug()),
+        _ => Value::Null,
+    };
+    let now = agent_activity::now_iso();
+    let line = json!({
+        "at": now,
+        "started_at": now,
+        "label": label(kind, alias),
+        "event": EVENT,
+        "tool": TOOL,
+        "detail": Step::Start.name(),
+        "kind": kind.code(),
+        "section": section,
+        "alias": alias,
+        "step": 0,
+        "steps": 0,
+        "step_code": Step::Start.code(),
+        "pid": std::process::id(),
+        "phase": "failed",
+        "reason": failure_reason(None, err),
+    });
+    if let Some(dir) = base.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = agent_activity::append_trace(&job_file(base, kind, alias), &line);
 }
 
 /// Whether an activity record (or trace line) belongs to a profile job.
@@ -291,6 +365,7 @@ impl ProfileJob {
             "step": st.step,
             "steps": st.steps,
             "step_code": st.code.code(),
+            "pid": std::process::id(),
         })
     }
 
@@ -399,8 +474,9 @@ pub struct JobView {
 
 impl JobView {
     /// A profile record with sane fields, else `None` (any other or a malformed record).
+    /// A record whose process is gone (or that names none) is not running.
     pub fn from_record(v: &Value) -> Option<JobView> {
-        if !is_profile_record(v) {
+        if !is_profile_record(v) || !live_pid(v) {
             return None;
         }
         let s = |k: &str| v.get(k).and_then(Value::as_str);
@@ -408,6 +484,7 @@ impl JobView {
             v.get(k)
                 .and_then(Value::as_u64)
                 .and_then(|x| usize::try_from(x).ok())
+                .filter(|x| *x <= MAX_STEPS)
         };
         let kind = s("kind").filter(|k| matches!(*k, "build" | "refresh" | "sync"))?;
         let step_code = s("step_code").and_then(Step::from_code)?;
@@ -500,12 +577,17 @@ impl JobView {
     }
 }
 
-/// Every running profile job under `base`, newest first.
+/// Every running profile job under `base`, in a stable order: by when it started,
+/// then kind and alias (so rows do not swap places as steps advance).
 pub fn running(base: &Path) -> Vec<JobView> {
-    agent_activity::read_all(base)
+    let mut jobs: Vec<JobView> = agent_activity::read_all(base)
         .iter()
         .filter_map(JobView::from_record)
-        .collect()
+        .collect();
+    jobs.sort_by(|a, b| {
+        (&a.started_at, &a.kind, &a.alias).cmp(&(&b.started_at, &b.kind, &b.alias))
+    });
+    jobs
 }
 
 /// The running job for `alias` (not the sync's overall record), if any.
@@ -575,10 +657,7 @@ mod tests {
             (Some(0), Some(5))
         );
         assert_eq!(v["step_code"], "start");
-        assert_eq!(
-            job.file(),
-            d.path().join("outputs/agent-activity/profile.web.json")
-        );
+        assert_eq!(job.file(), job_file(&base(d.path()), JobKind::Build, "web"));
         let refresh =
             ProfileJob::start(&base(d.path()), JobKind::Refresh(SectionKey::Stack), "api");
         let v = agent_activity::read(refresh.file()).unwrap();
@@ -741,10 +820,9 @@ mod tests {
         let b = Path::new("/o/agent-activity.json");
         let issue = agent_activity::for_task(b, "profile", "7");
         assert_ne!(job_file(b, JobKind::Build, "7"), issue);
-        assert_eq!(
-            job_file(b, JobKind::Build, "../x"),
-            Path::new("/o/agent-activity/profile..._x.json")
-        );
+        let odd = job_file(b, JobKind::Build, "../x");
+        assert_eq!(odd.parent(), Some(Path::new("/o/agent-activity")));
+        assert!(!odd.file_name().unwrap().to_str().unwrap().contains('/'));
         assert_eq!(
             job_file(b, JobKind::Sync, "web"),
             Path::new("/o/agent-activity/profile-sync.json")
@@ -789,6 +867,166 @@ mod tests {
         ] {
             assert!(!src.contains(banned), "{banned}");
         }
+    }
+
+    pub(crate) fn dead_pid() -> u32 {
+        let mut c = std::process::Command::new("true").spawn().unwrap();
+        c.wait().unwrap();
+        c.id()
+    }
+
+    fn seed(b: &Path, name: &str, v: Value) -> PathBuf {
+        let f = b.with_file_name("agent-activity").join(name);
+        std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+        std::fs::write(&f, v.to_string()).unwrap();
+        f
+    }
+
+    fn rec(alias: &str, pid: Option<u32>, started: &str) -> Value {
+        let mut v = json!({"at": started, "started_at": started, "label": "x", "event": EVENT, "tool": TOOL,
+            "detail": "x", "kind": "build", "section": null, "alias": alias, "step": 1, "steps": 5, "step_code": "scan"});
+        if let Some(p) = pid {
+            v["pid"] = json!(p);
+        }
+        v
+    }
+
+    #[test]
+    fn a_record_from_a_dead_process_or_without_a_pid_is_not_running() {
+        let d = tempfile::tempdir().unwrap();
+        let b = base(d.path());
+        seed(
+            &b,
+            "profile~dead~1.json",
+            rec("dead", Some(dead_pid()), "t1"),
+        );
+        seed(&b, "profile~nopid~2.json", rec("nopid", None, "t2"));
+        seed(
+            &b,
+            "profile~live~3.json",
+            rec("live", Some(std::process::id()), "t3"),
+        );
+        let job = ProfileJob::start(&b, JobKind::Build, "mine");
+        assert_eq!(
+            agent_activity::read(job.file()).unwrap()["pid"],
+            std::process::id()
+        );
+        let mut aliases: Vec<String> = running(&b).into_iter().map(|j| j.alias).collect();
+        aliases.sort();
+        assert_eq!(aliases, ["live", "mine"]);
+    }
+
+    #[test]
+    fn the_sweep_removes_only_dead_profile_records() {
+        let d = tempfile::tempdir().unwrap();
+        let b = base(d.path());
+        let dead = seed(
+            &b,
+            "profile~dead~1.json",
+            rec("dead", Some(dead_pid()), "t"),
+        );
+        let old = seed(&b, "profile.web.json", rec("web", None, "t"));
+        let mut sync = rec("", Some(dead_pid()), "t");
+        sync["kind"] = json!("sync");
+        let dead_sync = seed(&b, "profile-sync.json", sync);
+        let live = seed(
+            &b,
+            "profile~live~2.json",
+            rec("live", Some(std::process::id()), "t"),
+        );
+        let issue = seed(
+            &b,
+            "web-7.json",
+            json!({"at": "t", "label": "web #7", "event": "Start", "tool": null, "detail": null}),
+        );
+        let not_ours = seed(
+            &b,
+            "profile~odd~3.json",
+            json!({"event": "Start", "label": "?"}),
+        );
+        assert_eq!(sweep_stale(&b), 3);
+        assert!(!dead.exists() && !old.exists() && !dead_sync.exists());
+        assert!(live.exists() && issue.exists() && not_ours.exists());
+        assert_eq!(
+            sweep_stale(&d.path().join("nowhere/agent-activity.json")),
+            0
+        );
+    }
+
+    #[test]
+    fn absurd_step_counts_are_rejected() {
+        let mut v = rec("web", Some(std::process::id()), "t");
+        v["steps"] = json!(1001);
+        assert!(JobView::from_record(&v).is_none());
+        v["steps"] = json!(1000);
+        assert!(JobView::from_record(&v).is_some());
+        v["step"] = json!(u64::MAX);
+        assert!(JobView::from_record(&v).is_none());
+    }
+
+    #[test]
+    fn running_jobs_keep_a_stable_order() {
+        let d = tempfile::tempdir().unwrap();
+        let b = base(d.path());
+        let me = Some(std::process::id());
+        let mut late = rec("api", me, "2026-11-12T10:05:00+00:00");
+        late["at"] = json!("2026-11-12T10:09:00+00:00");
+        seed(&b, "profile~api~1.json", late);
+        seed(
+            &b,
+            "profile~web~2.json",
+            rec("web", me, "2026-11-12T10:00:00+00:00"),
+        );
+        seed(
+            &b,
+            "profile~app~3.json",
+            rec("app", me, "2026-11-12T10:00:00+00:00"),
+        );
+        let aliases: Vec<String> = running(&b).into_iter().map(|j| j.alias).collect();
+        assert_eq!(
+            aliases,
+            ["app", "web", "api"],
+            "by start, then kind and alias; not by last update"
+        );
+    }
+
+    #[test]
+    fn aliases_that_clean_up_alike_get_their_own_files() {
+        let b = Path::new("/o/agent-activity.json");
+        let (x, y) = (
+            job_file(b, JobKind::Build, "a b"),
+            job_file(b, JobKind::Build, "a_b"),
+        );
+        assert_ne!(x, y);
+        let name = x.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("profile~a_b~") && name.ends_with(".json"),
+            "{name}"
+        );
+        assert_eq!(
+            x,
+            job_file(b, JobKind::Refresh(SectionKey::Stack), "a b"),
+            "stable per alias"
+        );
+    }
+
+    #[test]
+    fn a_failure_before_any_job_is_one_content_free_trace_line() {
+        let d = tempfile::tempdir().unwrap();
+        let b = base(d.path());
+        log_failure(
+            &b,
+            JobKind::Build,
+            "web",
+            "the checkout for web is missing (/Users/me/x)",
+        );
+        let lines = trace(d.path());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["phase"], "failed");
+        assert_eq!(lines[0]["reason"], "checkout missing");
+        assert_eq!(lines[0]["alias"], "web");
+        assert!(running(&b).is_empty(), "no record is left");
+        assert!(!lines[0].to_string().contains("/Users/me"));
     }
 
     #[test]

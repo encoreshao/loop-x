@@ -1125,15 +1125,26 @@ fn sync_project(
     activity: Option<&Path>,
 ) -> Outcome {
     let job = |kind| activity.map(|b| ProfileJob::start(b, kind, &p.alias));
+    // A failure before any job starts is still one line in the trace.
+    let early = |err: &str| {
+        if let Some(b) = activity {
+            profile_progress::log_failure(b, JobKind::Build, &p.alias, err);
+        }
+    };
     if !p.work_dir.is_dir() {
+        early("checkout not found");
         return Outcome::Failed("checkout not found".into());
     }
     let Some(_slot) = profile_build::try_acquire(&p.alias) else {
+        early("a profile run is already in progress");
         return Outcome::Skipped;
     };
     let profile = match project_profile::load(&p.alias, root) {
         Ok(p) => p,
-        Err(e) => return failure(&e),
+        Err(e) => {
+            early(&e);
+            return failure(&e);
+        }
     };
     let Some(profile) = profile else {
         let job = job(JobKind::Build);
@@ -2208,6 +2219,15 @@ mod tests {
         assert!(
             phases.contains(&"refresh done 4/4 proposal".to_string()),
             "{phases:?}"
+        );
+        assert!(
+            phases.contains(&"build failed 0/0 start".to_string()),
+            "the missing checkout is one failed line: {phases:?}"
+        );
+        let trace = fs::read_to_string(out.path().join("agent-trace.jsonl")).unwrap();
+        assert!(
+            trace.contains("checkout missing") && !trace.contains("does-not-exist"),
+            "{trace}"
         );
         assert_eq!(
             phases.last().unwrap(),

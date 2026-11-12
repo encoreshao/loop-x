@@ -282,16 +282,23 @@ fn describe_agent(rec: &Value) -> Option<TraceLine> {
 /// anything malformed is dropped.
 fn describe_profile(rec: &Value) -> Option<TraceLine> {
     use crate::profile_progress::{Step, FAIL_REASONS};
-    let label = s(rec, "label");
     let kind = s(rec, "kind");
-    let n = |k: &str| rec.get(k).and_then(Value::as_u64);
+    let n = |k: &str| rec.get(k).and_then(Value::as_u64).filter(|x| *x <= 1000);
     let (step, steps) = (n("step")?, n("steps")?);
     let code = Step::from_code(s(rec, "step_code"))?;
-    if label.is_empty() || !matches!(kind, "build" | "refresh" | "sync") {
-        return None;
-    }
+    let alias = s(rec, "alias");
+    // A project alias: short, one line, no control characters.
+    let plausible =
+        |a: &str| !a.is_empty() && a.chars().count() <= 128 && !a.chars().any(char::is_control);
+    // The scope is built from the kind and the alias, never the line's own label.
+    let scope = match kind {
+        "sync" if alias.is_empty() || plausible(alias) => "Profile sync".to_string(),
+        "build" | "refresh" if plausible(alias) => format!("Profile \u{b7} {alias}"),
+        _ => return None,
+    };
     let name = match code {
-        Step::Project => s(rec, "alias").to_string(),
+        Step::Project if plausible(alias) => alias.to_string(),
+        Step::Project => return None,
         c => c.name().to_string(),
     };
     let section = crate::project_profile::SectionKey::from_slug(s(rec, "section"));
@@ -330,7 +337,7 @@ fn describe_profile(rec: &Value) -> Option<TraceLine> {
         source: Source::Profile,
         time: local_time(&at),
         at,
-        scope: label.to_string(),
+        scope,
         level,
         text,
     })
@@ -713,13 +720,60 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_lines_scope_comes_from_its_kind_and_a_plausible_alias() {
+        let l = describe_agent(&profile_line(
+            "step",
+            "build",
+            1,
+            5,
+            "scan",
+            json!({"label": "<b>anything</b>"}),
+        ))
+        .unwrap();
+        assert_eq!(l.scope, "Profile \u{b7} web");
+        let s = describe_agent(&profile_line(
+            "start",
+            "sync",
+            0,
+            0,
+            "start",
+            json!({"label": "x", "alias": ""}),
+        ))
+        .unwrap();
+        assert_eq!(s.scope, "Profile sync");
+        for alias in ["we\u{1b}[31mb", "a\nb", &"x".repeat(129), ""] {
+            assert!(
+                describe_agent(&profile_line(
+                    "step",
+                    "build",
+                    1,
+                    5,
+                    "scan",
+                    json!({"alias": alias})
+                ))
+                .is_none(),
+                "{alias:?}"
+            );
+        }
+        assert!(describe_agent(&profile_line(
+            "step",
+            "sync",
+            1,
+            2,
+            "project",
+            json!({"alias": "a\tb"})
+        ))
+        .is_none());
+    }
+
+    #[test]
     fn malformed_profile_lines_are_ignored() {
         for bad in [
             profile_line("step", "build", 3, 5, "rm -rf", json!({})),
             profile_line("step", "nope", 3, 5, "ai", json!({})),
             profile_line("wat", "build", 3, 5, "ai", json!({})),
             profile_line("step", "build", 3, 5, "ai", json!({"step": "three"})),
-            profile_line("step", "build", 3, 5, "ai", json!({"label": ""})),
+            profile_line("step", "build", 3, 5, "ai", json!({"steps": 5000})),
         ] {
             assert!(describe_agent(&bad).is_none(), "{bad}");
         }
