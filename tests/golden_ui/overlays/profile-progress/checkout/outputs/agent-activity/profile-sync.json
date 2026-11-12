@@ -1,1 +1,1 @@
-{"at": "2026-01-15T09:27:30+00:00", "started_at": "2026-01-15T09:25:00+00:00", "label": "Profile sync", "event": "Profile", "tool": "profile", "detail": "proj", "kind": "sync", "section": null, "alias": "proj", "step": 1, "steps": 2, "step_code": "project"}
+{"at": "2026-01-15T09:27:30+00:00", "started_at": "2026-01-15T09:25:00+00:00", "label": "Profile sync", "event": "Profile", "tool": "profile", "detail": "proj", "kind": "sync", "section": null, "alias": "proj", "step": 1, "steps": 2, "step_code": "project", "pid": @PID@}

@@ -2060,5 +2060,6 @@
   "{alias} · project {n} of {total}": "{alias} · 第 {n}/{total} 个项目",
   "{progress} · +{count} more": "{progress} · 另有 {count} 个",
   "Profile builds": "档案",
-  "Progress": "进度"
+  "Progress": "进度",
+  "Project profile builds show here too while they run.": "项目档案的生成在运行时也会显示在这里。"
 }

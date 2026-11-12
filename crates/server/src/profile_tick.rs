@@ -113,6 +113,9 @@ pub fn tick(
 /// `outputs/agent-activity.json`, which the Agents and Terminal pages and the Mac
 /// app read).
 pub fn start_profile_sync(activity: std::path::PathBuf) {
+    // A job cut short by the last server's exit left its record: drop it now, so
+    // nothing shows a profile job running that no process is doing.
+    loopx_core::profile_progress::sweep_stale(&activity);
     std::thread::spawn(move || {
         let mut state = TickState::default();
         loop {

@@ -798,6 +798,27 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_record_from_a_dead_process_is_not_a_running_agent() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let dir = p.outputs.join("agent-activity");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("profile-sync.json"),
+            json!({"at": "t", "started_at": "t", "label": "Profile sync", "event": "Profile", "tool": "profile",
+                   "detail": "web", "kind": "sync", "section": null, "alias": "web", "step": 1, "steps": 2,
+                   "step_code": "project", "pid": child.id()})
+            .to_string(),
+        )
+        .unwrap();
+        let s = build_snapshot(&p, now());
+        assert!(s["loops"].get("profile-sync").is_none(), "{s}");
+        assert_eq!(s["app_state"], "idle");
+    }
+
+    #[test]
     fn the_gitlab_loops_agent_list_leaves_out_profile_jobs() {
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());

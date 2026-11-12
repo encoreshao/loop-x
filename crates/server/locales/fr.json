@@ -2060,5 +2060,6 @@
   "{alias} · project {n} of {total}": "{alias} · projet {n} sur {total}",
   "{progress} · +{count} more": "{progress} · +{count} de plus",
   "Profile builds": "Profils",
-  "Progress": "Progression"
+  "Progress": "Progression",
+  "Project profile builds show here too while they run.": "Les créations de profils de projet s'affichent aussi ici pendant leur exécution."
 }

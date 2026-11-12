@@ -87,11 +87,12 @@ pub fn step_detail(ctx: &UiCtx, job: &JobView) -> String {
     }
 }
 
-/// The kind as a short pill: "Profile build", "Section refresh", "Weekly sync".
+/// The kind as a short pill: "Profile build", "Section refresh", "Profile sync"
+/// (the weekly run and "Sync now" alike).
 pub fn kind_label(ctx: &UiCtx, job: &JobView) -> String {
     match job.kind.as_str() {
         "refresh" => ctx.t("Section refresh"),
-        "sync" => ctx.t("Weekly sync"),
+        "sync" => ctx.t("Profile sync"),
         _ => ctx.t("Profile build"),
     }
 }

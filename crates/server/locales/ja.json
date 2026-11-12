@@ -2060,5 +2060,6 @@
   "{alias} · project {n} of {total}": "{alias} · プロジェクト {n}/{total}",
   "{progress} · +{count} more": "{progress} · ほか {count} 件",
   "Profile builds": "プロフィール",
-  "Progress": "進捗"
+  "Progress": "進捗",
+  "Project profile builds show here too while they run.": "プロジェクトのプロフィール作成も、実行中はここに表示されます。"
 }

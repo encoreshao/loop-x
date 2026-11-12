@@ -183,7 +183,11 @@ fn running_progress(ctx: &UiCtx, snap: &Snapshot) -> Option<String> {
         .map(|status| progress_text(ctx.lang, &status))
     {
         Some(text) => (text, profiles.len()),
-        None => (profile_jobs::progress_text(ctx, profiles.first()?), profiles.len() - 1),
+        // A project's own step says more than the sync's project count.
+        None => {
+            let first = profiles.iter().find(|j| !j.is_sync()).or(profiles.first())?;
+            (profile_jobs::progress_text(ctx, first), profiles.len() - 1)
+        }
     };
     Some(if rest > 0 {
         ctx.tf("{progress} · +{count} more", &[("progress", &shown), ("count", &rest.to_string())])
@@ -368,7 +372,7 @@ fn profile_row(ctx: &UiCtx, job: &loopx_core::profile_progress::JobView) -> Stri
         None => step,
     };
     let bar = if job.steps > 0 {
-        let pct = (job.step.min(job.steps) * 100) / job.steps;
+        let pct = job.step.min(job.steps).saturating_mul(100) / job.steps;
         format!(
             "<div class='queue-progress' role='progressbar' aria-label='{}' aria-valuemin='0' aria-valuenow='{}' aria-valuemax='{}'><span style='width:{pct}%'></span></div>",
             pyfmt::escape(&ctx.t("Progress")),
@@ -513,11 +517,12 @@ fn fragment_html(ctx: &UiCtx) -> String {
 
 fn body_html(ctx: &UiCtx) -> String {
     format!(
-        "<h1>{}</h1><p>{}</p>{}<div id='queue-root' class='queue-root'>{}</div>{STYLE}{SCRIPT}",
+        "<h1>{}</h1><p>{} {}</p>{}<div id='queue-root' class='queue-root'>{}</div>{STYLE}{SCRIPT}",
         pyfmt::escape(&ctx.t("Agents")),
         pyfmt::escape(&ctx.t(
             "Loops that are due wait here and run one at a time; a run you start by hand goes first."
         )),
+        pyfmt::escape(&ctx.t("Project profile builds show here too while they run.")),
         ctx.csrf_input(),
         fragment_html(ctx),
     )
@@ -949,7 +954,7 @@ mod tests {
             "agent-activity/profile.web.json",
             &serde_json::json!({"at": chrono::Utc::now().to_rfc3339(), "label": "<img src=x>", "event": "Profile",
                 "tool": "profile", "detail": "<b>README says hi</b>", "kind": "build", "section": null,
-                "alias": "web", "step": 2, "steps": 5, "step_code": "issues"})
+                "alias": "web", "step": 2, "steps": 5, "step_code": "issues", "pid": std::process::id()})
             .to_string(),
         );
         let html = get(&st, "/queue/fragment", "en");
@@ -960,6 +965,55 @@ mod tests {
         assert!(gone.contains("Profile build"));
         std::fs::remove_file(d.path().join("outputs/agent-activity/profile.web.json")).unwrap();
         assert!(!get(&st, "/queue/fragment", "en").contains("Profile build"));
+    }
+
+    #[test]
+    fn a_profile_record_left_by_a_dead_process_shows_nowhere() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        write_status(
+            d.path(),
+            "agent-activity/profile~web~deadbeef.json",
+            &serde_json::json!({"at": "2026-11-12T10:00:00+00:00", "started_at": "2026-11-12T10:00:00+00:00",
+                "label": "Profile \u{b7} web", "event": "Profile", "tool": "profile", "detail": "Asking the AI",
+                "kind": "build", "section": null, "alias": "web", "step": 3, "steps": 5, "step_code": "ai",
+                "pid": child.id()})
+            .to_string(),
+        );
+        let pill: serde_json::Value = serde_json::from_str(&get(&st, "/queue/pill", "en")).unwrap();
+        assert_eq!(pill["label"], "Agents", "{pill}");
+        let html = get(&st, "/queue/fragment", "en");
+        assert!(html.contains("Nothing is running") && !html.contains("Profile"), "{html}");
+        let term: serde_json::Value = serde_json::from_str(&get(&st, "/terminal/lines", "en")).unwrap();
+        assert_eq!(term["running"], serde_json::json!([]), "{term}");
+    }
+
+    #[test]
+    fn a_sync_row_is_labelled_profile_sync() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        // A sync that started well before the project job it is running now.
+        write_status(
+            d.path(),
+            "agent-activity/profile-sync.json",
+            &serde_json::json!({"at": "2020-01-01T09:00:00+00:00", "started_at": "2020-01-01T09:00:00+00:00",
+                "label": "Profile sync", "event": "Profile", "tool": "profile", "detail": "web", "kind": "sync",
+                "section": null, "alias": "web", "step": 1, "steps": 2, "step_code": "project", "pid": std::process::id()})
+            .to_string(),
+        );
+        let _web = profile_job(d.path(), "web", 3);
+        let pill: serde_json::Value = serde_json::from_str(&get(&st, "/queue/pill", "en")).unwrap();
+        assert_eq!(
+            pill["label"], "Profile \u{b7} web \u{2014} Asking the AI (3/5) \u{b7} +1 more",
+            "the project's own step beats the sync's count"
+        );
+        let html = get(&st, "/queue/fragment", "en");
+        assert!(html.contains("<span class='pill pill-outline'>Profile sync</span>"), "{html}");
+        assert!(!html.contains("Weekly sync"), "a Sync now run is not the weekly one: {html}");
+        let page = get(&st, "/queue", "en");
+        assert!(page.contains("Project profile builds show here too while they run."), "{page}");
     }
 
     #[test]

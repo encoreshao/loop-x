@@ -1,1 +1,1 @@
-{"at": "2026-01-15T09:29:40+00:00", "started_at": "2026-01-15T09:27:30+00:00", "label": "Profile · proj", "event": "Profile", "tool": "profile", "detail": "Asking the AI", "kind": "build", "section": null, "alias": "proj", "step": 3, "steps": 5, "step_code": "ai"}
+{"at": "2026-01-15T09:29:40+00:00", "started_at": "2026-01-15T09:27:30+00:00", "label": "Profile · proj", "event": "Profile", "tool": "profile", "detail": "Asking the AI", "kind": "build", "section": null, "alias": "proj", "step": 3, "steps": 5, "step_code": "ai", "pid": @PID@}
