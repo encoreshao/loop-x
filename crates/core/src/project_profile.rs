@@ -62,7 +62,8 @@ impl SectionKey {
         Self::ALL.into_iter().find(|k| k.slug() == slug)
     }
 
-    fn heading(self) -> &'static str {
+    /// The section's English heading ("Stack", "Gotchas").
+    pub fn heading(self) -> &'static str {
         match self {
             SectionKey::Overview => "Overview",
             SectionKey::Structure => "Structure",

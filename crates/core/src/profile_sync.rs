@@ -648,6 +648,9 @@ pub struct SyncSettings {
     pub hour: u32,
     /// Budget cap: a huge fleet cannot run away.
     pub max_projects_per_run: usize,
+    /// Post a Slack message when a profile job ends (see `profile_notify`). On by
+    /// default, also for a file written before this field existed.
+    pub notify_slack: bool,
 }
 
 impl Default for SyncSettings {
@@ -657,6 +660,7 @@ impl Default for SyncSettings {
             weekday: chrono::Weekday::Mon,
             hour: 9,
             max_projects_per_run: DEFAULT_MAX_PROJECTS,
+            notify_slack: true,
         }
     }
 }
@@ -954,6 +958,9 @@ pub struct QueueResult {
     /// (alias, one-line sanitised message) for entries dropped on a failure, for
     /// the status store so it is not silent.
     pub failures: Vec<(String, String)>,
+    /// What this pass did worth a message: each proposal raised and each
+    /// failure, with its fixed reason (see `profile_notify`).
+    pub rows: Vec<crate::profile_notify::QueueRow>,
 }
 
 /// Refresh queued (alias, section) entries through the same `propose_refresh_held`
@@ -999,6 +1006,11 @@ pub fn process_queue_with_progress(
             all_done(&mut res);
             res.failures
                 .push((alias.clone(), "checkout not found".into()));
+            res.rows.push(crate::profile_notify::QueueRow {
+                alias: alias.clone(),
+                section: None,
+                failed: Some(crate::profile_notify::reason("checkout not found")),
+            });
             continue;
         }
         let Some(_slot) = profile_build::try_acquire(alias) else {
@@ -1031,8 +1043,9 @@ pub fn process_queue_with_progress(
                 continue;
             }
             res.done.push((alias.clone(), e.section.clone()));
+            let job = activity.map(|b| ProfileJob::start(b, JobKind::Refresh(key), alias));
+            let tracked = profile_progress::Tracked::new(job.as_ref().map(|j| j as &dyn Progress));
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let job = activity.map(|b| ProfileJob::start(b, JobKind::Refresh(key), alias));
                 let digest = digest.get_or_init(|| {
                     profile_scan::digest_for(&p.instance, &p.project_id, alias, root)
                 });
@@ -1045,14 +1058,28 @@ pub fn process_queue_with_progress(
                     now,
                     root,
                     approvals_dir,
-                    job.as_ref().map(|j| j as &dyn Progress),
+                    Some(&tracked),
                 )
             }));
+            let fixed = tracked.failure();
+            drop(job);
+            let row = |failed| crate::profile_notify::QueueRow {
+                alias: alias.clone(),
+                section: Some(key),
+                failed,
+            };
             let err = match r {
-                Ok(Ok(_)) => continue,
+                Ok(Ok(Some(_))) => {
+                    res.rows.push(row(None));
+                    continue;
+                }
+                Ok(Ok(None)) => continue,
                 Ok(Err(e)) => e,
                 Err(_) => "internal error".into(),
             };
+            res.rows.push(row(Some(
+                fixed.unwrap_or_else(|| crate::profile_notify::reason(&err)),
+            )));
             if let Outcome::Failed(line) = failure(&err) {
                 res.failures.push((alias.clone(), line));
             }
@@ -2422,7 +2449,7 @@ mod tests {
         let q = queue(&f.alias, "stack", now() - chrono::Duration::days(1), false);
         let r = run_queue(&f, &q, &agent);
         assert_eq!(agent.calls(), 0);
-        assert!(r.done.is_empty() && r.failures.is_empty());
+        assert!(r.done.is_empty() && r.failures.is_empty() && r.rows.is_empty());
     }
 
     #[test]
@@ -2434,9 +2461,18 @@ mod tests {
         let r = run_queue(&f, &q, &agent);
         assert_eq!(agent.calls(), 1);
         assert_eq!(r.done, vec![(f.alias.clone(), "stack".to_string())]);
-        // Replaying the same queue is deduped by the proposal hash.
-        run_queue(&f, &q, &agent);
+        assert_eq!(
+            r.rows,
+            vec![crate::profile_notify::QueueRow {
+                alias: f.alias.clone(),
+                section: Some(SectionKey::Stack),
+                failed: None,
+            }]
+        );
+        // Replaying the same queue is deduped by the proposal hash: nothing to say.
+        let again = run_queue(&f, &q, &agent);
         assert_eq!(agent.calls(), 1);
+        assert!(again.rows.is_empty(), "{:?}", again.rows);
     }
 
     #[test]
@@ -2475,6 +2511,15 @@ mod tests {
         let q = queue(&f.alias, "stack", now(), false);
         let r = run_queue(&f, &q, &Refuse);
         assert_eq!(r.done, vec![(f.alias.clone(), "stack".to_string())]);
+        assert_eq!(
+            r.rows,
+            vec![crate::profile_notify::QueueRow {
+                alias: f.alias.clone(),
+                section: Some(SectionKey::Stack),
+                failed: Some("the AI call failed"),
+            }],
+            "the fixed reason of the step it failed at, never the error text"
+        );
         assert_eq!(r.failures.len(), 1);
         assert_eq!(r.failures[0].0, f.alias);
         assert!(

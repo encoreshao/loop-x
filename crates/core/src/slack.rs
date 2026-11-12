@@ -74,11 +74,26 @@ pub fn is_truthy(v: &Value) -> bool {
 
 /// POST `{text, blocks?}` to the webhook; returns the HTTP status.
 pub fn post_message(webhook_url: &str, text: &str, blocks: Option<&Value>) -> Result<u16, String> {
+    post_with(ureq::post(webhook_url), text, blocks)
+}
+
+/// [`post_message`] given up after `timeout` (connect, send and answer together).
+pub fn post_message_bounded(
+    webhook_url: &str,
+    text: &str,
+    blocks: Option<&Value>,
+    timeout: std::time::Duration,
+) -> Result<u16, String> {
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    post_with(agent.post(webhook_url), text, blocks)
+}
+
+fn post_with(req: ureq::Request, text: &str, blocks: Option<&Value>) -> Result<u16, String> {
     let mut body = json!({ "text": text });
     if let Some(blocks) = blocks.filter(|b| is_truthy(b)) {
         body["blocks"] = blocks.clone();
     }
-    match ureq::post(webhook_url)
+    match req
         .set("Content-Type", "application/json")
         .send_string(&body.to_string())
     {

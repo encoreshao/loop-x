@@ -310,6 +310,8 @@ struct State {
     /// The alias the job works on now (a sync moves from project to project).
     alias: String,
     settled: bool,
+    /// The fixed reason it failed with, once settled by [`Progress::fail`].
+    reason: Option<&'static str>,
 }
 
 /// One running profile job's live record. Dropping it removes the record, also on
@@ -343,6 +345,7 @@ impl ProfileJob {
                 code: Step::Start,
                 alias: alias.to_string(),
                 settled: false,
+                reason: None,
             }),
         };
         job.write("start", None);
@@ -352,6 +355,11 @@ impl ProfileJob {
     /// The record's path (for tests and the Memory page).
     pub fn file(&self) -> &Path {
         &self.file
+    }
+
+    /// The fixed reason (one of [`FAIL_REASONS`]) the job failed with, if it did.
+    pub fn failure(&self) -> Option<&'static str> {
+        self.lock().reason
     }
 
     /// A sync moved on to project `i` of `n`, `alias`.
@@ -446,7 +454,9 @@ impl Progress for ProfileJob {
                 return;
             }
             st.settled = true;
-            failure_reason(Some(st.code), err)
+            let reason = failure_reason(Some(st.code), err);
+            st.reason = Some(reason);
+            reason
         };
         self.write("failed", Some(reason));
     }
@@ -478,6 +488,50 @@ pub fn settle<T>(progress: Option<&dyn Progress>, res: &Result<T, String>) {
         match res {
             Ok(_) => p.done(),
             Err(e) => p.fail(e),
+        }
+    }
+}
+
+/// Passes every call on to `inner` (when there is one) and remembers the fixed
+/// reason a failure had at the step it happened, the same one a [`ProfileJob`]
+/// writes, so a caller without a live record still knows it.
+pub struct Tracked<'a> {
+    inner: Option<&'a dyn Progress>,
+    step: std::cell::Cell<Option<Step>>,
+    reason: std::cell::Cell<Option<&'static str>>,
+}
+
+impl<'a> Tracked<'a> {
+    pub fn new(inner: Option<&'a dyn Progress>) -> Self {
+        Tracked {
+            inner,
+            step: std::cell::Cell::new(None),
+            reason: std::cell::Cell::new(None),
+        }
+    }
+
+    /// The fixed reason of the first failure, if any.
+    pub fn failure(&self) -> Option<&'static str> {
+        self.reason.get()
+    }
+}
+
+impl Progress for Tracked<'_> {
+    fn step(&self, n: usize, total: usize, step: Step) {
+        self.step.set(Some(step));
+        report(self.inner, n, total, step);
+    }
+    fn done(&self) {
+        if let Some(p) = self.inner {
+            p.done();
+        }
+    }
+    fn fail(&self, err: &str) {
+        if self.reason.get().is_none() {
+            self.reason.set(Some(failure_reason(self.step.get(), err)));
+        }
+        if let Some(p) = self.inner {
+            p.fail(err);
         }
     }
 }
@@ -1114,6 +1168,37 @@ mod tests {
         assert_eq!(lines[0]["alias"], "web");
         assert!(running(&b).is_empty(), "no record is left");
         assert!(!lines[0].to_string().contains("/Users/me"));
+    }
+
+    #[test]
+    fn a_tracker_remembers_the_step_reason_and_passes_everything_on() {
+        let r = Recorder::default();
+        let t = Tracked::new(Some(&r));
+        t.step(3, 5, Step::Ai);
+        t.fail("TimeoutExpired");
+        assert_eq!(t.failure(), Some("the AI call failed"));
+        assert_eq!(*r.0.borrow(), ["3/5 ai", "fail error"]);
+        let bare = Tracked::new(None);
+        bare.step(4, 4, Step::Proposal);
+        bare.done();
+        assert_eq!(bare.failure(), None);
+        bare.fail("disk full");
+        assert_eq!(bare.failure(), Some("could not save"));
+    }
+
+    #[test]
+    fn a_job_remembers_its_fixed_failure_reason() {
+        let d = tempfile::tempdir().unwrap();
+        let job = ProfileJob::start(&base(d.path()), JobKind::Build, "web");
+        assert_eq!(job.failure(), None);
+        job.step(3, 5, Step::Ai);
+        job.fail("TimeoutExpired at /Users/me/x");
+        assert_eq!(job.failure(), Some("the AI call failed"));
+        job.fail("FileNotFoundError");
+        assert_eq!(job.failure(), Some("the AI call failed"), "settled once");
+        let ok = ProfileJob::start(&base(d.path()), JobKind::Build, "api");
+        ok.done();
+        assert_eq!(ok.failure(), None);
     }
 
     #[test]
