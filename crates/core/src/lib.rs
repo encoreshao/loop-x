@@ -34,6 +34,7 @@ pub mod golden_eval;
 pub mod guide_inventory;
 pub mod guide_plan;
 pub mod guide_read;
+pub mod guide_source;
 pub mod health;
 pub mod hosted;
 pub mod inbox_config;

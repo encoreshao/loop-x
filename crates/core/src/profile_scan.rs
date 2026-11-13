@@ -189,7 +189,7 @@ fn assignment(line: &str) -> Option<(&str, usize)> {
 
 /// Manifest text with secret values replaced (key names kept) and the names
 /// of the variables whose value was replaced.
-fn redact(text: &str) -> (String, Vec<String>) {
+pub(crate) fn redact(text: &str) -> (String, Vec<String>) {
     let mut names = Vec::new();
     let mut out: Vec<String> = Vec::new();
     let mut in_pem = false;
