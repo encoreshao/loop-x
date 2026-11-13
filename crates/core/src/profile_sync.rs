@@ -129,6 +129,12 @@ pub fn section_freshness(
     Freshness::Fresh
 }
 
+/// The guide writes this section itself (Features, once the project has a guide plan):
+/// like a human-edited one, it is never refreshed or proposed over.
+fn guide_owned(alias: &str, key: SectionKey, root: Option<&Path>) -> bool {
+    key == SectionKey::Features && crate::guide_features::owns_features(alias, root)
+}
+
 /// Sections whose sources include any of `touched_paths` (repo-relative).
 pub fn queue_event_refresh(
     alias: &str,
@@ -365,6 +371,9 @@ fn propose_inner(
 ) -> Result<Option<Proposal>, String> {
     let step = |n, s| profile_progress::report(progress, n, REFRESH_STEPS, s);
     step(1, Step::Scan);
+    if guide_owned(alias, key, root) {
+        return Ok(None);
+    }
     let profile = project_profile::load(alias, root)?
         .ok_or_else(|| format!("{alias} has no profile yet; build it first"))?;
     let scan = profile_scan::scan_repo(work_dir, &[])?;
@@ -1099,6 +1108,10 @@ pub fn process_queue_with_progress(
                 continue;
             };
             let fresh = section_freshness(&profile, key, &p.work_dir, head.as_deref());
+            if guide_owned(alias, key, root) {
+                res.done.push((alias.clone(), e.section.clone()));
+                continue;
+            }
             let go = match fresh {
                 Freshness::HumanEdited => {
                     res.done.push((alias.clone(), e.section.clone()));
@@ -1349,10 +1362,11 @@ fn sync_project(
     let stale: Vec<SectionKey> = SectionKey::ALL
         .into_iter()
         .filter(|k| {
-            matches!(
-                section_freshness(&profile, *k, &p.work_dir, head.as_deref()),
-                Freshness::Stale(_)
-            )
+            !guide_owned(&p.alias, *k, root)
+                && matches!(
+                    section_freshness(&profile, *k, &p.work_dir, head.as_deref()),
+                    Freshness::Stale(_)
+                )
         })
         .collect();
     if stale.is_empty() {
@@ -2125,6 +2139,74 @@ mod tests {
             vec![(f.alias.clone(), Outcome::Skipped)]
         );
         assert_eq!(agent.calls(), 0);
+    }
+
+    impl Fx {
+        /// Moves the Cargo.toml-sourced section to Features and drifts its source, so
+        /// Features is the one stale section; with `plan`, the guide owns Features.
+        fn drifted_features(&self, plan: bool) -> Fake {
+            let mut p = self.profile();
+            let sec = p.sections.remove(&SectionKey::Stack).unwrap();
+            p.sections.insert(SectionKey::Features, sec);
+            project_profile::save(&p, Some(self.root.path())).unwrap();
+            if plan {
+                let plan = crate::guide_plan::Plan {
+                    features: vec![crate::guide_plan::FeaturePlan {
+                        slug: "feature-orders".into(),
+                        title: "Orders".into(),
+                        summary: "Taking orders.".into(),
+                        files: vec!["src/main.rs".into()],
+                        related: vec![],
+                    }],
+                    ..Default::default()
+                };
+                crate::guide_plan::save(&self.alias, &plan, Some(self.root.path())).unwrap();
+            }
+            self.touch_cargo("[package]\nname = \"app2\"\n");
+            Fake::new("New features text.").for_section("features")
+        }
+    }
+
+    #[test]
+    fn a_drifted_features_section_is_still_proposed_without_a_guide_plan() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.drifted_features(false);
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Proposed(1))]
+        );
+        let all = approvals::all(f.apr.path());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0]["kind"], KIND);
+        assert_eq!(all[0]["target"]["section"], "features");
+    }
+
+    #[test]
+    fn a_guide_owned_features_section_is_never_proposed() {
+        let f = Fx::new(Origin::Agent);
+        let agent = f.drifted_features(true);
+        assert_eq!(
+            run_sync(&f, &agent),
+            vec![(f.alias.clone(), Outcome::Skipped)]
+        );
+        // A queued refresh drops it without a call, and a direct request raises nothing.
+        let q = queue(&f.alias, "features", now(), true);
+        let r = run_queue(&f, &q, &agent);
+        assert_eq!(r.done, vec![(f.alias.clone(), "features".to_string())]);
+        assert!(r.rows.is_empty() && r.failures.is_empty());
+        let direct = propose_refresh(
+            &f.alias,
+            SectionKey::Features,
+            f.work.path(),
+            &IssueDigest::default(),
+            &agent,
+            now(),
+            Some(f.root.path()),
+            f.apr.path(),
+        );
+        assert!(matches!(direct, Ok(None)), "{direct:?}");
+        assert_eq!(agent.calls(), 0);
+        assert!(approvals::all(f.apr.path()).is_empty());
     }
 
     #[test]

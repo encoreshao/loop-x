@@ -299,6 +299,12 @@ fn prepare(
     Ok((saved, scan, inv, digest))
 }
 
+/// Point the profile's Features section at the pages just written. A corrupt or absent
+/// profile must not fail a guide build, so its error is dropped.
+fn refresh_profile_index(alias: &str, now: DateTime<Utc>, root: Option<&Path>) {
+    let _ = crate::guide_features::sync_profile_features(alias, now, root);
+}
+
 fn known_slugs(jobs: &[Job]) -> Vec<String> {
     jobs.iter().map(|j| j.slug.clone()).collect()
 }
@@ -347,6 +353,7 @@ pub fn build_guide(
             report(progress, i + 2, total, Step::Page);
             run_job(&ctx, job, &mut out);
         }
+        refresh_profile_index(alias, now, root);
         Ok(out)
     })();
     settle(progress, &res);
@@ -393,6 +400,7 @@ pub fn rebuild_page(
         };
         let mut out = BuildReport::default();
         run_job(&ctx, job, &mut out);
+        refresh_profile_index(alias, now, root);
         Ok(out)
     })();
     settle(progress, &res);
@@ -851,6 +859,79 @@ mod tests {
             None
         )
         .is_err());
+    }
+
+    fn save_shop_profile(root: &Path) {
+        let mut sections = std::collections::BTreeMap::new();
+        for k in project_profile::SectionKey::ALL {
+            sections.insert(
+                k,
+                project_profile::Section {
+                    summary: format!("{} summary", k.heading()),
+                    body: "Old text.".into(),
+                    last_verified: None,
+                    sources: vec![],
+                    origin: Origin::Agent,
+                },
+            );
+        }
+        let p = project_profile::Profile {
+            alias: "shop".into(),
+            generated_at: None,
+            head_sha: None,
+            status: Status::Approved,
+            links: vec![],
+            sections,
+        };
+        project_profile::save(&p, Some(root)).unwrap();
+    }
+
+    fn features_body(root: &Path) -> String {
+        project_profile::load("shop", Some(root))
+            .unwrap()
+            .unwrap()
+            .sections[&project_profile::SectionKey::Features]
+            .body
+            .clone()
+    }
+
+    #[test]
+    fn a_build_or_rebuild_refreshes_the_profile_features_index() {
+        // No profile: the build is fine and creates none.
+        let d = repo();
+        let bare = tempfile::tempdir().unwrap();
+        build(d.path(), &fake(PLAN, None), bare.path()).unwrap();
+        assert!(!project_profile::profile_path("shop", Some(bare.path())).exists());
+
+        let root = tempfile::tempdir().unwrap();
+        save_shop_profile(root.path());
+        build(d.path(), &fake(PLAN, None), root.path()).unwrap();
+        assert_eq!(
+            features_body(root.path()),
+            "- **Orders**: Taking orders. (guide page `feature-orders`, draft)\n\
+             - **Cart**: Holding items. (guide page `feature-cart`, draft)"
+        );
+        // Approve Cart, rebuild Orders: the rebuild re-syncs the index too.
+        let mut cart = crate::project_guide::load("shop", "feature-cart", Some(root.path()))
+            .unwrap()
+            .unwrap();
+        cart.status = Status::Approved;
+        crate::project_guide::save(&cart, Some(root.path())).unwrap();
+        rebuild_page(
+            "shop",
+            "feature-orders",
+            d.path(),
+            "",
+            "",
+            &[],
+            &fake("unused", None),
+            now(),
+            Some(root.path()),
+            None,
+        )
+        .unwrap();
+        assert!(features_body(root.path())
+            .ends_with("- **Cart**: Holding items. (guide page `feature-cart`)"));
     }
 
     #[test]

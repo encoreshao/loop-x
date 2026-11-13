@@ -339,6 +339,14 @@ fn build_inner(
 
     let mut sections: BTreeMap<SectionKey, Section> = BTreeMap::new();
     for key in SectionKey::ALL {
+        // Once the guide has a plan, Features is its index of pages, never the agent's
+        // text. A human Features section is still restored by the carry-over below.
+        if key == SectionKey::Features {
+            if let Some(owned) = crate::guide_features::features_section(alias, now, root) {
+                sections.insert(key, owned);
+                continue;
+            }
+        }
         let mut sec = drafted.sections.remove(&key).unwrap_or(Section {
             summary: "unknown".into(),
             body: "unknown".into(),
@@ -613,6 +621,75 @@ mod tests {
         );
         assert_eq!(saved.sections[&SectionKey::Overview].summary, "An app");
         assert_eq!(saved.status, Status::Draft);
+    }
+
+    fn reply_with_ai_features() -> String {
+        format!(
+            "{REPLY}\n<!-- section: features origin: agent verified: - summary: AI summary -->\n\
+## Features\n\nAI wrote this\n"
+        )
+    }
+
+    fn save_app_plan(root: &Path) {
+        let plan = crate::guide_plan::Plan {
+            features: vec![crate::guide_plan::FeaturePlan {
+                slug: "feature-orders".into(),
+                title: "Orders".into(),
+                summary: "Taking orders.".into(),
+                files: vec!["src/main.rs".into()],
+                related: vec![],
+            }],
+            ..Default::default()
+        };
+        crate::guide_plan::save("app", &plan, Some(root)).unwrap();
+    }
+
+    #[test]
+    fn with_a_guide_plan_the_features_section_is_the_generated_index() {
+        let d = checkout();
+        let root = tempfile::tempdir().unwrap();
+        save_app_plan(root.path());
+        let p = build(d.path(), &Fake::new(&reply_with_ai_features()), root.path()).unwrap();
+        let feats = &p.sections[&SectionKey::Features];
+        assert_eq!(
+            feats.body,
+            "- **Orders**: Taking orders. (guide page `feature-orders`, draft)"
+        );
+        assert_eq!(feats.summary, "1 feature pages");
+        assert!(!feats.body.contains("AI wrote this"));
+        let saved = project_profile::load("app", Some(root.path()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.sections[&SectionKey::Features].body, feats.body);
+    }
+
+    #[test]
+    fn without_a_guide_plan_the_agent_features_text_is_kept() {
+        let d = checkout();
+        let root = tempfile::tempdir().unwrap();
+        let p = build(d.path(), &Fake::new(&reply_with_ai_features()), root.path()).unwrap();
+        assert_eq!(p.sections[&SectionKey::Features].body, "AI wrote this");
+    }
+
+    #[test]
+    fn with_a_guide_plan_a_human_features_section_still_wins() {
+        let d = checkout();
+        let root = tempfile::tempdir().unwrap();
+        let mut existing = empty_profile(vec![]);
+        let human = Section {
+            summary: "Mine".into(),
+            body: "Hand-written features.".into(),
+            last_verified: None,
+            sources: vec![],
+            origin: Origin::Human,
+        };
+        existing
+            .sections
+            .insert(SectionKey::Features, human.clone());
+        project_profile::save(&existing, Some(root.path())).unwrap();
+        save_app_plan(root.path());
+        let p = build(d.path(), &Fake::new(&reply_with_ai_features()), root.path()).unwrap();
+        assert_eq!(p.sections[&SectionKey::Features], human);
     }
 
     fn empty_profile(links: Vec<Link>) -> Profile {
