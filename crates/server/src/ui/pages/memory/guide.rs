@@ -25,7 +25,7 @@ use std::path::Path;
 
 /// The guide page of `alias` showing `slug`. Both are checked values (a known alias,
 /// a slug that passed `check_slug`).
-fn page_url(alias: &str, slug: &str) -> String {
+pub(super) fn page_url(alias: &str, slug: &str) -> String {
     format!("{}&guide={slug}", project_url(alias, Some("guide")))
 }
 
@@ -228,6 +228,15 @@ pub(super) fn render(ctx: &UiCtx, p: &Project, _m: &Model) -> String {
     )
 }
 
+/// Whether "Rebuild this page" can rewrite `slug`: a valid slug the saved plan names
+/// that a build writes (architecture, the data model when planned, a planned
+/// feature). Never `roadmap`: a build does not write it. Used by the button and the
+/// route alike.
+pub(super) fn rebuildable(alias: &str, slug: &str, root: &Path) -> bool {
+    matches!(check_slug(slug), Ok(Kind::Architecture | Kind::DataModel | Kind::Feature))
+        && guide_ops::in_plan(alias, slug, Some(root))
+}
+
 /// The disabled button a guide button becomes while a guide run works on the project.
 fn working(ctx: &UiCtx) -> String {
     format!(
@@ -268,7 +277,7 @@ fn actions(ctx: &UiCtx, p: &Project, has_pages: bool, page: Option<&str>) -> Str
         let build = action_form(ctx, "/insights/memory/guide/build", &project, !has_pages, icon_name, &label);
         let root = memory_root(ctx);
         let one = page
-            .filter(|slug| guide_ops::in_plan(&p.alias, slug, Some(&root)))
+            .filter(|slug| rebuildable(&p.alias, slug, &root))
             .map_or_else(String::new, |slug| {
                 let fields = format!("{project}{}", hidden("slug", slug));
                 action_form(ctx, "/insights/memory/guide/rebuild-page", &fields, false, "autorenew", &ctx.t("Rebuild this page"))

@@ -358,6 +358,24 @@ pub fn prepare(
     prepare_with(t, home, now, &remote_for)
 }
 
+/// The process-wide lock of one managed clone directory. Everything that clones,
+/// fetches or deletes a clone holds it ([`prepare_with`], the Memory page's Reclone),
+/// so a profile job and a guide build of the same project queue instead of one
+/// deleting the other's checkout mid-sync. It is held only around the sync, never
+/// across a build: a build that reads the checkout while a later sync updates it can
+/// still see files change (scans are read-only, so that is accepted).
+pub fn clone_lock(dir: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    type Locks = std::sync::Mutex<Vec<(PathBuf, std::sync::Arc<std::sync::Mutex<()>>)>>;
+    static LOCKS: Locks = std::sync::Mutex::new(Vec::new());
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, l)) = locks.iter().find(|(d, _)| d == dir) {
+        return l.clone();
+    }
+    let l = std::sync::Arc::new(std::sync::Mutex::new(()));
+    locks.push((dir.to_path_buf(), l.clone()));
+    l
+}
+
 /// [`prepare`] with the remote lookup injected (tests use a local repository).
 pub fn prepare_with(
     t: &crate::profile_sync::TrackedProject,
@@ -376,8 +394,11 @@ pub fn prepare_with(
         };
     }
     crate::project_profile::check_alias(&t.alias)?;
+    let dir = managed_dir(home, &t.alias);
+    let lock = clone_lock(&dir);
+    let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
     let remote = remote(&t.instance, &t.project_id)?;
-    let s = sync_clone(&managed_dir(home, &t.alias), &remote, now)?;
+    let s = sync_clone(&dir, &remote, now)?;
     Ok(Prepared {
         dir: s.dir,
         warning: s.warning,
@@ -619,6 +640,50 @@ pub(crate) mod tests {
         assert_eq!(p.dir, managed_dir(&home, "scraper"));
         assert!(p.dir.join("one").is_file());
         assert_eq!(seen.borrow()[0], ("work".to_string(), "g/p".to_string()));
+    }
+
+    #[test]
+    fn two_prepares_of_the_same_clone_take_turns() {
+        let f = fixture();
+        let home = f.base.parent().unwrap().join("home");
+        let r = remote(&f);
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let threads: Vec<_> = (0..2)
+            .map(|n| {
+                let (home, r, events, start) =
+                    (home.clone(), r.clone(), events.clone(), start.clone());
+                std::thread::spawn(move || {
+                    let t = tracked("turns", &managed_dir(&home, "turns"), true);
+                    let lookup = |_: &str, _: &str| -> Result<Remote, String> {
+                        events.lock().unwrap().push(format!("in {n}"));
+                        std::thread::sleep(Duration::from_millis(150));
+                        events.lock().unwrap().push(format!("out {n}"));
+                        Ok(r.clone())
+                    };
+                    start.wait();
+                    prepare_with(&t, &home, SystemTime::now(), &lookup).unwrap();
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let ev = events.lock().unwrap().clone();
+        assert_eq!(ev.len(), 4, "{ev:?}");
+        // Each prepare finishes before the other one starts: never in, in.
+        assert!(
+            ev[0].starts_with("in") && ev[1].starts_with("out") && ev[2].starts_with("in"),
+            "{ev:?}"
+        );
+        assert_eq!(ev[0][3..], ev[1][4..], "{ev:?}");
+        assert!(managed_dir(&home, "turns").join("one").is_file());
+        // Another clone directory is not held up by this one's lock.
+        let held = clone_lock(&managed_dir(&home, "turns"));
+        let _g = held.lock().unwrap();
+        let other = tracked("other", &managed_dir(&home, "other"), true);
+        let lookup = |_: &str, _: &str| -> Result<Remote, String> { Ok(r.clone()) };
+        assert!(prepare_with(&other, &home, SystemTime::now(), &lookup).is_ok());
     }
 
     #[test]

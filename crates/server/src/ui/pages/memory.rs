@@ -32,9 +32,8 @@ use crate::ui::state::ProfileAgent;
 use chrono::{DateTime, Duration, Local, Utc};
 use loopx_core::profile_graph::{self, Edge, EdgeKind, Graph};
 use loopx_core::profile_build;
-use loopx_core::profile_progress::{failure_reason, JobKind as ProfileJobKind, ProfileJob};
-use loopx_core::project_guide::check_slug;
-use loopx_core::{guide_build, guide_ops, guide_proposal};
+use loopx_core::profile_progress::{failure_reason, JobKind as ProfileJobKind, Progress, ProfileJob};
+use loopx_core::{guide_build, guide_proposal};
 use loopx_core::profile_notify::{self, BuildDone, Finished, RowResult};
 use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
@@ -2423,12 +2422,15 @@ fn notice_html(ctx: &UiCtx) -> String {
 enum Back<'a> {
     Overview,
     Project(&'a str, Option<&'static str>),
+    /// One guide page: a known alias and a slug that passed `check_slug`.
+    GuidePage(&'a str, &'a str),
 }
 
 fn back(to: Back<'_>, notice: Notice) -> UiResponse {
     let base = match to {
         Back::Overview => BASE.to_string(),
         Back::Project(alias, page) => project_url(alias, page),
+        Back::GuidePage(alias, slug) => guide::page_url(alias, slug),
     };
     UiResponse::redirect(303, &format!("{base}&notice={}", notice.code()))
 }
@@ -2863,7 +2865,15 @@ fn run_guide(env: &JobEnv, t: &TrackedProject, what: &GuideRun, tracked: &[Strin
     forget_in(&env.home, &t.alias, true);
     let job = ProfileJob::start(&env.activity, ProfileJobKind::Guide, &t.alias);
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let dir = loopx_core::profile_checkout::prepare(t, &env.home, std::time::SystemTime::now())?.dir;
+        // A clone that cannot be made fails the job (its record says failed, with a
+        // fixed reason), not "interrupted".
+        let dir = match loopx_core::profile_checkout::prepare(t, &env.home, std::time::SystemTime::now()) {
+            Ok(p) => p.dir,
+            Err(e) => {
+                Progress::fail(&job, &e);
+                return Err(e);
+            }
+        };
         let (agent, now, root) = (&*env.agent, env.now(), Some(env.root.as_path()));
         let (alias, instance, project) = (t.alias.as_str(), t.instance.as_str(), t.project_id.as_str());
         let report = match what {
@@ -2872,12 +2882,14 @@ fn run_guide(env: &JobEnv, t: &TrackedProject, what: &GuideRun, tracked: &[Strin
                 guide_build::rebuild_page(alias, slug, &dir, instance, project, tracked, agent, now, root, Some(&job))
             }
         }?;
-        guide_proposal::raise_all(alias, &report, &env.approvals, root, now);
-        Ok::<_, String>(report)
+        // "Waiting for approval" counts the proposals actually raised: a held page whose
+        // update is already pending (or cannot be raised) is not counted.
+        let raised = guide_proposal::raise_all(alias, &report, &env.approvals, root, now).len();
+        Ok::<_, String>((report, raised))
     }))
     .unwrap_or_else(|_| Err("internal error".into()));
     let outcome = match res {
-        Ok(r) => JobOutcome::GuideBuilt { saved: r.saved.len(), held: r.held.len(), failed: r.failed.len() },
+        Ok((r, raised)) => JobOutcome::GuideBuilt { saved: r.saved.len(), held: raised, failed: r.failed.len() },
         Err(e) => JobOutcome::Failed(job.failure().unwrap_or_else(|| failure_reason(None, &e)).to_string()),
     };
     record(&env.home, &t.alias, Job { at: env.now(), kind: JobKind::Guide, outcome });
@@ -2893,16 +2905,23 @@ fn start_guide(ctx: &UiCtx, page: bool) -> UiResponse {
     let Some(alias) = known_alias(ctx, form.first("project")) else {
         return back(Back::Overview, Notice::BadInput);
     };
-    let to = || Back::Project(&alias, Some("guide"));
     let what = if page {
         let root = memory_root(ctx);
-        let planned = |s: &&str| check_slug(s).is_ok() && guide_ops::in_plan(&alias, s, Some(&root));
-        match form.first("slug").filter(planned) {
+        match form.first("slug").filter(|s| guide::rebuildable(&alias, s, &root)) {
             Some(s) => GuideRun::Page(s.to_string()),
-            None => return back(to(), Notice::BadInput),
+            None => return back(Back::Project(&alias, Some("guide")), Notice::BadInput),
         }
     } else {
         GuideRun::All
+    };
+    // A page rebuild goes back to its page (a slug checked above), a build to the guide.
+    let page_slug = match &what {
+        GuideRun::Page(slug) => Some(slug.clone()),
+        GuideRun::All => None,
+    };
+    let to = || match &page_slug {
+        Some(slug) => Back::GuidePage(&alias, slug),
+        None => Back::Project(&alias, Some("guide")),
     };
     let Some(t) = checkout_of(ctx, &alias) else {
         return back(to(), Notice::NoCheckout);
@@ -3121,7 +3140,15 @@ fn reclone(ctx: &UiCtx) -> UiResponse {
     let Some(_slot) = profile_build::try_acquire(&alias) else {
         return back(Back::Project(&alias, None), Notice::Busy);
     };
-    let _ = std::fs::remove_dir_all(loopx_core::profile_checkout::managed_dir(&ctx.state.home_dir, &alias));
+    // A guide build uses the same clone: refused while one runs, and both slots
+    // are held until the clone is gone.
+    let Some(_guide_slot) = guide_build::try_acquire(&alias) else {
+        return back(Back::Project(&alias, None), Notice::Busy);
+    };
+    let dir = loopx_core::profile_checkout::managed_dir(&ctx.state.home_dir, &alias);
+    let lock = loopx_core::profile_checkout::clone_lock(&dir);
+    let _turn = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = std::fs::remove_dir_all(&dir);
     back(Back::Project(&alias, None), Notice::Recloned)
 }
 
@@ -6632,11 +6659,13 @@ mod tests {
         prompts: Mutex<Vec<String>>,
         err: Option<String>,
         panics: bool,
+        /// Only page calls fail with `err` (the plan call answers).
+        pages_only: bool,
     }
 
     impl GuideAgent {
         fn make(gate: Option<mpsc::Receiver<()>>, err: Option<String>, panics: bool) -> Arc<Self> {
-            Arc::new(Self { gate: Mutex::new(gate), prompts: Mutex::new(Vec::new()), err, panics })
+            Arc::new(Self { gate: Mutex::new(gate), prompts: Mutex::new(Vec::new()), err, panics, pages_only: false })
         }
         fn new() -> Arc<Self> {
             Self::make(None, None, false)
@@ -6647,6 +6676,15 @@ mod tests {
         }
         fn failing(err: &str) -> Arc<Self> {
             Self::make(None, Some(err.to_string()), false)
+        }
+        fn failing_pages(err: &str) -> Arc<Self> {
+            Arc::new(Self {
+                gate: Mutex::new(None),
+                prompts: Mutex::new(Vec::new()),
+                err: Some(err.to_string()),
+                panics: false,
+                pages_only: true,
+            })
         }
         fn calls(&self) -> usize {
             self.prompts.lock().unwrap().len()
@@ -6699,7 +6737,9 @@ mod tests {
                 panic!("the guide agent fell over");
             }
             if let Some(e) = &self.err {
-                return Err(e.clone());
+                if !(self.pages_only && is_plan_prompt(prompt)) {
+                    return Err(e.clone());
+                }
             }
             if is_plan_prompt(prompt) {
                 Ok(GUIDE_PLAN.to_string())
@@ -6730,6 +6770,11 @@ mod tests {
 
     fn guide_back(alias: &str, notice: &str) -> String {
         format!("/insights?view=memory&project={alias}&page=guide&notice={notice}")
+    }
+
+    /// Where a page rebuild sends the user back to: the page itself.
+    fn page_back(alias: &str, slug: &str, notice: &str) -> String {
+        format!("/insights?view=memory&project={alias}&page=guide&guide={slug}&notice={notice}")
     }
 
     #[test]
@@ -6816,7 +6861,12 @@ mod tests {
         put_plan(&sb, "gb-nock", &["feature-a"]);
         for (url, extra) in [("/insights/memory/guide/build", ""), ("/insights/memory/guide/rebuild-page", "&slug=architecture")] {
             let loc = sb.post_to(url, &format!("project=gb-nock{extra}"));
-            assert_eq!(loc, guide_back("gb-nock", "no-checkout"), "{url}");
+            let want = if extra.is_empty() {
+                guide_back("gb-nock", "no-checkout")
+            } else {
+                page_back("gb-nock", "architecture", "no-checkout")
+            };
+            assert_eq!(loc, want, "{url}");
             let loc = sb.post_to(url, &format!("project=ghost{extra}"));
             assert_eq!(loc, "/insights?view=memory&notice=bad-input", "{url}");
             let loc = sb.post_to(url, extra.trim_start_matches('&'));
@@ -6829,7 +6879,7 @@ mod tests {
         let loc = plain.post_to("/insights/memory/guide/build", "project=gb-noagent");
         assert_eq!(loc, guide_back("gb-noagent", "no-agent"), "tests never start the real AI CLI");
         let loc = plain.post_to("/insights/memory/guide/rebuild-page", "project=gb-noagent&slug=architecture");
-        assert_eq!(loc, guide_back("gb-noagent", "no-agent"));
+        assert_eq!(loc, page_back("gb-noagent", "architecture", "no-agent"));
         for alias in ["gb-nock", "ghost", "gb-noagent"] {
             assert!(!guide_slot_held(alias), "{alias}");
         }
@@ -6850,7 +6900,7 @@ mod tests {
         let path = loopx_core::project_guide::guide_dir(alias, Some(&root)).join("feature-a.md");
         let before = std::fs::read_to_string(&path).unwrap();
         let loc = sb.post_to("/insights/memory/guide/rebuild-page", &format!("project={alias}&slug=feature-a"));
-        assert_eq!(loc, guide_back(alias, "guide-build-started"));
+        assert_eq!(loc, page_back(alias, "feature-a", "guide-build-started"), "back to the page itself");
         wait_guide_idle(alias);
         assert_eq!((agent.calls(), agent.plan_calls()), (1, 0), "one page call, no plan call");
         let raised: Vec<Value> = approvals::list(&sb.approvals(), None, now())
@@ -6863,6 +6913,15 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "an approved page is never written by a build");
         let page = sb.get(&guide_url(alias, Some("feature-a")));
         assert!(page.contains("Guide built just now: 0 pages written, 1 waiting for approval, 0 failed."), "{page}");
+        // The same rebuild again: the page is held, but its proposal is already
+        // pending, so nothing new waits for approval and the count says so.
+        sb.post_to("/insights/memory/guide/rebuild-page", &format!("project={alias}&slug=feature-a"));
+        wait_guide_idle(alias);
+        assert_eq!(agent.calls(), 2);
+        let raised = approvals::list(&sb.approvals(), None, now()).into_iter().filter(|a| a["kind"] == "guide-page").count();
+        assert_eq!(raised, 1, "no second proposal");
+        let page = sb.get(&guide_url(alias, Some("feature-a")));
+        assert!(page.contains("Guide built just now: 0 pages written, 0 waiting for approval, 0 failed."), "{page}");
     }
 
     #[test]
@@ -6872,7 +6931,8 @@ mod tests {
         let sb = with_guide_agent(Sb::new(&[(alias, true)]), agent.clone());
         put_plan(&sb, alias, &["feature-a"]);
         // `data-model` is a valid slug but this plan has no schema files.
-        for slug in ["..%2Fx", "Feature-A", "feature-nope", "data-model", "", "feature-a%0A"] {
+        // `roadmap` is always in a plan, but a build never writes it (it is not rebuildable).
+        for slug in ["..%2Fx", "Feature-A", "feature-nope", "data-model", "roadmap", "", "feature-a%0A"] {
             let loc = sb.post_to("/insights/memory/guide/rebuild-page", &format!("project={alias}&slug={slug}"));
             assert_eq!(loc, guide_back(alias, "bad-input"), "{slug}");
         }
@@ -6895,13 +6955,114 @@ mod tests {
         let page = sb.get(&guide_url(alias, None));
         assert!(page.contains("The last guide build failed just now: the AI call failed"), "{page}");
         assert!(page.contains("mem-job-bad"), "{page}");
+        assert_no_leak(&sb, alias, &page);
+        assert!(loopx_core::project_guide::list(alias, Some(&sb.root())).unwrap().pages.is_empty());
+    }
+
+    /// No page, job line, jobs JSON or trace line of `alias` holds the secret or the
+    /// agent's own words. The trace must exist: a run always writes one.
+    fn assert_no_leak(sb: &Sb, alias: &str, page: &str) {
         let project = sb.get(&format!("/insights?view=memory&project={alias}"));
-        let (_, jobs) = jobs_json(&sb, &format!("/insights/memory/jobs?project={alias}"), None);
-        let trace = std::fs::read_to_string(activity_base(&sb).with_file_name("agent-trace.jsonl")).unwrap_or_default();
-        for text in [&page, &project, &jobs.to_string(), &trace] {
+        let (_, jobs) = jobs_json(sb, &format!("/insights/memory/jobs?project={alias}"), None);
+        let (_, all) = jobs_json(sb, "/insights/memory/jobs", None);
+        let trace = std::fs::read_to_string(activity_base(sb).with_file_name("agent-trace.jsonl")).expect("the run wrote a trace");
+        assert!(trace.contains(&format!("\"alias\":\"{alias}\"")), "{trace}");
+        for text in [page, &project, &jobs.to_string(), &all.to_string(), &trace] {
             assert!(!text.contains("glpat") && !text.contains("SECRETsecret") && !text.contains("boom"), "{text}");
         }
-        assert!(loopx_core::project_guide::list(alias, Some(&sb.root())).unwrap().pages.is_empty());
+    }
+
+    /// The trace's last line for `alias`'s guide job.
+    fn last_guide_trace(sb: &Sb, alias: &str) -> Value {
+        let trace = std::fs::read_to_string(activity_base(sb).with_file_name("agent-trace.jsonl")).unwrap();
+        trace
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .find(|v| v["kind"] == "guide" && v["alias"] == alias)
+            .expect("a guide trace line")
+    }
+
+    #[test]
+    fn a_failing_page_call_shows_no_agent_text() {
+        let alias = "gb-pagefail";
+        let secret = ["glpat-", "SECRETsecret1234567890"].concat();
+        let agent = GuideAgent::failing_pages(&format!("boom: page call leaked {secret}"));
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), agent.clone());
+        sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        wait_guide_idle(alias);
+        assert_eq!((agent.plan_calls(), agent.calls()), (1, 3));
+        let page = sb.get(&guide_url(alias, None));
+        assert!(page.contains("The last guide build failed just now: the AI call failed"), "{page}");
+        assert_no_leak(&sb, alias, &page);
+        assert_eq!(last_guide_trace(&sb, alias)["phase"], "failed");
+    }
+
+    #[test]
+    fn a_failed_clone_marks_the_job_failed_and_shows_no_remote_text() {
+        let alias = "gb-badclone";
+        let agent = GuideAgent::new();
+        let sb = with_guide_agent(Sb::new(&[]), agent.clone());
+        let dir = sb.add_managed(alias);
+        // A remote whose (unreachable) address holds a secret-looking value.
+        let leaky = format!("file://{}/glpat-SECRETsecret1234567890.git", sb.dir.path().display());
+        loopx_core::profile_checkout::register_test_remote(
+            "work",
+            "grp/gb-leaky",
+            loopx_core::profile_checkout::Remote { url: leaky, branch: "main".into(), auth_env: vec![] },
+        );
+        let path = sb.state.home_dir.join("projects.json");
+        let mut cfg: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        cfg["projects"][alias]["project_id"] = json!("grp/gb-leaky");
+        std::fs::write(&path, cfg.to_string()).unwrap();
+        let loc = sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        assert_eq!(loc, guide_back(alias, "guide-build-started"));
+        wait_guide_idle(alias);
+        assert_eq!(agent.calls(), 0, "nothing to scan, no AI call");
+        assert!(!dir.join("README.md").exists());
+        let page = sb.get(&guide_url(alias, None));
+        assert!(page.contains("The last guide build failed just now:"), "{page}");
+        assert_no_leak(&sb, alias, &page);
+        // The record says it failed, not that it was interrupted.
+        let last = last_guide_trace(&sb, alias);
+        assert_eq!(last["phase"], "failed", "{last}");
+        assert!(loopx_core::profile_progress::FAIL_REASONS.contains(&last["reason"].as_str().unwrap()), "{last}");
+    }
+
+    #[test]
+    fn reclone_is_refused_while_a_guide_run_holds_the_clone() {
+        let sb = Sb::new(&[]);
+        let alias = "gb-reclone";
+        let dir = sb.add_managed(alias);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("in-use"), "x").unwrap();
+        let slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let loc = sb.post_to("/insights/memory/checkout/reclone", &format!("project={alias}"));
+        assert!(loc.ends_with("notice=busy"), "{loc}");
+        assert!(dir.join("in-use").is_file(), "the clone a guide build uses is kept");
+        drop(slot);
+        let loc = sb.post_to("/insights/memory/checkout/reclone", &format!("project={alias}"));
+        assert!(loc.ends_with("notice=recloned"), "{loc}");
+        assert!(!dir.exists());
+        assert!(!guide_slot_held(alias) && !profile_build::is_running(alias), "both slots are let go");
+    }
+
+    #[test]
+    fn rebuild_this_page_is_offered_only_for_pages_a_build_writes() {
+        let alias = "gb-roadmap";
+        let sb = Sb::new(&[(alias, true)]);
+        put_plan(&sb, alias, &["feature-a"]);
+        let roadmap_key = loopx_core::project_guide::Kind::Roadmap.parts()[0].0;
+        put_page(&sb, alias, "roadmap", "Roadmap", Status::Draft, &[(roadmap_key, "Next up.", Origin::Agent)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Draft, &[("overview", "A web app.", Origin::Agent)]);
+        put_page(&sb, alias, "feature-off", "Off plan", Status::Draft, &[("what", "Gone.", Origin::Agent)]);
+        let roadmap = sb.get(&guide_url(alias, Some("roadmap")));
+        assert!(roadmap.contains("action='/insights/memory/guide/build'"), "{roadmap}");
+        assert!(!roadmap.contains("action='/insights/memory/guide/rebuild-page'"), "{roadmap}");
+        let off = sb.get(&guide_url(alias, Some("feature-off")));
+        assert!(!off.contains("action='/insights/memory/guide/rebuild-page'"), "{off}");
+        let arch = sb.get(&guide_url(alias, Some("architecture")));
+        assert!(arch.contains("action='/insights/memory/guide/rebuild-page'"), "{arch}");
     }
 
     #[test]
