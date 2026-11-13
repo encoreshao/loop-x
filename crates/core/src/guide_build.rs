@@ -292,6 +292,9 @@ fn prepare(
     let saved = guide_plan::load(alias, root)?;
     let scan = scan_repo(work_dir, tracked)?;
     let inv = inventory(work_dir);
+    if !inv.entries.iter().any(|e| e.readable) {
+        return Err("the checkout has no readable files".into());
+    }
     let digest = digest_for(instance, project_id, alias, root);
     Ok((saved, scan, inv, digest))
 }
@@ -318,6 +321,8 @@ pub fn build_guide(
     let res = (|| {
         let (_, scan, inv, digest) = prepare(alias, work_dir, instance, project_id, tracked, root)?;
         let prompt = plan_prompt(alias, &inv, &scan, &digest)?;
+        // The total is not known until the plan is in; restated below.
+        report(progress, 1, 1, Step::Plan);
         let reply = agent.run(&prompt)?;
         let plan = guide_plan::parse_plan(&reply, &inv)
             .map_err(|e| format!("the plan reply did not parse: {e}"))?;
@@ -859,6 +864,19 @@ mod tests {
         .is_err());
         let empty = tempfile::tempdir().unwrap();
         let _ = build(empty.path(), &fake(PLAN, None), root.path()); // must not panic
+        let git_only = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(git_only.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        let f = fake(PLAN, None);
+        assert!(build(git_only.path(), &f, root.path()).is_err());
+        assert!(f.prompts.borrow().is_empty());
+        assert!(crate::guide_plan::load("shop", Some(root.path()))
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -899,11 +917,10 @@ mod tests {
         )
         .unwrap();
         let steps = rec.0.borrow();
-        // total = 1 (the plan call) + 4 pages (architecture, data model, 2 features).
-        assert_eq!(
-            steps.first().map(|s| (s.0, s.1, s.2)),
-            Some((1, 5, Step::Plan))
-        );
+        // The plan step is live before the plan call (its total is not known yet), then
+        // restated with total = 1 (the plan call) + 4 pages (architecture, data model, 2 features).
+        assert_eq!(steps.first().map(|s| (s.0, s.2)), Some((1, Step::Plan)));
+        assert!(steps.iter().position(|s| *s == (1, 5, Step::Plan)) > Some(0));
         assert_eq!(
             steps.last().map(|s| (s.0, s.1, s.2)),
             Some((5, 5, Step::Page))

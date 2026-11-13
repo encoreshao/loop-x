@@ -185,7 +185,7 @@ pub fn failure_reason(step: Option<Step>, err: &str) -> &'static str {
         "internal error"
     } else {
         match step {
-            Some(Step::Ai) => "the AI call failed",
+            Some(Step::Ai | Step::Plan | Step::Page) => "the AI call failed",
             Some(Step::Check) => "the draft was rejected",
             Some(Step::Save | Step::Proposal) => "could not save",
             _ => "error",
@@ -939,6 +939,28 @@ mod tests {
         );
         for (step, err) in [(None, "anything"), (Some(Step::Ai), "timeout")] {
             assert!(FAIL_REASONS.contains(&failure_reason(step, err)));
+        }
+    }
+
+    #[test]
+    fn a_guide_plan_or_page_failure_is_an_ai_call_failure() {
+        for step in [Step::Plan, Step::Page] {
+            assert_eq!(
+                failure_reason(Some(step), "TimeoutExpired"),
+                "the AI call failed"
+            );
+            assert_eq!(
+                failure_reason(Some(step), "FileNotFoundError"),
+                CLI_NOT_STARTED
+            );
+            assert_eq!(
+                failure_reason(Some(step), "the plan reply did not parse: feature #1"),
+                "the reply did not parse"
+            );
+            assert_eq!(
+                failure_reason(Some(step), "it contains what looks like a secret (token)"),
+                "secret-shaped text found"
+            );
         }
     }
 
