@@ -4,7 +4,7 @@
 
 use crate::profile_read::{guard, ReadError};
 use crate::project_guide;
-use crate::project_profile::{contains_secret, Status};
+use crate::project_profile::{contains_secret, ts, Status};
 use serde_json::json;
 use std::path::Path;
 
@@ -28,7 +28,7 @@ pub fn index_json(alias: &str, root: Option<&Path>) -> Result<Option<String>, Re
             "kind": p.kind.as_str(),
             "title": p.title,
             "summary": p.summary,
-            "verified": p.generated_at.map(|t| t.to_rfc3339()),
+            "verified": p.generated_at.map(ts),
         }));
     }
     if pages.is_empty() {
@@ -107,6 +107,17 @@ mod tests {
         assert_eq!(slugs, ["feature-a"]);
         assert_eq!(v["pages"][0]["kind"], "feature");
         assert_eq!(v["pages"][0]["summary"], "Summary of feature-a.");
+    }
+
+    #[test]
+    fn the_index_verified_time_uses_the_z_form() {
+        let dir = tempdir().unwrap();
+        let mut p = page("feature-a", Status::Approved, "text");
+        p.generated_at = Some(chrono::Utc::now());
+        put(&p, dir.path());
+        let json = index_json("shop", Some(dir.path())).unwrap().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["pages"][0]["verified"].as_str().unwrap().ends_with('Z'));
     }
 
     #[test]

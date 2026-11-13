@@ -349,7 +349,7 @@ fn page_path(alias: &str, slug: &str, root: Option<&Path>) -> PathBuf {
 /// rejected, never dropped. Errors name the field and kind, never the matched text.
 pub fn validate(p: &Page) -> Result<(), String> {
     let has_nl = |v: &str| v.contains('\n') || v.contains('\r');
-    let kind = check_slug(&p.slug)?;
+    let kind = check_slug(&p.slug).map_err(|_| "slug is not valid".to_string())?;
     if kind != p.kind {
         return Err("kind does not match the slug".into());
     }
@@ -362,29 +362,30 @@ pub fn validate(p: &Page) -> Result<(), String> {
     {
         return Err("head_sha is not representable".into());
     }
-    for r in &p.related {
-        check_slug(r).map_err(|_| format!("related slug not valid: {r:?}"))?;
+    for (i, r) in p.related.iter().enumerate() {
+        check_slug(r).map_err(|_| format!("related slug #{} is not valid", i + 1))?;
     }
     let mut seen = Vec::new();
-    for part in &p.parts {
+    for (i, part) in p.parts.iter().enumerate() {
         if p.kind.part_index(&part.key).is_none() {
             return Err(format!(
-                "part {} does not belong on a {} page",
-                part.key,
+                "part #{} does not belong on a {} page",
+                i + 1,
                 p.kind.as_str()
             ));
         }
+        // The key is a known one here, so naming it echoes nothing a caller supplied.
         if seen.contains(&part.key) {
             return Err(format!("part {} appears twice", part.key));
         }
         seen.push(part.key.clone());
     }
-    for s in &p.sources {
+    for (i, s) in p.sources.iter().enumerate() {
         if s.path.is_empty() || s.path.contains('`') || has_nl(&s.path) {
-            return Err(format!("source path not representable: {:?}", s.path));
+            return Err(format!("source #{} path is not representable", i + 1));
         }
         if s.sha256.is_empty() || s.sha256.contains(char::is_whitespace) {
-            return Err(format!("bad sha256 for {:?}", s.path));
+            return Err(format!("source #{} has a bad sha256", i + 1));
         }
     }
     let check = |field: String, text: &str| match contains_secret(text) {
@@ -426,7 +427,8 @@ fn snapshot_and_write(alias: &str, slug: &str, text: &str, root: Option<&Path>) 
     crate::file_lock::write_atomic(&path, text.as_bytes())
 }
 
-/// Refuses (writes nothing) anything that would not read back as `p`.
+/// Refuses (writes nothing) anything that would not read back as `p`. Takes no lock:
+/// writers that read-modify-write a page must go through `update_locked`.
 pub fn save(p: &Page, root: Option<&Path>) -> io::Result<()> {
     check_alias(&p.alias).map_err(invalid)?;
     validate(p).map_err(invalid)?;
@@ -773,6 +775,33 @@ mod tests {
         let mut p = sample();
         p.sources[0].path = "a`b".into();
         assert!(save(&p, root).is_err());
+    }
+
+    #[test]
+    fn validation_errors_never_echo_a_rejected_value() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let s = secret();
+        let mut p = sample();
+        p.related = vec!["feature-ok".into(), s.clone()];
+        let e = save(&p, root).unwrap_err().to_string();
+        assert!(!e.contains("glpat") && e.contains("related"), "{e}");
+        let mut p = sample();
+        p.parts[0].key = s.clone();
+        let e = save(&p, root).unwrap_err().to_string();
+        assert!(!e.contains("glpat"), "{e}");
+        let mut p = sample();
+        p.sources[0].path = format!("{s}`");
+        let e = save(&p, root).unwrap_err().to_string();
+        assert!(!e.contains("glpat"), "{e}");
+        let mut p = sample();
+        p.sources[0].sha256 = format!("{s} x");
+        let e = save(&p, root).unwrap_err().to_string();
+        assert!(!e.contains("glpat"), "{e}");
+        let mut p = sample();
+        p.slug = s;
+        let e = save(&p, root).unwrap_err().to_string();
+        assert!(!e.contains("glpat"), "{e}");
     }
 
     #[test]
