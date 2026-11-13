@@ -111,17 +111,35 @@ fn is_dockerfile(name: &str) -> bool {
     name == "Dockerfile" || name.starts_with("Dockerfile.") || name.ends_with(".Dockerfile")
 }
 
-/// `ENV|ARG <SECRET_LIKE_NAME>[= ]<value>` lines of a Dockerfile: the value is dropped.
+/// Dockerfile text with secret values blanked, names kept: every secret-like `NAME=value`
+/// pair on any line (ENV/ARG, `RUN export X=...`, `_authToken=...`, `--password=...`), the
+/// legacy `ENV|ARG NAME value` form, and `Authorization: Bearer|Basic|token <value>` headers.
 fn redact_dockerfile(text: &str) -> String {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
+    static LEGACY: OnceLock<Regex> = OnceLock::new();
+    static PAIR: OnceLock<Regex> = OnceLock::new();
+    static HEADER: OnceLock<Regex> = OnceLock::new();
+    let legacy = LEGACY.get_or_init(|| {
         Regex::new(&format!(
-            r"(?i)^(\s*(?:ENV|ARG)\s+[A-Za-z0-9_]*{SECRET_WORDS}[A-Za-z0-9_]*\s*[=\s])\s*\S.*$"
+            r"(?i)^(\s*(?:ENV|ARG)\s+[A-Za-z0-9_]*{SECRET_WORDS}[A-Za-z0-9_]*\s+)[^\s=].*$"
         ))
         .expect("static regex")
     });
-    text.lines()
-        .map(|l| re.replace(l, "${1}[redacted]").into_owned())
+    let pair = PAIR.get_or_init(|| {
+        Regex::new(&format!(
+            r#"(?i)([A-Za-z0-9_.\-]*{SECRET_WORDS}[A-Za-z0-9_.\-]*=)("[^"]*"|'[^']*'|[^\s"'\\]+)"#
+        ))
+        .expect("static regex")
+    });
+    let header = HEADER.get_or_init(|| {
+        Regex::new(r#"(?i)(authorization:\s*(?:bearer|basic|token)\s+)[^\s"']+"#)
+            .expect("static regex")
+    });
+    text.split('\n')
+        .map(|l| {
+            let l = pair.replace_all(l, "${1}[redacted]");
+            let l = header.replace_all(&l, "${1}[redacted]");
+            legacy.replace(&l, "${1}[redacted]").into_owned()
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -642,5 +660,43 @@ mod tests {
             }
         }
         assert!(l.shown[0].1.contains("RAILS_ENV=production"));
+    }
+
+    #[test]
+    fn dockerfile_every_secret_variable_and_inline_run_secret_is_redacted() {
+        let d = tempfile::tempdir().unwrap();
+        let body = "FROM node\nENV A=1 DB_PASSWORD=s3cretpw99\nENV NODE_ENV=production DB_PASSWORD=s3cretpw98 B=2 API_TOKEN=\"tok en 77\"\nENV A=1 \\\n    DB_PASSWORD=s3cretpw97 \\\n    C=3\nRUN npm config set //registry.example/:_authToken=abc123xyz\nRUN echo x && export API_KEY=zzTop12345\nRUN curl -H \"Authorization: Bearer abcdef123456\" https://x.example\n";
+        write(d.path(), "Dockerfile", body);
+        let inv = inventory(d.path());
+        let l = load_files(d.path(), &inv, &["Dockerfile".into()], PAGE_CAP);
+        assert_eq!(l.shown.len(), 1, "{:?}", l.skipped_secret);
+        let t = &l.shown[0].1;
+        for leak in [
+            "s3cretpw9",
+            "abc123xyz",
+            "zzTop12345",
+            "abcdef123456",
+            "tok en 77",
+        ] {
+            assert!(!t.contains(leak), "{leak}: {t}");
+        }
+        for keep in [
+            "NODE_ENV=production",
+            "B=2",
+            "C=3",
+            "npm config set",
+            "export API_KEY=",
+            "Authorization: Bearer",
+            "https://x.example",
+            "_authToken=",
+        ] {
+            assert!(t.contains(keep), "{keep}: {t}");
+        }
+    }
+
+    #[test]
+    fn a_dockerfile_without_secrets_round_trips_unchanged() {
+        let body = "FROM ruby:3.3\nENV RAILS_ENV=production LANG=C.UTF-8\nRUN bundle install --jobs 4\nCOPY . /app\n";
+        assert_eq!(redact_dockerfile(body), body);
     }
 }
