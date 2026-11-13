@@ -88,19 +88,35 @@ pub fn approve_page(
     Ok(flipped)
 }
 
-/// Approve every draft page (in the plan or not), one lock per page. Pages approved
-/// before a failure stay approved; the error names only the slugs that failed.
-pub fn approve_all(alias: &str, now: DateTime<Utc>, root: Option<&Path>) -> Result<usize, String> {
+/// What [`approve_all`] did: how many drafts it approved, and the slugs it could not
+/// (a page that would not save, or a page file that does not load).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ApproveAll {
+    pub approved: usize,
+    pub failed: Vec<String>,
+}
+
+/// Approve every draft page (in the plan or not), one lock per page. A page that fails
+/// is recorded and the rest are still approved. `Err` only for an invalid alias, a busy
+/// guide slot or an unreadable guide directory.
+pub fn approve_all(
+    alias: &str,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+) -> Result<ApproveAll, String> {
     check_alias(alias)?;
     let _slot = take_slot(alias)?;
-    let drafts: Vec<String> = project_guide::list(alias, root)?
+    let listed = project_guide::list(alias, root)?;
+    let drafts: Vec<String> = listed
         .pages
         .into_iter()
         .filter(|p| p.status == Status::Draft)
         .map(|p| p.slug)
         .collect();
-    let mut count = 0;
-    let mut failed = Vec::new();
+    let mut out = ApproveAll {
+        approved: 0,
+        failed: listed.skipped,
+    };
     for slug in drafts {
         let res = project_guide::update_if_locked(alias, &slug, root, |cur| {
             // Re-checked under the lock: removed or approved meanwhile is nothing to do.
@@ -110,20 +126,14 @@ pub fn approve_all(alias: &str, now: DateTime<Utc>, root: Option<&Path>) -> Resu
             }))
         });
         match res {
-            Ok(Some(_)) => count += 1,
+            Ok(Some(_)) => out.approved += 1,
             Ok(None) => {}
-            Err(_) => failed.push(slug),
+            Err(_) => out.failed.push(slug),
         }
     }
+    out.failed.sort();
     resync(alias, now, root);
-    if failed.is_empty() {
-        Ok(count)
-    } else {
-        Err(format!(
-            "approved {count} pages; could not approve {}",
-            failed.join(", ")
-        ))
-    }
+    Ok(out)
 }
 
 /// Replace (or add) one part with a person's text. The part becomes Human-origin, so a
@@ -247,6 +257,13 @@ mod tests {
 
     fn save(p: &Page, root: &Path) {
         project_guide::save(p, Some(root)).unwrap();
+    }
+
+    fn done(approved: usize) -> ApproveAll {
+        ApproveAll {
+            approved,
+            failed: vec![],
+        }
     }
 
     fn feature(slug: &str, title: &str, summary: &str) -> FeaturePlan {
@@ -449,7 +466,7 @@ mod tests {
         save(&page(alias, "roadmap", Status::Approved), r);
         let roadmap_before = bytes(alias, "roadmap", r);
 
-        assert_eq!(approve_all(alias, later(), Some(r)), Ok(3));
+        assert_eq!(approve_all(alias, later(), Some(r)), Ok(done(3)));
         let pages = project_guide::list(alias, Some(r)).unwrap().pages;
         assert_eq!(pages.len(), 4);
         assert!(pages.iter().all(|p| p.status == Status::Approved));
@@ -458,11 +475,37 @@ mod tests {
         assert!(project_guide::history(alias, "roadmap", Some(r)).is_empty());
 
         // Nothing left to approve.
-        assert_eq!(approve_all(alias, later(), Some(r)), Ok(0));
+        assert_eq!(approve_all(alias, later(), Some(r)), Ok(done(0)));
         // A project with no guide approves nothing and creates nothing.
         let empty = tempfile::tempdir().unwrap();
-        assert_eq!(approve_all(alias, later(), Some(empty.path())), Ok(0));
+        assert_eq!(approve_all(alias, later(), Some(empty.path())), Ok(done(0)));
         assert!(tree(empty.path()).is_empty());
+    }
+
+    #[test]
+    fn approve_all_records_pages_it_cannot_approve_and_carries_on() {
+        let alias = "ops-approve-partial";
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        save(&page(alias, "feature-a", Status::Draft), r);
+        save(&page(alias, "feature-c", Status::Draft), r);
+        // A hand-edited draft holding a secret: it loads, but saving it is refused.
+        let mut secret = page(alias, "feature-secret", Status::Draft);
+        secret.parts[0].body = format!("token {}{}", "glpat-", "AAAAAAAAAAAAAAAAAAAA");
+        fs::write(
+            page_file(alias, "feature-secret", r),
+            project_guide::render(&secret),
+        )
+        .unwrap();
+        // A page file that does not parse: `list` skips it.
+        fs::write(page_file(alias, "feature-broken", r), "not a page\n").unwrap();
+
+        let res = approve_all(alias, later(), Some(r)).unwrap();
+        assert_eq!(res.approved, 2);
+        assert_eq!(res.failed, vec!["feature-broken", "feature-secret"]);
+        assert_eq!(loaded(alias, "feature-a", r).status, Status::Approved);
+        assert_eq!(loaded(alias, "feature-c", r).status, Status::Approved);
+        assert_eq!(loaded(alias, "feature-secret", r).status, Status::Draft);
     }
 
     // --- a minimal copy of guide_build's test agent and repo, for the rebuild check ---
@@ -805,7 +848,7 @@ mod tests {
         free();
         assert!(edit_part(alias, "feature-nope", "what", "New.", later(), Some(r)).is_err());
         free();
-        assert_eq!(approve_all(alias, later(), Some(r)), Ok(1));
+        assert_eq!(approve_all(alias, later(), Some(r)), Ok(done(1)));
         free();
         assert!(delete_page(alias, "feature-a", Some(r)).is_err());
         free();
@@ -849,7 +892,7 @@ mod tests {
 
         // Approving all re-syncs.
         reset_features(alias, r);
-        assert_eq!(approve_all(alias, later(), Some(r)), Ok(2));
+        assert_eq!(approve_all(alias, later(), Some(r)), Ok(done(2)));
         assert_eq!(features_body(alias, r), both_approved);
 
         // Deleting an out-of-plan page re-syncs and leaves the index intact.
