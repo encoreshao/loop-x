@@ -579,6 +579,29 @@ pub fn update_locked(
     .map_err(|e| e.to_string())?
 }
 
+/// Like [`update_locked`], but `f` may return `Ok(None)` to leave the page exactly as it
+/// is (no write, no history snapshot).
+pub fn update_if_locked(
+    alias: &str,
+    slug: &str,
+    root: Option<&Path>,
+    f: impl FnOnce(Option<Page>) -> Result<Option<Page>, String>,
+) -> Result<Option<Page>, String> {
+    check_alias(alias)?;
+    check_slug(slug)?;
+    let dir = guide_dir(alias, root);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::file_lock::with_lock(&dir, || {
+        let Some(p) = f(load(alias, slug, root)?)? else {
+            return Ok(None);
+        };
+        same_page(&p, alias, slug)?;
+        save(&p, root).map_err(|e| e.to_string())?;
+        Ok(Some(p))
+    })
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -960,5 +983,24 @@ mod tests {
         let dir = tempdir().unwrap();
         let r = update_locked("shop", "feature-cart", Some(dir.path()), |_| Ok(sample()));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn update_if_locked_writes_nothing_when_told_to_leave_the_page() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let none = update_if_locked("shop", "feature-checkout", root, |_| Ok(None)).unwrap();
+        assert!(none.is_none());
+        assert!(load("shop", "feature-checkout", root).unwrap().is_none());
+        update_if_locked("shop", "feature-checkout", root, |_| Ok(Some(sample()))).unwrap();
+        update_if_locked("shop", "feature-checkout", root, |cur| {
+            assert!(cur.is_some());
+            Ok(None)
+        })
+        .unwrap();
+        assert!(history("shop", "feature-checkout", root).is_empty());
+        assert!(load("shop", "feature-checkout", root).unwrap().is_some());
+        let wrong = update_if_locked("shop", "feature-cart", root, |_| Ok(Some(sample())));
+        assert!(wrong.is_err());
     }
 }

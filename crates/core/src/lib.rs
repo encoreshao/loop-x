@@ -31,6 +31,7 @@ pub mod gate_stats;
 pub mod gitlab;
 pub mod gitlab_cache;
 pub mod golden_eval;
+pub mod guide_build;
 pub mod guide_inventory;
 pub mod guide_plan;
 pub mod guide_prompt;
