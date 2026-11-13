@@ -32,7 +32,9 @@ use crate::ui::state::ProfileAgent;
 use chrono::{DateTime, Duration, Local, Utc};
 use loopx_core::profile_graph::{self, Edge, EdgeKind, Graph};
 use loopx_core::profile_build;
-use loopx_core::profile_progress::{JobKind as ProfileJobKind, ProfileJob};
+use loopx_core::profile_progress::{failure_reason, JobKind as ProfileJobKind, ProfileJob};
+use loopx_core::project_guide::check_slug;
+use loopx_core::{guide_build, guide_ops, guide_proposal};
 use loopx_core::profile_notify::{self, BuildDone, Finished, RowResult};
 use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
@@ -81,6 +83,8 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/checkout/reclone", reclone);
     r.post("/insights/memory/wiki/add", wiki_add);
     r.post("/insights/memory/wiki/remove", wiki_remove);
+    r.post("/insights/memory/guide/build", guide_build_route);
+    r.post("/insights/memory/guide/rebuild-page", guide_rebuild_page);
     r.get("/insights/memory/jobs", jobs_status);
 }
 
@@ -118,7 +122,12 @@ fn live_marker(ctx: &UiCtx, project: Option<&str>) -> String {
         .query()
         .first("notice")
         .and_then(Notice::from_code)
-        .is_some_and(|n| matches!(n, Notice::BuildStarted | Notice::BuildAllStarted | Notice::RefreshStarted));
+        .is_some_and(|n| {
+            matches!(
+                n,
+                Notice::BuildStarted | Notice::BuildAllStarted | Notice::RefreshStarted | Notice::GuideBuildStarted
+            )
+        });
     let project = project.map_or_else(String::new, |a| format!(" data-mem-project='{}'", escape(a)));
     let watch = if started { " data-mem-watch" } else { "" };
     let script = crate::ui::assets::text("memory/live.js").unwrap_or("");
@@ -181,6 +190,24 @@ fn jobs_status(ctx: &UiCtx) -> UiResponse {
             }));
         }
     }
+    // Guide runs, apart from the profile jobs (independent slots).
+    let mut guide: Vec<Value> = Vec::new();
+    for job in jobs.iter().filter(|j| j.is_guide() && shown(&j.alias)) {
+        guide.push(serde_json::json!({
+            "alias": job.alias,
+            "step": job.step,
+            "steps": job.steps,
+            "code": job.step_code,
+            "label": crate::ui::profile_jobs::step_detail(ctx, job),
+        }));
+    }
+    for alias in aliases.iter().filter(|a| shown(a)) {
+        if guide_slot_held(alias) && !guide.iter().any(|g| g["alias"] == alias.as_str()) {
+            guide.push(serde_json::json!({
+                "alias": alias, "step": 0, "steps": 0, "code": "start", "label": ctx.t("Starting"),
+            }));
+        }
+    }
     let sync = if wanted.is_some() {
         None
     } else {
@@ -210,6 +237,7 @@ fn jobs_status(ctx: &UiCtx) -> UiResponse {
         &[("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")],
         serde_json::json!({
             "running": running,
+            "guide": guide,
             "sync": sync,
             "build_all": wanted.is_none() && build_all_running(&ctx.state.home_dir),
             "failed": failed,
@@ -2247,9 +2275,11 @@ enum Notice {
     WikiOtherProject,
     WikiSecret,
     WikiFailed,
+    GuideBuildStarted,
+    GuideBusy,
 }
 
-const NOTICES: [(Notice, &str); 38] = [
+const NOTICES: [(Notice, &str); 40] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2288,6 +2318,8 @@ const NOTICES: [(Notice, &str); 38] = [
     (Notice::WikiOtherProject, "wiki-other-project"),
     (Notice::WikiSecret, "wiki-secret"),
     (Notice::WikiFailed, "wiki-failed"),
+    (Notice::GuideBuildStarted, "guide-build-started"),
+    (Notice::GuideBusy, "guide-busy"),
 ];
 
 impl Notice {
@@ -2324,6 +2356,7 @@ impl Notice {
                 | Notice::WikiAdded
                 | Notice::WikiUnchanged
                 | Notice::WikiRemoved
+                | Notice::GuideBuildStarted
         )
     }
 
@@ -2367,6 +2400,8 @@ impl Notice {
             Notice::WikiOtherProject => ctx.t("That wiki page belongs to another project."),
             Notice::WikiSecret => ctx.t("Not saved: the wiki page looks like it contains a secret value."),
             Notice::WikiFailed => ctx.t("The wiki page could not be fetched or saved. Check the link and the GitLab token."),
+            Notice::GuideBuildStarted => ctx.t("Building the guide in the background. It takes a few minutes; this page updates by itself."),
+            Notice::GuideBusy => ctx.t("A guide build for this project is already running. Try again when it finishes."),
         }
     }
 }
@@ -2431,12 +2466,16 @@ static WRITES: Mutex<()> = Mutex::new(());
 
 // ---- background jobs
 
-/// The last finished build or refresh per (home, alias), for the page to show.
-/// In memory only: a restart forgets it (the profile and proposals are on disk).
+/// The last finished build or refresh per (home, alias), for the page to show, and
+/// apart from it the last guide build or page rebuild (the guide has its own slot,
+/// so neither result replaces the other). In memory only: a restart forgets it
+/// (the profile, the guide and the proposals are on disk).
 #[derive(Clone)]
 enum JobKind {
     Build,
     Refresh(SectionKey),
+    /// A guide build or a one-page rebuild.
+    Guide,
 }
 
 #[derive(Clone)]
@@ -2444,6 +2483,9 @@ enum JobOutcome {
     Built,
     Proposed,
     NothingNew,
+    /// A guide run that wrote something: how many pages were written, held for
+    /// approval (an approved page gets a proposal instead) and failed. Counts only.
+    GuideBuilt { saved: usize, held: usize, failed: usize },
     Failed(String),
 }
 
@@ -2454,28 +2496,39 @@ struct Job {
     outcome: JobOutcome,
 }
 
-type JobKey = (PathBuf, String);
+/// (home, alias, guide lane).
+type JobKey = (PathBuf, String, bool);
 static JOBS: Mutex<Vec<(JobKey, Job)>> = Mutex::new(Vec::new());
 /// The homes with a "Build all profiles" pass running.
 static BUILD_ALL: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 fn record(home: &Path, alias: &str, job: Job) {
+    let guide = matches!(job.kind, JobKind::Guide);
+    forget_in(home, alias, guide);
     let mut jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
-    jobs.retain(|((h, a), _)| !(h == home && a == alias));
-    jobs.push(((home.to_path_buf(), alias.to_string()), job));
+    jobs.push(((home.to_path_buf(), alias.to_string(), guide), job));
 }
 
-/// Forget the last result for `alias`: a new build makes it out of date.
-fn forget(home: &Path, alias: &str) {
+fn forget_in(home: &Path, alias: &str, guide: bool) {
     let mut jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
-    jobs.retain(|((h, a), _)| !(h == home && a == alias));
+    jobs.retain(|((h, a, g), _)| !(h == home && a == alias && *g == guide));
 }
 
-fn last_job(home: &Path, alias: &str) -> Option<Job> {
+fn last_in(home: &Path, alias: &str, guide: bool) -> Option<Job> {
     let jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
     jobs.iter()
-        .find(|((h, a), _)| h == home && a == alias)
+        .find(|((h, a, g), _)| h == home && a == alias && *g == guide)
         .map(|(_, j)| j.clone())
+}
+
+/// Forget the last profile result for `alias`: a new build makes it out of date.
+fn forget(home: &Path, alias: &str) {
+    forget_in(home, alias, false);
+}
+
+/// The last profile build or refresh result for `alias` (never a guide run's).
+fn last_job(home: &Path, alias: &str) -> Option<Job> {
+    last_in(home, alias, false)
 }
 
 struct BuildAllGuard(PathBuf);
@@ -2792,6 +2845,90 @@ fn refresh_section(ctx: &UiCtx) -> UiResponse {
         env.notify(&Finished::Refresh { alias: t.alias.clone(), section: key, result, took: began.elapsed() });
     });
     back(to(), Notice::RefreshStarted)
+}
+
+// ---- guide builds
+
+/// What a guide run writes: the whole guide, or one page of the saved plan (a slug
+/// that passed `check_slug` and that the plan names).
+enum GuideRun {
+    All,
+    Page(String),
+}
+
+/// Run one guide build or page rebuild and record its result for the page: page
+/// counts, or a fixed reason (never the error's own text). Pages an approved page
+/// holds back are raised as proposals. A panic is an "internal error".
+fn run_guide(env: &JobEnv, t: &TrackedProject, what: &GuideRun, tracked: &[String]) {
+    forget_in(&env.home, &t.alias, true);
+    let job = ProfileJob::start(&env.activity, ProfileJobKind::Guide, &t.alias);
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let dir = loopx_core::profile_checkout::prepare(t, &env.home, std::time::SystemTime::now())?.dir;
+        let (agent, now, root) = (&*env.agent, env.now(), Some(env.root.as_path()));
+        let (alias, instance, project) = (t.alias.as_str(), t.instance.as_str(), t.project_id.as_str());
+        let report = match what {
+            GuideRun::All => guide_build::build_guide(alias, &dir, instance, project, tracked, agent, now, root, Some(&job)),
+            GuideRun::Page(slug) => {
+                guide_build::rebuild_page(alias, slug, &dir, instance, project, tracked, agent, now, root, Some(&job))
+            }
+        }?;
+        guide_proposal::raise_all(alias, &report, &env.approvals, root, now);
+        Ok::<_, String>(report)
+    }))
+    .unwrap_or_else(|_| Err("internal error".into()));
+    let outcome = match res {
+        Ok(r) => JobOutcome::GuideBuilt { saved: r.saved.len(), held: r.held.len(), failed: r.failed.len() },
+        Err(e) => JobOutcome::Failed(job.failure().unwrap_or_else(|| failure_reason(None, &e)).to_string()),
+    };
+    record(&env.home, &t.alias, Job { at: env.now(), kind: JobKind::Guide, outcome });
+    drop(job);
+}
+
+/// Build guide / Rebuild this page. In order: a known alias (else back to the
+/// overview), for a page a slug of the saved plan, a checkout, an agent, and the
+/// guide slot, taken on the click so a second click is refused at once. The slot
+/// is the guide's own: a profile build of the same project does not block it.
+fn start_guide(ctx: &UiCtx, page: bool) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, Some("guide"));
+    let what = if page {
+        let root = memory_root(ctx);
+        let planned = |s: &&str| check_slug(s).is_ok() && guide_ops::in_plan(&alias, s, Some(&root));
+        match form.first("slug").filter(planned) {
+            Some(s) => GuideRun::Page(s.to_string()),
+            None => return back(to(), Notice::BadInput),
+        }
+    } else {
+        GuideRun::All
+    };
+    let Some(t) = checkout_of(ctx, &alias) else {
+        return back(to(), Notice::NoCheckout);
+    };
+    let Some(env) = job_env(ctx) else {
+        return back(to(), Notice::NoAgent);
+    };
+    let Some(slot) = guide_build::try_acquire(&alias) else {
+        return back(to(), Notice::GuideBusy);
+    };
+    let tracked: Vec<String> = tracked_list(ctx).into_iter().map(|t| t.alias).collect();
+    // Cleared on the click, so the page it redirects to never shows the old result.
+    forget_in(&ctx.state.home_dir, &alias, true);
+    std::thread::spawn(move || {
+        let _slot = slot;
+        run_guide(&env, &t, &what, &tracked);
+    });
+    back(to(), Notice::GuideBuildStarted)
+}
+
+fn guide_build_route(ctx: &UiCtx) -> UiResponse {
+    start_guide(ctx, false)
+}
+
+fn guide_rebuild_page(ctx: &UiCtx) -> UiResponse {
+    start_guide(ctx, true)
 }
 
 fn valid_id(id: &str) -> bool {
@@ -3417,6 +3554,22 @@ fn busy(ctx: &UiCtx, alias: &str) -> bool {
     profile_build::is_running(alias) || live_job(ctx, alias).is_some()
 }
 
+/// Whether this process holds `alias`'s guide slot (from the click until the run ends).
+fn guide_slot_held(alias: &str) -> bool {
+    profile_build::is_running(&format!("guide:{alias}"))
+}
+
+/// The live record of a guide build or page rebuild working on `alias`.
+fn live_guide_job(ctx: &UiCtx, alias: &str) -> Option<loopx_core::profile_progress::JobView> {
+    loopx_core::profile_progress::running_guide_for(&crate::ui::profile_jobs::base(ctx), alias)
+}
+
+/// Whether a guide run works on `alias`. Apart from [`busy`]: a guide run only
+/// disables the guide's own buttons, never the profile's, and the reverse.
+fn guide_running(ctx: &UiCtx, alias: &str) -> bool {
+    guide_slot_held(alias) || live_guide_job(ctx, alias).is_some()
+}
+
 /// A failed build or refresh is no longer shown once it is this old.
 const FAILURE_SHOWN_FOR: Duration = Duration::hours(24);
 
@@ -3424,22 +3577,78 @@ const FAILURE_SHOWN_FOR: Duration = Duration::hours(24);
 /// opened again mid-run still says so), else the last build or refresh result;
 /// a failure is dropped after [`FAILURE_SHOWN_FOR`].
 fn job_line(ctx: &UiCtx, alias: &str) -> String {
+    format!("{}{}", profile_job_line(ctx, alias), guide_job_line(ctx, alias))
+}
+
+/// The running strip both job lines use: `data-mem-job` or `data-mem-guide-job`
+/// marks it for `live.js`, which moves the step text and the bar in place.
+fn running_strip(ctx: &UiCtx, marker: &str, alias: &str, text: &str, live: Option<&loopx_core::profile_progress::JobView>) -> String {
+    // Before the record is written, just "Starting".
+    let (step, percent) = match live {
+        Some(j) => (crate::ui::profile_jobs::step_detail(ctx, j), job_percent(j)),
+        None => (ctx.t("Starting"), 0),
+    };
+    format!(
+        "<div class='mem-job' role='status' {marker}='{}'>{}<div class='mem-job-body'><p>{}<br><span data-mem-step>{}</span></p>{}</div></div>",
+        escape(alias),
+        spinner(),
+        escape(text),
+        escape(&step),
+        progress_bar("", percent, &step)
+    )
+}
+
+/// A finished job's one line: a check or an error icon and the text.
+fn finished_strip(ok: bool, text: &str) -> String {
+    format!(
+        "<div class='mem-job{}' role='status'>{}<p>{}</p></div>",
+        if ok { "" } else { " mem-job-bad" },
+        icon(if ok { "check_circle" } else { "error" }),
+        escape(text)
+    )
+}
+
+/// The guide's line: its running strip (the step it is at), else the last guide
+/// run's page counts or fixed failure reason; a failure is dropped after
+/// [`FAILURE_SHOWN_FOR`]. Failed pages are only counted, never named.
+fn guide_job_line(ctx: &UiCtx, alias: &str) -> String {
+    let live = live_guide_job(ctx, alias);
+    if live.is_some() || guide_slot_held(alias) {
+        let text = ctx.t("Building the guide… This page updates by itself while it runs.");
+        return running_strip(ctx, "data-mem-guide-job", alias, &text, live.as_ref());
+    }
+    let Some(job) = last_in(&ctx.state.home_dir, alias, true) else {
+        return String::new();
+    };
+    let when = ago(ctx, job.at);
+    match &job.outcome {
+        JobOutcome::Failed(e) if ctx.state.now() - job.at < FAILURE_SHOWN_FOR => finished_strip(
+            false,
+            &ctx.tf("The last guide build failed {when}: {error}", &[("when", &when), ("error", &shown_failure(ctx, e))]),
+        ),
+        JobOutcome::GuideBuilt { saved, held, failed } => finished_strip(
+            true,
+            &ctx.tf(
+                "Guide built {when}: {saved} pages written, {held} waiting for approval, {failed} failed.",
+                &[
+                    ("when", &when),
+                    ("saved", &saved.to_string()),
+                    ("held", &held.to_string()),
+                    ("failed", &failed.to_string()),
+                ],
+            ),
+        ),
+        _ => String::new(),
+    }
+}
+
+/// The profile's line (see [`job_line`]).
+fn profile_job_line(ctx: &UiCtx, alias: &str) -> String {
     let live = live_job(ctx, alias);
     if live.is_some() || profile_build::is_running(alias) {
-        // What the running job is doing now, from its live record (before the
-        // record is written, just "Starting").
-        let (step, percent) = match &live {
-            Some(j) => (crate::ui::profile_jobs::step_detail(ctx, j), job_percent(j)),
-            None => (ctx.t("Starting"), 0),
-        };
-        return format!(
-            "<div class='mem-job' role='status' data-mem-job='{}'>{}<div class='mem-job-body'><p>{}<br><span data-mem-step>{}</span></p>{}</div></div>",
-            escape(alias),
-            spinner(),
-            escape(&ctx.t("Working on this profile… This page updates by itself while it runs.")),
-            escape(&step),
-            progress_bar("", percent, &step)
-        );
+        // What the running job is doing now, from its live record.
+        let text = ctx.t("Working on this profile… This page updates by itself while it runs.");
+        return running_strip(ctx, "data-mem-job", alias, &text, live.as_ref());
     }
     let Some(job) = last_job(&ctx.state.home_dir, alias) else {
         return String::new();
@@ -3471,13 +3680,10 @@ fn job_line(ctx: &UiCtx, alias: &str) -> String {
             true,
             ctx.tf("Nothing new to propose for {section} ({when}).", &[("section", &section(*k)), ("when", &when)]),
         ),
+        // Guide results live in their own lane (see `guide_job_line`).
+        (JobKind::Guide, _) => return String::new(),
     };
-    format!(
-        "<div class='mem-job{}' role='status'>{}<p>{}</p></div>",
-        if ok { "" } else { " mem-job-bad" },
-        icon(if ok { "check_circle" } else { "error" }),
-        escape(&text)
-    )
+    finished_strip(ok, &text)
 }
 
 /// A section card's Edit (inline editor) and Refresh this section. `s` is `None`
@@ -4474,7 +4680,7 @@ mod tests {
         panic!("{alias} is still running");
     }
 
-    const ROUTES: [&str; 12] = [
+    const ROUTES: [&str; 14] = [
         "/insights/memory/build",
         "/insights/memory/approve",
         "/insights/memory/section/save",
@@ -4487,6 +4693,8 @@ mod tests {
         "/insights/memory/checkout/reclone",
         "/insights/memory/wiki/add",
         "/insights/memory/wiki/remove",
+        "/insights/memory/guide/build",
+        "/insights/memory/guide/rebuild-page",
     ];
 
     #[test]
@@ -6407,5 +6615,396 @@ mod tests {
         assert!(html.contains("Fonctionnalités"), "{html}");
         assert!(html.contains("Brouillon : les agents ne lisent pas cette page tant qu"), "{html}");
         assert!(!html.contains("Draft: agents do not read"));
+    }
+
+    // ------------------------------------------------------------------ guide builds
+
+    /// The plan a guide build gets: the architecture page and one feature, both read
+    /// from the checkout's `README.md` (no data model, so two pages in all).
+    const GUIDE_PLAN: &str = r#"{"features":[{"slug":"feature-a","title":"Alpha feature","summary":"Does alpha.","files":["README.md"],"related":[]}],"architecture":{"files":["README.md"]},"data_model":{"files":[]}}"#;
+
+    /// A guide-capable agent, shaped like the real prompts: the plan prompt (it holds
+    /// `"features"` and `Reply with the JSON only`) gets [`GUIDE_PLAN`], a page prompt
+    /// gets every part its marker lines ask for. Gated on its first call, or failing
+    /// (or panicking) on every call.
+    struct GuideAgent {
+        gate: Mutex<Option<mpsc::Receiver<()>>>,
+        prompts: Mutex<Vec<String>>,
+        err: Option<String>,
+        panics: bool,
+    }
+
+    impl GuideAgent {
+        fn make(gate: Option<mpsc::Receiver<()>>, err: Option<String>, panics: bool) -> Arc<Self> {
+            Arc::new(Self { gate: Mutex::new(gate), prompts: Mutex::new(Vec::new()), err, panics })
+        }
+        fn new() -> Arc<Self> {
+            Self::make(None, None, false)
+        }
+        fn gated() -> (Arc<Self>, mpsc::Sender<()>) {
+            let (tx, rx) = mpsc::channel();
+            (Self::make(Some(rx), None, false), tx)
+        }
+        fn failing(err: &str) -> Arc<Self> {
+            Self::make(None, Some(err.to_string()), false)
+        }
+        fn calls(&self) -> usize {
+            self.prompts.lock().unwrap().len()
+        }
+        fn plan_calls(&self) -> usize {
+            self.prompts.lock().unwrap().iter().filter(|p| is_plan_prompt(p)).count()
+        }
+    }
+
+    fn is_plan_prompt(prompt: &str) -> bool {
+        prompt.contains("\"features\"") && prompt.contains("Reply with the JSON only")
+    }
+
+    fn guide_parts(keys: &[(&str, &str)]) -> String {
+        keys.iter()
+            .map(|(k, h)| format!("<!-- part: {k} origin: agent -->\n## {h}\n\nBody of {k}.\n\n"))
+            .collect()
+    }
+
+    /// The page reply for a page prompt: the parts its marker lines name.
+    fn guide_page_reply(prompt: &str) -> String {
+        if prompt.contains("<!-- part: what origin: agent -->") {
+            guide_parts(&[
+                ("what", "What it does"),
+                ("value", "Business value and metrics"),
+                ("how", "How it works"),
+                ("associations", "Associations"),
+                ("key-points", "Key points"),
+            ])
+        } else if prompt.contains("<!-- part: entities origin: agent -->") {
+            guide_parts(&[("entities", "Entities"), ("relationships", "Relationships"), ("rules", "Rules and invariants")])
+        } else {
+            guide_parts(&[
+                ("overview", "Overview"),
+                ("components", "Components"),
+                ("flows", "Request and data flows"),
+                ("runtime", "Runtime and deployment"),
+            ])
+        }
+    }
+
+    impl Agent for GuideAgent {
+        fn run(&self, prompt: &str) -> Result<String, String> {
+            self.prompts.lock().unwrap().push(prompt.to_string());
+            let gate = self.gate.lock().unwrap().take();
+            if let Some(rx) = gate {
+                let _ = rx.recv_timeout(std::time::Duration::from_secs(20));
+            }
+            if self.panics {
+                panic!("the guide agent fell over");
+            }
+            if let Some(e) = &self.err {
+                return Err(e.clone());
+            }
+            if is_plan_prompt(prompt) {
+                Ok(GUIDE_PLAN.to_string())
+            } else {
+                Ok(guide_page_reply(prompt))
+            }
+        }
+    }
+
+    fn with_guide_agent(sb: Sb, agent: Arc<GuideAgent>) -> Sb {
+        let Sb { dir, state } = sb;
+        Sb { dir, state: state.with_profile_agent(agent) }
+    }
+
+    fn guide_slot_held(alias: &str) -> bool {
+        profile_build::is_running(&format!("guide:{alias}"))
+    }
+
+    fn wait_guide_idle(alias: &str) {
+        for _ in 0..400 {
+            if !guide_slot_held(alias) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("the guide of {alias} is still building");
+    }
+
+    fn guide_back(alias: &str, notice: &str) -> String {
+        format!("/insights?view=memory&project={alias}&page=guide&notice={notice}")
+    }
+
+    #[test]
+    fn building_starts_a_job_and_writes_pages_as_drafts() {
+        let alias = "gb-build";
+        let (agent, release) = GuideAgent::gated();
+        let sb = with_guide_agent(Sb::new(&[("gb-plain", true)]), agent.clone());
+        sb.add_managed(alias);
+        let started = std::time::Instant::now();
+        let loc = sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the request did not wait for the agent");
+        assert_eq!(loc, guide_back(alias, "guide-build-started"));
+        assert!(guide_slot_held(alias), "the slot is taken on the click");
+        assert!(!profile_build::is_running(alias), "the profile slot is not touched");
+        // Mid-run: the plan call is waiting on the gate.
+        let base = activity_base(&sb);
+        let mut job = None;
+        for _ in 0..400 {
+            job = loopx_core::profile_progress::running_guide_for(&base, alias).filter(|j| j.step_code == "plan");
+            if job.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let job = job.expect("the build reports that it is planning");
+        assert_eq!(job.kind, "guide");
+        let page = sb.get(&loc);
+        assert!(page.contains("Building the guide in the background"), "{page}");
+        assert!(page.contains(&format!("data-mem-guide-job='{alias}'")), "{page}");
+        assert!(page.contains("Building the guide… This page updates by itself while it runs."), "{page}");
+        assert!(page.contains("Planning the guide"), "{page}");
+        assert!(page.contains("data-mem-watch"), "the script is asked to watch: {page}");
+        assert!(!page.contains("action='/insights/memory/guide/build'"), "no second Build while it runs: {page}");
+        assert!(page.contains("Working…"), "{page}");
+        // Another frame page shows the strip too.
+        let project = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(project.contains(&format!("data-mem-guide-job='{alias}'")), "{project}");
+        release.send(()).unwrap();
+        wait_guide_idle(alias);
+        let root = sb.root();
+        let listed = loopx_core::project_guide::list(alias, Some(&root)).unwrap();
+        let mut slugs: Vec<&str> = listed.pages.iter().map(|p| p.slug.as_str()).collect();
+        slugs.sort_unstable();
+        assert_eq!(slugs, ["architecture", "feature-a"]);
+        assert!(listed.pages.iter().all(|p| p.status == Status::Draft));
+        assert!(loopx_core::guide_plan::load(alias, Some(&root)).unwrap().is_some(), "plan.json saved");
+        assert_eq!((agent.plan_calls(), agent.calls()), (1, 3), "one plan call, one call per page");
+        assert!(loopx_core::profile_progress::running_guide_for(&base, alias).is_none());
+        let page = sb.get(&guide_url(alias, None));
+        assert!(page.contains("Guide built just now: 2 pages written, 0 waiting for approval, 0 failed."), "{page}");
+        assert!(!page.contains("data-mem-guide-job="), "{page}");
+        // With pages written the header offers a rebuild, and a page view rebuilds one page.
+        assert!(page.contains("Rebuild guide") && page.contains("action='/insights/memory/guide/build'"), "{page}");
+        let one = sb.get(&guide_url(alias, Some("feature-a")));
+        let form_at = one.find("action='/insights/memory/guide/rebuild-page'").expect("a Rebuild this page form");
+        let form = &one[form_at..form_at + one[form_at..].find("</form>").unwrap()];
+        assert!(form.contains("name='csrf_token'"), "{form}");
+        assert!(form.contains(&format!("<input type='hidden' name='project' value='{alias}'>")), "{form}");
+        assert!(form.contains("<input type='hidden' name='slug' value='feature-a'>"), "{form}");
+        assert!(form.contains("Rebuild this page"), "{form}");
+    }
+
+    #[test]
+    fn a_second_click_while_running_is_refused() {
+        let alias = "gb-twice";
+        let (agent, release) = GuideAgent::gated();
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), agent.clone());
+        assert_eq!(sb.post_to("/insights/memory/guide/build", &format!("project={alias}")), guide_back(alias, "guide-build-started"));
+        let again = sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        assert_eq!(again, guide_back(alias, "guide-busy"));
+        let page = sb.get(&again);
+        assert!(page.contains("A guide build for this project is already running."), "{page}");
+        assert!(page.contains("mem-notice-bad"), "{page}");
+        release.send(()).unwrap();
+        wait_guide_idle(alias);
+        assert_eq!(agent.plan_calls(), 1, "only the first click started a build");
+        assert_eq!(agent.calls(), 3);
+    }
+
+    #[test]
+    fn a_missing_checkout_or_agent_or_unknown_alias_starts_nothing() {
+        let agent = GuideAgent::new();
+        let sb = with_guide_agent(Sb::new(&[("gb-nock", false), ("gb-known", true)]), agent.clone());
+        put_plan(&sb, "gb-nock", &["feature-a"]);
+        for (url, extra) in [("/insights/memory/guide/build", ""), ("/insights/memory/guide/rebuild-page", "&slug=architecture")] {
+            let loc = sb.post_to(url, &format!("project=gb-nock{extra}"));
+            assert_eq!(loc, guide_back("gb-nock", "no-checkout"), "{url}");
+            let loc = sb.post_to(url, &format!("project=ghost{extra}"));
+            assert_eq!(loc, "/insights?view=memory&notice=bad-input", "{url}");
+            let loc = sb.post_to(url, extra.trim_start_matches('&'));
+            assert_eq!(loc, "/insights?view=memory&notice=bad-input", "{url}");
+        }
+        let page = sb.get(&guide_back("gb-nock", "no-checkout"));
+        assert!(page.contains("This project has no checkout to scan."), "{page}");
+        let plain = Sb::new(&[("gb-noagent", true)]);
+        put_plan(&plain, "gb-noagent", &["feature-a"]);
+        let loc = plain.post_to("/insights/memory/guide/build", "project=gb-noagent");
+        assert_eq!(loc, guide_back("gb-noagent", "no-agent"), "tests never start the real AI CLI");
+        let loc = plain.post_to("/insights/memory/guide/rebuild-page", "project=gb-noagent&slug=architecture");
+        assert_eq!(loc, guide_back("gb-noagent", "no-agent"));
+        for alias in ["gb-nock", "ghost", "gb-noagent"] {
+            assert!(!guide_slot_held(alias), "{alias}");
+        }
+        assert_eq!(agent.calls(), 0);
+        assert!(loopx_core::project_guide::list("gb-nock", Some(&sb.root())).unwrap().pages.is_empty());
+        assert!(loopx_core::project_guide::list("gb-noagent", Some(&plain.root())).unwrap().pages.is_empty());
+    }
+
+    #[test]
+    fn rebuilding_one_page_calls_the_agent_once_and_raises_a_proposal_for_an_approved_page() {
+        let alias = "gb-rebuild";
+        let agent = GuideAgent::new();
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), agent.clone());
+        put_plan(&sb, alias, &["feature-a"]);
+        put_page(&sb, alias, "feature-a", "Alpha", Status::Draft, &[("what", "Stored text.", Origin::Agent)]);
+        let root = sb.root();
+        assert!(loopx_core::guide_ops::approve_page(alias, "feature-a", now(), Some(&root)).unwrap());
+        let path = loopx_core::project_guide::guide_dir(alias, Some(&root)).join("feature-a.md");
+        let before = std::fs::read_to_string(&path).unwrap();
+        let loc = sb.post_to("/insights/memory/guide/rebuild-page", &format!("project={alias}&slug=feature-a"));
+        assert_eq!(loc, guide_back(alias, "guide-build-started"));
+        wait_guide_idle(alias);
+        assert_eq!((agent.calls(), agent.plan_calls()), (1, 0), "one page call, no plan call");
+        let raised: Vec<Value> = approvals::list(&sb.approvals(), None, now())
+            .into_iter()
+            .filter(|a| a["kind"] == "guide-page")
+            .collect();
+        assert_eq!(raised.len(), 1, "{raised:?}");
+        assert_eq!(raised[0]["project"], alias);
+        assert_eq!(raised[0]["target"]["slug"], "feature-a");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "an approved page is never written by a build");
+        let page = sb.get(&guide_url(alias, Some("feature-a")));
+        assert!(page.contains("Guide built just now: 0 pages written, 1 waiting for approval, 0 failed."), "{page}");
+    }
+
+    #[test]
+    fn rebuild_page_rejects_bad_and_out_of_plan_slugs() {
+        let alias = "gb-slugs";
+        let agent = GuideAgent::new();
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), agent.clone());
+        put_plan(&sb, alias, &["feature-a"]);
+        // `data-model` is a valid slug but this plan has no schema files.
+        for slug in ["..%2Fx", "Feature-A", "feature-nope", "data-model", "", "feature-a%0A"] {
+            let loc = sb.post_to("/insights/memory/guide/rebuild-page", &format!("project={alias}&slug={slug}"));
+            assert_eq!(loc, guide_back(alias, "bad-input"), "{slug}");
+        }
+        let loc = sb.post_to("/insights/memory/guide/rebuild-page", &format!("project={alias}"));
+        assert_eq!(loc, guide_back(alias, "bad-input"), "no slug at all");
+        assert!(!guide_slot_held(alias));
+        assert_eq!(agent.calls(), 0, "the agent is never called for a refused slug");
+        assert!(loopx_core::project_guide::list(alias, Some(&sb.root())).unwrap().pages.is_empty());
+    }
+
+    #[test]
+    fn a_failed_build_shows_a_fixed_reason_and_no_agent_text() {
+        let alias = "gb-fail";
+        let secret = ["glpat-", "SECRETsecret1234567890"].concat();
+        let agent = GuideAgent::failing(&format!("boom: the CLI said {secret} and crashed"));
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), agent);
+        let loc = sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        assert!(!loc.contains("glpat") && !loc.contains("boom"), "{loc}");
+        wait_guide_idle(alias);
+        let page = sb.get(&guide_url(alias, None));
+        assert!(page.contains("The last guide build failed just now: the AI call failed"), "{page}");
+        assert!(page.contains("mem-job-bad"), "{page}");
+        let project = sb.get(&format!("/insights?view=memory&project={alias}"));
+        let (_, jobs) = jobs_json(&sb, &format!("/insights/memory/jobs?project={alias}"), None);
+        let trace = std::fs::read_to_string(activity_base(&sb).with_file_name("agent-trace.jsonl")).unwrap_or_default();
+        for text in [&page, &project, &jobs.to_string(), &trace] {
+            assert!(!text.contains("glpat") && !text.contains("SECRETsecret") && !text.contains("boom"), "{text}");
+        }
+        assert!(loopx_core::project_guide::list(alias, Some(&sb.root())).unwrap().pages.is_empty());
+    }
+
+    #[test]
+    fn a_panicking_build_is_an_internal_error() {
+        let alias = "gb-panic";
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), GuideAgent::make(None, None, true));
+        sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        wait_guide_idle(alias);
+        let page = sb.get(&guide_url(alias, None));
+        assert!(page.contains("The last guide build failed just now: internal error"), "{page}");
+        assert!(!page.contains("fell over"), "{page}");
+        assert!(loopx_core::profile_progress::running_guide_for(&activity_base(&sb), alias).is_none());
+    }
+
+    #[test]
+    fn jobs_status_lists_a_running_guide_job_and_not_as_a_profile_build() {
+        let alias = "gj-alpha";
+        let sb = Sb::new(&[(alias, true), ("gj-other", true)]);
+        let base = activity_base(&sb);
+        let job = ProfileJob::start(&base, ProfileJobKind::Guide, alias);
+        loopx_core::profile_progress::Progress::step(&job, 5, 14, loopx_core::profile_progress::Step::Page);
+        let (r, v) = jobs_json(&sb, &format!("/insights/memory/jobs?project={alias}"), None);
+        assert_eq!(r.status, 200);
+        assert!(v["running"].as_array().unwrap().is_empty(), "never a profile build: {v}");
+        let guide = v["guide"].as_array().unwrap();
+        assert_eq!(guide.len(), 1, "{v}");
+        assert_eq!(guide[0]["alias"], alias);
+        assert_eq!((guide[0]["step"].as_u64(), guide[0]["steps"].as_u64()), (Some(5), Some(14)));
+        assert_eq!(guide[0]["code"], "page");
+        assert_eq!(guide[0]["label"], "Writing a page \u{b7} step 5 of 14");
+        let (_, fr) = jobs_json(&sb, &format!("/insights/memory/jobs?project={alias}"), Some("fr"));
+        assert_ne!(fr["guide"][0]["label"], "Writing a page \u{b7} step 5 of 14", "translated: {fr}");
+        let (_, other) = jobs_json(&sb, "/insights/memory/jobs?project=gj-other", None);
+        assert!(other["guide"].as_array().unwrap().is_empty(), "{other}");
+        let (_, all) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert_eq!(all["guide"].as_array().unwrap().len(), 1, "{all}");
+        // The page shows the same step in its strip.
+        let page = sb.get(&guide_url(alias, None));
+        assert!(page.contains(&format!("data-mem-guide-job='{alias}'")) && page.contains("Writing a page \u{b7} step 5 of 14"), "{page}");
+        drop(job);
+        let (_, gone) = jobs_json(&sb, &format!("/insights/memory/jobs?project={alias}"), None);
+        assert!(gone["guide"].as_array().unwrap().is_empty(), "{gone}");
+        // A build this process started whose record is not written yet: the slot alone.
+        let slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let (_, v) = jobs_json(&sb, &format!("/insights/memory/jobs?project={alias}"), None);
+        assert_eq!(v["guide"][0]["alias"], alias, "{v}");
+        assert_eq!(v["guide"][0]["code"], "start");
+        assert!(v["running"].as_array().unwrap().is_empty(), "{v}");
+        drop(slot);
+    }
+
+    #[test]
+    fn the_guide_build_does_not_disable_profile_refresh_and_vice_versa() {
+        let alias = "gb-indep";
+        let sb = with_guide_agent(Sb::new(&[(alias, true)]), GuideAgent::new());
+        sb.save(&profile(alias, &[(SectionKey::Stack, section("Rust.", "Rust body"))]));
+        // The guide slot held: the profile's Refresh buttons are still there.
+        let guide_slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let project = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(project.contains("action='/insights/memory/build'") && project.contains("Refresh profile"), "{project}");
+        assert!(!project.contains("data-mem-job="), "no profile strip: {project}");
+        assert!(project.contains(&format!("data-mem-guide-job='{alias}'")), "{project}");
+        let stack = sb.get(&format!("/insights?view=memory&project={alias}&page=stack"));
+        assert!(stack.contains("action='/insights/memory/section/refresh'"), "{stack}");
+        let guide = sb.get(&guide_url(alias, None));
+        assert!(!guide.contains("action='/insights/memory/guide/build'") && guide.contains("Working…"), "{guide}");
+        drop(guide_slot);
+        // The profile slot held: Build guide is still offered and still starts.
+        let profile_slot = profile_build::try_acquire(alias).unwrap();
+        let guide = sb.get(&guide_url(alias, None));
+        assert!(guide.contains("action='/insights/memory/guide/build'"), "{guide}");
+        let project = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(!project.contains("action='/insights/memory/build'"), "the profile itself is busy: {project}");
+        let loc = sb.post_to("/insights/memory/guide/build", &format!("project={alias}"));
+        assert_eq!(loc, guide_back(alias, "guide-build-started"));
+        wait_guide_idle(alias);
+        drop(profile_slot);
+        assert_eq!(loopx_core::project_guide::list(alias, Some(&sb.root())).unwrap().pages.len(), 2);
+    }
+
+    #[test]
+    fn the_guide_build_strings_are_translated() {
+        let alias = "gb-fr";
+        let sb = Sb::new(&[(alias, true)]);
+        let slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let html = get_fr(&sb, &guide_back(alias, "guide-build-started"));
+        assert!(!html.contains("Building the guide"), "{html}");
+        assert!(!html.contains("Working…"), "{html}");
+        drop(slot);
+        let html = get_fr(&sb, &guide_back(alias, "guide-busy"));
+        assert!(!html.contains("A guide build for this project is already running."), "{html}");
+        record(
+            &sb.state.home_dir,
+            alias,
+            Job { at: now(), kind: JobKind::Guide, outcome: JobOutcome::GuideBuilt { saved: 3, held: 1, failed: 2 } },
+        );
+        let html = get_fr(&sb, &guide_url(alias, None));
+        assert!(!html.contains("Guide built"), "{html}");
+        assert!(html.contains('3') && html.contains("mem-job"), "{html}");
+        // A guide result does not replace the profile's own last result, and vice versa.
+        failed_build(&sb, alias, now());
+        assert!(last_job(&sb.state.home_dir, alias).is_some_and(|j| matches!(j.kind, JobKind::Build)));
+        let html = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(html.contains("The last build failed") && html.contains("Guide built just now: 3 pages written, 1 waiting for approval, 2 failed."), "{html}");
     }
 }

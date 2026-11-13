@@ -1,4 +1,4 @@
-/* Memory page live updates. While a profile job runs, ask /insights/memory/jobs for
+/* Memory page live updates. While a profile job or a guide build runs, ask /insights/memory/jobs for
    its step every 2s (only while the tab is visible), move the step text and progress
    bar in place, and when the job ends reload the page once, unless something typed
    or an open editor would be lost: then show a "Finished" banner with a Reload link.
@@ -10,7 +10,9 @@
   var project = root.getAttribute('data-mem-project') || '';
   var watching = root.hasAttribute('data-mem-watch');
   var els = Array.prototype.slice.call(document.querySelectorAll('[data-mem-job]'));
-  if (!els.length && !watching) return;
+  // Guide builds have their own strips and their own list in the response.
+  var guideEls = Array.prototype.slice.call(document.querySelectorAll('[data-mem-guide-job]'));
+  if (!els.length && !guideEls.length && !watching) return;
 
   var startedAt = Date.now();
   var LIMIT = 2 * 60 * 60 * 1000; // stop after two hours
@@ -75,7 +77,7 @@
     // The "Building…" notice in the address would greet the finished page: drop it.
     try {
       var u = new URL(location.href);
-      if (/^(build|refresh)(-all)?-started$/.test(u.searchParams.get('notice') || '')) {
+      if (/^((build|refresh)(-all)?|guide-build)-started$/.test(u.searchParams.get('notice') || '')) {
         u.searchParams.delete('notice');
         history.replaceState(null, '', u.pathname + u.search + u.hash);
       }
@@ -122,10 +124,17 @@
         else ended = true;
       }
     });
+    var guide = data.guide || [];
+    guideEls.forEach(function (el) {
+      var info = find(guide, el.getAttribute('data-mem-guide-job'));
+      if (info) show(el, info);
+      else ended = true;
+    });
     if (ended) return finish();
+    var none = !els.length && !guideEls.length;
     // Nothing on the page shows a job yet, but one has started elsewhere.
-    if (!els.length && (running.length || data.sync || data.build_all)) return finish();
-    if (!els.length && Date.now() - startedAt > WATCH_WINDOW) {
+    if (none && (running.length || guide.length || data.sync || data.build_all)) return finish();
+    if (none && Date.now() - startedAt > WATCH_WINDOW) {
       done = true;
       return;
     }

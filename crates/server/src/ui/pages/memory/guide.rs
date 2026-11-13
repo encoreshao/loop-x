@@ -12,13 +12,12 @@
 //! its title.
 
 use super::{
-    day, escape, hidden, icon, markdown, memory_root, pill, prefixes, project_url, short_sha,
-    spinner, Model, Project,
+    day, escape, guide_running, hidden, icon, markdown, memory_root, pill, prefixes, project_url,
+    short_sha, spinner, Model, Project,
 };
 use crate::ui::routes::UiCtx;
 use loopx_core::guide_ops;
 use loopx_core::guide_plan::{self, Plan};
-use loopx_core::profile_build;
 use loopx_core::project_guide::{self, check_slug, Kind, Page};
 use loopx_core::project_profile::{contains_secret, Origin, Status};
 use std::collections::BTreeSet;
@@ -28,11 +27,6 @@ use std::path::Path;
 /// a slug that passed `check_slug`).
 fn page_url(alias: &str, slug: &str) -> String {
     format!("{}&guide={slug}", project_url(alias, Some("guide")))
-}
-
-/// Whether a guide build or page operation holds the project's guide slot.
-fn guide_busy(alias: &str) -> bool {
-    profile_build::is_running(&format!("guide:{alias}"))
 }
 
 /// The secret kind a page's stored text trips, if any: the whole rendered file, so a
@@ -220,17 +214,70 @@ pub(super) fn render(ctx: &UiCtx, p: &Project, _m: &Model) -> String {
             .filter_map(Row::slug)
             .find(|s| check_slug(raw).is_ok() && *s == raw),
     };
-    let right = match selected {
-        None if raw.is_some() => muted_page(&ctx.t("This page does not exist.")),
-        None => muted_page(&ctx.t("No page has been written yet.")),
-        Some(slug) => match g.pages.iter().find(|x| x.slug == slug) {
-            Some(page) => page_view(ctx, p, page, &g.pages),
-            None => muted_page(&ctx.t("This page could not be read.")),
-        },
+    let shown = selected.and_then(|slug| g.pages.iter().find(|x| x.slug == slug));
+    let right = match (selected, shown) {
+        (None, _) if raw.is_some() => muted_page(&ctx.t("This page does not exist.")),
+        (None, _) => muted_page(&ctx.t("No page has been written yet.")),
+        (Some(_), Some(page)) => page_view(ctx, p, page, &g.pages),
+        (Some(_), None) => muted_page(&ctx.t("This page could not be read.")),
     };
     format!(
-        "{GUIDE_STYLE}<div class='gd-layout'>{}<div class='gd-main'>{right}</div></div>",
+        "{GUIDE_STYLE}{}<div class='gd-layout'>{}<div class='gd-main'>{right}</div></div>",
+        actions(ctx, p, !g.pages.is_empty(), shown.map(|x| x.slug.as_str())),
         list_view(ctx, p, &groups, selected, &g.deleted)
+    )
+}
+
+/// The disabled button a guide button becomes while a guide run works on the project.
+fn working(ctx: &UiCtx) -> String {
+    format!(
+        "<button class='mem-btn mem-btn-primary' type='button' disabled>{}{}</button>",
+        spinner(),
+        escape(&ctx.t("Working…"))
+    )
+}
+
+/// One guide action: a CSRF-checked form posting the checked alias (and slug).
+fn action_form(ctx: &UiCtx, action: &str, fields: &str, primary: bool, icon_name: &str, label: &str) -> String {
+    format!(
+        "<form method='post' action='{action}' class='mem-inline'>{}{fields}\
+         <button class='mem-btn{}' type='submit'>{}{}</button></form>",
+        ctx.csrf_input(),
+        if primary { " mem-btn-primary" } else { "" },
+        icon(icon_name),
+        escape(label)
+    )
+}
+
+/// The header row over the list: Build guide (no page written yet) or Rebuild guide,
+/// and on a page the plan names, Rebuild this page. While a guide run works, one
+/// disabled Working… instead. Nothing without a checkout (the route would refuse).
+fn actions(ctx: &UiCtx, p: &Project, has_pages: bool, page: Option<&str>) -> String {
+    if !p.checkout {
+        return String::new();
+    }
+    let buttons = if guide_running(ctx, &p.alias) {
+        working(ctx)
+    } else {
+        let project = hidden("project", &p.alias);
+        let (icon_name, label) = if has_pages {
+            ("autorenew", ctx.t("Rebuild guide"))
+        } else {
+            ("auto_awesome", ctx.t("Build guide"))
+        };
+        let build = action_form(ctx, "/insights/memory/guide/build", &project, !has_pages, icon_name, &label);
+        let root = memory_root(ctx);
+        let one = page
+            .filter(|slug| guide_ops::in_plan(&p.alias, slug, Some(&root)))
+            .map_or_else(String::new, |slug| {
+                let fields = format!("{project}{}", hidden("slug", slug));
+                action_form(ctx, "/insights/memory/guide/rebuild-page", &fields, false, "autorenew", &ctx.t("Rebuild this page"))
+            });
+        format!("{one}{build}")
+    };
+    format!(
+        "<div class='gd-actions'><p class='mem-muted mem-hint'>{}</p><div class='gd-actions-buttons'>{buttons}</div></div>",
+        escape(&ctx.t("A rebuild writes new drafts. Approved pages are not changed: their updates wait for your approval."))
     )
 }
 
@@ -250,12 +297,8 @@ fn empty_state(ctx: &UiCtx, p: &Project) -> String {
                     "Set this project's local checkout on the Projects page to build its guide."
                 ))
             )
-        } else if guide_busy(&p.alias) {
-            format!(
-                "<button class='mem-btn mem-btn-primary' type='button' disabled>{}{}</button>",
-                spinner(),
-                escape(&ctx.t("Working…"))
-            )
+        } else if guide_running(ctx, &p.alias) {
+            working(ctx)
         } else {
             format!(
                 "<form method='post' action='/insights/memory/guide/build' class='gd-build'>{}{}\
@@ -646,6 +689,10 @@ a.gd-row:focus-visible{outline:2px solid var(--md-primary);outline-offset:1px}
 .gd-empty p{margin:0;max-width:36rem;line-height:1.5;color:var(--md-on-surface-variant)}
 .gd-empty-icon .icon{width:34px;height:34px;color:var(--md-primary)}
 .gd-build{margin:.35rem 0 0}
+.gd-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.6rem 1rem;min-width:0}
+.gd-actions .mem-hint{flex:1 1 16rem;min-width:0;margin:0}
+.gd-actions-buttons{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-left:auto}
+.gd-actions form{margin:0}
 @media (prefers-reduced-motion:no-preference){
 .gd-row,.gd-deleted a{transition:background-color .25s cubic-bezier(0.32,0.72,0,1),color .25s cubic-bezier(0.32,0.72,0,1)}
 }

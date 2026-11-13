@@ -2124,5 +2124,13 @@
   "Draft: agents do not read this page until it is approved.": "Brouillon : les agents ne lisent pas cette page tant qu'elle n'est pas approuvée.",
   "Written by the agent and a person": "Rédigée par l'agent et une personne",
   "Commit": "Commit",
-  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "Masqué : cette page semble contenir une valeur secrète ({kind}). Retirez la valeur du fichier de la page, ou supprimez la page et reconstruisez-la."
+  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "Masqué : cette page semble contenir une valeur secrète ({kind}). Retirez la valeur du fichier de la page, ou supprimez la page et reconstruisez-la.",
+  "Building the guide in the background. It takes a few minutes; this page updates by itself.": "Construction du guide en arrière-plan. Cela prend quelques minutes ; cette page se met à jour toute seule.",
+  "A guide build for this project is already running. Try again when it finishes.": "Une construction du guide est déjà en cours pour ce projet. Réessayez quand elle sera terminée.",
+  "Building the guide… This page updates by itself while it runs.": "Construction du guide… Cette page se met à jour toute seule pendant l'exécution.",
+  "The last guide build failed {when}: {error}": "La dernière construction du guide a échoué {when} : {error}",
+  "Guide built {when}: {saved} pages written, {held} waiting for approval, {failed} failed.": "Guide construit {when} : pages écrites : {saved}, en attente d'approbation : {held}, en échec : {failed}.",
+  "Rebuild guide": "Reconstruire le guide",
+  "Rebuild this page": "Reconstruire cette page",
+  "A rebuild writes new drafts. Approved pages are not changed: their updates wait for your approval.": "Une reconstruction écrit de nouveaux brouillons. Les pages approuvées ne changent pas : leurs mises à jour attendent votre approbation."
 }

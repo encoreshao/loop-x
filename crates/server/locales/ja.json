@@ -2124,5 +2124,13 @@
   "Draft: agents do not read this page until it is approved.": "下書き：承認されるまで、エージェントはこのページを読みません。",
   "Written by the agent and a person": "エージェントと人が作成",
   "Commit": "コミット",
-  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "非表示：このページには秘密の値（{kind}）が含まれているようです。ページファイルからその値を削除するか、ページを削除して作り直してください。"
+  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "非表示：このページには秘密の値（{kind}）が含まれているようです。ページファイルからその値を削除するか、ページを削除して作り直してください。",
+  "Building the guide in the background. It takes a few minutes; this page updates by itself.": "バックグラウンドでガイドを作成しています。数分かかります。このページは自動で更新されます。",
+  "A guide build for this project is already running. Try again when it finishes.": "このプロジェクトのガイド作成はすでに実行中です。終了してからもう一度お試しください。",
+  "Building the guide… This page updates by itself while it runs.": "ガイドを作成中… 実行中、このページは自動で更新されます。",
+  "The last guide build failed {when}: {error}": "前回のガイド作成は{when}に失敗しました：{error}",
+  "Guide built {when}: {saved} pages written, {held} waiting for approval, {failed} failed.": "ガイドを{when}に作成しました：書き込み {saved} ページ、承認待ち {held}、失敗 {failed}。",
+  "Rebuild guide": "ガイドを再作成",
+  "Rebuild this page": "このページを再作成",
+  "A rebuild writes new drafts. Approved pages are not changed: their updates wait for your approval.": "再作成すると新しい下書きが書き込まれます。承認済みのページは変更されず、その更新はあなたの承認を待ちます。"
 }

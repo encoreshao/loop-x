@@ -2124,5 +2124,13 @@
   "Draft: agents do not read this page until it is approved.": "草稿：在批准之前，智能体不会读取此页面。",
   "Written by the agent and a person": "由智能体和人共同编写",
   "Commit": "提交",
-  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "已隐藏：此页面似乎包含机密值（{kind}）。请从页面文件中删除该值，或删除此页面后重新构建。"
+  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "已隐藏：此页面似乎包含机密值（{kind}）。请从页面文件中删除该值，或删除此页面后重新构建。",
+  "Building the guide in the background. It takes a few minutes; this page updates by itself.": "正在后台构建指南。需要几分钟；此页面会自动更新。",
+  "A guide build for this project is already running. Try again when it finishes.": "此项目的指南构建已在运行。请在其完成后重试。",
+  "Building the guide… This page updates by itself while it runs.": "正在构建指南… 运行期间此页面会自动更新。",
+  "The last guide build failed {when}: {error}": "上次指南构建于{when}失败：{error}",
+  "Guide built {when}: {saved} pages written, {held} waiting for approval, {failed} failed.": "指南已于{when}构建：写入 {saved} 页，{held} 页等待批准，{failed} 页失败。",
+  "Rebuild guide": "重新构建指南",
+  "Rebuild this page": "重新构建此页面",
+  "A rebuild writes new drafts. Approved pages are not changed: their updates wait for your approval.": "重新构建会写入新的草稿。已批准的页面不会被更改：其更新将等待您的批准。"
 }
