@@ -384,6 +384,7 @@ mod tests {
             "feature-",
             "Feature-A",
             "feature--a",
+            "feature-a--b",
             "feature-a-",
             "feature_a",
             "feature-a/b",
