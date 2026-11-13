@@ -101,6 +101,7 @@ pub mod profile_read;
 pub mod profile_scan;
 pub mod profile_sync;
 pub mod profile_wiki;
+pub mod project_guide;
 pub mod project_profile;
 pub mod prompt;
 pub mod providers;
