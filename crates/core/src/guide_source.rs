@@ -113,7 +113,9 @@ fn is_dockerfile(name: &str) -> bool {
 
 /// Dockerfile text with secret values blanked, names kept: every secret-like `NAME=value`
 /// pair on any line (ENV/ARG, `RUN export X=...`, `_authToken=...`, `--password=...`), the
-/// legacy `ENV|ARG NAME value` form, and `Authorization: Bearer|Basic|token <value>` headers.
+/// legacy `ENV|ARG NAME value` form, and credential headers (`Authorization`,
+/// `Proxy-Authorization`, `X-Api-Key`, `X-Auth-Token`, `X-Access-Token`, `Api-Key`,
+/// `ApiKey`) with an optional `Bearer|Basic|token` scheme: name and scheme kept.
 fn redact_dockerfile(text: &str) -> String {
     static LEGACY: OnceLock<Regex> = OnceLock::new();
     static PAIR: OnceLock<Regex> = OnceLock::new();
@@ -131,7 +133,9 @@ fn redact_dockerfile(text: &str) -> String {
         .expect("static regex")
     });
     let header = HEADER.get_or_init(|| {
-        Regex::new(r#"(?i)(authorization:\s*(?:bearer|basic|token)\s+)[^\s"']+"#)
+        Regex::new(
+            r#"(?i)(\b(?:proxy-authorization|authorization|x-api-key|x-auth-token|x-access-token|api-key|apikey)\s*:\s*(?:(?:bearer|basic|token)\s+)?)[^\s"']+"#,
+        )
             .expect("static regex")
     });
     text.split('\n')
@@ -692,6 +696,54 @@ mod tests {
         ] {
             assert!(t.contains(keep), "{keep}: {t}");
         }
+    }
+
+    #[test]
+    fn dockerfile_api_key_style_headers_are_redacted_and_ordinary_headers_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let body = "FROM node\nRUN curl -H \"X-Api-Key: abc123xyz99\" x\nRUN curl -H 'x-auth-token: tok11aa22' -H \"X-Access-Token: acc33bb44\" y\nRUN curl -H \"Api-Key: k55cc66\" -H \"apikey: k77dd88\" z\nRUN curl -H \"Proxy-Authorization: Basic cHJveHk6cHc=\" -H \"Authorization: plainvalue99\" w\nRUN curl -H \"Accept: application/json\" -H \"Content-Type: text/plain\" v\n";
+        write(d.path(), "Dockerfile", body);
+        let inv = inventory(d.path());
+        let l = load_files(d.path(), &inv, &["Dockerfile".into()], PAGE_CAP);
+        assert_eq!(l.shown.len(), 1, "{:?}", l.skipped_secret);
+        let t = &l.shown[0].1;
+        for leak in [
+            "abc123xyz99",
+            "tok11aa22",
+            "acc33bb44",
+            "k55cc66",
+            "k77dd88",
+            "cHJveHk6cHc",
+            "plainvalue99",
+        ] {
+            assert!(!t.contains(leak), "{leak}: {t}");
+        }
+        for keep in [
+            "X-Api-Key: [redacted]",
+            "x-auth-token: [redacted]",
+            "X-Access-Token: [redacted]",
+            "Api-Key: [redacted]",
+            "apikey: [redacted]",
+            "Proxy-Authorization: Basic [redacted]",
+            "Authorization: [redacted]",
+            "Accept: application/json",
+            "Content-Type: text/plain",
+        ] {
+            assert!(t.contains(keep), "{keep}: {t}");
+        }
+    }
+
+    #[test]
+    fn dockerfile_header_redaction_stays_fast_on_a_long_line() {
+        let line = format!(
+            "RUN curl {}-H \"X-Api-Key: abc\"\n",
+            "Authorization: Bearer ".repeat(1400)
+        );
+        assert!(line.len() > 30_000);
+        let start = std::time::Instant::now();
+        let out = redact_dockerfile(&line);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        assert!(!out.contains("abc\""), "{}", &out[out.len() - 60..]);
     }
 
     #[test]

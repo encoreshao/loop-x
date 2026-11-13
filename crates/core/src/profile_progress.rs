@@ -591,7 +591,7 @@ impl JobView {
                 .and_then(|x| usize::try_from(x).ok())
                 .filter(|x| *x <= MAX_STEPS)
         };
-        let kind = s("kind").filter(|k| matches!(*k, "build" | "refresh" | "sync"))?;
+        let kind = s("kind").filter(|k| matches!(*k, "build" | "refresh" | "sync" | "guide"))?;
         let step_code = s("step_code").and_then(Step::from_code)?;
         let section = s("section")
             .and_then(SectionKey::from_slug)
@@ -612,6 +612,11 @@ impl JobView {
         self.kind == "sync"
     }
 
+    /// A project guide build (not a profile job: [`running_for`] never returns one).
+    pub fn is_guide(&self) -> bool {
+        self.kind == "guide"
+    }
+
     pub fn step_kind(&self) -> Step {
         Step::from_code(&self.step_code).unwrap_or(Step::Start)
     }
@@ -620,6 +625,8 @@ impl JobView {
     pub fn label(&self) -> String {
         if self.is_sync() {
             "Profile sync".to_string()
+        } else if self.is_guide() {
+            format!("Guide \u{b7} {}", self.alias)
         } else {
             format!("Profile \u{b7} {}", self.alias)
         }
@@ -700,11 +707,19 @@ pub fn running_at(base: &Path, now: chrono::DateTime<chrono::Utc>) -> Vec<JobVie
     jobs
 }
 
-/// The running job for `alias` (not the sync's overall record), if any.
+/// The running profile job (a build or a refresh) for `alias`, if any: never the
+/// sync's overall record and never a guide build.
 pub fn running_for(base: &Path, alias: &str) -> Option<JobView> {
     running(base)
         .into_iter()
-        .find(|j| !j.is_sync() && j.alias == alias)
+        .find(|j| !j.is_sync() && !j.is_guide() && j.alias == alias)
+}
+
+/// The running guide build for `alias`, if any.
+pub fn running_guide_for(base: &Path, alias: &str) -> Option<JobView> {
+    running(base)
+        .into_iter()
+        .find(|j| j.is_guide() && j.alias == alias)
 }
 
 #[cfg(test)]
@@ -1229,6 +1244,40 @@ mod tests {
             job_file(b, JobKind::Refresh(SectionKey::Stack), "a b"),
             "stable per alias"
         );
+    }
+
+    #[test]
+    fn a_guide_job_is_running_but_never_the_profile_job_of_its_alias() {
+        let d = tempfile::tempdir().unwrap();
+        let b = base(d.path());
+        let guide = ProfileJob::start(&b, JobKind::Guide, "shop");
+        guide.step(5, 14, Step::Page);
+        let views = running(&b);
+        assert_eq!(views.len(), 1, "{views:?}");
+        let g = &views[0];
+        assert!(g.is_guide());
+        assert!(!g.is_sync());
+        assert_eq!(g.kind, "guide");
+        assert_eq!(g.label(), "Guide \u{b7} shop");
+        assert_eq!(g.step_text(), "Writing a page \u{b7} step 5 of 14");
+        assert!(
+            running_for(&b, "shop").is_none(),
+            "a guide is not a profile job"
+        );
+        assert_eq!(running_guide_for(&b, "shop").map(|j| j.step), Some(5));
+        assert!(running_guide_for(&b, "api").is_none());
+
+        let build = ProfileJob::start(&b, JobKind::Build, "shop");
+        build.step(3, 5, Step::Ai);
+        assert_eq!(running(&b).len(), 2);
+        let p = running_for(&b, "shop").unwrap();
+        assert_eq!((p.kind.as_str(), p.step), ("build", 3));
+        assert!(!p.is_guide());
+        assert_eq!(p.label(), "Profile \u{b7} shop");
+        assert_eq!(running_guide_for(&b, "shop").map(|j| j.step), Some(5));
+        drop(build);
+        drop(guide);
+        assert!(running(&b).is_empty());
     }
 
     #[test]

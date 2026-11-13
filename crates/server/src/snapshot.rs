@@ -330,11 +330,15 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         loops.insert("mr-fix".to_string(), entry);
     }
     // Running project profile jobs (a build, a section refresh, the sync): one
-    // entry each, `profile:<alias>` or `profile-sync`, with the step fields.
+    // entry each, `profile:<alias>` or `profile-sync`, with the step fields. A guide
+    // build is left out: its key would collide with the alias's profile build.
     for job in loopx_core::profile_progress::running_at(
         &loopx_core::agent_activity::beside(&paths.outputs.join("status.json")),
         now,
-    ) {
+    )
+    .into_iter()
+    .filter(|j| !j.is_guide())
+    {
         loops.insert(job.snapshot_key(), job.island_status());
     }
     let state = app_state(&loops, pending.len());
@@ -750,6 +754,25 @@ mod tests {
         assert!(s["loops"]["issue-loop"].get("agent_activity").is_none());
         let mut child = child;
         let _ = child.kill();
+    }
+
+    #[test]
+    fn a_running_guide_build_never_takes_the_profile_entry_of_its_alias() {
+        use loopx_core::profile_progress::{JobKind, ProfileJob, Progress, Step};
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let base = loopx_core::agent_activity::beside(&p.outputs.join("status.json"));
+        let guide = ProfileJob::start(&base, JobKind::Guide, "web");
+        guide.step(2, 5, Step::Page);
+        let s = build_snapshot(&p, now());
+        assert!(s["loops"].get("profile:web").is_none(), "{s}");
+        let job = ProfileJob::start(&base, JobKind::Build, "web");
+        job.step(3, 5, Step::Ai);
+        let s = build_snapshot(&p, now());
+        let l = &s["loops"]["profile:web"];
+        assert_eq!(l["kind"], "build", "{s}");
+        assert_eq!(l["current_issue"], "Profile \u{b7} web");
+        drop((job, guide));
     }
 
     #[test]

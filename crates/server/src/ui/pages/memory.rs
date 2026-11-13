@@ -155,7 +155,7 @@ fn jobs_status(ctx: &UiCtx) -> UiResponse {
     // Judged at the real time, like the page's own `live_job`.
     let jobs = loopx_core::profile_progress::running(&crate::ui::profile_jobs::base(ctx));
     let mut running: Vec<Value> = Vec::new();
-    for job in jobs.iter().filter(|j| !j.is_sync() && shown(&j.alias)) {
+    for job in jobs.iter().filter(|j| !j.is_sync() && !j.is_guide() && shown(&j.alias)) {
         running.push(serde_json::json!({
             "alias": job.alias,
             "kind": job.kind,
@@ -5660,6 +5660,17 @@ mod tests {
         drop(job);
         let (_, gone) = jobs_json(&sb, "/insights/memory/jobs", None);
         assert!(gone["running"].as_array().unwrap().is_empty(), "{gone}");
+    }
+
+    #[test]
+    fn the_jobs_endpoint_does_not_list_a_guide_build_as_a_profile_job() {
+        let sb = Sb::new(&[("live-g", true)]);
+        let base = activity_base(&sb);
+        let guide = ProfileJob::start(&base, ProfileJobKind::Guide, "live-g");
+        loopx_core::profile_progress::Progress::step(&guide, 2, 5, loopx_core::profile_progress::Step::Page);
+        let (_, v) = jobs_json(&sb, "/insights/memory/jobs", None);
+        assert!(v["running"].as_array().unwrap().is_empty(), "{v}");
+        drop(guide);
     }
 
     #[test]

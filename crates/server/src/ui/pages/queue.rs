@@ -921,6 +921,21 @@ mod tests {
     }
 
     #[test]
+    fn a_running_guide_build_is_not_shown_as_a_profile_build() {
+        use loopx_core::profile_progress::{JobKind, ProfileJob, Progress, Step};
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let base = loopx_core::agent_activity::beside(&d.path().join("outputs/status.json"));
+        let guide = ProfileJob::start(&base, JobKind::Guide, "web");
+        guide.step(2, 5, Step::Page);
+        let pill = get(&st, "/queue/pill", "en");
+        assert!(!pill.contains("Profile"), "{pill}");
+        let html = get(&st, "/queue/fragment", "en");
+        assert!(!html.contains("Profile build") && !html.contains("Profile \u{b7} web"), "{html}");
+        drop(guide);
+    }
+
+    #[test]
     fn profile_steps_are_translated() {
         let d = tempfile::tempdir().unwrap();
         let st = state(d.path());

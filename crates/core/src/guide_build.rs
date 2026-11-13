@@ -26,6 +26,7 @@ const SECRET: &str = "secret-shaped text found";
 const NOT_SAVED: &str = "could not save";
 const TOO_LARGE: &str = "the prompt for this page is too large";
 const NOT_STATED: &str = "not stated";
+const NO_PAGE: &str = "no page could be written";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageFailure {
@@ -305,13 +306,32 @@ fn refresh_profile_index(alias: &str, now: DateTime<Utc>, root: Option<&Path>) {
     let _ = crate::guide_features::sync_profile_features(alias, now, root);
 }
 
+/// `Err` when every page tried failed (none saved, none held); a mixed result is `Ok`.
+fn written_or_failed(out: BuildReport) -> Result<BuildReport, String> {
+    if out.saved.is_empty() && out.held.is_empty() && !out.failed.is_empty() {
+        Err(NO_PAGE.into())
+    } else {
+        Ok(out)
+    }
+}
+
+/// The plan call's error as a fixed reason: the raw text is never returned or recorded.
+fn plan_call_reason(err: &str) -> String {
+    if crate::profile_progress::is_cli_not_started(err) {
+        crate::profile_progress::CLI_NOT_STARTED.into()
+    } else {
+        AI_FAILED.into()
+    }
+}
+
 fn known_slugs(jobs: &[Job]) -> Vec<String> {
     jobs.iter().map(|j| j.slug.clone()).collect()
 }
 
 /// Plan the guide and write every page in it as a draft. `Err` only when nothing could
 /// be built (missing checkout, corrupt state, the plan call failed or its plan was
-/// invalid); a page that fails is reported in `failed` and the build goes on.
+/// invalid, or every page failed); a page that fails is reported in `failed` and the
+/// build goes on.
 #[allow(clippy::too_many_arguments)]
 pub fn build_guide(
     alias: &str,
@@ -329,7 +349,7 @@ pub fn build_guide(
         // The total is not known until the plan is in; restated below.
         report(progress, 1, 1, Step::Plan);
         let prompt = plan_prompt(alias, &inv, &scan, &digest)?;
-        let reply = agent.run(&prompt)?;
+        let reply = agent.run(&prompt).map_err(|e| plan_call_reason(&e))?;
         let plan = guide_plan::parse_plan(&reply, &inv)
             .map_err(|e| format!("the plan reply did not parse: {e}"))?;
         let jobs = jobs(&plan);
@@ -353,6 +373,7 @@ pub fn build_guide(
             report(progress, i + 2, total, Step::Page);
             run_job(&ctx, job, &mut out);
         }
+        let out = written_or_failed(out)?;
         refresh_profile_index(alias, now, root);
         Ok(out)
     })();
@@ -361,7 +382,7 @@ pub fn build_guide(
 }
 
 /// Rewrite one page (`architecture`, `data-model` or a feature) from the saved plan, with
-/// one agent call. `Err` when there is no plan or the slug is not in it.
+/// one agent call. `Err` when there is no plan, the slug is not in it or the page failed.
 #[allow(clippy::too_many_arguments)]
 pub fn rebuild_page(
     alias: &str,
@@ -400,6 +421,7 @@ pub fn rebuild_page(
         };
         let mut out = BuildReport::default();
         run_job(&ctx, job, &mut out);
+        let out = written_or_failed(out)?;
         refresh_profile_index(alias, now, root);
         Ok(out)
     })();
@@ -426,6 +448,7 @@ mod tests {
         plan: String,
         fail_on: Option<&'static str>, // a page title (or "PLAN") whose call errors
         page: fn(&str) -> String,
+        err: &'static str, // what a failing call returns
     }
 
     fn parts_reply(keys: &[(&str, &str)]) -> String {
@@ -464,14 +487,14 @@ mod tests {
             self.prompts.borrow_mut().push(prompt.to_string());
             if prompt.contains("\"features\"") && prompt.contains("Reply with the JSON only") {
                 return if self.fail_on == Some("PLAN") {
-                    Err("boom".into())
+                    Err(self.err.into())
                 } else {
                     Ok(self.plan.clone())
                 };
             }
             if let Some(t) = self.fail_on {
                 if prompt.contains(&format!("Page title: {t}")) {
-                    return Err("boom".into());
+                    return Err(self.err.into());
                 }
             }
             Ok((self.page)(prompt))
@@ -489,6 +512,7 @@ mod tests {
             plan: plan.into(),
             fail_on,
             page: default_page,
+            err: "boom",
         }
     }
 
@@ -1007,5 +1031,103 @@ mod tests {
             Some((5, 5, Step::Page))
         );
         assert_eq!(*rec.1.borrow(), 1);
+    }
+
+    /// Counts `done` and `fail` calls.
+    #[derive(Default)]
+    struct Settled(RefCell<(u8, u8)>);
+    impl Progress for Settled {
+        fn step(&self, _: usize, _: usize, _: Step) {}
+        fn done(&self) {
+            self.0.borrow_mut().0 += 1;
+        }
+        fn fail(&self, _: &str) {
+            self.0.borrow_mut().1 += 1;
+        }
+    }
+
+    const TWO_PAGES: &str = r#"{"features":[{"slug":"feature-cart","title":"Cart","summary":"Holding items.","files":["app/cart.rb"],"related":[]}],"architecture":{"files":["config/routes.rb"]},"data_model":{"files":[]}}"#;
+
+    #[test]
+    fn a_build_where_every_page_fails_is_an_error_and_settles_failed_once() {
+        let d = repo();
+        let root = tempfile::tempdir().unwrap();
+        let f = fake(PLAN, Some("")); // every "Page title: " prompt errors
+        let s = Settled::default();
+        let r = build_guide(
+            "shop",
+            d.path(),
+            "",
+            "",
+            &[],
+            &f,
+            now(),
+            Some(root.path()),
+            Some(&s),
+        );
+        assert_eq!(r.unwrap_err(), "no page could be written");
+        assert_eq!(*s.0.borrow(), (0, 1));
+        assert_eq!(f.prompts.borrow().len(), 5, "every page was tried");
+    }
+
+    #[test]
+    fn a_build_where_one_of_two_pages_fails_is_still_ok() {
+        let d = repo();
+        let root = tempfile::tempdir().unwrap();
+        let f = fake(TWO_PAGES, Some("Cart"));
+        let s = Settled::default();
+        let r = build_guide(
+            "shop",
+            d.path(),
+            "",
+            "",
+            &[],
+            &f,
+            now(),
+            Some(root.path()),
+            Some(&s),
+        )
+        .unwrap();
+        assert_eq!(r.saved, ["architecture"]);
+        assert_eq!(r.failed.len(), 1);
+        assert_eq!(*s.0.borrow(), (1, 0));
+    }
+
+    #[test]
+    fn a_rebuild_whose_page_fails_is_an_error() {
+        let d = repo();
+        let root = tempfile::tempdir().unwrap();
+        build(d.path(), &fake(PLAN, None), root.path()).unwrap();
+        let s = Settled::default();
+        let r = rebuild_page(
+            "shop",
+            "feature-cart",
+            d.path(),
+            "",
+            "",
+            &[],
+            &fake("unused", Some("Cart")),
+            now(),
+            Some(root.path()),
+            Some(&s),
+        );
+        assert_eq!(r.unwrap_err(), "no page could be written");
+        assert_eq!(*s.0.borrow(), (0, 1));
+    }
+
+    #[test]
+    fn a_failing_plan_call_gives_a_fixed_reason_never_the_agent_text() {
+        let d = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut f = fake(PLAN, Some("PLAN"));
+        f.err = "auth failed for token glpat-AAAAAAAAAAAAAAAAAAAA at /Users/me/x";
+        let e = build(d.path(), &f, root.path()).unwrap_err();
+        assert_eq!(e, "the AI call failed");
+        assert!(!e.contains("glpat-") && !e.contains("/Users/me"));
+        f.err = "FileNotFoundError";
+        assert_eq!(
+            build(d.path(), &f, root.path()).unwrap_err(),
+            crate::profile_progress::CLI_NOT_STARTED
+        );
     }
 }

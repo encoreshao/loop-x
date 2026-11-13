@@ -8,9 +8,13 @@ use super::routes::UiCtx;
 use loopx_core::profile_progress::{self, JobView, Step};
 
 /// Every running profile job, newest first, from the activity files beside the
-/// issue loop's status file (where the jobs write them).
+/// issue loop's status file (where the jobs write them). Guide builds are left out:
+/// these pages would show them as a profile build.
 pub fn running(ctx: &UiCtx) -> Vec<JobView> {
     profile_progress::running_at(&base(ctx), ctx.state.now())
+        .into_iter()
+        .filter(|j| !j.is_guide())
+        .collect()
 }
 
 /// The shared activity file the jobs write beside.
