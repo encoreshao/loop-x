@@ -84,6 +84,11 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/wiki/remove", wiki_remove);
     r.post("/insights/memory/guide/build", guide_build_route);
     r.post("/insights/memory/guide/rebuild-page", guide_rebuild_page);
+    r.post("/insights/memory/guide/approve", guide::approve_route);
+    r.post("/insights/memory/guide/approve-all", guide::approve_all_route);
+    r.post("/insights/memory/guide/edit", guide::edit_route);
+    r.post("/insights/memory/guide/delete", guide::delete_route);
+    r.post("/insights/memory/guide/restore", guide::restore_route);
     r.get("/insights/memory/jobs", jobs_status);
 }
 
@@ -2276,9 +2281,16 @@ enum Notice {
     WikiFailed,
     GuideBuildStarted,
     GuideBusy,
+    GuideApproved,
+    GuideAllApproved,
+    GuideEdited,
+    GuideDeleted,
+    GuideRestored,
+    GuideInPlan,
+    GuideFailed,
 }
 
-const NOTICES: [(Notice, &str); 40] = [
+const NOTICES: [(Notice, &str); 47] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2319,6 +2331,13 @@ const NOTICES: [(Notice, &str); 40] = [
     (Notice::WikiFailed, "wiki-failed"),
     (Notice::GuideBuildStarted, "guide-build-started"),
     (Notice::GuideBusy, "guide-busy"),
+    (Notice::GuideApproved, "guide-approved"),
+    (Notice::GuideAllApproved, "guide-all-approved"),
+    (Notice::GuideEdited, "guide-edited"),
+    (Notice::GuideDeleted, "guide-deleted"),
+    (Notice::GuideRestored, "guide-restored"),
+    (Notice::GuideInPlan, "guide-in-plan"),
+    (Notice::GuideFailed, "guide-failed"),
 ];
 
 impl Notice {
@@ -2356,6 +2375,11 @@ impl Notice {
                 | Notice::WikiUnchanged
                 | Notice::WikiRemoved
                 | Notice::GuideBuildStarted
+                | Notice::GuideApproved
+                | Notice::GuideAllApproved
+                | Notice::GuideEdited
+                | Notice::GuideDeleted
+                | Notice::GuideRestored
         )
     }
 
@@ -2401,6 +2425,18 @@ impl Notice {
             Notice::WikiFailed => ctx.t("The wiki page could not be fetched or saved. Check the link and the GitLab token."),
             Notice::GuideBuildStarted => ctx.t("Building the guide in the background. It takes a few minutes; this page updates by itself."),
             Notice::GuideBusy => ctx.t("A guide build for this project is already running. Try again when it finishes."),
+            Notice::GuideApproved => ctx.t("Page approved. Agents now read it."),
+            // The count is the only other value a redirect carries: a number the route
+            // computed, read back as a number (anything else shows the plain message).
+            Notice::GuideAllApproved => match ctx.query().first("approved").and_then(|n| n.parse::<usize>().ok()) {
+                Some(n) => ctx.tf("Draft pages approved: {n}. Agents now read them.", &[("n", &n.to_string())]),
+                None => ctx.t("Every draft page was approved."),
+            },
+            Notice::GuideEdited => ctx.t("Part saved. It is now marked as written by a person; rebuilds keep it."),
+            Notice::GuideDeleted => ctx.t("Page deleted. A copy is kept under Deleted pages, where you can restore it."),
+            Notice::GuideRestored => ctx.t("Page restored from its history. The version it replaced is kept in the history too."),
+            Notice::GuideInPlan => ctx.t("This page is in the current plan, so it was not deleted. A rebuild would write it again."),
+            Notice::GuideFailed => ctx.t("The guide could not be changed: a page file could not be read or saved. Reload the page and try again."),
         }
     }
 }
@@ -4707,7 +4743,7 @@ mod tests {
         panic!("{alias} is still running");
     }
 
-    const ROUTES: [&str; 14] = [
+    const ROUTES: [&str; 19] = [
         "/insights/memory/build",
         "/insights/memory/approve",
         "/insights/memory/section/save",
@@ -4722,6 +4758,11 @@ mod tests {
         "/insights/memory/wiki/remove",
         "/insights/memory/guide/build",
         "/insights/memory/guide/rebuild-page",
+        "/insights/memory/guide/approve",
+        "/insights/memory/guide/approve-all",
+        "/insights/memory/guide/edit",
+        "/insights/memory/guide/delete",
+        "/insights/memory/guide/restore",
     ];
 
     #[test]
@@ -7167,5 +7208,432 @@ mod tests {
         assert!(last_job(&sb.state.home_dir, alias).is_some_and(|j| matches!(j.kind, JobKind::Build)));
         let html = sb.get(&format!("/insights?view=memory&project={alias}"));
         assert!(html.contains("The last build failed") && html.contains("Guide built just now: 3 pages written, 1 waiting for approval, 2 failed."), "{html}");
+    }
+
+    // ------------------------------------------------------------------ guide page actions
+
+    fn gd_file(sb: &Sb, alias: &str, slug: &str) -> PathBuf {
+        loopx_core::project_guide::guide_dir(alias, Some(&sb.root())).join(format!("{slug}.md"))
+    }
+
+    fn gd_load(sb: &Sb, alias: &str, slug: &str) -> Option<loopx_core::project_guide::Page> {
+        loopx_core::project_guide::load(alias, slug, Some(&sb.root())).unwrap()
+    }
+
+    fn gd_history(sb: &Sb, alias: &str, slug: &str) -> Vec<String> {
+        loopx_core::project_guide::history(alias, slug, Some(&sb.root()))
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The right-hand side of the guide page (the selected page or the history view).
+    fn gd_main(html: &str) -> &str {
+        let at = html.find("class='gd-main'").unwrap_or_else(|| panic!("no gd-main: {html}"));
+        let end = html.find("data-mem-live").unwrap();
+        &html[at..end]
+    }
+
+    fn history_url(alias: &str, slug: &str) -> String {
+        format!("{}&history={slug}", guide_url(alias, None))
+    }
+
+    /// Every `<textarea …>…</textarea>` body in `html`.
+    fn textareas(html: &str) -> Vec<&str> {
+        html.split("<textarea").skip(1).map(|t| {
+            let open = t.find('>').unwrap() + 1;
+            &t[open..t.find("</textarea>").unwrap()]
+        }).collect()
+    }
+
+    const APPROVE: &str = "/insights/memory/guide/approve";
+    const APPROVE_ALL: &str = "/insights/memory/guide/approve-all";
+    const EDIT: &str = "/insights/memory/guide/edit";
+    const DELETE: &str = "/insights/memory/guide/delete";
+    const RESTORE: &str = "/insights/memory/guide/restore";
+
+    #[test]
+    fn approving_a_draft_flips_it_and_the_page_shows_approved() {
+        let alias = "ga-appr";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Draft, &[("what", "Takes orders.", Origin::Agent)]);
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        let main = gd_main(&html);
+        assert!(main.contains(&format!("action='{APPROVE}'")), "{main}");
+        assert!(main.contains("name='slug' value='feature-orders'"), "{main}");
+        // An approved page has no Approve button.
+        let html = sb.get(&guide_url(alias, Some("architecture")));
+        assert!(!gd_main(&html).contains(&format!("action='{APPROVE}'")), "{html}");
+
+        let loc = sb.post_to(APPROVE, &format!("project={alias}&slug=feature-orders"));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-approved"));
+        let page = gd_load(&sb, alias, "feature-orders").unwrap();
+        assert_eq!(page.status, Status::Approved);
+        assert_eq!(page.parts[0].body, "Takes orders.");
+        let html = sb.get(&loc);
+        assert!(html.contains("Page approved. Agents now read it."), "{html}");
+        let main = gd_main(&html);
+        assert!(main.contains("mem-pill-fresh'>Approved</span>"), "{main}");
+        assert!(!main.contains("Draft: agents do not read this page"), "{main}");
+        assert!(!main.contains(&format!("action='{APPROVE}'")), "{main}");
+
+        // A second approve is harmless: same notice, nothing written, no new snapshot.
+        let bytes = std::fs::read(gd_file(&sb, alias, "feature-orders")).unwrap();
+        let snaps = gd_history(&sb, alias, "feature-orders").len();
+        let loc = sb.post_to(APPROVE, &format!("project={alias}&slug=feature-orders"));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-approved"));
+        assert_eq!(std::fs::read(gd_file(&sb, alias, "feature-orders")).unwrap(), bytes);
+        assert_eq!(gd_history(&sb, alias, "feature-orders").len(), snaps);
+    }
+
+    #[test]
+    fn approve_all_approves_every_draft_and_reports_the_count() {
+        let alias = "ga-all";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        for slug in ["feature-a", "feature-b", "roadmap"] {
+            let part = if slug == "roadmap" { "planned" } else { "what" };
+            put_page(&sb, alias, slug, slug, Status::Draft, &[(part, "Text.", Origin::Agent)]);
+        }
+        let html = sb.get(&guide_url(alias, None));
+        let list_at = html.find("class='card gd-list'").unwrap();
+        let list = &html[list_at..list_at + html[list_at..].find("</nav>").unwrap()];
+        assert!(list.contains(&format!("action='{APPROVE_ALL}'")), "{list}");
+        assert!(list.contains("Approve all drafts"), "{list}");
+
+        let loc = sb.post_to(APPROVE_ALL, &format!("project={alias}"));
+        assert_eq!(loc, format!("/insights?view=memory&project={alias}&page=guide&approved=3&notice=guide-all-approved"));
+        for slug in ["architecture", "feature-a", "feature-b", "roadmap"] {
+            assert_eq!(gd_load(&sb, alias, slug).unwrap().status, Status::Approved, "{slug}");
+        }
+        let html = sb.get(&loc);
+        assert!(html.contains("Draft pages approved: 3. Agents now read them."), "{html}");
+        // No draft left: no Approve all button.
+        assert!(!html.contains(&format!("action='{APPROVE_ALL}'")), "{html}");
+        // Nothing to approve: still a notice, with a zero count.
+        let loc = sb.post_to(APPROVE_ALL, &format!("project={alias}"));
+        assert!(loc.ends_with("&approved=0&notice=guide-all-approved"), "{loc}");
+    }
+
+    #[test]
+    fn editing_a_part_marks_it_human_and_shows_the_approved_note() {
+        let alias = "ga-edit";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(
+            &sb,
+            alias,
+            "feature-orders",
+            "Orders",
+            Status::Approved,
+            &[("what", "Old <b>text</b>.", Origin::Agent), ("how", "Queues.", Origin::Agent)],
+        );
+        put_page(&sb, alias, "roadmap", "Roadmap", Status::Draft, &[("planned", "Refunds.", Origin::Agent)]);
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        let main = gd_main(&html);
+        // One editor per part, each one form with one Save.
+        assert_eq!(main.matches("<details class='gd-edit'>").count(), 2, "{main}");
+        assert_eq!(main.matches(&format!("action='{EDIT}'")).count(), 2, "{main}");
+        for editor in main.split("<details class='gd-edit'>").skip(1) {
+            let editor = &editor[..editor.find("</details>").unwrap()];
+            assert_eq!((editor.matches("<form").count(), editor.matches("type='submit'").count()), (1, 1), "{editor}");
+        }
+        assert!(main.contains("name='part' value='what'") && main.contains("name='part' value='how'"), "{main}");
+        assert!(main.contains("name='body' maxlength='65536'"), "{main}");
+        // Prefilled with the stored text, escaped.
+        assert_eq!(textareas(main), vec!["Old &lt;b&gt;text&lt;/b&gt;.", "Queues."]);
+        assert!(main.contains("This page is approved, so agents see your change immediately."), "{main}");
+        assert!(main.contains("Saving marks this part as written by a person; rebuilds keep it."), "{main}");
+        // A draft has no "approved" note.
+        let html = sb.get(&guide_url(alias, Some("roadmap")));
+        assert!(!html.contains("This page is approved, so agents see your change immediately."), "{html}");
+
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body=Line+one%0D%0ALine+two%0D%0A"));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-edited"));
+        let page = gd_load(&sb, alias, "feature-orders").unwrap();
+        let what = page.parts.iter().find(|x| x.key == "what").unwrap();
+        assert_eq!((what.body.as_str(), what.origin), ("Line one\nLine two", Origin::Human));
+        let how = page.parts.iter().find(|x| x.key == "how").unwrap();
+        assert_eq!((how.body.as_str(), how.origin), ("Queues.", Origin::Agent));
+        assert_eq!(page.status, Status::Approved);
+        assert!(!std::fs::read_to_string(gd_file(&sb, alias, "feature-orders")).unwrap().contains('\r'));
+        let html = sb.get(&loc);
+        assert!(html.contains("Part saved. It is now marked as written by a person; rebuilds keep it."), "{html}");
+        let main = gd_main(&html);
+        let what_at = main.find("<h3>What it does</h3>").unwrap();
+        let what_head = &main[what_at..what_at + main[what_at..].find("</div>").unwrap()];
+        assert!(what_head.contains("mem-pill-human'>Written by a person</span>"), "{what_head}");
+        assert!(main.contains("Written by the agent and a person"), "{main}");
+    }
+
+    #[test]
+    fn editing_refuses_secrets_empty_text_and_unknown_parts_without_writing() {
+        let alias = "ga-refuse";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Approved, &[("what", "Old text.", Origin::Agent)]);
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let big = "x".repeat(64 * 1024 + 1);
+        for (part, body, notice) in [
+            ("what", format!("Use+{token}+here"), "secret"),
+            ("what", String::new(), "bad-input"),
+            ("what", "+%0D%0A+".to_string(), "bad-input"),
+            ("nope", "Fine.".to_string(), "bad-input"),
+            // A part of another kind of page.
+            ("overview", "Fine.".to_string(), "bad-input"),
+            ("what", big, "too-long"),
+        ] {
+            let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part={part}&body={body}"));
+            assert_eq!(loc, page_back(alias, "feature-orders", notice), "{part} {notice}");
+            assert!(!loc.contains("glpat") && !loc.contains("Use"), "{loc}");
+            let html = sb.get(&loc);
+            assert!(!html.contains("glpat"), "{html}");
+            assert!(!html.contains("xxxxxxxxxx"), "the refused text is not kept");
+            assert_eq!(std::fs::read(&file).unwrap(), bytes, "{part} {notice}");
+        }
+        assert!(gd_history(&sb, alias, "feature-orders").is_empty());
+        assert!(sb.get(&page_back(alias, "feature-orders", "secret")).contains("Nothing was saved: the text looks like it contains a secret value."));
+        // The editor still shows the stored text, not the refused one.
+        assert_eq!(textareas(gd_main(&sb.get(&page_back(alias, "feature-orders", "secret")))), vec!["Old text."]);
+    }
+
+    #[test]
+    fn the_editor_never_carries_text_of_a_redacted_page() {
+        let alias = "ga-redact";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(
+            &sb,
+            alias,
+            "feature-orders",
+            "Orders",
+            Status::Draft,
+            &[("what", "Body text here.", Origin::Agent), ("how", "Plain words.", Origin::Agent)],
+        );
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        hand_edit(&sb, alias, "Body text here.", &format!("Body text here {token}."));
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        let main = gd_main(&html);
+        assert!(main.contains("class='mem-redacted'"), "{main}");
+        let areas = textareas(main);
+        assert_eq!(areas.len(), 2, "{main}");
+        assert!(areas.iter().all(|t| t.is_empty()), "{areas:?}");
+        for hidden_text in ["glpat", "Body text here", "Plain words", "Summary of feature-orders"] {
+            assert!(!html.contains(hidden_text), "{hidden_text}: {html}");
+        }
+        // Approving a page that holds a secret is not offered.
+        assert!(!main.contains(&format!("action='{APPROVE}'")), "{main}");
+        assert!(main.contains("history=feature-orders"), "{main}");
+        // Overwriting the part that holds the secret clears the redaction.
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body=Clean."));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-edited"));
+        let html = sb.get(&loc);
+        assert!(!html.contains("class='mem-redacted'") && html.contains("Clean.") && !html.contains("glpat"), "{html}");
+    }
+
+    #[test]
+    fn deleting_is_offered_and_allowed_only_outside_the_plan() {
+        let alias = "ga-del";
+        let sb = Sb::new(&[(alias, true)]);
+        put_plan(&sb, alias, &["feature-a"]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        put_page(&sb, alias, "feature-a", "A", Status::Approved, &[("what", "In plan.", Origin::Agent)]);
+        put_page(&sb, alias, "feature-old", "Old", Status::Approved, &[("what", "Gone from plan.", Origin::Agent)]);
+        for slug in ["architecture", "feature-a"] {
+            let html = sb.get(&guide_url(alias, Some(slug)));
+            assert!(!html.contains(&format!("action='{DELETE}'")), "{slug}: {html}");
+            let loc = sb.post_to(DELETE, &format!("project={alias}&slug={slug}"));
+            assert_eq!(loc, page_back(alias, slug, "guide-in-plan"));
+            assert!(gd_file(&sb, alias, slug).is_file(), "{slug}");
+        }
+        assert!(sb.get(&page_back(alias, "feature-a", "guide-in-plan")).contains("This page is in the current plan, so it was not deleted."));
+
+        let html = sb.get(&guide_url(alias, Some("feature-old")));
+        let main = gd_main(&html);
+        let del_at = main.find("<details class='gd-delete'>").unwrap_or_else(|| panic!("{main}"));
+        let del = &main[del_at..del_at + main[del_at..].find("</details>").unwrap()];
+        assert!(del.contains(&format!("action='{DELETE}'")) && del.contains("name='slug' value='feature-old'"), "{del}");
+        assert!(del.contains("gd-btn-danger"), "{del}");
+        // The app shell carries its own confirm script; the guide never uses it.
+        assert!(!main.contains("confirm(") && !main.contains("data-confirm") && !main.contains("onclick"), "no browser dialog: {main}");
+
+        let loc = sb.post_to(DELETE, &format!("project={alias}&slug=feature-old"));
+        assert_eq!(loc, guide_back(alias, "guide-deleted"));
+        assert!(!gd_file(&sb, alias, "feature-old").exists());
+        let snaps = gd_history(&sb, alias, "feature-old");
+        assert_eq!(snaps.len(), 1);
+        let html = sb.get(&loc);
+        assert!(html.contains("Page deleted."), "{html}");
+        assert!(!html.contains("guide=feature-old'"), "the row is gone: {html}");
+        let deleted_at = html.find("class='gd-deleted'").unwrap();
+        assert!(html[deleted_at..].contains("history=feature-old"), "{html}");
+        // Deleting it again: nothing there to delete.
+        assert_eq!(sb.post_to(DELETE, &format!("project={alias}&slug=feature-old")), page_back(alias, "feature-old", "bad-input"));
+        assert_eq!(gd_history(&sb, alias, "feature-old").len(), 1);
+    }
+
+    #[test]
+    fn history_lists_snapshots_and_restore_brings_back_an_older_version_or_a_deleted_page() {
+        let alias = "ga-hist";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Approved, &[("what", "Version one.", Origin::Agent)]);
+        for body in ["Version+two.", "Version+three."] {
+            let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body={body}"));
+            assert_eq!(loc, page_back(alias, "feature-orders", "guide-edited"));
+        }
+        let snaps = gd_history(&sb, alias, "feature-orders");
+        assert_eq!(snaps.len(), 2);
+        // The page links to its history.
+        assert!(gd_main(&sb.get(&guide_url(alias, Some("feature-orders")))).contains("history=feature-orders"));
+        let html = sb.get(&history_url(alias, "feature-orders"));
+        let main = gd_main(&html);
+        assert_eq!(main.matches(&format!("action='{RESTORE}'")).count(), 2, "{main}");
+        // Newest first, each with the time from its file name, and no page text.
+        let (newer, older) = (main.find(&snaps[0]).unwrap(), main.find(&snaps[1]).unwrap());
+        assert!(newer < older, "{main}");
+        let ts = snaps[1].trim_start_matches("feature-orders.").trim_end_matches(".md");
+        let shown = format!("{}-{}-{} {}:{}:{} UTC", &ts[0..4], &ts[4..6], &ts[6..8], &ts[9..11], &ts[11..13], &ts[13..15]);
+        assert!(main.contains(&shown), "{shown}: {main}");
+        assert!(!main.contains("Version"), "{main}");
+        assert!(main.contains(&format!("href='/insights?view=memory&amp;project={alias}&amp;page=guide&amp;guide=feature-orders'")), "back link: {main}");
+
+        let loc = sb.post_to(RESTORE, &format!("project={alias}&slug=feature-orders&snapshot={}", snaps[1]));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-restored"));
+        assert_eq!(gd_load(&sb, alias, "feature-orders").unwrap().parts[0].body, "Version one.");
+        let html = sb.get(&loc);
+        assert!(html.contains("Page restored from its history.") && gd_main(&html).contains("Version one."), "{html}");
+
+        // A deleted page (no plan: nothing is in it) comes back from the Deleted pages history.
+        assert_eq!(sb.post_to(DELETE, &format!("project={alias}&slug=feature-orders")), guide_back(alias, "guide-deleted"));
+        assert!(gd_load(&sb, alias, "feature-orders").is_none());
+        let html = sb.get(&guide_url(alias, None));
+        assert!(html.contains(&format!("href='/insights?view=memory&amp;project={alias}&amp;page=guide&amp;history=feature-orders'")), "{html}");
+        let html = sb.get(&history_url(alias, "feature-orders"));
+        let snaps = gd_history(&sb, alias, "feature-orders");
+        assert_eq!(html.matches(&format!("action='{RESTORE}'")).count(), snaps.len(), "{html}");
+        assert!(!html.contains("Version") && !html.contains("This page does not exist."), "{html}");
+        let loc = sb.post_to(RESTORE, &format!("project={alias}&slug=feature-orders&snapshot={}", snaps[0]));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-restored"));
+        assert_eq!(gd_load(&sb, alias, "feature-orders").unwrap().parts[0].body, "Version one.");
+        assert!(!sb.get(&guide_url(alias, None)).contains("class='gd-deleted'"));
+    }
+
+    #[test]
+    fn hostile_form_values_are_refused() {
+        let alias = "ga-host";
+        let sb = Sb::new(&[(alias, true), ("ga-host-empty", true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Draft, &[("what", "Old text.", Origin::Agent)]);
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        let index = guide_back(alias, "bad-input");
+        let on_page = page_back(alias, "feature-orders", "bad-input");
+        let huge = "y".repeat(1024 * 1024);
+        let cases: Vec<(&str, String, String)> = vec![
+            (APPROVE, format!("project={alias}&slug=..%2Fx"), index.clone()),
+            (APPROVE, format!("project={alias}&slug=%3Cscript%3E"), index.clone()),
+            (APPROVE, format!("project={alias}"), index.clone()),
+            (EDIT, format!("project={alias}&slug=..%2Fx&part=what&body=Hi"), index.clone()),
+            (EDIT, format!("project={alias}&slug=feature-orders&part=%3Cscript%3E&body=Hi"), on_page.clone()),
+            (EDIT, format!("project={alias}&slug=feature-orders&part=what&body={huge}"), page_back(alias, "feature-orders", "too-long")),
+            (DELETE, format!("project={alias}&slug=..%2F..%2Fx"), index.clone()),
+            (RESTORE, format!("project={alias}&slug=feature-orders&snapshot=..%2F..%2Fx"), on_page.clone()),
+            (RESTORE, format!("project={alias}&slug=feature-orders&snapshot=feature-orders.20260101T000000000000000Z.md"), on_page.clone()),
+            (RESTORE, format!("project={alias}&slug=feature-orders"), on_page.clone()),
+            (RESTORE, format!("project={alias}&slug=..%2Fx&snapshot=x.md"), index.clone()),
+        ];
+        let unknown = "/insights?view=memory&notice=bad-input".to_string();
+        let mut all = cases;
+        for route in [APPROVE, APPROVE_ALL, EDIT, DELETE, RESTORE] {
+            all.push((route, "project=nope&slug=feature-orders&part=what&body=Hi&snapshot=x.md".into(), unknown.clone()));
+            all.push((route, "project=%3Cscript%3E&slug=feature-orders".into(), unknown.clone()));
+        }
+        for (route, body, want) in &all {
+            let loc = sb.post_to(route, body);
+            assert_eq!(&loc, want, "{route} {body:.80}");
+            assert!(!loc.contains("script") && !loc.contains("..") && !loc.contains("yyyy") && !loc.contains("nope"), "{loc}");
+            let html = sb.get(&loc);
+            assert!(!html.contains("<script>x") && !html.contains("&lt;script&gt;") && !html.contains("yyyyyyyy"), "{route}");
+            assert_eq!(std::fs::read(&file).unwrap(), bytes, "{route} {body:.80}");
+        }
+        assert!(gd_history(&sb, alias, "feature-orders").is_empty());
+        // A valid slug with no page creates nothing: no guide folder for a project without one.
+        let empty = "ga-host-empty";
+        for (route, body) in [
+            (APPROVE, format!("project={empty}&slug=feature-x")),
+            (EDIT, format!("project={empty}&slug=feature-x&part=what&body=Hi")),
+            (DELETE, format!("project={empty}&slug=feature-x")),
+            (RESTORE, format!("project={empty}&slug=feature-x&snapshot=feature-x.20260101T000000000000000Z.md")),
+        ] {
+            assert_eq!(sb.post_to(route, &body), page_back(empty, "feature-x", "bad-input"), "{route}");
+        }
+        assert!(!loopx_core::project_guide::guide_dir(empty, Some(&sb.root())).exists());
+        // A hostile history value shows the fixed line and is not echoed.
+        let html = sb.get(&format!("{}&history=..%2F%3Cscript%3E", guide_url(alias, None)));
+        assert!(html.contains("This page does not exist.") && !html.contains("&lt;script&gt;") && !html.contains("../"), "{html}");
+        let html = sb.get(&format!("{}&history=feature-ghost", guide_url(alias, None)));
+        assert!(html.contains("This page does not exist.") && !html.contains(&format!("action='{RESTORE}'")), "{html}");
+    }
+
+    #[test]
+    fn every_guide_post_route_requires_csrf_and_a_busy_guide_refuses_changes() {
+        for route in [APPROVE, APPROVE_ALL, EDIT, DELETE, RESTORE] {
+            assert!(ROUTES.contains(&route), "{route} is in the CSRF list");
+        }
+        let alias = "ga-busy";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Draft, &[("what", "Old text.", Origin::Agent)]);
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body=Second."));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-edited"));
+        let snap = gd_history(&sb, alias, "feature-orders")[0].clone();
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        // No CSRF token: refused before anything runs.
+        for route in [APPROVE, APPROVE_ALL, EDIT, DELETE, RESTORE] {
+            let req = crate::ui::routes::UiRequest::new(Method::POST, route)
+                .with_header("content-type", "application/x-www-form-urlencoded")
+                .with_body(format!("project={alias}&slug=feature-orders&part=what&body=X&snapshot={snap}"));
+            assert_eq!(sb.state.registry.dispatch(&sb.state, &req).unwrap().status, 403, "{route}");
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+        let slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let busy_page = page_back(alias, "feature-orders", "guide-busy");
+        for (route, body, want) in [
+            (APPROVE, format!("project={alias}&slug=feature-orders"), busy_page.clone()),
+            (APPROVE_ALL, format!("project={alias}"), guide_back(alias, "guide-busy")),
+            (EDIT, format!("project={alias}&slug=feature-orders&part=what&body=Third."), busy_page.clone()),
+            (DELETE, format!("project={alias}&slug=feature-orders"), busy_page.clone()),
+            (RESTORE, format!("project={alias}&slug=feature-orders&snapshot={snap}"), busy_page.clone()),
+        ] {
+            assert_eq!(sb.post_to(route, &body), want, "{route}");
+            assert_eq!(std::fs::read(&file).unwrap(), bytes, "{route}");
+        }
+        assert_eq!(gd_history(&sb, alias, "feature-orders").len(), 1);
+        drop(slot);
+        assert_eq!(sb.post_to(APPROVE, &format!("project={alias}&slug=feature-orders")), page_back(alias, "feature-orders", "guide-approved"));
+    }
+
+    #[test]
+    fn the_guide_page_actions_are_translated() {
+        let alias = "ga-fr";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Approved, &[("what", "Old text.", Origin::Agent)]);
+        let html = get_fr(&sb, &guide_url(alias, Some("feature-orders")));
+        for english in [
+            "This page is approved, so agents see your change immediately.",
+            "Saving marks this part as written by a person; rebuilds keep it.",
+            "Delete page",
+            ">History<",
+        ] {
+            assert!(!html.contains(english), "{english}");
+        }
+        let html = get_fr(&sb, &history_url(alias, "feature-orders"));
+        assert!(!html.contains("No earlier versions of this page are kept."), "{html}");
+        for code in ["guide-approved", "guide-edited", "guide-deleted", "guide-restored", "guide-in-plan", "guide-failed"] {
+            let html = get_fr(&sb, &guide_back(alias, code));
+            assert!(html.contains("class='mem-notice"), "{code}");
+        }
+        let html = get_fr(&sb, &format!("{}&approved=2&notice=guide-all-approved", guide_url(alias, None)));
+        assert!(html.contains('2') && !html.contains("Draft pages approved"), "{html}");
     }
 }

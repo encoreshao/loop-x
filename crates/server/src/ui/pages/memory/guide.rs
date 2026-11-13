@@ -10,13 +10,19 @@
 //! dashboard's markdown renderer; a page whose stored text trips the secret guard
 //! shows only its title, its status and the redaction notice, and its list row only
 //! its title.
+//!
+//! The page actions (Approve, Approve all drafts, Edit a part, Delete, History and
+//! Restore) post to the routes at the end of this file. Each takes a known alias and a
+//! slug that passed `check_slug`, calls `guide_ops` (which takes the guide slot and
+//! the guide lock), and redirects with checked values and one fixed notice code.
 
 use super::{
-    day, escape, guide_running, hidden, icon, markdown, memory_root, pill, prefixes, project_url,
-    short_sha, spinner, Model, Project,
+    back, day, escape, guide_running, hidden, icon, known_alias, markdown, memory_root, pill,
+    prefixes, project_url, short_sha, spinner, Back, Model, Notice, Project,
 };
-use crate::ui::routes::UiCtx;
-use loopx_core::guide_ops;
+use crate::ui::routes::{UiCtx, UiResponse};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use loopx_core::guide_ops::{self, MAX_PART_BYTES};
 use loopx_core::guide_plan::{self, Plan};
 use loopx_core::project_guide::{self, check_slug, Kind, Page};
 use loopx_core::project_profile::{contains_secret, Origin, Status};
@@ -27,6 +33,11 @@ use std::path::Path;
 /// a slug that passed `check_slug`).
 pub(super) fn page_url(alias: &str, slug: &str) -> String {
     format!("{}&guide={slug}", project_url(alias, Some("guide")))
+}
+
+/// A page's history view: `alias` known, `slug` checked.
+fn history_url(alias: &str, slug: &str) -> String {
+    format!("{}&history={slug}", project_url(alias, Some("guide")))
 }
 
 /// The secret kind a page's stored text trips, if any: the whole rendered file, so a
@@ -194,32 +205,53 @@ pub(super) fn render(ctx: &UiCtx, p: &Project, _m: &Model) -> String {
             escape(&ctx.t("The guide folder could not be read."))
         );
     }
+    let query = ctx.query();
+    // `history=<slug>`: a checked slug of a page that exists, could not be read, or
+    // was deleted (has snapshots but no file). Anything else is "does not exist".
+    let history = query.first("history").map(|raw| {
+        g.pages
+            .iter()
+            .map(|x| x.slug.as_str())
+            .chain(g.unreadable.iter().map(String::as_str))
+            .chain(g.deleted.iter().map(String::as_str))
+            .find(|s| check_slug(raw).is_ok() && *s == raw)
+    });
+    let history_view = |slug: &str| {
+        let exists = g.pages.iter().any(|x| x.slug == slug) || g.unreadable.iter().any(|x| x == slug);
+        history_view(ctx, p, slug, exists, &root)
+    };
     if g.pages.is_empty() && g.unreadable.is_empty() && g.plan.is_none() {
-        return format!(
-            "{GUIDE_STYLE}{}{}",
-            empty_state(ctx, p),
-            deleted_card(ctx, p, &g.deleted)
-        );
+        let main = match history {
+            Some(Some(slug)) => history_view(slug),
+            Some(None) => muted_page(&ctx.t("This page does not exist.")),
+            None => empty_state(ctx, p),
+        };
+        return format!("{GUIDE_STYLE}{main}{}", deleted_card(ctx, p, &g.deleted));
     }
     let groups = rows(&p.alias, &root, &g);
     let first = groups.iter().flatten().find_map(Row::slug);
-    // The selected slug: a checked `guide` value naming a listed page, or the first page.
-    let query = ctx.query();
-    let raw = query.first("guide");
-    let selected = match raw {
-        None => first,
-        Some(raw) => groups
+    let listed = |raw: &str| {
+        groups
             .iter()
             .flatten()
             .filter_map(Row::slug)
-            .find(|s| check_slug(raw).is_ok() && *s == raw),
+            .find(|s| check_slug(raw).is_ok() && *s == raw)
+    };
+    // The selected slug: a checked `guide` value naming a listed page, or the first page.
+    let raw = query.first("guide");
+    let selected = match (history, raw) {
+        (Some(h), _) => h.and_then(listed),
+        (None, None) => first,
+        (None, Some(raw)) => listed(raw),
     };
     let shown = selected.and_then(|slug| g.pages.iter().find(|x| x.slug == slug));
-    let right = match (selected, shown) {
-        (None, _) if raw.is_some() => muted_page(&ctx.t("This page does not exist.")),
-        (None, _) => muted_page(&ctx.t("No page has been written yet.")),
-        (Some(_), Some(page)) => page_view(ctx, p, page, &g.pages),
-        (Some(_), None) => muted_page(&ctx.t("This page could not be read.")),
+    let right = match (history, selected, shown) {
+        (Some(Some(slug)), ..) => history_view(slug),
+        (Some(None), ..) => muted_page(&ctx.t("This page does not exist.")),
+        (None, None, _) if raw.is_some() => muted_page(&ctx.t("This page does not exist.")),
+        (None, None, _) => muted_page(&ctx.t("No page has been written yet.")),
+        (None, Some(_), Some(page)) => page_view(ctx, p, page, &g.pages, &root),
+        (None, Some(_), None) => muted_page(&ctx.t("This page could not be read.")),
     };
     format!(
         "{GUIDE_STYLE}{}<div class='gd-layout'>{}<div class='gd-main'>{right}</div></div>",
@@ -338,7 +370,22 @@ fn list_view(
         ctx.t("Features"),
         ctx.t("Not in the current plan"),
     ];
-    let mut out = String::new();
+    let drafts = groups
+        .iter()
+        .flatten()
+        .any(|r| matches!(r, Row::Page { page, .. } if page.status == Status::Draft));
+    let mut out = if drafts {
+        format!(
+            "<form method='post' action='/insights/memory/guide/approve-all' class='gd-approve-all'>{}{}\
+             <button class='mem-btn' type='submit'>{}{}</button></form>",
+            ctx.csrf_input(),
+            hidden("project", &p.alias),
+            icon("task_alt"),
+            escape(&ctx.t("Approve all drafts"))
+        )
+    } else {
+        String::new()
+    };
     for (name, rows) in names.iter().zip(groups.iter()) {
         if rows.is_empty() {
             continue;
@@ -431,10 +478,7 @@ fn deleted_list(ctx: &UiCtx, p: &Project, deleted: &[String]) -> String {
         .map(|s| {
             format!(
                 "<li><a href='{}'>{}<code>{}</code></a></li>",
-                escape(&format!(
-                    "{}&history={s}",
-                    project_url(&p.alias, Some("guide"))
-                )),
+                escape(&history_url(&p.alias, s)),
                 icon("history"),
                 escape(s)
             )
@@ -560,11 +604,13 @@ fn redacted_page(ctx: &UiCtx, kind: &str) -> String {
     )
 }
 
-fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
+fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page], root: &Path) -> String {
+    let secret = page_secret(page);
     let head = format!(
-        "<div class='gd-page-head'><h2>{}</h2>{}</div>",
+        "<div class='gd-page-head'><h2>{}</h2>{}</div>{}",
         escape(shown_title(page)),
-        status_pill(ctx, page.status)
+        status_pill(ctx, page.status),
+        page_tools(ctx, p, page, secret.is_none(), root)
     );
     let banner = if page.status == Status::Draft {
         format!(
@@ -575,9 +621,24 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
     } else {
         String::new()
     };
-    if let Some(kind) = page_secret(page) {
+    if let Some(kind) = secret {
+        // The parts can still be rewritten (that is how a secret is removed), but the
+        // editors start empty: no stored text of this page reaches the browser.
+        let fix: String = page
+            .kind
+            .parts()
+            .iter()
+            .filter(|(key, _)| page.parts.iter().any(|x| x.key == *key))
+            .map(|(key, heading)| {
+                format!(
+                    "<section class='gd-fix'><div class='gd-fix-head'><h3>{}</h3>{}</div></section>",
+                    escape(&part_heading(ctx, heading)),
+                    part_editor(ctx, p, page, key, heading, "")
+                )
+            })
+            .collect();
         return format!(
-            "<article class='card gd-page'>{head}{banner}{}</article>",
+            "<article class='card gd-page'>{head}{banner}{}{fix}</article>",
             redacted_page(ctx, &kind)
         );
     }
@@ -621,8 +682,9 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
                 String::new()
             };
             Some(format!(
-                "<section class='gd-part'><div class='gd-part-head'><h3>{}</h3>{tag}</div>{}</section>",
+                "<section class='gd-part'><div class='gd-part-head'><h3>{}</h3>{tag}{}</div>{}</section>",
                 escape(&part_heading(ctx, heading)),
+                part_editor(ctx, p, page, key, heading, &part.body),
                 part_body(ctx, &p.alias, &part.body, all)
             ))
         })
@@ -658,6 +720,294 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
         )
     };
     format!("<article class='card gd-page'>{head}{banner}{meta}{lede}{parts}{sources}</article>")
+}
+
+/// Under the page title: Approve (a draft whose text is shown), History, and Delete
+/// with its confirmation (only for a page the current plan does not name).
+fn page_tools(ctx: &UiCtx, p: &Project, page: &Page, readable: bool, root: &Path) -> String {
+    let fields = format!("{}{}", hidden("project", &p.alias), hidden("slug", &page.slug));
+    let approve = if readable && page.status == Status::Draft {
+        action_form(ctx, "/insights/memory/guide/approve", &fields, true, "check", &ctx.t("Approve"))
+    } else {
+        String::new()
+    };
+    let history = format!(
+        "<a class='mem-btn' href='{}'>{}{}</a>",
+        escape(&history_url(&p.alias, &page.slug)),
+        icon("history"),
+        escape(&ctx.t("History"))
+    );
+    let delete = if guide_ops::in_plan(&p.alias, &page.slug, Some(root)) {
+        String::new()
+    } else {
+        format!(
+            "<details class='gd-delete'><summary class='mem-btn'>{}{}</summary>\
+             <div class='gd-confirm'><p>{}</p>\
+             <form method='post' action='/insights/memory/guide/delete' class='mem-inline'>{}{fields}\
+             <button class='mem-btn gd-btn-danger' type='submit'>{}{}</button></form></div></details>",
+            icon("delete"),
+            escape(&ctx.t("Delete page")),
+            escape(&ctx.t("Delete this page? The current plan no longer names it. A copy stays under Deleted pages, so you can restore it.")),
+            ctx.csrf_input(),
+            icon("delete"),
+            escape(&ctx.t("Delete"))
+        )
+    };
+    format!("<div class='gd-tools'>{approve}{history}{delete}</div>")
+}
+
+/// One part's editor: one form, one Save. `text` prefills it (empty for a page whose
+/// text is hidden). `key` and `heading` come from `Kind::parts()`.
+fn part_editor(ctx: &UiCtx, p: &Project, page: &Page, key: &str, heading: &str, text: &str) -> String {
+    let id = format!(
+        "gd-body-{}-{}-{key}",
+        p.alias.bytes().filter(u8::is_ascii_alphanumeric).map(char::from).collect::<String>(),
+        page.slug
+    );
+    let note = if page.status == Status::Approved {
+        format!(
+            "<p class='gd-editor-note'>{}{}</p>",
+            icon("visibility"),
+            escape(&ctx.t("This page is approved, so agents see your change immediately."))
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<details class='gd-edit'><summary class='mem-btn'>{}{}</summary>\
+         <form method='post' action='/insights/memory/guide/edit' class='gd-editor'>{}{}{}{}{note}\
+         <label class='gd-label' for='{id}'>{}</label>\
+         <textarea class='gd-textarea' id='{id}' name='body' maxlength='{MAX_PART_BYTES}' required>{}</textarea>\
+         <div class='gd-editor-foot'><p class='mem-muted'>{}</p>\
+         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></div></form></details>",
+        icon("edit"),
+        escape(&ctx.t("Edit")),
+        ctx.csrf_input(),
+        hidden("project", &p.alias),
+        hidden("slug", &page.slug),
+        hidden("part", key),
+        escape(&part_heading(ctx, heading)),
+        escape(text),
+        escape(&ctx.t("Saving marks this part as written by a person; rebuilds keep it.")),
+        icon("save"),
+        escape(&ctx.t("Save"))
+    )
+}
+
+/// The time in a snapshot file name `<slug>.<%Y%m%dT%H%M%S%9fZ>.md`.
+fn snapshot_time(slug: &str, name: &str) -> Option<DateTime<Utc>> {
+    let ts = name.strip_prefix(slug)?.strip_prefix('.')?.strip_suffix(".md")?;
+    NaiveDateTime::parse_from_str(ts, "%Y%m%dT%H%M%S%9fZ")
+        .ok()
+        .map(|t| t.and_utc())
+}
+
+/// A page's snapshots, newest first: (bare file name, time). Only names that parse
+/// as a snapshot of `slug`; the names are what a Restore form may post back.
+fn snapshots(alias: &str, slug: &str, root: &Path) -> Vec<(String, DateTime<Utc>)> {
+    project_guide::history(alias, slug, Some(root))
+        .iter()
+        .filter_map(|path| {
+            let name = path.file_name()?.to_str()?;
+            Some((name.to_string(), snapshot_time(slug, name)?))
+        })
+        .collect()
+}
+
+/// The history of `slug` (checked; a page, an unreadable page or a deleted one): one
+/// row per snapshot with its time and a Restore button. No page text at all.
+fn history_view(ctx: &UiCtx, p: &Project, slug: &str, exists: bool, root: &Path) -> String {
+    let (back_url, back_label) = if exists {
+        (page_url(&p.alias, slug), ctx.t("Back to the page"))
+    } else {
+        (project_url(&p.alias, Some("guide")), ctx.t("Back to the guide"))
+    };
+    let list = snapshots(&p.alias, slug, root);
+    let rows = if list.is_empty() {
+        format!(
+            "<p class='mem-muted'>{}</p>",
+            escape(&ctx.t("No earlier versions of this page are kept."))
+        )
+    } else {
+        let fields = format!("{}{}", hidden("project", &p.alias), hidden("slug", slug));
+        let items: String = list
+            .iter()
+            .map(|(name, at)| {
+                format!(
+                    "<li><time class='gd-history-time' datetime='{}'>{}</time>\
+                     <form method='post' action='/insights/memory/guide/restore' class='mem-inline'>{}{fields}{}\
+                     <button class='mem-btn' type='submit'>{}{}</button></form></li>",
+                    at.to_rfc3339(),
+                    at.format("%Y-%m-%d %H:%M:%S UTC"),
+                    ctx.csrf_input(),
+                    hidden("snapshot", name),
+                    icon("history"),
+                    escape(&ctx.t("Restore"))
+                )
+            })
+            .collect();
+        format!("<ol class='gd-history'>{items}</ol>")
+    };
+    format!(
+        "<article class='card gd-page gd-history-view'>\
+         <div class='gd-history-head'><div class='gd-page-head'><h2>{}</h2><code class='gd-slug'>{}</code></div>\
+         <a class='mem-btn' href='{}'>{}{}</a></div>\
+         <p class='mem-muted mem-hint'>{}</p>{rows}</article>",
+        escape(&ctx.t("Page history")),
+        escape(slug),
+        escape(&back_url),
+        icon("arrow_back"),
+        escape(&back_label),
+        escape(&ctx.t("Restoring makes that version the current page. The version it replaces is kept here too, so a restore can be undone."))
+    )
+}
+
+// ------------------------------------------------------------------ page actions
+
+/// The form's `slug` when it passes `check_slug` (never the raw value otherwise).
+fn form_slug(raw: Option<&str>) -> Option<(String, Kind)> {
+    let raw = raw?;
+    check_slug(raw).ok().map(|kind| (raw.to_string(), kind))
+}
+
+/// What a refused `guide_ops` call tells the page. Core errors are content-free
+/// sentences; only their fixed wording is matched, never shown.
+fn op_notice(err: &str) -> Notice {
+    if err.contains("is in progress") {
+        Notice::GuideBusy
+    } else if err == "the page is in the current plan" {
+        Notice::GuideInPlan
+    } else if err.contains("looks like a secret") {
+        Notice::Secret
+    } else if err.contains("does not exist") || err.starts_with("no such snapshot") {
+        Notice::BadInput
+    } else {
+        Notice::GuideFailed
+    }
+}
+
+/// The checked alias and slug of a page-action form, or the redirect that refuses it:
+/// an unknown project goes to the overview, a bad slug to the project's guide.
+fn page_form(ctx: &UiCtx) -> Result<(String, String, Kind), UiResponse> {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return Err(back(Back::Overview, Notice::BadInput));
+    };
+    match form_slug(form.first("slug")) {
+        Some((slug, kind)) => Ok((alias, slug, kind)),
+        None => Err(back(Back::Project(&alias, Some("guide")), Notice::BadInput)),
+    }
+}
+
+pub(super) fn approve_route(ctx: &UiCtx) -> UiResponse {
+    let (alias, slug, _) = match page_form(ctx) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let root = memory_root(ctx);
+    let notice = match guide_ops::approve_page(&alias, &slug, ctx.state.now(), Some(&root)) {
+        Ok(_) => Notice::GuideApproved,
+        Err(e) => op_notice(&e),
+    };
+    back(Back::GuidePage(&alias, &slug), notice)
+}
+
+/// Approve every draft. The count goes back as a number; a page that could not be
+/// approved turns the notice into a failure (the rest are approved all the same).
+pub(super) fn approve_all_route(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = Back::Project(&alias, Some("guide"));
+    match guide_ops::approve_all(&alias, ctx.state.now(), Some(&memory_root(ctx))) {
+        Ok(r) if r.failed.is_empty() => UiResponse::redirect(
+            303,
+            &format!(
+                "{}&approved={}&notice={}",
+                project_url(&alias, Some("guide")),
+                r.approved,
+                Notice::GuideAllApproved.code()
+            ),
+        ),
+        Ok(_) => back(to, Notice::GuideFailed),
+        Err(e) => back(to, op_notice(&e)),
+    }
+}
+
+/// Rewrite one part. Checked here before the core sees it (so the notice is exact):
+/// the part is one of the page kind's, the text is not empty, at most 64 KB and holds
+/// no secret. The text is never echoed back.
+pub(super) fn edit_route(ctx: &UiCtx) -> UiResponse {
+    let (alias, slug, kind) = match page_form(ctx) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let to = || Back::GuidePage(&alias, &slug);
+    let form = ctx.form();
+    let Some(key) = form
+        .first("part")
+        .and_then(|raw| kind.parts().iter().map(|(k, _)| *k).find(|k| *k == raw))
+    else {
+        return back(to(), Notice::BadInput);
+    };
+    let body = form.first("body").unwrap_or("");
+    if body.len() > 4 * MAX_PART_BYTES {
+        return back(to(), Notice::TooLong);
+    }
+    let text = body.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text.trim();
+    if text.is_empty() {
+        return back(to(), Notice::BadInput);
+    }
+    if text.len() > MAX_PART_BYTES {
+        return back(to(), Notice::TooLong);
+    }
+    if contains_secret(text).is_some() {
+        return back(to(), Notice::Secret);
+    }
+    let root = memory_root(ctx);
+    let notice = match guide_ops::edit_part(&alias, &slug, key, text, ctx.state.now(), Some(&root)) {
+        Ok(()) => Notice::GuideEdited,
+        Err(e) => op_notice(&e),
+    };
+    back(to(), notice)
+}
+
+/// Delete a page the plan does not name (the core refuses one it does, and keeps a
+/// snapshot of what it removes). Back to the guide, or to the page when refused.
+pub(super) fn delete_route(ctx: &UiCtx) -> UiResponse {
+    let (alias, slug, _) = match page_form(ctx) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match guide_ops::delete_page(&alias, &slug, Some(&memory_root(ctx))) {
+        Ok(()) => back(Back::Project(&alias, Some("guide")), Notice::GuideDeleted),
+        Err(e) => back(Back::GuidePage(&alias, &slug), op_notice(&e)),
+    }
+}
+
+/// Restore a snapshot. The posted name is only used to pick one of the names this
+/// page's history lists; the core gets that listed name, never the form value.
+pub(super) fn restore_route(ctx: &UiCtx) -> UiResponse {
+    let (alias, slug, _) = match page_form(ctx) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let to = || Back::GuidePage(&alias, &slug);
+    let root = memory_root(ctx);
+    let form = ctx.form();
+    let Some((name, _)) = form
+        .first("snapshot")
+        .and_then(|raw| snapshots(&alias, &slug, &root).into_iter().find(|(n, _)| n == raw))
+    else {
+        return back(to(), Notice::BadInput);
+    };
+    let notice = match guide_ops::restore(&alias, &slug, &name, ctx.state.now(), Some(&root)) {
+        Ok(()) => Notice::GuideRestored,
+        Err(e) => op_notice(&e),
+    };
+    back(to(), notice)
 }
 
 const GUIDE_STYLE: &str = "<style>
@@ -702,6 +1052,38 @@ a.gd-row:focus-visible{outline:2px solid var(--md-primary);outline-offset:1px}
 .gd-actions .mem-hint{flex:1 1 16rem;min-width:0;margin:0}
 .gd-actions-buttons{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-left:auto}
 .gd-actions form{margin:0}
+.gd-tools{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.15rem 0 .75rem}
+.gd-tools form{margin:0}
+.gd-delete{min-width:0}
+.gd-delete[open]{flex:1 1 100%}
+.gd-delete[open]>summary,.gd-edit[open]>summary{background:var(--md-surface-container-high)}
+.gd-confirm{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.6rem 1rem;margin-top:.6rem;padding:.8rem 1rem;box-sizing:border-box;border:1px solid color-mix(in srgb,var(--md-error) 35%,transparent);border-radius:12px;background:color-mix(in srgb,var(--md-error-container) 45%,transparent)}
+.gd-confirm p{flex:1 1 16rem;min-width:0;margin:0;font-size:.85rem;line-height:1.45;color:var(--md-on-surface)}
+.gd-confirm form{margin:0}
+.mem-btn.gd-btn-danger{background:var(--md-error);border-color:var(--md-error);color:var(--md-on-error)}
+.mem-btn.gd-btn-danger:hover{background:var(--md-error);filter:brightness(1.08)}
+.gd-approve-all{margin:.15rem .2rem .4rem}
+.gd-approve-all .mem-btn{width:100%;justify-content:center}
+.gd-edit{margin-left:auto;min-width:0}
+.gd-edit[open]{flex:1 1 100%;margin-left:0}
+.gd-editor{display:flex;flex-direction:column;gap:.5rem;margin:.6rem 0 .4rem;padding:1rem;box-sizing:border-box;border:1px solid color-mix(in srgb,var(--md-outline) 30%,transparent);border-radius:14px;background:transparent}
+.gd-editor-note{display:flex;align-items:center;gap:.45rem;margin:0;padding:.5rem .75rem;border-radius:10px;background:var(--md-primary-container);color:var(--md-on-primary-container);font-size:.82rem;line-height:1.4}
+.gd-editor-note .icon{width:15px;height:15px;flex:0 0 15px}
+.gd-label{font-size:.78rem;font-weight:600;color:var(--md-on-surface-variant)}
+.gd-textarea{display:block;width:100%;height:220px;min-height:120px;box-sizing:border-box;flex:none;margin:0;padding:.6rem .75rem;border:1px solid color-mix(in srgb,var(--md-outline) 45%,transparent);border-radius:10px;background:var(--md-surface-container-lowest);color:var(--md-on-surface);font:.84rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+.gd-textarea:focus{outline:2px solid var(--md-primary);outline-offset:0;border-color:transparent}
+.gd-editor-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.6rem 1rem}
+.gd-editor-foot p{flex:1 1 220px;min-width:0;margin:0;font-size:.82rem}
+.gd-fix{padding:.85rem 0 .25rem;border-top:1px solid var(--md-outline-variant)}
+.gd-fix-head{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+.gd-fix-head h3{margin:0;font-size:1rem}
+.gd-history-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.6rem 1rem;margin-bottom:.35rem}
+.gd-history-head .gd-page-head{margin:0}
+.gd-slug{font:.82rem ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--md-on-surface-variant)}
+.gd-history{list-style:none;margin:.6rem 0 0;padding:0}
+.gd-history li{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem;min-height:48px;box-sizing:border-box;padding:.4rem 0;border-top:1px solid var(--md-outline-variant)}
+.gd-history-time{font-size:.9rem;font-variant-numeric:tabular-nums}
+.gd-history form{margin:0}
 @media (prefers-reduced-motion:no-preference){
 .gd-row,.gd-deleted a{transition:background-color .25s cubic-bezier(0.32,0.72,0,1),color .25s cubic-bezier(0.32,0.72,0,1)}
 }
