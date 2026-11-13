@@ -2151,5 +2151,9 @@
   "Page deleted. A copy is kept under Deleted pages, where you can restore it.": "Page supprimée. Une copie est conservée dans Pages supprimées, d’où vous pouvez la restaurer.",
   "Page restored from its history. The version it replaced is kept in the history too.": "Page restaurée depuis son historique. La version remplacée est aussi conservée dans l’historique.",
   "This page is in the current plan, so it was not deleted. A rebuild would write it again.": "Cette page fait partie du plan actuel : elle n’a pas été supprimée. Une reconstruction la réécrirait.",
-  "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.": "Le guide n’a pas pu être modifié : un fichier de page n’a pas pu être lu ou enregistré. Rechargez la page et réessayez."
+  "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.": "Le guide n’a pas pu être modifié : un fichier de page n’a pas pu être lu ou enregistré. Rechargez la page et réessayez.",
+  "Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again.": "Rien n’a été enregistré : une partie peut contenir au plus 20 000 caractères. Raccourcissez-la et enregistrez à nouveau.",
+  "Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it.": "Rien n’a été enregistré : une autre partie de cette page semble contenir une valeur secrète. Retirez-la du fichier de la page, ou supprimez la page et reconstruisez-la.",
+  "A build is running, so this page cannot be changed right now.": "Une construction est en cours : cette page ne peut pas être modifiée pour le moment.",
+  "Approved {n} pages; some pages could not be read or saved.": "{n} pages approuvées ; certaines pages n’ont pas pu être lues ou enregistrées."
 }

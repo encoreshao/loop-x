@@ -1047,4 +1047,59 @@ mod tests {
         assert_eq!(features_body(alias, r), both_approved);
         assert!(project_profile::load(alias, Some(r)).unwrap().is_some());
     }
+
+    /// The dashboard maps these errors to its notices by their wording
+    /// (`memory/guide.rs`, `op_notice`). Each one is triggered for real here, so
+    /// changing a sentence fails this test instead of silently turning a notice
+    /// into a generic failure.
+    #[test]
+    fn the_error_wording_the_dashboard_maps_on_is_stable() {
+        let alias = "ops-wording";
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        save_plan(alias, r, false);
+        save(&page(alias, "feature-a", Status::Draft), r);
+        save(&page(alias, "feature-zzz", Status::Draft), r);
+
+        let guard = crate::guide_build::try_acquire(alias).unwrap();
+        let busy = edit_part(alias, "feature-a", "what", "New.", later(), Some(r)).unwrap_err();
+        assert!(busy.contains("is in progress"), "{busy}");
+        assert!(approve_all(alias, later(), Some(r))
+            .unwrap_err()
+            .contains("is in progress"));
+        drop(guard);
+
+        assert_eq!(
+            delete_page(alias, "feature-a", Some(r)).unwrap_err(),
+            "the page is in the current plan"
+        );
+        let secret = edit_part(
+            alias,
+            "feature-a",
+            "what",
+            "token glpat-AAAAAAAAAAAAAAAAAAAA here",
+            later(),
+            Some(r),
+        )
+        .unwrap_err();
+        assert!(secret.contains("looks like a secret"), "{secret}");
+        for e in [
+            approve_page(alias, "feature-nope", later(), Some(r)).unwrap_err(),
+            edit_part(alias, "feature-nope", "what", "x", later(), Some(r)).unwrap_err(),
+            delete_page(alias, "feature-nope", Some(r)).unwrap_err(),
+        ] {
+            assert!(e.contains("does not exist"), "{e}");
+        }
+        let unknown = restore(
+            alias,
+            "feature-a",
+            "feature-a.20260101T000000000000000Z.md",
+            later(),
+            Some(r),
+        )
+        .unwrap_err();
+        assert!(unknown.starts_with("no such snapshot"), "{unknown}");
+        let path = restore(alias, "feature-a", "../x.md", later(), Some(r)).unwrap_err();
+        assert!(path.starts_with("no such snapshot"), "{path}");
+    }
 }

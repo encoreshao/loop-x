@@ -2151,5 +2151,9 @@
   "Page deleted. A copy is kept under Deleted pages, where you can restore it.": "ページを削除しました。コピーは「削除されたページ」に残り、そこから復元できます。",
   "Page restored from its history. The version it replaced is kept in the history too.": "履歴からページを復元しました。置き換えられたバージョンも履歴に残ります。",
   "This page is in the current plan, so it was not deleted. A rebuild would write it again.": "このページは現在の計画に含まれているため、削除しませんでした。再構築すると再び書かれます。",
-  "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.": "ガイドを変更できませんでした：ページファイルを読み込めないか保存できませんでした。ページを再読み込みして、もう一度お試しください。"
+  "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.": "ガイドを変更できませんでした：ページファイルを読み込めないか保存できませんでした。ページを再読み込みして、もう一度お試しください。",
+  "Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again.": "保存されませんでした：1つの部分には最大20,000文字まで入力できます。短くしてからもう一度保存してください。",
+  "Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it.": "保存されませんでした：このページの別の部分に秘密の値が含まれているようです。ページファイルから取り除くか、ページを削除して再構築してください。",
+  "A build is running, so this page cannot be changed right now.": "ビルドの実行中のため、このページは今は変更できません。",
+  "Approved {n} pages; some pages could not be read or saved.": "{n} ページを承認しました。一部のページは読み込みまたは保存できませんでした。"
 }

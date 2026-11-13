@@ -23,6 +23,11 @@ use super::{
 use crate::ui::routes::{UiCtx, UiResponse};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use loopx_core::guide_ops::{self, MAX_PART_BYTES};
+
+/// The most a part edited here may hold, in characters (UTF-16 units, what the
+/// textarea's `maxlength` counts). At 3 UTF-8 bytes per unit at most, any text the
+/// browser accepts stays under the core's 64 KB byte limit, which remains the backstop.
+const MAX_PART_CHARS: usize = 20_000;
 use loopx_core::guide_plan::{self, Plan};
 use loopx_core::project_guide::{self, check_slug, Kind, Page};
 use loopx_core::project_profile::{contains_secret, Origin, Status};
@@ -606,6 +611,8 @@ fn redacted_page(ctx: &UiCtx, kind: &str) -> String {
 
 fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page], root: &Path) -> String {
     let secret = page_secret(page);
+    // A build holds the guide slot, so a Save would only be refused: show it disabled.
+    let running = guide_running(ctx, &p.alias);
     let head = format!(
         "<div class='gd-page-head'><h2>{}</h2>{}</div>{}",
         escape(shown_title(page)),
@@ -633,7 +640,7 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page], root: &Path) -
                 format!(
                     "<section class='gd-fix'><div class='gd-fix-head'><h3>{}</h3>{}</div></section>",
                     escape(&part_heading(ctx, heading)),
-                    part_editor(ctx, p, page, key, heading, "")
+                    part_editor(ctx, p, page, key, heading, "", running)
                 )
             })
             .collect();
@@ -684,7 +691,7 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page], root: &Path) -
             Some(format!(
                 "<section class='gd-part'><div class='gd-part-head'><h3>{}</h3>{tag}{}</div>{}</section>",
                 escape(&part_heading(ctx, heading)),
-                part_editor(ctx, p, page, key, heading, &part.body),
+                part_editor(ctx, p, page, key, heading, &part.body, running),
                 part_body(ctx, &p.alias, &part.body, all)
             ))
         })
@@ -757,8 +764,9 @@ fn page_tools(ctx: &UiCtx, p: &Project, page: &Page, readable: bool, root: &Path
 }
 
 /// One part's editor: one form, one Save. `text` prefills it (empty for a page whose
-/// text is hidden). `key` and `heading` come from `Kind::parts()`.
-fn part_editor(ctx: &UiCtx, p: &Project, page: &Page, key: &str, heading: &str, text: &str) -> String {
+/// text is hidden). `key` and `heading` come from `Kind::parts()`. While a guide run
+/// works on the project (`running`), Save is disabled and a note says why.
+fn part_editor(ctx: &UiCtx, p: &Project, page: &Page, key: &str, heading: &str, text: &str, running: bool) -> String {
     let id = format!(
         "gd-body-{}-{}-{key}",
         p.alias.bytes().filter(u8::is_ascii_alphanumeric).map(char::from).collect::<String>(),
@@ -773,13 +781,25 @@ fn part_editor(ctx: &UiCtx, p: &Project, page: &Page, key: &str, heading: &str, 
     } else {
         String::new()
     };
+    let (busy_note, disabled) = if running {
+        (
+            format!(
+                "<p class='gd-editor-note gd-editor-busy' role='note'>{}{}</p>",
+                icon("schedule"),
+                escape(&ctx.t("A build is running, so this page cannot be changed right now."))
+            ),
+            " disabled aria-disabled='true'",
+        )
+    } else {
+        (String::new(), "")
+    };
     format!(
         "<details class='gd-edit'><summary class='mem-btn'>{}{}</summary>\
-         <form method='post' action='/insights/memory/guide/edit' class='gd-editor'>{}{}{}{}{note}\
+         <form method='post' action='/insights/memory/guide/edit' class='gd-editor'>{}{}{}{}{note}{busy_note}\
          <label class='gd-label' for='{id}'>{}</label>\
-         <textarea class='gd-textarea' id='{id}' name='body' maxlength='{MAX_PART_BYTES}' required>{}</textarea>\
+         <textarea class='gd-textarea' id='{id}' name='body' maxlength='{MAX_PART_CHARS}' required>{}</textarea>\
          <div class='gd-editor-foot'><p class='mem-muted'>{}</p>\
-         <button class='mem-btn mem-btn-primary' type='submit'>{}{}</button></div></form></details>",
+         <button class='mem-btn mem-btn-primary' type='submit'{disabled}>{}{}</button></div></form></details>",
         icon("edit"),
         escape(&ctx.t("Edit")),
         ctx.csrf_input(),
@@ -930,14 +950,24 @@ pub(super) fn approve_all_route(ctx: &UiCtx) -> UiResponse {
                 Notice::GuideAllApproved.code()
             ),
         ),
-        Ok(_) => back(to, Notice::GuideFailed),
+        // The rest were approved all the same: say how many, with the failure.
+        Ok(r) => UiResponse::redirect(
+            303,
+            &format!(
+                "{}&approved={}&notice={}",
+                project_url(&alias, Some("guide")),
+                r.approved,
+                Notice::GuideFailed.code()
+            ),
+        ),
         Err(e) => back(to, op_notice(&e)),
     }
 }
 
 /// Rewrite one part. Checked here before the core sees it (so the notice is exact):
-/// the part is one of the page kind's, the text is not empty, at most 64 KB and holds
-/// no secret. The text is never echoed back.
+/// the part is one of the page kind's, the text is not empty, at most
+/// [`MAX_PART_CHARS`] characters (and 64 KB) and holds no secret. A secret the core
+/// still finds is then elsewhere on the page. The text is never echoed back.
 pub(super) fn edit_route(ctx: &UiCtx) -> UiResponse {
     let (alias, slug, kind) = match page_form(ctx) {
         Ok(v) => v,
@@ -953,15 +983,15 @@ pub(super) fn edit_route(ctx: &UiCtx) -> UiResponse {
     };
     let body = form.first("body").unwrap_or("");
     if body.len() > 4 * MAX_PART_BYTES {
-        return back(to(), Notice::TooLong);
+        return back(to(), Notice::GuideTooLong);
     }
     let text = body.replace("\r\n", "\n").replace('\r', "\n");
     let text = text.trim();
     if text.is_empty() {
         return back(to(), Notice::BadInput);
     }
-    if text.len() > MAX_PART_BYTES {
-        return back(to(), Notice::TooLong);
+    if text.encode_utf16().count() > MAX_PART_CHARS || text.len() > MAX_PART_BYTES {
+        return back(to(), Notice::GuideTooLong);
     }
     if contains_secret(text).is_some() {
         return back(to(), Notice::Secret);
@@ -969,7 +999,11 @@ pub(super) fn edit_route(ctx: &UiCtx) -> UiResponse {
     let root = memory_root(ctx);
     let notice = match guide_ops::edit_part(&alias, &slug, key, text, ctx.state.now(), Some(&root)) {
         Ok(()) => Notice::GuideEdited,
-        Err(e) => op_notice(&e),
+        Err(e) => match op_notice(&e) {
+            // The text was checked above, so the secret is in the stored page.
+            Notice::Secret => Notice::GuideSecretElsewhere,
+            n => n,
+        },
     };
     back(to(), notice)
 }
@@ -1069,6 +1103,7 @@ a.gd-row:focus-visible{outline:2px solid var(--md-primary);outline-offset:1px}
 .gd-editor{display:flex;flex-direction:column;gap:.5rem;margin:.6rem 0 .4rem;padding:1rem;box-sizing:border-box;border:1px solid color-mix(in srgb,var(--md-outline) 30%,transparent);border-radius:14px;background:transparent}
 .gd-editor-note{display:flex;align-items:center;gap:.45rem;margin:0;padding:.5rem .75rem;border-radius:10px;background:var(--md-primary-container);color:var(--md-on-primary-container);font-size:.82rem;line-height:1.4}
 .gd-editor-note .icon{width:15px;height:15px;flex:0 0 15px}
+.gd-editor-busy{background:var(--md-surface-container-highest);color:var(--md-on-surface-variant)}
 .gd-label{font-size:.78rem;font-weight:600;color:var(--md-on-surface-variant)}
 .gd-textarea{display:block;width:100%;height:220px;min-height:120px;box-sizing:border-box;flex:none;margin:0;padding:.6rem .75rem;border:1px solid color-mix(in srgb,var(--md-outline) 45%,transparent);border-radius:10px;background:var(--md-surface-container-lowest);color:var(--md-on-surface);font:.84rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
 .gd-textarea:focus{outline:2px solid var(--md-primary);outline-offset:0;border-color:transparent}

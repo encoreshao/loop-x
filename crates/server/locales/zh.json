@@ -2151,5 +2151,9 @@
   "Page deleted. A copy is kept under Deleted pages, where you can restore it.": "页面已删除。副本保留在“已删除的页面”中，可从那里恢复。",
   "Page restored from its history. The version it replaced is kept in the history too.": "已从历史恢复页面。被替换的版本也保留在历史中。",
   "This page is in the current plan, so it was not deleted. A rebuild would write it again.": "此页面在当前计划中，因此未删除。重新构建会再次写入它。",
-  "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.": "无法修改指南：页面文件无法读取或保存。请重新加载页面后再试。"
+  "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.": "无法修改指南：页面文件无法读取或保存。请重新加载页面后再试。",
+  "Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again.": "未保存：每个部分最多可容纳 20,000 个字符。请缩短后再保存。",
+  "Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it.": "未保存：此页面的另一部分似乎包含机密值。请从页面文件中删除它，或删除此页面后重新构建。",
+  "A build is running, so this page cannot be changed right now.": "正在构建，因此暂时无法修改此页面。",
+  "Approved {n} pages; some pages could not be read or saved.": "已批准 {n} 个页面；部分页面无法读取或保存。"
 }

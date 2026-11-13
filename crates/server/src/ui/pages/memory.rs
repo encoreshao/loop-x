@@ -2288,9 +2288,11 @@ enum Notice {
     GuideRestored,
     GuideInPlan,
     GuideFailed,
+    GuideTooLong,
+    GuideSecretElsewhere,
 }
 
-const NOTICES: [(Notice, &str); 47] = [
+const NOTICES: [(Notice, &str); 49] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2338,6 +2340,8 @@ const NOTICES: [(Notice, &str); 47] = [
     (Notice::GuideRestored, "guide-restored"),
     (Notice::GuideInPlan, "guide-in-plan"),
     (Notice::GuideFailed, "guide-failed"),
+    (Notice::GuideTooLong, "guide-too-long"),
+    (Notice::GuideSecretElsewhere, "guide-secret-elsewhere"),
 ];
 
 impl Notice {
@@ -2426,9 +2430,7 @@ impl Notice {
             Notice::GuideBuildStarted => ctx.t("Building the guide in the background. It takes a few minutes; this page updates by itself."),
             Notice::GuideBusy => ctx.t("A guide build for this project is already running. Try again when it finishes."),
             Notice::GuideApproved => ctx.t("Page approved. Agents now read it."),
-            // The count is the only other value a redirect carries: a number the route
-            // computed, read back as a number (anything else shows the plain message).
-            Notice::GuideAllApproved => match ctx.query().first("approved").and_then(|n| n.parse::<usize>().ok()) {
+            Notice::GuideAllApproved => match approved_count(ctx) {
                 Some(n) => ctx.tf("Draft pages approved: {n}. Agents now read them.", &[("n", &n.to_string())]),
                 None => ctx.t("Every draft page was approved."),
             },
@@ -2436,9 +2438,25 @@ impl Notice {
             Notice::GuideDeleted => ctx.t("Page deleted. A copy is kept under Deleted pages, where you can restore it."),
             Notice::GuideRestored => ctx.t("Page restored from its history. The version it replaced is kept in the history too."),
             Notice::GuideInPlan => ctx.t("This page is in the current plan, so it was not deleted. A rebuild would write it again."),
-            Notice::GuideFailed => ctx.t("The guide could not be changed: a page file could not be read or saved. Reload the page and try again."),
+            Notice::GuideFailed => match approved_count(ctx) {
+                Some(n) => ctx.tf("Approved {n} pages; some pages could not be read or saved.", &[("n", &n.to_string())]),
+                None => ctx.t("The guide could not be changed: a page file could not be read or saved. Reload the page and try again."),
+            },
+            Notice::GuideTooLong => ctx.t("Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again."),
+            Notice::GuideSecretElsewhere => ctx.t("Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it."),
         }
     }
+}
+
+/// Approve all's count: the only value besides the notice code an approve-all
+/// redirect carries. Read back only as a plain number up to 1000 (more pages than a
+/// guide ever has); anything else gives `None` and the notice's plain wording.
+fn approved_count(ctx: &UiCtx) -> Option<usize> {
+    ctx.query()
+        .first("approved")
+        .filter(|v| !v.is_empty() && v.len() <= 4 && v.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n <= 1000)
 }
 
 /// The banner for the request's `notice` code; unknown codes show nothing.
@@ -7339,7 +7357,7 @@ mod tests {
             assert_eq!((editor.matches("<form").count(), editor.matches("type='submit'").count()), (1, 1), "{editor}");
         }
         assert!(main.contains("name='part' value='what'") && main.contains("name='part' value='how'"), "{main}");
-        assert!(main.contains("name='body' maxlength='65536'"), "{main}");
+        assert!(main.contains("name='body' maxlength='20000'"), "{main}");
         // Prefilled with the stored text, escaped.
         assert_eq!(textareas(main), vec!["Old &lt;b&gt;text&lt;/b&gt;.", "Queues."]);
         assert!(main.contains("This page is approved, so agents see your change immediately."), "{main}");
@@ -7382,7 +7400,7 @@ mod tests {
             ("nope", "Fine.".to_string(), "bad-input"),
             // A part of another kind of page.
             ("overview", "Fine.".to_string(), "bad-input"),
-            ("what", big, "too-long"),
+            ("what", big, "guide-too-long"),
         ] {
             let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part={part}&body={body}"));
             assert_eq!(loc, page_back(alias, "feature-orders", notice), "{part} {notice}");
@@ -7534,7 +7552,7 @@ mod tests {
             (APPROVE, format!("project={alias}"), index.clone()),
             (EDIT, format!("project={alias}&slug=..%2Fx&part=what&body=Hi"), index.clone()),
             (EDIT, format!("project={alias}&slug=feature-orders&part=%3Cscript%3E&body=Hi"), on_page.clone()),
-            (EDIT, format!("project={alias}&slug=feature-orders&part=what&body={huge}"), page_back(alias, "feature-orders", "too-long")),
+            (EDIT, format!("project={alias}&slug=feature-orders&part=what&body={huge}"), page_back(alias, "feature-orders", "guide-too-long")),
             (DELETE, format!("project={alias}&slug=..%2F..%2Fx"), index.clone()),
             (RESTORE, format!("project={alias}&slug=feature-orders&snapshot=..%2F..%2Fx"), on_page.clone()),
             (RESTORE, format!("project={alias}&slug=feature-orders&snapshot=feature-orders.20260101T000000000000000Z.md"), on_page.clone()),
@@ -7635,5 +7653,108 @@ mod tests {
         }
         let html = get_fr(&sb, &format!("{}&approved=2&notice=guide-all-approved", guide_url(alias, None)));
         assert!(html.contains('2') && !html.contains("Draft pages approved"), "{html}");
+    }
+
+    #[test]
+    fn a_part_holds_up_to_20000_characters_like_its_textarea() {
+        let alias = "ga-limit";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Approved, &[("what", "Old text.", Origin::Agent)]);
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        // 3 UTF-8 bytes each: 20,001 of them fit in 64 KB, but not in the textarea.
+        let han = "%E6%BC%A2";
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body={}", han.repeat(20_001)));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-too-long"));
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        let html = sb.get(&loc);
+        assert!(html.contains("Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again."), "{html}");
+        assert!(!html.contains("Your text is still in the editor below"), "{html}");
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body={}", han.repeat(20_000)));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-edited"));
+        let what = &gd_load(&sb, alias, "feature-orders").unwrap().parts[0];
+        assert_eq!((what.body.chars().count(), what.body.len()), (20_000, 60_000));
+    }
+
+    #[test]
+    fn a_secret_elsewhere_on_the_page_is_not_blamed_on_the_edit() {
+        let alias = "ga-elsewhere";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(
+            &sb,
+            alias,
+            "feature-orders",
+            "Orders",
+            Status::Draft,
+            &[("what", "Plain words.", Origin::Agent), ("how", "Body text here.", Origin::Agent)],
+        );
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        hand_edit(&sb, alias, "Body text here.", &format!("Body text here {token}."));
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        // A clean text for another part: the page itself is what holds the secret.
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body=Clean."));
+        assert_eq!(loc, page_back(alias, "feature-orders", "guide-secret-elsewhere"));
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        let html = sb.get(&loc);
+        assert!(html.contains("Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it."), "{html}");
+        assert!(!html.contains("glpat"), "{html}");
+        // A text that itself holds a secret is still blamed on the text.
+        let loc = sb.post_to(EDIT, &format!("project={alias}&slug=feature-orders&part=what&body=Use+{token}"));
+        assert_eq!(loc, page_back(alias, "feature-orders", "secret"));
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    }
+
+    #[test]
+    fn the_editors_cannot_save_while_a_build_runs() {
+        let alias = "ga-running";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Approved, &[("what", "Old text.", Origin::Agent), ("how", "Queues.", Origin::Agent)]);
+        let note = "A build is running, so this page cannot be changed right now.";
+        let editors = |html: &str| -> Vec<String> {
+            gd_main(html)
+                .split("<details class='gd-edit'>")
+                .skip(1)
+                .map(|e| e[..e.find("</details>").unwrap()].to_string())
+                .collect()
+        };
+        let slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        let list = editors(&html);
+        assert_eq!(list.len(), 2, "{html}");
+        for e in &list {
+            assert!(e.contains("type='submit' disabled aria-disabled='true'"), "{e}");
+            assert!(e.contains(note), "{e}");
+        }
+        drop(slot);
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        for e in editors(&html) {
+            assert!(!e.contains("disabled") && !e.contains(note), "{e}");
+        }
+    }
+
+    #[test]
+    fn approve_all_keeps_the_count_when_a_page_cannot_be_approved() {
+        let alias = "ga-partial";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-a", "A", Status::Draft, &[("what", "Text.", Origin::Agent)]);
+        put_page(&sb, alias, "feature-b", "B", Status::Draft, &[("what", "Text.", Origin::Agent)]);
+        std::fs::write(gd_file(&sb, alias, "feature-x"), "not a page").unwrap();
+        let loc = sb.post_to(APPROVE_ALL, &format!("project={alias}"));
+        assert_eq!(loc, format!("/insights?view=memory&project={alias}&page=guide&approved=2&notice=guide-failed"));
+        for slug in ["feature-a", "feature-b"] {
+            assert_eq!(gd_load(&sb, alias, slug).unwrap().status, Status::Approved, "{slug}");
+        }
+        let html = sb.get(&loc);
+        assert!(html.contains("Approved 2 pages; some pages could not be read or saved."), "{html}");
+        // The count is read back only as a small number; anything else gets the plain text.
+        let generic = "The guide could not be changed: a page file could not be read or saved. Reload the page and try again.";
+        for bad in ["1001", "99999999999999999999", "abc", "%3Cscript%3E", "-1"] {
+            let html = sb.get(&format!("{}&approved={bad}&notice=guide-failed", guide_url(alias, None)));
+            assert!(html.contains(generic), "{bad}");
+            assert!(!html.contains("Approved 1001") && !html.contains("&lt;script&gt;") && !html.contains("abc pages"), "{bad}");
+        }
+        let html = sb.get(&format!("{}&approved=5000&notice=guide-all-approved", guide_url(alias, None)));
+        assert!(html.contains("Every draft page was approved."), "{html}");
     }
 }
