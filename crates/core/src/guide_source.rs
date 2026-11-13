@@ -137,7 +137,7 @@ fn table_start(line: &str) -> Option<String> {
 fn dropped_schema_line(line: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)^\s*(?:--|#|//|/\*|\*|create\s+(?:unique\s+)?index|insert\s+into|copy\s+|t\.index|add_index|set\s+|select\s+|comment\s+on)")
+        Regex::new(r"(?i)^\s*(?:--|#|//|/\*|\*|create\s+(?:unique\s+)?index|insert\s+into|t\.index|add_index|set\s+|select\s+|comment\s+on)")
             .expect("static regex")
     });
     line.trim().is_empty() || re.is_match(line)
@@ -151,23 +151,46 @@ pub fn reduce_schema(text: &str, max: usize) -> (String, Vec<String>) {
     let mut header = String::new();
     let mut blocks: Vec<(String, String)> = Vec::new();
     // Data is never structure: skip a COPY block through `\.` and an INSERT through its `;`.
-    let mut skip_until: Option<&str> = None;
+    // A new table start always ends a skip, so a malformed block cannot swallow later tables.
+    #[derive(PartialEq)]
+    enum Skip {
+        None,
+        Copy,
+        Insert,
+    }
+    static COPY_RE: OnceLock<Regex> = OnceLock::new();
+    static INSERT_RE: OnceLock<Regex> = OnceLock::new();
+    let copy_re = COPY_RE
+        .get_or_init(|| Regex::new(r"(?i)^\s*copy\s+\S+.*\bfrom\s+stdin\b").expect("static regex"));
+    let insert_re =
+        INSERT_RE.get_or_init(|| Regex::new(r"(?i)^\s*insert\s+into\b").expect("static regex"));
+    let ends_statement = |l: &str| {
+        let code = l.find("--").map_or(l, |i| &l[..i]);
+        code.trim_end().ends_with(';')
+    };
+    let mut skip = Skip::None;
     for line in text.lines() {
-        if let Some(end) = skip_until {
-            let t = line.trim_end();
-            if (end == "\\." && t == "\\.") || (end == ";" && t.ends_with(';')) {
-                skip_until = None;
+        if skip != Skip::None {
+            if table_start(line).is_some() {
+                skip = Skip::None;
+            } else {
+                let done = match skip {
+                    Skip::Copy => line.trim() == "\\.",
+                    _ => ends_statement(line),
+                };
+                if done {
+                    skip = Skip::None;
+                }
+                continue;
             }
+        }
+        if copy_re.is_match(line) {
+            skip = Skip::Copy;
             continue;
         }
-        let lower = line.trim_start().to_ascii_lowercase();
-        if lower.starts_with("copy ") {
-            skip_until = Some("\\.");
-            continue;
-        }
-        if lower.starts_with("insert into") {
-            if !line.trim_end().ends_with(';') {
-                skip_until = Some(";");
+        if insert_re.is_match(line) {
+            if !ends_statement(line) {
+                skip = Skip::Insert;
             }
             continue;
         }
@@ -548,5 +571,35 @@ mod tests {
             "{out}"
         );
         assert_eq!(left, ["b"]);
+    }
+
+    #[test]
+    fn a_column_named_copy_or_a_commented_insert_does_not_swallow_later_tables() {
+        let sql = "CREATE TABLE a (\n  id int,\n  copy text\n);\nCREATE TABLE b (\n  id int\n);\n";
+        let (out, left) = reduce_schema(sql, 10_000);
+        assert!(
+            out.contains("CREATE TABLE b") && out.contains("copy text"),
+            "{out}"
+        );
+        assert!(left.is_empty());
+        let sql = "CREATE TABLE a (\n  id int\n);\nINSERT INTO a VALUES (1,'x'); -- seed\nCREATE TABLE b (\n  id int\n);\n";
+        let (out, _) = reduce_schema(sql, 10_000);
+        assert!(
+            out.contains("CREATE TABLE b") && !out.contains("INSERT"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_unterminated_insert_or_copy_never_swallows_a_following_table() {
+        for head in [
+            "INSERT INTO a VALUES\n  (1, 'x@example.com')",
+            "COPY a (id) FROM stdin;\n1\tx@example.com",
+        ] {
+            let sql = format!("{head}\nCREATE TABLE b (\n  id int\n);\n");
+            let (out, _) = reduce_schema(&sql, 10_000);
+            assert!(out.contains("CREATE TABLE b"), "{out}");
+            assert!(!out.contains("example.com"), "{out}");
+        }
     }
 }
