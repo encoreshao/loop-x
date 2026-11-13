@@ -1958,6 +1958,8 @@
   "That request was not understood, so nothing was changed.": "リクエストを解釈できなかったため、何も変更されていません。",
   "Refreshing this section in the background. The update will wait under Proposals for your review.": "バックグラウンドでこのセクションを更新しています。更新内容は「提案」でレビューを待ちます。",
   "Proposal approved and applied to the profile.": "提案を承認し、プロフィールに反映しました。",
+  "Review the proposed change to the {slug} guide page of {project}": "{project} のガイドページ {slug} への変更案を確認",
+  "Proposal approved and applied to the guide page.": "提案を承認し、ガイドページに適用しました。",
   "Proposal dismissed. It is not raised again until its sources change.": "提案を却下しました。ソースが変わるまで再提案されません。",
   "This section changed since the proposal was raised, so it was not applied. Refresh the section to get a new proposal.": "提案後にこのセクションが変更されたため、反映されませんでした。セクションを更新して新しい提案を取得してください。",
   "That proposal was already decided.": "この提案はすでに決定済みです。",

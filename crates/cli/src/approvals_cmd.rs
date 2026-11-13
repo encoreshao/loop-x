@@ -2,7 +2,7 @@
 //! the dashboard server and the Mac app use).
 
 use chrono::Utc;
-use loopx_core::{approvals, profile_sync, pyjson};
+use loopx_core::{approvals, proposals, pyjson};
 use serde_json::Value;
 use std::process::ExitCode;
 
@@ -65,12 +65,12 @@ fn dispatch_in(
         }
         Some(cmd @ ("approve" | "deny")) => {
             let id = args.get(1).ok_or(USAGE)?;
-            // A profile proposal is applied when approved, and approved only
-            // while it still applies.
+            // A profile or guide page proposal is applied when approved, and
+            // approved only while it still applies.
             if cmd == "approve"
-                && approvals::get(dir, id).is_some_and(|a| a["kind"] == profile_sync::KIND)
+                && approvals::get(dir, id).is_some_and(|a| proposals::is_kind(&a["kind"]))
             {
-                return profile_sync::approve_and_apply(id, &by(args), memory_root, dir, now)
+                return proposals::approve_and_apply(id, &by(args), memory_root, dir, now)
                     .map(|a| pyjson::to_string_pretty(&a));
             }
             approvals::decide(dir, id, cmd, &by(args), now)
@@ -98,6 +98,7 @@ fn dispatch_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loopx_core::profile_sync;
 
     #[test]
     fn by_defaults_to_cli() {
@@ -170,5 +171,80 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(back.sections[&SectionKey::Stack].body, "New.");
+    }
+
+    /// An approved `feature-orders` page of `alias` under `memory` and a pending
+    /// `guide-page` proposal rewriting its `what` part; returns the approval id.
+    fn pending_guide_proposal(
+        alias: &str,
+        memory: &std::path::Path,
+        apr: &std::path::Path,
+    ) -> String {
+        use loopx_core::project_guide::{self, Kind, Page, Part};
+        use loopx_core::project_profile::{Origin, Status};
+        let page = Page {
+            alias: alias.into(),
+            slug: "feature-orders".into(),
+            kind: Kind::Feature,
+            title: "Orders".into(),
+            status: Status::Approved,
+            generated_at: None,
+            head_sha: Some("abc123".into()),
+            summary: "Taking orders.".into(),
+            related: vec![],
+            parts: vec![Part {
+                key: "what".into(),
+                body: "Old what.".into(),
+                origin: Origin::Agent,
+            }],
+            sources: vec![],
+        };
+        project_guide::save(&page, Some(memory)).unwrap();
+        let mut held = page;
+        held.status = Status::Draft;
+        held.parts[0].body = "New what.".into();
+        loopx_core::guide_proposal::raise(alias, &held, apr, Some(memory), Utc::now())
+            .unwrap()
+            .expect("a proposal")
+    }
+
+    fn guide_what(alias: &str, memory: &std::path::Path) -> String {
+        loopx_core::project_guide::load(alias, "feature-orders", Some(memory))
+            .unwrap()
+            .unwrap()
+            .parts[0]
+            .body
+            .clone()
+    }
+
+    #[test]
+    fn approving_a_guide_page_proposal_applies_it_and_a_stale_one_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let (apr, memory) = (d.path().join("approvals"), d.path().join("memory"));
+        let approve = |id: &str| {
+            let args: Vec<String> = ["approve", id].iter().map(|s| s.to_string()).collect();
+            dispatch_in(&args, &apr, Some(&memory))
+        };
+        let id = pending_guide_proposal("cli-guide-web", &memory, &apr);
+        approve(&id).unwrap();
+        assert_eq!(guide_what("cli-guide-web", &memory), "New what.");
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "approved");
+
+        let stale = pending_guide_proposal("cli-guide-stale", &memory, &apr);
+        loopx_core::project_guide::update_locked(
+            "cli-guide-stale",
+            "feature-orders",
+            Some(&memory),
+            |p| {
+                let mut p = p.unwrap();
+                p.parts[0].body = "Edited by hand.".into();
+                Ok(p)
+            },
+        )
+        .unwrap();
+        let err = approve(&stale).unwrap_err();
+        assert!(err.contains("changed since"), "{err}");
+        assert_eq!(approvals::get(&apr, &stale).unwrap()["status"], "pending");
+        assert_eq!(guide_what("cli-guide-stale", &memory), "Edited by hand.");
     }
 }

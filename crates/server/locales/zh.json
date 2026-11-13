@@ -1958,6 +1958,8 @@
   "That request was not understood, so nothing was changed.": "无法理解该请求，因此未做任何更改。",
   "Refreshing this section in the background. The update will wait under Proposals for your review.": "正在后台刷新此章节。更新内容将在“提案”中等待你审阅。",
   "Proposal approved and applied to the profile.": "提案已批准并应用到档案。",
+  "Review the proposed change to the {slug} guide page of {project}": "查看对 {project} 指南页面 {slug} 的拟议更改",
+  "Proposal approved and applied to the guide page.": "提案已批准并应用到指南页面。",
   "Proposal dismissed. It is not raised again until its sources change.": "提案已驳回。在其来源变化之前不会再次提出。",
   "This section changed since the proposal was raised, so it was not applied. Refresh the section to get a new proposal.": "该章节在提出提案后已被修改，因此未应用。请刷新该章节以获得新的提案。",
   "That proposal was already decided.": "该提案已被处理。",

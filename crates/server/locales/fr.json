@@ -1958,6 +1958,8 @@
   "That request was not understood, so nothing was changed.": "Cette demande n'a pas été comprise : rien n'a été modifié.",
   "Refreshing this section in the background. The update will wait under Proposals for your review.": "Actualisation de cette section en arrière-plan. La mise à jour attendra votre relecture dans Propositions.",
   "Proposal approved and applied to the profile.": "Proposition approuvée et appliquée au profil.",
+  "Review the proposed change to the {slug} guide page of {project}": "Examiner la modification proposée de la page de guide {slug} de {project}",
+  "Proposal approved and applied to the guide page.": "Proposition approuvée et appliquée à la page de guide.",
   "Proposal dismissed. It is not raised again until its sources change.": "Proposition écartée. Elle ne sera pas reproposée tant que ses sources ne changent pas.",
   "This section changed since the proposal was raised, so it was not applied. Refresh the section to get a new proposal.": "Cette section a changé depuis la proposition : elle n'a pas été appliquée. Actualisez la section pour obtenir une nouvelle proposition.",
   "That proposal was already decided.": "Cette proposition a déjà été traitée.",

@@ -228,13 +228,13 @@ async fn decide(
     let decision = body["decision"].as_str().unwrap_or("");
     let by = body["by"].as_str().unwrap_or("api");
     let notes = body["notes"].as_str();
-    // A profile proposal is applied when approved (and approved only while it
-    // still applies); a refusal leaves it pending.
-    let profile = decision == "approve"
+    // A profile or guide page proposal is applied when approved (and approved only
+    // while it still applies); a refusal leaves it pending.
+    let proposal = decision == "approve"
         && approvals::get(&s.paths.approvals_dir, &id)
-            .is_some_and(|a| a["kind"] == loopx_core::profile_sync::KIND);
-    if profile {
-        return match loopx_core::profile_sync::approve_and_apply(
+            .is_some_and(|a| loopx_core::proposals::is_kind(&a["kind"]));
+    if proposal {
+        return match loopx_core::proposals::approve_and_apply(
             &id,
             by,
             Some(&s.paths.memory_root),
@@ -534,6 +534,103 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(back.sections[&SectionKey::Stack].body, "New.");
+    }
+
+    /// An approved `feature-orders` page of `alias` under `root` and a pending
+    /// `guide-page` proposal rewriting its `what` part; returns the approval id.
+    fn pending_guide_proposal(
+        alias: &str,
+        root: &std::path::Path,
+        apr: &std::path::Path,
+    ) -> String {
+        use loopx_core::project_guide::{self, Kind, Page, Part};
+        use loopx_core::project_profile::{Origin, Status};
+        let page = Page {
+            alias: alias.into(),
+            slug: "feature-orders".into(),
+            kind: Kind::Feature,
+            title: "Orders".into(),
+            status: Status::Approved,
+            generated_at: None,
+            head_sha: Some("abc123".into()),
+            summary: "Taking orders.".into(),
+            related: vec![],
+            parts: vec![Part {
+                key: "what".into(),
+                body: "Old what.".into(),
+                origin: Origin::Agent,
+            }],
+            sources: vec![],
+        };
+        project_guide::save(&page, Some(root)).unwrap();
+        let mut held = page;
+        held.status = Status::Draft;
+        held.parts[0].body = "New what.".into();
+        loopx_core::guide_proposal::raise(alias, &held, apr, Some(root), Utc::now())
+            .unwrap()
+            .expect("a proposal")
+    }
+
+    fn guide_what(alias: &str, root: &std::path::Path) -> String {
+        loopx_core::project_guide::load(alias, "feature-orders", Some(root))
+            .unwrap()
+            .unwrap()
+            .parts[0]
+            .body
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn approving_a_guide_page_proposal_applies_it_and_a_stale_one_is_a_conflict() {
+        let d = tempfile::tempdir().unwrap();
+        let mut st = Arc::try_unwrap(state(d.path())).ok().unwrap();
+        st.paths.memory_root = d.path().join("memory");
+        let s = Arc::new(st);
+        let (root, apr) = (s.paths.memory_root.clone(), s.paths.approvals_dir.clone());
+        let id = pending_guide_proposal("api-guide-web", &root, &apr);
+        let (code, v, _) = call(
+            router(s.clone()),
+            decide_req(
+                &id,
+                json!({"decision": "approve", "by": "mac"}),
+                &[("x-loopx-token", "secret-token")],
+            ),
+        )
+        .await;
+        assert_eq!(code, 200, "{v}");
+        assert_eq!(v["status"], "approved");
+        assert_eq!(guide_what("api-guide-web", &root), "New what.");
+        assert!(loopx_core::guide_proposal::is_applied(
+            "api-guide-web",
+            &id,
+            Some(&root)
+        ));
+
+        // The page changes after the proposal was raised: refused, still pending.
+        let stale = pending_guide_proposal("api-guide-stale", &root, &apr);
+        loopx_core::project_guide::update_locked(
+            "api-guide-stale",
+            "feature-orders",
+            Some(&root),
+            |p| {
+                let mut p = p.unwrap();
+                p.parts[0].body = "Edited by hand.".into();
+                Ok(p)
+            },
+        )
+        .unwrap();
+        let (code, v, _) = call(
+            router(s.clone()),
+            decide_req(
+                &stale,
+                json!({"decision": "approve", "by": "mac"}),
+                &[("x-loopx-token", "secret-token")],
+            ),
+        )
+        .await;
+        assert_eq!(code, 409, "{v}");
+        assert_eq!(approvals::get(&apr, &stale).unwrap()["status"], "pending");
+        assert_eq!(guide_what("api-guide-stale", &root), "Edited by hand.");
     }
 
     #[tokio::test]

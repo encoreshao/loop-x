@@ -76,6 +76,10 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
             "Review the proposed {section} change to the {project} profile",
             &[("section", &f("section")), ("project", &f("project"))],
         ),
+        Some("approval") if item["approval_kind"] == loopx_core::guide_proposal::KIND => ctx.tf(
+            "Review the proposed change to the {slug} guide page of {project}",
+            &[("slug", &f("slug")), ("project", &f("project"))],
+        ),
         Some("approval") => ctx.tf(
             "Approve the fix for {project} #{iid}: {title}",
             &[("project", &f("project")), ("iid", &f("issue_iid")), ("title", &f("issue_title"))],
@@ -329,14 +333,18 @@ fn post_approval(ctx: &UiCtx) -> UiResponse {
     let decision = form.first("decision").unwrap_or("");
     let notes = form.first("notes").map(str::trim).filter(|n| !n.is_empty());
     let dir = paths(ctx.state).approvals_dir;
-    // A profile proposal is only worth approving if it is applied: the shared
-    // helper approves it only while it still applies, then writes it.
-    let profile = decision == "approve"
-        && loopx_core::approvals::get(&dir, id).is_some_and(|a| a["kind"] == loopx_core::profile_sync::KIND);
-    if profile {
+    // A profile or guide page proposal is only worth approving if it is applied: the
+    // shared helper approves it only while it still applies, then writes it.
+    let kind = loopx_core::approvals::get(&dir, id).map(|a| a["kind"].clone());
+    if decision == "approve" && kind.as_ref().is_some_and(loopx_core::proposals::is_kind) {
         let root = memory_root(ctx.state);
-        return match loopx_core::profile_sync::approve_and_apply(id, "dashboard", Some(&root), &dir, Utc::now()) {
-            Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Proposal approved and applied to the profile."), PATH),
+        let done = if kind.as_ref().is_some_and(|k| k == loopx_core::guide_proposal::KIND) {
+            ctx.t("Proposal approved and applied to the guide page.")
+        } else {
+            ctx.t("Proposal approved and applied to the profile.")
+        };
+        return match loopx_core::proposals::approve_and_apply(id, "dashboard", Some(&root), &dir, Utc::now()) {
+            Ok(_) => UiResponse::flash_redirect(true, &done, PATH),
             Err(e) => UiResponse::flash_redirect(false, &e, PATH),
         };
     }
@@ -539,6 +547,73 @@ mod tests {
         )
         .unwrap();
         a["id"].as_str().unwrap().to_string()
+    }
+
+    /// An approved `feature-orders` page of `alias` and a pending `guide-page`
+    /// proposal rewriting its `what` part.
+    fn guide_proposal(alias: &str, apr: &std::path::Path, memory: &std::path::Path) -> String {
+        use loopx_core::project_guide::{self, Kind, Page, Part};
+        use loopx_core::project_profile::{Origin, Status};
+        let page = Page {
+            alias: alias.into(),
+            slug: "feature-orders".into(),
+            kind: Kind::Feature,
+            title: "Orders".into(),
+            status: Status::Approved,
+            generated_at: None,
+            head_sha: Some("abc123".into()),
+            summary: "Taking orders.".into(),
+            related: vec![],
+            parts: vec![Part { key: "what".into(), body: "Old what.".into(), origin: Origin::Agent }],
+            sources: vec![],
+        };
+        project_guide::save(&page, Some(memory)).unwrap();
+        let mut held = page;
+        held.status = Status::Draft;
+        held.parts[0].body = "New what.".into();
+        loopx_core::guide_proposal::raise(alias, &held, apr, Some(memory), chrono::Utc::now()).unwrap().expect("a proposal")
+    }
+
+    fn guide_what(alias: &str, memory: &std::path::Path) -> String {
+        loopx_core::project_guide::load(alias, "feature-orders", Some(memory)).unwrap().unwrap().parts[0].body.clone()
+    }
+
+    #[test]
+    fn a_guide_page_proposal_reads_as_a_page_review_in_every_language() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        guide_proposal("ny-guide-read", &d.path().join("outputs/approvals"), &d.path().join("memory"));
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("Review the proposed change to the feature-orders guide page of ny-guide-read"), "{html}");
+        assert!(!html.contains("Approve the fix for"), "{html}");
+        let req = crate::ui::routes::UiRequest::get("/needs-you").with_header("cookie", "loop_lang=fr");
+        let fr = st.registry.dispatch(&st, &req).unwrap().body_text();
+        assert!(
+            fr.contains("Examiner la modification propos\u{e9}e de la page de guide feature-orders de ny-guide-read"),
+            "{fr}"
+        );
+    }
+
+    #[test]
+    fn approving_a_guide_page_proposal_here_applies_it_and_denying_does_not() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let apr = d.path().join("outputs/approvals");
+        let memory = d.path().join("memory");
+        let id = guide_proposal("ny-guide-web", &apr, &memory);
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id}&decision=approve"));
+        let loc = r.header("location").unwrap_or_default();
+        assert!(loc.contains("ok=1"), "{loc:?}");
+        assert!(loc.contains("applied%20to%20the%20guide%20page"), "{loc:?}");
+        assert_eq!(guide_what("ny-guide-web", &memory), "New what.");
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "approved");
+
+        let id2 = guide_proposal("ny-guide-deny", &apr, &memory);
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id2}&decision=deny"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"));
+        assert_eq!(approvals::get(&apr, &id2).unwrap()["status"], "denied");
+        assert_eq!(guide_what("ny-guide-deny", &memory), "Old what.");
+        assert!(!loopx_core::guide_proposal::is_applied("ny-guide-deny", &id2, Some(&memory)));
     }
 
     #[test]

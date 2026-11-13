@@ -122,6 +122,17 @@ fn approvals(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
                     json!({"approval_id": a["id"], "project": project, "approval_kind": a["kind"], "section": section}),
                 );
             }
+            if a["kind"] == crate::guide_proposal::KIND {
+                // A guide page proposal has no issue, branch or merge request either.
+                let slug = a["target"]["slug"].as_str().unwrap_or("");
+                return item(
+                    format!("approval:{}", a["id"].as_str().unwrap_or("")),
+                    "approval",
+                    format!("Review the proposed change to the {slug} guide page of {project}"),
+                    a["created_at"].as_str(),
+                    json!({"approval_id": a["id"], "project": project, "approval_kind": a["kind"], "slug": slug}),
+                );
+            }
             item(
                 format!("approval:{}", a["id"].as_str().unwrap_or("")),
                 "approval",
@@ -622,6 +633,50 @@ mod tests {
         assert_eq!(
             items[0]["title"],
             "Review the proposed stack change to the web profile"
+        );
+    }
+
+    #[test]
+    fn a_guide_page_proposal_names_its_page_and_project() {
+        use crate::project_guide::{self, Kind, Page, Part};
+        use crate::project_profile::{Origin, Status};
+        let f = Fx::new();
+        let mem = tempfile::tempdir().unwrap();
+        let page = Page {
+            alias: "web".into(),
+            slug: "feature-orders".into(),
+            kind: Kind::Feature,
+            title: "Orders".into(),
+            status: Status::Approved,
+            generated_at: Some(now()),
+            head_sha: Some("abc123".into()),
+            summary: "Taking orders.".into(),
+            related: vec![],
+            parts: vec![Part {
+                key: "what".into(),
+                body: "Lets a customer place an order.".into(),
+                origin: Origin::Agent,
+            }],
+            sources: vec![],
+        };
+        project_guide::save(&page, Some(mem.path())).unwrap();
+        let mut held = page.clone();
+        held.status = Status::Draft;
+        held.parts[0].body = "Places and cancels orders.".into();
+        crate::guide_proposal::raise("web", &held, &f.p("approvals"), Some(mem.path()), now())
+            .unwrap()
+            .expect("a proposal");
+        let items = f.collect();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["kind"], "approval");
+        assert_eq!(items[0]["approval_kind"], "guide-page");
+        assert_eq!(items[0]["slug"], "feature-orders");
+        assert_eq!(items[0]["project"], "web");
+        assert!(items[0].get("issue_iid").is_none(), "{}", items[0]);
+        assert!(items[0].get("section").is_none(), "{}", items[0]);
+        assert_eq!(
+            items[0]["title"],
+            "Review the proposed change to the feature-orders guide page of web"
         );
     }
 

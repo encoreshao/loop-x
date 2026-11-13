@@ -112,6 +112,7 @@ pub mod profile_wiki;
 pub mod project_guide;
 pub mod project_profile;
 pub mod prompt;
+pub mod proposals;
 pub mod providers;
 pub mod pydumps;
 pub mod pyfmt_lite;
