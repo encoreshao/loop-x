@@ -12,8 +12,8 @@
 //! its title.
 
 use super::{
-    day, escape, hidden, icon, markdown, memory_root, pill, prefixes, project_url, redacted,
-    short_sha, spinner, Model, Project,
+    day, escape, hidden, icon, markdown, memory_root, pill, prefixes, project_url, short_sha,
+    spinner, Model, Project,
 };
 use crate::ui::routes::UiCtx;
 use loopx_core::guide_ops;
@@ -407,9 +407,40 @@ fn deleted_card(ctx: &UiCtx, p: &Project, deleted: &[String]) -> String {
 /// `[label](slug)` → `[label](<guide url>)` when `slug` is a page in `existing`, and just
 /// `label` when it is a page slug with no page (a link to nowhere); any other link is
 /// left for the markdown renderer's own rules. Returns the text and the URLs it wrote.
+/// Text inside a fenced code block or an inline code span is left as it is.
 fn link_pages(text: &str, alias: &str, existing: &BTreeSet<&str>) -> (String, Vec<String>) {
     let mut out = String::with_capacity(text.len());
     let mut urls = Vec::new();
+    let mut fenced = false;
+    for line in text.split_inclusive('\n') {
+        // The markdown renderer's own fence rule.
+        if line.starts_with("```") {
+            fenced = !fenced;
+            out.push_str(line);
+            continue;
+        }
+        if fenced {
+            out.push_str(line);
+            continue;
+        }
+        // Even pieces are outside a code span, odd ones inside.
+        for (n, piece) in line.split('`').enumerate() {
+            if n > 0 {
+                out.push('`');
+            }
+            if n % 2 == 1 {
+                out.push_str(piece);
+            } else {
+                out.push_str(&link_text(piece, alias, existing, &mut urls));
+            }
+        }
+    }
+    (out, urls)
+}
+
+/// [`link_pages`] for a piece of text with no code in it.
+fn link_text(text: &str, alias: &str, existing: &BTreeSet<&str>, urls: &mut Vec<String>) -> String {
+    let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find('[') {
         out.push_str(&rest[..open]);
@@ -440,20 +471,14 @@ fn link_pages(text: &str, alias: &str, existing: &BTreeSet<&str>) -> (String, Ve
         }
     }
     out.push_str(rest);
-    (out, urls)
+    out
 }
 
-fn part_body(ctx: &UiCtx, alias: &str, key: &str, body: &str, all: &[Page]) -> String {
+fn part_body(ctx: &UiCtx, alias: &str, body: &str, all: &[Page]) -> String {
     if body.trim().is_empty() {
         return format!(
             "<p class='mem-muted'>{}</p>",
             escape(&ctx.t("No details written yet."))
-        );
-    }
-    if key != "associations" {
-        return format!(
-            "<div class='markdown mem-body'>{}</div>",
-            markdown::render_markdown(body, &prefixes(ctx))
         );
     }
     let existing: BTreeSet<&str> = all.iter().map(|p| p.slug.as_str()).collect();
@@ -468,6 +493,19 @@ fn part_body(ctx: &UiCtx, alias: &str, key: &str, body: &str, all: &[Page]) -> S
         );
     }
     format!("<div class='markdown mem-body'>{html}</div>")
+}
+
+/// The redaction notice for a guide page: same look as the profile's, but it names the
+/// page file (`guide/<slug>.md`), which is where the value has to be removed.
+fn redacted_page(ctx: &UiCtx, kind: &str) -> String {
+    format!(
+        "<p class='mem-redacted' role='note'>{}<span>{}</span></p>",
+        icon("warning"),
+        escape(&ctx.tf(
+            "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.",
+            &[("kind", kind)]
+        ))
+    )
 }
 
 fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
@@ -488,7 +526,7 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
     if let Some(kind) = page_secret(page) {
         return format!(
             "<article class='card gd-page'>{head}{banner}{}</article>",
-            redacted(ctx, &kind)
+            redacted_page(ctx, &kind)
         );
     }
     let human = page.parts.iter().any(|x| x.origin == Origin::Human);
@@ -533,7 +571,7 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
             Some(format!(
                 "<section class='gd-part'><div class='gd-part-head'><h3>{}</h3>{tag}</div>{}</section>",
                 escape(&part_heading(ctx, heading)),
-                part_body(ctx, &p.alias, key, &part.body, all)
+                part_body(ctx, &p.alias, &part.body, all)
             ))
         })
         .collect();
@@ -573,7 +611,7 @@ fn page_view(ctx: &UiCtx, p: &Project, page: &Page, all: &[Page]) -> String {
 const GUIDE_STYLE: &str = "<style>
 .gd-layout{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:1.25rem;align-items:start}
 .gd-main{display:flex;flex-direction:column;gap:1.25rem;min-width:0}
-.card.gd-list{position:sticky;top:1rem;display:flex;flex-direction:column;gap:.2rem;min-width:0;padding:.6rem;border-radius:14px}
+.card.gd-list{position:sticky;top:1rem;max-height:calc(100vh - 7rem);overflow:auto;overscroll-behavior:contain;box-sizing:border-box;display:flex;flex-direction:column;gap:.2rem;min-width:0;padding:.6rem;border-radius:14px}
 .gd-group{margin:.55rem .55rem .3rem;font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--md-on-surface-variant)}
 .gd-group:first-child{margin-top:.2rem}
 .gd-rows{display:flex;flex-direction:column;gap:2px}
@@ -613,6 +651,6 @@ a.gd-row:focus-visible{outline:2px solid var(--md-primary);outline-offset:1px}
 }
 @media (max-width:760px){
 .gd-layout{grid-template-columns:minmax(0,1fr)}
-.card.gd-list{position:static}
+.card.gd-list{position:static;max-height:none;overflow:visible}
 }
 </style>";

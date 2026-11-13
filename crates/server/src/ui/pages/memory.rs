@@ -6253,6 +6253,87 @@ mod tests {
         assert!(page.contains("class='mem-redacted'"), "{page}");
         assert!(page.contains("GitLab token"), "{page}");
         assert!(!page.contains("gd-part"), "{page}");
+        // The notice names the page file, not the profile.
+        assert!(!page.contains("PROFILE.md"), "{page}");
+        assert!(
+            page.contains("Hidden: this page looks like it contains a secret value (GitLab token). Remove the value from the page file, or delete the page and rebuild it."),
+            "{page}"
+        );
+    }
+
+    /// Store `feature-orders` with `from` replaced by `to` in its file (a hand edit).
+    fn hand_edit(sb: &Sb, alias: &str, from: &str, to: &str) {
+        let file = loopx_core::project_guide::guide_dir(alias, Some(&sb.root())).join("feature-orders.md");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(from), "{text}");
+        std::fs::write(&file, text.replace(from, to)).unwrap();
+    }
+
+    #[test]
+    fn a_secret_only_in_the_title_summary_or_a_source_path_is_hidden() {
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        for (i, (from, to)) in [
+            ("title: Orders", format!("title: Orders {token}")),
+            ("summary: Summary of feature-orders.", format!("summary: Summary of feature-orders. {token}")),
+            ("`app/feature-orders.rb`", format!("`app/{token}.rb`")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let alias = format!("gd-sec{i}");
+            let sb = Sb::new(&[(alias.as_str(), true)]);
+            put_page(&sb, &alias, "feature-orders", "Orders", Status::Draft, &[("what", "Body text here.", Origin::Agent)]);
+            hand_edit(&sb, &alias, from, &to);
+            for url in [guide_url(&alias, Some("feature-orders")), guide_url(&alias, None)] {
+                let html = sb.get(&url);
+                assert!(!html.contains("glpat-"), "{from}: {html}");
+                assert!(!html.contains("Body text here"), "{from}: {html}");
+                assert!(!html.contains("Summary of feature-orders."), "{from}: {html}");
+                assert!(html.contains("class='mem-redacted'"), "{from}: {html}");
+                let row = row_of(&html, "feature-orders");
+                assert!(!row.contains("gd-row-sum"), "{from}: {row}");
+                if i == 0 {
+                    // The title itself is the secret: the checked slug stands in for it.
+                    assert!(row.contains("<span class='gd-row-title'>feature-orders</span>"), "{row}");
+                    assert!(html.contains("<h2>feature-orders</h2>"), "{html}");
+                } else {
+                    assert!(row.contains("<span class='gd-row-title'>Orders</span>"), "{row}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn page_links_are_rewritten_in_every_part_but_not_inside_code() {
+        let alias = "gd-links";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "feature-cart", "Cart", Status::Approved, &[("what", "Holds items.", Origin::Agent)]);
+        put_page(
+            &sb,
+            alias,
+            "feature-orders",
+            "Orders",
+            Status::Approved,
+            &[
+                ("what", "Fills a [Cart](feature-cart) or a [Ghost](feature-ghost).", Origin::Agent),
+                (
+                    "how",
+                    "Write `[x](feature-cart)` or `[z](feature-ghost)` in text.\n\n```\n[y](feature-cart) and [w](feature-ghost)\n```\n\nAfter the fence: [Cart](feature-cart).",
+                    Origin::Agent,
+                ),
+            ],
+        );
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        let page = &html[html.find("class='card gd-page'").unwrap()..];
+        let link = "<a href=\"/insights?view=memory&amp;project=gd-links&amp;page=guide&amp;guide=feature-cart\">Cart</a>";
+        // A part that is not Associations is rewritten too: twice (What it does, after the fence).
+        assert_eq!(page.matches(link).count(), 2, "{page}");
+        assert!(page.contains("Fills a ") && page.contains(" or a Ghost."), "{page}");
+        assert!(!page.contains("href=\"feature-ghost\""), "{page}");
+        // Code spans and fenced blocks stay literal.
+        assert!(page.contains("<code>[x](feature-cart)</code>"), "{page}");
+        assert!(page.contains("<code>[z](feature-ghost)</code>"), "{page}");
+        assert!(page.contains("[y](feature-cart) and [w](feature-ghost)"), "{page}");
     }
 
     #[test]

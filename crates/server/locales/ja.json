@@ -2123,5 +2123,6 @@
   "Deleted pages": "削除されたページ",
   "Draft: agents do not read this page until it is approved.": "下書き：承認されるまで、エージェントはこのページを読みません。",
   "Written by the agent and a person": "エージェントと人が作成",
-  "Commit": "コミット"
+  "Commit": "コミット",
+  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "非表示：このページには秘密の値（{kind}）が含まれているようです。ページファイルからその値を削除するか、ページを削除して作り直してください。"
 }

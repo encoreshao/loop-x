@@ -2123,5 +2123,6 @@
   "Deleted pages": "Pages supprimées",
   "Draft: agents do not read this page until it is approved.": "Brouillon : les agents ne lisent pas cette page tant qu'elle n'est pas approuvée.",
   "Written by the agent and a person": "Rédigée par l'agent et une personne",
-  "Commit": "Commit"
+  "Commit": "Commit",
+  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "Masqué : cette page semble contenir une valeur secrète ({kind}). Retirez la valeur du fichier de la page, ou supprimez la page et reconstruisez-la."
 }

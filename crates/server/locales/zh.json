@@ -2123,5 +2123,6 @@
   "Deleted pages": "已删除的页面",
   "Draft: agents do not read this page until it is approved.": "草稿：在批准之前，智能体不会读取此页面。",
   "Written by the agent and a person": "由智能体和人共同编写",
-  "Commit": "提交"
+  "Commit": "提交",
+  "Hidden: this page looks like it contains a secret value ({kind}). Remove the value from the page file, or delete the page and rebuild it.": "已隐藏：此页面似乎包含机密值（{kind}）。请从页面文件中删除该值，或删除此页面后重新构建。"
 }
