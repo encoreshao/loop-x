@@ -67,25 +67,20 @@ fn dispatch_in(
             let id = args.get(1).ok_or(USAGE)?;
             // A profile or guide page proposal is applied when approved, and
             // approved only while it still applies.
-            if cmd == "approve"
-                && approvals::get(dir, id).is_some_and(|a| proposals::is_kind(&a["kind"]))
-            {
-                return proposals::approve_and_apply(id, &by(args), memory_root, dir, now)
-                    .map(|a| pyjson::to_string_pretty(&a));
-            }
-            approvals::decide(dir, id, cmd, &by(args), now)
+            proposals::decide(id, cmd, None, &by(args), memory_root, dir, now)
                 .map(|a| pyjson::to_string_pretty(&a))
                 .map_err(|e| e.to_string())
         }
         Some("request-changes") => {
             let id = args.get(1).ok_or(USAGE)?;
             let notes = flag(args, "--notes");
-            approvals::decide_with_notes(
-                dir,
+            proposals::decide(
                 id,
                 "request_changes",
                 notes.as_deref(),
                 &by(args),
+                memory_root,
+                dir,
                 now,
             )
             .map(|a| pyjson::to_string_pretty(&a))
@@ -246,5 +241,20 @@ mod tests {
         assert!(err.contains("changed since"), "{err}");
         assert_eq!(approvals::get(&apr, &stale).unwrap()["status"], "pending");
         assert_eq!(guide_what("cli-guide-stale", &memory), "Edited by hand.");
+    }
+
+    #[test]
+    fn request_changes_on_a_guide_page_proposal_is_refused_and_it_stays_pending() {
+        let d = tempfile::tempdir().unwrap();
+        let (apr, memory) = (d.path().join("approvals"), d.path().join("memory"));
+        let id = pending_guide_proposal("cli-guide-changes", &memory, &apr);
+        let args: Vec<String> = ["request-changes", id.as_str(), "--notes", "x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let err = dispatch_in(&args, &apr, Some(&memory)).unwrap_err();
+        assert_eq!(err, proposals::NO_CHANGES_REQUESTED);
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "pending");
+        assert_eq!(guide_what("cli-guide-changes", &memory), "Old what.");
     }
 }

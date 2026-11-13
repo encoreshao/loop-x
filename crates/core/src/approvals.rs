@@ -182,6 +182,17 @@ pub fn decide(
     decide_with_notes(dir, id, decision, None, decided_by, now)
 }
 
+/// The status a decision verb records (`approved`, `denied`, `changes_requested`), or
+/// `None` for a verb [`decide_with_notes`] refuses.
+pub fn decision_status(decision: &str) -> Option<&'static str> {
+    match decision {
+        "approve" | "approved" => Some("approved"),
+        "deny" | "denied" => Some("denied"),
+        "request_changes" | "changes_requested" => Some("changes_requested"),
+        _ => None,
+    }
+}
+
 /// [`decide`], plus `request_changes`, which needs `notes` saying what to change.
 pub fn decide_with_notes(
     dir: &Path,
@@ -191,12 +202,8 @@ pub fn decide_with_notes(
     decided_by: &str,
     now: DateTime<Utc>,
 ) -> Result<Value, ApprovalError> {
-    let status = match decision {
-        "approve" | "approved" => "approved",
-        "deny" | "denied" => "denied",
-        "request_changes" | "changes_requested" => "changes_requested",
-        other => return Err(ApprovalError::BadDecision(other.to_string())),
-    };
+    let status = decision_status(decision)
+        .ok_or_else(|| ApprovalError::BadDecision(decision.to_string()))?;
     let notes = notes.map(str::trim).filter(|n| !n.is_empty());
     if status == "changes_requested" {
         match notes {

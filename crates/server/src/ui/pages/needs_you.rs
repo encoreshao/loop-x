@@ -334,22 +334,19 @@ fn post_approval(ctx: &UiCtx) -> UiResponse {
     let notes = form.first("notes").map(str::trim).filter(|n| !n.is_empty());
     let dir = paths(ctx.state).approvals_dir;
     // A profile or guide page proposal is only worth approving if it is applied: the
-    // shared helper approves it only while it still applies, then writes it.
+    // shared helper approves it (by any approve verb) only while it still applies.
     let kind = loopx_core::approvals::get(&dir, id).map(|a| a["kind"].clone());
-    if decision == "approve" && kind.as_ref().is_some_and(loopx_core::proposals::is_kind) {
-        let root = memory_root(ctx.state);
-        let done = if kind.as_ref().is_some_and(|k| k == loopx_core::guide_proposal::KIND) {
-            ctx.t("Proposal approved and applied to the guide page.")
-        } else {
-            ctx.t("Proposal approved and applied to the profile.")
-        };
-        return match loopx_core::proposals::approve_and_apply(id, "dashboard", Some(&root), &dir, Utc::now()) {
-            Ok(_) => UiResponse::flash_redirect(true, &done, PATH),
-            Err(e) => UiResponse::flash_redirect(false, &e, PATH),
-        };
-    }
-    match loopx_core::approvals::decide_with_notes(&dir, id, decision, notes, "dashboard", Utc::now()) {
-        Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Decision recorded; the loop picks it up within seconds."), PATH),
+    let applies = kind.as_ref().is_some_and(|k| loopx_core::proposals::applies(k, decision));
+    let done = if !applies {
+        ctx.t("Decision recorded; the loop picks it up within seconds.")
+    } else if kind.as_ref().is_some_and(|k| k == loopx_core::guide_proposal::KIND) {
+        ctx.t("Proposal approved and applied to the guide page.")
+    } else {
+        ctx.t("Proposal approved and applied to the profile.")
+    };
+    let root = memory_root(ctx.state);
+    match loopx_core::proposals::decide(id, decision, notes, "dashboard", Some(&root), &dir, Utc::now()) {
+        Ok(_) => UiResponse::flash_redirect(true, &done, PATH),
         Err(e) => UiResponse::flash_redirect(false, &e.to_string(), PATH),
     }
 }
@@ -614,6 +611,27 @@ mod tests {
         assert_eq!(approvals::get(&apr, &id2).unwrap()["status"], "denied");
         assert_eq!(guide_what("ny-guide-deny", &memory), "Old what.");
         assert!(!loopx_core::guide_proposal::is_applied("ny-guide-deny", &id2, Some(&memory)));
+    }
+
+    #[test]
+    fn the_approved_verb_here_applies_a_guide_page_proposal_and_changes_are_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let apr = d.path().join("outputs/approvals");
+        let memory = d.path().join("memory");
+        let id = guide_proposal("ny-guide-approved", &apr, &memory);
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id}&decision=approved"));
+        let loc = r.header("location").unwrap_or_default();
+        assert!(loc.contains("ok=1"), "{loc:?}");
+        assert!(loc.contains("applied%20to%20the%20guide%20page"), "{loc:?}");
+        assert_eq!(guide_what("ny-guide-approved", &memory), "New what.");
+        assert!(loopx_core::guide_proposal::is_applied("ny-guide-approved", &id, Some(&memory)));
+
+        let id2 = guide_proposal("ny-guide-changes", &apr, &memory);
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id2}&decision=request_changes&notes=x"));
+        assert!(!r.header("location").unwrap_or_default().contains("ok=1"));
+        assert_eq!(approvals::get(&apr, &id2).unwrap()["status"], "pending");
+        assert_eq!(guide_what("ny-guide-changes", &memory), "Old what.");
     }
 
     #[test]

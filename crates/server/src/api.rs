@@ -19,6 +19,7 @@ use axum::{Json, Router};
 use chrono::{SecondsFormat, Utc};
 use futures_util::stream::{self, Stream, StreamExt};
 use loopx_core::approvals::{self, ApprovalError};
+use loopx_core::proposals::DecideError;
 use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::path::PathBuf;
@@ -228,36 +229,33 @@ async fn decide(
     let decision = body["decision"].as_str().unwrap_or("");
     let by = body["by"].as_str().unwrap_or("api");
     let notes = body["notes"].as_str();
-    // A profile or guide page proposal is applied when approved (and approved only
-    // while it still applies); a refusal leaves it pending.
-    let proposal = decision == "approve"
-        && approvals::get(&s.paths.approvals_dir, &id)
-            .is_some_and(|a| loopx_core::proposals::is_kind(&a["kind"]));
-    if proposal {
-        return match loopx_core::proposals::approve_and_apply(
-            &id,
-            by,
-            Some(&s.paths.memory_root),
-            &s.paths.approvals_dir,
-            Utc::now(),
-        ) {
-            Ok(a) => Json(a).into_response(),
-            Err(e) => json_error(StatusCode::CONFLICT, &e),
-        };
-    }
-    match approvals::decide_with_notes(&s.paths.approvals_dir, &id, decision, notes, by, Utc::now())
-    {
+    // A profile or guide page proposal is applied when approved by any approve verb
+    // (and approved only while it still applies); a refusal leaves it pending.
+    match loopx_core::proposals::decide(
+        &id,
+        decision,
+        notes,
+        by,
+        Some(&s.paths.memory_root),
+        &s.paths.approvals_dir,
+        Utc::now(),
+    ) {
         Ok(a) => Json(a).into_response(),
-        Err(e @ ApprovalError::Unknown(_)) => json_error(StatusCode::NOT_FOUND, &e.to_string()),
-        Err(e @ ApprovalError::AlreadyDecided(..)) => {
+        Err(DecideError::Proposal(e)) => json_error(StatusCode::CONFLICT, &e),
+        Err(DecideError::Approval(e @ ApprovalError::Unknown(_))) => {
+            json_error(StatusCode::NOT_FOUND, &e.to_string())
+        }
+        Err(DecideError::Approval(e @ ApprovalError::AlreadyDecided(..))) => {
             json_error(StatusCode::CONFLICT, &e.to_string())
         }
-        Err(
+        Err(DecideError::Approval(
             e @ (ApprovalError::BadDecision(_)
             | ApprovalError::MissingNotes
             | ApprovalError::NotesTooLong),
-        ) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        )) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(DecideError::Approval(e)) => {
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        }
     }
 }
 
@@ -631,6 +629,43 @@ mod tests {
         assert_eq!(code, 409, "{v}");
         assert_eq!(approvals::get(&apr, &stale).unwrap()["status"], "pending");
         assert_eq!(guide_what("api-guide-stale", &root), "Edited by hand.");
+    }
+
+    #[tokio::test]
+    async fn the_approved_verb_applies_a_guide_page_proposal_and_changes_are_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let mut st = Arc::try_unwrap(state(d.path())).ok().unwrap();
+        st.paths.memory_root = d.path().join("memory");
+        let s = Arc::new(st);
+        let (root, apr) = (s.paths.memory_root.clone(), s.paths.approvals_dir.clone());
+        let tok = [("x-loopx-token", "secret-token")];
+        let id = pending_guide_proposal("api-guide-approved", &root, &apr);
+        let (code, v, _) = call(
+            router(s.clone()),
+            decide_req(&id, json!({"decision": "approved", "by": "mac"}), &tok),
+        )
+        .await;
+        assert_eq!(code, 200, "{v}");
+        assert_eq!(v["status"], "approved");
+        assert_eq!(guide_what("api-guide-approved", &root), "New what.");
+        assert!(loopx_core::guide_proposal::is_applied(
+            "api-guide-approved",
+            &id,
+            Some(&root)
+        ));
+
+        let id = pending_guide_proposal("api-guide-changes", &root, &apr);
+        let (code, v, _) = call(
+            router(s.clone()),
+            decide_req(
+                &id,
+                json!({"decision": "request_changes", "notes": "x"}),
+                &tok,
+            ),
+        )
+        .await;
+        assert_eq!(code, 409, "{v}");
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "pending");
     }
 
     #[tokio::test]
