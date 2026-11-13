@@ -346,7 +346,7 @@ fn history_dir(alias: &str, root: Option<&Path>) -> PathBuf {
     guide_dir(alias, root).join(".history")
 }
 
-fn page_path(alias: &str, slug: &str, root: Option<&Path>) -> PathBuf {
+pub(crate) fn page_path(alias: &str, slug: &str, root: Option<&Path>) -> PathBuf {
     guide_dir(alias, root).join(format!("{slug}.md"))
 }
 
@@ -408,27 +408,38 @@ pub fn validate(p: &Page) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy the current page file, if there is one, into `.history/` as `<slug>.<ts>.md` and
+/// prune to the newest `HISTORY_KEEP`. Callers hold the guide lock.
+pub(crate) fn snapshot_current(alias: &str, slug: &str, root: Option<&Path>) -> io::Result<()> {
+    check_alias(alias).map_err(invalid)?;
+    check_slug(slug).map_err(invalid)?;
+    let path = page_path(alias, slug, root);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let hdir = history_dir(alias, root);
+    std::fs::create_dir_all(&hdir)?;
+    let mut now = Utc::now();
+    let dest = loop {
+        let candidate = hdir.join(format!("{slug}.{}.md", now.format("%Y%m%dT%H%M%S%9fZ")));
+        if !candidate.exists() {
+            break candidate;
+        }
+        now += chrono::Duration::nanoseconds(1);
+    };
+    std::fs::copy(&path, dest)?;
+    for old in history(alias, slug, root).into_iter().skip(HISTORY_KEEP) {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(())
+}
+
 fn snapshot_and_write(alias: &str, slug: &str, text: &str, root: Option<&Path>) -> io::Result<()> {
     let path = page_path(alias, slug, root);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    if path.is_file() {
-        let hdir = history_dir(alias, root);
-        std::fs::create_dir_all(&hdir)?;
-        let mut now = Utc::now();
-        let dest = loop {
-            let candidate = hdir.join(format!("{slug}.{}.md", now.format("%Y%m%dT%H%M%S%9fZ")));
-            if !candidate.exists() {
-                break candidate;
-            }
-            now += chrono::Duration::nanoseconds(1);
-        };
-        std::fs::copy(&path, dest)?;
-        for old in history(alias, slug, root).into_iter().skip(HISTORY_KEEP) {
-            let _ = std::fs::remove_file(old);
-        }
-    }
+    snapshot_current(alias, slug, root)?;
     crate::file_lock::write_atomic(&path, text.as_bytes())
 }
 

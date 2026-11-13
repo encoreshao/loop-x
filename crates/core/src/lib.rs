@@ -34,6 +34,7 @@ pub mod golden_eval;
 pub mod guide_build;
 pub mod guide_features;
 pub mod guide_inventory;
+pub mod guide_ops;
 pub mod guide_plan;
 pub mod guide_prompt;
 pub mod guide_proposal;
