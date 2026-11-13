@@ -134,7 +134,7 @@ pub fn learning(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-const MEMORY_USAGE: &str = "Usage: memory_store.py add <alias> <issue_iid> <lesson> [tags_comma_separated] [category]\n       memory_store.py get <alias> <issue_iid>\n       memory_store.py list <alias>\n       memory_store.py setup <alias>\n       memory_store.py profile <alias>\n       memory_store.py graph [alias] [--all]";
+const MEMORY_USAGE: &str = "Usage: memory_store.py add <alias> <issue_iid> <lesson> [tags_comma_separated] [category]\n       memory_store.py get <alias> <issue_iid>\n       memory_store.py list <alias>\n       memory_store.py setup <alias>\n       memory_store.py profile <alias>\n       memory_store.py graph [alias] [--all]\n       memory_store.py guide <alias> [slug]";
 
 fn setup_text(alias: &str, root: Option<&std::path::Path>) -> String {
     memory_store::read_setup_knowledge(alias, root)
@@ -147,6 +147,27 @@ fn profile_output(alias: &str, root: Option<&std::path::Path>) -> Result<String,
         Ok(Some(text)) => Ok(text),
         Ok(None) => Ok(loopx_core::profile_read::NO_PROFILE.to_string()),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+/// `memory-store guide <alias> [slug]`: the index of approved pages, or one approved page.
+fn guide_output(
+    alias: &str,
+    slug: Option<&str>,
+    root: Option<&std::path::Path>,
+) -> Result<String, String> {
+    use loopx_core::guide_read;
+    match slug {
+        None => match guide_read::index_json(alias, root) {
+            Ok(Some(t)) => Ok(t),
+            Ok(None) => Ok(guide_read::NO_GUIDE.to_string()),
+            Err(e) => Err(e.to_string()),
+        },
+        Some(s) => match guide_read::page_text(alias, s, root) {
+            Ok(Some(t)) => Ok(t),
+            Ok(None) => Ok(guide_read::NO_PAGE.to_string()),
+            Err(e) => Err(e.to_string()),
+        },
     }
 }
 
@@ -242,6 +263,8 @@ pub fn memory_store(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         ("profile", [alias, ..]) => print_or_fail(profile_output(alias, None)),
+        ("guide", [alias]) => print_or_fail(guide_output(alias, None, None)),
+        ("guide", [alias, slug]) => print_or_fail(guide_output(alias, Some(slug), None)),
         ("graph", rest) => {
             let all = rest.iter().any(|a| a == "--all");
             let alias = rest
@@ -250,7 +273,7 @@ pub fn memory_store(args: &[String]) -> ExitCode {
                 .map(String::as_str);
             print_or_fail(graph_output(alias, all))
         }
-        ("add" | "get" | "list" | "setup" | "profile", _) => fail(MEMORY_USAGE),
+        ("add" | "get" | "list" | "setup" | "profile" | "guide", _) => fail(MEMORY_USAGE),
         (other, _) => fail(&format!("Unknown command: {other}")),
     }
 }

@@ -31,6 +31,7 @@ pub mod gate_stats;
 pub mod gitlab;
 pub mod gitlab_cache;
 pub mod golden_eval;
+pub mod guide_read;
 pub mod health;
 pub mod hosted;
 pub mod inbox_config;

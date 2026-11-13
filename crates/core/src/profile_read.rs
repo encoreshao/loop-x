@@ -32,7 +32,7 @@ impl std::fmt::Display for ReadError {
     }
 }
 
-fn guard(text: String) -> Result<String, ReadError> {
+pub(crate) fn guard(text: String) -> Result<String, ReadError> {
     match contains_secret(&text) {
         Some(kind) => Err(ReadError::SecretRefused(kind)),
         None => Ok(text),
