@@ -141,8 +141,10 @@ pub fn raise(
     // A hand-edited stored page is copied into the approval: check it too.
     project_guide::validate(&stored)?;
     project_guide::validate(held)?;
-    // What apply will write: the stored Human parts win over the rebuild's.
-    let proposed = merge_human(held, &stored);
+    // What apply will write: the stored Human parts win over the rebuild's, and the
+    // page stays approved (the held page is a draft; showing that would read as if
+    // approving the proposal demoted the page).
+    let proposed = merged(held, &stored);
     project_guide::validate(&proposed)?;
     if substance(&proposed)? == substance(&stored)? {
         return Ok(None);
@@ -514,7 +516,11 @@ mod tests {
         assert_eq!(t["alias"], "gp-raise");
         assert_eq!(t["slug"], "feature-orders");
         assert_eq!(t["old"], project_guide::render(&stored));
-        assert_eq!(t["new"], project_guide::render(&held));
+        // The proposed text is the page as apply writes it: approved, not the held draft.
+        let mut proposed = held.clone();
+        proposed.status = Status::Approved;
+        assert_eq!(t["new"], project_guide::render(&proposed));
+        assert!(!t["new"].as_str().unwrap().contains("status: draft"));
         assert!(is_hex64(&t["old_hash"]), "{}", t["old_hash"]);
         assert!(is_hex64(&t["new_hash"]), "{}", t["new_hash"]);
         assert_ne!(t["old_hash"], t["new_hash"]);
@@ -591,10 +597,7 @@ mod tests {
         let mut expected = project_guide::parse(&new_text).unwrap();
         expected.status = Status::Approved;
         assert_eq!(after, expected);
-        assert_eq!(
-            project_guide::render(&after),
-            new_text.replace("status: draft", "status: approved")
-        );
+        assert_eq!(project_guide::render(&after), new_text);
         assert_eq!(fx.history("feature-orders"), before + 1);
         assert!(is_applied(&fx.alias, &id, fx.root()));
         assert_eq!(fx.status(&id), "approved");
@@ -811,10 +814,7 @@ mod tests {
         assert!(new.contains("A brand new what."), "{new}");
         // Applying gives exactly the proposed text (re-merging is idempotent).
         fx.approve(&id).unwrap();
-        assert_eq!(
-            project_guide::render(&fx.stored("feature-orders")),
-            new.replace("status: draft", "status: approved")
-        );
+        assert_eq!(project_guide::render(&fx.stored("feature-orders")), new);
     }
 
     #[test]
