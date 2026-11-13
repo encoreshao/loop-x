@@ -44,6 +44,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Creator → Showcase: choose the **voice**: no narration (the default), the quick macOS voice in English or Chinese, or one of your own cloned voice profiles from `~/.inspire-video/voices/` (listed once CosyVoice 3 is set up, spoken in the profile's language). Narrated videos get a note in their publish text that the voice is synthetic. The choice is kept with the job, so Retry narrates the same way.
 - Creator: choose which platforms a video is made for, on the Showcase form and on Generate from a link. WeChat and Douyin are ticked by default, LinkedIn and Facebook are not; the choice is kept with the job, so Retry makes the same video. LinkedIn and Facebook also get a 4:5 render and English text.
 - Creator → Videos: publish text for **LinkedIn** and **Facebook** (English) next to WeChat and Douyin, each with Copy, Share and a Published mark.- Settings → Skills lists the inspire-showcase skill with its install steps.
+- Guide: a per-project wiki on Insights → Memory (**Guide**): Architecture, Data model and one page per major feature, written from the code, with **Build guide**, **Rebuild guide** and **Rebuild this page** (live progress while it runs), **Approve** and **Approve all drafts**, **Edit** for one part at a time (saved as written by a person, so rebuilds keep it), **History** with **Restore** (deleted pages too) and **Delete** for pages the current plan no longer names. A rebuild never changes an approved page: it raises a guide proposal, shown on the Proposals page with the current and proposed text, and a proposal whose page changed or was deleted since can only be dismissed. A page or proposal that looks like it holds a secret value is hidden.
+- `loopx memory-store guide <alias> [slug]` prints a project's guide: the list of pages, or one page. Agents read approved pages only.
 
 ### Changed
 
@@ -62,6 +64,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - The Issues → Worktrees "Switch to a worktree" snippet is now a dark, syntax-highlighted code block in the same style as the Terminal view; copying it still copies the plain script.
 - Issue loop screenshots: shots are planned from the merge request's changed files, and pages behind a sign-in are reached through a documented dev bypass first, then the local development database read-only, then test data or mocks.
 - Creator is no longer in the dashboard sidebar; the Mac app has a new **Creator** menu (also in the menu-bar icon) that opens its Discover, Library, Showcase, Videos and Jobs panels directly.
+- Approving a profile or guide proposal by any route (the API, Needs you, `loopx approvals approve` or the Memory page) now always applies it, and only while the page or section still holds the text it replaces. The approval listings (the snapshot and `/api/approvals`) no longer carry the full proposal texts, only their lengths (`old_len`, `new_len`).
+- Once a project's guide has a plan, the profile's Features section becomes an index of the guide's feature pages: it is no longer refreshed by the AI or proposed over, and the Memory page points you to the Guide instead.
 
 ### Fixed
 
@@ -76,6 +80,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Dashboard notification toasts in dark mode with a tinted accent (green, blue, ...): the background now follows the dark theme instead of the light accent wash, so the message, time and close button are readable.
 - Project profile builds (and refreshes and syncs) no longer fail with "FileNotFoundError" within a second when the dashboard backend, started by the Mac app or launchd, cannot see the AI CLI on its `PATH`: the sealed AI call now starts the CLI with the login shell's `PATH` (asked at most every 10 minutes), which also fixes Todos reply drafts started from the dashboard. A CLI that really cannot be started now says "the AI command could not be started — check Settings → AI CLI" on the Memory page, the Terminal trace and Needs you. The Memory page shows a job as working from its live record (also after leaving and coming back), clears the last failure when a new build starts, and stops showing a failure after 24 hours.
 - GitLab issues: after the loop opens a merge request for an issue, scheduled checks and manual runs do nothing for 7 days (no duplicate comment on the issue) unless someone other than the assignee comments; that comment wakes the issue up and gets a reply in its thread.
+- Secrets in Dockerfiles and shell lines, such as `ENV`/`ARG` values and `Authorization` or `X-Api-Key` headers, are now redacted before source text is sent to an AI.
+- A project's managed clone is no longer deleted while a profile or guide job is using it.
 
 ### Changed
 
