@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const HISTORY_KEEP: usize = 20;
+pub(crate) const HISTORY_KEEP: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SectionKey {
@@ -123,7 +123,7 @@ pub struct Profile {
     pub sections: BTreeMap<SectionKey, Section>,
 }
 
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     let mut cur = s.split_whitespace().collect::<Vec<_>>().join(" ");
     // Idempotent: replacing can create a new `-->` (e.g. `--->`), so loop.
     while cur.contains("-->") {
@@ -142,10 +142,10 @@ fn is_structural(line: &str) -> bool {
 
 /// Body escaping: a structural line, with any number of leading backslashes,
 /// gets one more backslash on render; parse strips one. Round-trips exactly.
-fn escape_body(body: &str) -> String {
+pub(crate) fn escape_body_by(body: &str, structural: fn(&str) -> bool) -> String {
     body.lines()
         .map(|l| {
-            if is_structural(l.trim_start_matches('\\')) {
+            if structural(l.trim_start_matches('\\')) {
                 format!("\\{l}")
             } else {
                 l.to_string()
@@ -155,15 +155,23 @@ fn escape_body(body: &str) -> String {
         .join("\n")
 }
 
-fn unescape_line(line: &str) -> &str {
-    if line.starts_with('\\') && is_structural(line.trim_start_matches('\\')) {
+pub(crate) fn unescape_line_by(line: &str, structural: fn(&str) -> bool) -> &str {
+    if line.starts_with('\\') && structural(line.trim_start_matches('\\')) {
         &line[1..]
     } else {
         line
     }
 }
 
-fn ts(t: DateTime<Utc>) -> String {
+fn escape_body(body: &str) -> String {
+    escape_body_by(body, is_structural)
+}
+
+fn unescape_line(line: &str) -> &str {
+    unescape_line_by(line, is_structural)
+}
+
+pub(crate) fn ts(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
@@ -223,7 +231,7 @@ pub fn render(p: &Profile) -> String {
 /// Parse errors name the line and what was wrong with it, never the text: a
 /// profile line can carry anything (a pasted secret included), and these
 /// messages reach logs, stderr, the dashboard and the chat.
-fn parse_time(v: &str) -> Result<DateTime<Utc>, String> {
+pub(crate) fn parse_time(v: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(v.trim())
         .map(|t| t.with_timezone(&Utc))
         .map_err(|_| "bad timestamp".to_string())
@@ -395,7 +403,7 @@ pub fn parse(text: &str) -> Result<Profile, String> {
     })
 }
 
-fn project_dir(alias: &str, root: Option<&Path>) -> PathBuf {
+pub(crate) fn project_dir(alias: &str, root: Option<&Path>) -> PathBuf {
     root.map(Path::to_path_buf)
         .unwrap_or_else(default_memory_root)
         .join(alias)
@@ -487,7 +495,7 @@ fn snapshot_and_write(alias: &str, text: &str, root: Option<&Path>) -> io::Resul
     std::fs::rename(&tmp, &path)
 }
 
-fn invalid(msg: String) -> io::Error {
+pub(crate) fn invalid(msg: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
@@ -1276,6 +1284,30 @@ mod tests {
         let got = load("app", Some(root.path())).unwrap().unwrap();
         for k in keys {
             assert_eq!(got.sections[&k].summary, format!("s-{}", k.slug()), "{k:?}");
+        }
+    }
+
+    #[test]
+    fn escape_by_a_custom_predicate_round_trips() {
+        fn marker(l: &str) -> bool {
+            l.starts_with("<!-- part: ")
+        }
+        for body in [
+            "plain",
+            "<!-- part: x origin: agent -->",
+            "\\<!-- part: x origin: agent -->",
+            "a\n<!-- part: y -->\nb",
+        ] {
+            let escaped = escape_body_by(body, marker);
+            assert!(
+                !escaped.lines().any(marker),
+                "an escaped body must not contain a live marker: {escaped:?}"
+            );
+            let back: Vec<&str> = escaped
+                .lines()
+                .map(|l| unescape_line_by(l, marker))
+                .collect();
+            assert_eq!(back.join("\n"), body);
         }
     }
 }
