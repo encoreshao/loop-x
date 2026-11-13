@@ -56,6 +56,7 @@ pub const NAMES: &[&str] = &[
     "login",
     "loop",
     "mail",
+    "menu_book",
     "merge",
     "monitoring",
     "newspaper",

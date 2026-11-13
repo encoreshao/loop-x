@@ -44,10 +44,16 @@ use std::path::{Path, PathBuf};
 use std::cell::OnceCell;
 use std::sync::{Arc, Mutex};
 
+// An explicit path: `build.rs` registers every `pages/<name>.rs` as a page, and a
+// child module resolved by default would sit beside it in `pages/`.
+#[path = "memory/guide.rs"]
+mod guide;
+
 const BASE: &str = "/insights?view=memory";
 
-/// The sub-page slugs, in sub-nav order. `activity` holds Recent work and People.
-pub const PAGES: [&str; 11] = [
+/// The sub-page slugs, in sub-nav order. `activity` holds Recent work and People;
+/// `guide` is the project guide (its own module, [`guide`]).
+pub const PAGES: [&str; 12] = [
     "overview",
     "structure",
     "features",
@@ -57,6 +63,7 @@ pub const PAGES: [&str; 11] = [
     "conventions",
     "gotchas",
     "activity",
+    "guide",
     "lessons",
     "proposals",
 ];
@@ -603,6 +610,7 @@ fn page_label(ctx: &UiCtx, slug: &str) -> String {
         "conventions" => ctx.t("Conventions"),
         "gotchas" => ctx.t("Gotchas"),
         "activity" => ctx.t("Activity"),
+        "guide" => ctx.t("Guide"),
         "lessons" => ctx.t("Lessons"),
         _ => ctx.t("Proposals"),
     }
@@ -619,6 +627,7 @@ fn page_icon(slug: &str) -> &'static str {
         "conventions" => "tune",
         "gotchas" => "warning",
         "activity" => "history",
+        "guide" => "menu_book",
         "lessons" => "lightbulb",
         _ => "fact_check",
     }
@@ -1751,6 +1760,7 @@ fn sub_page(ctx: &UiCtx, p: &Project, slug: &str, m: &Model) -> String {
     let content = match slug {
         "lessons" => lessons_card(ctx, p),
         "proposals" => proposals_card(ctx, p, &m.proposals),
+        "guide" => guide::render(ctx, p, m),
         _ => match &p.loaded {
             Loaded::Unreadable(e) => error_card(ctx, e),
             Loaded::Missing => empty_card(&ctx.t("This project has no profile yet, so this section has not been written."),
@@ -5988,5 +5998,333 @@ mod tests {
         assert!(html.contains("name='url'"), "{html}");
         sb.save(&profile("wiki-form", &[(SectionKey::Overview, section("S.", "B"))]));
         assert!(sb.get("/insights?view=memory&project=wiki-form").contains("action='/insights/memory/wiki/add'"));
+    }
+
+    // ------------------------------------------------------------------ the guide reader
+
+    fn gd_page(alias: &str, slug: &str, title: &str, status: Status, parts: &[(&str, &str, Origin)]) -> loopx_core::project_guide::Page {
+        loopx_core::project_guide::Page {
+            alias: alias.into(),
+            slug: slug.into(),
+            kind: loopx_core::project_guide::check_slug(slug).unwrap(),
+            title: title.into(),
+            status,
+            generated_at: Some(Utc.with_ymd_and_hms(2026, 11, 2, 9, 0, 0).unwrap()),
+            head_sha: Some("0123456789abcdef0123".into()),
+            summary: format!("Summary of {slug}."),
+            related: vec![],
+            parts: parts
+                .iter()
+                .map(|(k, b, o)| loopx_core::project_guide::Part { key: (*k).into(), body: (*b).into(), origin: *o })
+                .collect(),
+            sources: vec![Source { path: format!("app/{slug}.rb"), sha256: "cd".repeat(32) }],
+        }
+    }
+
+    fn put_page(sb: &Sb, alias: &str, slug: &str, title: &str, status: Status, parts: &[(&str, &str, Origin)]) {
+        loopx_core::project_guide::save(&gd_page(alias, slug, title, status, parts), Some(&sb.root())).unwrap();
+    }
+
+    fn put_plan(sb: &Sb, alias: &str, features: &[&str]) {
+        let plan = loopx_core::guide_plan::Plan {
+            features: features
+                .iter()
+                .map(|s| loopx_core::guide_plan::FeaturePlan {
+                    slug: (*s).into(),
+                    title: format!("Planned {s}"),
+                    summary: format!("Plan summary of {s}."),
+                    files: vec![],
+                    related: vec![],
+                })
+                .collect(),
+            ..Default::default()
+        };
+        loopx_core::guide_plan::save(alias, &plan, Some(&sb.root())).unwrap();
+    }
+
+    fn guide_url(alias: &str, slug: Option<&str>) -> String {
+        let mut url = format!("/insights?view=memory&project={alias}&page=guide");
+        if let Some(s) = slug {
+            url.push_str("&guide=");
+            url.push_str(s);
+        }
+        url
+    }
+
+    /// The `<a>` row of `slug` in the guide list.
+    fn row_of<'a>(html: &'a str, slug: &str) -> &'a str {
+        let href = html.find(&format!("guide={slug}'")).unwrap_or_else(|| panic!("no row for {slug}: {html}"));
+        let at = html[..href].rfind("<a ").unwrap();
+        let end = href + html[href..].find("</a>").unwrap();
+        &html[at..end]
+    }
+
+    fn get_fr(sb: &Sb, url: &str) -> String {
+        let req = crate::ui::routes::UiRequest::get(url).with_header("cookie", "loop_lang=fr");
+        let r = sb.state.registry.dispatch(&sb.state, &req).unwrap();
+        assert_eq!(r.status, 200, "{url}");
+        String::from_utf8(r.body).unwrap()
+    }
+
+    #[test]
+    fn guide_appears_in_the_sub_nav_and_the_empty_state_explains_a_build() {
+        let sb = Sb::new(&[("gd-empty", true), ("gd-nock", false)]);
+        let html = sb.get(&guide_url("gd-empty", None));
+        // The sub-nav: …Activity, Guide, | Lessons, Proposals; Guide is the current page.
+        let nav_at = html.find("class='card mem-subnav'").unwrap();
+        let nav = &html[nav_at..nav_at + html[nav_at..].find("</nav>").unwrap()];
+        let pos = |needle: &str| nav.find(needle).unwrap_or_else(|| panic!("{needle} missing: {nav}"));
+        assert!(pos("page=activity'") < pos("page=guide'"));
+        assert!(pos("page=guide'") < pos("mem-subnav-sep"));
+        assert!(pos("mem-subnav-sep") < pos("page=lessons'"));
+        assert!(nav.contains("<span>Guide</span>"), "{nav}");
+        assert!(nav.contains("href='#i-menu_book'"), "{nav}");
+        assert!(nav[pos("page=guide'")..].starts_with("page=guide' class='is-active' aria-current='page'"), "{nav}");
+        // The empty state says what a build does and costs, with a Build guide form.
+        assert!(html.contains("A build reads the project&#x27;s code and writes about 15 pages"), "{html}");
+        assert!(html.contains("It makes one AI call per page (about 15) and takes a few minutes."));
+        assert!(html.contains("Nothing is used by agents until you approve a page."));
+        assert!(html.contains("action='/insights/memory/guide/build'"), "{html}");
+        let form_at = html.find("action='/insights/memory/guide/build'").unwrap();
+        let form = &html[form_at..form_at + html[form_at..].find("</form>").unwrap()];
+        assert!(form.contains("name='csrf_token'"), "{form}");
+        assert!(form.contains("<input type='hidden' name='project' value='gd-empty'>"), "{form}");
+        assert!(form.contains("Build guide"), "{form}");
+        // No profile is needed, and no list is drawn when there is nothing to list.
+        assert!(!html.contains("class='gd-layout'"));
+        // Without a checkout: no form, the reason instead.
+        let html = sb.get(&guide_url("gd-nock", None));
+        assert!(html.contains("about 15 pages"));
+        assert!(!html.contains("action='/insights/memory/guide/build'"), "{html}");
+        assert!(html.contains("Set this project&#x27;s local checkout on the Projects page to build its guide."), "{html}");
+    }
+
+    #[test]
+    fn the_list_groups_project_and_feature_pages_with_status_pills_and_plan_markers() {
+        let sb = Sb::new(&[("gd-list", true)]);
+        put_plan(&sb, "gd-list", &["feature-orders", "feature-pay"]);
+        put_page(&sb, "gd-list", "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        put_page(&sb, "gd-list", "feature-orders", "Orders", Status::Draft, &[("what", "Takes orders.", Origin::Agent)]);
+        put_page(&sb, "gd-list", "feature-old", "Old export", Status::Draft, &[("what", "Exports.", Origin::Agent)]);
+        let html = sb.get(&guide_url("gd-list", None));
+        assert!(html.contains("class='gd-layout'"), "{html}");
+        let list_at = html.find("class='card gd-list'").unwrap();
+        let list = &html[list_at..list_at + html[list_at..].find("</nav>").unwrap()];
+        let pos = |needle: &str| list.find(needle).unwrap_or_else(|| panic!("{needle} missing: {list}"));
+        // Groups, in order: Project, Features, Not in the current plan.
+        assert!(pos("<h3 class='gd-group'>Project</h3>") < pos("guide=architecture'"));
+        assert!(pos("guide=architecture'") < pos("<h3 class='gd-group'>Features</h3>"));
+        assert!(pos("<h3 class='gd-group'>Features</h3>") < pos("guide=feature-orders'"));
+        assert!(pos("guide=feature-orders'") < pos("<h3 class='gd-group'>Not in the current plan</h3>"));
+        assert!(pos("<h3 class='gd-group'>Not in the current plan</h3>") < pos("guide=feature-old'"));
+        // Each row: title, summary, a status pill; the off-plan marker only on feature-old.
+        let arch = row_of(list, "architecture");
+        assert!(arch.contains("Architecture") && arch.contains("Summary of architecture."), "{arch}");
+        assert!(arch.contains("<span class='mem-pill mem-pill-fresh'>Approved</span>"), "{arch}");
+        let orders = row_of(list, "feature-orders");
+        assert!(orders.contains("Orders") && orders.contains("<span class='mem-pill mem-pill-review'>Draft</span>"), "{orders}");
+        assert!(!orders.contains("gd-off-plan"), "{orders}");
+        let old = row_of(list, "feature-old");
+        assert!(old.contains("Old export") && old.contains("<span class='mem-pill mem-pill-review'>Draft</span>"), "{old}");
+        assert!(old.contains("<span class='gd-off-plan'>Not in the current plan</span>"), "{old}");
+        assert_eq!(list.matches("gd-off-plan").count(), 1, "{list}");
+        // A planned feature with no page yet is listed as not written, and is not a link.
+        assert!(list.contains("Planned feature-pay") && list.contains("Not written yet"), "{list}");
+        assert!(!list.contains("guide=feature-pay'"));
+        // The first page is selected by default and shown on the right.
+        assert!(arch.contains("is-active"), "{arch}");
+        assert!(!orders.contains("is-active"));
+        let page_at = html.find("class='card gd-page'").unwrap();
+        assert!(html[page_at..].contains("<h2>Architecture</h2>"));
+        assert!(html[page_at..].contains("Layers."));
+        assert!(!html[page_at..].contains("Takes orders."));
+    }
+
+    #[test]
+    fn a_page_renders_parts_sources_verified_commit_and_human_tag() {
+        let sb = Sb::new(&[("gd-view", true)]);
+        // Parts given out of order: they render in the kind's order.
+        put_page(
+            &sb,
+            "gd-view",
+            "feature-orders",
+            "Orders",
+            Status::Approved,
+            &[
+                ("key-points", "Totals are in **cents**.", Origin::Agent),
+                ("how", "A job settles payments.", Origin::Human),
+                ("what", "Buyers place orders.", Origin::Agent),
+            ],
+        );
+        let html = sb.get(&guide_url("gd-view", Some("feature-orders")));
+        let page_at = html.find("class='card gd-page'").unwrap();
+        let page = &html[page_at..];
+        let pos = |needle: &str| page.find(needle).unwrap_or_else(|| panic!("{needle} missing: {page}"));
+        assert!(pos("<h2>Orders</h2>") < pos("<h3>What it does</h3>"));
+        assert!(pos("<h3>What it does</h3>") < pos("<h3>How it works</h3>"));
+        assert!(pos("<h3>How it works</h3>") < pos("<h3>Key points</h3>"));
+        assert!(page.contains("<span class='mem-pill mem-pill-fresh'>Approved</span>"));
+        assert!(page.contains("<strong>cents</strong>"), "{page}");
+        assert!(page.contains("Summary of feature-orders."));
+        // Each part is its own section; only the human one carries the person tag.
+        let parts: Vec<&str> = page.split("<section class='gd-part'>").skip(1).collect();
+        assert_eq!(parts.len(), 3, "{page}");
+        assert!(!parts[0].split("</section>").next().unwrap().contains("Written by a person"));
+        assert!(parts[1].split("</section>").next().unwrap().contains("<span class='mem-pill mem-pill-human'>Written by a person</span>"));
+        assert!(!parts[2].split("</section>").next().unwrap().contains("Written by a person"));
+        assert!(parts[0].contains("<div class='markdown mem-body'>"));
+        // Meta: who wrote it, verified date, short commit.
+        assert!(page.contains("Written by the agent and a person"), "{page}");
+        assert!(page.contains("Last verified 2026-11-02"), "{page}");
+        assert!(page.contains("<code>0123456789ab</code>"), "{page}");
+        assert!(!page.contains("0123456789abcdef"));
+        // Sources.
+        assert!(page.contains("<details class='mem-sources'"), "{page}");
+        assert!(page.contains("Sources (1)"));
+        assert!(page.contains("<code>app/feature-orders.rb</code>"));
+        assert!(page.contains("cdcdcdcdcdcd"));
+        // An all-agent page says so.
+        put_page(&sb, "gd-view", "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        let html = sb.get(&guide_url("gd-view", Some("architecture")));
+        assert!(html.contains("Written by the agent ·") || html.contains("Written by the agent<"), "{html}");
+        assert!(!html.contains("Written by the agent and a person"));
+    }
+
+    #[test]
+    fn associations_link_only_to_existing_pages() {
+        let sb = Sb::new(&[("gd-assoc", true)]);
+        put_page(&sb, "gd-assoc", "feature-cart", "Cart", Status::Approved, &[("what", "Holds items.", Origin::Agent)]);
+        put_page(
+            &sb,
+            "gd-assoc",
+            "feature-orders",
+            "Orders",
+            Status::Approved,
+            &[(
+                "associations",
+                "Uses [Cart](feature-cart), not [Ghost](feature-ghost) or [x](javascript:alert(1)).",
+                Origin::Agent,
+            )],
+        );
+        let html = sb.get(&guide_url("gd-assoc", Some("feature-orders")));
+        let page_at = html.find("class='card gd-page'").unwrap();
+        let page = &html[page_at..];
+        assert!(page.contains("<h3>Associations</h3>"), "{page}");
+        assert!(
+            page.contains("<a href=\"/insights?view=memory&amp;project=gd-assoc&amp;page=guide&amp;guide=feature-cart\">Cart</a>"),
+            "{page}"
+        );
+        // A slug with no page is not turned into a guide link (only its label is kept);
+        // a javascript: link stays text.
+        assert!(!page.contains("guide=feature-ghost"), "{page}");
+        assert!(!page.contains("href=\"feature-ghost\""), "{page}");
+        assert!(page.contains("not Ghost or"), "{page}");
+        assert!(!page.contains("href=\"javascript"), "{page}");
+        assert!(page.contains("[x](javascript:alert(1))"), "{page}");
+    }
+
+    #[test]
+    fn a_page_with_a_secret_is_redacted_everywhere() {
+        let alias = "gd-secret";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        put_page(&sb, alias, "feature-orders", "Orders", Status::Draft, &[("what", "Body text here.", Origin::Agent)]);
+        let file = loopx_core::project_guide::guide_dir(alias, Some(&sb.root())).join("feature-orders.md");
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        let text = std::fs::read_to_string(&file).unwrap().replace("Body text here.", &format!("Body text here {token}."));
+        std::fs::write(&file, text).unwrap();
+        for url in [guide_url(alias, Some("feature-orders")), guide_url(alias, None)] {
+            let html = sb.get(&url);
+            assert!(!html.contains("glpat-"), "{html}");
+            assert!(!html.contains("Body text here"), "{html}");
+            assert!(!html.contains("Summary of feature-orders."), "{html}");
+            assert!(!html.contains("app/feature-orders.rb"), "{html}");
+            // The list row still shows the title.
+            assert!(row_of(&html, "feature-orders").contains("Orders"));
+            let layout_at = html.find("class='gd-layout'").unwrap();
+            let layout_end = html.find("data-mem-live").unwrap();
+            assert!(!html[layout_at..layout_end].contains("title="), "{html}");
+        }
+        let html = sb.get(&guide_url(alias, Some("feature-orders")));
+        let page_at = html.find("class='card gd-page'").unwrap();
+        let page = &html[page_at..];
+        assert!(page.contains("<h2>Orders</h2>"), "{page}");
+        assert!(page.contains("mem-pill-review'>Draft</span>"), "{page}");
+        assert!(page.contains("class='mem-redacted'"), "{page}");
+        assert!(page.contains("GitLab token"), "{page}");
+        assert!(!page.contains("gd-part"), "{page}");
+    }
+
+    #[test]
+    fn hostile_guide_values_are_not_echoed_and_do_not_crash() {
+        let alias = "gd-host";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        let long = "q".repeat(10 * 1024);
+        for (raw, shown) in [
+            ("%3Cscript%3Ex", "<script>x"),
+            ("..%2Fx", "../x"),
+            (long.as_str(), long.as_str()),
+            ("Feature-A", "Feature-A"),
+            ("feature-nope", "feature-nope"),
+        ] {
+            let html = sb.get(&guide_url(alias, Some(raw)));
+            assert!(html.contains("This page does not exist."), "{raw}");
+            assert!(!html.contains(shown), "{raw} echoed");
+            assert!(!html.contains(raw), "{raw} echoed");
+            assert!(!html.contains("&lt;script&gt;x"), "{raw}");
+            // The list is still there.
+            assert!(html.contains("guide=architecture'"), "{raw}");
+        }
+        let html = sb.get("/insights?view=memory&project=nope&page=guide&guide=%3Cscript%3Ex");
+        assert!(html.contains("No project by that name"), "{html}");
+        assert!(!html.contains("<script>x") && !html.contains("&lt;script&gt;x"));
+    }
+
+    #[test]
+    fn a_draft_page_says_agents_do_not_read_it() {
+        let alias = "gd-draft";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        put_page(&sb, alias, "roadmap", "Roadmap", Status::Draft, &[("planned", "Refunds.", Origin::Agent)]);
+        let banner = "Draft: agents do not read this page until it is approved.";
+        assert!(sb.get(&guide_url(alias, Some("roadmap"))).contains(banner));
+        assert!(!sb.get(&guide_url(alias, Some("architecture"))).contains(banner));
+    }
+
+    #[test]
+    fn an_unreadable_page_file_shows_a_neutral_row_and_the_rest_still_renders() {
+        let alias = "gd-bad";
+        let sb = Sb::new(&[(alias, true)]);
+        put_page(&sb, alias, "architecture", "Architecture", Status::Approved, &[("overview", "Layers.", Origin::Agent)]);
+        let dir = loopx_core::project_guide::guide_dir(alias, Some(&sb.root()));
+        std::fs::write(dir.join("feature-x.md"), "not a page").unwrap();
+        let html = sb.get(&guide_url(alias, None));
+        let row = row_of(&html, "feature-x");
+        assert!(row.contains("Could not be read"), "{row}");
+        assert!(!html.contains("not a page"), "{html}");
+        assert!(!html.contains(&*sb.root().to_string_lossy()), "{html}");
+        // The readable page is still listed and shown.
+        assert!(html.contains("guide=architecture'") && html.contains("Layers."));
+        let html = sb.get(&guide_url(alias, Some("feature-x")));
+        assert!(html.contains("This page could not be read."), "{html}");
+        assert!(!html.contains("not a page") && !html.contains("missing frontmatter"), "{html}");
+    }
+
+    #[test]
+    fn the_guide_page_is_translated() {
+        let sb = Sb::new(&[("gd-fr", true), ("gd-fr2", true)]);
+        let html = get_fr(&sb, &guide_url("gd-fr", None));
+        assert!(html.contains("<span>Guide</span>"), "{html}");
+        assert!(html.contains("Elle fait un appel IA par page (environ 15)"), "{html}");
+        assert!(html.contains("Construire le guide"), "{html}");
+        assert!(!html.contains("It makes one AI call per page"));
+        put_page(&sb, "gd-fr2", "feature-orders", "Orders", Status::Draft, &[("key-points", "Cents.", Origin::Human)]);
+        let html = get_fr(&sb, &guide_url("gd-fr2", Some("feature-orders")));
+        assert!(html.contains("mem-pill-review'>Brouillon</span>"), "{html}");
+        assert!(html.contains("<h3>Points clés</h3>"), "{html}");
+        assert!(html.contains("Fonctionnalités"), "{html}");
+        assert!(html.contains("Brouillon : les agents ne lisent pas cette page tant qu"), "{html}");
+        assert!(!html.contains("Draft: agents do not read"));
     }
 }
