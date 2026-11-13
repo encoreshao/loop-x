@@ -326,9 +326,9 @@ pub fn build_guide(
 ) -> Result<BuildReport, String> {
     let res = (|| {
         let (_, scan, inv, digest) = prepare(alias, work_dir, instance, project_id, tracked, root)?;
-        let prompt = plan_prompt(alias, &inv, &scan, &digest)?;
         // The total is not known until the plan is in; restated below.
         report(progress, 1, 1, Step::Plan);
+        let prompt = plan_prompt(alias, &inv, &scan, &digest)?;
         let reply = agent.run(&prompt)?;
         let plan = guide_plan::parse_plan(&reply, &inv)
             .map_err(|e| format!("the plan reply did not parse: {e}"))?;

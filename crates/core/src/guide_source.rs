@@ -95,31 +95,35 @@ fn is_config_extension(path: &str) -> bool {
 
 fn is_config_like(path: &str) -> bool {
     let n = base_name(path);
-    matches!(
-        n,
-        "docker-compose.yml"
-            | "docker-compose.yaml"
-            | "compose.yml"
-            | "compose.yaml"
-            | "Cargo.toml"
-            | "package.json"
-            | "Gemfile"
-            | "go.mod"
-            | "pyproject.toml"
-            | "requirements.txt"
-            | "composer.json"
-            | "Makefile"
-            | "Package.swift"
-            | "pom.xml"
-            | "build.gradle"
-            | "mix.exs"
-            | ".gitlab-ci.yml"
-            | "Jenkinsfile"
-    ) || is_config_extension(path)
+    crate::profile_scan::MANIFEST_NAMES.contains(&n)
+        || n == ".gitlab-ci.yml"
+        || n == "Jenkinsfile"
+        || is_dockerfile(n)
+        || (n.starts_with("docker-compose") && (n.ends_with(".yml") || n.ends_with(".yaml")))
+        || is_config_extension(path)
         || path.starts_with("config/")
         || path.contains("/config/")
         || path.starts_with(".github/workflows/")
         || path.starts_with(".circleci/")
+}
+
+fn is_dockerfile(name: &str) -> bool {
+    name == "Dockerfile" || name.starts_with("Dockerfile.") || name.ends_with(".Dockerfile")
+}
+
+/// `ENV|ARG <SECRET_LIKE_NAME>[= ]<value>` lines of a Dockerfile: the value is dropped.
+fn redact_dockerfile(text: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"(?i)^(\s*(?:ENV|ARG)\s+[A-Za-z0-9_]*{SECRET_WORDS}[A-Za-z0-9_]*\s*[=\s])\s*\S.*$"
+        ))
+        .expect("static regex")
+    });
+    text.lines()
+        .map(|l| re.replace(l, "${1}[redacted]").into_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn table_start(line: &str) -> Option<String> {
@@ -272,7 +276,13 @@ pub fn load_files(work_dir: &Path, inv: &Inventory, files: &[String], page_cap: 
             out.uncovered_tables.extend(left);
             redact_source(&reduced)
         } else if is_config_like(rel) {
-            redact_source(&cut_at_line(crate::profile_scan::redact(&raw).0, FILE_CAP))
+            {
+                let mut t = crate::profile_scan::redact(&raw).0;
+                if is_dockerfile(base_name(rel)) {
+                    t = redact_dockerfile(&t);
+                }
+                redact_source(&cut_at_line(t, FILE_CAP))
+            }
         } else {
             redact_source(&cut_at_line(raw.clone(), FILE_CAP))
         };
@@ -601,5 +611,36 @@ mod tests {
             assert!(out.contains("CREATE TABLE b"), "{out}");
             assert!(!out.contains("example.com"), "{out}");
         }
+    }
+
+    #[test]
+    fn dockerfile_env_and_arg_secrets_are_redacted() {
+        let d = tempfile::tempdir().unwrap();
+        let body = "FROM ruby\nENV DB_PASSWORD=s3cretpw99\nARG NPM_TOKEN=abc123xyz\nENV API_SECRET hunter2hunter\nENV RAILS_ENV=production\n";
+        write(d.path(), "Dockerfile", body);
+        write(d.path(), "Dockerfile.prod", body);
+        write(d.path(), "app.Dockerfile", body);
+        write(
+            d.path(),
+            "docker-compose.override.yml",
+            "services:\n  a:\n    environment:\n      DB_PASSWORD: s3cretpw99\n",
+        );
+        let inv = inventory(d.path());
+        let files: Vec<String> = [
+            "Dockerfile",
+            "Dockerfile.prod",
+            "app.Dockerfile",
+            "docker-compose.override.yml",
+        ]
+        .map(String::from)
+        .to_vec();
+        let l = load_files(d.path(), &inv, &files, PAGE_CAP);
+        assert_eq!(l.shown.len(), 4, "{:?}", l.skipped_secret);
+        for (p, text) in &l.shown {
+            for leak in ["s3cretpw99", "abc123xyz", "hunter2hunter"] {
+                assert!(!text.contains(leak), "{p}: {text}");
+            }
+        }
+        assert!(l.shown[0].1.contains("RAILS_ENV=production"));
     }
 }

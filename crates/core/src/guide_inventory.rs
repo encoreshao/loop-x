@@ -73,6 +73,7 @@ fn depth(path: &str) -> usize {
     path.matches('/').count()
 }
 
+/// An env name: `.env`, `.envs`, `.env.*`, `*.env`. Excluded when ANY path component is one.
 fn is_env_file(name: &str) -> bool {
     name.starts_with(".env") || name.ends_with(".env")
 }
@@ -167,7 +168,7 @@ pub(crate) fn inventory_capped(work_dir: &Path, cap: usize) -> Inventory {
         walk(work_dir, "", &mut v);
         v
     });
-    paths.retain(|p| !is_env_file(p.rsplit('/').next().unwrap_or(p)));
+    paths.retain(|p| !p.split('/').any(is_env_file));
     paths.sort_by(|a, b| depth(a).cmp(&depth(b)).then_with(|| a.cmp(b)));
     let truncated = paths.len() > cap;
     paths.truncate(cap);
@@ -343,5 +344,30 @@ mod tests {
         let inv = inventory(&d.path().join("sub"));
         let paths: Vec<&str> = inv.entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, ["inner.rb"]);
+    }
+
+    #[test]
+    fn files_under_an_env_named_directory_are_excluded_in_git_and_walk() {
+        let files = [
+            ".envs/.production/.postgres",
+            "deploy/.env/db",
+            "config/prod.env/x",
+            "ok.rb",
+        ];
+        let d = git_repo();
+        for f in files {
+            write(d.path(), f, b"POSTGRES_PASSWORD=Xk9fj2LqHunter\n");
+        }
+        add_all(d.path());
+        let inv = inventory(d.path());
+        let paths: Vec<&str> = inv.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["ok.rb"], "git");
+        let d = tempfile::tempdir().unwrap();
+        for f in files {
+            write(d.path(), f, b"POSTGRES_PASSWORD=Xk9fj2LqHunter\n");
+        }
+        let inv = inventory(d.path());
+        let paths: Vec<&str> = inv.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, ["ok.rb"], "walk");
     }
 }

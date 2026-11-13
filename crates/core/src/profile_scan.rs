@@ -27,7 +27,7 @@ const MAX_TREE: usize = 500;
 /// Files larger than this are not hashed into `sources` (never loaded whole).
 const SOURCE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const SKIP_DIRS: [&str; 5] = [".git", "node_modules", "target", "vendor", ".venv"];
-const MANIFEST_NAMES: [&str; 17] = [
+pub(crate) const MANIFEST_NAMES: [&str; 17] = [
     "Cargo.toml",
     "package.json",
     "Gemfile",

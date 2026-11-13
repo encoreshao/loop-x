@@ -117,6 +117,9 @@ pub fn parse_plan(reply: &str, inv: &Inventory) -> Result<Plan, String> {
     let mut plan: Plan =
         serde_json::from_str(json).map_err(|_| "the plan did not parse".to_string())?;
     check_shape(&plan)?;
+    if plan.features.is_empty() {
+        return Err("the plan names no features".to_string());
+    }
     for (i, f) in plan.features.iter_mut().enumerate() {
         if f.files.is_empty() {
             return Err(format!("feature #{} names no files", i + 1));
@@ -284,9 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn no_features_is_a_valid_plan() {
-        let p = parse_plan(&reply(""), &base()).unwrap();
-        assert!(p.features.is_empty());
+    fn a_plan_with_no_features_is_refused() {
+        let e = parse_plan(&reply(""), &base()).unwrap_err();
+        assert_eq!(e, "the plan names no features");
     }
 
     #[test]
