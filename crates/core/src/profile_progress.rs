@@ -33,6 +33,8 @@ pub enum JobKind {
     Refresh(SectionKey),
     /// The weekly sync (or "Sync now"): one record for the whole pass.
     Sync,
+    /// A project guide build; its page count sets the step total.
+    Guide,
 }
 
 impl JobKind {
@@ -41,6 +43,7 @@ impl JobKind {
             JobKind::Build => "build",
             JobKind::Refresh(_) => "refresh",
             JobKind::Sync => "sync",
+            JobKind::Guide => "guide",
         }
     }
 
@@ -48,7 +51,7 @@ impl JobKind {
         match self {
             JobKind::Build => BUILD_STEPS,
             JobKind::Refresh(_) => REFRESH_STEPS,
-            JobKind::Sync => 0,
+            JobKind::Sync | JobKind::Guide => 0,
         }
     }
 }
@@ -65,10 +68,14 @@ pub enum Step {
     Proposal,
     /// A sync working on one project (the record names the project's alias).
     Project,
+    /// A guide build deciding which pages to write.
+    Plan,
+    /// A guide build writing one page.
+    Page,
 }
 
 impl Step {
-    const ALL: [Step; 8] = [
+    const ALL: [Step; 10] = [
         Step::Start,
         Step::Scan,
         Step::Issues,
@@ -77,6 +84,8 @@ impl Step {
         Step::Save,
         Step::Proposal,
         Step::Project,
+        Step::Plan,
+        Step::Page,
     ];
 
     pub fn code(self) -> &'static str {
@@ -89,6 +98,8 @@ impl Step {
             Step::Save => "save",
             Step::Proposal => "proposal",
             Step::Project => "project",
+            Step::Plan => "plan",
+            Step::Page => "page",
         }
     }
 
@@ -103,6 +114,8 @@ impl Step {
             Step::Save => "Saving",
             Step::Proposal => "Raising the proposal",
             Step::Project => "Syncing a project",
+            Step::Plan => "Planning the guide",
+            Step::Page => "Writing a page",
         }
     }
 
@@ -204,7 +217,11 @@ pub fn job_file(base: &Path, kind: JobKind, alias: &str) -> PathBuf {
     match kind {
         JobKind::Sync => dir.join("profile-sync.json"),
         _ => {
-            let hash = crate::sha256::hex(&crate::sha256::sha256(alias.as_bytes()));
+            let keyed = match kind {
+                JobKind::Guide => format!("guide:{alias}"),
+                _ => alias.to_string(),
+            };
+            let hash = crate::sha256::hex(&crate::sha256::sha256(keyed.as_bytes()));
             dir.join(format!("profile~{}~{}.json", safe_name(alias), &hash[..8]))
         }
     }
@@ -299,6 +316,7 @@ pub fn is_profile_record(v: &Value) -> bool {
 pub fn label(kind: JobKind, alias: &str) -> String {
     match kind {
         JobKind::Sync => "Profile sync".to_string(),
+        JobKind::Guide => format!("Guide \u{b7} {alias}"),
         _ => format!("Profile \u{b7} {alias}"),
     }
 }
@@ -732,6 +750,46 @@ mod tests {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn a_guide_job_and_a_profile_build_of_one_alias_use_different_files() {
+        let base = std::path::Path::new("/tmp/x/outputs/agent-activity.json");
+        let build = job_file(base, JobKind::Build, "shop");
+        let guide = job_file(base, JobKind::Guide, "shop");
+        assert_ne!(build, guide);
+        assert!(is_job_file_name(
+            guide.file_name().unwrap().to_str().unwrap()
+        ));
+    }
+
+    #[test]
+    fn the_new_steps_have_codes_names_and_round_trip() {
+        for (s, code, name) in [
+            (Step::Plan, "plan", "Planning the guide"),
+            (Step::Page, "page", "Writing a page"),
+        ] {
+            assert_eq!(s.code(), code);
+            assert_eq!(s.name(), name);
+            assert_eq!(Step::from_code(code), Some(s));
+        }
+    }
+
+    #[test]
+    fn a_guide_job_reports_a_per_page_step_and_says_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("outputs").join("agent-activity.json");
+        let job = ProfileJob::start(&base, JobKind::Guide, "shop");
+        job.step(5, 14, Step::Page);
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(job.file()).unwrap()).unwrap();
+        assert_eq!(v["detail"], "Writing a page");
+        assert_eq!(v["step_code"], "page");
+        assert_eq!(v["kind"], "guide");
+        assert_eq!(v["step"], 5);
+        assert_eq!(v["steps"], 14);
+        assert!(label(JobKind::Guide, "shop").starts_with("Guide"));
+        drop(job);
     }
 
     #[test]

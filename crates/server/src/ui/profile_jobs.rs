@@ -41,6 +41,8 @@ pub fn step_name(ctx: &UiCtx, job: &JobView) -> String {
         Step::Save => ctx.t("Saving"),
         Step::Proposal => ctx.t("Raising the proposal"),
         Step::Project => ctx.t("Syncing a project"),
+        Step::Plan => ctx.t("Planning the guide"),
+        Step::Page => ctx.t("Writing a page"),
     }
 }
 

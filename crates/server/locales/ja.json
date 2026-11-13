@@ -2046,6 +2046,8 @@
   "Saving": "保存中",
   "Raising the proposal": "提案を作成中",
   "Syncing a project": "プロジェクトを同期中",
+  "Planning the guide": "ガイドを計画中",
+  "Writing a page": "ページを執筆中",
   "Profile · {alias} — {step} ({n}/{total})": "プロフィール · {alias} — {step} ({n}/{total})",
   "Profile · {alias} — {step}": "プロフィール · {alias} — {step}",
   "Profile sync — {alias} ({n}/{total})": "プロフィール同期 — {alias} ({n}/{total})",

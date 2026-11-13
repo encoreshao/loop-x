@@ -2046,6 +2046,8 @@
   "Saving": "正在保存",
   "Raising the proposal": "正在提交提案",
   "Syncing a project": "正在同步项目",
+  "Planning the guide": "正在规划指南",
+  "Writing a page": "正在撰写页面",
   "Profile · {alias} — {step} ({n}/{total})": "档案 · {alias} — {step} ({n}/{total})",
   "Profile · {alias} — {step}": "档案 · {alias} — {step}",
   "Profile sync — {alias} ({n}/{total})": "档案同步 — {alias} ({n}/{total})",
