@@ -236,7 +236,7 @@ pub fn parse(text: &str) -> Result<Page, String> {
     }
     let alias = alias.filter(|a| !a.is_empty()).ok_or("missing alias")?;
     let slug = slug.ok_or("missing slug")?;
-    let slug_kind = check_slug(&slug)?;
+    let slug_kind = check_slug(&slug).map_err(|_| "invalid slug in frontmatter".to_string())?;
     let kind = kind.ok_or("missing kind")?;
     if kind != slug_kind {
         return Err("kind does not match the slug".into());
@@ -274,6 +274,9 @@ pub fn parse(text: &str) -> Result<Page, String> {
             };
             if kind.part_index(key.trim()).is_none() {
                 return Err(format!("unknown part on line {n}"));
+            }
+            if blocks.iter().any(|b| b.0 == key.trim()) {
+                return Err(format!("duplicate part on line {n}"));
             }
             blocks.push((key.trim().to_string(), origin, Vec::new()));
         } else if let Some(b) = blocks.last_mut() {
@@ -444,5 +447,20 @@ mod tests {
         let err = parse(&text).unwrap_err();
         assert!(err.contains("unknown part"), "{err}");
         assert!(!err.contains("Buyers pay"), "{err}");
+    }
+
+    #[test]
+    fn parse_errors_never_echo_a_bad_slug() {
+        for bad in ["feature-glpat-AAAA1234", "../x"] {
+            let text = render(&sample()).replace("slug: feature-checkout", &format!("slug: {bad}"));
+            let err = parse(&text).unwrap_err();
+            assert!(!err.contains(bad), "{err}");
+        }
+    }
+
+    #[test]
+    fn parse_refuses_a_duplicate_part() {
+        let text = render(&sample()).replace("<!-- part: key-points ", "<!-- part: what ");
+        assert!(parse(&text).unwrap_err().contains("duplicate part"));
     }
 }
