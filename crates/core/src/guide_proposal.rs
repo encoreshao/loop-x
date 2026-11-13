@@ -33,13 +33,27 @@ fn stale(slug: &str) -> String {
     )
 }
 
-/// The parts' (key, body) pairs, as stored (normalised by a render/parse round trip).
-fn part_bodies(p: &Page) -> Result<Vec<(String, String)>, String> {
+/// What a person reads on the page: title, summary, related and the parts' (key, body)
+/// pairs, as stored (normalised by a render/parse round trip). Sources, HEAD and the
+/// build time are not a change.
+type Substance = (String, String, Vec<String>, Vec<(String, String)>);
+
+fn substance(p: &Page) -> Result<Substance, String> {
     let back = project_guide::parse(&project_guide::render(p))
         .map_err(|_| "the page does not round-trip through its markdown form".to_string())?;
-    let mut v: Vec<_> = back.parts.into_iter().map(|x| (x.key, x.body)).collect();
-    v.sort();
-    Ok(v)
+    let mut parts: Vec<_> = back.parts.into_iter().map(|x| (x.key, x.body)).collect();
+    parts.sort();
+    Ok((back.title, back.summary, back.related, parts))
+}
+
+/// The proposal's dedupe key: the page without the metadata every rebuild changes
+/// (build time, HEAD, sources), so the same text proposed weekly hashes the same.
+fn content_hash(p: &Page) -> String {
+    let mut c = p.clone();
+    c.generated_at = None;
+    c.head_sha = None;
+    c.sources.clear();
+    hash(&project_guide::render(&c))
 }
 
 /// A pending or dismissed proposal with the same new text, or an approved one that is
@@ -94,13 +108,18 @@ pub fn raise(
     if stored.status != Status::Approved {
         return Err(format!("the {slug} page of {alias} is not approved"));
     }
+    // A hand-edited stored page is copied into the approval: check it too.
+    project_guide::validate(&stored)?;
     project_guide::validate(held)?;
-    if part_bodies(held)? == part_bodies(&stored)? {
+    // What apply will write: the stored Human parts win over the rebuild's.
+    let proposed = merge_human(held, &stored);
+    project_guide::validate(&proposed)?;
+    if substance(&proposed)? == substance(&stored)? {
         return Ok(None);
     }
     let old = project_guide::render(&stored);
-    let new = project_guide::render(held);
-    let (old_hash, new_hash) = (hash(&old), hash(&new));
+    let new = project_guide::render(&proposed);
+    let (old_hash, new_hash) = (hash(&old), content_hash(&proposed));
     if already_raised(approvals_dir, alias, slug, &new_hash, &old_hash, root) {
         return Ok(None);
     }
@@ -162,6 +181,9 @@ fn check_target(id: &str, a: &Value) -> Result<Checked, String> {
     }
     let t = &a["target"];
     let alias = t["alias"].as_str().ok_or("the proposal names no project")?;
+    if a["project"] != alias {
+        return Err("the proposal's project does not match its page".into());
+    }
     let slug = t["slug"].as_str().ok_or("the proposal names no page")?;
     check_alias(alias).map_err(|_| "the proposal names an invalid project".to_string())?;
     check_slug(slug).map_err(|_| "the proposal names an invalid page".to_string())?;
@@ -183,17 +205,24 @@ fn check_target(id: &str, a: &Value) -> Result<Checked, String> {
     })
 }
 
-/// The proposal's page over `stored`: the stored Human-origin parts win, status
-/// Approved; everything else is the proposal's.
-fn merged(new: &Page, stored: &Page) -> Page {
+/// `new` with `stored`'s Human-origin parts in place of its own; everything else is
+/// `new`'s. Idempotent, so applying a proposal raised from a merged page re-merges to
+/// the same text.
+fn merge_human(new: &Page, stored: &Page) -> Page {
     let mut out = new.clone();
-    out.status = Status::Approved;
     for h in stored.parts.iter().filter(|p| p.origin == Origin::Human) {
         match out.parts.iter_mut().find(|p| p.key == h.key) {
             Some(p) => *p = h.clone(),
             None => out.parts.push(h.clone()),
         }
     }
+    out
+}
+
+/// The page apply writes: [`merge_human`], status Approved.
+fn merged(new: &Page, stored: &Page) -> Page {
+    let mut out = merge_human(new, stored);
+    out.status = Status::Approved;
     out
 }
 
@@ -686,6 +715,129 @@ mod tests {
         assert!(!fx.marker_dir().exists());
         assert_eq!(files_under(fx.root.path()), before);
         assert!(!fx.root.path().join("x").exists());
+    }
+
+    /// The same text as a later rebuild gives it: new time, HEAD and sources.
+    fn rebuilt(p: &Page, n: i64) -> Page {
+        let mut r = p.clone();
+        r.generated_at = Some(now() + chrono::Duration::days(7 * n));
+        r.head_sha = Some(format!("head{n}"));
+        r.sources = vec![crate::project_profile::Source {
+            path: format!("app/orders_{n}.rb"),
+            sha256: format!("{n:064}"),
+        }];
+        r
+    }
+
+    #[test]
+    fn a_rebuild_with_the_same_text_but_new_metadata_is_not_raised_again() {
+        let fx = Fx::new("gp-rebuild");
+        let stored = fx.approved_page("feature-orders");
+        let held = held_of(&stored, "Same text every week.");
+        let id = fx.raise(&rebuilt(&held, 1)).unwrap().expect("first");
+        assert_eq!(fx.raise(&rebuilt(&held, 2)).unwrap(), None, "pending");
+        approvals::decide(fx.apr(), &id, "deny", "tester", now()).unwrap();
+        assert_eq!(fx.raise(&rebuilt(&held, 3)).unwrap(), None, "denied");
+        let other = held_of(&stored, "Different text this week.");
+        assert!(fx.raise(&rebuilt(&other, 4)).unwrap().is_some());
+        assert_eq!(approvals::all(fx.apr()).len(), 2);
+    }
+
+    #[test]
+    fn a_human_part_is_merged_into_the_proposal_and_does_not_count_as_a_change() {
+        let fx = Fx::new("gp-human-raise");
+        let mut p = fx.page("feature-orders", Status::Approved);
+        p.parts[1] = Part {
+            key: "key-points".into(),
+            body: "- Person-written key point.".into(),
+            origin: Origin::Human,
+        };
+        project_guide::save(&p, fx.root()).unwrap();
+        let stored = fx.stored("feature-orders");
+        // A rebuild that only rewrites the human's part is no proposal.
+        let mut only_kp = held_of(&stored, "Lets a customer place an order.");
+        only_kp.parts[1] = Part {
+            key: "key-points".into(),
+            body: "- Agent rewrite.".into(),
+            origin: Origin::Agent,
+        };
+        assert_eq!(fx.raise(&only_kp).unwrap(), None);
+        assert!(approvals::all(fx.apr()).is_empty());
+        // A rebuild of `what` proposes the human key points with the new what.
+        let mut both = held_of(&stored, "A brand new what.");
+        both.parts[1] = only_kp.parts[1].clone();
+        let id = fx.raise(&both).unwrap().expect("a proposal");
+        let new = approvals::get(fx.apr(), &id).unwrap()["target"]["new"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(new.contains("- Person-written key point."), "{new}");
+        assert!(
+            new.contains("<!-- part: key-points origin: human -->"),
+            "{new}"
+        );
+        assert!(!new.contains("Agent rewrite"), "{new}");
+        assert!(new.contains("A brand new what."), "{new}");
+        // Applying gives exactly the proposed text (re-merging is idempotent).
+        fx.approve(&id).unwrap();
+        assert_eq!(
+            project_guide::render(&fx.stored("feature-orders")),
+            new.replace("status: draft", "status: approved")
+        );
+    }
+
+    #[test]
+    fn a_stored_page_holding_a_secret_is_not_copied_into_a_proposal() {
+        let fx = Fx::new("gp-stored-secret");
+        let mut p = fx.page("feature-orders", Status::Approved);
+        p.parts[1].body = format!("token {}", fake_token());
+        // Hand-edited on disk: `save` would refuse it.
+        let dir = project_guide::guide_dir(&fx.alias, fx.root());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("feature-orders.md"), project_guide::render(&p)).unwrap();
+        let mut held = held_of(&p, "Clean new what.");
+        held.parts[1].body = "- Clean key points.".into();
+        let err = fx.raise(&held).unwrap_err();
+        assert!(!err.contains("glpat-"), "{err}");
+        assert!(approvals::all(fx.apr()).is_empty());
+    }
+
+    #[test]
+    fn a_proposal_whose_project_differs_from_its_target_is_refused() {
+        let fx = Fx::new("gp-project");
+        let stored = fx.approved_page("feature-orders");
+        let id = fx.raise(&held_of(&stored, "Moved.")).unwrap().unwrap();
+        let path = fx.apr().join(format!("{id}.json"));
+        let mut a: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        a["project"] = json!("another-project");
+        std::fs::write(&path, a.to_string()).unwrap();
+        let before = files_under(fx.root.path());
+        assert!(fx.approve(&id).is_err());
+        assert_eq!(fx.status(&id), "pending");
+        approvals::decide(fx.apr(), &id, "approve", "tester", now()).unwrap();
+        assert!(apply_proposal(&id, fx.root(), fx.apr()).is_err());
+        assert_eq!(fx.stored("feature-orders"), stored);
+        assert_eq!(files_under(fx.root.path()), before);
+    }
+
+    #[test]
+    fn a_lost_marker_is_recreated_without_writing_the_page_again() {
+        let fx = Fx::new("gp-marker");
+        let stored = fx.approved_page("feature-orders");
+        let id = fx.raise(&held_of(&stored, "Marked.")).unwrap().unwrap();
+        fx.approve(&id).unwrap();
+        let hist = fx.history("feature-orders");
+        let page = fx.stored("feature-orders");
+        let marker = fx.marker_dir().join(&id);
+        std::fs::remove_file(&marker).unwrap();
+        assert!(!is_applied(&fx.alias, &id, fx.root()));
+        assert_eq!(
+            apply_proposal(&id, fx.root(), fx.apr()).unwrap(),
+            ApplyOutcome::AlreadyApplied
+        );
+        assert_eq!(fx.history("feature-orders"), hist);
+        assert_eq!(fx.stored("feature-orders"), page);
+        assert!(marker.exists(), "the marker is written again");
     }
 
     #[test]
