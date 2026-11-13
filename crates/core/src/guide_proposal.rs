@@ -56,8 +56,9 @@ fn content_hash(p: &Page) -> String {
     hash(&project_guide::render(&c))
 }
 
-/// A pending or dismissed proposal with the same new text, or an approved one that is
-/// not applied yet and can still be (the page still holds its old text).
+/// A dismissed proposal with the same new text, or a pending or approved-but-unapplied
+/// one with the same new text that can still be applied (the page still holds the text
+/// it was raised against).
 fn already_raised(
     approvals_dir: &Path,
     alias: &str,
@@ -75,7 +76,10 @@ fn already_raised(
             return false;
         }
         match a["status"].as_str() {
-            Some("pending") | Some("denied") => true,
+            // A stale pending proposal (the page changed since) can only fail to
+            // apply, so it does not block the same text raised against the new page.
+            Some("pending") => t["old_hash"] == cur_hash,
+            Some("denied") => true,
             Some("approved") => {
                 t["old_hash"] == cur_hash
                     && a["id"]
@@ -85,6 +89,32 @@ fn already_raised(
             _ => false,
         }
     })
+}
+
+/// Whether a guide-page approval can still be applied: its target names a valid page
+/// that exists and still renders to the text the proposal was raised against. A reader
+/// shows a stale proposal instead of an Approve button that can only fail.
+pub fn still_applies(approval: &Value, root: Option<&Path>) -> bool {
+    let t = &approval["target"];
+    let (Some(alias), Some(slug), Some(old_hash)) = (
+        t["alias"].as_str(),
+        t["slug"].as_str(),
+        t["old_hash"].as_str(),
+    ) else {
+        return false;
+    };
+    if check_alias(alias).is_err() || check_slug(slug).is_err() {
+        return false;
+    }
+    current_hash(alias, slug, root).is_some_and(|h| h == old_hash)
+}
+
+/// sha256 of the stored page's full render, `None` when it is missing or unreadable.
+fn current_hash(alias: &str, slug: &str, root: Option<&Path>) -> Option<String> {
+    project_guide::load(alias, slug, root)
+        .ok()
+        .flatten()
+        .map(|p| hash(&project_guide::render(&p)))
 }
 
 /// Raise a proposal for a held (rebuilt, not written) page. `Ok(None)` when the
@@ -228,8 +258,9 @@ fn merged(new: &Page, stored: &Page) -> Page {
 
 /// Write an approved proposal over the stored page under the guide lock (the old page
 /// is snapshotted), then mark it applied. Refuses a proposal that is not approved or
-/// whose page changed since it was raised.
-pub fn apply_proposal(
+/// whose page changed since it was raised. Takes no guide slot: [`approve_and_apply`]
+/// is the entry point.
+pub(crate) fn apply_proposal(
     id: &str,
     root: Option<&Path>,
     approvals_dir: &Path,
@@ -838,6 +869,65 @@ mod tests {
         assert_eq!(fx.history("feature-orders"), hist);
         assert_eq!(fx.stored("feature-orders"), page);
         assert!(marker.exists(), "the marker is written again");
+    }
+
+    #[test]
+    fn a_stale_pending_proposal_does_not_block_the_same_text_for_the_changed_page() {
+        let fx = Fx::new("gp-stale-reraise");
+        let stored = fx.approved_page("feature-orders");
+        let held = held_of(&stored, "Proposed what.");
+        let first = fx.raise(&held).unwrap().expect("first");
+        // Unchanged page: the identical pending proposal still dedupes.
+        assert_eq!(fx.raise(&rebuilt(&held, 1)).unwrap(), None);
+        // The page changes (an agent part, so the merge keeps the rebuild's text).
+        project_guide::update_locked(&fx.alias, "feature-orders", fx.root(), |p| {
+            let mut p = p.unwrap();
+            p.parts[1].body = "- Changed meanwhile.".into();
+            Ok(p)
+        })
+        .unwrap();
+        assert!(!still_applies(
+            &approvals::get(fx.apr(), &first).unwrap(),
+            fx.root()
+        ));
+        let second = fx
+            .raise(&rebuilt(&held, 2))
+            .unwrap()
+            .expect("a new proposal against the changed page");
+        assert_ne!(second, first);
+        assert!(still_applies(
+            &approvals::get(fx.apr(), &second).unwrap(),
+            fx.root()
+        ));
+        // And that one dedupes in turn.
+        assert_eq!(fx.raise(&rebuilt(&held, 3)).unwrap(), None);
+        fx.approve(&second).unwrap();
+        assert_eq!(fx.stored("feature-orders").parts[0].body, "Proposed what.");
+    }
+
+    #[test]
+    fn still_applies_follows_the_stored_page() {
+        let fx = Fx::new("gp-still");
+        let stored = fx.approved_page("feature-orders");
+        let id = fx.raise(&held_of(&stored, "Fresh.")).unwrap().unwrap();
+        let a = approvals::get(fx.apr(), &id).unwrap();
+        assert!(still_applies(&a, fx.root()));
+        // A tampered slug or alias never applies, and builds no path.
+        let mut bad = a.clone();
+        bad["target"]["slug"] = json!("../x");
+        assert!(!still_applies(&bad, fx.root()));
+        let mut bad = a.clone();
+        bad["target"]["alias"] = json!("..");
+        assert!(!still_applies(&bad, fx.root()));
+        // Applied: the page is no longer the old text.
+        fx.approve(&id).unwrap();
+        assert!(!still_applies(&a, fx.root()));
+        // A missing page.
+        std::fs::remove_file(
+            project_guide::guide_dir(&fx.alias, fx.root()).join("feature-orders.md"),
+        )
+        .unwrap();
+        assert!(!still_applies(&a, fx.root()));
     }
 
     #[test]
