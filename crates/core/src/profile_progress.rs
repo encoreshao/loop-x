@@ -654,10 +654,13 @@ impl JobView {
         }
     }
 
-    /// The key the snapshot lists the job under: `profile:<alias>` or `profile-sync`.
+    /// The key the snapshot lists the job under: `profile:<alias>`, `profile-sync`, or
+    /// `guide:<alias>` for a guide build.
     pub fn snapshot_key(&self) -> String {
         if self.is_sync() {
             "profile-sync".to_string()
+        } else if self.is_guide() {
+            format!("guide:{}", self.alias)
         } else {
             format!("profile:{}", self.alias)
         }
@@ -1260,6 +1263,7 @@ mod tests {
         assert_eq!(g.kind, "guide");
         assert_eq!(g.label(), "Guide \u{b7} shop");
         assert_eq!(g.step_text(), "Writing a page \u{b7} step 5 of 14");
+        assert_eq!(g.snapshot_key(), "guide:shop");
         assert!(
             running_for(&b, "shop").is_none(),
             "a guide is not a profile job"
@@ -1274,6 +1278,7 @@ mod tests {
         assert_eq!((p.kind.as_str(), p.step), ("build", 3));
         assert!(!p.is_guide());
         assert_eq!(p.label(), "Profile \u{b7} shop");
+        assert_eq!(p.snapshot_key(), "profile:shop");
         assert_eq!(running_guide_for(&b, "shop").map(|j| j.step), Some(5));
         drop(build);
         drop(guide);
