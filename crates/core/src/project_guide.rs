@@ -6,9 +6,12 @@
 
 use crate::memory_store::parse_source_line;
 use crate::project_profile::{
-    escape_body_by, one_line, parse_time, ts, unescape_line_by, Origin, Source, Status,
+    check_alias, contains_secret, escape_body_by, invalid, one_line, parse_time, project_dir, ts,
+    unescape_line_by, Origin, Source, Status, HISTORY_KEEP,
 };
 use chrono::{DateTime, Timelike, Utc};
+use std::io;
+use std::path::{Path, PathBuf};
 
 pub const MAX_SLUG: usize = 48;
 
@@ -317,8 +320,6 @@ pub fn parse(text: &str) -> Result<Page, String> {
 
 /// `p` as `render` + `parse` give it back: whole-second timestamps, one-line title and
 /// summary, trimmed LF bodies, parts in the kind's order.
-// Used only by tests until the storage layer (next task) calls it for its round-trip check.
-#[allow(dead_code)]
 pub(crate) fn normalised(p: &Page) -> Page {
     let mut n = p.clone();
     n.generated_at = n.generated_at.map(|t| t.with_nanosecond(0).unwrap_or(t));
@@ -330,6 +331,245 @@ pub(crate) fn normalised(p: &Page) -> Page {
     n.parts
         .sort_by_key(|x| p.kind.part_index(&x.key).unwrap_or(usize::MAX));
     n
+}
+
+pub fn guide_dir(alias: &str, root: Option<&Path>) -> PathBuf {
+    project_dir(alias, root).join("guide")
+}
+
+fn history_dir(alias: &str, root: Option<&Path>) -> PathBuf {
+    guide_dir(alias, root).join(".history")
+}
+
+fn page_path(alias: &str, slug: &str, root: Option<&Path>) -> PathBuf {
+    guide_dir(alias, root).join(format!("{slug}.md"))
+}
+
+/// Fields the line-based format cannot represent or that would persist a secret are
+/// rejected, never dropped. Errors name the field and kind, never the matched text.
+pub fn validate(p: &Page) -> Result<(), String> {
+    let has_nl = |v: &str| v.contains('\n') || v.contains('\r');
+    let kind = check_slug(&p.slug)?;
+    if kind != p.kind {
+        return Err("kind does not match the slug".into());
+    }
+    if p.title.trim().is_empty() || has_nl(&p.title) {
+        return Err("title must be one non-empty line".into());
+    }
+    if p.head_sha
+        .as_deref()
+        .is_some_and(|h| has_nl(h) || h.contains(char::is_whitespace))
+    {
+        return Err("head_sha is not representable".into());
+    }
+    for r in &p.related {
+        check_slug(r).map_err(|_| format!("related slug not valid: {r:?}"))?;
+    }
+    let mut seen = Vec::new();
+    for part in &p.parts {
+        if p.kind.part_index(&part.key).is_none() {
+            return Err(format!(
+                "part {} does not belong on a {} page",
+                part.key,
+                p.kind.as_str()
+            ));
+        }
+        if seen.contains(&part.key) {
+            return Err(format!("part {} appears twice", part.key));
+        }
+        seen.push(part.key.clone());
+    }
+    for s in &p.sources {
+        if s.path.is_empty() || s.path.contains('`') || has_nl(&s.path) {
+            return Err(format!("source path not representable: {:?}", s.path));
+        }
+        if s.sha256.is_empty() || s.sha256.contains(char::is_whitespace) {
+            return Err(format!("bad sha256 for {:?}", s.path));
+        }
+    }
+    let check = |field: String, text: &str| match contains_secret(text) {
+        Some(k) => Err(format!("{field} contains what looks like a secret ({k})")),
+        None => Ok(()),
+    };
+    check("title".into(), &p.title)?;
+    check("summary".into(), &p.summary)?;
+    for part in &p.parts {
+        check(format!("part {}", part.key), &part.body)?;
+    }
+    for s in &p.sources {
+        check("source path".into(), &s.path)?;
+    }
+    Ok(())
+}
+
+fn snapshot_and_write(alias: &str, slug: &str, text: &str, root: Option<&Path>) -> io::Result<()> {
+    let path = page_path(alias, slug, root);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if path.is_file() {
+        let hdir = history_dir(alias, root);
+        std::fs::create_dir_all(&hdir)?;
+        let mut now = Utc::now();
+        let dest = loop {
+            let candidate = hdir.join(format!("{slug}.{}.md", now.format("%Y%m%dT%H%M%S%9fZ")));
+            if !candidate.exists() {
+                break candidate;
+            }
+            now += chrono::Duration::nanoseconds(1);
+        };
+        std::fs::copy(&path, dest)?;
+        for old in history(alias, slug, root).into_iter().skip(HISTORY_KEEP) {
+            let _ = std::fs::remove_file(old);
+        }
+    }
+    crate::file_lock::write_atomic(&path, text.as_bytes())
+}
+
+/// Refuses (writes nothing) anything that would not read back as `p`.
+pub fn save(p: &Page, root: Option<&Path>) -> io::Result<()> {
+    check_alias(&p.alias).map_err(invalid)?;
+    validate(p).map_err(invalid)?;
+    let text = render(p);
+    let back = parse(&text).map_err(invalid)?;
+    if back != normalised(p) {
+        return Err(invalid(
+            "page does not round-trip through its markdown form".into(),
+        ));
+    }
+    snapshot_and_write(&p.alias, &p.slug, &text, root)
+}
+
+fn same_page(p: &Page, alias: &str, slug: &str) -> Result<(), String> {
+    if p.alias != alias {
+        return Err(format!(
+            "the guide page in the {alias} folder belongs to another project (its alias does not match the folder); move or fix it by hand"
+        ));
+    }
+    if p.slug != slug {
+        return Err(format!(
+            "the file for {slug} holds a different page (its slug does not match)"
+        ));
+    }
+    Ok(())
+}
+
+pub fn load(alias: &str, slug: &str, root: Option<&Path>) -> Result<Option<Page>, String> {
+    check_alias(alias)?;
+    check_slug(slug)?;
+    let path = page_path(alias, slug, root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let p = parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    same_page(&p, alias, slug)?;
+    Ok(Some(p))
+}
+
+#[derive(Debug, Default)]
+pub struct GuideList {
+    pub pages: Vec<Page>,
+    pub skipped: Vec<String>,
+}
+
+fn order_key(slug: &str) -> (u8, String) {
+    let rank = match slug {
+        "architecture" => 0,
+        "data-model" => 1,
+        "roadmap" => 2,
+        _ => 3,
+    };
+    (rank, slug.to_string())
+}
+
+pub fn list(alias: &str, root: Option<&Path>) -> Result<GuideList, String> {
+    check_alias(alias)?;
+    let rd = match std::fs::read_dir(guide_dir(alias, root)) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(GuideList::default()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut out = GuideList::default();
+    for entry in rd.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() || path.extension().is_none_or(|x| x != "md") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if check_slug(stem).is_err() {
+            continue;
+        }
+        match load(alias, stem, root) {
+            Ok(Some(p)) => out.pages.push(p),
+            _ => out.skipped.push(stem.to_string()),
+        }
+    }
+    out.pages.sort_by_key(|p| order_key(&p.slug));
+    out.skipped.sort();
+    Ok(out)
+}
+
+/// Newest first.
+pub fn history(alias: &str, slug: &str, root: Option<&Path>) -> Vec<PathBuf> {
+    if check_alias(alias).is_err() || check_slug(slug).is_err() {
+        return Vec::new();
+    }
+    let prefix = format!("{slug}.");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(history_dir(alias, root))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "md"))
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&prefix))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files.reverse();
+    files
+}
+
+/// Make a snapshot the current page (the current one is snapshotted first), under the
+/// guide lock. Refused when the file is for another project or page, or holds a secret.
+pub fn restore(alias: &str, slug: &str, file: &Path, root: Option<&Path>) -> io::Result<()> {
+    check_alias(alias).map_err(invalid)?;
+    check_slug(slug).map_err(invalid)?;
+    let text = std::fs::read_to_string(file)?;
+    let p = parse(&text).map_err(invalid)?;
+    same_page(&p, alias, slug).map_err(invalid)?;
+    validate(&p).map_err(invalid)?;
+    let dir = guide_dir(alias, root);
+    std::fs::create_dir_all(&dir)?;
+    crate::file_lock::with_lock(&dir, || snapshot_and_write(alias, slug, &text, root))?
+}
+
+/// Load, change and save one page under the guide directory's lock. Keep `f` quick:
+/// never hold this across a model call.
+pub fn update_locked(
+    alias: &str,
+    slug: &str,
+    root: Option<&Path>,
+    f: impl FnOnce(Option<Page>) -> Result<Page, String>,
+) -> Result<Page, String> {
+    check_alias(alias)?;
+    check_slug(slug)?;
+    let dir = guide_dir(alias, root);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::file_lock::with_lock(&dir, || {
+        let p = f(load(alias, slug, root)?)?;
+        same_page(&p, alias, slug)?;
+        save(&p, root).map_err(|e| e.to_string())?;
+        Ok(p)
+    })
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -463,5 +703,228 @@ mod tests {
     fn parse_refuses_a_duplicate_part() {
         let text = render(&sample()).replace("<!-- part: key-points ", "<!-- part: what ");
         assert!(parse(&text).unwrap_err().contains("duplicate part"));
+    }
+
+    use tempfile::tempdir;
+
+    fn secret() -> String {
+        format!("glpat-{}", "a".repeat(24))
+    }
+
+    #[test]
+    fn save_then_load_round_trips_and_a_missing_page_is_none() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        assert_eq!(load("shop", "feature-checkout", root).unwrap(), None);
+        let p = sample();
+        save(&p, root).unwrap();
+        assert_eq!(
+            load("shop", "feature-checkout", root).unwrap(),
+            Some(normalised(&p))
+        );
+        assert!(guide_dir("shop", root)
+            .join("feature-checkout.md")
+            .is_file());
+    }
+
+    #[test]
+    fn a_bad_slug_or_alias_creates_nothing() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        assert!(load("shop", "../evil", root).is_err());
+        assert!(load("../shop", "roadmap", root).is_err());
+        assert!(!dir.path().join("shop").exists());
+        let mut p = sample();
+        p.slug = "../evil".into();
+        assert!(save(&p, root).is_err());
+        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_page_with_a_secret_is_refused_without_echoing_it() {
+        let dir = tempdir().unwrap();
+        let mut p = sample();
+        p.parts[0].body = format!("token {}", secret());
+        let err = save(&p, Some(dir.path())).unwrap_err().to_string();
+        assert!(err.contains("part what"), "{err}");
+        assert!(!err.contains("glpat"), "{err}");
+        assert_eq!(
+            load("shop", "feature-checkout", Some(dir.path())).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn unrepresentable_fields_are_rejected_not_dropped() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let mut p = sample();
+        p.title = "two\nlines".into();
+        assert!(save(&p, root).is_err());
+        let mut p = sample();
+        p.related = vec!["Not A Slug".into()];
+        assert!(save(&p, root).is_err());
+        let mut p = sample();
+        p.parts.push(part("what", "dup", Origin::Agent));
+        assert!(save(&p, root).is_err());
+        let mut p = sample();
+        p.parts = vec![part("shipped", "wrong kind", Origin::Agent)];
+        assert!(save(&p, root).is_err());
+        let mut p = sample();
+        p.sources[0].path = "a`b".into();
+        assert!(save(&p, root).is_err());
+    }
+
+    #[test]
+    fn saving_over_a_page_snapshots_it_and_keeps_twenty() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let mut p = sample();
+        for i in 0..23 {
+            p.parts[0].body = format!("version {i}");
+            save(&p, root).unwrap();
+        }
+        let h = history("shop", "feature-checkout", root);
+        assert_eq!(h.len(), 20);
+        // newest first: the newest snapshot is the one made before the last save.
+        let newest = parse(&std::fs::read_to_string(&h[0]).unwrap()).unwrap();
+        assert_eq!(newest.parts[0].body, "version 21");
+    }
+
+    #[test]
+    fn history_is_per_page() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let a = sample();
+        let mut b = sample();
+        b.slug = "feature-cart".into();
+        b.related.clear();
+        save(&a, root).unwrap();
+        save(&a, root).unwrap();
+        save(&b, root).unwrap();
+        assert_eq!(history("shop", "feature-checkout", root).len(), 1);
+        assert!(history("shop", "feature-cart", root).is_empty());
+    }
+
+    #[test]
+    fn restore_makes_a_snapshot_current_and_snapshots_the_replaced_page() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let mut p = sample();
+        p.parts[0].body = "first".into();
+        save(&p, root).unwrap();
+        p.parts[0].body = "second".into();
+        save(&p, root).unwrap();
+        let snap = history("shop", "feature-checkout", root).remove(0);
+        restore("shop", "feature-checkout", &snap, root).unwrap();
+        let now = load("shop", "feature-checkout", root).unwrap().unwrap();
+        assert_eq!(now.parts[0].body, "first");
+        assert_eq!(history("shop", "feature-checkout", root).len(), 2);
+    }
+
+    #[test]
+    fn restore_refuses_another_projects_or_pages_file() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        save(&sample(), root).unwrap();
+        let other = dir.path().join("other.md");
+        let mut o = sample();
+        o.alias = "elsewhere".into();
+        std::fs::write(&other, render(&o)).unwrap();
+        assert!(restore("shop", "feature-checkout", &other, root).is_err());
+        let mut o = sample();
+        o.slug = "feature-cart".into();
+        std::fs::write(&other, render(&o)).unwrap();
+        assert!(restore("shop", "feature-checkout", &other, root).is_err());
+    }
+
+    #[test]
+    fn load_refuses_a_file_that_belongs_to_another_project() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let mut p = sample();
+        p.alias = "elsewhere".into();
+        let gd = guide_dir("shop", root);
+        std::fs::create_dir_all(&gd).unwrap();
+        std::fs::write(gd.join("feature-checkout.md"), render(&p)).unwrap();
+        assert!(load("shop", "feature-checkout", root)
+            .unwrap_err()
+            .contains("another project"));
+    }
+
+    #[test]
+    fn list_orders_pages_and_ignores_non_pages_and_names_broken_ones() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let mut roadmap = sample();
+        roadmap.slug = "roadmap".into();
+        roadmap.kind = Kind::Roadmap;
+        roadmap.parts = vec![part("planned", "x", Origin::Agent)];
+        roadmap.related.clear();
+        let mut arch = roadmap.clone();
+        arch.slug = "architecture".into();
+        arch.kind = Kind::Architecture;
+        arch.parts = vec![part("overview", "x", Origin::Agent)];
+        let mut zed = sample();
+        zed.slug = "feature-zed".into();
+        zed.related.clear();
+        let mut abe = zed.clone();
+        abe.slug = "feature-abe".into();
+        for p in [&zed, &roadmap, &abe, &arch] {
+            save(p, root).unwrap();
+        }
+        save(&zed, root).unwrap(); // creates .history/
+        let gd = guide_dir("shop", root);
+        std::fs::write(gd.join("plan.json"), "{}").unwrap();
+        std::fs::write(gd.join("feature-x.md.tmp"), "junk").unwrap();
+        std::fs::write(gd.join("feature-broken.md"), "not a page").unwrap();
+        std::fs::write(gd.join("Not A Slug.md"), "x").unwrap();
+        let l = list("shop", root).unwrap();
+        let slugs: Vec<&str> = l.pages.iter().map(|p| p.slug.as_str()).collect();
+        assert_eq!(
+            slugs,
+            ["architecture", "roadmap", "feature-abe", "feature-zed"]
+        );
+        assert_eq!(l.skipped, ["feature-broken"]);
+    }
+
+    #[test]
+    fn list_of_a_project_with_no_guide_is_empty() {
+        let dir = tempdir().unwrap();
+        let l = list("shop", Some(dir.path())).unwrap();
+        assert!(l.pages.is_empty() && l.skipped.is_empty());
+    }
+
+    #[test]
+    fn update_locked_sees_the_current_page_and_saves_the_result() {
+        let dir = tempdir().unwrap();
+        let root = Some(dir.path());
+        let first = update_locked("shop", "feature-checkout", root, |cur| {
+            assert!(cur.is_none());
+            Ok(sample())
+        })
+        .unwrap();
+        assert_eq!(first.slug, "feature-checkout");
+        let second = update_locked("shop", "feature-checkout", root, |cur| {
+            let mut p = cur.unwrap();
+            p.status = Status::Approved;
+            Ok(p)
+        })
+        .unwrap();
+        assert_eq!(second.status, Status::Approved);
+        assert_eq!(
+            load("shop", "feature-checkout", root)
+                .unwrap()
+                .unwrap()
+                .status,
+            Status::Approved
+        );
+    }
+
+    #[test]
+    fn update_locked_refuses_a_page_for_another_slug() {
+        let dir = tempdir().unwrap();
+        let r = update_locked("shop", "feature-cart", Some(dir.path()), |_| Ok(sample()));
+        assert!(r.is_err());
     }
 }
