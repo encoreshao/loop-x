@@ -1,5 +1,5 @@
 //! What a person does to guide pages by hand: approve one, approve every draft, rewrite
-//! one part, delete a page the plan no longer names.
+//! one part, delete a page the plan no longer names, restore a page from its history.
 //!
 //! Every operation validates the alias and slug before any path is built, takes the
 //! guide's single-flight slot (so it never races a build), changes pages only under the
@@ -205,6 +205,61 @@ pub fn delete_page(alias: &str, slug: &str, root: Option<&Path>) -> Result<(), S
     .map_err(|_| format!("could not lock the guide for {alias}"))??;
     resync(alias, Utc::now(), root);
     Ok(())
+}
+
+/// Make one of a page's history snapshots the current page (the current one, if any,
+/// is snapshotted first, so a restore can be undone; a deleted page comes back).
+/// `snapshot_name` must be the bare file name of a snapshot `project_guide::history`
+/// lists for this page: no path, no other page's snapshot.
+pub fn restore(
+    alias: &str,
+    slug: &str,
+    snapshot_name: &str,
+    now: DateTime<Utc>,
+    root: Option<&Path>,
+) -> Result<(), String> {
+    check_alias(alias)?;
+    check_slug(slug)?;
+    let unknown = || format!("no such snapshot of the {slug} page");
+    if snapshot_name.is_empty()
+        || snapshot_name.contains(['/', '\\', '\0'])
+        || snapshot_name.contains("..")
+    {
+        return Err(unknown());
+    }
+    let _slot = take_slot(alias)?;
+    let file = project_guide::history(alias, slug, root)
+        .into_iter()
+        .find(|p| p.file_name().and_then(|n| n.to_str()) == Some(snapshot_name))
+        .ok_or_else(unknown)?;
+    project_guide::restore(alias, slug, &file, root)
+        .map_err(|_| format!("could not restore the {slug} page from that snapshot"))?;
+    resync(alias, now, root);
+    Ok(())
+}
+
+/// Slugs that have history snapshots but no current page (deleted pages), sorted, so a
+/// reader can reach a deleted page's history. Empty for an invalid alias.
+pub fn deleted_pages(alias: &str, root: Option<&Path>) -> Vec<String> {
+    if check_alias(alias).is_err() {
+        return Vec::new();
+    }
+    let dir = project_guide::guide_dir(alias, root);
+    let Ok(rd) = std::fs::read_dir(dir.join(".history")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let slug = name.strip_suffix(".md")?.split_once('.')?.0.to_string();
+            check_slug(&slug).ok()?;
+            (!dir.join(format!("{slug}.md")).exists()).then_some(slug)
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]
@@ -506,6 +561,97 @@ mod tests {
         assert_eq!(loaded(alias, "feature-a", r).status, Status::Approved);
         assert_eq!(loaded(alias, "feature-c", r).status, Status::Approved);
         assert_eq!(loaded(alias, "feature-secret", r).status, Status::Draft);
+    }
+
+    fn snapshot_names(alias: &str, slug: &str, root: &Path) -> Vec<String> {
+        project_guide::history(alias, slug, Some(root))
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn restore_brings_back_an_older_version_and_refuses_anything_but_its_snapshots() {
+        let alias = "ops-restore";
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        let mut p = page(alias, "feature-zzz", Status::Draft);
+        p.parts[0].body = "First version.".into();
+        save(&p, r);
+        p.parts[0].body = "Second version.".into();
+        save(&p, r);
+        save(&page(alias, "feature-yyy", Status::Draft), r);
+        save(&page(alias, "feature-yyy", Status::Approved), r);
+        let names = snapshot_names(alias, "feature-zzz", r);
+        assert_eq!(names.len(), 1);
+        let other = snapshot_names(alias, "feature-yyy", r)[0].clone();
+        let before = bytes(alias, "feature-zzz", r);
+
+        // Paths, other pages' snapshots, unknown names and bad slugs are refused.
+        let hist = project_guide::guide_dir(alias, Some(r)).join(".history");
+        for bad in [
+            hist.join(&names[0]).to_string_lossy().into_owned(),
+            format!("../.history/{}", names[0]),
+            format!("./{}", names[0]),
+            "..".to_string(),
+            String::new(),
+            other.clone(),
+            "feature-zzz.20990101T000000000000000Z.md".to_string(),
+        ] {
+            assert!(
+                restore(alias, "feature-zzz", &bad, later(), Some(r)).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(restore(alias, "../x", &names[0], later(), Some(r)).is_err());
+        assert!(restore("..", "feature-zzz", &names[0], later(), Some(r)).is_err());
+        assert_eq!(bytes(alias, "feature-zzz", r), before);
+
+        // Refused while a guide run holds the slot.
+        let guard = crate::guide_build::try_acquire(alias).unwrap();
+        let err = restore(alias, "feature-zzz", &names[0], later(), Some(r)).unwrap_err();
+        assert!(err.contains("in progress"), "{err}");
+        assert_eq!(bytes(alias, "feature-zzz", r), before);
+        drop(guard);
+
+        restore(alias, "feature-zzz", &names[0], later(), Some(r)).unwrap();
+        assert_eq!(
+            loaded(alias, "feature-zzz", r).parts[0].body,
+            "First version."
+        );
+        // The replaced version was snapshotted, so the restore can be undone.
+        assert_eq!(snapshot_names(alias, "feature-zzz", r).len(), 2);
+    }
+
+    #[test]
+    fn a_deleted_page_is_listed_and_restoring_its_snapshot_brings_it_back() {
+        let alias = "ops-restore-deleted";
+        let root = tempfile::tempdir().unwrap();
+        let r = root.path();
+        save_plan(alias, r, false);
+        save_profile(alias, r);
+        assert!(deleted_pages(alias, Some(r)).is_empty());
+        save(&page(alias, "feature-zzz", Status::Approved), r);
+        save(&page(alias, "feature-a", Status::Draft), r);
+        save(&page(alias, "feature-a", Status::Approved), r);
+        assert!(
+            deleted_pages(alias, Some(r)).is_empty(),
+            "feature-a still exists"
+        );
+        delete_page(alias, "feature-zzz", Some(r)).unwrap();
+        // A stray file with an invalid slug in the history is not listed.
+        let hist = project_guide::guide_dir(alias, Some(r)).join(".history");
+        fs::write(hist.join("Not_A_Slug.20260101T000000000000000Z.md"), "x").unwrap();
+        assert_eq!(
+            deleted_pages(alias, Some(r)),
+            vec!["feature-zzz".to_string()]
+        );
+        assert!(deleted_pages("..", Some(r)).is_empty());
+
+        let names = snapshot_names(alias, "feature-zzz", r);
+        restore(alias, "feature-zzz", &names[0], later(), Some(r)).unwrap();
+        assert_eq!(loaded(alias, "feature-zzz", r).status, Status::Approved);
+        assert!(deleted_pages(alias, Some(r)).is_empty());
     }
 
     // --- a minimal copy of guide_build's test agent and repo, for the rebuild check ---
