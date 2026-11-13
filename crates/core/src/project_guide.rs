@@ -337,6 +337,11 @@ pub fn guide_dir(alias: &str, root: Option<&Path>) -> PathBuf {
     project_dir(alias, root).join("guide")
 }
 
+/// `<guide dir>/plan.json`, the last accepted plan.
+pub fn plan_path(alias: &str, root: Option<&Path>) -> PathBuf {
+    guide_dir(alias, root).join("plan.json")
+}
+
 fn history_dir(alias: &str, root: Option<&Path>) -> PathBuf {
     guide_dir(alias, root).join(".history")
 }
