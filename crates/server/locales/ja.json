@@ -2155,5 +2155,17 @@
   "Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again.": "保存されませんでした：1つの部分には最大20,000文字まで入力できます。短くしてからもう一度保存してください。",
   "Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it.": "保存されませんでした：このページの別の部分に秘密の値が含まれているようです。ページファイルから取り除くか、ページを削除して再構築してください。",
   "A build is running, so this page cannot be changed right now.": "ビルドの実行中のため、このページは今は変更できません。",
-  "Approved {n} pages; some pages could not be read or saved.": "{n} ページを承認しました。一部のページは読み込みまたは保存できませんでした。"
+  "Approved {n} pages; some pages could not be read or saved.": "{n} ページを承認しました。一部のページは読み込みまたは保存できませんでした。",
+  "The page changed after this was proposed, so it can no longer be applied. Dismiss it and rebuild the page for a new proposal.": "提案後にページが変更されたため、この提案は適用できなくなりました。却下してから、ページを再ビルドして新しい提案を作成してください。",
+  "The page was deleted after this was proposed.": "このページは提案後に削除されました。",
+  "The page changed after this was approved, so it was not applied. Rebuild the page for a new proposal.": "承認後にページが変更されたため、適用されませんでした。ページを再ビルドして新しい提案を作成してください。",
+  "Approved, but not applied yet. Apply it to write it into the guide page.": "承認済みですが、まだ適用されていません。適用するとガイドページに書き込まれます。",
+  "Show the change": "変更を表示",
+  "Update the {slug} guide page": "ガイドページ {slug} の更新",
+  "Hidden: this proposal looks like it contains a secret value ({kind}). It cannot be approved; dismiss it and rebuild the page.": "非表示: この提案には秘密の値 ({kind}) が含まれているようです。承認できません。却下してから、ページを再ビルドしてください。",
+  "Proposed updates to this profile and its guide. Nothing changes until a proposal is approved.": "このプロファイルとそのガイドへの更新の提案です。提案が承認されるまで何も変更されません。",
+  "Proposal approved. The guide page now holds the new text, and agents read it.": "提案を承認しました。ガイドページは新しい内容になり、エージェントはそれを読み込みます。",
+  "The page changed after this was proposed, so nothing was applied. Rebuild the page for a new proposal.": "提案後にページが変更されたため、何も適用されませんでした。ページを再ビルドして新しい提案を作成してください。",
+  "The proposal could not be applied to the guide page.": "提案をガイドページに適用できませんでした。",
+  "Open in Memory": "メモリで開く"
 }

@@ -8,7 +8,7 @@
 //! same-origin browser request (`Origin` equal to our own origin, which a
 //! cross-site page cannot forge).
 
-use crate::snapshot::{build_snapshot, Paths};
+use crate::snapshot::{build_snapshot, without_page_texts, Paths};
 use axum::body::Body;
 use axum::extract::{Path as UrlPath, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -196,12 +196,14 @@ async fn list_approvals(State(s): State<Shared>, headers: HeaderMap) -> Response
     }
     let now = Utc::now();
     let dir = &s.paths.approvals_dir;
-    let pending = approvals::list(dir, Some("pending"), now);
-    let recent: Vec<Value> = approvals::list(dir, None, now)
-        .into_iter()
-        .filter(|a| a["status"] != "pending")
-        .take(20)
-        .collect();
+    let pending = without_page_texts(approvals::list(dir, Some("pending"), now));
+    let recent: Vec<Value> = without_page_texts(
+        approvals::list(dir, None, now)
+            .into_iter()
+            .filter(|a| a["status"] != "pending")
+            .take(20)
+            .collect(),
+    );
     let snap = build_snapshot(&s.paths, now);
     let escalations: Vec<Value> = snap["recent_events"]
         .as_array()
@@ -470,6 +472,50 @@ mod tests {
         let (_, v, _) = call(router(s), get_req("/api/approvals")).await;
         assert_eq!(v["pending"], json!([]));
         assert_eq!(v["recent"][0]["status"], "approved");
+    }
+
+    #[tokio::test]
+    async fn approval_listings_carry_no_page_texts() {
+        let d = tempfile::tempdir().unwrap();
+        let s = state(d.path());
+        let mut ids = vec![];
+        for kind in ["guide-page", "profile-section"] {
+            ids.push(
+                approvals::create(
+                    &s.paths.approvals_dir,
+                    &approvals::NewApproval {
+                        kind: kind.into(),
+                        project: "web".into(),
+                        timeout_seconds: 3600,
+                        target: Some(
+                            json!({"alias": "web", "old": "OLD-PAGE", "new": "NEW-PAGE!"}),
+                        ),
+                        ..Default::default()
+                    },
+                    Utc::now(),
+                )
+                .unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        // A decided one is listed under recent: stripped too.
+        approvals::decide(&s.paths.approvals_dir, &ids[1], "deny", "me", Utc::now()).unwrap();
+        let (_, v, _) = call(router(s.clone()), get_req("/api/approvals")).await;
+        let text = v.to_string();
+        assert!(
+            !text.contains("OLD-PAGE") && !text.contains("NEW-PAGE"),
+            "{text}"
+        );
+        for t in [&v["pending"][0]["target"], &v["recent"][0]["target"]] {
+            assert!(t.get("old").is_none() && t.get("new").is_none(), "{t}");
+            assert_eq!(t["old_len"], 8, "{t}");
+            assert_eq!(t["new_len"], 9, "{t}");
+            assert_eq!(t["alias"], "web");
+        }
+        let (_, snap, _) = call(router(s), get_req("/api/snapshot")).await;
+        assert!(!snap.to_string().contains("NEW-PAGE"), "{snap}");
     }
 
     #[tokio::test]

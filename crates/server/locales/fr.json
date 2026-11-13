@@ -2155,5 +2155,17 @@
   "Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again.": "Rien n’a été enregistré : une partie peut contenir au plus 20 000 caractères. Raccourcissez-la et enregistrez à nouveau.",
   "Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it.": "Rien n’a été enregistré : une autre partie de cette page semble contenir une valeur secrète. Retirez-la du fichier de la page, ou supprimez la page et reconstruisez-la.",
   "A build is running, so this page cannot be changed right now.": "Une construction est en cours : cette page ne peut pas être modifiée pour le moment.",
-  "Approved {n} pages; some pages could not be read or saved.": "{n} pages approuvées ; certaines pages n’ont pas pu être lues ou enregistrées."
+  "Approved {n} pages; some pages could not be read or saved.": "{n} pages approuvées ; certaines pages n’ont pas pu être lues ou enregistrées.",
+  "The page changed after this was proposed, so it can no longer be applied. Dismiss it and rebuild the page for a new proposal.": "La page a changé depuis cette proposition, elle ne peut donc plus être appliquée. Ignorez-la et reconstruisez la page pour obtenir une nouvelle proposition.",
+  "The page was deleted after this was proposed.": "La page a été supprimée après cette proposition.",
+  "The page changed after this was approved, so it was not applied. Rebuild the page for a new proposal.": "La page a changé depuis l'approbation, elle n'a donc pas été appliquée. Reconstruisez la page pour obtenir une nouvelle proposition.",
+  "Approved, but not applied yet. Apply it to write it into the guide page.": "Approuvée, mais pas encore appliquée. Appliquez-la pour l'écrire dans la page du guide.",
+  "Show the change": "Afficher la modification",
+  "Update the {slug} guide page": "Mettre à jour la page de guide {slug}",
+  "Hidden: this proposal looks like it contains a secret value ({kind}). It cannot be approved; dismiss it and rebuild the page.": "Masqué : cette proposition semble contenir une valeur secrète ({kind}). Elle ne peut pas être approuvée ; ignorez-la et reconstruisez la page.",
+  "Proposed updates to this profile and its guide. Nothing changes until a proposal is approved.": "Mises à jour proposées pour ce profil et son guide. Rien ne change tant qu'une proposition n'est pas approuvée.",
+  "Proposal approved. The guide page now holds the new text, and agents read it.": "Proposition approuvée. La page du guide contient désormais le nouveau texte, et les agents le lisent.",
+  "The page changed after this was proposed, so nothing was applied. Rebuild the page for a new proposal.": "La page a changé depuis cette proposition, rien n'a donc été appliqué. Reconstruisez la page pour obtenir une nouvelle proposition.",
+  "The proposal could not be applied to the guide page.": "La proposition n'a pas pu être appliquée à la page du guide.",
+  "Open in Memory": "Ouvrir dans Mémoire"
 }

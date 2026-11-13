@@ -273,6 +273,30 @@ fn enabled_loops(loops_config: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// A listing of approvals without the page texts a proposal carries: a
+/// `profile-section` or `guide-page` approval's `target.old` and `target.new` (a whole
+/// section or guide page each) become `old_len`/`new_len` byte counts. Every other
+/// kind, and every other field, is unchanged. The views that show the text (the
+/// Memory page's Proposals) read the approval from the store.
+pub fn without_page_texts(list: Vec<Value>) -> Vec<Value> {
+    list.into_iter()
+        .map(|mut a| {
+            if !loopx_core::proposals::is_kind(&a["kind"]) {
+                return a;
+            }
+            if let Some(t) = a.get_mut("target").and_then(Value::as_object_mut) {
+                for (key, len) in [("old", "old_len"), ("new", "new_len")] {
+                    if let Some(v) = t.remove(key) {
+                        let n = v.as_str().map_or(0, str::len);
+                        t.insert(len.to_string(), Value::from(n));
+                    }
+                }
+            }
+            a
+        })
+        .collect()
+}
+
 pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     let mut loops = loop_statuses(&paths.outputs);
     // Only enabled loops reach the Mac island; a disabled one that is running
@@ -282,7 +306,7 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     let topics =
         status::read_topic_status(&paths.outputs.join("topic-monitor").join("status.json"));
     approvals::expire_overdue(&paths.approvals_dir, now);
-    let pending = approvals::list(&paths.approvals_dir, Some("pending"), now);
+    let pending = without_page_texts(approvals::list(&paths.approvals_dir, Some("pending"), now));
 
     let since = (now - Duration::days(1)).format("%Y-%m-%d").to_string();
     let all = events::iter_events(Some(&paths.events_dir), Some(&since), None);
@@ -938,6 +962,60 @@ mod tests {
         let s = build_snapshot(&p, now());
         assert_eq!(s["app_state"], "awaiting_approval");
         assert_eq!(s["approvals"]["pending"].as_array().unwrap().len(), 1);
+    }
+
+    /// A pending approval of `kind` whose target holds page texts.
+    fn texts_approval(p: &Paths, kind: &str) -> String {
+        approvals::create(
+            &p.approvals_dir,
+            &approvals::NewApproval {
+                kind: kind.into(),
+                project: "web".into(),
+                title: "t".into(),
+                timeout_seconds: 3600,
+                target: Some(
+                    json!({"alias": "web", "slug": "feature-orders", "section": "stack",
+                    "old": "OLD-TEXT", "new": "NEW TEXT \u{e9}", "old_hash": "h"}),
+                ),
+                ..Default::default()
+            },
+            now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn approval_listings_carry_no_page_texts() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let guide = texts_approval(&p, "guide-page");
+        let profile = texts_approval(&p, "profile-section");
+        let other = texts_approval(&p, "open_mr");
+        let s = build_snapshot(&p, now());
+        let pending = s["approvals"]["pending"].as_array().unwrap();
+        let by_id = |id: &str| pending.iter().find(|a| a["id"] == id).unwrap().clone();
+        for id in [&guide, &profile] {
+            let t = &by_id(id)["target"];
+            assert!(t.get("old").is_none() && t.get("new").is_none(), "{t}");
+            assert_eq!(t["old_len"], 8, "{t}");
+            assert_eq!(t["new_len"], "NEW TEXT \u{e9}".len(), "{t}");
+            assert_eq!(
+                t["slug"], "feature-orders",
+                "the rest of the target is kept"
+            );
+        }
+        // Other kinds are untouched.
+        assert_eq!(by_id(&other)["target"]["old"], "OLD-TEXT");
+        // Only the other kind's copy of the text is in the snapshot.
+        assert_eq!(s.to_string().matches("NEW TEXT").count(), 1, "{s}");
+        // The store keeps the full text for the detail views.
+        assert_eq!(
+            approvals::get(&p.approvals_dir, &guide).unwrap()["target"]["new"],
+            "NEW TEXT \u{e9}"
+        );
     }
 
     #[test]

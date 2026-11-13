@@ -17,8 +17,9 @@
 //! the guide lock), and redirects with checked values and one fixed notice code.
 
 use super::{
-    back, day, escape, guide_running, hidden, icon, known_alias, markdown, memory_root, pill,
-    prefixes, project_url, short_sha, spinner, Back, Model, Notice, Project,
+    approvals_dir, back, day, escape, guide_running, hidden, icon, known_alias, markdown,
+    memory_root, pill, prefixes, project_url, secret_in, short_sha, spinner, valid_id, Back,
+    Model, Notice, Project,
 };
 use crate::ui::routes::{UiCtx, UiResponse};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -31,6 +32,8 @@ const MAX_PART_CHARS: usize = 20_000;
 use loopx_core::guide_plan::{self, Plan};
 use loopx_core::project_guide::{self, check_slug, Kind, Page};
 use loopx_core::project_profile::{contains_secret, Origin, Status};
+use loopx_core::{approvals, guide_proposal, proposals as core_proposals};
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -1043,6 +1046,230 @@ pub(super) fn restore_route(ctx: &UiCtx) -> UiResponse {
     };
     back(to(), notice)
 }
+
+// ------------------------------------------------------------------ proposals
+
+const DECIDE: &str = "/insights/memory/guide/proposal/decide";
+
+/// The pending and approved `guide-page` proposals of every project, read once per
+/// request (the profile's own list, `super::proposals`, holds `profile-section` only).
+pub(super) fn proposals(ctx: &UiCtx) -> Vec<Value> {
+    approvals::all(&approvals_dir(ctx))
+        .into_iter()
+        .filter(|a| a["kind"] == guide_proposal::KIND)
+        .filter(|a| a["status"] == "pending" || a["status"] == "approved")
+        .collect()
+}
+
+/// A guide proposal's checked id and slug, when it is a well-formed proposal of
+/// `alias`: a valid id, `project` and `target.alias` both `alias`, a slug that passes
+/// `check_slug`. Anything else is neither listed nor decided here.
+fn checked<'a>(a: &'a Value, alias: &str) -> Option<(&'a str, &'a str)> {
+    if a["kind"] != guide_proposal::KIND || a["project"] != alias || a["target"]["alias"] != alias {
+        return None;
+    }
+    let id = a["id"].as_str().filter(|id| valid_id(id))?;
+    let slug = a["target"]["slug"].as_str().filter(|s| check_slug(s).is_ok())?;
+    Some((id, slug))
+}
+
+/// The redaction notice for a proposal: it names the proposal, not a file, and says
+/// what to do instead of approving it.
+fn redacted_proposal(ctx: &UiCtx, kind: &str) -> String {
+    format!(
+        "<p class='mem-redacted' role='note'>{}<span>{}</span></p>",
+        icon("warning"),
+        escape(&ctx.tf(
+            "Hidden: this proposal looks like it contains a secret value ({kind}). It cannot be approved; dismiss it and rebuild the page.",
+            &[("kind", kind)]
+        ))
+    )
+}
+
+/// The guide pages' proposals of `p` for the Proposals page, pending first, under a
+/// **Guide pages** heading; empty when there are none.
+pub(super) fn proposals_list(ctx: &UiCtx, p: &Project, all: &[Value]) -> String {
+    let mut items: Vec<(&Value, &str, &str)> = all
+        .iter()
+        .filter_map(|a| checked(a, &p.alias).map(|(id, slug)| (a, id, slug)))
+        .collect();
+    if items.is_empty() {
+        return String::new();
+    }
+    items.sort_by_key(|(a, _, _)| a["status"] != "pending");
+    let root = memory_root(ctx);
+    let list: String = items
+        .iter()
+        .map(|(a, id, slug)| proposal_item(ctx, &p.alias, a, id, slug, &root))
+        .collect();
+    format!(
+        "{GP_STYLE}<div class='gp-group'><h3 class='gp-heading'>{}<span>{}</span></h3><div class='mem-proposals'>{list}</div></div>",
+        icon("menu_book"),
+        escape(&ctx.t("Guide pages"))
+    )
+}
+
+fn proposal_item(ctx: &UiCtx, alias: &str, a: &Value, id: &str, slug: &str, root: &Path) -> String {
+    let pending = a["status"] == "pending";
+    let applied = !pending && guide_proposal::is_applied(alias, id, Some(root));
+    let deleted = matches!(project_guide::load(alias, slug, Some(root)), Ok(None));
+    let applies = !applied && guide_proposal::still_applies(a, Some(root));
+    let text = |k: &str| a["target"][k].as_str().unwrap_or("").to_string();
+    let (old, new) = (text("old"), text("new"));
+    let secret = secret_in(&[&old, &new]);
+    let status = if applied {
+        pill("fresh", &ctx.t("Approved"))
+    } else if !applies {
+        pill("stale", &ctx.t("Stale"))
+    } else if pending {
+        pill("review", &ctx.t("Pending"))
+    } else {
+        pill("stale", &ctx.t("Approved, not applied"))
+    };
+    let note = |t: String| format!("<p class='mem-muted mem-unapplied'>{}</p>", escape(&t));
+    let note = if applied {
+        String::new()
+    } else if deleted {
+        note(ctx.t("The page was deleted after this was proposed."))
+    } else if !applies && pending {
+        note(ctx.t("The page changed after this was proposed, so it can no longer be applied. Dismiss it and rebuild the page for a new proposal."))
+    } else if !applies {
+        note(ctx.t("The page changed after this was approved, so it was not applied. Rebuild the page for a new proposal."))
+    } else if !pending {
+        note(ctx.t("Approved, but not applied yet. Apply it to write it into the guide page."))
+    } else {
+        String::new()
+    };
+    let created = a["created_at"].as_str().and_then(|s| s.get(..10)).unwrap_or("");
+    let when = if created.is_empty() {
+        String::new()
+    } else {
+        format!("<span class='mem-muted'>{}</span>", escape(&ctx.tf("Proposed {date}", &[("date", created)])))
+    };
+    let diff = match &secret {
+        Some(kind) => redacted_proposal(ctx, kind),
+        None => {
+            let col = |class: &str, label: String, body: &str| {
+                let body = if body.trim().is_empty() {
+                    format!("<p class='mem-muted'>{}</p>", escape(&ctx.t("(empty)")))
+                } else {
+                    format!("<pre class='mem-pre'>{}</pre>", escape(body))
+                };
+                format!("<div class='mem-diff-col mem-diff-{class}'><h4>{}</h4>{body}</div>", escape(&label))
+            };
+            format!(
+                "<details class='gp-diff'><summary>{}<span>{}</span></summary><div class='mem-diff'>{}{}</div></details>",
+                icon("expand_more"),
+                escape(&ctx.t("Show the change")),
+                col("old", ctx.t("Current"), &old),
+                col("new", ctx.t("Proposed"), &new)
+            )
+        }
+    };
+    // Approve (or Apply) only while the page still holds the text it was raised
+    // against and the proposal holds no secret; Dismiss while it is pending.
+    let can_apply = applies && secret.is_none();
+    let button = |decision: &str, primary: bool, icon_name: &str, label: String| {
+        format!(
+            "<button class='mem-btn{}' type='submit' name='decision' value='{decision}'>{}{}</button>",
+            if primary { " mem-btn-primary" } else { "" },
+            icon(icon_name),
+            escape(&label)
+        )
+    };
+    let mut buttons = String::new();
+    if pending {
+        buttons.push_str(&button("dismiss", false, "close", ctx.t("Dismiss")));
+        if can_apply {
+            buttons.push_str(&button("approve", true, "check", ctx.t("Approve")));
+        }
+    } else if !applied && can_apply {
+        buttons.push_str(&button("approve", true, "check", ctx.t("Apply")));
+    }
+    let actions = if buttons.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<div class='mem-actions'><form method='post' action='{DECIDE}' class='mem-inline mem-decide'>{}{}{}{buttons}</form></div>",
+            ctx.csrf_input(),
+            hidden("project", alias),
+            hidden("id", id)
+        )
+    };
+    format!(
+        "<article class='mem-proposal' data-proposal='{id}'><div class='mem-proposal-head'><h3>{}</h3>{status}{when}</div>{diff}{note}{actions}</article>",
+        escape(&ctx.tf("Update the {slug} guide page", &[("slug", slug)]))
+    )
+}
+
+/// Approve or dismiss a guide page proposal of this project. The approval must be a
+/// `guide-page` proposal whose project is the (known) alias; anything else is
+/// `bad-input` and nothing is decided. Approving goes through the core's
+/// `proposals::decide`, which takes the guide slot, checks the page still holds the
+/// text the proposal was raised against, and applies it; its errors are matched on
+/// their fixed wording and never shown.
+pub(super) fn proposal_decide_route(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, Some("proposals"));
+    let id = form.first("id").unwrap_or("");
+    let decision = match form.first("decision") {
+        Some("approve") => "approve",
+        Some("dismiss") => "deny",
+        _ => return back(to(), Notice::BadInput),
+    };
+    if !valid_id(id) {
+        return back(to(), Notice::BadInput);
+    }
+    let dir = approvals_dir(ctx);
+    let Some(a) = approvals::get(&dir, id).filter(|a| a["id"] == id && checked(a, &alias).is_some()) else {
+        return back(to(), Notice::BadInput);
+    };
+    let status = a["status"].as_str().unwrap_or("");
+    if status != "pending" && (decision == "deny" || status != "approved") {
+        return back(to(), Notice::AlreadyDecided);
+    }
+    let root = memory_root(ctx);
+    let notice = match core_proposals::decide(id, decision, None, "dashboard", Some(&root), &dir, ctx.state.now()) {
+        Ok(_) if decision == "deny" => Notice::Dismissed,
+        Ok(_) => Notice::GuideProposalApproved,
+        Err(e) => {
+            let e = e.to_string();
+            if e.contains("changed since") {
+                Notice::GuideProposalChanged
+            } else if e.contains("in progress") {
+                Notice::GuideBusy
+            } else if e.contains("already decided") || decision == "deny" {
+                Notice::AlreadyDecided
+            } else {
+                Notice::GuideProposalFailed
+            }
+        }
+    };
+    back(to(), notice)
+}
+
+/// The guide proposals' own styles on the Proposals page.
+const GP_STYLE: &str = "<style>
+.gp-group{margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--md-outline-variant)}
+.gp-heading{display:flex;align-items:center;gap:.45rem;margin:0 0 .25rem;font-size:.95rem;font-weight:600}
+.gp-heading .icon{width:17px;height:17px;flex:0 0 17px;color:var(--md-primary)}
+.gp-diff{margin:.5rem 0 .25rem}
+.gp-diff>summary{display:inline-flex;align-items:center;gap:.35rem;height:30px;box-sizing:border-box;padding:0 .8rem;border-radius:999px;border:1px solid var(--md-outline-variant);background:transparent;color:var(--md-on-surface-variant);font:500 .8rem -apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;cursor:pointer;list-style:none;user-select:none}
+.gp-diff>summary::-webkit-details-marker{display:none}
+.gp-diff>summary:hover{background:var(--md-surface-container-high);color:var(--md-on-surface)}
+.gp-diff>summary:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
+.gp-diff>summary .icon{width:15px;height:15px;flex:0 0 15px}
+.gp-diff[open]>summary{background:var(--md-surface-container-high);color:var(--md-on-surface)}
+.gp-diff[open]>summary .icon{transform:rotate(180deg)}
+.gp-diff>.mem-diff{margin-top:.6rem}
+@media (prefers-reduced-motion:no-preference){
+.gp-diff>summary{transition:background-color .25s cubic-bezier(0.32,0.72,0,1),color .25s cubic-bezier(0.32,0.72,0,1)}
+.gp-diff>summary .icon{transition:transform .25s cubic-bezier(0.32,0.72,0,1)}
+}
+</style>";
 
 const GUIDE_STYLE: &str = "<style>
 .gd-layout{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:1.25rem;align-items:start}

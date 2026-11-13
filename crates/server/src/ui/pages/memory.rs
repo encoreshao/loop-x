@@ -89,6 +89,7 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/guide/edit", guide::edit_route);
     r.post("/insights/memory/guide/delete", guide::delete_route);
     r.post("/insights/memory/guide/restore", guide::restore_route);
+    r.post("/insights/memory/guide/proposal/decide", guide::proposal_decide_route);
     r.get("/insights/memory/jobs", jobs_status);
 }
 
@@ -258,6 +259,8 @@ fn jobs_status(ctx: &UiCtx) -> UiResponse {
 struct Model {
     projects: Vec<Project>,
     proposals: Vec<Value>,
+    /// The pending and approved `guide-page` proposals of every project.
+    guide_proposals: Vec<Value>,
     /// The banner for a whitelisted `notice` code, or empty.
     notice: String,
     /// Each project's issue digest, read (through the process-wide digest cache)
@@ -295,6 +298,7 @@ fn model(ctx: &UiCtx) -> Model {
     Model {
         projects: projects(ctx),
         proposals: proposals(ctx),
+        guide_proposals: guide::proposals(ctx),
         notice: notice_html(ctx),
         digests: OnceCell::new(),
         links: OnceCell::new(),
@@ -551,8 +555,11 @@ fn proposal_alias(a: &Value) -> &str {
         .unwrap_or("")
 }
 
-fn pending_for(all: &[Value], alias: &str) -> usize {
-    all.iter()
+/// Pending proposals of `alias`, profile sections and guide pages.
+fn pending_for(m: &Model, alias: &str) -> usize {
+    m.proposals
+        .iter()
+        .chain(&m.guide_proposals)
         .filter(|a| a["status"] == "pending" && proposal_alias(a) == alias)
         .count()
 }
@@ -791,12 +798,11 @@ fn overview(ctx: &UiCtx, m: &Model, graph: bool) -> String {
     let main = if graph {
         graph_view(ctx, m)
     } else {
-        let all = &m.proposals;
         let links = links(ctx, m);
         let status = store.as_ref().ok();
         let cards: String = projects
             .iter()
-            .map(|p| project_card(ctx, p, all, links, status))
+            .map(|p| project_card(ctx, p, pending_for(m, &p.alias), links, status))
             .collect();
         format!("<div class='mem-grid'>{cards}</div>")
     };
@@ -877,7 +883,7 @@ fn overview_line(ctx: &UiCtx, p: &Project) -> String {
 fn project_card(
     ctx: &UiCtx,
     p: &Project,
-    all: &[Value],
+    pending: usize,
     links: &BTreeMap<String, Vec<(String, EdgeKind)>>,
     status: Option<&SyncStore>,
 ) -> String {
@@ -901,7 +907,6 @@ fn project_card(
             &[("n", &good.to_string()), ("total", &total.to_string())]
         ))
     );
-    let pending = pending_for(all, &p.alias);
     let n_links = distinct_neighbors(links.get(&p.alias));
     let tasks = memory_store::list_task_memories(&p.alias, Some(&memory_root(ctx)));
     let review = tasks
@@ -1352,7 +1357,7 @@ fn node_template(
         ));
     }
     facts.push((ctx.t("Recent issues"), activity.to_string()));
-    facts.push((ctx.t("Pending proposals"), pending_for(&m.proposals, &p.alias).to_string()));
+    facts.push((ctx.t("Pending proposals"), pending_for(m, &p.alias).to_string()));
     let facts: String = facts
         .iter()
         .map(|(k, v)| format!("<div><dt>{}</dt><dd>{}</dd></div>", escape(k), escape(v)))
@@ -1541,7 +1546,7 @@ fn subnav(ctx: &UiCtx, p: &Project, current: Option<&str>, pending: usize) -> St
 
 /// The project frame: breadcrumb, title, the sub-nav and `content` beside it.
 fn frame(ctx: &UiCtx, p: &Project, page: Option<&str>, content: &str, m: &Model) -> String {
-    let pending = pending_for(&m.proposals, &p.alias);
+    let pending = pending_for(m, &p.alias);
     let subtitle = [p.instance.as_str(), p.project_id.as_str()]
         .iter()
         .filter(|s| !s.is_empty())
@@ -1612,7 +1617,7 @@ fn project_page(ctx: &UiCtx, p: &Project, m: &Model) -> String {
                 String::new()
             };
             let links = links(ctx, m);
-            let pending = pending_for(&m.proposals, &p.alias);
+            let pending = pending_for(m, &p.alias);
             let cards: String = SectionKey::ALL
                 .into_iter()
                 .map(|k| summary_card(ctx, p, profile, k, check))
@@ -1791,7 +1796,7 @@ fn proposals_summary(ctx: &UiCtx, p: &Project, pending: usize) -> String {
 fn sub_page(ctx: &UiCtx, p: &Project, slug: &str, m: &Model) -> String {
     let content = match slug {
         "lessons" => lessons_card(ctx, p),
-        "proposals" => proposals_card(ctx, p, &m.proposals),
+        "proposals" => proposals_card(ctx, p, &m.proposals, &guide::proposals_list(ctx, p, &m.guide_proposals)),
         "guide" => guide::render(ctx, p, m),
         _ => match &p.loaded {
             Loaded::Unreadable(e) => error_card(ctx, e),
@@ -1931,7 +1936,8 @@ fn setup_card(ctx: &UiCtx, p: &Project) -> String {
     )
 }
 
-fn proposals_card(ctx: &UiCtx, p: &Project, all: &[Value]) -> String {
+/// The profile's proposals, then (`guide`, already rendered) the guide pages'.
+fn proposals_card(ctx: &UiCtx, p: &Project, all: &[Value], guide: &str) -> String {
     let mut items: Vec<&Value> = all
         .iter()
         .filter(|a| proposal_alias(a) == p.alias)
@@ -1943,16 +1949,23 @@ fn proposals_card(ctx: &UiCtx, p: &Project, all: &[Value]) -> String {
         _ => None,
     };
     let list: String = items.iter().map(|a| proposal_item(ctx, &p.alias, a, profile)).collect();
-    let body = if list.is_empty() {
+    let body = if list.is_empty() && guide.is_empty() {
         format!("<p class='mem-muted'>{}</p>", escape(&ctx.t("No proposals for this project.")))
+    } else if list.is_empty() {
+        String::new()
     } else {
         format!("<div class='mem-proposals'>{list}</div>")
     };
+    let meta = if guide.is_empty() {
+        ctx.t("Proposed updates to this profile. Nothing changes until a proposal is approved.")
+    } else {
+        ctx.t("Proposed updates to this profile and its guide. Nothing changes until a proposal is approved.")
+    };
     format!(
-        "<section class='card'><div class='section-header'>{}<h2>{}</h2></div><p class='mem-meta'>{}</p>{body}</section>",
+        "<section class='card'><div class='section-header'>{}<h2>{}</h2></div><p class='mem-meta'>{}</p>{body}{guide}</section>",
         icon("fact_check"),
         escape(&ctx.t("Proposals")),
-        escape(&ctx.t("Proposed updates to this profile. Nothing changes until a proposal is approved."))
+        escape(&meta)
     )
 }
 
@@ -2290,9 +2303,12 @@ enum Notice {
     GuideFailed,
     GuideTooLong,
     GuideSecretElsewhere,
+    GuideProposalApproved,
+    GuideProposalChanged,
+    GuideProposalFailed,
 }
 
-const NOTICES: [(Notice, &str); 49] = [
+const NOTICES: [(Notice, &str); 52] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2342,6 +2358,9 @@ const NOTICES: [(Notice, &str); 49] = [
     (Notice::GuideFailed, "guide-failed"),
     (Notice::GuideTooLong, "guide-too-long"),
     (Notice::GuideSecretElsewhere, "guide-secret-elsewhere"),
+    (Notice::GuideProposalApproved, "guide-proposal-approved"),
+    (Notice::GuideProposalChanged, "guide-proposal-changed"),
+    (Notice::GuideProposalFailed, "guide-proposal-failed"),
 ];
 
 impl Notice {
@@ -2384,6 +2403,7 @@ impl Notice {
                 | Notice::GuideEdited
                 | Notice::GuideDeleted
                 | Notice::GuideRestored
+                | Notice::GuideProposalApproved
         )
     }
 
@@ -2443,6 +2463,9 @@ impl Notice {
                 None => ctx.t("The guide could not be changed: a page file could not be read or saved. Reload the page and try again."),
             },
             Notice::GuideTooLong => ctx.t("Nothing was saved: a part can hold up to 20,000 characters. Shorten it and save again."),
+            Notice::GuideProposalApproved => ctx.t("Proposal approved. The guide page now holds the new text, and agents read it."),
+            Notice::GuideProposalChanged => ctx.t("The page changed after this was proposed, so nothing was applied. Rebuild the page for a new proposal."),
+            Notice::GuideProposalFailed => ctx.t("The proposal could not be applied to the guide page."),
             Notice::GuideSecretElsewhere => ctx.t("Nothing was saved: another part of this page looks like it contains a secret value. Remove it from the page file, or delete the page and rebuild it."),
         }
     }
@@ -4761,7 +4784,7 @@ mod tests {
         panic!("{alias} is still running");
     }
 
-    const ROUTES: [&str; 19] = [
+    const ROUTES: [&str; 20] = [
         "/insights/memory/build",
         "/insights/memory/approve",
         "/insights/memory/section/save",
@@ -4781,6 +4804,7 @@ mod tests {
         "/insights/memory/guide/edit",
         "/insights/memory/guide/delete",
         "/insights/memory/guide/restore",
+        "/insights/memory/guide/proposal/decide",
     ];
 
     #[test]
@@ -7756,5 +7780,252 @@ mod tests {
         }
         let html = sb.get(&format!("{}&approved=5000&notice=guide-all-approved", guide_url(alias, None)));
         assert!(html.contains("Every draft page was approved."), "{html}");
+    }
+
+    // ------------------------------------------------------------------ guide proposals
+
+    use loopx_core::guide_proposal;
+    const GP_DECIDE: &str = "/insights/memory/guide/proposal/decide";
+
+    fn proposals_url(alias: &str) -> String {
+        format!("/insights?view=memory&project={alias}&page=proposals")
+    }
+
+    fn proposals_back(alias: &str, notice: &str) -> String {
+        format!("{}&notice={notice}", proposals_url(alias))
+    }
+
+    /// The `feature-orders` page `put_page` writes with its `what` part set to `what`,
+    /// held as a rebuild (a draft).
+    fn gp_held(alias: &str, what: &str) -> loopx_core::project_guide::Page {
+        gd_page(alias, "feature-orders", "Orders", Status::Draft, &[("what", what, Origin::Agent)])
+    }
+
+    /// An approved `feature-orders` page of `alias` whose `what` part says `old`, and a
+    /// pending guide proposal rewriting it to `new`.
+    fn gp_raise(sb: &Sb, alias: &str, old: &str, new: &str) -> String {
+        put_page(sb, alias, "feature-orders", "Orders", Status::Approved, &[("what", old, Origin::Agent)]);
+        guide_proposal::raise(alias, &gp_held(alias, new), &sb.approvals(), Some(&sb.root()), now())
+            .unwrap()
+            .expect("a proposal")
+    }
+
+    /// The `<article>` of proposal `id` on the Proposals page.
+    fn gp_item<'a>(html: &'a str, id: &str) -> &'a str {
+        let at = html.find(&format!("name='id' value='{id}'")).or_else(|| html.find(&format!("data-proposal='{id}'")));
+        let at = at.unwrap_or_else(|| panic!("no proposal {id}: {html}"));
+        let start = html[..at].rfind("<article").unwrap();
+        let end = at + html[at..].find("</article>").unwrap();
+        &html[start..end]
+    }
+
+    fn gp_status(sb: &Sb, id: &str) -> Value {
+        approvals::get(&sb.approvals(), id).unwrap()["status"].clone()
+    }
+
+    #[test]
+    fn guide_proposals_are_listed_with_a_diff_and_counted_in_the_badge() {
+        let alias = "gp-list";
+        let sb = Sb::new(&[(alias, true), ("gp-other", true)]);
+        let id = gp_raise(&sb, alias, "OLD-WHAT <b>x</b>", "NEW-WHAT");
+        // Another project's guide proposal is not listed here.
+        gp_raise(&sb, "gp-other", "OTHER-OLD", "OTHER-NEW");
+        let html = sb.get(&proposals_url(alias));
+        assert!(html.contains(">Guide pages<"), "{html}");
+        let item = gp_item(&html, &id);
+        assert!(item.contains("Update the feature-orders guide page"), "{item}");
+        assert!(item.contains("mem-pill-review'>Pending</span>"), "{item}");
+        // One collapsed diff per proposal: Current and Proposed page texts, escaped.
+        assert!(item.contains("<details class='gp-diff'>"), "{item}");
+        assert!(item.contains("OLD-WHAT &lt;b&gt;x&lt;/b&gt;") && item.contains("NEW-WHAT"), "{item}");
+        assert!(item.contains(">Current<") && item.contains(">Proposed<"), "{item}");
+        assert!(item.contains(&format!("action='{GP_DECIDE}'")), "{item}");
+        assert!(item.contains("value='approve'") && item.contains("value='dismiss'"), "{item}");
+        assert!(!html.contains("OTHER-NEW"), "{html}");
+        // The sub-nav badge and the summary's count include it.
+        assert!(html.contains("<span class='mem-subnav-badge'>1</span>"), "{html}");
+        // A profile proposal too: the badge counts both kinds.
+        sb.save(&profile(alias, &[(SectionKey::Overview, section("A.", "a"))]));
+        propose(&sb, alias, "stack", "OLD-STACK", "NEW-STACK");
+        let html = sb.get(&proposals_url(alias));
+        assert!(html.contains("<span class='mem-subnav-badge'>2</span>"), "{html}");
+        assert!(html.contains("NEW-STACK") && html.contains("NEW-WHAT"), "{html}");
+        let summary = sb.get(&format!("/insights?view=memory&project={alias}"));
+        assert!(summary.contains("<p class='mem-count'>2</p>"), "{summary}");
+    }
+
+    #[test]
+    fn approving_applies_the_page_and_a_stale_proposal_offers_only_dismiss() {
+        let alias = "gp-approve";
+        let sb = Sb::new(&[(alias, true)]);
+        let id = gp_raise(&sb, alias, "Old what.", "New what.");
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={id}&decision=approve"));
+        assert_eq!(loc, proposals_back(alias, "guide-proposal-approved"));
+        assert_eq!(gd_load(&sb, alias, "feature-orders").unwrap().parts[0].body, "New what.");
+        assert_eq!(gp_status(&sb, &id), "approved");
+        assert!(guide_proposal::is_applied(alias, &id, Some(&sb.root())));
+        let html = sb.get(&loc);
+        assert!(html.contains("Proposal approved. The guide page now holds the new text, and agents read it."), "{html}");
+        let item = gp_item(&html, &id);
+        assert!(item.contains("mem-pill-fresh'>Approved</span>"), "{item}");
+        assert!(!item.contains("<form"), "an applied proposal has no actions: {item}");
+
+        // Stale: the page is changed by hand after a proposal was raised.
+        let stale = guide_proposal::raise(alias, &gp_held(alias, "Newer what."), &sb.approvals(), Some(&sb.root()), now())
+            .unwrap()
+            .expect("a proposal");
+        hand_edit(&sb, alias, "New what.", "Hand-written what.");
+        let html = sb.get(&proposals_url(alias));
+        let item = gp_item(&html, &stale);
+        assert!(item.contains("mem-pill-stale'>Stale</span>"), "{item}");
+        assert!(item.contains("The page changed after this was proposed, so it can no longer be applied. Dismiss it and rebuild the page for a new proposal."), "{item}");
+        assert!(item.contains("value='dismiss'") && !item.contains("value='approve'"), "{item}");
+        // A stale form posted anyway: refused with a notice, nothing written, still pending.
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={stale}&decision=approve"));
+        assert_eq!(loc, proposals_back(alias, "guide-proposal-changed"));
+        assert_eq!(gd_load(&sb, alias, "feature-orders").unwrap().parts[0].body, "Hand-written what.");
+        assert_eq!(gp_status(&sb, &stale), "pending");
+        assert!(sb.get(&loc).contains("The page changed after this was proposed, so nothing was applied. Rebuild the page for a new proposal."));
+        // A busy guide refuses to apply.
+        let fresh = guide_proposal::raise(alias, &gp_held(alias, "Busy what."), &sb.approvals(), Some(&sb.root()), now())
+            .unwrap()
+            .expect("a proposal");
+        let slot = loopx_core::guide_build::try_acquire(alias).unwrap();
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={fresh}&decision=approve"));
+        assert_eq!(loc, proposals_back(alias, "guide-busy"));
+        assert_eq!(gp_status(&sb, &fresh), "pending");
+        drop(slot);
+    }
+
+    #[test]
+    fn a_proposal_for_a_deleted_page_offers_only_dismiss() {
+        let alias = "gp-deleted";
+        let sb = Sb::new(&[(alias, true)]);
+        let id = gp_raise(&sb, alias, "Old what.", "New what.");
+        loopx_core::guide_ops::delete_page(alias, "feature-orders", Some(&sb.root())).unwrap();
+        let html = sb.get(&proposals_url(alias));
+        let item = gp_item(&html, &id);
+        assert!(item.contains("The page was deleted after this was proposed."), "{item}");
+        assert!(!item.contains("The page changed after this was proposed"), "{item}");
+        assert!(item.contains("value='dismiss'") && !item.contains("value='approve'"), "{item}");
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={id}&decision=approve"));
+        assert_eq!(loc, proposals_back(alias, "guide-proposal-failed"));
+        assert!(gd_load(&sb, alias, "feature-orders").is_none());
+        assert_eq!(gp_status(&sb, &id), "pending");
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={id}&decision=dismiss"));
+        assert_eq!(loc, proposals_back(alias, "dismissed"));
+        assert_eq!(gp_status(&sb, &id), "denied");
+    }
+
+    #[test]
+    fn dismissing_records_a_denial_and_the_text_is_not_raised_again_until_it_changes() {
+        let alias = "gp-dismiss";
+        let sb = Sb::new(&[(alias, true)]);
+        let id = gp_raise(&sb, alias, "Old what.", "New what.");
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={id}&decision=dismiss"));
+        assert_eq!(loc, proposals_back(alias, "dismissed"));
+        assert_eq!(gp_status(&sb, &id), "denied");
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "dismissing writes nothing");
+        // A dismissed proposal leaves the list, and deciding it again is refused.
+        assert!(!sb.get(&proposals_url(alias)).contains(&format!("value='{id}'")));
+        for d in ["dismiss", "approve"] {
+            let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={id}&decision={d}"));
+            assert_eq!(loc, proposals_back(alias, "already-decided"), "{d}");
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        // The same text is not raised again; a different one is.
+        let again = guide_proposal::raise(alias, &gp_held(alias, "New what."), &sb.approvals(), Some(&sb.root()), now()).unwrap();
+        assert_eq!(again, None);
+        let other = guide_proposal::raise(alias, &gp_held(alias, "Other what."), &sb.approvals(), Some(&sb.root()), now()).unwrap();
+        assert!(other.is_some());
+    }
+
+    #[test]
+    fn a_proposal_with_a_secret_is_redacted_and_cannot_be_approved() {
+        let alias = "gp-secret";
+        let sb = Sb::new(&[(alias, true)]);
+        let clean = gp_raise(&sb, alias, "Old what.", "New what.");
+        let token = ["glpat-", "abcDEF123456ghiJKL78"].concat();
+        // A hand-edited approval file: its proposed text now holds a token.
+        let mut a = approvals::get(&sb.approvals(), &clean).unwrap();
+        let new = a["target"]["new"].as_str().unwrap().replace("New what.", &format!("New what {token}."));
+        a["target"]["new"] = json!(new);
+        let path = sb.approvals().join(format!("{clean}.json"));
+        assert!(path.is_file(), "the approval file is {path:?}");
+        std::fs::write(&path, a.to_string()).unwrap();
+        let file = gd_file(&sb, alias, "feature-orders");
+        let bytes = std::fs::read(&file).unwrap();
+        let html = sb.get(&proposals_url(alias));
+        assert!(!html.contains("glpat") && !html.contains(&token), "{html}");
+        let item = gp_item(&html, &clean);
+        assert!(item.contains("Hidden: this proposal looks like it contains a secret value"), "{item}");
+        assert!(!item.contains("PROFILE.md"), "{item}");
+        assert!(!item.contains("<details class='gp-diff'>"), "{item}");
+        assert!(item.contains("value='dismiss'") && !item.contains("value='approve'"), "{item}");
+        let loc = sb.post_to(GP_DECIDE, &format!("project={alias}&id={clean}&decision=approve"));
+        assert_eq!(loc, proposals_back(alias, "guide-proposal-failed"));
+        assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        assert_eq!(gp_status(&sb, &clean), "pending");
+        assert!(!sb.get(&loc).contains("glpat"));
+    }
+
+    #[test]
+    fn the_guide_decide_route_refuses_profile_proposals_and_foreign_projects() {
+        let alias = "gp-refuse";
+        let sb = Sb::new(&[(alias, true), ("gp-foreign", true)]);
+        sb.save(&profile(alias, &[(SectionKey::Stack, section("S", "B"))]));
+        let profile_id = propose(&sb, alias, "stack", "B", "x");
+        let foreign = gp_raise(&sb, "gp-foreign", "Old what.", "New what.");
+        let mine = gp_raise(&sb, alias, "Old what.", "New what.");
+        let mut bad = vec![
+            format!("project={alias}&id={profile_id}&decision=approve"),
+            format!("project={alias}&id={profile_id}&decision=dismiss"),
+            format!("project={alias}&id={foreign}&decision=approve"),
+            format!("project={alias}&id={foreign}&decision=dismiss"),
+            format!("project={alias}&id={mine}&decision=yes"),
+            format!("project={alias}&id={mine}&decision=request-changes"),
+            format!("project={alias}&id=..%2F..%2Fetc%2Fpasswd&decision=dismiss"),
+            format!("project={alias}&id=apr_missing&decision=dismiss"),
+            format!("project={alias}&decision=dismiss"),
+        ];
+        bad.push(format!("project={alias}&id=%3Cscript%3E&decision=approve"));
+        for body in &bad {
+            let loc = sb.post_to(GP_DECIDE, body);
+            assert_eq!(loc, proposals_back(alias, "bad-input"), "{body}");
+        }
+        // An unknown project goes to the overview; nothing is echoed.
+        let loc = sb.post_to(GP_DECIDE, &format!("project=%3Cscript%3E&id={mine}&decision=approve"));
+        assert_eq!(loc, "/insights?view=memory&notice=bad-input");
+        let loc = sb.post_to(GP_DECIDE, &format!("project=gp-nope&id={mine}&decision=approve"));
+        assert_eq!(loc, "/insights?view=memory&notice=bad-input");
+        for id in [&profile_id, &foreign, &mine] {
+            assert_eq!(gp_status(&sb, id), "pending", "{id}");
+        }
+        assert_eq!(gd_load(&sb, "gp-foreign", "feature-orders").unwrap().parts[0].body, "Old what.");
+        assert_eq!(gd_load(&sb, alias, "feature-orders").unwrap().parts[0].body, "Old what.");
+        // The profile route keeps refusing a guide proposal.
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project={alias}&id={mine}&decision=approve"));
+        assert!(loc.ends_with("notice=bad-input"), "{loc}");
+        assert_eq!(gp_status(&sb, &mine), "pending");
+        assert!(ROUTES.contains(&GP_DECIDE));
+    }
+
+    #[test]
+    fn the_guide_proposal_strings_are_translated() {
+        let alias = "gp-fr";
+        let sb = Sb::new(&[(alias, true)]);
+        let stale = gp_raise(&sb, alias, "Old what.", "New what.");
+        hand_edit(&sb, alias, "Old what.", "Hand what.");
+        let html = get_fr(&sb, &proposals_url(alias));
+        for english in [">Guide pages<", "Update the feature-orders guide page", "The page changed after this was proposed", ">Stale<", "Show the change"] {
+            assert!(!html.contains(english), "{english}: {html}");
+        }
+        assert!(gp_item(&html, &stale).contains("value='dismiss'"));
+        for code in ["guide-proposal-approved", "guide-proposal-changed", "guide-proposal-failed"] {
+            let html = get_fr(&sb, &proposals_back(alias, code));
+            assert!(html.contains("class='mem-notice"), "{code}");
+        }
     }
 }

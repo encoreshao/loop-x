@@ -134,8 +134,41 @@ fn link(ctx: &UiCtx, item: &Value) -> String {
     format!("<a class='btn btn-neutral' href='{}'>{}</a>", pyfmt::escape(&href), pyfmt::escape(&label))
 }
 
-fn actions(ctx: &UiCtx, item: &Value) -> String {
+/// Whether `item` is a guide page proposal that can no longer be applied: the page
+/// changed (or went) after it was raised. It offers Dismiss and the project's
+/// proposals, not an Approve button that can only fail.
+fn stale_guide_proposal(ctx: &UiCtx, item: &Value) -> bool {
+    if item["kind"] != "approval" || item["approval_kind"] != loopx_core::guide_proposal::KIND {
+        return false;
+    }
+    let dir = paths(ctx.state).approvals_dir;
+    loopx_core::approvals::get(&dir, &text(item, "approval_id"))
+        .is_some_and(|a| !loopx_core::guide_proposal::still_applies(&a, Some(&memory_root(ctx.state))))
+}
+
+fn stale_note(ctx: &UiCtx) -> String {
+    format!(
+        "<p class='muted needs-you-note'>{}</p>",
+        pyfmt::escape(&ctx.t(
+            "The page changed after this was proposed, so it can no longer be applied. Dismiss it and rebuild the page for a new proposal."
+        ))
+    )
+}
+
+fn actions(ctx: &UiCtx, item: &Value, stale: bool) -> String {
     let csrf = ctx.csrf_input();
+    if stale {
+        return format!(
+            "<form method='post' action='/needs-you/approval' class='needs-you-approval'>{csrf}\
+<input type='hidden' name='id' value='{}'>\
+<button type='submit' name='decision' value='deny' class='btn btn-neutral'>{}</button></form>\
+<a class='btn btn-neutral' href='{}'>{}</a>",
+            pyfmt::escape(&text(item, "approval_id")),
+            pyfmt::escape(&ctx.t("Dismiss")),
+            pyfmt::escape(&crate::ui::pages::memory::project_url(&text(item, "project"), Some("proposals"))),
+            pyfmt::escape(&ctx.t("Open in Memory")),
+        );
+    }
     if item["kind"] == "approval" {
         return format!(
             "<form method='post' action='/needs-you/approval' class='daemon-action-form needs-you-approval'>{csrf}\
@@ -256,10 +289,13 @@ fn row(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes
         };
         format!(" <span class='muted'>· {}</span>", pyfmt::escape(&ago))
     };
+    let stale = stale_guide_proposal(ctx, item);
     let (details, actions) = if item["kind"] == "mr_thread" {
         (mr_thread_details(ctx, item, prefixes), mr_thread_actions(ctx, item))
+    } else if stale {
+        (stale_note(ctx), actions(ctx, item, true))
     } else {
-        (String::new(), actions(ctx, item))
+        (String::new(), actions(ctx, item, false))
     };
     format!(
         "<li class='needs-you-item needs-you-{kind}'>{}<div class='needs-you-text'>{}{when}{details}</div><div class='needs-you-actions'>{actions}</div></li>",
@@ -589,6 +625,44 @@ mod tests {
             fr.contains("Examiner la modification propos\u{e9}e de la page de guide feature-orders de ny-guide-read"),
             "{fr}"
         );
+    }
+
+    #[test]
+    fn needs_you_shows_no_approve_button_for_a_stale_guide_proposal() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let apr = d.path().join("outputs/approvals");
+        let memory = d.path().join("memory");
+        let fresh = guide_proposal("ny-guide-fresh", &apr, &memory);
+        let stale = guide_proposal("ny-guide-stale", &apr, &memory);
+        // The page is changed after the proposal was raised.
+        let file = loopx_core::project_guide::guide_dir("ny-guide-stale", Some(&memory)).join("feature-orders.md");
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, text.replace("Old what.", "Hand what.")).unwrap();
+        let html = get(&st, "/needs-you");
+        let item = |id: &str| -> String {
+            let at = html.find(&format!("value='{id}'")).unwrap_or_else(|| panic!("no item {id}: {html}"));
+            let start = html[..at].rfind("<li").unwrap();
+            let end = at + html[at..].find("</li>").unwrap();
+            html[start..end].to_string()
+        };
+        let f = item(&fresh);
+        assert!(f.contains("name='decision' value='approve'"), "{f}");
+        assert!(!f.contains("can no longer be applied"), "{f}");
+        let s = item(&stale);
+        assert!(!s.contains("value='approve'") && !s.contains("value='request_changes'"), "{s}");
+        assert!(s.contains("The page changed after this was proposed, so it can no longer be applied. Dismiss it and rebuild the page for a new proposal."), "{s}");
+        assert!(s.contains("name='decision' value='deny'") && s.contains(">Dismiss<"), "{s}");
+        assert!(s.contains("href='/insights?view=memory&amp;project=ny-guide-stale&amp;page=proposals'"), "{s}");
+        // Dismissing it here records a denial and writes nothing.
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={stale}&decision=deny"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"));
+        assert_eq!(approvals::get(&apr, &stale).unwrap()["status"], "denied");
+        assert_eq!(guide_what("ny-guide-stale", &memory), "Hand what.");
+        // Translated.
+        let req = crate::ui::routes::UiRequest::get("/needs-you").with_header("cookie", "loop_lang=fr");
+        let fr = st.registry.dispatch(&st, &req).unwrap().body_text();
+        assert!(!fr.contains("can no longer be applied"), "{fr}");
     }
 
     #[test]
