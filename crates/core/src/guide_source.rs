@@ -25,21 +25,72 @@ pub struct Loaded {
     pub uncovered_tables: Vec<String>,
 }
 
-/// Replace a quoted literal assigned to a secret-like name; keep names, calls and
-/// expressions (`token = jwt.decode(h)` stays whole).
-pub fn redact_source(text: &str) -> String {
+const SECRET_WORDS: &str = r"(?:key|token|secret|passw(?:or)?d|auth|credential|private)";
+const LIT: &str = r#"(?:"(?:[^"\\\r\n]|\\.)*"|'(?:[^'\\\r\n]|\\.)*'|`(?:[^`\\\r\n]|\\.)*`)"#;
+
+fn mask_literal(lit: &str) -> String {
+    let q = &lit[..1];
+    format!("{q}[redacted]{q}")
+}
+
+fn has_secret_word(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(
-            r#"(?i)((?:[A-Za-z0-9_.\-]*)(?:key|token|secret|passw(?:or)?d|auth|credential|private)(?:[A-Za-z0-9_.\-]*)["']?\s*(?:=>|=|:)\s*)(["'`])[^"'`\r\n]+(["'`])"#,
-        )
+    RE.get_or_init(|| Regex::new(&format!("(?i){SECRET_WORDS}")).expect("static regex"))
+        .is_match(text)
+}
+
+/// Replace a quoted literal assigned to a secret-like name (plain, typed, `:=`, `||=`,
+/// `??=`, `=>`, `:`) or given as the default of a call whose first string argument names a
+/// secret-like variable; keep names, calls and expressions (`token = jwt.decode(h)` stays whole).
+pub fn redact_source(text: &str) -> String {
+    static ASSIGN: OnceLock<Regex> = OnceLock::new();
+    static DEFAULT: OnceLock<Regex> = OnceLock::new();
+    let assign = ASSIGN.get_or_init(|| {
+        Regex::new(&format!(
+            r#"(?i)((?:[A-Za-z0-9_.\-]*){SECRET_WORDS}(?:[A-Za-z0-9_.\-]*)["']?(?:\s*:\s*[A-Za-z_][\w.\[\]<>, |?]*\s*=\s*|\s*(?:\|\|=|\?\?=|:=|=>|=|:)\s*))({LIT})"#
+        ))
         .expect("static regex")
     });
-    re.replace_all(text, "${1}${2}[redacted]${3}").into_owned()
+    let default = DEFAULT.get_or_init(|| {
+        Regex::new(&format!(
+            r#"([A-Za-z_][\w.:]*\(\s*)({LIT})(\s*,\s*)({LIT})"#
+        ))
+        .expect("static regex")
+    });
+    let once = assign.replace_all(text, |c: &regex::Captures| {
+        format!("{}{}", &c[1], mask_literal(&c[2]))
+    });
+    default
+        .replace_all(&once, |c: &regex::Captures| {
+            if has_secret_word(&c[2]) {
+                format!("{}{}{}{}", &c[1], &c[2], &c[3], mask_literal(&c[4]))
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned()
 }
 
 fn base_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+fn is_config_extension(path: &str) -> bool {
+    let n = base_name(path).to_ascii_lowercase();
+    n == ".env"
+        || n.starts_with(".env.")
+        || n.ends_with(".env")
+        || [
+            ".yml",
+            ".yaml",
+            ".properties",
+            ".ini",
+            ".toml",
+            ".conf",
+            ".cfg",
+        ]
+        .iter()
+        .any(|e| n.ends_with(e))
 }
 
 fn is_config_like(path: &str) -> bool {
@@ -64,7 +115,10 @@ fn is_config_like(path: &str) -> bool {
             | "mix.exs"
             | ".gitlab-ci.yml"
             | "Jenkinsfile"
-    ) || path.starts_with(".github/workflows/")
+    ) || is_config_extension(path)
+        || path.starts_with("config/")
+        || path.contains("/config/")
+        || path.starts_with(".github/workflows/")
         || path.starts_with(".circleci/")
 }
 
@@ -96,7 +150,30 @@ pub fn reduce_schema(text: &str, max: usize) -> (String, Vec<String>) {
     // Group the kept lines into table blocks; lines before the first table are a header.
     let mut header = String::new();
     let mut blocks: Vec<(String, String)> = Vec::new();
-    for line in text.lines().filter(|l| !dropped_schema_line(l)) {
+    // Data is never structure: skip a COPY block through `\.` and an INSERT through its `;`.
+    let mut skip_until: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(end) = skip_until {
+            let t = line.trim_end();
+            if (end == "\\." && t == "\\.") || (end == ";" && t.ends_with(';')) {
+                skip_until = None;
+            }
+            continue;
+        }
+        let lower = line.trim_start().to_ascii_lowercase();
+        if lower.starts_with("copy ") {
+            skip_until = Some("\\.");
+            continue;
+        }
+        if lower.starts_with("insert into") {
+            if !line.trim_end().ends_with(';') {
+                skip_until = Some(";");
+            }
+            continue;
+        }
+        if dropped_schema_line(line) {
+            continue;
+        }
         if let Some(name) = table_start(line) {
             blocks.push((name, String::new()));
         }
@@ -172,7 +249,7 @@ pub fn load_files(work_dir: &Path, inv: &Inventory, files: &[String], page_cap: 
             out.uncovered_tables.extend(left);
             redact_source(&reduced)
         } else if is_config_like(rel) {
-            cut_at_line(crate::profile_scan::redact(&raw).0, FILE_CAP)
+            redact_source(&cut_at_line(crate::profile_scan::redact(&raw).0, FILE_CAP))
         } else {
             redact_source(&cut_at_line(raw.clone(), FILE_CAP))
         };
@@ -372,5 +449,104 @@ mod tests {
         assert_eq!(l.shown[0].0, "ok.rb");
         assert_eq!(l.not_shown, ["../outside.rb"]);
         assert!(l.sources.iter().all(|s| s.path != "../outside.rb"));
+    }
+
+    #[test]
+    fn typed_compound_and_default_argument_secrets_are_replaced() {
+        let secret = "Zq8vN2kLm4Pp9Rt1Xy7W";
+        let cases = [
+            ("const apiKey: string = \"Zq8vN2kLm4Pp9Rt1Xy7W\";", "apiKey"),
+            ("api_key: str = \"Zq8vN2kLm4Pp9Rt1Xy7W\"", "api_key"),
+            ("token := \"Zq8vN2kLm4Pp9Rt1Xy7W\"", "token"),
+            ("password ||= \"Zq8vN2kLm4Pp9Rt1Xy7W\"", "password"),
+            ("password ??= \"Zq8vN2kLm4Pp9Rt1Xy7W\"", "password"),
+            (
+                "os.getenv(\"SECRET_KEY\", \"Zq8vN2kLm4Pp9Rt1Xy7W\")",
+                "SECRET_KEY",
+            ),
+            (
+                "ENV.fetch(\"API_KEY\", \"Zq8vN2kLm4Pp9Rt1Xy7W\")",
+                "API_KEY",
+            ),
+        ];
+        for (src, name) in cases {
+            let out = redact_source(src);
+            assert!(!out.contains(secret), "{src} -> {out}");
+            assert!(
+                out.contains(name) && out.contains("[redacted]"),
+                "{src} -> {out}"
+            );
+        }
+        let out = redact_source("os.getenv(\"HOME\", \"/root\")\ntoken = jwt.decode(header)\n");
+        assert!(
+            out.contains("\"/root\"") && out.contains("jwt.decode(header)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn mixed_and_escaped_quotes_do_not_leak_the_tail() {
+        let out = redact_source("password = \"it's-Sup3rS3cret\"\n");
+        assert!(!out.contains("Sup3rS3cret"), "{out}");
+        let out = redact_source("password = \"abc\\\"Sup3rS3cretTail\"\n");
+        assert!(!out.contains("Sup3rS3cretTail"), "{out}");
+        assert_eq!(out.trim_end(), "password = \"[redacted]\"");
+    }
+
+    #[test]
+    fn unquoted_values_in_other_config_files_are_redacted() {
+        let d = tempfile::tempdir().unwrap();
+        write(
+            d.path(),
+            "config/database.yml",
+            "production:\n  password: Tr0ub4dor&3\n",
+        );
+        write(
+            d.path(),
+            "src/main/resources/application.properties",
+            "spring.datasource.password=hunter2x\n",
+        );
+        write(
+            d.path(),
+            "config/secrets.yml",
+            "production:\n  secret_key_base: Tr0ub4dor9876xyz\n",
+        );
+        write(d.path(), "settings.ini", "[db]\npassword = Tr0ub4dor&3\n");
+        write(d.path(), "other.toml", "password = \"Tr0ub4dor&3\"\n");
+        let inv = inventory(d.path());
+        let files: Vec<String> = [
+            "config/database.yml",
+            "src/main/resources/application.properties",
+            "config/secrets.yml",
+            "settings.ini",
+            "other.toml",
+        ]
+        .map(String::from)
+        .to_vec();
+        let l = load_files(d.path(), &inv, &files, PAGE_CAP);
+        let all: String = l.shown.iter().map(|(_, t)| t.clone()).collect();
+        for leak in ["Tr0ub4dor", "hunter2x"] {
+            assert!(!all.contains(leak), "{leak} leaked: {all}");
+        }
+    }
+
+    #[test]
+    fn schema_data_rows_are_dropped_and_later_tables_still_counted() {
+        let sql = "CREATE TABLE a (\n  id int\n);\nCOPY a (id, email) FROM stdin;\n1\tbob@example.com\t$2a$10$abcdefghij\n2\tamy@example.com\t$2a$10$klmnopqrst\n\\.\nINSERT INTO a VALUES\n  (3, 'carol@example.com'),\n  (4, 'dave@example.com');\nCREATE TABLE b (\n  id int\n);\n";
+        let (out, left) = reduce_schema(sql, 10_000);
+        for leak in ["example.com", "$2a$", "INSERT", "COPY"] {
+            assert!(!out.contains(leak), "{leak}: {out}");
+        }
+        assert!(
+            out.contains("CREATE TABLE a") && out.contains("CREATE TABLE b"),
+            "{out}"
+        );
+        assert!(left.is_empty());
+        let (out, left) = reduce_schema(sql, 30);
+        assert!(
+            out.contains("CREATE TABLE a") && !out.contains("CREATE TABLE b"),
+            "{out}"
+        );
+        assert_eq!(left, ["b"]);
     }
 }
