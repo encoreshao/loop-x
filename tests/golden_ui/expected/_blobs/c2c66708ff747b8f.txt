@@ -135,6 +135,8 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-wiki-list a:hover{text-decoration:underline}
 .mem-detail .mem-actions{margin:0 0 .9rem}
 .mem-refresh{order:1}
+.mem-guide-note{order:3;flex:1 1 100%;margin:0;font-size:.85rem}
+.mem-guide-note a{color:var(--md-primary);font-weight:500}
 .mem-edit{order:2;min-width:0}
 .mem-edit[open]{flex:1 1 100%}
 .mem-edit[open]>summary{background:var(--md-surface-container-high)}

@@ -92,4 +92,14 @@ import Testing
         #expect(Timestamps.parse("2026-10-22T08:15:03.412907+00:00") != nil)
         #expect(Timestamps.parse("garbage") == nil)
     }
+
+    /// Profile and guide proposals are text the dashboard shows; there is no agent run
+    /// to send back with requested changes, so the island offers only Allow and Deny.
+    @Test func changesButtonHiddenForProposalKinds() throws {
+        #expect(!Approval(id: "apr_1", kind: "profile-section").offersChanges)
+        #expect(!Approval(id: "apr_2", kind: "guide-page").offersChanges)
+        #expect(Approval(id: "apr_3", kind: "open_mr").offersChanges)
+        let s = try Snapshot.decode(Data(#"{"approvals":{"pending":[{"id":"apr_4","kind":"guide-page","status":"pending"}]}}"#.utf8))
+        #expect(s.approvals.pending.first?.offersChanges == false)
+    }
 }

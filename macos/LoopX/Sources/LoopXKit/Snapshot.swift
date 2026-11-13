@@ -143,6 +143,9 @@ public struct Approval: Codable, Equatable, Sendable, Identifiable {
 
     public var isPending: Bool { status == "pending" }
     public var expiry: Date? { expiresAt.flatMap(Timestamps.parse) }
+    /// Whether "Changes…" makes sense: profile and guide proposals have no agent run
+    /// to send back, so they are only allowed or denied.
+    public var offersChanges: Bool { kind != "profile-section" && kind != "guide-page" }
 }
 
 public struct Attention: Codable, Equatable, Sendable {

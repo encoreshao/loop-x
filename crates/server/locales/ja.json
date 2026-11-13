@@ -2167,5 +2167,7 @@
   "Proposal approved. The guide page now holds the new text, and agents read it.": "提案を承認しました。ガイドページは新しい内容になり、エージェントはそれを読み込みます。",
   "The page changed after this was proposed, so nothing was applied. Rebuild the page for a new proposal.": "提案後にページが変更されたため、何も適用されませんでした。ページを再ビルドして新しい提案を作成してください。",
   "The proposal could not be applied to the guide page.": "提案をガイドページに適用できませんでした。",
-  "Open in Memory": "メモリで開く"
+  "Open in Memory": "メモリで開く",
+  "This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.": "このセクションはガイドから生成されています。代わりにガイドのページを編集するか、このセクションを手で編集して引き継いでください。",
+  "Open the Guide": "ガイドを開く"
 }

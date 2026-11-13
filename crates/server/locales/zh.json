@@ -2167,5 +2167,7 @@
   "Proposal approved. The guide page now holds the new text, and agents read it.": "提案已批准。指南页面现已更新为新内容，智能体会读取它。",
   "The page changed after this was proposed, so nothing was applied. Rebuild the page for a new proposal.": "提出此提案后页面已更改，因此未应用任何内容。请重新构建该页面以获得新的提案。",
   "The proposal could not be applied to the guide page.": "无法将提案应用到指南页面。",
-  "Open in Memory": "在记忆中打开"
+  "Open in Memory": "在记忆中打开",
+  "This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.": "此章节由指南生成。请改为编辑指南页面，或手动编辑此章节以接管它。",
+  "Open the Guide": "打开指南"
 }

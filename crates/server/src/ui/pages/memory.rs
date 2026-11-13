@@ -33,7 +33,7 @@ use chrono::{DateTime, Duration, Local, Utc};
 use loopx_core::profile_graph::{self, Edge, EdgeKind, Graph};
 use loopx_core::profile_build;
 use loopx_core::profile_progress::{failure_reason, JobKind as ProfileJobKind, Progress, ProfileJob};
-use loopx_core::{guide_build, guide_proposal};
+use loopx_core::{guide_build, guide_features, guide_proposal};
 use loopx_core::profile_notify::{self, BuildDone, Finished, RowResult};
 use loopx_core::profile_sync::{self, Freshness, Outcome, SyncStore, TrackedProject};
 use loopx_core::project_profile::{self, contains_secret, Origin, Profile, Section, SectionKey, Status};
@@ -1985,7 +1985,9 @@ fn proposal_item(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profile>)
         pill("fresh", &ctx.t("Approved"))
     };
     // Why an approved proposal is not in the profile, and what to do about it.
+    let owned = key.is_some_and(|k| guide_owned(ctx, alias, k));
     let note = match (unapplied, key) {
+        _ if owned && (unapplied || a["status"] == "pending") => guide_owned_note(ctx, alias, "mem-unapplied"),
         (true, Some(key)) if profile.is_some_and(|p| still_applies(p, key, a)) => format!(
             "<p class='mem-muted mem-unapplied'>{}</p>",
             escape(&ctx.t("Approved, but not applied yet. Apply it to write it into the profile."))
@@ -3083,6 +3085,10 @@ fn decide(ctx: &UiCtx) -> UiResponse {
             Err(_) => back(to(), Notice::AlreadyDecided),
         };
     }
+    // An older agent proposal must not overwrite the guide's Features index.
+    if guide_owned(ctx, &alias, key) {
+        return back(to(), Notice::Changed);
+    }
     let root = memory_root(ctx);
     let _w = WRITES.lock().unwrap_or_else(|e| e.into_inner());
     // No build or refresh may rewrite the profile between the check and the apply.
@@ -3793,11 +3799,30 @@ fn profile_job_line(ctx: &UiCtx, alias: &str) -> String {
 /// A section card's Edit (inline editor) and Refresh this section. `s` is `None`
 /// for a missing section and for one whose text is hidden as a secret: the editor
 /// then starts empty and never carries the hidden text.
+/// Whether the guide writes `key` for `alias`: only Features, once a guide plan
+/// exists. Refresh and agent proposals for it would fight the guide's index.
+fn guide_owned(ctx: &UiCtx, alias: &str, key: SectionKey) -> bool {
+    key == SectionKey::Features && guide_features::owns_features(alias, Some(&memory_root(ctx)))
+}
+
+/// What to do instead of refreshing (or approving an agent proposal for) a
+/// guide-owned Features section.
+fn guide_owned_note(ctx: &UiCtx, alias: &str, class: &str) -> String {
+    format!(
+        "<p class='mem-muted {class}'>{} <a href='{}'>{}</a></p>",
+        escape(&ctx.t("This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.")),
+        escape(&project_url(alias, Some("guide"))),
+        escape(&ctx.t("Open the Guide"))
+    )
+}
+
 fn section_actions(ctx: &UiCtx, p: &Project, key: SectionKey, s: Option<&Section>) -> String {
     let csrf = ctx.csrf_input();
     let slug = key.slug();
     let ids = format!("{}-{slug}", p.alias.bytes().filter(u8::is_ascii_alphanumeric).map(char::from).collect::<String>());
-    let refresh = if !p.checkout {
+    let refresh = if guide_owned(ctx, &p.alias, key) {
+        guide_owned_note(ctx, &p.alias, "mem-guide-note")
+    } else if !p.checkout {
         String::new()
     } else if busy(ctx, &p.alias) {
         format!(
@@ -3854,7 +3879,15 @@ fn proposal_actions(ctx: &UiCtx, alias: &str, a: &Value, profile: Option<&Profil
     let Some(key) = proposal_key(a, alias) else {
         return String::new();
     };
+    let owned = guide_owned(ctx, alias, key);
     let buttons = match a["status"].as_str() {
+        // The guide writes this section now: an older agent proposal may only go.
+        Some("pending") if owned => format!(
+            "<button class='mem-btn' type='submit' name='decision' value='dismiss'>{}{}</button>",
+            icon("close"),
+            escape(&ctx.t("Dismiss"))
+        ),
+        Some("approved") if owned => return String::new(),
         Some("pending") => format!(
             "<button class='mem-btn' type='submit' name='decision' value='dismiss'>{}{}</button>\
              <button class='mem-btn mem-btn-primary' type='submit' name='decision' value='approve'>{}{}</button>",
@@ -4158,6 +4191,8 @@ a.mem-card:focus-visible{outline:2px solid var(--md-primary);outline-offset:2px}
 .mem-wiki-list a:hover{text-decoration:underline}
 .mem-detail .mem-actions{margin:0 0 .9rem}
 .mem-refresh{order:1}
+.mem-guide-note{order:3;flex:1 1 100%;margin:0;font-size:.85rem}
+.mem-guide-note a{color:var(--md-primary);font-weight:500}
 .mem-edit{order:2;min-width:0}
 .mem-edit[open]{flex:1 1 100%}
 .mem-edit[open]>summary{background:var(--md-surface-container-high)}
@@ -8027,5 +8062,104 @@ mod tests {
             let html = get_fr(&sb, &proposals_back(alias, code));
             assert!(html.contains("class='mem-notice"), "{code}");
         }
+    }
+
+    // ------------------------------------------------- guide-owned Features
+
+    const GUIDE_NOTE: &str = "This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.";
+
+    fn refresh_form_for(html: &str, slug: &str) -> bool {
+        html.split("action='/insights/memory/section/refresh'")
+            .skip(1)
+            .any(|rest| rest.split("</form>").next().unwrap_or("").contains(&format!("name='section' value='{slug}'")))
+    }
+
+    #[test]
+    fn features_refresh_button_is_replaced_for_a_guide_owned_project() {
+        let alias = "owned-f";
+        let sb = Sb::new(&[(alias, true)]);
+        sb.save(&profile(
+            alias,
+            &[(SectionKey::Features, section("Guide features.", "- Orders")), (SectionKey::Stack, section("Rust.", "Rust stack"))],
+        ));
+        put_plan(&sb, alias, &["feature-orders"]);
+        assert!(loopx_core::guide_features::owns_features(alias, Some(&sb.root())));
+        let html = sb.get(&format!("/insights?view=memory&project={alias}&page=features"));
+        assert!(!refresh_form_for(&html, "features"), "no refresh for features: {html}");
+        assert!(html.contains(&crate::ui::pyfmt::escape(GUIDE_NOTE)), "{html}");
+        assert!(html.contains(&format!("href='/insights?view=memory&amp;project={alias}&amp;page=guide'")), "{html}");
+        assert!(html.contains("Open the Guide"));
+        assert!(html.contains("action='/insights/memory/section/save'"), "Edit stays");
+        let stack = sb.get(&format!("/insights?view=memory&project={alias}&page=stack"));
+        assert!(refresh_form_for(&stack, "stack"), "other sections keep Refresh: {stack}");
+        assert!(!stack.contains(&crate::ui::pyfmt::escape(GUIDE_NOTE)));
+    }
+
+    #[test]
+    fn an_older_features_proposal_cannot_be_approved_over_the_guide_index() {
+        let alias = "owned-p";
+        let sb = Sb::new(&[(alias, true)]);
+        sb.save(&profile(alias, &[(SectionKey::Features, section("old summary", "old"))]));
+        let id = propose(&sb, alias, "features", "old", "new");
+        put_plan(&sb, alias, &["feature-orders"]);
+        let html = sb.get(&format!("/insights?view=memory&project={alias}&page=proposals"));
+        assert!(html.contains("value='dismiss'"), "{html}");
+        assert!(!html.contains("value='approve'"), "no Approve/Apply: {html}");
+        assert!(html.contains(&crate::ui::pyfmt::escape(GUIDE_NOTE)), "{html}");
+        // The server refuses the approval too, whatever the page showed.
+        let before = std::fs::read_to_string(project_profile::profile_path(alias, Some(&sb.root()))).unwrap();
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project={alias}&id={id}&decision=approve"));
+        assert!(loc.ends_with("page=proposals&notice=changed"), "{loc}");
+        assert_eq!(approvals::get(&sb.approvals(), &id).unwrap()["status"], "pending", "nothing decided");
+        let after = std::fs::read_to_string(project_profile::profile_path(alias, Some(&sb.root()))).unwrap();
+        assert_eq!(before, after);
+        // Dismiss still works.
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project={alias}&id={id}&decision=dismiss"));
+        assert!(loc.ends_with("notice=dismissed"), "{loc}");
+        assert_eq!(approvals::get(&sb.approvals(), &id).unwrap()["status"], "denied");
+        // Approved elsewhere (the Mac island) but not applied: no Apply either.
+        let id2 = propose(&sb, alias, "features", "old", "newer");
+        approvals::decide(&sb.approvals(), &id2, "approve", "island", now()).unwrap();
+        let html = sb.get(&format!("/insights?view=memory&project={alias}&page=proposals"));
+        assert!(!html.contains("value='approve'"), "no Apply: {html}");
+        assert!(html.contains(&crate::ui::pyfmt::escape(GUIDE_NOTE)), "{html}");
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project={alias}&id={id2}&decision=approve"));
+        assert!(loc.ends_with("notice=changed"), "{loc}");
+        assert_eq!(before, std::fs::read_to_string(project_profile::profile_path(alias, Some(&sb.root()))).unwrap());
+    }
+
+    #[test]
+    fn a_project_without_a_plan_keeps_the_features_refresh_and_approve() {
+        let alias = "unowned";
+        let sb = Sb::new(&[(alias, true)]);
+        sb.save(&profile(alias, &[(SectionKey::Features, section("old summary", "old"))]));
+        assert!(!loopx_core::guide_features::owns_features(alias, Some(&sb.root())));
+        let html = sb.get(&format!("/insights?view=memory&project={alias}&page=features"));
+        assert!(refresh_form_for(&html, "features"), "{html}");
+        assert!(!html.contains(&crate::ui::pyfmt::escape(GUIDE_NOTE)));
+        assert!(!html.contains("Open the Guide"));
+        let id = propose(&sb, alias, "features", "old", "new");
+        let html = sb.get(&format!("/insights?view=memory&project={alias}&page=proposals"));
+        assert!(html.contains("value='dismiss'") && html.contains("value='approve'"), "{html}");
+        assert!(!html.contains(&crate::ui::pyfmt::escape(GUIDE_NOTE)));
+        let loc = sb.post_to("/insights/memory/proposal/decide", &format!("project={alias}&id={id}&decision=approve"));
+        assert!(loc.ends_with("notice=approved"), "{loc}");
+        assert_eq!(sb.load(alias).sections[&SectionKey::Features].body, "new");
+    }
+
+    #[test]
+    fn a_human_edit_of_the_features_section_still_saves() {
+        let alias = "owned-h";
+        let sb = Sb::new(&[(alias, true)]);
+        sb.save(&profile(alias, &[(SectionKey::Features, section("Guide features.", "- Orders"))]));
+        put_plan(&sb, alias, &["feature-orders"]);
+        let loc = sb.post_to("/insights/memory/section/save", &format!("project={alias}&section=features&summary=Mine&body=Hand+written"));
+        assert!(!loc.contains("notice=bad-input"), "{loc}");
+        let s = &sb.load(alias).sections[&SectionKey::Features];
+        assert_eq!((s.summary.as_str(), s.body.as_str(), s.origin), ("Mine", "Hand written", Origin::Human));
+        assert!(loopx_core::guide_features::owns_features(alias, Some(&sb.root())));
+        loopx_core::guide_features::sync_profile_features(alias, now(), Some(&sb.root())).unwrap();
+        let s = &sb.load(alias).sections[&SectionKey::Features];
+        assert_eq!((s.summary.as_str(), s.body.as_str(), s.origin), ("Mine", "Hand written", Origin::Human), "sync leaves it");
     }
 }
