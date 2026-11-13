@@ -2169,5 +2169,7 @@
   "The proposal could not be applied to the guide page.": "提案をガイドページに適用できませんでした。",
   "Open in Memory": "メモリで開く",
   "This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.": "このセクションはガイドから生成されています。代わりにガイドのページを編集するか、このセクションを手で編集して引き継いでください。",
-  "Open the Guide": "ガイドを開く"
+  "Open the Guide": "ガイドを開く",
+  "This section is generated from the Guide, so the proposal was not applied. Dismiss it, or edit this section by hand to take it over.": "このセクションはガイドから生成されているため、提案は適用されませんでした。非表示にするか、このセクションを手で編集して引き継いでください。",
+  "You wrote this section by hand, so the Guide leaves it alone.": "このセクションは手で書かれたため、ガイドは変更しません。"
 }

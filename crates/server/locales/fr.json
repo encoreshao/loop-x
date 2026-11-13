@@ -2169,5 +2169,7 @@
   "The proposal could not be applied to the guide page.": "La proposition n'a pas pu être appliquée à la page du guide.",
   "Open in Memory": "Ouvrir dans Mémoire",
   "This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.": "Cette section est générée à partir du guide. Modifiez plutôt une page du guide, ou modifiez cette section à la main pour la reprendre.",
-  "Open the Guide": "Ouvrir le guide"
+  "Open the Guide": "Ouvrir le guide",
+  "This section is generated from the Guide, so the proposal was not applied. Dismiss it, or edit this section by hand to take it over.": "Cette section est générée à partir du guide, la proposition n'a donc pas été appliquée. Ignorez-la, ou modifiez cette section à la main pour la reprendre.",
+  "You wrote this section by hand, so the Guide leaves it alone.": "Vous avez écrit cette section à la main, le guide n'y touche donc pas."
 }

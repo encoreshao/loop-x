@@ -51,6 +51,12 @@ use std::time::Duration;
 
 /// The approval kind of a profile section proposal.
 pub const KIND: &str = "profile-section";
+
+/// Why a Features proposal is refused once a guide plan exists: the guide writes
+/// that section, and an older agent proposal must not overwrite its index.
+pub const GUIDE_OWNS_FEATURES: &str =
+    "the guide writes the Features section; dismiss this proposal";
+
 /// Ten years: pending proposals must not be expired by `approvals::expire_overdue`.
 const NO_EXPIRY_SECONDS: i64 = 10 * 365 * 24 * 3600;
 
@@ -130,8 +136,9 @@ pub fn section_freshness(
 }
 
 /// The guide writes this section itself (Features, once the project has a guide plan):
-/// like a human-edited one, it is never refreshed or proposed over.
-fn guide_owned(alias: &str, key: SectionKey, root: Option<&Path>) -> bool {
+/// like a human-edited one, it is never refreshed or proposed over, and an older
+/// proposal for it is never applied.
+pub fn guide_owned(alias: &str, key: SectionKey, root: Option<&Path>) -> bool {
     key == SectionKey::Features && crate::guide_features::owns_features(alias, root)
 }
 
@@ -487,6 +494,9 @@ pub fn apply_proposal(
         .into_iter()
         .find(|k| k.slug() == slug)
         .ok_or_else(|| format!("unknown section {slug:?}"))?;
+    if guide_owned(alias, key, root) {
+        return Err(GUIDE_OWNS_FEATURES.into());
+    }
     let when = a["decided_at"]
         .as_str()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
@@ -593,6 +603,10 @@ pub fn approve_and_apply(
         .as_str()
         .and_then(SectionKey::from_slug)
         .ok_or("the proposal names no known section")?;
+    // Before anything is decided: an approval stays pending.
+    if guide_owned(&alias, key, root) {
+        return Err(GUIDE_OWNS_FEATURES.into());
+    }
     // No build or refresh may rewrite the profile between the check and the apply.
     let _slot = profile_build::try_acquire(&alias).ok_or_else(|| {
         format!("a profile run for {alias} is in progress; try again when it finishes")
@@ -3327,5 +3341,107 @@ mod tests {
             bad.apr.path(),
         );
         assert!(matches!(out[0].1, Outcome::Failed(_)), "{:?}", out[0].1);
+    }
+
+    /// A Features proposal raised the plain way (before any guide plan existed):
+    /// the profile gets a Features section holding `old`.
+    fn features_proposal(f: &Fx, old: &str, new: &str) -> String {
+        let mut p = f.profile();
+        p.sections.insert(
+            SectionKey::Features,
+            Section {
+                summary: "Old features".into(),
+                body: old.into(),
+                last_verified: Some(now()),
+                sources: vec![],
+                origin: Origin::Agent,
+            },
+        );
+        project_profile::save(&p, Some(f.root.path())).unwrap();
+        let a = approvals::create(
+            f.apr.path(),
+            &NewApproval {
+                kind: KIND.into(),
+                project: f.alias.clone(),
+                title: "Update the features section".into(),
+                summary: "s".into(),
+                timeout_seconds: 10 * 365 * 24 * 3600,
+                target: Some(json!({
+                    "section": "features", "alias": f.alias, "old": old, "new": new,
+                    "old_summary": "Old features", "new_summary": "New features",
+                })),
+                ..Default::default()
+            },
+            now(),
+        )
+        .unwrap();
+        a["id"].as_str().unwrap().to_string()
+    }
+
+    fn save_guide_plan(f: &Fx) {
+        let plan = crate::guide_plan::Plan {
+            features: vec![crate::guide_plan::FeaturePlan {
+                slug: "feature-orders".into(),
+                title: "Orders".into(),
+                summary: "Orders.".into(),
+                files: vec![],
+                related: vec![],
+            }],
+            ..Default::default()
+        };
+        crate::guide_plan::save(&f.alias, &plan, Some(f.root.path())).unwrap();
+    }
+
+    fn profile_bytes(f: &Fx) -> String {
+        fs::read_to_string(project_profile::profile_path(&f.alias, Some(f.root.path()))).unwrap()
+    }
+
+    #[test]
+    fn a_features_proposal_is_refused_once_the_guide_owns_the_section() {
+        let f = Fx::new(Origin::Agent);
+        let id = features_proposal(&f, "Old list.", "Agent list.");
+        save_guide_plan(&f);
+        let before = profile_bytes(&f);
+        let err =
+            approve_and_apply(&id, "cli", Some(f.root.path()), f.apr.path(), now()).unwrap_err();
+        assert_eq!(err, GUIDE_OWNS_FEATURES);
+        assert_eq!(
+            approvals::get(f.apr.path(), &id).unwrap()["status"],
+            "pending"
+        );
+        assert_eq!(profile_bytes(&f), before);
+        // Approved elsewhere before the plan existed: neither path applies it.
+        f.decide(&id, "approved");
+        let err =
+            approve_and_apply(&id, "cli", Some(f.root.path()), f.apr.path(), now()).unwrap_err();
+        assert_eq!(err, GUIDE_OWNS_FEATURES);
+        assert_eq!(f.apply(&id).unwrap_err(), GUIDE_OWNS_FEATURES);
+        assert!(!is_applied(&f.alias, &id, Some(f.root.path())), "no marker");
+        assert_eq!(profile_bytes(&f), before);
+    }
+
+    #[test]
+    fn another_section_still_applies_on_a_guide_owned_project() {
+        let f = Fx::new(Origin::Agent);
+        f.touch_cargo("[package]\nname = \"renamed\"\n");
+        let prop = f.propose(&Fake::new("New stack text.")).unwrap().unwrap();
+        save_guide_plan(&f);
+        approve_and_apply(&prop.id, "cli", Some(f.root.path()), f.apr.path(), now()).unwrap();
+        assert_eq!(
+            f.profile().sections[&SectionKey::Stack].body,
+            "New stack text."
+        );
+    }
+
+    #[test]
+    fn a_features_proposal_still_applies_without_a_plan() {
+        let f = Fx::new(Origin::Agent);
+        let id = features_proposal(&f, "Old list.", "Agent list.");
+        approve_and_apply(&id, "cli", Some(f.root.path()), f.apr.path(), now()).unwrap();
+        assert_eq!(
+            f.profile().sections[&SectionKey::Features].body,
+            "Agent list."
+        );
+        assert!(is_applied(&f.alias, &id, Some(f.root.path())));
     }
 }

@@ -580,6 +580,87 @@ mod tests {
         assert_eq!(back.sections[&SectionKey::Stack].body, "New.");
     }
 
+    #[tokio::test]
+    async fn a_features_proposal_is_a_conflict_once_the_guide_owns_the_section() {
+        use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+        let d = tempfile::tempdir().unwrap();
+        let mut st = Arc::try_unwrap(state(d.path())).ok().unwrap();
+        st.paths.memory_root = d.path().join("memory");
+        let s = Arc::new(st);
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            SectionKey::Features,
+            Section {
+                summary: "s".into(),
+                body: "Old.".into(),
+                last_verified: None,
+                sources: vec![],
+                origin: Origin::Agent,
+            },
+        );
+        let p = Profile {
+            alias: "api-owned-web".into(),
+            generated_at: None,
+            head_sha: None,
+            status: Status::Approved,
+            links: vec![],
+            sections,
+        };
+        project_profile::save(&p, Some(&s.paths.memory_root)).unwrap();
+        let id = approvals::create(
+            &s.paths.approvals_dir,
+            &approvals::NewApproval {
+                kind: loopx_core::profile_sync::KIND.into(),
+                project: "api-owned-web".into(),
+                timeout_seconds: 3600,
+                target: Some(
+                    json!({"section": "features", "alias": "api-owned-web", "old": "Old.", "old_summary": "s",
+                    "new": "New.", "new_summary": "n", "sources": []}),
+                ),
+                ..Default::default()
+            },
+            Utc::now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // The guide plan arrives after the proposal was raised.
+        loopx_core::guide_plan::save(
+            "api-owned-web",
+            &loopx_core::guide_plan::Plan {
+                features: vec![loopx_core::guide_plan::FeaturePlan {
+                    slug: "feature-orders".into(),
+                    title: "Orders".into(),
+                    summary: "Orders.".into(),
+                    files: vec![],
+                    related: vec![],
+                }],
+                ..Default::default()
+            },
+            Some(&s.paths.memory_root),
+        )
+        .unwrap();
+        let (code, v, _) = call(
+            router(s.clone()),
+            decide_req(
+                &id,
+                json!({"decision": "approve", "by": "mac"}),
+                &[("x-loopx-token", "secret-token")],
+            ),
+        )
+        .await;
+        assert_eq!(code, 409, "{v}");
+        assert_eq!(
+            approvals::get(&s.paths.approvals_dir, &id).unwrap()["status"],
+            "pending"
+        );
+        let back = project_profile::load("api-owned-web", Some(&s.paths.memory_root))
+            .unwrap()
+            .unwrap();
+        assert_eq!(back.sections[&SectionKey::Features].body, "Old.");
+    }
+
     /// An approved `feature-orders` page of `alias` under `root` and a pending
     /// `guide-page` proposal rewriting its `what` part; returns the approval id.
     fn pending_guide_proposal(

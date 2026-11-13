@@ -731,6 +731,59 @@ mod tests {
     }
 
     #[test]
+    fn approving_a_features_proposal_here_is_refused_once_the_guide_owns_the_section() {
+        use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let apr = d.path().join("outputs/approvals");
+        let memory = d.path().join("memory");
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            SectionKey::Features,
+            Section { summary: "s".into(), body: "Old.".into(), last_verified: None, sources: vec![], origin: Origin::Agent },
+        );
+        let p = Profile { alias: "ny-owned".into(), generated_at: None, head_sha: None, status: Status::Approved, links: vec![], sections };
+        project_profile::save(&p, Some(&memory)).unwrap();
+        let id = approvals::create(
+            &apr,
+            &NewApproval {
+                kind: loopx_core::profile_sync::KIND.into(),
+                project: "ny-owned".into(),
+                title: "Update the features section of the ny-owned profile".into(),
+                timeout_seconds: 3600,
+                target: Some(serde_json::json!({"section": "features", "alias": "ny-owned", "old": "Old.", "old_summary": "s",
+                    "new": "New.", "new_summary": "n", "sources": []})),
+                ..Default::default()
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        loopx_core::guide_plan::save(
+            "ny-owned",
+            &loopx_core::guide_plan::Plan {
+                features: vec![loopx_core::guide_plan::FeaturePlan {
+                    slug: "feature-orders".into(),
+                    title: "Orders".into(),
+                    summary: "Orders.".into(),
+                    files: vec![],
+                    related: vec![],
+                }],
+                ..Default::default()
+            },
+            Some(&memory),
+        )
+        .unwrap();
+        let r = post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id}&decision=approve"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"), "{:?}", r.header("location"));
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "pending");
+        let p = project_profile::load("ny-owned", Some(&memory)).unwrap().unwrap();
+        assert_eq!(p.sections[&SectionKey::Features].body, "Old.");
+    }
+
+    #[test]
     fn a_failed_profile_sync_is_listed_with_a_link_to_its_memory_page() {
         use loopx_core::profile_sync::{with_store, Outcome, ProjectSync};
         let d = tempfile::tempdir().unwrap();

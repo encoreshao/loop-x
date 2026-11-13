@@ -2169,5 +2169,7 @@
   "The proposal could not be applied to the guide page.": "无法将提案应用到指南页面。",
   "Open in Memory": "在记忆中打开",
   "This section is generated from the Guide. Edit a guide page instead, or edit this section by hand to take it over.": "此章节由指南生成。请改为编辑指南页面，或手动编辑此章节以接管它。",
-  "Open the Guide": "打开指南"
+  "Open the Guide": "打开指南",
+  "This section is generated from the Guide, so the proposal was not applied. Dismiss it, or edit this section by hand to take it over.": "此章节由指南生成，因此未应用该提案。请忽略它，或手动编辑此章节以接管它。",
+  "You wrote this section by hand, so the Guide leaves it alone.": "此章节由你手动编写，因此指南不会改动它。"
 }

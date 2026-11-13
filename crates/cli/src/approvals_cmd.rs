@@ -168,6 +168,75 @@ mod tests {
         assert_eq!(back.sections[&SectionKey::Stack].body, "New.");
     }
 
+    #[test]
+    fn approving_a_features_proposal_is_refused_once_the_guide_owns_the_section() {
+        use loopx_core::project_profile::{self, Origin, Profile, Section, SectionKey, Status};
+        let d = tempfile::tempdir().unwrap();
+        let (apr, memory) = (d.path().join("approvals"), d.path().join("memory"));
+        let mut sections = std::collections::BTreeMap::new();
+        sections.insert(
+            SectionKey::Features,
+            Section {
+                summary: "s".into(),
+                body: "Old.".into(),
+                last_verified: None,
+                sources: vec![],
+                origin: Origin::Agent,
+            },
+        );
+        let p = Profile {
+            alias: "cli-owned".into(),
+            generated_at: None,
+            head_sha: None,
+            status: Status::Approved,
+            links: vec![],
+            sections,
+        };
+        project_profile::save(&p, Some(&memory)).unwrap();
+        let id = approvals::create(
+            &apr,
+            &approvals::NewApproval {
+                kind: profile_sync::KIND.into(),
+                project: "cli-owned".into(),
+                timeout_seconds: 3600,
+                target: Some(serde_json::json!({"section": "features", "alias": "cli-owned",
+                    "old": "Old.", "old_summary": "s", "new": "New.", "new_summary": "n", "sources": []})),
+                ..Default::default()
+            },
+            Utc::now(),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        loopx_core::guide_plan::save(
+            "cli-owned",
+            &loopx_core::guide_plan::Plan {
+                features: vec![loopx_core::guide_plan::FeaturePlan {
+                    slug: "feature-orders".into(),
+                    title: "Orders".into(),
+                    summary: "Orders.".into(),
+                    files: vec![],
+                    related: vec![],
+                }],
+                ..Default::default()
+            },
+            Some(&memory),
+        )
+        .unwrap();
+        let args: Vec<String> = ["approve", id.as_str()]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let err = dispatch_in(&args, &apr, Some(&memory)).unwrap_err();
+        assert!(err.contains(profile_sync::GUIDE_OWNS_FEATURES), "{err}");
+        assert_eq!(approvals::get(&apr, &id).unwrap()["status"], "pending");
+        let back = project_profile::load("cli-owned", Some(&memory))
+            .unwrap()
+            .unwrap();
+        assert_eq!(back.sections[&SectionKey::Features].body, "Old.");
+    }
+
     /// An approved `feature-orders` page of `alias` under `memory` and a pending
     /// `guide-page` proposal rewriting its `what` part; returns the approval id.
     fn pending_guide_proposal(
