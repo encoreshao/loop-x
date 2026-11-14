@@ -114,6 +114,69 @@ fn duration(ms: u64) -> String {
     }
 }
 
+/// A Cursor `tool_call` event's tool, as the Claude-style name and key argument shown in
+/// the log: `shellToolCall` is `Bash` and its command, `readToolCall` is `Read` and its
+/// path, and so on.
+fn cursor_tool(call: &Value) -> Option<(&str, &Value, String)> {
+    let (key, body) = call.as_object()?.iter().next()?;
+    let args = body.get("args").unwrap_or(&Value::Null);
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| args.get(*k).and_then(Value::as_str))
+            .map(str::to_string)
+    };
+    let (name, arg) = match key.as_str() {
+        "shellToolCall" => ("Bash", pick(&["command"])),
+        "readToolCall" => ("Read", pick(&["path"])),
+        "writeToolCall" => ("Write", pick(&["path"])),
+        "editToolCall" => ("Edit", pick(&["path"])),
+        "globToolCall" => ("Glob", pick(&["globPattern"])),
+        "grepToolCall" => ("Grep", pick(&["pattern"])),
+        other => (other.strip_suffix("ToolCall").unwrap_or(other), None),
+    };
+    let arg = arg
+        .or_else(|| {
+            args.as_object()?
+                .values()
+                .find_map(|v| v.as_str().map(str::to_string))
+        })
+        .unwrap_or_default();
+    Some((name, body, arg))
+}
+
+/// The result line of a finished Cursor tool call: `Err` for a failure or error, with the
+/// first useful line of what it said; `Ok` otherwise (the first line of its output).
+fn cursor_result(body: &Value) -> Result<String, String> {
+    let result = body.get("result").unwrap_or(&Value::Null);
+    let first = |v: &Value, keys: &[&str]| {
+        keys.iter()
+            .filter_map(|k| v.get(*k).and_then(Value::as_str))
+            .flat_map(str::lines)
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
+    };
+    if let Some(e) = result.get("failure") {
+        let said = first(e, &["stderr", "stdout", "errorMessage", "error"]);
+        return Err(if said.is_empty() {
+            match e.get("exitCode").and_then(Value::as_i64) {
+                Some(c) => format!("exit {c}"),
+                None => String::new(),
+            }
+        } else {
+            said
+        });
+    }
+    if let Some(e) = result.get("error") {
+        return Err(first(e, &["errorMessage", "error"]));
+    }
+    Ok(result
+        .get("success")
+        .map(|s| first(s, &["stdout"]))
+        .unwrap_or_default())
+}
+
 /// The lines for one stream event; `None` when `line` is not a stream event.
 fn event_lines(line: &str, step: &mut usize) -> Option<Vec<String>> {
     let v: Value = serde_json::from_str(line.trim()).ok()?;
@@ -179,6 +242,36 @@ fn event_lines(line: &str, step: &mut usize) -> Option<Vec<String>> {
                     (false, true) => "    ↳ done".to_string(),
                     (false, false) => format!("    ↳ {text}"),
                 });
+            }
+        }
+        // Cursor Agent reports tools as their own events (Claude nests them in messages).
+        "tool_call" => {
+            if let Some((name, body, arg)) = v.get("tool_call").and_then(cursor_tool) {
+                match v.get("subtype").and_then(Value::as_str) {
+                    Some("started") => {
+                        *step += 1;
+                        let arg = one_line(&arg, LINE_CHARS);
+                        out.push(if arg.is_empty() {
+                            format!("Step {step} · {name}")
+                        } else {
+                            format!("Step {step} · {name}: {arg}")
+                        });
+                    }
+                    Some("completed") => {
+                        let (failed, text) = match cursor_result(body) {
+                            Ok(t) => (false, t),
+                            Err(t) => (true, t),
+                        };
+                        let text = one_line(&text, LINE_CHARS);
+                        out.push(match (failed, text.is_empty()) {
+                            (true, true) => "    ↳ error".to_string(),
+                            (true, false) => format!("    ↳ error: {text}"),
+                            (false, true) => "    ↳ done".to_string(),
+                            (false, false) => format!("    ↳ {text}"),
+                        });
+                    }
+                    _ => {}
+                }
             }
         }
         "result" => {
@@ -291,6 +384,50 @@ mod tests {
              \n\
              \n\
              loopx-exit=0\n"
+        );
+    }
+
+    #[test]
+    fn a_cursor_run_reads_like_a_claude_run() {
+        let log = [
+            ev(json!({"type": "system", "subtype": "init", "model": "Auto"})),
+            ev(json!({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Fetching."}]}})),
+            ev(json!({"type": "tool_call", "subtype": "started", "tool_call": {"shellToolCall": {
+                "args": {"command": "python3 scripts/fetch.py https://ted.com/talks/x"}}}})),
+            ev(json!({"type": "tool_call", "subtype": "completed", "tool_call": {"shellToolCall": {
+                "args": {"command": "python3 scripts/fetch.py https://ted.com/talks/x"},
+                "result": {"success": {"exitCode": 0, "stdout": "downloaded 12 MB\nmore", "stderr": ""}}}}})),
+            ev(json!({"type": "tool_call", "subtype": "started", "tool_call": {"readToolCall": {
+                "args": {"path": "/h/SKILL.md"}}}})),
+            ev(json!({"type": "tool_call", "subtype": "completed", "tool_call": {"readToolCall": {
+                "args": {"path": "/h/SKILL.md"},
+                "result": {"error": {"errorMessage": "File not found"}}}}})),
+            ev(json!({"type": "tool_call", "subtype": "started", "tool_call": {"editToolCall": {
+                "args": {"path": "/h/output/a.json", "streamContent": "x"}}}})),
+            ev(json!({"type": "tool_call", "subtype": "completed", "tool_call": {"editToolCall": {
+                "args": {"path": "/h/output/a.json"}, "result": {"success": {"linesAdded": 1}}}}})),
+            ev(json!({"type": "tool_call", "subtype": "started", "tool_call": {"shellToolCall": {
+                "args": {"command": "ls /nope"}}}})),
+            ev(json!({"type": "tool_call", "subtype": "completed", "tool_call": {"shellToolCall": {
+                "args": {"command": "ls /nope"},
+                "result": {"failure": {"exitCode": 1, "stdout": "", "stderr": "ls: /nope: No such file\n"}}}}})),
+            ev(json!({"type": "result", "subtype": "success", "is_error": false,
+                      "duration_ms": 65000, "result": "Done."})),
+        ]
+        .concat();
+        assert_eq!(
+            render(&log),
+            "Started · Auto\n\nClaude:\nFetching.\n\n\n\
+             Step 1 · Bash: python3 scripts/fetch.py https://ted.com/talks/x\n\
+             \x20   ↳ downloaded 12 MB\n\
+             Step 2 · Read: /h/SKILL.md\n\
+             \x20   ↳ error: File not found\n\
+             Step 3 · Edit: /h/output/a.json\n\
+             \x20   ↳ done\n\
+             Step 4 · Bash: ls /nope\n\
+             \x20   ↳ error: ls: /nope: No such file\n\
+             Finished · 1m 05s\n\nResult:\nDone.\n\n\n"
         );
     }
 

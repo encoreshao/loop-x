@@ -1,7 +1,10 @@
 //! Launching Creator jobs: the detached agent process and the per-skill argv.
 //!
-//! Only Claude can be fenced to a fixed tool set, so any other selected AI CLI is
-//! refused rather than started with its full tool access.
+//! Only Claude can be fenced to a fixed tool set. The video jobs (Generate, Showcase) also
+//! run on Cursor Agent, unfenced: its permission rules name a command, not its arguments,
+//! and the `python3` the skill needs can then read, write and reach the network freely
+//! (Settings warns about this when Cursor is picked). Find videos and every other CLI are
+//! refused rather than started with full tool access.
 
 use super::jobs::{self, JobKind, JobRecord};
 use super::skills::{self, Engine};
@@ -299,6 +302,26 @@ pub(crate) fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<Stri
     argv
 }
 
+/// `agent --print --force` in the skill's folder, one JSON event per step like Claude's
+/// stream (see `logfmt`). Cursor has no spend cap flag, so there is none.
+fn cursor_argv(prompt: &str, cwd: &Path) -> Vec<String> {
+    let program = crate::ai_cli_config::resolve_binary("cursor", &|n| {
+        crate::doctor::find_on_path(n, &std::env::var("PATH").unwrap_or_default()).is_some()
+    })
+    .unwrap_or_else(|| "agent".into());
+    let mut argv = vec![crate::runner_util::resolved_program(&program)];
+    argv.extend(strs(&[
+        "--print",
+        "--force",
+        "--output-format",
+        "stream-json",
+        "--workspace",
+    ]));
+    argv.push(cwd.display().to_string());
+    argv.push(prompt.to_string());
+    argv
+}
+
 fn require_claude(cli: &str) -> Result<(), String> {
     if cli == "claude" {
         Ok(())
@@ -330,6 +353,9 @@ pub fn video_argv(
     f: &Fence<'_>,
     data: &Path,
 ) -> Result<Vec<String>, String> {
+    if cli == "cursor" {
+        return Ok(cursor_argv(prompt, f.cwd));
+    }
     require_claude(cli)?;
     let c = f.cwd.display();
     let out = data.join("output");
@@ -1093,13 +1119,38 @@ mod tests {
     #[test]
     fn other_clis_are_refused_rather_than_run_unrestricted() {
         let home = Path::new(HOME);
-        for cli in ["codex", "gemini", "kimi", "cursor", "grok", "nope"] {
+        for cli in ["codex", "gemini", "kimi", "grok", "nope"] {
             let gd = generate_dir(home);
             let e = video_argv(cli, "p", &fence(&gd), &gd).unwrap_err();
             assert!(e.contains("Claude"), "{cli}: {e}");
+        }
+        // Scout (web search and fetch) stays Claude-only, Cursor included.
+        for cli in ["codex", "gemini", "kimi", "cursor", "grok", "nope"] {
             let sd = scout_dir(home);
             assert!(scout_argv(cli, "p", &fence(&sd), Path::new(SCOUT_SKILL)).is_err());
         }
+    }
+
+    #[test]
+    fn cursor_runs_video_jobs_headless_in_the_skill_dir_with_a_json_stream() {
+        let gd = generate_dir(Path::new(HOME));
+        let argv = video_argv("cursor", "THE PROMPT", &fence(&gd), &gd).unwrap();
+        assert!(
+            argv[0].ends_with("agent") || argv[0].ends_with("cursor-agent"),
+            "{argv:?}"
+        );
+        assert_eq!(
+            &argv[1..],
+            [
+                "--print",
+                "--force",
+                "--output-format",
+                "stream-json",
+                "--workspace",
+                &gd.display().to_string(),
+                "THE PROMPT"
+            ]
+        );
     }
 
     type Calls = RefCell<Vec<(Vec<String>, PathBuf, PathBuf)>>;
