@@ -359,6 +359,7 @@ capabilities (`issues`, `merge_requests`, `pipelines`, `notify`, `feed`,
 | `crates/core/src/connectors/mod.rs` | `CONNECTOR_TYPES` registry + `get_type(name)` |
 | `crates/core/src/connectors/mod.rs` | `Field`, `Connector` base class, capability constants, `ConnectorError` |
 | `connectors/{gitlab,github,slack,webhook,rss,jira,linear,mailbox}.rs` | One module per type: its settings fields, capabilities, and `test()` (plus `send()` for `notify` types) |
+| `connectors/slack_bot.rs` | The `slack_bot` type ("Slack agent"): bot token as the secret, app-level token under `slack_bot:<id>:app_token`, settings `allowed_users`, `approvals`, `rate_per_hour`. Has the `notify` capability; the listener itself lives in `slack_agent/` |
 | `connectors_config.rs` | The account registry: `list_accounts`/`get_account`/`accounts_with_capability`, `upsert_account`/`delete_account`, `load_connector` |
 | `secrets.rs` | macOS Keychain wrapper for connector secrets (service `loop-engineering.connectors`, sandbox-suffixed under `LOOP_ENGINEERING_HOME`), built on `mail_auth`'s Keychain calls |
 | `loop_notify.rs` | Per-loop notification routing (below) |
@@ -388,6 +389,50 @@ read-only with a Clear button. In the dashboard, the
 Loops catalog blocks enabling a loop (UI and server) until a connector with each
 capability in its `requires` exists, and the AI panel exposes a read-only
 `connector-list` chat tool.
+
+## Slack agent
+
+`@LoopX` in Slack runs the chat agent on the user's Mac. Spec:
+`docs/superpowers/specs/2026-11-15-slack-agent-design.md`; behavior and setup:
+[`docs/tasks/slack-agent.md`](tasks/slack-agent.md).
+
+```text
+Slack --Socket Mode (outbound wss)--> loopx slack listen   (launchd agent com.hermes.loopx-slack, opt-in)
+   socket     connect, ack envelopes, reconnect with backoff
+   intake     allowlisted user, app_mention or DM, not a bot, seen (event ids)
+   limits     per-user sliding-window rate limit
+   threads    thread_ts -> chat session id
+   executor   run_chat_job on the session; progress edits; final reply; DM for private data
+   approvals_bridge   Block Kit Allow/Deny -> approvals::decide_with_notes
+   catchup    offers Run/Ignore for recent unanswered messages after (re)connect
+        | shared on disk (flock'd)
+        v  run_queue.json, approvals store, MessageStore, connector accounts, outputs/slack/, outputs/chat-private/
+```
+
+- Code: `crates/core/src/slack_agent/*` (`socket`, `intake`, `seen`, `limits`,
+  `web`, `threads`, `executor`, `approvals_bridge`, `listener`, `status`,
+  `catchup`, `install`). `listener::run_listener` takes `outputs/slack/listener.lock`,
+  writes `outputs/slack/status.json` and returns an `Exit`.
+- `crates/core/src/chat_tools/private_ledger.rs`: `loopx chat-tool` appends to
+  `outputs/chat-private/<session>.jsonl` before a mail or calendar tool runs; the
+  executor reads it to route a reply to a DM. Never pruned.
+- CLI: `loopx slack listen | status | test | install | uninstall | restart | manifest`
+  (`crates/cli/src/slack_cmd.rs`). `install` is the only thing that writes the plist.
+- launchd: `com.hermes.loopx-slack`, `RunAtLoad`, `KeepAlive {SuccessfulExit: false}`,
+  `ThrottleInterval` 30. Exit codes: 0 clean stop or rejected token (stays down),
+  78 misconfigured, 1 another listener holds the lock after about 2 s of
+  retries (both relaunched; any other non-zero exit, such as a crash, is
+  relaunched too). The plist
+  is in `launchd::MANAGED_DAEMONS`, so the Daemons page and the chat tool refuse
+  to toggle it; Settings -> Connectors -> Slack and `loopx slack uninstall` own it.
+- The dashboard (`crates/server/src/ui/pages/slack_agent.rs`) calls
+  `slack_agent::install` directly with the server's own environment, so the
+  listener reads the Keychain service the dashboard saved the tokens to.
+  Saving a Slack agent while the listener is installed restarts it (it reads
+  the account once at start); deleting the account it runs as
+  (`connectors::slack_bot::listener_account`) uninstalls it.
+- Everything the executor posts is mrkdwn-escaped (`slack_bot::escape_mrkdwn`)
+  before it is split, and the split never cuts an entity.
 
 ## LoopKit
 
