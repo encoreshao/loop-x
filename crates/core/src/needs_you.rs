@@ -52,6 +52,9 @@ pub struct Sources<'a> {
     pub dismissed: &'a Path,
     /// Task memory, where each issue's review-thread state lives.
     pub memory_root: &'a Path,
+    /// The Slack listener's `status.json`, only while its launchd agent is
+    /// installed (`None` otherwise, so a stale file after uninstall is ignored).
+    pub slack_status: Option<&'a Path>,
 }
 
 /// An RFC 3339 time, or a naive one in local time (`auth_health`, run status).
@@ -95,7 +98,12 @@ fn item(id: String, kind: &str, title: String, since: Option<&str>, fields: Valu
         "since": since,
         "dismissable": matches!(
             kind,
-            "escalated" | "loop_failed" | "sign_in" | "mr_thread" | "profile_sync_failed"
+            "escalated"
+                | "loop_failed"
+                | "sign_in"
+                | "mr_thread"
+                | "profile_sync_failed"
+                | "slack_listener"
         ),
     });
     if let (Some(v), Value::Object(f)) = (v.as_object_mut(), fields) {
@@ -361,6 +369,32 @@ fn mr_threads(src: &Sources, dismissed: &Value) -> Vec<Value> {
     out
 }
 
+/// The installed Slack listener stopped on a problem only the user can fix
+/// (usually a rejected token). Its `last_error` is token-free by construction.
+/// Fixing it (the listener writes a new state) or dismissing it clears it; a
+/// newer failure brings it back.
+fn slack_listener(src: &Sources, dismissed: &Value) -> Vec<Value> {
+    use crate::slack_agent::status::{read_status, State};
+    let Some(status) = src.slack_status.and_then(read_status) else {
+        return Vec::new();
+    };
+    if status.state != State::NeedsAttention {
+        return Vec::new();
+    }
+    let id = "slack_listener".to_string();
+    if dismissed_since(dismissed, &id, Some(&status.since)) {
+        return Vec::new();
+    }
+    let error = status.last_error.unwrap_or_default();
+    vec![item(
+        id,
+        "slack_listener",
+        format!("The Slack listener needs attention: {error}"),
+        Some(&status.since),
+        json!({"error": error}),
+    )]
+}
+
 /// Everything waiting on a person, oldest first.
 pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     let dismissed = read_json(src.dismissed);
@@ -370,6 +404,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     items.extend(failed_loops(src, &dismissed));
     items.extend(mr_threads(src, &dismissed));
     items.extend(profile_sync_failures(src, &dismissed));
+    items.extend(slack_listener(src, &dismissed));
     // Oldest first; an item with no time goes last.
     items.sort_by_key(|i| {
         let since = i["since"].as_str().and_then(parse);
@@ -386,6 +421,7 @@ pub fn dismiss(path: &Path, id: &str, now: DateTime<Utc>) -> Result<(), String> 
         "sign_in:",
         "mr_thread:",
         "profile_sync:",
+        "slack_listener",
     ]
     .iter()
     .any(|p| id.starts_with(p))
@@ -413,6 +449,7 @@ mod tests {
     struct Fx {
         dir: tempfile::TempDir,
         loops: Map<String, Value>,
+        slack_status: Option<PathBuf>,
     }
 
     impl Fx {
@@ -420,6 +457,7 @@ mod tests {
             Self {
                 dir: tempfile::tempdir().unwrap(),
                 loops: Map::new(),
+                slack_status: None,
             }
         }
         fn p(&self, rel: &str) -> PathBuf {
@@ -451,6 +489,7 @@ mod tests {
                     loops: &self.loops,
                     dismissed: &dismissed,
                     memory_root: &memory,
+                    slack_status: self.slack_status.as_deref(),
                 },
                 now(),
             )
@@ -851,5 +890,49 @@ mod tests {
         // It recovered and then broke again later: back in the list.
         write("2026-10-31T13:00:00+00:00");
         assert_eq!(f.ids(), ["sign_in:mailbox:work"]);
+    }
+
+    #[test]
+    fn a_slack_listener_that_needs_attention_waits_until_fixed_or_dismissed() {
+        use crate::slack_agent::status::{write_status, State, Status};
+        let mut f = Fx::new();
+        let path = f.p("slack/status.json");
+        let status = |state, since: &str| Status {
+            state,
+            since: since.into(),
+            last_event: None,
+            last_error: Some("Slack rejected the token (invalid_auth)".into()),
+        };
+        write_status(
+            &path,
+            &status(State::NeedsAttention, "2026-10-31T09:00:00Z"),
+        );
+        // Not installed (the caller passes no status): nothing, whatever the file says.
+        assert!(f.ids().is_empty());
+        f.slack_status = Some(path.clone());
+        let items = f.collect();
+        assert_eq!(items.len(), 1, "{items:?}");
+        let item = &items[0];
+        assert_eq!(item["kind"], "slack_listener");
+        assert_eq!(item["id"], "slack_listener");
+        assert_eq!(item["error"], "Slack rejected the token (invalid_auth)");
+        assert_eq!(item["since"], "2026-10-31T09:00:00Z");
+        assert_eq!(item["dismissable"], true);
+        for ok in [State::Connected, State::Offline] {
+            write_status(&path, &status(ok, "2026-10-31T10:00:00Z"));
+            assert!(f.ids().is_empty(), "{ok:?}");
+        }
+        write_status(
+            &path,
+            &status(State::NeedsAttention, "2026-10-31T09:00:00Z"),
+        );
+        dismiss(&f.p("dismissed.json"), "slack_listener", now()).unwrap();
+        assert!(f.ids().is_empty());
+        // A newer rejection comes back.
+        write_status(
+            &path,
+            &status(State::NeedsAttention, "2026-10-31T13:00:00Z"),
+        );
+        assert_eq!(f.ids(), ["slack_listener"]);
     }
 }

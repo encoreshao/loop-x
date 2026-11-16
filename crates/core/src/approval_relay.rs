@@ -1,6 +1,6 @@
 //! Approval requests answered from a chat app. While the GitLab loop waits on
 //! an approval, each connector account with "Approvals here" switched on
-//! (Telegram today) gets the request with Allow / Deny buttons; a press, or a
+//! (Telegram and the Slack agent) gets the request with Allow / Deny buttons; a press, or a
 //! reply asking for changes, is recorded with `approvals::decide_with_notes`
 //! like a decision made in the Mac app or the dashboard. Whichever answers
 //! first wins; the others are told how it ended.
@@ -38,7 +38,11 @@ pub fn channels(source: &dyn ConnectorSource) -> Vec<Box<dyn Connector>> {
     source
         .accounts_with_capability(NOTIFY)
         .into_iter()
-        .filter(|a| a.enabled && a.kind == "telegram" && a.setting(SETTING) == "on")
+        .filter(|a| {
+            a.enabled
+                && matches!(a.kind.as_str(), "telegram" | "slack_bot")
+                && a.setting(SETTING) == "on"
+        })
         .filter_map(|a| source.load(&a.id).ok())
         .collect()
 }
@@ -343,6 +347,25 @@ mod tests {
             .map(|c| c.account().id.clone())
             .collect();
         assert_eq!(ids, ["phone"]);
+    }
+
+    #[test]
+    fn slack_bot_accounts_are_used_only_when_enabled_with_approvals_on() {
+        let on = |id: &str, kind: &str| Account::new(id, kind).with_setting(SETTING, "on");
+        let mut disabled = on("off-bot", "slack_bot");
+        disabled.enabled = false;
+        let source = Source(vec![
+            on("dm-bot", "slack_bot"),
+            Account::new("quiet-bot", "slack_bot"),
+            Account::new("explicit-off", "slack_bot").with_setting(SETTING, "off"),
+            disabled,
+            on("phone", "telegram"),
+        ]);
+        let ids: Vec<String> = channels(&source)
+            .iter()
+            .map(|c| c.account().id.clone())
+            .collect();
+        assert_eq!(ids, ["dm-bot", "phone"]);
     }
 
     #[test]

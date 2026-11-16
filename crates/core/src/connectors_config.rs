@@ -464,6 +464,18 @@ pub fn upsert_account(
     if renamed {
         touched.push(original_id.clone());
     }
+    // The Slack agent's app-level token sits beside the bot token under its own
+    // key; a rename moves it too (same snapshot, same undo).
+    let app_keys = (renamed && type_name == "slack_bot").then(|| {
+        (
+            connectors::slack_bot::app_token_key(&original_id),
+            connectors::slack_bot::app_token_key(&new_id),
+        )
+    });
+    if let Some((old_key, new_key)) = &app_keys {
+        touched.push(old_key.clone());
+        touched.push(new_key.clone());
+    }
     let mut snapshot: Vec<(String, Option<String>)> = Vec::new();
     if !secret.is_empty() || touched.len() > 1 {
         for r in &touched {
@@ -485,9 +497,18 @@ pub fn upsert_account(
             }
             store.delete(&original_id)?;
         }
+        if let Some((old_key, new_key)) = &app_keys {
+            if let Some(old) = store.get(old_key)?.filter(|o| !o.is_empty()) {
+                store.set(new_key, &old)?;
+            }
+            store.delete(old_key)?;
+        }
         Ok(())
     })();
     if stored.is_err() {
+        // A move can fail halfway (bot token moved, app token not): put every
+        // touched secret back so the account keeps both under its old id.
+        restore_secrets(store, &snapshot);
         // No exception detail: Keychain stderr can echo the secret.
         return keychain_failed();
     }
@@ -586,6 +607,15 @@ pub fn delete_account(
     }
     if let Err(e) = store.delete(account_id) {
         return (false, format!("Could not remove the stored secret: {e}"));
+    }
+    // The Slack agent keeps a second secret (its app-level token) beside the bot token.
+    let is_slack_bot = entries
+        .iter()
+        .any(|e| text(e.get("id")) == account_id && text(e.get("type")) == "slack_bot");
+    if is_slack_bot {
+        if let Err(e) = store.delete(&connectors::slack_bot::app_token_key(account_id)) {
+            return (false, format!("Could not remove the stored secret: {e}"));
+        }
     }
     let kept: Vec<_> = entries
         .into_iter()
@@ -1150,6 +1180,108 @@ mod tests {
             json!([])
         );
         assert!(!delete_account("work", Some(&e.paths.config()), &s).0);
+    }
+
+    #[test]
+    fn deleting_a_slack_bot_removes_its_app_token_too() {
+        let e = env();
+        let s = store();
+        let bot = json!({"id": "agent", "type": "slack_bot", "label": "Agent",
+                         "allowed_users": "U01ABC", "approvals": "off"});
+        let (ok, msg) = upsert_account(&bot, Some("xoxb-1"), "", &e.paths, &s);
+        assert!(ok, "{msg}");
+        s.set(
+            &crate::connectors::slack_bot::app_token_key("agent"),
+            "xapp-1",
+        )
+        .unwrap();
+        s.set(
+            &crate::connectors::slack_bot::app_token_key("other"),
+            "xapp-2",
+        )
+        .unwrap();
+        let (ok, _) = delete_account("agent", Some(&e.paths.config()), &s);
+        assert!(ok);
+        assert_eq!(s.get("agent").unwrap(), None);
+        assert_eq!(
+            s.get(&crate::connectors::slack_bot::app_token_key("agent"))
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            s.get(&crate::connectors::slack_bot::app_token_key("other"))
+                .unwrap()
+                .as_deref(),
+            Some("xapp-2")
+        );
+    }
+
+    #[test]
+    fn renaming_a_slack_bot_moves_its_app_token_too() {
+        let e = env();
+        let s = store();
+        let key = crate::connectors::slack_bot::app_token_key;
+        let bot = |id: &str| {
+            json!({"id": id, "type": "slack_bot", "label": "Agent",
+                   "allowed_users": "U01ABC", "approvals": "off"})
+        };
+        let (ok, msg) = upsert_account(&bot("agent"), Some("xoxb-1"), "", &e.paths, &s);
+        assert!(ok, "{msg}");
+        s.set(&key("agent"), "xapp-1").unwrap();
+        // A plain save keeps it where it is.
+        let (ok, msg) = upsert_account(&bot("agent"), None, "agent", &e.paths, &s);
+        assert!(ok, "{msg}");
+        assert_eq!(s.get(&key("agent")).unwrap().as_deref(), Some("xapp-1"));
+        let (ok, msg) = upsert_account(&bot("team"), None, "agent", &e.paths, &s);
+        assert!(ok, "{msg}");
+        assert_eq!(s.get(&key("team")).unwrap().as_deref(), Some("xapp-1"));
+        assert_eq!(s.get(&key("agent")).unwrap(), None);
+        assert_eq!(s.get("team").unwrap().as_deref(), Some("xoxb-1"));
+    }
+
+    /// Fails only when writing one account, so the bot token moves and the
+    /// app-level token move after it fails.
+    struct FailOnSet(MemoryStore, String);
+    impl SecretStore for FailOnSet {
+        fn service(&self) -> String {
+            self.0.service()
+        }
+        fn get(&self, a: &str) -> Result<Option<String>, keychain::SecretError> {
+            self.0.get(a)
+        }
+        fn set(&self, a: &str, s: &str) -> Result<(), keychain::SecretError> {
+            if a == self.1 {
+                return Err(keychain::SecretError::Failed("locked".into()));
+            }
+            self.0.set(a, s)
+        }
+        fn delete(&self, a: &str) -> Result<(), keychain::SecretError> {
+            self.0.delete(a)
+        }
+        fn list(&self) -> Result<Vec<String>, keychain::SecretError> {
+            self.0.list()
+        }
+    }
+
+    #[test]
+    fn a_failed_slack_bot_rename_leaves_both_tokens_under_the_old_id() {
+        let e = env();
+        let key = crate::connectors::slack_bot::app_token_key;
+        let s = FailOnSet(store(), key("team"));
+        let bot = |id: &str| {
+            json!({"id": id, "type": "slack_bot", "label": "Agent",
+                   "allowed_users": "U01ABC", "approvals": "off"})
+        };
+        let (ok, msg) = upsert_account(&bot("agent"), Some("xoxb-1"), "", &e.paths, &s);
+        assert!(ok, "{msg}");
+        s.set(&key("agent"), "xapp-1").unwrap();
+        let (ok, msg) = upsert_account(&bot("team"), None, "agent", &e.paths, &s);
+        assert!(!ok && msg == "Could not store the secret in the Keychain");
+        assert_eq!(s.get("agent").unwrap().as_deref(), Some("xoxb-1"));
+        assert_eq!(s.get(&key("agent")).unwrap().as_deref(), Some("xapp-1"));
+        assert_eq!(s.get("team").unwrap(), None);
+        assert_eq!(s.get(&key("team")).unwrap(), None);
+        assert!(get_account("agent", &e.paths).unwrap().is_some());
     }
 
     #[test]

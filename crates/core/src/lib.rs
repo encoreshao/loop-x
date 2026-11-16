@@ -134,6 +134,7 @@ pub mod settings_store;
 pub mod setup_doctor;
 pub mod sha256;
 pub mod slack;
+pub mod slack_agent;
 pub mod slack_report;
 pub mod slides_store;
 pub mod status;

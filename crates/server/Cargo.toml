@@ -23,6 +23,7 @@ libc.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+serde_norway.workspace = true
 tempfile = "3"
 sha2 = "0.10"
 tower.workspace = true

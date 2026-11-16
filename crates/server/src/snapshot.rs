@@ -72,6 +72,16 @@ impl Paths {
 
 /// Everything waiting on a person (see `loopx_core::needs_you`).
 pub fn needs_you(paths: &Paths, loops: &Map<String, Value>, now: DateTime<Utc>) -> Vec<Value> {
+    use loopx_core::slack_agent::{install, listener};
+    // The Slack listener's state, only while its agent is installed: the same
+    // LaunchAgents folder and state dir the Connectors page uses.
+    let installed =
+        install::is_installed(&loopx_core::launchd::launch_agents_dir(&paths.user_home));
+    let slack_status = paths
+        .outputs
+        .parent()
+        .filter(|_| installed)
+        .map(|root| listener::status_path(&listener::default_state_dir(root)));
     loopx_core::needs_you::collect(
         &loopx_core::needs_you::Sources {
             approvals_dir: &paths.approvals_dir,
@@ -80,6 +90,7 @@ pub fn needs_you(paths: &Paths, loops: &Map<String, Value>, now: DateTime<Utc>) 
             loops,
             dismissed: &paths.dismissed,
             memory_root: &paths.memory_root,
+            slack_status: slack_status.as_deref(),
         },
         now,
     )

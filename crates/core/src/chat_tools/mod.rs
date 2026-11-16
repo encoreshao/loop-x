@@ -20,6 +20,7 @@ pub mod gitlab;
 pub mod gsheets;
 pub mod mail;
 pub mod pending;
+pub mod private_ledger;
 pub mod profile;
 pub mod rss;
 pub mod settings;
@@ -780,6 +781,15 @@ pub(crate) fn run_in(
     let Some(tool) = find(tools, name) else {
         return json!({"error": format!("Unknown tool: {name}")});
     };
+    // Recorded before anything runs; a call that cannot be recorded never runs.
+    if !session.is_empty() && private_ledger::is_private(tool) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64());
+        if private_ledger::record(&env.repo_root, session, tool.name, now).is_err() {
+            return json!({"error": format!("{} failed (OSError)", tool.name)});
+        }
+    }
     let session_env = env.clone().with_session(session);
     let env = &session_env;
     let mut args = match validate(tool, args_json) {

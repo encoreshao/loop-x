@@ -26,6 +26,7 @@ pub mod notion;
 pub mod rss;
 pub mod secrets;
 pub mod slack;
+pub mod slack_bot;
 pub mod telegram;
 pub mod webhook;
 
@@ -274,7 +275,7 @@ fn is_email(value: &str) -> bool {
 }
 
 /// Every type, in registry order.
-pub fn all_types() -> [&'static TypeInfo; 15] {
+pub fn all_types() -> [&'static TypeInfo; 16] {
     [
         &github::INFO,
         &gitlab::INFO,
@@ -289,6 +290,7 @@ pub fn all_types() -> [&'static TypeInfo; 15] {
         &notion::INFO,
         &rss::INFO,
         &slack::INFO,
+        &slack_bot::INFO,
         &telegram::INFO,
         &webhook::INFO,
     ]
@@ -662,6 +664,7 @@ pub fn build(
         "notion" => Box::new(notion::NotionConnector::new(account, secret, http)),
         "rss" => Box::new(rss::RssConnector::new(account, http)),
         "slack" => Box::new(slack::SlackConnector::new(account, secret, http)),
+        "slack_bot" => Box::new(slack_bot::SlackBotConnector::new(account, secret, http)),
         "telegram" => Box::new(telegram::TelegramConnector::new(account, secret, http)),
         "webhook" => Box::new(webhook::WebhookConnector::new(account, secret, http)),
         _ => return None,
@@ -943,6 +946,7 @@ mod tests {
                 "notion",
                 "rss",
                 "slack",
+                "slack_bot",
                 "telegram",
                 "webhook"
             ]
