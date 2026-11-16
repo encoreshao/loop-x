@@ -457,7 +457,7 @@ impl<P: Poster> Executor<P> {
         text: &str,
     ) -> bool {
         let mut ok = true;
-        for (i, part) in split_message(&escape_mrkdwn(text)).iter().enumerate() {
+        for (i, part) in split_message(&to_mrkdwn(text)).iter().enumerate() {
             let sent = match replace_ts.filter(|_| i == 0) {
                 Some(ts) => self.update_or_post(channel, thread, ts, part),
                 None => self
@@ -473,7 +473,7 @@ impl<P: Poster> Executor<P> {
     /// `text`, escaped (an error line can carry engine or model text).
     fn replace(&self, req: &Request, progress: Option<&str>, text: &str) -> bool {
         let thread = Some(req.thread_ts.as_str());
-        let text = &escape_mrkdwn(text);
+        let text = &to_mrkdwn(text);
         match progress {
             Some(ts) => self.update_or_post(&req.channel, thread, ts, text),
             None => self
@@ -540,6 +540,53 @@ fn progress_text(tools: &[String]) -> String {
             format!("• `{}`", escape_mrkdwn(t))
         }
     }));
+    lines.join("\n")
+}
+
+/// Turns the agent's Markdown into Slack mrkdwn, escaped: `**bold**` and
+/// `__bold__` become `*bold*`, `# Heading` lines become bold lines and
+/// `[label](url)` becomes `<url|label>`. Code spans and fenced blocks pass
+/// through untouched (apart from escaping).
+pub(crate) fn to_mrkdwn(text: &str) -> String {
+    static BOLD: OnceLock<Regex> = OnceLock::new();
+    static LINK: OnceLock<Regex> = OnceLock::new();
+    static HEAD: OnceLock<Regex> = OnceLock::new();
+    let bold = BOLD.get_or_init(|| Regex::new(r"\*\*([^*\n]+?)\*\*|__([^_\n]+?)__").unwrap());
+    let link = LINK.get_or_init(|| Regex::new(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)").unwrap());
+    let head = HEAD.get_or_init(|| Regex::new(r"^#{1,6}\s+(.+?)\s*#*$").unwrap());
+    let mut in_fence = false;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            lines.push(escape_mrkdwn(line));
+            continue;
+        }
+        if in_fence {
+            lines.push(escape_mrkdwn(line));
+            continue;
+        }
+        let line = match head.captures(line) {
+            Some(c) => format!("**{}**", &c[1]),
+            None => line.to_string(),
+        };
+        let converted: Vec<String> = line
+            .split('`')
+            .enumerate()
+            .map(|(i, seg)| {
+                let seg = escape_mrkdwn(seg);
+                if i % 2 == 1 {
+                    return seg;
+                }
+                let seg = link.replace_all(&seg, "<$2|$1>");
+                bold.replace_all(&seg, |c: &regex::Captures| {
+                    format!("*{}*", c.get(1).or(c.get(2)).map_or("", |m| m.as_str()))
+                })
+                .into_owned()
+            })
+            .collect();
+        lines.push(converted.join("`"));
+    }
     lines.join("\n")
 }
 

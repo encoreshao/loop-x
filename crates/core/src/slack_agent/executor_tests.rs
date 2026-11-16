@@ -945,3 +945,26 @@ fn a_long_escaped_reply_fits_the_limit_and_keeps_entities_whole() {
     }
     assert_eq!(parts.concat(), escape_mrkdwn(&reply));
 }
+
+#[test]
+fn to_mrkdwn_converts_markdown_to_slack_syntax() {
+    use super::to_mrkdwn;
+    assert_eq!(to_mrkdwn("**#1361: Title** (x)"), "*#1361: Title* (x)");
+    assert_eq!(to_mrkdwn("## Heading"), "*Heading*");
+    assert_eq!(
+        to_mrkdwn("see [docs](https://a.io/x?a=1)"),
+        "see <https://a.io/x?a=1|docs>"
+    );
+    assert_eq!(
+        to_mrkdwn("`**keep**` and **bold**"),
+        "`**keep**` and *bold*"
+    );
+    assert_eq!(
+        to_mrkdwn("```\n**raw** <b>\n```"),
+        "```\n**raw** &lt;b&gt;\n```"
+    );
+    assert_eq!(
+        to_mrkdwn("a < b & <!channel>"),
+        "a &lt; b &amp; &lt;!channel&gt;"
+    );
+}
