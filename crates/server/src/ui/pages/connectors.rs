@@ -3,6 +3,7 @@
 //! with Google sign-in start and the LinkedIn browser sign-in actions.
 
 use super::loops_common::flash_html;
+use super::slack_agent;
 use crate::ui::badge::default_badge;
 use crate::ui::hub::{self, render_hub_page};
 use crate::ui::i18n::Lang;
@@ -817,9 +818,14 @@ aria-controls='cf-secret' hidden>{}</button></span>",
             if editing { "" } else { " required" },
             h(&ctx.t("Show"))
         );
+        let app_token_html = if type_name == slack_agent::TYPE {
+            slack_agent::app_token_row(ctx, editing.then_some(original_id.as_str()))
+        } else {
+            String::new()
+        };
         secret_html = format!(
             "<fieldset class='connector-section'><legend>{}</legend>\
-<div class='connector-fields'>{}</div></fieldset>",
+<div class='connector-fields'>{}{app_token_html}</div></fieldset>",
             h(&ctx.t("Credentials")),
             form_row(ctx, "cf-secret", &ctx.t(secret_label), &secret_input, !editing, &note, true)
         );
@@ -1008,6 +1014,11 @@ fn add_body(ctx: &UiCtx, p: &AddParams) -> String {
         return type_picker_html(ctx);
     };
     match type_or_none(&type_name) {
+        Some(c) if c.name == slack_agent::TYPE => format!(
+            "{flash}{}{}",
+            form_body(ctx, c.name, account.as_ref(), p.preset, None, false),
+            slack_agent::extra_cards(ctx, account.as_ref())
+        ),
         Some(c) if !c.external => form_body(ctx, c.name, account.as_ref(), p.preset, None, false),
         _ => format!(
             "{}{}",
@@ -1162,11 +1173,23 @@ fn save(ctx: &UiCtx) -> UiResponse {
     let form = form_first_keep_blank(&ctx.req.body);
     let fields: Map<String, Value> = form
         .iter()
-        .filter(|(k, _)| !matches!(k.as_str(), "csrf_token" | "secret" | "original_id" | "preset" | "then_test"))
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "csrf_token" | "secret" | "original_id" | "preset" | "then_test" | slack_agent::APP_TOKEN_FIELD
+            )
+        })
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
     let secret = get(&form, "secret").to_string();
     let original_id = get(&form, "original_id").to_string();
+    let slack = get(&form, "type") == slack_agent::TYPE;
+    let app_token = if slack { get(&form, slack_agent::APP_TOKEN_FIELD) } else { "" };
+    if slack {
+        if let Err(m) = slack_agent::check_tokens(ctx, &secret, app_token) {
+            return rerender_failed(ctx, &form, &m);
+        }
+    }
     let store = match store(ctx.state) {
         Ok(s) => s,
         Err(m) => return rerender_failed(ctx, &form, &m),
@@ -1183,6 +1206,9 @@ fn save(ctx: &UiCtx) -> UiResponse {
     }
     let old_id = original_id.trim().to_string();
     let new_id = get(&form, "id").trim().to_string();
+    if let Err(m) = slack_agent::store_app_token(ctx, &new_id, app_token) {
+        return redirect(false, &m);
+    }
     if !old_id.is_empty() && !new_id.is_empty() && old_id != new_id {
         renamed_or_deleted(ctx, &old_id, Some(&new_id));
         if cc::is_valid_id(&old_id) && cc::is_valid_id(&new_id) {
@@ -1200,6 +1226,14 @@ fn save(ctx: &UiCtx) -> UiResponse {
         let (test_ok, test_message) = run_test(ctx, &new_id);
         ok = test_ok;
         message = format!("{message} — {test_message}");
+    }
+    if slack {
+        if let Some((restarted, note)) = slack_agent::restart_after_save(ctx) {
+            ok &= restarted;
+            message = format!("{message} — {note}");
+        }
+        // Its view has the Slack app and Background listener cards.
+        return UiResponse::flash_redirect(ok, &message, &slack_agent::view_href(&new_id));
     }
     redirect(ok, &message)
 }
@@ -1229,7 +1263,21 @@ fn delete(ctx: &UiCtx) -> UiResponse {
         Ok(s) => s,
         Err(m) => return redirect(false, &m),
     };
-    let (ok, message) = cc::delete_account(&id, Some(&paths(ctx.state).config()), store.as_ref());
+    // Removing the Slack agent removes its background listener, first: a
+    // listener left behind would run with no connector to manage it.
+    let removed_listener = match slack_agent::uninstall_for_delete(ctx, &id) {
+        Ok(removed) => removed,
+        Err(e) => {
+            return redirect(
+                false,
+                &ctx.tf("Could not remove the background listener: {error}", &[("error", &e)]),
+            )
+        }
+    };
+    let (ok, mut message) = cc::delete_account(&id, Some(&paths(ctx.state).config()), store.as_ref());
+    if removed_listener {
+        message = format!("{message} — {}", ctx.t("Removed the background listener"));
+    }
     if ok {
         renamed_or_deleted(ctx, &id, None);
         if let Some(d) = linkedin_dir(ctx.state, &id) {

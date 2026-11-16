@@ -343,6 +343,20 @@ fn daemon_row(ctx: &UiCtx, d: &Daemon, csrf: &str) -> String {
         )
     };
     let runs: Vec<String> = d.program_arguments.iter().map(loops_config::py_str).collect();
+    if launchd::is_managed_daemon(&d.file) {
+        // Installed and removed from its connector's view only (opt-in, with a
+        // confirmation): no switch and no schedule here.
+        let managed = format!(
+            "<a class='pill pill-link' href=\"{}\">{}</a>",
+            pyfmt::escape(&crate::ui::pages::slack_agent::listener_href(ctx.state)),
+            pyfmt::escape(&ctx.t("Managed by Slack settings"))
+        );
+        return format!(
+            "<tr><td>{safe_label}</td><td>{pill}</td><td>{}</td><td><code>{}</code></td><td>—</td><td>{managed}</td></tr>",
+            pyfmt::escape(&launchd::describe_trigger(d)),
+            pyfmt::escape(&runs.join(" "))
+        );
+    }
     let schedule = if d.schedule.is_some() {
         schedule_form(ctx, d, csrf)
     } else {

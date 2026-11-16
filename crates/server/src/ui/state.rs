@@ -107,7 +107,8 @@ pub struct UiState {
     /// Command prefix that starts one loop run (`<loopx> run`, the loop name is
     /// appended); empty means "Run now" starts nothing.
     pub run_cmd: Vec<String>,
-    /// Settings: the `launchctl` command prefix (production `["launchctl"]`). Empty
+    /// Settings: the `launchctl` command prefix (production `["launchctl"]`, see
+    /// `launchd::dashboard_launchctl`: none under a scratch `HOME`). Empty
     /// means "no launchd": `list` answers from `<repo_root>/outputs/launchctl_list.txt`
     /// and load/unload fail without touching anything (tests inject a fake script).
     pub launchctl: Vec<String>,
@@ -195,7 +196,13 @@ impl UiState {
                     .unwrap_or_else(|_| "loopx".to_string()),
                 "run".to_string(),
             ],
-            launchctl: vec!["launchctl".to_string()],
+            // The real launchctl only when $HOME is the account's real home; a
+            // development sandbox gets LOOPX_LAUNCHCTL_CMD's fake or none at all.
+            launchctl: loopx_core::launchd::dashboard_launchctl(
+                Path::new(&std::env::var_os("HOME").unwrap_or_default()),
+                loopx_core::launchd::passwd_home().as_deref(),
+                std::env::var("LOOPX_LAUNCHCTL_CMD").ok().as_deref(),
+            ),
             cli_pinned: None,
             claude_snapshot: None,
             connector_store: None,

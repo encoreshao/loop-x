@@ -932,6 +932,39 @@ mod tests {
             .starts_with("Refusing to disable"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn chat_cannot_enable_or_disable_the_slack_listener_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let mut s = state(d.path());
+        let log = d.path().join("calls.log");
+        let fake = d.path().join("fake-launchctl");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" >> {}\nexit 0\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        s.launchctl = vec![fake.display().to_string()];
+        let dir = s.repo_root.join("launchd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let plist = "<?xml version=\"1.0\"?>\n<plist version=\"1.0\"><dict><key>Label</key><string>x</string></dict></plist>\n";
+        std::fs::write(dir.join("com.hermes.loopx-slack.plist"), plist).unwrap();
+        std::fs::write(dir.join("com.example.other.plist"), plist).unwrap();
+
+        for action in ["daemon-enable", "daemon-disable"] {
+            let r = call(&s, action, &["com.hermes.loopx-slack.plist"]).unwrap();
+            assert_eq!(r["ok"], false, "{action}");
+            assert!(r["message"].as_str().unwrap().contains("Connectors"));
+        }
+        assert!(!log.exists(), "launchctl was called");
+        // Everything else still toggles.
+        let r = call(&s, "daemon-enable", &["com.example.other.plist"]).unwrap();
+        assert_eq!(r["ok"], true, "{r}");
+        assert!(log.exists());
+    }
+
     #[test]
     fn issue_urls_resolve_to_tracked_aliases() {
         let mut prefixes = crate::ui::markdown::GitlabPrefixes::new();
