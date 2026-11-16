@@ -23,6 +23,7 @@ mod screenshot_cmd;
 mod screenshot_serve;
 mod secrets_cmd;
 mod serve_cmd;
+mod slack_cmd;
 mod status_cmd;
 mod topic_cmd;
 mod update_cmd;
@@ -178,6 +179,11 @@ enum Command {
     /// Serve the dashboard backend and the Mac app's API
     Serve {
         /// `[--port N] [--no-legacy]`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// The Slack agent: `listen [--account ID]` (Socket Mode listener), `status`, `test [--account ID]`, `install [--yes]`, `uninstall`, `restart`, `manifest`
+    Slack {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -382,6 +388,7 @@ fn main() -> ExitCode {
         Command::QueueWorker => run_cmds::queue_worker(&[]),
         Command::Doctor { args } => doctor_cmd::run(&args),
         Command::Serve { args } => serve_cmd::run(&args),
+        Command::Slack { args } => slack_cmd::run(&args),
         Command::Entry { args } => run_cmds::entry(&args),
         Command::Status { args } => status_cmd::run(&args),
         Command::Watch { args } => watch_cmd::run(&args),

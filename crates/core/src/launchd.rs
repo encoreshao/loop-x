@@ -506,6 +506,71 @@ pub fn launch_agents_dir(user_home: &Path) -> PathBuf {
     user_home.join("Library").join("LaunchAgents")
 }
 
+/// The account's home from the password database (`getpwuid`), not `$HOME`:
+/// the real `~/Library/LaunchAgents` lives under it however `$HOME` is set.
+/// `None` when it cannot be determined.
+pub fn passwd_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // SAFETY: getpwuid returns null or a pointer to a static passwd entry that
+    // stays valid until the next getpw* call; it is copied out immediately.
+    unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if pw.is_null() || (*pw).pw_dir.is_null() {
+            return None;
+        }
+        let dir = PathBuf::from(std::ffi::OsStr::from_bytes(
+            std::ffi::CStr::from_ptr((*pw).pw_dir).to_bytes(),
+        ));
+        (!dir.as_os_str().is_empty()).then_some(dir)
+    }
+}
+
+/// Whether two paths name the same directory: equal, or equal once both
+/// canonicalize (a symlinked home).
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
+/// The `launchctl` command a dashboard process may use (`UiState::launchctl`;
+/// empty means "no launchd": nothing is ever run). Only `$HOME` decides, never
+/// `LOOP_ENGINEERING_HOME`: the real dashboard runs with it pinned.
+/// - `$HOME`'s LaunchAgents is the real one (same as under the passwd home):
+///   the real `launchctl`, and an injected fake is ignored in favour of
+///   nothing at all (a test harness must never write into the real folder).
+/// - Otherwise (a development sandbox's scratch `HOME`): the fake from
+///   `LOOPX_LAUNCHCTL_CMD` when given, else no launchd, so a sandboxed
+///   dashboard can never load, unload or kickstart an agent in the user's real
+///   GUI domain (labels are shared, so it would hit the real listener).
+/// - The real home cannot be determined: no launchd.
+pub fn dashboard_launchctl(
+    home_env: &Path,
+    real_home: Option<&Path>,
+    fake_cmd: Option<&str>,
+) -> Vec<String> {
+    let Some(real_home) = real_home.filter(|h| !h.as_os_str().is_empty()) else {
+        return Vec::new();
+    };
+    let fake: Vec<String> = fake_cmd
+        .unwrap_or("")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    if same_dir(&launch_agents_dir(home_env), &launch_agents_dir(real_home))
+        || same_dir(home_env, real_home)
+    {
+        return if fake.is_empty() {
+            vec!["launchctl".to_string()]
+        } else {
+            Vec::new()
+        };
+    }
+    fake
+}
+
 fn stderr_or(result: &RunResult, key: &str) -> Msg {
     let s = result.stderr.trim();
     if s.is_empty() {
@@ -517,8 +582,41 @@ fn stderr_or(result: &RunResult, key: &str) -> Msg {
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Agents with their own opt-in lifecycle (preflight, disclosure, uninstall):
+/// the generic toggles below refuse them, so neither the Daemons page nor a
+/// chat message can start or stop one. Their own installer uses
+/// [`enable_daemon_managed`] / [`disable_daemon_managed`].
+pub const MANAGED_DAEMONS: [&str; 1] = ["com.hermes.loopx-slack.plist"];
+
+/// Whether `filename` (any case, any directory prefix) is a [`MANAGED_DAEMONS`] agent.
+pub fn is_managed_daemon(filename: &str) -> bool {
+    let name = plist_name(filename).to_lowercase();
+    MANAGED_DAEMONS.contains(&name.as_str())
+}
+
+fn managed_refusal(filename: &str) -> Outcome {
+    fail(Msg::tra(
+        "{name} is managed by its own settings: use Settings -> Connectors -> Slack, or `loopx slack uninstall`",
+        &[("name", &plist_name(filename))],
+    ))
+}
+
 /// Copy `launchd_dir/<filename>` to `agents_dir` and `launchctl load -w` it.
+/// Refuses a [`MANAGED_DAEMONS`] agent.
 pub fn enable_daemon(
+    filename: &str,
+    launchd_dir: &Path,
+    agents_dir: &Path,
+    ctl: &Launchctl,
+) -> Outcome {
+    if is_managed_daemon(filename) {
+        return managed_refusal(filename);
+    }
+    enable_daemon_managed(filename, launchd_dir, agents_dir, ctl)
+}
+
+/// [`enable_daemon`] without the managed-agent refusal: for the agent's own installer.
+pub fn enable_daemon_managed(
     filename: &str,
     launchd_dir: &Path,
     agents_dir: &Path,
@@ -559,8 +657,22 @@ pub fn enable_daemon(
     }
 }
 
-/// `launchctl unload -w` the installed copy (the file stays).
+/// `launchctl unload -w` the installed copy (the file stays). Refuses a
+/// [`MANAGED_DAEMONS`] agent.
 pub fn disable_daemon(
+    filename: &str,
+    launchd_dir: &Path,
+    agents_dir: &Path,
+    ctl: &Launchctl,
+) -> Outcome {
+    if is_managed_daemon(filename) {
+        return managed_refusal(filename);
+    }
+    disable_daemon_managed(filename, launchd_dir, agents_dir, ctl)
+}
+
+/// [`disable_daemon`] without the managed-agent refusal: for the agent's own installer.
+pub fn disable_daemon_managed(
     filename: &str,
     launchd_dir: &Path,
     agents_dir: &Path,
@@ -626,6 +738,9 @@ pub fn update_daemon_schedule(
     agents_dir: &Path,
     ctl: &Launchctl,
 ) -> Outcome {
+    if is_managed_daemon(filename) {
+        return managed_refusal(filename);
+    }
     let safe = plist_name(filename);
     if !safe.ends_with(".plist") {
         return invalid_name(filename);
@@ -782,6 +897,60 @@ mod tests {
         );
     }
 
+    /// The Slack listener's agent is installed and removed only by its own
+    /// opt-in lifecycle; the generic daemon toggles (Daemons page, chat tool)
+    /// must neither start nor stop it.
+    #[cfg(unix)]
+    #[test]
+    fn the_generic_toggles_refuse_a_managed_agent_and_never_call_launchctl() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("launchd");
+        let agents = d.path().join("agents");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(src.join("com.hermes.loopx-slack.plist"), PLIST).unwrap();
+        std::fs::write(agents.join("com.hermes.loopx-slack.plist"), PLIST).unwrap();
+        std::fs::write(src.join("a.plist"), PLIST).unwrap();
+        let ctl = fake(d.path(), "", false);
+
+        for name in [
+            "com.hermes.loopx-slack.plist",
+            "COM.Hermes.LoopX-Slack.plist",
+            "../x/com.hermes.loopx-slack.plist",
+        ] {
+            let (okk, msg) = enable_daemon(name, &src, &agents, &ctl);
+            assert!(!okk, "{name}");
+            let text = msg.english();
+            assert!(text.contains("Connectors"), "{text}");
+            assert!(text.contains("loopx slack uninstall"), "{text}");
+            let (okk, _) = disable_daemon(name, &src, &agents, &ctl);
+            assert!(!okk, "{name}");
+        }
+        assert!(
+            !d.path().join("calls.log").exists(),
+            "launchctl was called for a managed agent"
+        );
+        // A schedule rewrite would reload it too.
+        let (okk, _) = update_daemon_schedule(
+            "com.hermes.loopx-slack.plist",
+            9,
+            0,
+            &[],
+            None,
+            &src,
+            &agents,
+            &ctl,
+        );
+        assert!(!okk);
+        assert!(!d.path().join("calls.log").exists());
+        // Other daemons toggle as before.
+        assert!(enable_daemon("a.plist", &src, &agents, &ctl).0);
+        assert!(disable_daemon("a.plist", &src, &agents, &ctl).0);
+        // The sanctioned path still works.
+        assert!(enable_daemon_managed("com.hermes.loopx-slack.plist", &src, &agents, &ctl).0);
+        assert!(disable_daemon_managed("com.hermes.loopx-slack.plist", &src, &agents, &ctl).0);
+    }
+
     #[cfg(unix)]
     #[test]
     fn enable_disable_and_reload_through_the_fake_launchctl() {
@@ -851,5 +1020,62 @@ mod tests {
         assert_eq!(describe_trigger(&all[0]), "every 15 minutes");
         assert!(all[1].error.is_some());
         assert!(get_daemons_status(&d.path().join("missing"), "").is_empty());
+    }
+
+    // ---- which launchctl a dashboard process may use ------------------------------
+
+    #[test]
+    fn the_real_dashboard_keeps_the_real_launchctl() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("me");
+        std::fs::create_dir_all(&home).unwrap();
+        // LOOP_ENGINEERING_HOME pinned in its plist plays no part: only HOME does.
+        assert_eq!(dashboard_launchctl(&home, Some(&home), None), ["launchctl"]);
+    }
+
+    #[test]
+    fn a_scratch_home_gets_no_launchd_unless_a_fake_is_injected() {
+        let d = tempfile::tempdir().unwrap();
+        let (real, scratch) = (d.path().join("me"), d.path().join("scratch"));
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        assert!(dashboard_launchctl(&scratch, Some(&real), None).is_empty());
+        assert!(dashboard_launchctl(&scratch, Some(&real), Some("  ")).is_empty());
+        assert_eq!(
+            dashboard_launchctl(&scratch, Some(&real), Some("/tmp/fake-ctl --log x")),
+            ["/tmp/fake-ctl", "--log", "x"]
+        );
+    }
+
+    #[test]
+    fn the_fake_never_applies_to_the_real_home_and_nothing_real_runs_either() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("me");
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(dashboard_launchctl(&home, Some(&home), Some("/tmp/fake-ctl")).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_the_real_home_is_the_real_home() {
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("me");
+        std::fs::create_dir_all(real.join("Library").join("LaunchAgents")).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(dashboard_launchctl(&link, Some(&real), None), ["launchctl"]);
+    }
+
+    #[test]
+    fn an_unknown_real_home_gets_no_launchd() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(dashboard_launchctl(d.path(), None, None).is_empty());
+        assert!(dashboard_launchctl(d.path(), Some(Path::new("")), None).is_empty());
+    }
+
+    #[test]
+    fn the_passwd_home_is_this_users_home() {
+        let home = passwd_home().expect("a passwd entry");
+        assert!(home.is_absolute() && home.is_dir(), "{home:?}");
     }
 }

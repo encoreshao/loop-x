@@ -217,3 +217,13 @@ The Inbox Triage loop has its own fixed safety boundary (see [`docs/tasks/inbox-
 - **Message bodies never persist.** They exist only in memory and in the prompt of the AI CLI call per inbox (plus at most one retry), which keeps no session transcript — never written to `outputs/`, logs, status, or the Slack digest, which only ever get sender, subject, category, the AI's short reason, and a draft link. The AI-written reply draft is saved only in the mailbox's own Drafts folder.
 - **Inbox Triage runs on the selected AI CLI.** CLIs that cannot be locked down (Codex, Gemini, Kimi, Cursor) run with a visible warning; Codex gives the model a shell and records the prompt, including email text, under `~/.codex/sessions/`. Claude is the one CLI run with no tools. Error text shown for an inbox is only loopx's own (exit code, timeout, could not start), never the CLI's output.
 - **Refresh tokens live only in the macOS Keychain**, written via `security -i` with the token on stdin, never on disk in plain text or in a process's argv.
+
+The Slack agent (see [`docs/tasks/slack-agent.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/slack-agent.md)) has its own boundary:
+
+- **Only allowlisted Slack users can start work.** An empty allowlist makes the listener refuse to start; anyone else gets one fixed refusal.
+- **Everyone on the allowlist acts as you.** Each allowlisted person uses your full agent, gets replies built from your mail and calendar by DM, and can answer your approvals.
+- **Agent replies are escaped** (`&`, `<`, `>`), so a reply cannot ping a channel or user or disguise a link.
+- **Opt-in install.** Saving the connector or its tokens starts nothing; the background listener is installed only by a separate, explicit Install (or `loopx slack install`), after stating what it does.
+- **Mail and calendar data is answered by DM, never in a channel.** A private-call ledger (`outputs/chat-private/<session>.jsonl`, written before the tool runs) makes a thread that ever touched mail or calendar DM-only, sticky for that thread; the ledger is never pruned.
+- **Slack text is untrusted** user content under the chat agent's existing lock-down, and Slack turns are stored as already seen so no loop picks them up as new messages.
+- **Approvals answered in Slack need the listener running** and an allowlisted user; the approvals store locks decisions, so a decided approval keeps its first answer.

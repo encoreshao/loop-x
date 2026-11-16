@@ -97,6 +97,7 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
             let error = crate::ui::profile_jobs::failure_text(ctx, &f("message"));
             ctx.tf("Profile sync failed for {alias}: {error}", &[("alias", &f("project")), ("error", &error)])
         }
+        Some("slack_listener") => ctx.tf("The Slack listener needs attention: {error}", &[("error", &f("error"))]),
         Some("mr_thread") => ctx.tf(
             "{project} #{iid}: a review thread on the merge request needs you ({reason})",
             &[("project", &f("project")), ("iid", &f("issue_iid")), ("reason", &f("reason"))],
@@ -110,7 +111,7 @@ fn icon_for(kind: &str) -> &'static str {
         "approval" => "task_alt",
         "escalated" => "warning",
         "sign_in" => "login",
-        "mr_thread" => "forum",
+        "mr_thread" | "slack_listener" => "forum",
         _ => "error",
     }
 }
@@ -125,6 +126,10 @@ fn link(ctx: &UiCtx, item: &Value) -> String {
         Some("sign_in") if text(item, "probe") == "ai_cli" => (crate::ui::ai_cli::SETTINGS_HREF.to_string(), ctx.t("Open AI CLI settings")),
         Some("sign_in") => ("/connectors".to_string(), ctx.t("Reconnect")),
         Some("loop_failed") => ("/runs?view=logs".to_string(), ctx.t("See the log")),
+        Some("slack_listener") => (
+            crate::ui::pages::slack_agent::listener_href(ctx.state),
+            ctx.t("Open Slack settings"),
+        ),
         Some("profile_sync_failed") => (
             crate::ui::pages::memory::project_url(&text(item, "project"), None),
             ctx.t("Open the project's memory"),

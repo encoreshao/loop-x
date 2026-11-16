@@ -10,7 +10,7 @@ pub fn run(args: &[String]) -> ExitCode {
         eprintln!("Usage: loopx chat-tool <action> [args]");
         return ExitCode::from(1);
     };
-    let state = UiState::from_env(&repo_root());
+    let state = state();
     let session = std::env::var("LOOP_CHAT_SESSION").unwrap_or_default();
     match chat_tool::run(&state, action, rest, &session) {
         Ok(result) => {
@@ -22,6 +22,12 @@ pub fn run(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// The state `loopx chat-tool` runs with: rooted at [`repo_root`]. The Slack
+/// listener builds its chat runtime from this too, so both see one root.
+pub(crate) fn state() -> UiState {
+    UiState::from_env(&repo_root())
 }
 
 /// `loopx _chat-eval-stub`: the chat eval's offline stand-in (see `chat_eval::stub_main`).

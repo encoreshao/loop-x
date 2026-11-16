@@ -145,8 +145,12 @@ fn hold(argv: &[String]) -> Result<String, String> {
 }
 
 fn stop() -> Result<String, String> {
-    let dir = state_dir();
-    let Some(pid) = read_pid(&dir) else {
+    stop_in(&state_dir())
+}
+
+/// [`stop`] for the hold state kept in `dir`.
+fn stop_in(dir: &Path) -> Result<String, String> {
+    let Some(pid) = read_pid(dir) else {
         return Ok("no dev server is held".into());
     };
     let _ = std::fs::write(dir.join("stop"), "");
@@ -159,7 +163,7 @@ fn stop() -> Result<String, String> {
             .arg(pid.to_string())
             .status();
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(dir);
     Ok("dev server stopped".into())
 }
 
@@ -197,8 +201,10 @@ mod tests {
 
     #[test]
     fn stop_with_nothing_held_is_not_an_error() {
+        // An explicit folder, not LOOPX_ROOT: setting a process-wide variable
+        // here would race the other tests in this binary that read it.
         let root = tempfile::tempdir().unwrap();
-        std::env::set_var("LOOPX_ROOT", root.path());
-        assert_eq!(stop().unwrap(), "no dev server is held");
+        let dir = root.path().join("outputs").join("screens").join(".server");
+        assert_eq!(stop_in(&dir).unwrap(), "no dev server is held");
     }
 }

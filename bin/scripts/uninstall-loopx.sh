@@ -6,7 +6,8 @@ set -euo pipefail
 # Reverses what those set up on this machine, and is safe to re-run:
 #
 #   - LaunchAgents: every com.hermes.loop-engineering*.plist (the scheduler,
-#     the dashboard, the old topic-monitor) and homebrew.mxcl.loopx.plist
+#     the dashboard, the old topic-monitor), com.hermes.loopx-slack.plist
+#     (the opt-in Slack listener) and homebrew.mxcl.loopx.plist
 #     (`brew services`) in --launch-agents-dir is `launchctl bootout`-ed and
 #     removed.
 #   - loopx.lock: a live `loopx` backend recorded in <project-dir>/loopx.lock
@@ -118,7 +119,7 @@ if [ -z "$LAUNCHCTL_CMD" ]; then
 fi
 removed_agents=0
 shopt -s nullglob
-for dest in "$LAUNCH_AGENTS_DIR"/com.hermes.loop-engineering*.plist "$LAUNCH_AGENTS_DIR"/homebrew.mxcl.loopx.plist; do
+for dest in "$LAUNCH_AGENTS_DIR"/com.hermes.loop-engineering*.plist "$LAUNCH_AGENTS_DIR"/com.hermes.loopx-slack.plist "$LAUNCH_AGENTS_DIR"/homebrew.mxcl.loopx.plist; do
   [ -e "$dest" ] || continue
   name="$(basename "$dest")"
   label="${name%.plist}"

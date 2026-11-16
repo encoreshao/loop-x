@@ -478,6 +478,25 @@ impl MessageStore {
         tools: Option<&Value>,
         now: DateTime<Utc>,
     ) {
+        self.append_entry(from, text, session, tools, now, false);
+    }
+
+    /// [`Self::append_message`] for a message the loop must never pick up
+    /// (`seen_by_loop: true`): a chat turn from an untrusted channel such as
+    /// Slack belongs to its chat session only.
+    pub fn append_message_seen(&self, from: &str, text: &str, session: Option<&str>) {
+        self.append_entry(from, text, session, None, Utc::now(), true);
+    }
+
+    fn append_entry(
+        &self,
+        from: &str,
+        text: &str,
+        session: Option<&str>,
+        tools: Option<&Value>,
+        now: DateTime<Utc>,
+        seen: bool,
+    ) {
         let session = match session {
             Some(s) => s.to_string(),
             None => self
@@ -493,7 +512,7 @@ impl MessageStore {
         entry.insert("text".into(), json!(text));
         entry.insert("timestamp".into(), json!(isoformat_utc(now)));
         if from == "user" {
-            entry.insert("seen_by_loop".into(), json!(false));
+            entry.insert("seen_by_loop".into(), json!(seen));
         }
         if session != LEGACY_CHAT_SESSION_ID {
             entry.insert("session".into(), json!(session));
@@ -644,6 +663,17 @@ mod tests {
         assert_eq!(s.pop_unseen_user_messages().len(), 1);
         assert!(s.pop_unseen_user_messages().is_empty());
         assert_eq!(s.read_messages()[0]["seen_by_loop"], true);
+    }
+
+    #[test]
+    fn a_message_appended_as_seen_is_never_popped_for_the_loop() {
+        let (_d, s) = store();
+        s.append_message_seen("user", "from slack", Some("abc"));
+        assert!(s.pop_unseen_user_messages().is_empty());
+        let msgs = s.chat_session_messages("abc");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["text"], "from slack");
+        assert_eq!(msgs[0]["seen_by_loop"], true);
     }
 
     #[test]

@@ -233,6 +233,44 @@ mod tests {
         assert_eq!(Lang::Fr.display_name(), "Français");
     }
 
+    /// The connectors page translates a connector type's label, description,
+    /// credential label and field labels, help and worded placeholders at
+    /// render time (`ctx.t(field.label)`): those literals live in core, out of
+    /// reach of the source scan below, so they are checked here. Only the
+    /// Slack agent for now: three Google types' descriptions predate this test
+    /// and are still untranslated.
+    #[test]
+    fn every_slack_agent_type_string_has_a_catalog_entry() {
+        let mut missing = Vec::new();
+        for info in [&loopx_core::connectors::slack_bot::INFO] {
+            let mut texts = vec![info.label, info.description];
+            texts.extend(info.secret_label);
+            for f in info.fields {
+                texts.push(f.label);
+                texts.push(f.help);
+                if f.placeholder.contains(' ') {
+                    texts.push(f.placeholder);
+                }
+            }
+            for text in texts.into_iter().filter(|t| !t.is_empty()) {
+                for lang in [Lang::Ja, Lang::Zh, Lang::Fr] {
+                    if !has_translation(lang, text) {
+                        missing.push(format!(
+                            "{}: {text:?} missing in {}",
+                            info.name,
+                            lang.code()
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "untranslated connector strings:\n{}",
+            missing.join("\n")
+        );
+    }
+
     /// The value of a Rust string literal body: `\<newline>` continuations,
     /// `\n`, `\'`, `\"`, `\\` and `\u{..}`.
     fn unescape_rust(body: &str) -> String {

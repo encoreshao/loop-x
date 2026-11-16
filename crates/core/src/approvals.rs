@@ -75,9 +75,13 @@ fn write(dir: &Path, approval: &Value) -> Result<(), ApprovalError> {
     std::fs::create_dir_all(dir).map_err(io)?;
     let id = approval["id"].as_str().unwrap_or_default();
     let path = path_of(dir, id);
-    let tmp = dir.join(format!(".{id}.tmp"));
+    // Unique per write: concurrent writers never share (and clobber) a temp file.
+    let tmp = dir.join(format!(".{id}.{}.tmp", &new_uuid_hex()[..8]));
     std::fs::write(&tmp, pyjson::to_string_pretty(approval)).map_err(io)?;
-    std::fs::rename(&tmp, &path).map_err(io)
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io(e)
+    })
 }
 
 /// Create a `pending` approval and return it.
@@ -214,6 +218,10 @@ pub fn decide_with_notes(
             Some(_) => {}
         }
     }
+    // One decision at a time across processes (dashboard, Mac app, chat
+    // listeners, CLI): the check and the write must not interleave.
+    let _lock = crate::file_lock::FileLock::exclusive(&dir.join(".decide.lock"))
+        .map_err(|e| ApprovalError::Io(e.to_string()))?;
     expire_overdue(dir, now);
     let mut approval = get(dir, id).ok_or_else(|| ApprovalError::Unknown(id.to_string()))?;
     if approval["status"] != "pending" {
@@ -267,6 +275,86 @@ mod tests {
 
     fn t(sec: i64) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 22, 10, 0, 0).unwrap() + Duration::seconds(sec)
+    }
+
+    #[test]
+    fn racing_decisions_on_one_approval_record_exactly_one() {
+        for _ in 0..50 {
+            let d = tempfile::tempdir().unwrap();
+            let id = create(d.path(), &req(), t(0)).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let spawn = |decision: &'static str| {
+                let (dir, id, barrier) = (d.path().to_path_buf(), id.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    decide_with_notes(&dir, &id, decision, None, decision, t(1))
+                })
+            };
+            let (a, b) = (spawn("approve"), spawn("deny"));
+            let results = [("approve", a.join().unwrap()), ("deny", b.join().unwrap())];
+            let wins: Vec<_> = results.iter().filter(|(_, r)| r.is_ok()).collect();
+            assert_eq!(wins.len(), 1, "{results:?}");
+            let loser = results.iter().find(|(_, r)| r.is_err()).unwrap();
+            assert!(
+                matches!(loser.1, Err(ApprovalError::AlreadyDecided(..))),
+                "{results:?}"
+            );
+            let stored = get(d.path(), &id).unwrap();
+            let expect = if wins[0].0 == "approve" {
+                "approved"
+            } else {
+                "denied"
+            };
+            assert_eq!(stored["status"], expect);
+            assert_eq!(stored["decided_by"], wins[0].0);
+        }
+    }
+
+    #[test]
+    fn concurrent_decisions_on_different_approvals_all_land() {
+        for _ in 0..20 {
+            let d = tempfile::tempdir().unwrap();
+            let ids: Vec<String> = (0..4)
+                .map(|_| {
+                    create(d.path(), &req(), t(0)).unwrap()["id"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            let handles: Vec<_> = ids
+                .iter()
+                .map(|id| {
+                    let (dir, id) = (d.path().to_path_buf(), id.clone());
+                    std::thread::spawn(move || decide(&dir, &id, "approve", "x", t(1)))
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap().unwrap();
+            }
+            assert!(ids
+                .iter()
+                .all(|id| get(d.path(), id).unwrap()["status"] == "approved"));
+        }
+    }
+
+    #[test]
+    fn deciding_leaves_no_temp_files_behind() {
+        let d = tempfile::tempdir().unwrap();
+        let id = create(d.path(), &req(), t(0)).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        decide(d.path(), &id, "deny", "x", t(1)).unwrap();
+        let tmp = std::fs::read_dir(d.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(tmp, 0);
     }
 
     #[test]

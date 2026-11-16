@@ -878,6 +878,7 @@ dependencies = [
  "notify",
  "regex",
  "serde_json",
+ "serde_norway",
  "sha2",
  "tempfile",
  "thiserror",
@@ -1580,9 +1581,12 @@ dependencies = [
  "httparse",
  "log",
  "rand",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
  "utf-8",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
