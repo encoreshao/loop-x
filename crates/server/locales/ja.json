@@ -2263,5 +2263,8 @@
   "Create": "作成",
   "Rename folder": "フォルダ名を変更",
   "Delete folder": "フォルダを削除",
-  "Drag chats here": "ここにチャットをドラッグ"
+  "Drag chats here": "ここにチャットをドラッグ",
+  "Move to folder": "フォルダに移動",
+  "No folder": "フォルダなし",
+  "Move chat {title} to a folder": "チャット {title} をフォルダに移動"
 }

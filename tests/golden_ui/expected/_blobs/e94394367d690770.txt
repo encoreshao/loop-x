@@ -1229,6 +1229,11 @@ if (!window.__loopPendingCardClicks) {
     new FormData(form).forEach(function(v, k) { if (k !== 'csrf_token') fields[k] = v; });
     post(list, form.getAttribute('action'), fields).catch(function() {});
   });
+  // The per-chat "Move to folder" menu (the way to file a chat without a mouse).
+  document.addEventListener('change', function(ev) {
+    var select = ev.target.closest && ev.target.closest('[data-move-select]');
+    if (select && listOf(select)) select.form.requestSubmit();
+  });
   document.addEventListener('dragstart', function(ev) {
     var row = ev.target.closest && ev.target.closest('.chat-history-row[data-session-id]');
     if (!row || !listOf(row)) return;

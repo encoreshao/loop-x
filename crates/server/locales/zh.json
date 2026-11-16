@@ -2263,5 +2263,8 @@
   "Create": "创建",
   "Rename folder": "重命名文件夹",
   "Delete folder": "删除文件夹",
-  "Drag chats here": "将对话拖到这里"
+  "Drag chats here": "将对话拖到这里",
+  "Move to folder": "移到文件夹",
+  "No folder": "无文件夹",
+  "Move chat {title} to a folder": "将对话 {title} 移到文件夹"
 }

@@ -421,6 +421,7 @@ fn session_row_html(
     s: &loopx_core::messages::SessionInfo,
     active: Option<&str>,
     viewing_input: &str,
+    folders: &[loopx_core::messages::FolderInfo],
 ) -> String {
     let now = state.now();
     let csrf_input = csrf_input(state);
@@ -434,6 +435,34 @@ fn session_row_html(
     };
     let quoted = pyfmt::quote(&s.id, "");
     let href = format!("/?session={quoted}");
+    let move_form = if draggable.is_empty() || folders.is_empty() {
+        String::new()
+    } else {
+        let mut options = format!(
+            "<option value=''{}>{}</option>",
+            if s.folder.is_none() { " selected" } else { "" },
+            esc_t(lang, "No folder")
+        );
+        for f in folders {
+            options.push_str(&format!(
+                "<option value='{}'{}>{}</option>",
+                pyfmt::escape(&f.id),
+                if s.folder.as_deref() == Some(f.id.as_str()) { " selected" } else { "" },
+                pyfmt::escape(&f.name)
+            ));
+        }
+        let label = pyfmt::escape(&i18n::t(lang, "Move chat {title} to a folder", &[("title", &s.title)]));
+        format!(
+            "<form method='post' action='/activity/sessions/{}/move' class='chat-history-move-form' data-history-form>\
+             {csrf_input}{viewing_input}\
+             <span class='message-action-btn chat-history-move-btn' title='{}'>\
+             <svg class='icon' aria-hidden='true'><use href='#i-folder'/></svg>\
+             <select name='folder' data-move-select aria-label='{label}'>{options}</select></span>\
+             </form>",
+            pyfmt::escape(&quoted),
+            esc_t(lang, "Move to folder"),
+        )
+    };
     let confirm = pyfmt::escape(&i18n::t(
         lang,
         "Delete the chat \u{201c}{title}\u{201d}? Its messages will be removed.",
@@ -445,6 +474,7 @@ fn session_row_html(
          <span class='chat-history-title'>{}</span>\
          <span class='chat-history-time'>{}</span>\
          </a>\
+         {move_form}\
          <form method='post' action='/activity/sessions/{}/delete' class='chat-history-delete-form'>\
          {csrf_input}{viewing_input}\
          <button type='submit' class='message-action-btn' aria-label='{}'\
@@ -491,6 +521,7 @@ fn folder_html(
     members: &[&loopx_core::messages::SessionInfo],
     active: Option<&str>,
     viewing_input: &str,
+    folders: &[loopx_core::messages::FolderInfo],
 ) -> String {
     let csrf = csrf_input(state);
     let id = pyfmt::escape(&folder.id);
@@ -500,7 +531,7 @@ fn folder_html(
     } else {
         members
             .iter()
-            .map(|s| session_row_html(state, lang, s, active, viewing_input))
+            .map(|s| session_row_html(state, lang, s, active, viewing_input, folders))
             .collect()
     };
     format!(
@@ -557,7 +588,7 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
             .iter()
             .filter(|s| s.folder.as_deref() == Some(folder.id.as_str()))
             .collect();
-        parts.push_str(&folder_html(state, lang, folder, &members, active, &viewing_input));
+        parts.push_str(&folder_html(state, lang, folder, &members, active, &viewing_input, &folders));
     }
     parts.push_str("<div class='chat-history-ungrouped' data-folder-id=''>");
     let unfiled: Vec<_> = sessions.iter().filter(|s| s.folder.is_none()).collect();
@@ -571,7 +602,7 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
         }
         parts.push_str(&format!("<h3 class='chat-history-group'>{}</h3>", esc_t(lang, group)));
         for s in members {
-            parts.push_str(&session_row_html(state, lang, s, active, &viewing_input));
+            parts.push_str(&session_row_html(state, lang, s, active, &viewing_input, &folders));
         }
     }
     parts.push_str("</div></div>");
@@ -1731,5 +1762,22 @@ mod tests {
         let r = post_to(&state, "/activity/folders", "name=Work&viewing=abc", false);
         assert_eq!(r.status, 303);
         assert!(r.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("location") && v == "/?session=abc&history=1"));
+    }
+
+    #[test]
+    fn each_movable_chat_has_a_move_to_folder_menu_once_a_folder_exists() {
+        let (_d, state) = history_state();
+        let store = store(&state);
+        let id = store.send_chat_message("hello", None).unwrap();
+        assert!(!history_fragment(&state, Lang::En, None).contains("data-move-select"));
+        let f = store.create_chat_folder("Work").unwrap();
+        let html = history_fragment(&state, Lang::En, None);
+        assert!(html.contains(&format!("action='/activity/sessions/{id}/move'")));
+        assert!(html.contains("<option value='' selected>No folder</option>"));
+        assert!(html.contains(&format!("<option value='{f}'>Work</option>")));
+        store.move_chat_session(&id, Some(&f));
+        let html = history_fragment(&state, Lang::En, None);
+        assert!(html.contains(&format!("<option value='{f}' selected>Work</option>")));
+        assert!(html.contains("<option value=''>No folder</option>"));
     }
 }

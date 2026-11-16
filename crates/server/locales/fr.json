@@ -2263,5 +2263,8 @@
   "Create": "Créer",
   "Rename folder": "Renommer le dossier",
   "Delete folder": "Supprimer le dossier",
-  "Drag chats here": "Faites glisser des conversations ici"
+  "Drag chats here": "Faites glisser des conversations ici",
+  "Move to folder": "Déplacer vers un dossier",
+  "No folder": "Aucun dossier",
+  "Move chat {title} to a folder": "Déplacer la conversation {title} vers un dossier"
 }

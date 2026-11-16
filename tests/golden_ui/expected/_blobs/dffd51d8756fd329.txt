@@ -1602,6 +1602,17 @@ html.file-panel-open .file-panel { display: flex; }
   border-color: color-mix(in srgb, var(--md-primary) 50%, transparent);
 }
 .chat-history-row[draggable='true'] { cursor: grab; }
+.chat-history-move-form { position: absolute; right: 2.2rem; margin: 0; opacity: 0; transition: opacity 150ms ease; }
+.chat-history-row:hover .chat-history-move-form, .chat-history-row:focus-within .chat-history-move-form { opacity: 1; }
+.chat-history-move-btn { position: relative; background: var(--md-surface-container-high); }
+.chat-history-move-btn select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; }
+.chat-history-move-btn:focus-within { box-shadow: 0 0 0 2px var(--md-primary); }
+@media (hover: none) { .chat-history-move-form { position: static; opacity: 1; } }
+/* The AI panel has no delete button, so the move menu takes its place and the time steps aside. */
+.ai-panel .chat-history-move-form { right: 0.3rem; }
+.ai-panel .chat-history-row:has(.chat-history-move-form):hover .chat-history-time,
+.ai-panel .chat-history-row:has(.chat-history-move-form):focus-within .chat-history-time { visibility: hidden; }
+@media (hover: none) { .ai-panel .chat-history-move-form { position: static; } .ai-panel .chat-history-row:has(.chat-history-move-form) .chat-history-time { visibility: visible; } }
 .chat-history-row.is-dragging { opacity: 0.45; }
 
 /* Session thread: assistant replies read as plain text beside the brand
