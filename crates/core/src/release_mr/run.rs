@@ -204,6 +204,7 @@ mod tests {
                 iid: 1351,
                 title: "Order export".into(),
                 author_username: "ann".into(),
+                web_url: "https://g/app/-/merge_requests/1351".into(),
             },
         );
         api
@@ -263,10 +264,10 @@ mod tests {
         );
         assert_eq!(made[0].title, "Release: order export");
         assert!(
-            made[0].description.starts_with("ccing @ann\n")
-                && made[0]
-                    .description
-                    .contains("* **Order export:** Download orders as CSV. (`#1351`)"),
+            !made[0].description.contains("ccing")
+                && made[0].description.contains(
+                    "* **Order export:** Download orders as CSV. ([#1351](https://g/app/-/merge_requests/1351)) \u{b7} @ann"
+                ),
             "{}",
             made[0].description
         );

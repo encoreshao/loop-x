@@ -166,6 +166,7 @@ mod tests {
             iid: 7,
             title: "Export".into(),
             author_username: "ann".into(),
+            web_url: String::new(),
         });
         let p = prompt(&[c]);
         assert!(p.contains("title_brief"), "instructions present");

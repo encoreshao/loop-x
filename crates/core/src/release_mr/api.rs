@@ -22,6 +22,8 @@ pub struct MrInfo {
     pub iid: u64,
     pub title: String,
     pub author_username: String,
+    /// The merge request's page, used to link its number in the description.
+    pub web_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +195,7 @@ impl ReleaseApi for GitlabApi {
         Ok(landed.map(|m| MrInfo {
             iid: m.get("iid").and_then(Value::as_u64).unwrap_or_default(),
             title: text(m, "title"),
+            web_url: text(m, "web_url"),
             author_username: m
                 .pointer("/author/username")
                 .and_then(Value::as_str)
@@ -472,7 +475,8 @@ mod tests {
             Some(MrInfo {
                 iid: 0,
                 title: "Export".into(),
-                author_username: "ann".into()
+                author_username: "ann".into(),
+                web_url: String::new(),
             })
         );
         assert_eq!(

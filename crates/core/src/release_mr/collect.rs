@@ -123,6 +123,7 @@ mod tests {
             iid: 1351,
             title: "Export orders".into(),
             author_username: "ann".into(),
+            web_url: String::new(),
         };
         api.commit_mrs.insert("a".into(), mr.clone());
         api.commit_mrs.insert("b".into(), mr);

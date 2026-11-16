@@ -108,6 +108,7 @@ mod tests {
                 iid: 0,
                 title: "t".into(),
                 author_username: a.into(),
+                web_url: String::new(),
             }),
         }
     }

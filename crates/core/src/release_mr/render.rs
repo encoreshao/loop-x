@@ -10,6 +10,8 @@ const TITLE_PREFIX: &str = "Release: ";
 const TITLE_MAX: usize = 72;
 /// A bullet cites at most this many merge requests.
 const MAX_REFS: usize = 5;
+/// A feature credits at most this many authors.
+const MAX_AUTHORS: usize = 4;
 
 /// Drops commit-hash-shaped words (7-40 hex characters with at least one digit).
 fn strip_hashes(text: &str) -> String {
@@ -81,32 +83,120 @@ fn fit_title(brief: &str) -> String {
     format!("{TITLE_PREFIX}{cut}\u{2026}")
 }
 
+/// The opening lines a release description can start with. The `release-mr` skill in the
+/// encore-skills repo (`skills/release-mr/SKILL.md`) keeps the same list and format rules
+/// for hand-written release MRs; Loop X does not read it, so change both together.
+/// The "focuses on" line is built in `opening_line` and only joins when the title brief
+/// names exactly three features.
+const OPENINGS: [&str; 7] = [
+    "Here's what's shipping in this release, grouped by feature area:",
+    "This release rounds up a handful of improvements, sorted by area:",
+    "Quick tour of what's new, by feature area:",
+    "A few things got better in this release. Here's the rundown by area:",
+    "Fresh from the branch: this release's changes, grouped by feature area.",
+    "Short version of what's changed, organized by area so you can jump to what matters to you:",
+    "What you'll notice in this release, area by area:",
+];
+
+/// FNV-1a: a hash that never changes between Rust versions, so the same release always
+/// gets the same opening line (a previewed text and its re-render agree).
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// One opening line, picked by the content of the release. The "focuses on a, b, and c"
+/// variant joins the pool only when the title brief names three features.
+fn opening_line(summary: &Summary) -> String {
+    let brief = clean_title(&summary.title_brief);
+    let themes: Vec<&str> = brief
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut pool: Vec<String> = OPENINGS.iter().map(|o| o.to_string()).collect();
+    if let [a, b, c] = themes[..] {
+        pool.push(format!(
+            "This release focuses on {a}, {b}, and {c}. The details, by area:"
+        ));
+    }
+    let seed: String = std::iter::once(brief.as_str())
+        .chain(summary.features.iter().map(|f| f.name.as_str()))
+        .collect::<Vec<_>>()
+        .join("|");
+    pool.swap_remove((fnv(&seed) % pool.len() as u64) as usize)
+}
+
+/// `[#N](url)` for a merge request whose page URL is a plain http(s) link; the bare
+/// number in code formatting otherwise, so an odd URL can never break the Markdown.
+fn link(iid: u64, url: &str) -> String {
+    let plain = (url.starts_with("https://") || url.starts_with("http://"))
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || "()[]<>`".contains(c));
+    if plain {
+        format!("[#{iid}]({url})")
+    } else {
+        format!("`#{iid}`")
+    }
+}
+
+/// Who built a feature: the authors of the changes it cites, as `@mentions` for people
+/// matched to one project member and plain names for the rest. Only people the resolver
+/// already vetted can appear, so agent text can never add a mention.
+fn credit(feature: &Feature, resolved: &Resolved, changes: &[Change]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for c in feature
+        .refs
+        .iter()
+        .filter_map(|r| r.checked_sub(1))
+        .filter_map(|r| changes.get(r))
+    {
+        let by_mr =
+            c.mr.as_ref()
+                .map(|m| m.author_username.as_str())
+                .and_then(|u| {
+                    resolved
+                        .tags
+                        .iter()
+                        .find(|t| !u.is_empty() && t.eq_ignore_ascii_case(u))
+                });
+        let by_name = || {
+            let n = c.author_name.to_ascii_lowercase();
+            resolved
+                .mentions
+                .iter()
+                .find(|(name, _)| *name == n)
+                .map(|(_, user)| user)
+        };
+        let token = match by_mr.or_else(by_name) {
+            Some(user) => format!("@{user}"),
+            None if resolved.plain.contains(&c.author_name) => {
+                clean(&c.author_name.replace('@', ""))
+            }
+            None => continue,
+        };
+        if !token.is_empty() && !out.contains(&token) {
+            out.push(token);
+        }
+    }
+    out.truncate(MAX_AUTHORS);
+    out.join(" ")
+}
+
 /// `(title, description)` for the release MR. Only `resolved` can add mentions, and only
 /// merge request numbers read from `changes` can appear as references.
 ///
-/// The description follows the team's usual release MR: a `ccing` line, then numbered theme
-/// headings, each with one bold-labelled bullet per feature and the MRs it came from.
+/// The description opens with one casual line, then numbered theme headings, each with one
+/// bold-labelled bullet per feature, linking the MRs it came from and crediting their authors
+/// (`· @user`); there is no `ccing` line, each feature's author is the one tagged.
 pub fn render(summary: &Summary, resolved: &Resolved, changes: &[Change]) -> (String, String) {
     let title = fit_title(&clean_title(&summary.title_brief));
     let mut body = String::new();
 
-    let tags: Vec<String> = resolved.tags.iter().map(|t| format!("@{t}")).collect();
-    let plain: Vec<String> = resolved
-        .plain
-        .iter()
-        .map(|p| clean(&p.replace('@', "")))
-        .filter(|p| !p.is_empty())
-        .collect();
-    if !tags.is_empty() {
-        body.push_str(&format!("ccing {}", tags.join(", ")));
-        if !plain.is_empty() {
-            body.push_str(&format!(" (also: {})", plain.join(", ")));
-        }
-        body.push_str("\n\n");
-    } else if !plain.is_empty() {
-        body.push_str(&format!("Also contributed: {}\n\n", plain.join(", ")));
-    }
-    body.push_str("Here is the high-level summary of changes organized by feature area:\n\n");
+    body.push_str(&opening_line(summary));
+    body.push_str("\n\n");
 
     // Themes in first-seen order; features without one go last under "Other".
     let theme_of = |f: &Feature| -> String {
@@ -130,25 +220,32 @@ pub fn render(summary: &Summary, resolved: &Resolved, changes: &[Change]) -> (St
     for (n, theme) in themes.iter().enumerate() {
         body.push_str(&format!("### **{}. {theme}**\n\n", n + 1));
         for f in summary.features.iter().filter(|f| theme_of(f) == *theme) {
-            let mut refs: Vec<u64> = Vec::new();
+            let mut refs: Vec<(u64, &str)> = Vec::new();
             for r in f.refs.iter().filter_map(|r| r.checked_sub(1)) {
-                let iid = changes.get(r).and_then(|c| c.mr.as_ref()).map(|m| m.iid);
-                if let Some(iid) = iid.filter(|i| *i > 0 && !refs.contains(i)) {
-                    refs.push(iid);
+                let mr = changes.get(r).and_then(|c| c.mr.as_ref());
+                if let Some(m) = mr.filter(|m| m.iid > 0 && !refs.iter().any(|(i, _)| *i == m.iid))
+                {
+                    refs.push((m.iid, m.web_url.as_str()));
                 }
             }
             let refs: Vec<String> = refs
                 .iter()
                 .take(MAX_REFS)
-                .map(|i| format!("`#{i}`"))
+                .map(|(iid, url)| link(*iid, url))
                 .collect();
             let cited = if refs.is_empty() {
                 String::new()
             } else {
                 format!(" ({})", refs.join(", "))
             };
+            let credit = credit(f, resolved, changes);
+            let by = if credit.is_empty() {
+                String::new()
+            } else {
+                format!(" \u{b7} {credit}")
+            };
             body.push_str(&format!(
-                "* **{}:** {}{cited}\n",
+                "* **{}:** {}{cited}{by}\n",
                 clean(&f.name),
                 clean(&f.summary)
             ));
@@ -181,6 +278,7 @@ mod tests {
                 iid,
                 title: format!("change {iid}"),
                 author_username: "ann".into(),
+                web_url: format!("https://g/app/-/merge_requests/{iid}"),
             }),
         }
     }
@@ -219,10 +317,91 @@ mod tests {
     }
 
     #[test]
-    fn the_description_follows_the_team_release_format() {
+    fn the_description_follows_the_release_format() {
         let (_, d) = render(&summary(), &resolved(), &changes());
-        let want = "ccing @ann, @bo (also: Cy)\n\nHere is the high-level summary of changes organized by feature area:\n\n### **1. Orders**\n\n* **Order export:** Customers can download their orders as CSV. (`#1351`, `#1352`)\n* **Faster search:** Results load in under a second.\n\n### **2. Money**\n\n* **Billing:** Invoices show the right tax.\n";
+        let open = opening_line(&summary());
+        let want = format!("{open}\n\n### **1. Orders**\n\n* **Order export:** Customers can download their orders as CSV. ([#1351](https://g/app/-/merge_requests/1351), [#1352](https://g/app/-/merge_requests/1352)) \u{b7} @ann\n* **Faster search:** Results load in under a second. \u{b7} @ann\n\n### **2. Money**\n\n* **Billing:** Invoices show the right tax.\n");
         assert_eq!(d, want);
+        assert!(
+            !d.contains("ccing") && !d.contains("Also contributed"),
+            "{d}"
+        );
+    }
+
+    #[test]
+    fn the_opening_line_is_stable_per_release_and_varies_across_releases() {
+        let s = summary();
+        assert_eq!(opening_line(&s), opening_line(&s));
+        let mut seen = std::collections::HashSet::new();
+        for n in 0..40 {
+            let mut other = summary();
+            other.features[0].name = format!("Feature {n}");
+            seen.insert(opening_line(&other));
+        }
+        assert!(seen.len() >= 4, "{seen:?}");
+        assert!(
+            seen.iter().all(|l| l.ends_with(':') || l.ends_with('.')),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn the_focus_line_joins_the_pool_only_for_three_featured_items() {
+        let mut s = summary();
+        s.title_brief = "order export, faster search".into();
+        for n in 0..60 {
+            s.features[0].name = format!("F{n}");
+            assert!(!opening_line(&s).contains("focuses on"));
+        }
+        s.title_brief = "order export, faster search, billing fixes".into();
+        let focus = (0..200).any(|n| {
+            s.features[0].name = format!("F{n}");
+            opening_line(&s)
+                == "This release focuses on order export, faster search, and billing fixes. The details, by area:"
+        });
+        assert!(focus, "a three-item brief can produce the focus line");
+    }
+
+    #[test]
+    fn each_feature_credits_its_authors_not_a_ccing_line() {
+        let mut ch = changes();
+        ch[1].mr.as_mut().unwrap().author_username = "bo".into();
+        ch[1].author_name = "Bo".into();
+        ch[2].author_name = "Cy".into();
+        let r = Resolved {
+            tags: vec!["ann".into(), "bo".into()],
+            plain: vec!["Cy".into()],
+            mentions: vec![("ann".into(), "ann".into()), ("bo".into(), "bo".into())],
+        };
+        let mut s = summary();
+        s.features[1].refs = vec![3];
+        let (_, d) = render(&s, &r, &ch);
+        assert!(
+            d.contains("CSV. ([#1351]") && d.contains(") \u{b7} @ann @bo\n"),
+            "{d}"
+        );
+        assert!(
+            d.contains("second. \u{b7} Cy\n"),
+            "a plain name stays unmentioned: {d}"
+        );
+        assert_eq!(d.matches("@ann").count(), 1, "{d}");
+    }
+
+    #[test]
+    fn an_unusable_page_url_falls_back_to_the_number() {
+        assert_eq!(
+            link(7, "https://g/a/-/merge_requests/7"),
+            "[#7](https://g/a/-/merge_requests/7)"
+        );
+        for bad in [
+            "",
+            "javascript:alert(1)",
+            "https://g/a b",
+            "https://g/a)x",
+            "https://g/<x>",
+        ] {
+            assert_eq!(link(7, bad), "`#7`", "{bad}");
+        }
     }
 
     #[test]
@@ -230,14 +409,17 @@ mod tests {
         let mut s = summary();
         s.features[0].refs = vec![0, 1, 1, 2, 3, 99];
         let (_, d) = render(&s, &resolved(), &changes());
-        assert!(d.contains("CSV. (`#1351`, `#1352`)\n"), "{d}");
-        assert_eq!(d.matches("`#").count(), 2, "{d}");
+        assert!(
+            d.contains("[#1351](https://g/app/-/merge_requests/1351), [#1352]("),
+            "{d}"
+        );
+        assert_eq!(d.matches("](https").count(), 2, "{d}");
         s.features[0].refs = vec![1, 2];
         let many: Vec<Change> = (1..=9).map(change).collect();
         s.features[0].refs = (1..=9).collect();
         let (_, d) = render(&s, &resolved(), &many);
         assert!(
-            d.contains("(`#1`, `#2`, `#3`, `#4`, `#5`)"),
+            d.contains("[#1](https://g/app/-/merge_requests/1), [#2](https://g/app/-/merge_requests/2), [#3](https://g/app/-/merge_requests/3), [#4](https://g/app/-/merge_requests/4), [#5](https://g/app/-/merge_requests/5))"),
             "capped at five: {d}"
         );
     }
@@ -253,16 +435,11 @@ mod tests {
     }
 
     #[test]
-    fn nobody_to_tag_means_no_ccing_line() {
+    fn nobody_to_tag_means_no_credit_and_no_mentions() {
         let (_, d) = render(&summary(), &Resolved::default(), &changes());
-        assert!(d.starts_with("Here is the high-level summary"), "{d}");
-        let r = Resolved {
-            plain: vec!["Zed".into()],
-            ..Resolved::default()
-        };
-        let (_, d) = render(&summary(), &r, &changes());
-        assert!(d.starts_with("Also contributed: Zed\n\n"), "{d}");
+        assert!(d.starts_with(&opening_line(&summary())), "{d}");
         assert_eq!(d.matches('@').count(), 0, "{d}");
+        assert!(!d.contains('\u{b7}'), "{d}");
     }
 
     #[test]
@@ -312,7 +489,7 @@ mod tests {
                 "{text}"
             );
             assert!(
-                !text.contains("](") && !text.contains("@all") && !text.contains("!["),
+                !text.contains("](http://e") && !text.contains("@all") && !text.contains("!["),
                 "{text}"
             );
             assert!(
@@ -324,6 +501,6 @@ mod tests {
             );
         }
         assert!(!d.lines().any(|l| l.trim_start().starts_with('/')), "{d}");
-        assert!(d.starts_with("ccing @ann, @bo (also: Cy)\n"), "{d}");
+        assert!(!d.contains("ccing"), "{d}");
     }
 }
