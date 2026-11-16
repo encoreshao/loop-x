@@ -574,6 +574,39 @@ fn a_disconnect_reconnects_and_calls_the_catch_up_hook_once() {
 }
 
 #[test]
+fn a_silent_socket_is_dropped_and_reconnected_with_catch_up() {
+    let d = tempfile::tempdir().unwrap();
+    let runs = Arc::new(Runs::default());
+    let scripts: Vec<Script> = vec![
+        // Connection 1: hello, then silence (what a socket looks like after
+        // the Mac slept): no ping, no frame, never closed.
+        Box::new(move |ws| {
+            hello(ws);
+            hold(ws);
+        }),
+        Box::new(move |ws| {
+            hello(ws);
+            hold(ws);
+        }),
+    ];
+    let (url, server) = fake_socket_server_seq(scripts);
+    let http = slack_http(&url, |_| None);
+    let hooks: Arc<Mutex<Vec<DateTime<Utc>>>> = Arc::default();
+    let seen = hooks.clone();
+    let mut l = listener(d.path(), &http, &runs).on_reconnect(move |c| {
+        seen.lock().unwrap().push(c.offline_since);
+    });
+    l.idle_limit = Duration::from_millis(300);
+    let (stop, h) = start(l);
+    wait_until("a second connection", || {
+        count(&http, "apps.connections.open") >= 2
+    });
+    wait_until("the catch-up hook", || hooks.lock().unwrap().len() == 1);
+    assert_eq!(stop_and_join(&stop, h), Exit::Shutdown);
+    server.join().unwrap();
+}
+
+#[test]
 fn a_connection_that_drops_before_hello_is_not_a_reconnect() {
     let d = tempfile::tempdir().unwrap();
     let runs = Arc::new(Runs::default());

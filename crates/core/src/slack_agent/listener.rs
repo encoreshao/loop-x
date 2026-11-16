@@ -238,6 +238,8 @@ pub struct Listener<W: SlackApi> {
     first_error: Arc<Mutex<Option<String>>>,
     /// Longest wait on the socket before the stop flag is checked again.
     pub tick: Duration,
+    /// A socket silent for longer than this is treated as dead.
+    pub idle_limit: Duration,
     /// See [`UNAUTHORIZED_WINDOW`].
     pub unauthorized_window: Duration,
     backoff: BackoffFn,
@@ -251,6 +253,10 @@ pub struct Listener<W: SlackApi> {
 }
 
 /// Runs a listener until `stop` is set or it cannot go on.
+/// How long a Socket Mode connection may stay completely silent (pings
+/// included) before the listener reconnects.
+pub const IDLE_LIMIT: Duration = Duration::from_secs(120);
+
 pub fn run_listener<W: SlackApi>(
     cfg: Config,
     web: W,
@@ -270,6 +276,7 @@ impl<W: SlackApi> Listener<W> {
             executor,
             first_error,
             tick: Duration::from_secs(1),
+            idle_limit: IDLE_LIMIT,
             unauthorized_window: UNAUTHORIZED_WINDOW,
             backoff: Box::new(|attempt| socket::backoff(attempt) + jitter()),
             catch_up: None,
@@ -333,6 +340,7 @@ impl<W: SlackApi> Listener<W> {
             executor,
             first_error,
             tick,
+            idle_limit,
             unauthorized_window,
             backoff,
             catch_up,
@@ -367,6 +375,7 @@ impl<W: SlackApi> Listener<W> {
             sticky_error: None,
             catch_up_note: Arc::new(Mutex::new(None)),
             tick,
+            idle_limit,
             backoff,
             catch_up,
             catch_up_noted: Arc::new(AtomicBool::new(false)),
@@ -399,6 +408,7 @@ struct Run<W: SlackApi> {
     /// "catch-up unavailable (missing scope)" until a later pass succeeds.
     catch_up_note: Arc<Mutex<Option<String>>>,
     tick: Duration,
+    idle_limit: Duration,
     backoff: BackoffFn,
     catch_up: Option<CatchUpHook<W>>,
     /// Set once the missing-scope catch-up note was logged.
@@ -522,6 +532,12 @@ impl<W: SlackApi> Run<W> {
                 return Ended::BotTokenRejected;
             }
             self.surface_errors();
+            // Slack keeps a live socket busy with pings; one that has gone quiet
+            // (the Mac slept, the network changed) is dead, so reconnect and
+            // let catch-up offer what was missed.
+            if client.idle_for() > self.idle_limit {
+                return dropped(SocketError::Closed, live);
+            }
             let frame = match client.next(self.tick) {
                 // Checked again before any work: no envelope is handled (and
                 // no run started) once the bot token has been rejected.

@@ -98,6 +98,10 @@ fn io_error(e: WsError) -> SocketError {
 /// A connected Socket Mode websocket (blocking, one reader).
 pub struct SocketClient {
     ws: WebSocket<MaybeTlsStream<TcpStream>>,
+    /// When anything last arrived (data or control frame). A socket that
+    /// survived a laptop sleep looks `ESTABLISHED` yet is dead, and only
+    /// silence reveals it.
+    last_rx: Instant,
 }
 
 /// Bound on the TCP connect and on each read/write of the websocket handshake.
@@ -153,12 +157,20 @@ impl SocketClient {
             .and_then(|_| stream.set_write_timeout(Some(timeout)))
             .map_err(|e| SocketError::Io(e.to_string()))?;
         match tungstenite::client_tls(url, stream) {
-            Ok((ws, _)) => Ok(Self { ws }),
+            Ok((ws, _)) => Ok(Self {
+                ws,
+                last_rx: Instant::now(),
+            }),
             Err(HandshakeError::Failure(e)) => Err(connect_error(e)),
             Err(HandshakeError::Interrupted(_)) => {
                 Err(SocketError::Io("websocket handshake timed out".into()))
             }
         }
+    }
+
+    /// How long since the last frame of any kind arrived.
+    pub fn idle_for(&self) -> Duration {
+        self.last_rx.elapsed()
     }
 
     fn tcp(&self) -> Option<&TcpStream> {
@@ -184,7 +196,11 @@ impl SocketClient {
             // A zero timeout means "block forever" to the OS; never pass one.
             tcp.set_read_timeout(Some(left.max(Duration::from_millis(1))))
                 .map_err(|e| SocketError::Io(e.to_string()))?;
-            match self.ws.read() {
+            let read = self.ws.read();
+            if read.is_ok() {
+                self.last_rx = Instant::now();
+            }
+            match read {
                 Ok(Message::Text(t)) => {
                     return Ok(Some(parse_frame(&t).unwrap_or(Frame::Other)));
                 }
@@ -389,6 +405,34 @@ mod tests {
         assert!(took < Duration::from_secs(2), "{took:?}");
         done_tx.send(()).unwrap();
         drop(reader.join().unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn idle_for_counts_silence_and_resets_on_any_frame_even_a_ping() {
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let (url, server) = fake_socket_server(move |ws| {
+            let _ = go_rx.recv();
+            std::thread::sleep(Duration::from_millis(250));
+            ws.send(Message::Ping(vec![1])).unwrap();
+            let _ = ws.flush();
+            while ws.read().is_ok() {}
+        });
+        let mut client = SocketClient::connect(&url).unwrap();
+        assert_eq!(client.next(Duration::from_millis(300)).unwrap(), None);
+        assert!(
+            client.idle_for() >= Duration::from_millis(300),
+            "{:?}",
+            client.idle_for()
+        );
+        go_tx.send(()).unwrap();
+        assert_eq!(client.next(Duration::from_millis(300)).unwrap(), None);
+        assert!(
+            client.idle_for() < Duration::from_millis(200),
+            "{:?}",
+            client.idle_for()
+        );
+        drop(client);
         server.join().unwrap();
     }
 

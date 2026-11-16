@@ -91,6 +91,7 @@ fn listen(args: &[String]) -> ExitCode {
     };
     let web = SlackWeb::new(loaded.bot, loaded.app, Arc::new(UreqClient::default()));
     let stop = stop_on_signals();
+    keep_awake_on_ac();
     eprintln!("loopx slack: listening as account {}", loaded.account.id);
     let exit = run_listener(cfg, web, chat_runtime(&state), stop);
     match &exit {
@@ -102,6 +103,23 @@ fn listen(args: &[String]) -> ExitCode {
         }
     }
     ExitCode::from(exit_code(&exit))
+}
+
+/// Stops the Mac sleeping (lid closed included) while it is on AC power, for as
+/// long as this process lives: a sleeping Mac kills the Slack socket and every
+/// mention sent meanwhile is lost. `-s` only applies on AC, so on battery the
+/// Mac sleeps as usual; `-w` ends the assertion when the listener exits.
+fn keep_awake_on_ac() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let pid = std::process::id().to_string();
+    let _ = std::process::Command::new("/usr/bin/caffeinate")
+        .args(["-i", "-s", "-w", &pid])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// The process exit code for how the listener ended. launchd runs the
