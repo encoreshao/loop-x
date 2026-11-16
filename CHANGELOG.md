@@ -73,6 +73,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Slack agent: when a private answer cannot be sent by DM, the notice now says why (for example the Slack error from opening the DM) and the listener log records it, instead of one generic line.
 - Slack agent replies now render Markdown the way Slack does: `**bold**` and headings show as bold, and `[label](url)` links are clickable; code spans and blocks are left as written.
 - The Memory page now updates by itself while a profile job runs: the step text and a progress bar move in place (also on the overview cards and the sync line), and the page reloads once when the job ends. If a section editor, dialog or typed text is open it is left alone and a "Finished — reload to see the result" banner appears instead. It used to say "reload the page to see the result" and stay on "Working…" until you left the page and came back.
 - Slack reports are no longer sent twice after a timed-out reply (a later layout is tried only when Slack answers with an HTTP error), a failed post no longer writes the webhook URL to the log, and a Build all profiles pass where every project was already running sends no "drafts ready" message.

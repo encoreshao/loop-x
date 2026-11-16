@@ -436,12 +436,27 @@ impl<P: Poster> Executor<P> {
         if !private {
             return self.post_parts(&req.channel, Some(&req.thread_ts), progress, &text);
         }
-        let sent = match self.final_call(|| self.poster.open_dm(&req.user)) {
-            Ok(dm) => self.post_parts(&dm, None, None, &text),
-            Err(_) => false,
+        // Keep why the DM failed: opening and posting fail for different
+        // reasons (a missing `im:write` scope, a closed account, a bad user id).
+        let failure = match self.final_call(|| self.poster.open_dm(&req.user)) {
+            Ok(dm) => {
+                if self.post_parts(&dm, None, None, &text) {
+                    None
+                } else {
+                    Some("posting to the DM failed".to_string())
+                }
+            }
+            Err(e) => Some(format!("conversations.open failed: {e}")),
         };
-        let notice = if sent { DM_NOTICE } else { DM_FAILED };
-        let _ = self.replace(req, progress, notice);
+        let sent = failure.is_none();
+        let notice = match &failure {
+            None => DM_NOTICE.to_string(),
+            Some(why) => {
+                eprintln!("loopx slack: DM delivery failed: {why}");
+                format!("{DM_FAILED} ({why})")
+            }
+        };
+        let _ = self.replace(req, progress, &notice);
         sent
     }
 
