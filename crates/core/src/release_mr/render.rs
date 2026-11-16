@@ -404,6 +404,56 @@ mod tests {
         }
     }
 
+    /// The worked example from the encore-skills `release-mr` skill
+    /// (`examples/loopx-release.md`), rendered by this code. Authors are made up.
+    #[test]
+    fn a_loopx_release_renders_like_the_skill_example() {
+        let url = "https://gitlab.example.com/acme/loop-x/-/merge_requests";
+        let mr = |iid: u64, by: &str| Change {
+            title: format!("change {iid}"),
+            author_name: by.into(),
+            author_email: String::new(),
+            mr: Some(MrInfo {
+                iid,
+                title: format!("change {iid}"),
+                author_username: by.into(),
+                web_url: format!("{url}/{iid}"),
+            }),
+        };
+        let changes = vec![
+            mr(398, "priya"),
+            mr(405, "jonas"),
+            mr(409, "jonas"),
+            mr(412, "mira"),
+            mr(418, "tomas"),
+            mr(421, "priya"),
+        ];
+        let s = Summary {
+            title_brief: "slack agent, chat folders, project memory graph".into(),
+            features: vec![
+                feature("Slack Agent", "Mention LoopX in a channel, thread or DM and it starts a loop or an ad-hoc task on your Mac, then replies in the thread with progress and the result.", "Slack & Agents", &[4, 5]),
+                feature("Cursor Agent for Creator", "Generate, Showcase and Retry now run on Cursor Agent when it's your selected AI CLI, and the job log follows its output.", "Slack & Agents", &[6]),
+                feature("Chat History Folders", "File chats into folders by dragging them over or using the folder menu on each chat, and rename or delete a folder without losing its chats.", "Chat", &[2, 3]),
+                feature("Project Memory Graph", "The Memory page now has a graph of projects, linked only where there is evidence, with zoom, filters and a one-page summary for each node.", "Insights & Memory", &[1]),
+            ],
+        };
+        let r = Resolved {
+            tags: ["mira", "tomas", "priya", "jonas"]
+                .map(String::from)
+                .to_vec(),
+            ..Resolved::default()
+        };
+        let (title, d) = render(&s, &r, &changes);
+        assert_eq!(
+            title,
+            "Release: slack agent, chat folders, project memory graph"
+        );
+        let (open, body) = d.split_once("\n\n").unwrap();
+        assert_eq!(open, opening_line(&s));
+        let want = format!("### **1. Slack & Agents**\n\n* **Slack Agent:** Mention LoopX in a channel, thread or DM and it starts a loop or an ad-hoc task on your Mac, then replies in the thread with progress and the result. ([#412]({url}/412), [#418]({url}/418)) \u{b7} @mira @tomas\n* **Cursor Agent for Creator:** Generate, Showcase and Retry now run on Cursor Agent when it's your selected AI CLI, and the job log follows its output. ([#421]({url}/421)) \u{b7} @priya\n\n### **2. Chat**\n\n* **Chat History Folders:** File chats into folders by dragging them over or using the folder menu on each chat, and rename or delete a folder without losing its chats. ([#405]({url}/405), [#409]({url}/409)) \u{b7} @jonas\n\n### **3. Insights & Memory**\n\n* **Project Memory Graph:** The Memory page now has a graph of projects, linked only where there is evidence, with zoom, filters and a one-page summary for each node. ([#398]({url}/398)) \u{b7} @priya\n");
+        assert_eq!(body, want);
+    }
+
     #[test]
     fn references_come_from_real_merge_requests_only() {
         let mut s = summary();
