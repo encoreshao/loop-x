@@ -2257,5 +2257,11 @@
   "It cannot start: {reason}. launchd tries again every 30 seconds and it keeps failing until this is fixed; fix it, Save, then Restart.": "起動できません: {reason}。launchd は 30 秒ごとに再試行しますが、これを直すまで失敗し続けます。直して保存し、再起動してください。",
   "The background listener keeps the old settings until it restarts: restart it with loopx slack restart.": "バックグラウンドリスナーは再起動するまで以前の設定のままです: loopx slack restart で再起動してください。",
   "Restarted the background listener so the change takes effect": "変更を反映するためにバックグラウンドリスナーを再起動しました",
-  "Everyone on the allowlist can use your agent as you: they get replies with your mail and calendar data by direct message and can answer your approvals.": "許可リストの全員があなたとしてエージェントを使えます。あなたのメールとカレンダーのデータを含む返信をダイレクトメッセージで受け取り、あなたの承認にも応答できます。"
+  "Everyone on the allowlist can use your agent as you: they get replies with your mail and calendar data by direct message and can answer your approvals.": "許可リストの全員があなたとしてエージェントを使えます。あなたのメールとカレンダーのデータを含む返信をダイレクトメッセージで受け取り、あなたの承認にも応答できます。",
+  "New folder": "新規フォルダ",
+  "Folder name": "フォルダ名",
+  "Create": "作成",
+  "Rename folder": "フォルダ名を変更",
+  "Delete folder": "フォルダを削除",
+  "Drag chats here": "ここにチャットをドラッグ"
 }

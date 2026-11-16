@@ -1170,6 +1170,96 @@ if (!window.__loopPendingCardClicks) {
   });
 })();
 (function() {
+  // Chat folders in the history list (the Dashboard drawer and the AI panel
+  // render the same fragment): create / rename / delete a folder and drag a
+  // chat onto one. Delegated on the document because the list is swapped
+  // wholesale after every change.
+  var LISTS = '#chat-history-list, #ai-panel-history-list';
+  var dragged = null;
+  function listOf(el) { return el.closest(LISTS); }
+  function reload(list) {
+    var root = list.querySelector('.chat-history-root');
+    var active = root ? root.getAttribute('data-active') || '' : '';
+    return fetch('/activity/sessions/fragment?session=' + encodeURIComponent(active))
+      .then(function(r) { return r.text(); })
+      .then(function(markup) { list.innerHTML = markup; });
+  }
+  function post(list, url, fields) {
+    var token = list.querySelector('input[name="csrf_token"]');
+    var body = new URLSearchParams(fields);
+    body.set('csrf_token', token ? token.value : '');
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'fetch', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
+    }).then(function() { return reload(list); });
+  }
+  function toggleForm(form, show) {
+    form.hidden = !show;
+    if (show) {
+      var input = form.querySelector('input[type="text"]');
+      if (input) { input.focus(); input.select(); }
+    }
+  }
+  document.addEventListener('click', function(ev) {
+    var add = ev.target.closest('[data-folder-new]');
+    if (add) { toggleForm(add.parentNode.querySelector('.chat-folder-form'), true); return; }
+    var rename = ev.target.closest('[data-folder-rename]');
+    if (rename) { toggleForm(rename.closest('.chat-folder').querySelector('.chat-folder-rename'), true); return; }
+    var cancel = ev.target.closest('[data-folder-cancel]');
+    if (cancel) toggleForm(cancel.closest('form'), false);
+  });
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key !== 'Escape') return;
+    var form = ev.target.closest && ev.target.closest('.chat-folder-form');
+    if (form && !form.hidden) { ev.stopPropagation(); toggleForm(form, false); }
+  }, true);
+  document.addEventListener('submit', function(ev) {
+    var form = ev.target.closest('form[data-history-form]');
+    var list = form && listOf(form);
+    if (!list) return;
+    ev.preventDefault();
+    var fields = {};
+    new FormData(form).forEach(function(v, k) { if (k !== 'csrf_token') fields[k] = v; });
+    post(list, form.getAttribute('action'), fields).catch(function() {});
+  });
+  document.addEventListener('dragstart', function(ev) {
+    var row = ev.target.closest && ev.target.closest('.chat-history-row[data-session-id]');
+    if (!row || !listOf(row)) return;
+    dragged = row;
+    ev.dataTransfer.effectAllowed = 'move';
+    ev.dataTransfer.setData('text/plain', row.getAttribute('data-session-id'));
+    row.classList.add('is-dragging');
+  });
+  document.addEventListener('dragend', function() {
+    if (dragged) dragged.classList.remove('is-dragging');
+    dragged = null;
+    document.querySelectorAll('.is-drop-target').forEach(function(el) { el.classList.remove('is-drop-target'); });
+  });
+  function dropZone(ev) {
+    var zone = ev.target.closest && ev.target.closest('[data-folder-id]');
+    return dragged && zone && listOf(zone) === listOf(dragged) ? zone : null;
+  }
+  document.addEventListener('dragover', function(ev) {
+    var zone = dropZone(ev);
+    if (!zone) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'move';
+    document.querySelectorAll('.is-drop-target').forEach(function(el) { if (el !== zone) el.classList.remove('is-drop-target'); });
+    zone.classList.add('is-drop-target');
+  });
+  document.addEventListener('drop', function(ev) {
+    var zone = dropZone(ev);
+    if (!zone) return;
+    ev.preventDefault();
+    var row = dragged;
+    var folder = zone.getAttribute('data-folder-id') || '';
+    var list = listOf(row);
+    if (row.closest('[data-folder-id]') === zone) return;
+    post(list, '/activity/sessions/' + encodeURIComponent(row.getAttribute('data-session-id')) + '/move', { folder: folder }).catch(function() {});
+  });
+})();
+(function() {
   function showFieldError(field) {
     var bubble = document.getElementById('field-error-bubble');
     if (!bubble) return;

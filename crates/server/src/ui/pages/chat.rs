@@ -36,6 +36,10 @@ pub fn register(r: &mut Registry) {
     r.post("/activity/messages", post_message);
     r.post("/activity/messages/:timestamp/delete", post_delete_message);
     r.post("/activity/sessions/:id/delete", post_delete_session);
+    r.post("/activity/sessions/:id/move", post_move_session);
+    r.post("/activity/folders", post_create_folder);
+    r.post("/activity/folders/:id/rename", post_rename_folder);
+    r.post("/activity/folders/:id/delete", post_delete_folder);
     r.post("/activity/new-chat", post_new_chat);
     r.post("/activity/chat/approve", post_approve);
     r.post("/activity/chat/reject", post_reject);
@@ -409,22 +413,156 @@ fn history_group(last_at: &str, today: NaiveDate) -> &'static str {
     }
 }
 
-/// `render_chat_history_fragment`.
-pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> String {
-    let sessions = store(state).list_chat_sessions();
-    if sessions.is_empty() {
-        return format!("<p class='chat-history-empty'>{}</p>", esc_t(lang, "No chats yet"));
-    }
+/// One chat in the history list: the link, its time, delete, and (for chats that have a
+/// record) a drag handle for filing it in a folder.
+fn session_row_html(
+    state: &UiState,
+    lang: Lang,
+    s: &loopx_core::messages::SessionInfo,
+    active: Option<&str>,
+    viewing_input: &str,
+) -> String {
     let now = state.now();
-    let today = now.date_naive();
     let csrf_input = csrf_input(state);
+    let is_active = Some(s.id.as_str()) == active;
+    let active_cls = if is_active { " is-active" } else { "" };
+    let current = if is_active { " aria-current='page'" } else { "" };
+    let draggable = if s.id == loopx_core::messages::LEGACY_CHAT_SESSION_ID {
+        String::new()
+    } else {
+        format!(" draggable='true' data-session-id='{}'", pyfmt::escape(&s.id))
+    };
+    let quoted = pyfmt::quote(&s.id, "");
+    let href = format!("/?session={quoted}");
+    let confirm = pyfmt::escape(&i18n::t(
+        lang,
+        "Delete the chat \u{201c}{title}\u{201d}? Its messages will be removed.",
+        &[("title", &s.title)],
+    ));
+    format!(
+        "<div class='chat-history-row'{draggable}>\
+         <a class='chat-history-item{active_cls}' href='{}'{current} draggable='false'>\
+         <span class='chat-history-title'>{}</span>\
+         <span class='chat-history-time'>{}</span>\
+         </a>\
+         <form method='post' action='/activity/sessions/{}/delete' class='chat-history-delete-form'>\
+         {csrf_input}{viewing_input}\
+         <button type='submit' class='message-action-btn' aria-label='{}'\
+         \u{20}title='{}' data-confirm=\"{confirm}\">\
+         <svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg></button>\
+         </form>\
+         </div>",
+        pyfmt::escape(&href),
+        pyfmt::escape(&s.title),
+        pyfmt::escape(&relative_time(now, &s.last_at)),
+        pyfmt::escape(&quoted),
+        pyfmt::escape(&i18n::t(lang, "Delete chat {title}", &[("title", &s.title)])),
+        esc_t(lang, "Delete chat"),
+    )
+}
+
+/// The "New folder" button and its inline name form.
+fn new_folder_html(state: &UiState, lang: Lang, viewing_input: &str) -> String {
+    format!(
+        "<div class='chat-history-toolbar'>\
+         <button type='button' class='chat-folder-new-btn' data-folder-new>\
+         <svg class='icon' aria-hidden='true'><use href='#i-folder'/></svg>{new_folder}</button>\
+         <form method='post' action='/activity/folders' class='chat-folder-form' data-history-form hidden>\
+         {csrf}{viewing_input}\
+         <input type='text' name='name' class='chat-folder-input' maxlength='40' required \
+         autocomplete='off' placeholder='{placeholder}' aria-label='{placeholder}'>\
+         <button type='submit' class='chat-folder-save'>{create}</button>\
+         <button type='button' class='chat-folder-cancel' data-folder-cancel>{cancel}</button>\
+         </form></div>",
+        csrf = csrf_input(state),
+        new_folder = esc_t(lang, "New folder"),
+        placeholder = esc_t(lang, "Folder name"),
+        create = esc_t(lang, "Create"),
+        cancel = esc_t(lang, "Cancel"),
+    )
+}
+
+/// One folder: its header (rename, delete) and the chats filed in it. Dropping a chat on
+/// the section files it here.
+fn folder_html(
+    state: &UiState,
+    lang: Lang,
+    folder: &loopx_core::messages::FolderInfo,
+    members: &[&loopx_core::messages::SessionInfo],
+    active: Option<&str>,
+    viewing_input: &str,
+) -> String {
+    let csrf = csrf_input(state);
+    let id = pyfmt::escape(&folder.id);
+    let name = pyfmt::escape(&folder.name);
+    let rows: String = if members.is_empty() {
+        format!("<p class='chat-folder-empty'>{}</p>", esc_t(lang, "Drag chats here"))
+    } else {
+        members
+            .iter()
+            .map(|s| session_row_html(state, lang, s, active, viewing_input))
+            .collect()
+    };
+    format!(
+        "<section class='chat-folder' data-folder-id='{id}'>\
+         <div class='chat-folder-head'>\
+         <svg class='icon chat-folder-icon' aria-hidden='true'><use href='#i-folder'/></svg>\
+         <span class='chat-folder-name'>{name}</span>\
+         <span class='chat-folder-count'>{count}</span>\
+         <button type='button' class='message-action-btn' data-folder-rename aria-label='{rename}' title='{rename}'>\
+         <svg class='icon' aria-hidden='true'><use href='#i-edit'/></svg></button>\
+         <form method='post' action='/activity/folders/{id}/delete' class='chat-folder-delete-form' data-history-form>\
+         {csrf}{viewing_input}\
+         <button type='submit' class='message-action-btn' aria-label='{delete}' title='{delete}'>\
+         <svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg></button></form>\
+         </div>\
+         <form method='post' action='/activity/folders/{id}/rename' class='chat-folder-form chat-folder-rename' data-history-form hidden>\
+         {csrf}{viewing_input}\
+         <input type='text' name='name' class='chat-folder-input' maxlength='40' required \
+         autocomplete='off' value='{name}' aria-label='{rename}'>\
+         <button type='submit' class='chat-folder-save'>{save}</button>\
+         <button type='button' class='chat-folder-cancel' data-folder-cancel>{cancel}</button>\
+         </form>\
+         {rows}</section>",
+        count = members.len(),
+        rename = esc_t(lang, "Rename folder"),
+        delete = esc_t(lang, "Delete folder"),
+        save = esc_t(lang, "Save"),
+        cancel = esc_t(lang, "Cancel"),
+    )
+}
+
+/// `render_chat_history_fragment`: folders first, then the unfiled chats by date.
+pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> String {
+    let store = store(state);
+    let sessions = store.list_chat_sessions();
+    let folders = store.list_chat_folders();
+    let today = state.now().date_naive();
     let viewing_input = format!(
         "<input type='hidden' name='viewing' value='{}'>",
         pyfmt::escape(active.unwrap_or(""))
     );
-    let mut parts = String::new();
-    for group in ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"] {
+    let mut parts = format!(
+        "<div class='chat-history-root' data-active='{}'>{}{}",
+        pyfmt::escape(active.unwrap_or("")),
+        csrf_input(state),
+        new_folder_html(state, lang, &viewing_input)
+    );
+    if sessions.is_empty() && folders.is_empty() {
+        parts.push_str(&format!("<p class='chat-history-empty'>{}</p></div>", esc_t(lang, "No chats yet")));
+        return parts;
+    }
+    for folder in &folders {
         let members: Vec<_> = sessions
+            .iter()
+            .filter(|s| s.folder.as_deref() == Some(folder.id.as_str()))
+            .collect();
+        parts.push_str(&folder_html(state, lang, folder, &members, active, &viewing_input));
+    }
+    parts.push_str("<div class='chat-history-ungrouped' data-folder-id=''>");
+    let unfiled: Vec<_> = sessions.iter().filter(|s| s.folder.is_none()).collect();
+    for group in ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"] {
+        let members: Vec<_> = unfiled
             .iter()
             .filter(|s| history_group(&s.last_at, today) == group)
             .collect();
@@ -433,38 +571,10 @@ pub fn history_fragment(state: &UiState, lang: Lang, active: Option<&str>) -> St
         }
         parts.push_str(&format!("<h3 class='chat-history-group'>{}</h3>", esc_t(lang, group)));
         for s in members {
-            let is_active = Some(s.id.as_str()) == active;
-            let active_cls = if is_active { " is-active" } else { "" };
-            let current = if is_active { " aria-current='page'" } else { "" };
-            let quoted = pyfmt::quote(&s.id, "");
-            let href = format!("/?session={quoted}");
-            let confirm = pyfmt::escape(&i18n::t(
-                lang,
-                "Delete the chat \u{201c}{title}\u{201d}? Its messages will be removed.",
-                &[("title", &s.title)],
-            ));
-            parts.push_str(&format!(
-                "<div class='chat-history-row'>\
-                 <a class='chat-history-item{active_cls}' href='{}'{current}>\
-                 <span class='chat-history-title'>{}</span>\
-                 <span class='chat-history-time'>{}</span>\
-                 </a>\
-                 <form method='post' action='/activity/sessions/{}/delete' class='chat-history-delete-form'>\
-                 {csrf_input}{viewing_input}\
-                 <button type='submit' class='message-action-btn' aria-label='{}'\
-                 \u{20}title='{}' data-confirm=\"{confirm}\">\
-                 <svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg></button>\
-                 </form>\
-                 </div>",
-                pyfmt::escape(&href),
-                pyfmt::escape(&s.title),
-                pyfmt::escape(&relative_time(now, &s.last_at)),
-                pyfmt::escape(&quoted),
-                pyfmt::escape(&i18n::t(lang, "Delete chat {title}", &[("title", &s.title)])),
-                esc_t(lang, "Delete chat"),
-            ));
+            parts.push_str(&session_row_html(state, lang, s, active, &viewing_input));
         }
     }
+    parts.push_str("</div></div>");
     parts
 }
 
@@ -912,6 +1022,49 @@ fn post_delete_session(ctx: &UiCtx) -> UiResponse {
         "/?history=1".to_string()
     };
     UiResponse::flash_redirect(ok, &message, &location)
+}
+
+/// Where a folder action lands without JavaScript: the history drawer, on the chat being viewed.
+fn history_location(form: &[(String, String)]) -> String {
+    match field(form, "viewing").filter(|v| !v.is_empty()) {
+        Some(v) => format!("/?session={}&history=1", pyfmt::quote(v, "")),
+        None => "/?history=1".to_string(),
+    }
+}
+
+/// The drawer's script posts with `X-Requested-With: fetch` and only needs the verdict;
+/// a plain form post gets the redirect back to the drawer.
+fn history_done(ctx: &UiCtx, ok: bool, form: &[(String, String)]) -> UiResponse {
+    if ctx.req.header("x-requested-with") == Some("fetch") {
+        return UiResponse::json(if ok { 200 } else { 400 }, &json!({"ok": ok}));
+    }
+    UiResponse::redirect(303, &history_location(form))
+}
+
+fn post_create_folder(ctx: &UiCtx) -> UiResponse {
+    let form = form_keep_blank(&ctx.req.body);
+    let ok = store(ctx.state).create_chat_folder(field(&form, "name").unwrap_or("")).is_some();
+    history_done(ctx, ok, &form)
+}
+
+fn post_rename_folder(ctx: &UiCtx) -> UiResponse {
+    let form = form_keep_blank(&ctx.req.body);
+    let ok = store(ctx.state).rename_chat_folder(ctx.param("id"), field(&form, "name").unwrap_or(""));
+    history_done(ctx, ok, &form)
+}
+
+fn post_delete_folder(ctx: &UiCtx) -> UiResponse {
+    let form = form_keep_blank(&ctx.req.body);
+    let ok = store(ctx.state).delete_chat_folder(ctx.param("id"));
+    history_done(ctx, ok, &form)
+}
+
+/// Files a chat in `folder`; a blank `folder` takes it out of its folder.
+fn post_move_session(ctx: &UiCtx) -> UiResponse {
+    let form = form_keep_blank(&ctx.req.body);
+    let folder = field(&form, "folder").filter(|f| !f.is_empty());
+    let ok = store(ctx.state).move_chat_session(ctx.param("id"), folder);
+    history_done(ctx, ok, &form)
 }
 
 fn post_new_chat(ctx: &UiCtx) -> UiResponse {
@@ -1479,5 +1632,104 @@ mod tests {
         let fr = overview_for("kimi", Some("fr"));
         assert!(fr.contains("flash-warning"), "{fr}");
         assert!(!fr.contains("cannot be limited to a fixed set of tools"), "{fr}");
+    }
+
+    fn history_state() -> (tempfile::TempDir, UiState) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), dir.path(), dir.path(), dir.path(), "tok", None);
+        (dir, state)
+    }
+
+    /// A POST through the registry, so the route's CSRF check and URL params apply.
+    fn post_to(state: &UiState, path: &str, body: &str, fetch: bool) -> UiResponse {
+        let mut registry = Registry::default();
+        register(&mut registry);
+        let mut req = UiRequest::new(axum::http::Method::POST, path)
+            .with_body(format!("csrf_token=tok&{body}"))
+            .with_header("content-type", "application/x-www-form-urlencoded");
+        if fetch {
+            req = req.with_header("x-requested-with", "fetch");
+        }
+        registry.dispatch(state, &req).expect("route is registered")
+    }
+
+    #[test]
+    fn the_history_offers_new_folder_even_with_no_chats() {
+        let (_d, state) = history_state();
+        let html = history_fragment(&state, Lang::En, None);
+        assert!(html.contains("data-folder-new"));
+        assert!(html.contains("action='/activity/folders'"));
+        assert!(html.contains("No chats yet"));
+    }
+
+    #[test]
+    fn a_filed_chat_shows_in_its_folder_and_not_in_the_date_groups() {
+        let (_d, state) = history_state();
+        let store = store(&state);
+        let id = store.send_chat_message("quarterly numbers", None).unwrap();
+        let other = store.send_chat_message("unrelated", Some("")).unwrap();
+        let folder = store.create_chat_folder("Finance").unwrap();
+        assert!(store.move_chat_session(&id, Some(&folder)));
+        let html = history_fragment(&state, Lang::En, None);
+        let (folders, ungrouped) = html.split_once("chat-history-ungrouped").unwrap();
+        assert!(folders.contains("Finance") && folders.contains("quarterly numbers"));
+        assert!(!ungrouped.contains("quarterly numbers"));
+        assert!(ungrouped.contains("unrelated"));
+        assert!(html.contains(&format!("data-session-id='{id}'")) && html.contains(&other));
+    }
+
+    #[test]
+    fn an_empty_folder_invites_a_drop_and_a_legacy_chat_is_not_draggable() {
+        let (_d, state) = history_state();
+        store(&state).create_chat_folder("Ideas");
+        assert!(history_fragment(&state, Lang::En, None).contains("Drag chats here"));
+        std::fs::create_dir_all(state.repo_root.join("outputs")).unwrap();
+        std::fs::write(
+            state.repo_root.join("outputs").join("messages.json"),
+            r#"[{"from":"user","text":"old","timestamp":"2026-01-01T00:00:00+00:00"}]"#,
+        )
+        .unwrap();
+        let html = history_fragment(&state, Lang::En, None);
+        assert!(html.contains("old") || html.contains("Earlier messages"));
+        assert!(!html.contains("data-session-id='earlier'"));
+    }
+
+    #[test]
+    fn folder_posts_create_rename_move_and_delete() {
+        let (_d, state) = history_state();
+        let store = store(&state);
+        let id = store.send_chat_message("hello", None).unwrap();
+        post_to(&state, "/activity/folders", "name=Work", true);
+        let folder = store.list_chat_folders()[0].id.clone();
+        let r = post_to(&state, &format!("/activity/folders/{folder}/rename"), "name=Clients", true);
+        assert_eq!(r.status, 200);
+        assert_eq!(store.list_chat_folders()[0].name, "Clients");
+        post_to(&state, &format!("/activity/sessions/{id}/move"), &format!("folder={folder}"), true);
+        assert_eq!(store.list_chat_sessions()[0].folder.as_deref(), Some(folder.as_str()));
+        post_to(&state, &format!("/activity/sessions/{id}/move"), "folder=", true);
+        assert_eq!(store.list_chat_sessions()[0].folder, None);
+        post_to(&state, &format!("/activity/folders/{folder}/delete"), "", true);
+        assert!(store.list_chat_folders().is_empty());
+    }
+
+    #[test]
+    fn folder_posts_need_the_csrf_token() {
+        let (_d, state) = history_state();
+        let mut registry = Registry::default();
+        register(&mut registry);
+        let req = UiRequest::new(axum::http::Method::POST, "/activity/folders")
+            .with_body("name=Work".to_string())
+            .with_header("content-type", "application/x-www-form-urlencoded");
+        assert_eq!(registry.dispatch(&state, &req).unwrap().status, 403);
+        assert!(store(&state).list_chat_folders().is_empty());
+    }
+
+    #[test]
+    fn a_failed_folder_post_says_so_and_a_plain_post_redirects_to_the_drawer() {
+        let (_d, state) = history_state();
+        assert_eq!(post_to(&state, "/activity/folders", "name=%20", true).status, 400);
+        let r = post_to(&state, "/activity/folders", "name=Work&viewing=abc", false);
+        assert_eq!(r.status, 303);
+        assert!(r.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("location") && v == "/?session=abc&history=1"));
     }
 }

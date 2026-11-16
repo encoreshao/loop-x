@@ -146,11 +146,27 @@ pub fn heuristic_chat_title(text: &str) -> String {
     format!("{base}…")
 }
 
+const FOLDER_NAME_MAX_CHARS: usize = 40;
+
+fn clean_folder_name(name: &str) -> Option<String> {
+    let name: String = name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(FOLDER_NAME_MAX_CHARS)
+        .collect();
+    let name = name.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 /// `read_chat_sessions` result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatSessions {
     pub current: Option<String>,
     pub sessions: Vec<Value>,
+    /// User-made folders: `{id, name, created_at}` records.
+    pub folders: Vec<Value>,
     /// Whether the file was there (and a JSON object) at all.
     pub exists: bool,
 }
@@ -164,6 +180,15 @@ pub struct SessionInfo {
     pub started_at: String,
     pub last_at: String,
     pub count: usize,
+    /// The folder the chat was filed in, if any (and it still exists).
+    pub folder: Option<String>,
+}
+
+/// A user-made group for chats on the history screen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FolderInfo {
+    pub id: String,
+    pub name: String,
 }
 
 /// The store, rooted at one `messages.json`.
@@ -210,6 +235,7 @@ impl MessageStore {
         let missing = ChatSessions {
             current: None,
             sessions: Vec::new(),
+            folders: Vec::new(),
             exists: false,
         };
         let Ok(text) = std::fs::read_to_string(chat_sessions_path_for(&self.path)) else {
@@ -228,6 +254,16 @@ impl MessageStore {
                     .collect()
             })
             .unwrap_or_default();
+        let folders = data
+            .get("folders")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter(|r| r.get("id").is_some_and(Value::is_string))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         let current = data
             .get("current")
             .and_then(Value::as_str)
@@ -235,6 +271,7 @@ impl MessageStore {
         ChatSessions {
             current,
             sessions,
+            folders,
             exists: true,
         }
     }
@@ -253,6 +290,9 @@ impl MessageStore {
             cur.current.map_or(Value::Null, Value::String),
         );
         data.insert("sessions".into(), Value::Array(cur.sessions));
+        if !cur.folders.is_empty() {
+            data.insert("folders".into(), Value::Array(cur.folders));
+        }
         let out = mutate(&mut data);
         atomic_write_json(&Value::Object(data), &path)?;
         Ok(out)
@@ -378,7 +418,13 @@ impl MessageStore {
             }
         }
         let mut sessions = Vec::new();
-        for record in self.read_chat_sessions().sessions {
+        let state = self.read_chat_sessions();
+        let folder_ids: Vec<&str> = state
+            .folders
+            .iter()
+            .filter_map(|f| f["id"].as_str())
+            .collect();
+        for record in state.sessions {
             let id = record["id"].as_str().unwrap_or("").to_string();
             if let Some(entry) = stats.remove(&id) {
                 let title = match record.get("title") {
@@ -399,6 +445,11 @@ impl MessageStore {
                         .map_or(entry.first_at.clone(), str::to_string),
                     last_at: entry.last_at,
                     count: entry.count,
+                    folder: record
+                        .get("folder")
+                        .and_then(Value::as_str)
+                        .filter(|f| folder_ids.contains(f))
+                        .map(str::to_string),
                 });
             }
         }
@@ -410,11 +461,134 @@ impl MessageStore {
                 started_at: legacy.first_at,
                 last_at: legacy.last_at,
                 count: legacy.count,
+                folder: None,
             });
         }
         // Python's sort is stable and `reverse=True` keeps equal keys in order.
         sessions.sort_by(|a, b| b.last_at.cmp(&a.last_at));
         sessions
+    }
+
+    /// The history screen's folders, in creation order.
+    pub fn list_chat_folders(&self) -> Vec<FolderInfo> {
+        self.read_chat_sessions()
+            .folders
+            .iter()
+            .filter_map(|f| {
+                Some(FolderInfo {
+                    id: f["id"].as_str()?.to_string(),
+                    name: f["name"].as_str().unwrap_or("").to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// Creates a folder named `name` (trimmed, at most 40 characters) and returns
+    /// its id; an existing folder with the same name (any case) is reused.
+    /// `None` for a blank name.
+    pub fn create_chat_folder(&self, name: &str) -> Option<String> {
+        let name = clean_folder_name(name)?;
+        let id = crate::events::new_uuid_hex()[..12].to_string();
+        self.update_sessions(move |data| {
+            let folders = data
+                .entry("folders")
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()?;
+            if let Some(f) = folders.iter().find(|f| {
+                f["name"]
+                    .as_str()
+                    .is_some_and(|n| n.to_lowercase() == name.to_lowercase())
+            }) {
+                return f["id"].as_str().map(str::to_string);
+            }
+            folders.push(json!({
+                "id": id,
+                "name": name,
+                "created_at": isoformat_utc(Utc::now()),
+            }));
+            Some(id)
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// False for a blank name or an unknown folder.
+    pub fn rename_chat_folder(&self, folder_id: &str, name: &str) -> bool {
+        let Some(name) = clean_folder_name(name) else {
+            return false;
+        };
+        let id = folder_id.to_string();
+        self.update_sessions(move |data| {
+            let Some(Value::Array(a)) = data.get_mut("folders") else {
+                return false;
+            };
+            let Some(f) = a.iter_mut().find(|f| f["id"].as_str() == Some(id.as_str())) else {
+                return false;
+            };
+            f["name"] = Value::String(name);
+            true
+        })
+        .unwrap_or(false)
+    }
+
+    /// Removes the folder; its chats go back to the date groups. False when unknown.
+    pub fn delete_chat_folder(&self, folder_id: &str) -> bool {
+        let id = folder_id.to_string();
+        self.update_sessions(move |data| {
+            let Some(Value::Array(a)) = data.get_mut("folders") else {
+                return false;
+            };
+            let before = a.len();
+            a.retain(|f| f["id"].as_str() != Some(id.as_str()));
+            if a.len() == before {
+                return false;
+            }
+            if let Some(Value::Array(sessions)) = data.get_mut("sessions") {
+                for r in sessions.iter_mut() {
+                    if r["folder"].as_str() == Some(id.as_str()) {
+                        if let Some(o) = r.as_object_mut() {
+                            o.remove("folder");
+                        }
+                    }
+                }
+            }
+            true
+        })
+        .unwrap_or(false)
+    }
+
+    /// Files a chat in `folder` (`None` takes it out). False when the chat has no
+    /// record (the legacy group) or the folder does not exist.
+    pub fn move_chat_session(&self, session_id: &str, folder: Option<&str>) -> bool {
+        let (id, folder) = (session_id.to_string(), folder.map(str::to_string));
+        self.update_sessions(move |data| {
+            if let Some(f) = &folder {
+                let known = data
+                    .get("folders")
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| a.iter().any(|x| x["id"].as_str() == Some(f.as_str())));
+                if !known {
+                    return false;
+                }
+            }
+            let Some(Value::Array(a)) = data.get_mut("sessions") else {
+                return false;
+            };
+            let Some(r) = a.iter_mut().find(|r| r["id"].as_str() == Some(id.as_str())) else {
+                return false;
+            };
+            match (&folder, r.as_object_mut()) {
+                (Some(f), Some(o)) => {
+                    o.insert("folder".into(), Value::String(f.clone()));
+                }
+                (None, Some(o)) => {
+                    o.remove("folder");
+                }
+                _ => return false,
+            }
+            true
+        })
+        .unwrap_or(false)
     }
 
     /// `delete_chat_session`: false when the session does not exist.
@@ -750,5 +924,74 @@ mod tests {
             (l[0].title.as_str(), l[0].title_source.as_str()),
             ("Greeting", "ai")
         );
+    }
+
+    #[test]
+    fn folders_are_created_trimmed_and_deduplicated() {
+        let (_d, s) = store();
+        assert_eq!(s.create_chat_folder("   "), None);
+        let work = s.create_chat_folder("  Work  ").unwrap();
+        assert_eq!(s.create_chat_folder("work").as_deref(), Some(work.as_str()));
+        let long = s.create_chat_folder(&"x".repeat(80)).unwrap();
+        let folders = s.list_chat_folders();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].name, "Work");
+        assert_eq!(
+            folders
+                .iter()
+                .find(|f| f.id == long)
+                .unwrap()
+                .name
+                .chars()
+                .count(),
+            40
+        );
+    }
+
+    #[test]
+    fn a_chat_moves_into_a_folder_and_back_out() {
+        let (_d, s) = store();
+        let id = s.send_chat_message("hello", None).unwrap();
+        let f = s.create_chat_folder("Work").unwrap();
+        assert!(!s.move_chat_session(&id, Some("nope")));
+        assert!(!s.move_chat_session("missing", Some(&f)));
+        assert!(s.move_chat_session(&id, Some(&f)));
+        assert_eq!(
+            s.list_chat_sessions()[0].folder.as_deref(),
+            Some(f.as_str())
+        );
+        assert!(s.move_chat_session(&id, None));
+        assert_eq!(s.list_chat_sessions()[0].folder, None);
+    }
+
+    #[test]
+    fn folders_survive_title_changes_and_new_chats() {
+        let (_d, s) = store();
+        let id = s.send_chat_message("hello", None).unwrap();
+        let f = s.create_chat_folder("Work").unwrap();
+        s.move_chat_session(&id, Some(&f));
+        s.set_chat_session_title(&id, "Greeting", "ai");
+        s.start_new_chat_session();
+        assert_eq!(s.list_chat_folders().len(), 1);
+        assert_eq!(
+            s.list_chat_sessions()[0].folder.as_deref(),
+            Some(f.as_str())
+        );
+    }
+
+    #[test]
+    fn renaming_and_deleting_a_folder_keeps_its_chats() {
+        let (_d, s) = store();
+        let id = s.send_chat_message("hello", None).unwrap();
+        let f = s.create_chat_folder("Work").unwrap();
+        s.move_chat_session(&id, Some(&f));
+        assert!(s.rename_chat_folder(&f, " Clients "));
+        assert!(!s.rename_chat_folder(&f, ""));
+        assert_eq!(s.list_chat_folders()[0].name, "Clients");
+        assert!(s.delete_chat_folder(&f));
+        assert!(!s.delete_chat_folder(&f));
+        assert!(s.list_chat_folders().is_empty());
+        let l = s.list_chat_sessions();
+        assert_eq!((l.len(), l[0].folder.clone()), (1, None));
     }
 }

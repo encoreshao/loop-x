@@ -2257,5 +2257,11 @@
   "It cannot start: {reason}. launchd tries again every 30 seconds and it keeps failing until this is fixed; fix it, Save, then Restart.": "Il ne peut pas démarrer : {reason}. launchd réessaie toutes les 30 secondes et cela échouera tant que ce n'est pas corrigé ; corrigez-le, enregistrez, puis redémarrez.",
   "The background listener keeps the old settings until it restarts: restart it with loopx slack restart.": "L'écouteur en arrière-plan garde les anciens réglages jusqu'à son redémarrage : redémarrez-le avec loopx slack restart.",
   "Restarted the background listener so the change takes effect": "Écouteur en arrière-plan redémarré pour appliquer la modification",
-  "Everyone on the allowlist can use your agent as you: they get replies with your mail and calendar data by direct message and can answer your approvals.": "Toute personne de la liste autorisée peut utiliser votre agent en votre nom : elle reçoit par message direct les réponses contenant vos données d'e-mail et d'agenda et peut répondre à vos approbations."
+  "Everyone on the allowlist can use your agent as you: they get replies with your mail and calendar data by direct message and can answer your approvals.": "Toute personne de la liste autorisée peut utiliser votre agent en votre nom : elle reçoit par message direct les réponses contenant vos données d'e-mail et d'agenda et peut répondre à vos approbations.",
+  "New folder": "Nouveau dossier",
+  "Folder name": "Nom du dossier",
+  "Create": "Créer",
+  "Rename folder": "Renommer le dossier",
+  "Delete folder": "Supprimer le dossier",
+  "Drag chats here": "Faites glisser des conversations ici"
 }

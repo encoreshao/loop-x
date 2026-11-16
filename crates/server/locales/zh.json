@@ -2257,5 +2257,11 @@
   "It cannot start: {reason}. launchd tries again every 30 seconds and it keeps failing until this is fixed; fix it, Save, then Restart.": "无法启动：{reason}。launchd 每 30 秒重试一次，在修复之前会一直失败；请修复、保存，然后重新启动。",
   "The background listener keeps the old settings until it restarts: restart it with loopx slack restart.": "后台监听器在重新启动前会沿用旧设置：请用 loopx slack restart 重新启动它。",
   "Restarted the background listener so the change takes effect": "已重新启动后台监听器，使更改生效",
-  "Everyone on the allowlist can use your agent as you: they get replies with your mail and calendar data by direct message and can answer your approvals.": "允许列表中的每个人都能以你的身份使用你的代理：他们会通过私信收到包含你邮件和日历数据的回复，并能处理你的审批。"
+  "Everyone on the allowlist can use your agent as you: they get replies with your mail and calendar data by direct message and can answer your approvals.": "允许列表中的每个人都能以你的身份使用你的代理：他们会通过私信收到包含你邮件和日历数据的回复，并能处理你的审批。",
+  "New folder": "新建文件夹",
+  "Folder name": "文件夹名称",
+  "Create": "创建",
+  "Rename folder": "重命名文件夹",
+  "Delete folder": "删除文件夹",
+  "Drag chats here": "将对话拖到这里"
 }
