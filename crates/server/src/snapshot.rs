@@ -314,8 +314,13 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
     // right now stays so its progress is not hidden.
     let disabled = disabled_loops(&paths.loops_config);
     loops.retain(|name, doc| !disabled.contains(name) || doc["state"] == "running");
-    let topics =
+    let mut topics =
         status::read_topic_status(&paths.outputs.join("topic-monitor").join("status.json"));
+    // Topics all run under the topic loop: with it off (and idle) none of them
+    // should show on the island.
+    if !loops.contains_key("topic-loop") {
+        topics["topics"] = json!({});
+    }
     approvals::expire_overdue(&paths.approvals_dir, now);
     let pending = without_page_texts(approvals::list(&paths.approvals_dir, Some("pending"), now));
 
@@ -928,6 +933,27 @@ mod tests {
         assert_eq!(s["loops"]["topic-loop"]["state"], "failed");
         assert_eq!(s["topics"]["ai"]["state"], "running");
         assert_eq!(s["app_state"], "failed");
+    }
+
+    #[test]
+    fn topics_are_hidden_from_the_island_while_the_topic_loop_is_disabled() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::write(
+            &p.loops_config,
+            r#"[{"name": "topic-loop", "enabled": false}]"#,
+        )
+        .unwrap();
+        status::write_status(&p.outputs.join("status/topic-loop.json"), "idle", &[]).unwrap();
+        status::write_topic_status(
+            &p.outputs.join("topic-monitor/status.json"),
+            "public-speaking",
+            "idle",
+            &[],
+        )
+        .unwrap();
+        let s = build_snapshot(&p, now());
+        assert_eq!(s["topics"], json!({}));
     }
 
     #[test]
