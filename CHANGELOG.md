@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-17
+
 ### Added
 
 - Chat history has folders: **New folder** on the history list creates one, drag a chat onto a folder to file it (drag it back to the date groups to take it out) or use the folder button on a chat to pick a folder from a menu (the way to do it on a touch screen), and hover a folder to rename or delete it (deleting a folder keeps its chats). A filed chat shows only under its folder. Works in the Dashboard drawer and the AI panel; the chat history file gains a `folders` list and a `folder` on each chat.
@@ -742,7 +744,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/encoreshao/loop-x/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/encoreshao/loop-x/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/encoreshao/loop-x/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/encoreshao/loop-x/compare/v0.15.0...v0.16.0
