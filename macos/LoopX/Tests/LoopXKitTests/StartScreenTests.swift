@@ -2,80 +2,88 @@ import Testing
 @testable import LoopXKit
 
 @Suite struct StartScreenTests {
-    func html(_ text: String = "Starting the backend…", failed: Bool = false) -> String {
-        StartScreen.html(text, failed: failed, version: "0.7.0", logo: "<svg id='logo'></svg>")
+    static let mark = "data:image/png;base64,AA"
+
+    func html(_ text: String = "Starting LoopX…", failed: Bool = false, mark: String = StartScreenTests.mark) -> String {
+        StartScreen.html(text, failed: failed, version: "0.7.0", mark: mark)
     }
 
-    @Test func hasTheRippleAndWaveLayersBehindTheLogo() {
-        let h = html()
-        #expect(h.contains("class='water'"))
-        #expect(h.components(separatedBy: "class='ripple").count - 1 == 4)
-        #expect(h.contains("class='wave"))
-        #expect(h.contains("<svg id='logo'>"))
-    }
-
-    @Test func theWaterKeepsMovingCalmlyUnderReducedMotion() {
-        let h = html()
-        let open = "@media(prefers-reduced-motion:no-preference){"
-        let gated = h.components(separatedBy: open)[1].components(separatedBy: "}}")[0]   // the block ends at its first "}}"
-        let ungated = h.replacingOccurrences(of: open + gated + "}}", with: "")
-        // Reduce Motion is on for some users, and the ripples are what they asked for: a slow, small
-        // version always runs; the larger, faster one (and the entrance/float) only without the setting.
-        #expect(ungated.contains("animation:ripple ") && ungated.contains("animation:wave "))
-        #expect(gated.contains("rippleBig") && gated.contains("assemble") && gated.contains("float"))
-        // The orbit ring and spinner are never gated: that motion means "still starting".
-        #expect(!gated.contains("animation:orbit") && !gated.contains("animation:s "))
-        #expect(ungated.contains("animation:orbit") && ungated.contains("animation:s "))
-    }
-
-    @Test func theLogoAssemblesFromItsFragmentsOnlyWithoutReducedMotion() {
-        let h = html()
-        #expect(h.contains("@keyframes assemble"))
-        // The four arcs and the two X strokes each fly in on their own, gated like the other entrances.
+    /// The `@media(prefers-reduced-motion:no-preference){…}` block, and the page without it.
+    func motionSplit(_ h: String) -> (gated: String, ungated: String) {
         let open = "@media(prefers-reduced-motion:no-preference){"
         let gated = h.components(separatedBy: open)[1].components(separatedBy: "}}")[0]
-        for part in ["a1", "a2", "a3", "a4", "x1", "x2"] {
-            #expect(h.contains(".logo .\(part){"), "\(part) has a scattered start")
-            #expect(gated.contains(".logo .\(part){animation:assemble"), "\(part) animates only when motion is allowed")
-        }
+        return (gated, h.replacingOccurrences(of: open + gated + "}}", with: ""))
     }
 
-    @Test func theIntroHoldLastsUntilTheLastFragmentHasLanded() {
-        // Each "animation:assemble <duration>s <easing> [<delay>s] both": the hold must cover the latest end.
-        let rules = html().components(separatedBy: "animation:assemble ").dropFirst()
-        let ends = rules.map { rule -> Double in
-            let secs = rule.components(separatedBy: " both")[0].split(separator: " ")
-                .filter { $0.hasSuffix("s") }.compactMap { Double($0.dropLast()) }
-            return secs.reduce(0, +)
+    @Test func oneFocalPointNoOldDecoration() {
+        let h = html()
+        for old in ["class='water'", "ripple", "class='wave", "bub", "orbit", "assemble"] {
+            #expect(!h.contains(old), "\(old) is gone")
         }
-        #expect(ends.count == 6)
+        #expect(h.contains("<img class='mark' src='\(Self.mark)'"))
+    }
+
+    @Test func lightIsQuietAndDarkIsTheGlowStage() {
+        let h = html()
+        #expect(h.contains("#f5f5f7") && h.contains("#0a84ff"))
+        #expect(h.contains("@media(prefers-color-scheme:dark)"))
+        #expect(h.contains("#1b1530") && h.contains("class='halo'") && h.contains("class='sheen'"))
+        // The sheen only ever lights the mark itself: it is masked to the mark's own shape.
+        #expect(h.contains("url('\(Self.mark)')"))
+    }
+
+    @Test func reduceMotionGatesOnlyDecoration() {
+        let (gated, ungated) = motionSplit(html())
+        #expect(gated.contains("animation:breathe") && gated.contains("animation:sheen") && gated.contains("animation:enter"))
+        // The bar and the dot mean "still starting": never gated.
+        #expect(ungated.contains("animation:slide") && ungated.contains("animation:pulse"))
+        #expect(!gated.contains("animation:slide") && !gated.contains("animation:pulse"))
+    }
+
+    @Test func introHoldCoversTheEntrance() {
+        // Each "animation:enter <duration>s <easing> [<delay>s] both": the hold covers the latest end.
+        let rules = html().components(separatedBy: "animation:enter ").dropFirst()
+        let ends = rules.map { rule -> Double in
+            rule.components(separatedBy: " both")[0].split(separator: " ")
+                .filter { $0.hasSuffix("s") }.compactMap { Double($0.dropLast()) }.reduce(0, +)
+        }
+        #expect(!ends.isEmpty)
         #expect(StartScreen.introSeconds >= ends.max()!)
-        #expect(StartScreen.introSeconds < ends.max()! + 0.5, "no dead time after the logo is whole")
+        #expect(StartScreen.introSeconds < ends.max()! + 0.3, "no dead time after the entrance")
+    }
+
+    @Test func noMarkMeansNoImageAndNoMask() {
+        let h = html(mark: "")
+        #expect(!h.contains("<img class='mark'"))
+        #expect(!h.contains("url('')"))
+        #expect(!h.contains("class='sheen'"))
     }
 
     @Test func theNameIsTheBrandImageWhenGivenAndTextOtherwise() {
         let name = "<img class='brand-name' src='data:image/png;base64,AA' alt='LoopX'>"
-        let withImage = StartScreen.html("Starting…", failed: false, logo: "", name: name)
+        let withImage = StartScreen.html("Starting…", failed: false, mark: "", name: name)
         #expect(withImage.contains("<h1>\(name)</h1>"))
         #expect(!withImage.contains("<h1>LoopX</h1>"))
         #expect(html().contains("<h1>LoopX</h1>"))
     }
 
-    @Test func theBodyDoesNotPaintOverTheWaterLayer() {
-        let h = html()
-        #expect(h.contains("html{background:var(--bg)"))
-        #expect(h.contains("body{background:transparent"))
-    }
-
     @Test func statusTextIsEscapedAndFailureOffersRetry() {
         let h = html("<b>boom</b> & more", failed: true)
         #expect(h.contains("&lt;b>boom&lt;/b> &amp; more"))
-        #expect(h.contains("loopx-retry://now"))
-        #expect(!html().contains("loopx-retry"))
+        #expect(h.contains("class='retry' href='loopx-retry://now'"))
+        #expect(!h.contains("class='bar'") && !h.contains("class='dot'"))
+        let starting = html()
+        #expect(!starting.contains("loopx-retry"))
+        #expect(starting.contains("class='bar'") && starting.contains("class='dot'"))
     }
 
-    @Test func showsVersionAndAuthor() {
-        #expect(html().contains("v0.7.0"))
-        #expect(html().contains("Encore Shao"))
+    @Test func showsVersionOnly() {
+        let h = html()
+        #expect(h.contains("v0.7.0"))
+        #expect(!h.contains("Encore Shao") && !h.contains("mailto:") && !h.contains("daily grind"))
+    }
+
+    @Test func keepsTheTitlebarDragStrip() {
+        #expect(html().contains("class='\(TitlebarChrome.dragStripClass)'"))
     }
 }

@@ -26,7 +26,7 @@ import Testing
     }
 
     @Test func theStartScreenHasADragStripAtTheTop() {
-        let h = StartScreen.html("Starting…", failed: false, logo: "")
+        let h = StartScreen.html("Starting…", failed: false)
         #expect(h.contains("class='\(TitlebarChrome.dragStripClass)'"))
         #expect(TitlebarChrome.script.contains(".\(TitlebarChrome.dragStripClass)"))
     }
