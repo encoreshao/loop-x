@@ -187,13 +187,13 @@ Note: `LOOP_ENGINEERING_HOME` does not sandbox this; the safety mechanism is a s
 Usage: `new_worktree.sh <repo_path> <default_branch> <issue_iid> <worktree_root>` (exactly 4 args, else usage on stderr, exit 1). Bash, `set -euo pipefail`.
 
 Behavior, in order:
-1. Branch = `loop/issue-<iid>`; worktree path = `<worktree_root>/<basename(repo_path)>-issue-<iid>`; `mkdir -p worktree_root`.
+1. Branch = the issue's existing local branch (`feature#<iid>…`, `bug#<iid>…` or legacy `loop/issue-<iid>`), else a new `bug#<iid>-<slug>` (the issue has a `bug`/`defect`/`regression`/`hotfix`/`type::bug` label) or `feature#<iid>-<slug>`, the slug being the title's ASCII words, lowercased, joined by `-`, at most 40 characters (`loopx worktree new` fetches the title and labels from the tracker; unknown → `feature#<iid>`); worktree path = `<worktree_root>/<basename(repo_path)>-issue-<iid>`; `mkdir -p worktree_root`.
 2. `git -C repo fetch origin <default_branch>` (always, stdout redirected to stderr).
 3. If the branch already exists: add the worktree if the directory is missing; **refuse** (exit 1, `Worktree has uncommitted changes, refusing to sync: <path>`) if `git status --porcelain` is non-empty; then `git merge --no-edit origin/<default_branch>`; on conflict `git merge --abort` and exit 1 with `Merge conflict pulling in <default_branch>, aborted: <path>`.
-   Otherwise: `git worktree add -b loop/issue-<iid> <path> origin/<default_branch>`.
+   Otherwise: `git worktree add -b <branch> <path> origin/<default_branch>`.
 4. Copy `.ruby-version` and `config/database.yml` from repo to worktree if they exist (every run).
 5. `git submodule update --init --recursive` in the worktree.
-6. stdout: **only** the worktree path plus newline. All git chatter goes to stderr (callers capture stdout as the path).
+6. stdout: **only** the worktree path plus newline. All git chatter goes to stderr (callers capture stdout as the path); `loopx worktree new` ends its stderr with `Branch: <branch>`.
 
 Exit codes: 0 success; 1 on usage/dirty/conflict; git's own non-zero (via `set -e`) otherwise. Env: none read. Files: creates/updates worktrees and branches in `repo_path`'s git dir; writes the two copied files. Tests: `tests/test_new_worktree.py` (real local git repos).
 
@@ -202,7 +202,7 @@ Sample: `/Users/me/.loop-engineering/worktrees/kurrant.web-issue-42`
 ### 1.9 `bin/scripts/open_merge_request.sh`
 
 Usage: `open_merge_request.sh <repo_path> <branch> <target_branch> <title>` (exactly 4 args, else usage on stderr, exit 1).
-- Hard guard: `branch` must match `loop/issue-*`, else `Refusing to push non-loop branch: <branch>` on stderr, exit 1.
+- Hard guard: `branch` must be an issue branch (`feature#<n>[-<slug>]`, `bug#<n>[-<slug>]` or `loop/issue-<n>`), else `Refusing to push non-loop branch: <branch>` on stderr, exit 1. `loopx mr push <repo_path> <branch>` has the same guard and runs `git -C <repo> push -u origin <branch>` (for an MR that already exists; `DRY_RUN=1` prints the argv the same way).
 - Executes `git -C <repo> push origin <branch> -o merge_request.create -o merge_request.target=<target> -o merge_request.title=<title> -o merge_request.remove_source_branch` (GitLab push options; GitLab's response on the push goes through git's stderr).
 - `DRY_RUN=1`: prints the command argv, **one argument per line**, instead of running. Sample (title `My title`):
 

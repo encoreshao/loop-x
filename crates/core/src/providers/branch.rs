@@ -1,31 +1,28 @@
-//! Loop branch names: `<type>/issue-<n>[-<slug>]`, type from the issue's
-//! labels, slug from its title. Built once when the worktree is created and
-//! stored, so later title or label edits never rename a pushed branch. Legacy
+//! Loop branch names: `<type>#<n>[-<slug>]` (`feature#1412-org-website-liveness`,
+//! `bug#1303-dashboard-scrollbar`), type from the issue's labels, slug from its
+//! title. Built once when the branch is created, so later title or label edits
+//! never rename a pushed branch: everything else finds an issue's branch by its
+//! number ([`issue_of_branch`]), never by rebuilding the name. Legacy
 //! `loop/issue-<n>` branches (before types and slugs) are still loop branches.
 
 use super::Issue;
 
-pub const PREFIXES: [&str; 4] = ["feat", "fix", "docs", "chore"];
-pub const LEGACY_PREFIX: &str = "loop";
+pub const TYPES: [&str; 2] = ["feature", "bug"];
+const LEGACY_PREFIX: &str = "loop/issue-";
 const SLUG_MAX: usize = 40;
 
-/// First rule that matches any label (case-insensitive, whole label) wins.
-const RULES: [(&str, &[&str]); 3] = [
-    ("fix", &["bug", "defect", "regression", "hotfix"]),
-    ("docs", &["docs", "documentation"]),
-    ("chore", &["chore", "maintenance", "dependencies", "ci"]),
-];
+/// Labels (case-insensitive, whole label) that make an issue a `bug`.
+const BUG_LABELS: [&str; 5] = ["bug", "defect", "regression", "hotfix", "type::bug"];
 
 pub fn branch_type(labels: &[String]) -> &'static str {
-    for (kind, names) in RULES {
-        if labels
-            .iter()
-            .any(|l| names.iter().any(|n| l.trim().eq_ignore_ascii_case(n)))
-        {
-            return kind;
-        }
+    let bug = labels
+        .iter()
+        .any(|l| BUG_LABELS.iter().any(|b| l.trim().eq_ignore_ascii_case(b)));
+    if bug {
+        "bug"
+    } else {
+        "feature"
     }
-    "feat"
 }
 
 /// ASCII alphanumeric runs of the title, lowercased, joined by `-`, cut at a
@@ -56,32 +53,49 @@ pub fn slug(title: &str) -> String {
     out
 }
 
-pub fn branch_for(issue: &Issue) -> String {
-    let base = format!("{}/issue-{}", branch_type(&issue.labels), issue.number);
-    match slug(&issue.title) {
+/// The name a new branch for issue `n` gets.
+pub fn new_branch_name(n: u64, title: &str, labels: &[String]) -> String {
+    let base = format!("{}#{n}", branch_type(labels));
+    match slug(title) {
         s if s.is_empty() => base,
         s => format!("{base}-{s}"),
     }
 }
 
+pub fn branch_for(issue: &Issue) -> String {
+    new_branch_name(issue.number, &issue.title, &issue.labels)
+}
+
+/// The pre-slug `loop/issue-<n>` name, still recognised for older branches.
+pub fn legacy_branch_name(n: u64) -> String {
+    format!("{LEGACY_PREFIX}{n}")
+}
+
 /// The issue number of a loop branch, if `name` is one.
 pub fn issue_of_branch(name: &str) -> Option<u64> {
-    let (prefix, rest) = name.split_once('/')?;
-    let rest = rest.strip_prefix("issue-")?;
+    let (rest, slug_allowed) = if let Some(rest) = name.strip_prefix(LEGACY_PREFIX) {
+        (rest, false)
+    } else {
+        let (kind, rest) = name.split_once('#')?;
+        if !TYPES.contains(&kind) {
+            return None;
+        }
+        (rest, true)
+    };
     let digits_end = rest
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(rest.len());
-    if digits_end == 0 {
+    if digits_end == 0 || rest.starts_with('0') {
         return None;
     }
     let tail = &rest[digits_end..];
-    let ok = if prefix == LEGACY_PREFIX {
-        tail.is_empty()
-    } else if PREFIXES.contains(&prefix) {
-        tail.is_empty() || (tail.starts_with('-') && tail.len() > 1)
-    } else {
-        false
-    };
+    let ok = tail.is_empty()
+        || (slug_allowed
+            && tail.len() > 1
+            && tail.starts_with('-')
+            && tail[1..]
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
     if !ok {
         return None;
     }
@@ -90,6 +104,10 @@ pub fn issue_of_branch(name: &str) -> Option<u64> {
 
 pub fn is_loop_branch(name: &str, n: u64) -> bool {
     issue_of_branch(name) == Some(n)
+}
+
+pub fn is_any_loop_branch(name: &str) -> bool {
+    issue_of_branch(name).is_some()
 }
 
 #[cfg(test)]
@@ -116,19 +134,16 @@ mod tests {
     }
 
     #[test]
-    fn type_comes_from_labels_in_priority_order() {
+    fn type_is_bug_for_a_bug_label_and_feature_otherwise() {
         let t = |l: &[&str]| branch_type(&l.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        assert_eq!(t(&[]), "feat");
-        assert_eq!(t(&["Bug"]), "fix");
-        assert_eq!(t(&["HOTFIX"]), "fix");
-        assert_eq!(t(&["documentation"]), "docs");
-        assert_eq!(t(&["dependencies"]), "chore");
-        assert_eq!(t(&["ci"]), "chore");
-        // fix wins over docs and chore whatever the label order.
-        assert_eq!(t(&["docs", "chore", "regression"]), "fix");
-        assert_eq!(t(&["chore", "docs"]), "docs");
+        assert_eq!(t(&[]), "feature");
+        assert_eq!(t(&["Bug"]), "bug");
+        assert_eq!(t(&["HOTFIX"]), "bug");
+        assert_eq!(t(&["frontend", "regression"]), "bug");
+        assert_eq!(t(&["type::bug"]), "bug");
+        assert_eq!(t(&["documentation", "chore"]), "feature");
         // only whole labels count
-        assert_eq!(t(&["debugging"]), "feat");
+        assert_eq!(t(&["debugging"]), "feature");
     }
 
     #[test]
@@ -156,41 +171,62 @@ mod tests {
     #[test]
     fn branch_for_joins_type_number_and_slug() {
         assert_eq!(
-            branch_for(&issue(42, "Add dark theme to settings page", &[])),
-            "feat/issue-42-add-dark-theme-to-settings-page"
+            branch_for(&issue(1412, "Org website liveness", &[])),
+            "feature#1412-org-website-liveness"
         );
         assert_eq!(
-            branch_for(&issue(57, "Login button crash", &["bug"])),
-            "fix/issue-57-login-button-crash"
+            branch_for(&issue(1303, "Dashboard scrollbar", &["bug"])),
+            "bug#1303-dashboard-scrollbar"
         );
-        assert_eq!(branch_for(&issue(42, "修复登录按钮", &[])), "feat/issue-42");
+        assert_eq!(branch_for(&issue(42, "修复登录按钮", &[])), "feature#42");
+    }
+
+    #[test]
+    fn new_names_are_valid_git_branch_names() {
+        for name in [
+            new_branch_name(1412, "Org website liveness", &[]),
+            new_branch_name(7, "", &["bug".into()]),
+        ] {
+            let ok = std::process::Command::new("git")
+                .args(["check-ref-format", "--branch", &name])
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "{name}");
+        }
     }
 
     #[test]
     fn loop_branches_are_recognised_with_and_without_slug_and_legacy() {
         for name in [
-            "feat/issue-42",
-            "fix/issue-42-login",
-            "docs/issue-42-x",
-            "chore/issue-42",
+            "feature#42",
+            "bug#42-login",
+            "feature#42-org-website-liveness",
             "loop/issue-42",
         ] {
             assert!(is_loop_branch(name, 42), "{name}");
             assert_eq!(issue_of_branch(name), Some(42), "{name}");
         }
         for name in [
-            "feat/issue-420",
-            "feat/issue-4",
+            "feature#420",
+            "feature#4",
+            "feat#42",
+            "fix#42",
             "feature/issue-42",
-            "feat/issue-42x",
+            "feature#42x",
+            "feature#42-",
+            "feature#42-Upper",
+            "feature#042",
             "loop/issue-42-slug",
-            "feat/issue-",
+            "feature#",
             "main",
         ] {
             assert!(!is_loop_branch(name, 42), "{name}");
         }
-        assert_eq!(issue_of_branch("feat/issue-420-x"), Some(420));
+        assert_eq!(issue_of_branch("bug#420-x"), Some(420));
         assert_eq!(issue_of_branch("loop/issue-42-x"), None);
-        assert_eq!(issue_of_branch("feat/issue-x"), None);
+        assert_eq!(issue_of_branch("feature#x"), None);
+        assert!(is_any_loop_branch("bug#1-x") && !is_any_loop_branch("loop/mr-1"));
     }
 }

@@ -1,5 +1,7 @@
-//! Per-issue git worktrees for the loop. Mirrors `bin/scripts/new_worktree.sh`:
-//! branch `loop/issue-<iid>`, path `<worktree_root>/<repo>-issue-<iid>`.
+//! Per-issue git worktrees for the loop: branch `feature#<iid>-<slug>` or
+//! `bug#<iid>-<slug>` (see [`crate::providers::branch`]; an older
+//! `loop/issue-<iid>` branch is reused as is), path
+//! `<worktree_root>/<repo>-issue-<iid>`.
 
 use std::path::Path;
 use std::process::Command;
@@ -20,8 +22,69 @@ impl Failure {
     }
 }
 
-pub fn branch_name(issue_iid: &str) -> String {
-    format!("loop/issue-{issue_iid}")
+/// What a new issue branch is named from: the issue's title and labels.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BranchSeed {
+    pub title: String,
+    pub labels: Vec<String>,
+}
+
+fn issue_number(issue_iid: &str) -> Result<u64, Failure> {
+    issue_iid
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0 && issue_iid.chars().all(|c| c.is_ascii_digit()))
+        .ok_or_else(|| Failure::new(format!("not an issue number: {issue_iid}")))
+}
+
+/// Every local loop branch of `repo_path` with its issue number.
+fn local_issue_branches(repo_path: &str) -> Result<Vec<(u64, String)>, Failure> {
+    Ok(git_stdout(
+        repo_path,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+    )?
+    .lines()
+    .filter_map(|b| Some((crate::providers::branch::issue_of_branch(b)?, b.to_string())))
+    .collect())
+}
+
+/// The local branch the loop works on for issue `issue_iid`, whatever its
+/// type and slug (or the legacy `loop/issue-<iid>`), if there is one.
+pub fn find_issue_branch(repo_path: &str, issue_iid: &str) -> Result<Option<String>, Failure> {
+    let n = issue_number(issue_iid)?;
+    Ok(local_issue_branches(repo_path)?
+        .into_iter()
+        .find(|(i, _)| *i == n)
+        .map(|(_, b)| b))
+}
+
+/// The branch for issue `issue_iid` on `origin`, if it was pushed.
+pub fn remote_issue_branch(repo_path: &str, issue_iid: &str) -> Result<Option<String>, Failure> {
+    let n = issue_number(issue_iid)?;
+    Ok(git_stdout(repo_path, &["ls-remote", "--heads", "origin"])?
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(1)?.strip_prefix("refs/heads/"))
+        .find(|b| crate::providers::branch::is_loop_branch(b, n))
+        .map(str::to_string))
+}
+
+/// The existing branch for the issue, else a new name from `seed`, else
+/// `feature#<iid>` when the issue's title and labels are not known.
+fn branch_for_issue(
+    repo_path: &str,
+    issue_iid: &str,
+    seed: Option<&BranchSeed>,
+) -> Result<String, Failure> {
+    let n = issue_number(issue_iid)?;
+    if let Some(b) = find_issue_branch(repo_path, issue_iid)? {
+        return Ok(b);
+    }
+    let seed = seed.cloned().unwrap_or_default();
+    Ok(crate::providers::branch::new_branch_name(
+        n,
+        &seed.title,
+        &seed.labels,
+    ))
 }
 
 /// The worktree path exactly as the shell script built it (plain concatenation).
@@ -178,11 +241,13 @@ pub(crate) fn checkout_lock(repo_path: &str) -> Result<crate::file_lock::FileLoc
 }
 
 /// Create (or bring up to date) the worktree for an issue and return its path.
+/// A new branch is named from `seed`; an existing one for the issue is reused.
 pub fn new_worktree(
     repo_path: &str,
     default_branch: &str,
     issue_iid: &str,
     worktree_root: &str,
+    seed: Option<&BranchSeed>,
 ) -> Result<String, Failure> {
     if default_branch.trim().is_empty() {
         return Err(Failure::new(
@@ -191,7 +256,7 @@ pub fn new_worktree(
     }
     usable_checkout(repo_path)?;
     let _lock = checkout_lock(repo_path)?;
-    new_worktree_locked(repo_path, default_branch, issue_iid, worktree_root)
+    new_worktree_locked(repo_path, default_branch, issue_iid, worktree_root, seed)
 }
 
 fn new_worktree_locked(
@@ -199,13 +264,14 @@ fn new_worktree_locked(
     default_branch: &str,
     issue_iid: &str,
     worktree_root: &str,
+    seed: Option<&BranchSeed>,
 ) -> Result<String, Failure> {
     if !Path::new(worktree_root).is_absolute() {
         return Err(Failure::new(format!(
             "worktree_root must be an absolute path: {worktree_root}"
         )));
     }
-    let branch = branch_name(issue_iid);
+    let branch = branch_for_issue(repo_path, issue_iid, seed)?;
     let wt = worktree_path(repo_path, issue_iid, worktree_root);
     std::fs::create_dir_all(worktree_root)
         .map_err(|e| Failure::new(format!("cannot create {worktree_root}: {e}")))?;
@@ -292,7 +358,7 @@ fn prepare_worktree_with(repo_path: &str, wt: &str, skip_tracked: bool) -> Resul
     ensure_submodules(wt)
 }
 
-/// The worktree of the existing `loop/issue-<iid>` branch, re-added when its
+/// The worktree of the issue's existing branch, re-added when its
 /// directory is gone, and prepared like [`new_worktree`]'s, but with no fetch
 /// and no merge of the target branch: the branch stays exactly as it is.
 pub fn reuse_worktree(
@@ -307,19 +373,12 @@ pub fn reuse_worktree(
             "worktree_root must be an absolute path: {worktree_root}"
         )));
     }
-    let branch = branch_name(issue_iid);
+    let Some(branch) = find_issue_branch(repo_path, issue_iid)? else {
+        return Err(Failure::new(format!(
+            "no local branch for issue #{issue_iid} to reuse"
+        )));
+    };
     let wt = worktree_path(repo_path, issue_iid, worktree_root);
-    if !git(
-        repo_path,
-        &[
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
-    )? {
-        return Err(Failure::new(format!("no local branch {branch} to reuse")));
-    }
     if !Path::new(&wt).is_dir() {
         std::fs::create_dir_all(worktree_root)
             .map_err(|e| Failure::new(format!("cannot create {worktree_root}: {e}")))?;
@@ -378,13 +437,14 @@ fn uninitialised_submodules(wt: &str) -> Result<Vec<String>, Failure> {
         .collect())
 }
 
-/// Branch the checkout itself to `loop/issue-<iid>` (projects with
+/// Branch the checkout itself to the issue's branch (projects with
 /// `use_worktree: false`) and return its path. The branch the user was on is
 /// recorded so `restore_in_place` can put it back.
 pub fn prepare_in_place(
     repo_path: &str,
     default_branch: &str,
     issue_iid: &str,
+    seed: Option<&BranchSeed>,
 ) -> Result<String, Failure> {
     if default_branch.trim().is_empty() {
         return Err(Failure::new(
@@ -394,7 +454,7 @@ pub fn prepare_in_place(
     usable_checkout(repo_path)?;
     let _lock = checkout_lock(repo_path)?;
     let marker = restore_marker(repo_path)?;
-    let branch = branch_name(issue_iid);
+    let branch = branch_for_issue(repo_path, issue_iid, seed)?;
     let origin_ref = format!("origin/{default_branch}");
     let is_clean = || -> Result<bool, Failure> {
         Ok(git_stdout(repo_path, &["status", "--porcelain"])?
@@ -493,6 +553,38 @@ pub fn uses_worktree_for(local_path: &str, config_path: &Path) -> bool {
         .is_none_or(crate::config::use_worktree)
 }
 
+/// The alias and project of `projects.json` whose checkout is `local_path`.
+pub fn project_for_checkout(
+    local_path: &str,
+    config_path: &Path,
+) -> Option<(String, serde_json::Value)> {
+    let config = crate::config::Config::load(config_path).ok()?;
+    config.aliases().ok()?.into_iter().find_map(|alias| {
+        let project = config.project(&alias).ok()?;
+        (project
+            .get("local_path")
+            .and_then(serde_json::Value::as_str)
+            == Some(local_path))
+        .then_some((alias, project))
+    })
+}
+
+/// The seed of a GitLab-style issue JSON (`title`, `labels` as strings).
+pub fn seed_of_issue(issue: &serde_json::Value) -> BranchSeed {
+    BranchSeed {
+        title: issue["title"].as_str().unwrap_or("").to_string(),
+        labels: issue["labels"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
 /// Put an in-place checkout back on the branch `prepare_in_place` recorded.
 /// `None` when there was nothing to restore. A failed switch keeps the record.
 pub fn restore_in_place(repo_path: &str) -> Result<Option<String>, Failure> {
@@ -528,11 +620,11 @@ fn restore_in_place_locked(repo_path: &str) -> Result<Option<String>, Failure> {
     Ok(Some(original))
 }
 
-/// What [`sweep_finished_issue_branches`] did, by issue iid.
+/// What [`sweep_finished_issue_branches`] did, by branch name.
 #[derive(Debug, Default)]
 pub struct Sweep {
     pub removed: Vec<String>,
-    /// Finished, but kept: the iid and why.
+    /// Finished, but kept: the branch and why.
     pub skipped: Vec<(String, String)>,
 }
 
@@ -552,30 +644,19 @@ fn worktrees(repo_path: &str) -> Result<Vec<(String, String)>, Failure> {
     Ok(out)
 }
 
-/// Delete each local `loop/issue-<iid>` branch whose issue `is_finished` says
+/// Delete each local issue branch whose issue `is_finished(iid, branch)` says
 /// is done (closed, or its MR merged), removing its worktree first. A worktree
 /// with uncommitted changes, or a branch the checkout itself is on, is kept.
 pub fn sweep_finished_issue_branches(
     repo_path: &str,
-    is_finished: &mut dyn FnMut(&str) -> bool,
+    is_finished: &mut dyn FnMut(&str, &str) -> bool,
 ) -> Result<Sweep, Failure> {
-    let refs = git_stdout(
-        repo_path,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/heads/loop/",
-        ],
-    )?;
     // Ask GitLab first, outside the checkout lock: those calls can be slow and
     // must not hold up a parallel issue's `worktree new`.
-    let finished: Vec<(String, String)> = refs
-        .lines()
-        .filter_map(|branch| {
-            let iid = branch.strip_prefix("loop/issue-")?;
-            (!iid.is_empty() && iid.chars().all(|c| c.is_ascii_digit()) && is_finished(iid))
-                .then(|| (branch.to_string(), iid.to_string()))
-        })
+    let finished: Vec<String> = local_issue_branches(repo_path)?
+        .into_iter()
+        .filter(|(n, branch)| is_finished(&n.to_string(), branch))
+        .map(|(_, branch)| branch)
         .collect();
     let mut sweep = Sweep::default();
     if finished.is_empty() {
@@ -585,12 +666,12 @@ pub fn sweep_finished_issue_branches(
     // Forget worktrees whose directory was deleted by hand.
     git(repo_path, &["worktree", "prune"])?;
     let trees = worktrees(repo_path)?;
-    for (branch, iid) in &finished {
-        let (branch, iid) = (branch.as_str(), iid.as_str());
+    for branch in &finished {
+        let branch = branch.as_str();
         let tree = trees.iter().position(|(_, b)| b == branch);
         if tree == Some(0) {
             sweep.skipped.push((
-                iid.to_string(),
+                branch.to_string(),
                 format!("{branch} is checked out in {repo_path}"),
             ));
             continue;
@@ -600,9 +681,10 @@ pub fn sweep_finished_issue_branches(
                 .trim()
                 .is_empty()
             {
-                sweep
-                    .skipped
-                    .push((iid.to_string(), format!("{path} has uncommitted changes")));
+                sweep.skipped.push((
+                    branch.to_string(),
+                    format!("{path} has uncommitted changes"),
+                ));
                 continue;
             }
             // Clean, so --force only gets past git's refusal to remove a
@@ -610,23 +692,23 @@ pub fn sweep_finished_issue_branches(
             if !git(repo_path, &["worktree", "remove", "--force", path])? {
                 sweep
                     .skipped
-                    .push((iid.to_string(), format!("could not remove {path}")));
+                    .push((branch.to_string(), format!("could not remove {path}")));
                 continue;
             }
         }
         // -D: a squash-merged MR leaves the branch looking unmerged locally.
         if git(repo_path, &["branch", "-D", branch])? {
-            sweep.removed.push(iid.to_string());
+            sweep.removed.push(branch.to_string());
         } else {
             sweep
                 .skipped
-                .push((iid.to_string(), format!("could not delete {branch}")));
+                .push((branch.to_string(), format!("could not delete {branch}")));
         }
     }
     Ok(sweep)
 }
 
-/// One local `loop/issue-<iid>` branch, as the dashboard's Worktrees view lists it.
+/// One local issue branch, as the dashboard's Worktrees view lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueBranch {
     pub iid: String,
@@ -647,7 +729,7 @@ fn is_dirty(dir: &str) -> Result<bool, Failure> {
         .is_empty())
 }
 
-/// Every local `loop/issue-<iid>` branch of `repo_path`, by issue number.
+/// Every local issue branch of `repo_path`, by issue number.
 pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure> {
     // Forget worktrees whose directory was deleted by hand.
     git(repo_path, &["worktree", "prune"])?;
@@ -657,18 +739,16 @@ pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure>
         &[
             "for-each-ref",
             "--format=%(refname:short) %(committerdate:iso-strict)",
-            "refs/heads/loop/",
+            "refs/heads/",
         ],
     )?;
     let mut out = Vec::new();
     for line in refs.lines() {
         let (branch, date) = line.split_once(' ').unwrap_or((line, ""));
-        let Some(iid) = branch.strip_prefix("loop/issue-") else {
+        let Some(iid) = crate::providers::branch::issue_of_branch(branch).map(|n| n.to_string())
+        else {
             continue;
         };
-        if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
         let tree = trees.iter().position(|(_, b)| b == branch);
         let dirty = match tree {
             Some(i) => is_dirty(&trees[i].0)?,
@@ -687,23 +767,21 @@ pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure>
     Ok(out)
 }
 
-/// Delete the local `loop/issue-<iid>` branch and its worktree, uncommitted
-/// changes and all. A branch the checkout itself is on is refused, and the
-/// remote branch (if it was pushed) is left alone.
-pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<(), Failure> {
-    if iid.is_empty() || !iid.chars().all(|c| c.is_ascii_digit()) {
-        return Err(Failure::new(format!("not an issue number: {iid}")));
-    }
+/// Delete the issue's local branch and its worktree, uncommitted changes and
+/// all, and return the branch's name. A branch the checkout itself is on is
+/// refused, and the remote branch (if it was pushed) is left alone.
+pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<String, Failure> {
+    issue_number(iid)?;
     let _lock = checkout_lock(repo_path)?;
-    let branch = branch_name(iid);
     let Some(found) = list_issue_branches(repo_path)?
         .into_iter()
-        .find(|b| b.branch == branch)
+        .find(|b| b.iid == iid)
     else {
         return Err(Failure::new(format!(
-            "no local branch {branch} in {repo_path}"
+            "no local branch for issue #{iid} in {repo_path}"
         )));
     };
+    let branch = found.branch.clone();
     if found.in_checkout {
         return Err(Failure::new(format!(
             "{branch} is checked out in {repo_path}; switch the checkout to another branch first"
@@ -720,7 +798,8 @@ pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<(), Failure> {
             )));
         }
     }
-    git_ok(repo_path, &["branch", "-D", &branch])
+    git_ok(repo_path, &["branch", "-D", &branch])?;
+    Ok(branch)
 }
 
 /// Local branch an MR's worktree works on; tracks `origin/<source_branch>`.
@@ -1027,7 +1106,7 @@ mod tests {
     fn new_worktree_names_the_misconfiguration() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("wt").display().to_string();
-        let msg = |r: &str, b: &str, w: &str| new_worktree(r, b, "1", w).unwrap_err().message;
+        let msg = |r: &str, b: &str, w: &str| new_worktree(r, b, "1", w, None).unwrap_err().message;
         assert!(msg("/nope", "main", &root).contains("not a directory"));
         assert!(msg("/nope", "", &root).contains("target branch"));
         let repo = d.path().join("repo");
@@ -1087,7 +1166,7 @@ mod tests {
         let repo = clone_on_feature(d.path());
         std::fs::write(Path::new(&repo).join("stray.txt"), "s").unwrap();
         let before = sh(Path::new(&repo), &["status", "--porcelain"]);
-        let err = prepare_in_place(&repo, "main", "7").unwrap_err();
+        let err = prepare_in_place(&repo, "main", "7", None).unwrap_err();
         assert!(
             err.message.contains("uncommitted or untracked"),
             "{}",
@@ -1102,8 +1181,8 @@ mod tests {
     fn in_place_creates_issue_branch_and_restore_returns() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        assert_eq!(prepare_in_place(&repo, "main", "7").unwrap(), repo);
-        assert_eq!(head(&repo), "loop/issue-7");
+        assert_eq!(prepare_in_place(&repo, "main", "7", None).unwrap(), repo);
+        assert_eq!(head(&repo), "feature#7");
         assert_eq!(
             restore_in_place(&repo).unwrap(),
             Some("feature-x".to_string())
@@ -1111,28 +1190,28 @@ mod tests {
         assert_eq!(head(&repo), "feature-x");
         assert_eq!(restore_in_place(&repo).unwrap(), None);
         // A second run reuses the existing issue branch.
-        prepare_in_place(&repo, "main", "7").unwrap();
-        assert_eq!(head(&repo), "loop/issue-7");
+        prepare_in_place(&repo, "main", "7", None).unwrap();
+        assert_eq!(head(&repo), "feature#7");
     }
 
     #[test]
     fn in_place_refuses_an_unrestored_dirty_checkout() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        prepare_in_place(&repo, "main", "7").unwrap();
+        prepare_in_place(&repo, "main", "7", None).unwrap();
         std::fs::write(Path::new(&repo).join("a.txt"), "leftover").unwrap();
-        let err = prepare_in_place(&repo, "main", "8").unwrap_err();
+        let err = prepare_in_place(&repo, "main", "8", None).unwrap_err();
         assert!(err.message.contains("was not restored"), "{}", err.message);
-        assert_eq!(head(&repo), "loop/issue-7");
+        assert_eq!(head(&repo), "feature#7");
     }
 
     #[test]
     fn in_place_retry_on_the_same_issue_reuses_the_branch() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        prepare_in_place(&repo, "main", "7").unwrap();
-        assert_eq!(prepare_in_place(&repo, "main", "7").unwrap(), repo);
-        assert_eq!(head(&repo), "loop/issue-7");
+        prepare_in_place(&repo, "main", "7", None).unwrap();
+        assert_eq!(prepare_in_place(&repo, "main", "7", None).unwrap(), repo);
+        assert_eq!(head(&repo), "feature#7");
         assert_eq!(
             restore_in_place(&repo).unwrap(),
             Some("feature-x".to_string())
@@ -1143,10 +1222,10 @@ mod tests {
     fn a_stale_record_on_a_clean_checkout_is_restored_first() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        prepare_in_place(&repo, "main", "7").unwrap();
+        prepare_in_place(&repo, "main", "7", None).unwrap();
         // The runner died before restoring; the next issue heals it.
-        prepare_in_place(&repo, "main", "8").unwrap();
-        assert_eq!(head(&repo), "loop/issue-8");
+        prepare_in_place(&repo, "main", "8", None).unwrap();
+        assert_eq!(head(&repo), "feature#8");
         assert_eq!(
             restore_in_place(&repo).unwrap(),
             Some("feature-x".to_string())
@@ -1157,15 +1236,15 @@ mod tests {
     fn restore_refuses_leftover_edits_and_keeps_the_record() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        prepare_in_place(&repo, "main", "7").unwrap();
+        prepare_in_place(&repo, "main", "7", None).unwrap();
         std::fs::write(Path::new(&repo).join("a.txt"), "agent leftover").unwrap();
         let err = restore_in_place(&repo).unwrap_err();
         assert!(
-            err.message.contains("loop/issue-7") && err.message.contains("feature-x"),
+            err.message.contains("feature#7") && err.message.contains("feature-x"),
             "{}",
             err.message
         );
-        assert_eq!(head(&repo), "loop/issue-7");
+        assert_eq!(head(&repo), "feature#7");
         assert!(restore_marker(&repo).unwrap().exists());
     }
 
@@ -1185,6 +1264,33 @@ mod tests {
     }
 
     #[test]
+    fn the_checkouts_project_and_an_issues_seed_are_found() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("projects.json");
+        std::fs::write(
+            &p,
+            r#"{"projects": {"a": {"local_path": "/a", "project_id": "g/a"}, "b": {"local_path": "/b"}}}"#,
+        )
+        .unwrap();
+        let (alias, project) = project_for_checkout("/a", &p).unwrap();
+        assert_eq!(
+            (alias.as_str(), project["project_id"].as_str()),
+            ("a", Some("g/a"))
+        );
+        assert!(project_for_checkout("/c", &p).is_none());
+        let seed = seed_of_issue(
+            &serde_json::json!({"title": "Dashboard scrollbar", "labels": ["bug", 3]}),
+        );
+        assert_eq!(
+            seed,
+            BranchSeed {
+                title: "Dashboard scrollbar".into(),
+                labels: vec!["bug".into()]
+            }
+        );
+    }
+
+    #[test]
     fn restore_without_marker_is_noop() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
@@ -1192,15 +1298,16 @@ mod tests {
         assert_eq!(head(&repo), "feature-x");
     }
 
+    /// The checkout's branches other than `main` and `feature-x`.
     fn branches(repo: &str) -> String {
         sh(
             Path::new(repo),
-            &[
-                "for-each-ref",
-                "--format=%(refname:short)",
-                "refs/heads/loop/",
-            ],
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
         )
+        .lines()
+        .filter(|b| !["main", "feature-x"].contains(b))
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 
     #[test]
@@ -1212,7 +1319,7 @@ mod tests {
             let handles: Vec<_> = (1..=8)
                 .map(|iid| {
                     let (repo, root) = (&repo, &root);
-                    s.spawn(move || new_worktree(repo, "main", &iid.to_string(), root))
+                    s.spawn(move || new_worktree(repo, "main", &iid.to_string(), root, None))
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
@@ -1232,22 +1339,22 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
         let root = d.path().join("wt").display().to_string();
-        let wt3 = new_worktree(&repo, "main", "3", &root).unwrap();
-        let wt4 = new_worktree(&repo, "main", "4", &root).unwrap();
-        let wt5 = new_worktree(&repo, "main", "5", &root).unwrap();
+        let wt3 = new_worktree(&repo, "main", "3", &root, None).unwrap();
+        let wt4 = new_worktree(&repo, "main", "4", &root, None).unwrap();
+        let wt5 = new_worktree(&repo, "main", "5", &root, None).unwrap();
         std::fs::write(Path::new(&wt5).join("wip.txt"), "x").unwrap();
         sh(Path::new(&repo), &["branch", "loop/issue-6"]);
         sh(Path::new(&repo), &["branch", "loop/other"]);
         let mut asked = Vec::new();
-        let sweep = sweep_finished_issue_branches(&repo, &mut |iid| {
+        let sweep = sweep_finished_issue_branches(&repo, &mut |iid, _| {
             asked.push(iid.to_string());
             iid != "4"
         })
         .unwrap();
         assert_eq!(asked, ["3", "4", "5", "6"]);
-        assert_eq!(sweep.removed, ["3", "6"]);
+        assert_eq!(sweep.removed, ["feature#3", "loop/issue-6"]);
         assert_eq!(sweep.skipped.len(), 1);
-        assert_eq!(sweep.skipped[0].0, "5");
+        assert_eq!(sweep.skipped[0].0, "feature#5");
         assert!(
             sweep.skipped[0].1.contains("uncommitted"),
             "{:?}",
@@ -1255,7 +1362,7 @@ mod tests {
         );
         assert!(!Path::new(&wt3).exists());
         assert!(Path::new(&wt4).exists() && Path::new(&wt5).exists());
-        assert_eq!(branches(&repo), "loop/issue-4\nloop/issue-5\nloop/other");
+        assert_eq!(branches(&repo), "feature#4\nfeature#5\nloop/other");
     }
 
     #[test]
@@ -1332,7 +1439,7 @@ mod tests {
             std::fs::write(local.join(rel), body).unwrap();
         }
         let root = d.path().join("wt").display().to_string();
-        let wt = new_worktree(&repo, "main", "7", &root).unwrap();
+        let wt = new_worktree(&repo, "main", "7", &root, None).unwrap();
         let read = |rel: &str| std::fs::read_to_string(Path::new(&wt).join(rel)).ok();
         assert_eq!(read("config/master.key").as_deref(), Some("m"));
         assert_eq!(
@@ -1615,15 +1722,15 @@ mod tests {
     fn a_finished_branch_checked_out_in_place_is_left_alone() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        prepare_in_place(&repo, "main", "7").unwrap();
-        let sweep = sweep_finished_issue_branches(&repo, &mut |_| true).unwrap();
+        prepare_in_place(&repo, "main", "7", None).unwrap();
+        let sweep = sweep_finished_issue_branches(&repo, &mut |_, _| true).unwrap();
         assert!(sweep.removed.is_empty());
         assert!(
             sweep.skipped[0].1.contains("checked out"),
             "{:?}",
             sweep.skipped
         );
-        assert_eq!(head(&repo), "loop/issue-7");
+        assert_eq!(head(&repo), "feature#7");
     }
 
     #[test]
@@ -1631,8 +1738,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
         let root = d.path().join("wt").display().to_string();
-        let wt3 = new_worktree(&repo, "main", "3", &root).unwrap();
-        let wt4 = new_worktree(&repo, "main", "4", &root).unwrap();
+        let wt3 = new_worktree(&repo, "main", "3", &root, None).unwrap();
+        let wt4 = new_worktree(&repo, "main", "4", &root, None).unwrap();
         std::fs::write(Path::new(&wt4).join("wip.txt"), "x").unwrap();
         sh(Path::new(&repo), &["branch", "loop/issue-6"]);
         sh(Path::new(&repo), &["branch", "loop/other"]);
@@ -1640,7 +1747,7 @@ mod tests {
         let iids: Vec<_> = list.iter().map(|b| b.iid.as_str()).collect();
         assert_eq!(iids, ["3", "4", "6"]);
         let canon = |p: &str| std::fs::canonicalize(p).unwrap();
-        assert_eq!(list[0].branch, "loop/issue-3");
+        assert_eq!(list[0].branch, "feature#3");
         assert_eq!(canon(list[0].worktree.as_deref().unwrap()), canon(&wt3));
         assert!(!list[0].dirty && !list[0].in_checkout);
         assert!(list[1].dirty);
@@ -1654,7 +1761,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
         let root = d.path().join("wt").display().to_string();
-        let wt5 = new_worktree(&repo, "main", "5", &root).unwrap();
+        let wt5 = new_worktree(&repo, "main", "5", &root, None).unwrap();
         std::fs::write(Path::new(&wt5).join("wip.txt"), "x").unwrap();
         sh(Path::new(&repo), &["branch", "loop/issue-6"]);
         remove_issue_branch(&repo, "5").unwrap();
@@ -1662,7 +1769,7 @@ mod tests {
         remove_issue_branch(&repo, "6").unwrap();
         assert_eq!(branches(&repo), "");
         let err = remove_issue_branch(&repo, "9").unwrap_err();
-        assert!(err.message.contains("loop/issue-9"), "{}", err.message);
+        assert!(err.message.contains("issue #9"), "{}", err.message);
         let err = remove_issue_branch(&repo, "../main").unwrap_err();
         assert!(err.message.contains("issue number"), "{}", err.message);
     }
@@ -1671,17 +1778,67 @@ mod tests {
     fn an_issue_branch_checked_out_in_place_is_listed_but_not_removed() {
         let d = tempfile::tempdir().unwrap();
         let repo = clone_on_feature(d.path());
-        prepare_in_place(&repo, "main", "7").unwrap();
+        prepare_in_place(&repo, "main", "7", None).unwrap();
         let list = list_issue_branches(&repo).unwrap();
         assert!(list[0].in_checkout, "{list:?}");
         let err = remove_issue_branch(&repo, "7").unwrap_err();
         assert!(err.message.contains("checked out"), "{}", err.message);
-        assert_eq!(head(&repo), "loop/issue-7");
+        assert_eq!(head(&repo), "feature#7");
     }
 
     #[test]
-    fn branch_naming() {
-        assert_eq!(branch_name("9"), "loop/issue-9");
+    fn a_new_branch_is_named_from_the_seed_and_an_existing_one_is_reused() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let seed = BranchSeed {
+            title: "Dashboard scrollbar".into(),
+            labels: vec!["Bug".into()],
+        };
+        let wt = new_worktree(&repo, "main", "1303", &root, Some(&seed)).unwrap();
+        assert_eq!(head(&wt), "bug#1303-dashboard-scrollbar");
+        // A later title or label edit never renames the branch.
+        let edited = BranchSeed {
+            title: "Something else".into(),
+            labels: vec![],
+        };
+        new_worktree(&repo, "main", "1303", &root, Some(&edited)).unwrap();
+        assert_eq!(head(&wt), "bug#1303-dashboard-scrollbar");
+        assert_eq!(
+            find_issue_branch(&repo, "1303").unwrap().as_deref(),
+            Some("bug#1303-dashboard-scrollbar")
+        );
+        // No seed: the type defaults to feature and there is no slug.
+        let wt2 = new_worktree(&repo, "main", "1412", &root, None).unwrap();
+        assert_eq!(head(&wt2), "feature#1412");
+        // A legacy branch is reused as is.
+        sh(Path::new(&repo), &["branch", "loop/issue-9"]);
+        let wt9 = new_worktree(&repo, "main", "9", &root, Some(&seed)).unwrap();
+        assert_eq!(head(&wt9), "loop/issue-9");
+        assert_eq!(find_issue_branch(&repo, "8").unwrap(), None);
+        assert!(find_issue_branch(&repo, "x").is_err());
+    }
+
+    #[test]
+    fn the_pushed_issue_branch_is_found_on_origin() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let seed = BranchSeed {
+            title: "Org website liveness".into(),
+            labels: vec![],
+        };
+        new_worktree(&repo, "main", "1412", &root, Some(&seed)).unwrap();
+        assert_eq!(remote_issue_branch(&repo, "1412").unwrap(), None);
+        sh(
+            Path::new(&repo),
+            &["push", "-q", "origin", "feature#1412-org-website-liveness"],
+        );
+        assert_eq!(
+            remote_issue_branch(&repo, "1412").unwrap().as_deref(),
+            Some("feature#1412-org-website-liveness")
+        );
+        assert_eq!(remote_issue_branch(&repo, "141").unwrap(), None);
     }
 
     /// A repo with one committed submodule at `sub`, whose source is `<dir>/lib`.

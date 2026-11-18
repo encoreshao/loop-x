@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- The issue loop names each new issue branch after the issue: `feature#1412-org-website-liveness`, or `bug#1303-dashboard-scrollbar` when the issue has a `bug`, `defect`, `regression`, `hotfix` or `type::bug` label (slug from the title, at most 40 characters). The name is fixed when the branch is created, so editing the title or labels later never renames a pushed branch. Existing `loop/issue-<iid>` branches and their open merge requests keep working, and MR review, branch cleanup and the Worktrees view find either kind. New `loopx mr push <repo_path> <branch>` pushes more commits to an issue branch that already has a merge request; like `loopx mr open`, it refuses any other branch. Shell users: quote these branch names (`wt 'bug#7-login-crash'`), because zsh's `extendedglob` reads `#` as a pattern.
+
 ### Fixed
 
 - Slack agent and dashboard chat: a message that starts with a dash (such as a Slack bullet, "- what's new on issue 12") no longer fails with "Claude Code exited with code 1"; Claude Code had read it as an unknown command-line option.

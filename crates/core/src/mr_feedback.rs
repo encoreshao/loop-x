@@ -104,7 +104,10 @@ pub struct Snapshot {
 
 /// The issue's git worktree and branch.
 pub trait Workspace {
-    /// Fetches the remote `loop/issue-<iid>` and compares it with the local
+    /// The issue's branch: the local one, else the pushed one, else the
+    /// legacy `loop/issue-<iid>`.
+    fn branch(&self) -> String;
+    /// Fetches the remote issue branch and compares it with the local
     /// branch, recreating a missing local branch from the remote one.
     fn sync(&self) -> Result<Branch, String>;
     /// Reuses the issue's worktree, or adds one on the existing branch
@@ -1449,10 +1452,10 @@ impl Round<'_> {
             mr_plan::fenced(&mut input, "PREVIOUS ATTEMPT", &nonce, f);
         }
         format!(
-            "{}\n\n## This run\n\nWorktree: {}\nBranch: loop/issue-{}\nHandoff path: {}\n\n## The thread and the approved plan\n\n{input}",
+            "{}\n\n## This run\n\nWorktree: {}\nBranch: {}\nHandoff path: {}\n\n## The thread and the approved plan\n\n{input}",
             prompt::mr_feedback(&self.ctx.repo_root, Phase::Execute),
             worktree.display(),
-            self.issue_iid,
+            self.deps.workspace.branch(),
             handoff.display(),
         )
     }
@@ -1510,7 +1513,7 @@ impl Round<'_> {
     ) -> ThreadEnd {
         let id = a.discussion_id.as_str();
         let ws = &*self.deps.workspace;
-        let branch = crate::worktree::branch_name(self.issue_iid);
+        let branch = ws.branch();
         let local_path = self
             .deps
             .project
@@ -1757,7 +1760,7 @@ fn git_ok(dir: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// The issue's real worktree under `worktree_root`, on `loop/issue-<iid>`.
+/// The issue's real worktree under `worktree_root`, on the issue's branch.
 pub struct GitWorkspace {
     pub local_path: String,
     pub target_branch: String,
@@ -1766,8 +1769,18 @@ pub struct GitWorkspace {
 }
 
 impl GitWorkspace {
-    fn branch(&self) -> String {
-        crate::worktree::branch_name(&self.issue_iid)
+    fn find_branch(&self) -> String {
+        let found = crate::worktree::find_issue_branch(&self.local_path, &self.issue_iid)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                crate::worktree::remote_issue_branch(&self.local_path, &self.issue_iid)
+                    .ok()
+                    .flatten()
+            });
+        found.unwrap_or_else(|| {
+            crate::providers::branch::legacy_branch_name(self.issue_iid.parse().unwrap_or(0))
+        })
     }
 
     fn worktree(&self) -> PathBuf {
@@ -1789,6 +1802,10 @@ impl GitWorkspace {
 }
 
 impl Workspace for GitWorkspace {
+    fn branch(&self) -> String {
+        self.find_branch()
+    }
+
     fn sync(&self) -> Result<Branch, String> {
         // Parallel issues of one checkout fetch into the same repository.
         let _lock = crate::worktree::checkout_lock(&self.local_path).map_err(|f| f.message)?;
@@ -1946,24 +1963,34 @@ impl RealMrGitlab {
 
 impl MrGitlab for RealMrGitlab {
     fn find_mr(&self, issue_iid: i64) -> Result<Option<i64>, String> {
-        let branch = crate::worktree::branch_name(&issue_iid.to_string());
-        let mrs = self
-            .client()?
-            .get_all(
-                &format!(
-                    "projects/{}/merge_requests",
-                    crate::gitlab::quote(&self.project_id)
-                ),
-                &[("source_branch", &branch)],
-            )
-            .map_err(|e| e.to_string())?;
-        let open = mrs
-            .iter()
-            .find(|m| m.get("state").and_then(Value::as_str) == Some("opened"));
-        Ok(open
-            .or(mrs.first())
-            .and_then(|m| m.get("iid"))
-            .and_then(Value::as_i64))
+        let client = self.client()?;
+        let mut first = None;
+        for branch in client
+            .loop_branches(&self.project_id, issue_iid)
+            .map_err(|e| e.to_string())?
+        {
+            let mrs = client
+                .get_all(
+                    &format!(
+                        "projects/{}/merge_requests",
+                        crate::gitlab::quote(&self.project_id)
+                    ),
+                    &[("source_branch", &branch)],
+                )
+                .map_err(|e| e.to_string())?;
+            if let Some(open) = mrs
+                .iter()
+                .find(|m| m.get("state").and_then(Value::as_str) == Some("opened"))
+            {
+                return Ok(open.get("iid").and_then(Value::as_i64));
+            }
+            first = first.or_else(|| {
+                mrs.first()
+                    .and_then(|m| m.get("iid"))
+                    .and_then(Value::as_i64)
+            });
+        }
+        Ok(first)
     }
 
     fn mr_title(&self, mr_iid: i64) -> Option<String> {
@@ -2196,6 +2223,9 @@ mod tests {
     }
 
     impl Workspace for FakeWorkspace {
+        fn branch(&self) -> String {
+            "loop/issue-7".into()
+        }
         fn sync(&self) -> Result<Branch, String> {
             self.log.borrow_mut().synced += 1;
             if let Some(b) = self.syncs.borrow_mut().pop_front() {

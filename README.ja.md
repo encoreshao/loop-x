@@ -84,7 +84,7 @@ Loop X は、macOS 向けのローカルファーストな AI エージェント
 1. 設定内のすべてのプロジェクトエイリアスを対象に、設定したユーザー名にアサインされているオープンな GitLab Issue をすべて一覧化します。
 2. [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md) の段階的な判断手順に従い、それらを**一度に 1 件ずつ、決して並列にせず**処理します。
 3. 各 Issue について、次のいずれか 1 つだけを行います。
-  - **修正する** — 隔離された git worktree の `loop/issue-<iid>` ブランチ上で作業し、プロジェクト自身の lint/test コマンドが通った場合にのみマージリクエストを作成します。
+  - **修正する** — 隔離された git worktree の `feature#<iid>-<slug>` / `bug#<iid>-<slug>` ブランチ上で作業し、プロジェクト自身の lint/test コマンドが通った場合にのみマージリクエストを作成します。
   - **回答する** — コード変更が不要な依頼（質問、状況確認）には GitLab コメントを投稿します。
   - **エスカレーションする** — 依頼が曖昧な場合や検証が失敗した場合は、確認を求める GitLab コメントを投稿します。
 4. Issue ごとの Slack メッセージと、実行終了時のダイジェストを 1 件送信します（アサインが何もない朝も含め、毎回の実行で）。
@@ -188,7 +188,7 @@ bin/scripts/uninstall-loopx.sh --keep-config   # すべて削除するには --k
 │   ├── status/<loop_name>.json   #   every other registered loop's current/last run status
 │   └── history/<date>.{md,log}   #   every past run's report + log
 └── worktrees/                    # ← per-issue git worktrees for tracked projects (gitignored)
-    └── <project>-issue-<iid>/    #   that project's own checkout, on branch loop/issue-<iid>
+    └── <project>-issue-<iid>/    #   that project's own checkout, on branch feature#<iid>-<slug>
 ```
 
 `projects.json`、`topics.json`、`loops.json`、`instructions.md`、`ai_cli.json` は、このリポジトリをどこにチェックアウトしたかに関係なく、常に `~/.loopx/…` に解決されます。`projects.json` の初期化時の `worktree_root` も `~/.loopx/worktrees` がデフォルトです。
@@ -338,7 +338,7 @@ localhost 専用の Web UI（サーバーサイドレンダリング、JS フレ
 | `loopx topic` | トピックのレジストリ（`topics.json`）、トピックごとの 7 日間ローリング重複排除ウィンドウ、トピックモニターの実行（`loopx topic run`） |
 | `loopx inbox run`, `loopx loopkit` | Inbox Triage のランナー、LoopKit プラグインの実行 |
 | `loopx notify`, `loopx notify-loop` | 設定済みの Slack Incoming Webhook にメッセージを投稿します。ループの通知をそのコネクタへ振り分けます |
-| `loopx worktree new`, `loopx mr open` | `loop/issue-<iid>` ブランチ上に分離された git worktree を作成（または再利用）します。issue ブランチを push して MR を開きます（`loop/issue-*` 以外は拒否） |
+| `loopx worktree new`, `loopx mr open` | `feature#<iid>-<slug>` / `bug#<iid>-<slug>` ブランチ上に分離された git worktree を作成（または再利用）します。issue ブランチを push して MR を開きます（`feature#*` / `bug#*` 以外は拒否） |
 | `loopx gitlab`, `loopx secrets`, `loopx auth` | GitLab REST ヘルパーとキャッシュ、キーチェーン内のコネクタのシークレット、Google/LinkedIn の OAuth サインイン |
 | `loopx serve`, `loopx chat-tool` | ダッシュボードのバックエンドと Mac アプリの API、ダッシュボードのチャットアシスタントが実行できる唯一のコマンド |
 | `loopx loop`, `loopx events`, `loopx ledger`, `loopx metrics`, `loopx cost`, `loopx risk`, `loopx learning` | ループ定義（init、validate、audit、eval など）、イベント台帳とそこから作られるレポート |
@@ -357,7 +357,7 @@ localhost 専用の Web UI（サーバーサイドレンダリング、JS フレ
 固定されており、時間の経過や成功の積み重ねによって緩むことはありません（[`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md) を参照）。
 
 - **マージリクエストを決してマージしません。** ループの仕事は「MR を作成し、検証が通っている」状態で終わります。マージは常に人間が手動で行うステップです。
-- すべてのコード変更は、専用の git worktree の `loop/issue-<iid>` ブランチ上で行われ、ターゲットブランチ上で直接行われることはありません。
+- すべてのコード変更は、専用の git worktree の `feature#<iid>-<slug>` / `bug#<iid>-<slug>` ブランチ上で行われ、ターゲットブランチ上で直接行われることはありません。
 - MR が作成されるのは、エージェントが記録したテスト/lint コマンドをループ自身が再実行して通り、かつ diff が Issue に関連するファイルだけに触れている場合に限られます。
 - 任意のシェル実行、依存関係のアップグレード、`.env`/認証情報/SSH キーの読み取りは行いません — 使えるのは `instructions/loopx/gitlab-issue.md` の許可コマンドリストだけです。
 - Issue は一度に 1 件ずつ順番に処理され、決して並列には処理されません。

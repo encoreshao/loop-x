@@ -1,6 +1,6 @@
 //! The quiet window after the loop opens a merge request.
 //!
-//! Once `loop/issue-<iid>` has an open MR that is less than [`QUIET_DAYS`] old,
+//! Once the issue's loop branch has an open MR that is less than [`QUIET_DAYS`] old,
 //! the issue is already handed off: a scheduled check or a manual run must not
 //! launch the agent (which would post another comment) unless someone other
 //! than the loop's own account has written on the issue since. The loop posts
@@ -191,6 +191,11 @@ mod tests {
                 200,
                 "Content-Type: application/json\r\n",
                 json!([note(5, "me", "2099-01-01T00:00:00Z")]).to_string(),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                json!([{"name": "feature#7-x"}]).to_string(),
             ),
             (
                 200,

@@ -185,11 +185,34 @@ pub fn assigned_issues(tracker: &dyn IssueTracker, user: &str) -> PResult<Vec<Va
         .collect())
 }
 
-/// The open change request from the loop's `loop/issue-<n>` branch, as
-/// `{iid, web_url}`, or `None` when there is none.
-pub fn loop_mr(code: &dyn CodeHost, n: u64) -> PResult<Option<Value>> {
-    let branch = crate::worktree::branch_name(&n.to_string());
-    let Some(cr) = code.find_by_source_branch(&branch, Some(CrState::Open))? else {
+/// The open change request from the loop's branch for `issue` (the GitLab
+/// JSON of [`issue_json`]), as `{iid, web_url}`, or `None` when there is none.
+/// The branch is the one its title and labels name now, else the legacy
+/// `loop/issue-<n>`; a branch named from a title edited since is not found.
+pub fn loop_mr(code: &dyn CodeHost, issue: &Value) -> PResult<Option<Value>> {
+    let n = issue["iid"].as_u64().unwrap_or(0);
+    let labels: Vec<String> = issue["labels"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let title = issue["title"].as_str().unwrap_or("");
+    let candidates = [
+        crate::providers::branch::new_branch_name(n, title, &labels),
+        crate::providers::branch::legacy_branch_name(n),
+    ];
+    let mut found = None;
+    for branch in &candidates {
+        if let Some(cr) = code.find_by_source_branch(branch, Some(CrState::Open))? {
+            found = Some(cr);
+            break;
+        }
+    }
+    let Some(cr) = found else {
         return Ok(None);
     };
     Ok(Some(json!({
@@ -212,14 +235,13 @@ pub fn issue_with_notes(tracker: &dyn IssueTracker, n: u64) -> PResult<Value> {
 }
 
 /// Is the loop done with this issue for good: closed, or the change request
-/// from its `loop/issue-<n>` branch merged? Decides when that branch is deleted.
-pub fn issue_finished(r: &Resolved, n: u64) -> PResult<bool> {
+/// from its local loop branch `branch` merged? Decides when that branch is deleted.
+pub fn issue_finished(r: &Resolved, n: u64, branch: &str) -> PResult<bool> {
     if r.tracker.issue(n)?.state == IssueState::Closed {
         return Ok(true);
     }
-    let branch = crate::worktree::branch_name(&n.to_string());
     Ok(r.code
-        .find_by_source_branch(&branch, Some(CrState::Merged))?
+        .find_by_source_branch(branch, Some(CrState::Merged))?
         .is_some())
 }
 
@@ -299,7 +321,7 @@ pub fn helper(
             if command == "sync-issue" {
                 // The loop's own change request (iid, URL); its review comments
                 // belong to the MR-feedback round. A failed lookup never fails the sync.
-                issue["loop_mr"] = match loop_mr(r.code.as_ref(), n) {
+                issue["loop_mr"] = match loop_mr(r.code.as_ref(), &issue) {
                     Ok(mr) => mr.unwrap_or(Value::Null),
                     Err(e) => {
                         eprintln!("sync-issue: change request lookup failed: {e}");
@@ -679,7 +701,10 @@ mod tests {
             cr_comments: vec![comment("v1", "rev", "2026-10-02T00:00:00Z")],
             ..Default::default()
         });
-        let mr = loop_mr(resolved(host).code.as_ref(), 4).unwrap().unwrap();
+        let issue = json!({"iid": 4, "title": "t", "labels": []});
+        let mr = loop_mr(resolved(host).code.as_ref(), &issue)
+            .unwrap()
+            .unwrap();
         assert_eq!(mr["iid"], 5);
         assert_eq!(mr["web_url"], "https://github.com/o/r/pull/5");
         assert!(mr.get("notes").is_none());
@@ -691,7 +716,23 @@ mod tests {
             crs: vec![cr(5, "loop/issue-4", CrState::Merged)],
             ..Default::default()
         });
-        assert!(loop_mr(resolved(host).code.as_ref(), 4).unwrap().is_none());
+        let issue = json!({"iid": 4, "title": "t", "labels": []});
+        assert!(loop_mr(resolved(host).code.as_ref(), &issue)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn the_loop_mr_is_found_on_a_typed_branch_named_from_the_issue() {
+        let host = Arc::new(Host {
+            crs: vec![cr(6, "bug#4-login-crash", CrState::Open)],
+            ..Default::default()
+        });
+        let issue = json!({"iid": 4, "title": "Login crash", "labels": ["bug"]});
+        let mr = loop_mr(resolved(host).code.as_ref(), &issue)
+            .unwrap()
+            .unwrap();
+        assert_eq!(mr["iid"], 6);
     }
 
     #[test]
@@ -702,13 +743,13 @@ mod tests {
                 issue(2, "me", IssueState::Open),
                 issue(3, "me", IssueState::Open),
             ],
-            crs: vec![cr(9, "loop/issue-2", CrState::Merged)],
+            crs: vec![cr(9, "feature#2-x", CrState::Merged)],
             ..Default::default()
         });
         let r = resolved(host);
-        assert!(issue_finished(&r, 1).unwrap());
-        assert!(issue_finished(&r, 2).unwrap());
-        assert!(!issue_finished(&r, 3).unwrap());
+        assert!(issue_finished(&r, 1, "feature#1").unwrap());
+        assert!(issue_finished(&r, 2, "feature#2-x").unwrap());
+        assert!(!issue_finished(&r, 3, "feature#3").unwrap());
     }
 
     #[test]

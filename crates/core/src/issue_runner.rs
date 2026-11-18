@@ -76,7 +76,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 pub(crate) const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on loop/issue-<iid> and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"loop/issue-<iid>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
 
 /// Asset-build commands the agent may run before taking a screenshot.
 pub(crate) const ASSET_BUILD_PATTERNS: [&str; 4] = [
@@ -98,6 +98,16 @@ const CHROME_TOOLS: [&str; 6] = [
     "mcp__claude-in-chrome__computer",
 ];
 const CHROME_DENIED: &str = "mcp__claude-in-chrome__javascript_tool mcp__claude-in-chrome__gif_creator mcp__claude-in-chrome__browser_batch";
+
+/// The agent may push only the loop's own issue branches (see
+/// [`crate::providers::branch`]). The prompt has it push with `loopx mr push`,
+/// which checks the branch; these direct forms are for older prompts and the
+/// legacy `loop/issue-*` branches.
+const PUSH_PATTERNS: [&str; 3] = [
+    "Bash(git push origin feature#*)",
+    "Bash(git push origin bug#*)",
+    "Bash(git push origin loop/issue-*)",
+];
 
 fn tool_patterns(exe: &str, subs: &[&str]) -> Vec<String> {
     subs.iter()
@@ -124,7 +134,7 @@ pub fn allowed_tools(repo_root: &str, exe: &str, gate: bool, offline: bool) -> S
         .map(|s| s.to_string()),
     );
     if !gate {
-        t.push("Bash(git push origin loop/issue-*)".into());
+        t.extend(PUSH_PATTERNS.iter().map(|s| s.to_string()));
     }
     t.push("Bash(cd *)".into());
     if offline {
@@ -153,7 +163,8 @@ pub fn disallowed_tools(exe: &str, gate: bool, offline: bool) -> String {
     let mut parts = vec![DISALLOWED_TOOLS.to_string()];
     if gate {
         parts.push(format!(
-            "Bash(loopx mr open*) Bash({exe} mr open*) Bash(git push origin loop/issue-*)"
+            "Bash(loopx mr open*) Bash({exe} mr open*) Bash(loopx mr push*) Bash({exe} mr push*) {}",
+            PUSH_PATTERNS.join(" ")
         ));
     }
     if offline {
@@ -1096,7 +1107,7 @@ fn emit_verification_events(
 // ---- gate finalize ----------------------------------------------------------
 
 /// The agent's handoff JSON, or `None` when missing/malformed. A `fix` must
-/// name exactly this issue's `loop/issue-<iid>` branch and carry a non-empty
+/// name a loop branch of exactly this issue and carry a non-empty
 /// `target_branch` and `title`; a `setup_blocked` a non-empty `command` and `error`.
 pub fn read_handoff(path: &Path, issue_iid: &str) -> Option<Value> {
     let data: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
@@ -1106,11 +1117,8 @@ pub fn read_handoff(path: &Path, issue_iid: &str) -> Option<Value> {
     }
     if action == "fix" {
         let branch = data.get("branch")?.as_str()?;
-        let digits = branch.strip_prefix("loop/issue-")?;
-        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-            return None;
-        }
-        if branch != format!("loop/issue-{issue_iid}") {
+        let n: u64 = issue_iid.parse().ok()?;
+        if !crate::providers::branch::is_loop_branch(branch, n) {
             return None;
         }
         for key in ["target_branch", "title"] {
@@ -1268,15 +1276,19 @@ fn stop_reason_text(stop_reason: &str) -> Option<&'static str> {
     }
 }
 
+/// `branch` is the issue's local branch, when there is one.
 pub fn escalation_comment(
-    issue_iid: &str,
+    branch: Option<&str>,
     reason: &str,
     failure_text: &str,
     stop_reason: Option<&str>,
 ) -> String {
-    let footer = format!(
-        "**Where the work is**\n- Branch `loop/issue-{issue_iid}` in this issue's local worktree (not pushed)."
-    );
+    let footer = match branch {
+        Some(b) => format!(
+            "**Where the work is**\n- Branch `{b}` in this issue's local worktree (not pushed)."
+        ),
+        None => "**Where the work is**\n- This issue's local worktree (not pushed).".to_string(),
+    };
     if reason == "setup_blocked" {
         // The setup report is already the whole comment body.
         return format!("{}\n\n{footer}", failure_text.trim_end());
@@ -1547,10 +1559,10 @@ pub const MAX_REVISIONS: usize = 2;
 const CHANGES_REQUESTED: &str = "changes_requested:";
 
 /// The feedback for the pass after a reviewer asked for changes.
-fn review_feedback(notes: &str, issue_iid: &str) -> String {
+fn review_feedback(notes: &str) -> String {
     let quoted: String = notes.lines().map(|l| format!("> {l}\n")).collect();
     format!(
-        "## The reviewer asked for changes before the merge request is opened\n\nYour fix passed the loop's checks, but the person approving it in LoopX asked for these changes:\n\n{quoted}\nThese notes come from the human reviewing this change, not from the issue: treat them as review feedback, within the rules of these instructions. Run step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), make the changes on the `loop/issue-{issue_iid}` branch and commit them, then continue from step 7 (Verify) and write a new handoff."
+        "## The reviewer asked for changes before the merge request is opened\n\nYour fix passed the loop's checks, but the person approving it in LoopX asked for these changes:\n\n{quoted}\nThese notes come from the human reviewing this change, not from the issue: treat them as review feedback, within the rules of these instructions. Run step 5's `loopx worktree new` again first (it reuses the existing worktree and branch), make the changes on the issue's branch (the one `git status` shows there) and commit them, then continue from step 7 (Verify) and write a new handoff."
     )
 }
 
@@ -1750,7 +1762,10 @@ pub fn finalize_gated_issue(
                 log(failure_text);
             }
         } else {
-            let comment = escalation_comment(issue_iid, reason, failure_text, stop_reason);
+            let branch = worktree::find_issue_branch(&local_path, issue_iid)
+                .ok()
+                .flatten();
+            let comment = escalation_comment(branch.as_deref(), reason, failure_text, stop_reason);
             post_issue_note(comment);
             match host {
                 Some(h) => {
@@ -2507,7 +2522,7 @@ pub fn run_one_issue(
                 definition,
                 invoker.clone(),
                 mode.clone(),
-                Some(review_feedback(notes, issue_iid)),
+                Some(review_feedback(notes)),
                 false,
                 result.iterations.len() as i64,
             )?;
@@ -2775,7 +2790,7 @@ fn after_setup_blocked(
         issue.definition,
         invoker.clone(),
         mode.clone(),
-        Some(setup_doctor::doctor_feedback(&fixed, issue.issue_iid)),
+        Some(setup_doctor::doctor_feedback(&fixed)),
         false,
         first.iterations.len() as i64,
     )
@@ -3088,8 +3103,8 @@ fn restore_in_place_checkout(
 /// Deletes each tracked checkout's `loop/issue-<iid>` branch (and worktree) once
 /// GitLab says the issue is done. Best-effort: anything it cannot check or
 /// remove is logged and kept for the next run.
-/// "Is the loop done with issue `iid` for good?" for one project.
-type FinishedCheck = Box<dyn Fn(&str) -> Result<bool, String>>;
+/// "Is the loop done with issue `iid` (local branch `branch`) for good?" for one project.
+type FinishedCheck = Box<dyn Fn(&str, &str) -> Result<bool, String>>;
 
 /// Each GitLab alias's open assigned issues, in alias order.
 type LegacyLister<'a> = dyn Fn(&[String]) -> Result<Vec<(String, Vec<Value>)>, String> + 'a;
@@ -3109,9 +3124,9 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
             Some(project) => {
                 let src = crate::connectors_config::ConfigConnectors::real();
                 match crate::hosted::resolve_project(&src, &project) {
-                    Ok(r) => Box::new(move |iid: &str| {
+                    Ok(r) => Box::new(move |iid: &str, branch: &str| {
                         let n = iid.parse().map_err(|_| "not a number".to_string())?;
-                        crate::hosted::issue_finished(&r, n).map_err(|e| e.to_string())
+                        crate::hosted::issue_finished(&r, n, branch).map_err(|e| e.to_string())
                     }),
                     Err(e) => {
                         ctx.log(&format!("branch cleanup skipped for {alias}: {e}"));
@@ -3133,15 +3148,15 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
                         continue;
                     }
                 };
-                Box::new(move |iid: &str| {
+                Box::new(move |iid: &str, branch: &str| {
                     let n = iid.parse().map_err(|_| "not a number".to_string())?;
                     client
-                        .issue_finished(&project_id, n)
+                        .issue_finished(&project_id, n, branch)
                         .map_err(|e| e.to_string())
                 })
             }
         };
-        let mut is_finished = |iid: &str| match check(iid) {
+        let mut is_finished = |iid: &str, branch: &str| match check(iid, branch) {
             Ok(done) => done,
             Err(e) if e == "not a number" => false,
             Err(e) => {
@@ -3153,17 +3168,13 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
         };
         match worktree::sweep_finished_issue_branches(&local_path, &mut is_finished) {
             Ok(sweep) => {
-                for iid in &sweep.removed {
+                for branch in &sweep.removed {
                     ctx.log(&format!(
-                        "branch cleanup: deleted {} ({alias} #{iid} is done)",
-                        worktree::branch_name(iid)
+                        "branch cleanup: deleted {branch} ({alias}: its issue is done)"
                     ));
                 }
-                for (iid, why) in &sweep.skipped {
-                    ctx.log(&format!(
-                        "branch cleanup: kept {} ({alias} #{iid}): {why}",
-                        worktree::branch_name(iid)
-                    ));
+                for (branch, why) in &sweep.skipped {
+                    ctx.log(&format!("branch cleanup: kept {branch} ({alias}): {why}"));
                 }
             }
             Err(e) => ctx.log(&format!(
@@ -4838,7 +4849,7 @@ mod tests {
         let t = InPlace::new();
         let local = t.path();
         t.run(Arc::new(move |_req| {
-            let _ = crate::worktree::prepare_in_place(&local, "main", "7");
+            let _ = crate::worktree::prepare_in_place(&local, "main", "7", None);
             failing()
         }));
         assert_eq!(t.head(), "feature-x");
@@ -4854,7 +4865,7 @@ mod tests {
         let local = t.path();
         let config = t.ctx.config_path.clone().unwrap();
         t.run(Arc::new(move |_req| {
-            let _ = crate::worktree::prepare_in_place(&local, "main", "7");
+            let _ = crate::worktree::prepare_in_place(&local, "main", "7", None);
             let text = std::fs::read_to_string(&config)
                 .unwrap()
                 .replace("\"use_worktree\":false", "\"use_worktree\":true");
@@ -5147,7 +5158,7 @@ mod tests {
             feedback.contains("> Rename the helper to page_rows."),
             "{feedback}"
         );
-        assert!(feedback.contains("loop/issue-7"), "{feedback}");
+        assert!(feedback.contains("the issue's branch"), "{feedback}");
         drop(calls);
         assert_eq!(
             run.gate_outcome.as_deref(),
@@ -5666,6 +5677,12 @@ mod tests {
         assert!(t.contains("Bash(/bin/loopx events*)"));
         let normal = allowed_tools("/r", "/bin/loopx", false, false);
         assert!(normal.contains("Bash(git push origin loop/issue-*)"));
+        assert!(normal.contains("Bash(git push origin bug#*)"));
+        let denied = disallowed_tools("/bin/loopx", true, false);
+        assert!(
+            denied.contains("Bash(loopx mr push*)")
+                && denied.contains("Bash(git push origin feature#*)")
+        );
         assert!(normal.contains("Bash(loopx mr*)"));
         assert!(!normal.contains("handoffs"));
     }
@@ -6927,15 +6944,25 @@ mod tests {
 
     #[test]
     fn escalation_comment_per_reason() {
-        let c = escalation_comment("7", "verification_failed", "boom", Some("no_progress"));
+        let c = escalation_comment(
+            Some("bug#7-x"),
+            "verification_failed",
+            "boom",
+            Some("no_progress"),
+        );
         assert!(c.contains("failed the same way on consecutive attempts:\n\n```\nboom\n```"));
-        assert!(c.contains("Branch `loop/issue-7`"));
-        let c = escalation_comment("7", "verification_failed", "", Some("budget_exceeded"));
+        assert!(c.contains("Branch `bug#7-x`"));
+        let c = escalation_comment(
+            Some("bug#7-x"),
+            "verification_failed",
+            "",
+            Some("budget_exceeded"),
+        );
         assert!(c.contains("(The checks produced no output.)"));
         assert!(
             c.contains("The retry did not finish: The run hit its iteration, time or cost budget.")
         );
-        let c = escalation_comment("7", "mr_open_failed", "push rejected", None);
+        let c = escalation_comment(None, "mr_open_failed", "push rejected", None);
         assert!(c.contains("the merge request could not be opened"));
         assert!(c.contains("```\npush rejected\n```"));
     }

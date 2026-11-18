@@ -102,7 +102,7 @@ Project object:
 | `project_id` | string | yes | GitLab path (`group/sub/project`) or numeric id as string. A URL is only derivable when it contains `/`. Non-empty on dashboard save. |
 | `local_path` | string | yes | Absolute checkout path. Dashboard saves it stripped, may be `""`. |
 | `target_branch` | string | yes | Branch worktrees are cut from / MRs target. May be `""` when saved from the UI. |
-| `use_worktree` | bool | optional | Default `true`. `false`: issues are worked on a `loop/issue-<iid>` branch of `local_path` itself (refused when the checkout is dirty; the original branch is restored after the issue). |
+| `use_worktree` | bool | optional | Default `true`. `false`: issues are worked on a `feature#<iid>-<slug>` / `bug#<iid>-<slug>` branch of `local_path` itself (refused when the checkout is dirty; the original branch is restored after the issue). |
 | `install_cmd` | string | optional | A **hint** only: the agent chooses its own commands (step 7 of `instructions/loopx/gitlab-issue.md`) and starts from this. Not written by the dashboard; kept when it saves. |
 | `lint_cmd` | string | optional | Hint, as above. In gate mode it is also the verifier's fallback when the agent logged no lint command. See `CLAUDE.md` on pass-an-explicit-path (`rubocop .`) and `--cache false`. |
 | `test_cmd` | string | optional | Hint, as above; the verifier's fallback when the agent logged no test command. |

@@ -872,6 +872,9 @@ mod tests {
     struct NoWorkspace;
 
     impl Workspace for NoWorkspace {
+        fn branch(&self) -> String {
+            "loop/issue-7".into()
+        }
         fn sync(&self) -> Result<Branch, String> {
             Err("no git here".into())
         }

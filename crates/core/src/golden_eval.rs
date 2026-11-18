@@ -239,7 +239,7 @@ pub fn worktree_path(repo: &Path, root: &Path) -> PathBuf {
 }
 
 /// A fresh git repo with the case's files committed as `initial` (also tagged
-/// `initial`), a local bare `origin`, and issue 1's worktree on `loop/issue-1`.
+/// `initial`), a local bare `origin`, and issue 1's worktree on `feature#1`.
 pub fn build_fixture(case: &GoldenCase, root: &Path) -> Result<PathBuf, String> {
     let io = |e: std::io::Error| e.to_string();
     let repo = root.join("fixture-repo");
@@ -289,6 +289,7 @@ pub fn build_fixture(case: &GoldenCase, root: &Path) -> Result<PathBuf, String> 
         DEFAULT_BRANCH,
         &ISSUE_IID.to_string(),
         &root.join("worktrees").display().to_string(),
+        None,
     )
     .map_err(|f| f.message)?;
     Ok(repo)

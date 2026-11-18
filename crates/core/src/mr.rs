@@ -3,7 +3,7 @@
 
 /// The loop may only ever push its own issue branches.
 pub fn check_branch(branch: &str) -> Result<(), String> {
-    if branch.starts_with("loop/issue-") {
+    if crate::providers::branch::is_any_loop_branch(branch) {
         Ok(())
     } else {
         Err(format!("Refusing to push non-loop branch: {branch}"))
@@ -53,9 +53,18 @@ mod tests {
 
     #[test]
     fn only_loop_issue_branches_pass() {
-        assert!(check_branch("loop/issue-5").is_ok());
+        for good in [
+            "loop/issue-5",
+            "feature#5-dark-mode",
+            "bug#1303-dashboard-scrollbar",
+        ] {
+            assert!(check_branch(good).is_ok(), "{good}");
+        }
         for bad in [
             "staging",
+            "feature#",
+            "feat#5",
+            "bug#5-Has Space",
             "main",
             "loop/issues-1",
             "xloop/issue-1",

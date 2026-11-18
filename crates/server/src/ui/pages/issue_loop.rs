@@ -650,7 +650,7 @@ fn live_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Worktrees view: every local `loop/issue-<iid>` branch of the tracked checkouts
+// Worktrees view: every local issue branch of the tracked checkouts
 
 const WORKTREES_URL: &str = "/loops/issue-loop?view=worktrees";
 
@@ -792,7 +792,7 @@ fn wt_snippet_card(ctx: &UiCtx) -> String {
         esc_t(ctx, "Switch to a worktree"),
         esc_t(ctx, "Copied"),
         esc_t(ctx, "Copy"),
-        esc_t(ctx, "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch (for example wt loop/issue-7) to jump into its worktree and check the change."),
+        esc_t(ctx, "Add this function to your ~/.zshrc or ~/.bashrc. Then, from inside the project's checkout, run wt with an issue branch in quotes (for example wt 'bug#7-login-crash') to jump into its worktree and check the change."),
         highlight_shell(WT_SNIPPET),
     )
 }
@@ -899,11 +899,11 @@ fn remove_worktree(ctx: &UiCtx) -> UiResponse {
         (false, ctx.t("The issue loop is running - wait for it to finish or stop it before removing a worktree"))
     } else if let Some((_, local_path)) = tracked_checkouts(ctx).into_iter().find(|(a, _)| a == alias) {
         match worktree::remove_issue_branch(&local_path, &iid) {
-            Ok(()) => (
+            Ok(branch) => (
                 true,
                 ctx.tf(
                     "Removed {branch} for {alias} #{iid}",
-                    &[("branch", &worktree::branch_name(&iid)), ("alias", alias), ("iid", &iid)],
+                    &[("branch", &branch), ("alias", alias), ("iid", &iid)],
                 ),
             ),
             Err(e) => (false, e.message),
@@ -4036,8 +4036,8 @@ mod tests {
         let root = sb.path("wt");
         sb.seed_projects(json!({"gitlab_instance": "g", "assignee_username": "me", "worktree_root": root,
             "projects": {"app": {"project_id": "g/app", "local_path": local, "target_branch": "main"}}}));
-        let wt7 = worktree::new_worktree(&local, "main", "7", &root).unwrap();
-        worktree::new_worktree(&local, "main", "8", &root).unwrap();
+        let wt7 = worktree::new_worktree(&local, "main", "7", &root, None).unwrap();
+        worktree::new_worktree(&local, "main", "8", &root, None).unwrap();
         std::fs::write(Path::new(&wt7).join("wip.txt"), "x").unwrap();
         (sb, wt7)
     }
@@ -4052,7 +4052,7 @@ mod tests {
         assert!(body.contains("href='https://g.example/g/app/-/issues/7'"), "{body}");
         // Not in the cached Tasks list: linked from the instance URL instead.
         assert!(body.contains("href='https://g.example/g/app/-/issues/8'"), "{body}");
-        assert!(body.contains("<code>loop/issue-7</code>") && body.contains("<code>loop/issue-8</code>"), "{body}");
+        assert!(body.contains("<code>feature#7</code>") && body.contains("<code>feature#8</code>"), "{body}");
         assert!(body.contains(&pyfmt::escape(&wt7)) || body.contains("app-issue-7"), "{body}");
         assert!(body.contains("Uncommitted changes"), "{body}");
         assert!(body.contains("<form method='post' action='/gitlab/worktrees/app/7/remove'"), "{body}");
@@ -4120,7 +4120,7 @@ mod tests {
         assert!(location.ends_with("&ok=1"), "{location}");
         assert!(!Path::new(&wt7).exists());
         let body = worktrees_body(&sb.ctx(), None, true);
-        assert!(!body.contains("<code>loop/issue-7</code>") && body.contains("<code>loop/issue-8</code>"), "{body}");
+        assert!(!body.contains("<code>feature#7</code>") && body.contains("<code>feature#8</code>"), "{body}");
 
         assert!(post(state, "/gitlab/worktrees/nope/8/remove").header("Location").unwrap().ends_with("&ok=0"));
         assert!(post(state, "/gitlab/worktrees/app/7/remove").header("Location").unwrap().ends_with("&ok=0"));

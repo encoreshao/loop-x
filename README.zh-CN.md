@@ -84,7 +84,7 @@ Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划�
 1. 列出配置中每个项目别名下、分配给你所配置用户名的所有未关闭 GitLab issue。
 2. **逐个处理，绝不并行**，遵循 [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md) 中的分步决策流程。
 3. 对每个 issue 只执行以下其中一项：
-  - **修复**——在隔离的 git worktree 中、在 `loop/issue-<iid>` 分支上进行，只有在项目自身的 lint/test 命令通过后才会创建 merge request。
+  - **修复**——在隔离的 git worktree 中、在 `feature#<iid>-<slug>` / `bug#<iid>-<slug>` 分支上进行，只有在项目自身的 lint/test 命令通过后才会创建 merge request。
   - **回答**——当请求无需改代码时（提问、状态查询），发布一条 GitLab 评论。
   - **升级**——当请求含义不明确或验证失败时，发布一条 GitLab 评论请求澄清。
 4. 每个 issue 发送一条 Slack 消息，并在运行结束时发送一份汇总（每次运行都会发送，即使当天早上没有任何分配给你的 issue）。
@@ -188,7 +188,7 @@ bin/scripts/uninstall-loopx.sh --keep-config   # 去掉 --keep-config 则全部�
 │   ├── status/<loop_name>.json   #   every other registered loop's current/last run status
 │   └── history/<date>.{md,log}   #   every past run's report + log
 └── worktrees/                    # ← per-issue git worktrees for tracked projects (gitignored)
-    └── <project>-issue-<iid>/    #   that project's own checkout, on branch loop/issue-<iid>
+    └── <project>-issue-<iid>/    #   that project's own checkout, on branch feature#<iid>-<slug>
 ```
 
 无论本仓库检出在哪里，`projects.json`、`topics.json`、`loops.json`、`instructions.md` 和 `ai_cli.json` 始终解析到 `~/.loopx/…`。`projects.json` 生成时的 `worktree_root` 默认也是 `~/.loopx/worktrees`。
@@ -338,7 +338,7 @@ loopx run topic-loop    # the topic monitor loop
 | `loopx topic` | 主题注册表（`topics.json`）、每个主题滚动 7 天的去重窗口，以及主题监控运行（`loopx topic run`） |
 | `loopx inbox run`, `loopx loopkit` | Inbox Triage 运行器；运行 LoopKit 插件 |
 | `loopx notify`, `loopx notify-loop` | 向配置的 Slack incoming webhook 发送消息；将循环的通知路由到它的连接器 |
-| `loopx worktree new`, `loopx mr open` | 在 `loop/issue-<iid>` 分支上创建（或复用）隔离的 git worktree；推送 issue 分支并开 MR——拒绝任何不以 `loop/issue-*` 命名的分支 |
+| `loopx worktree new`, `loopx mr open` | 在 `feature#<iid>-<slug>` / `bug#<iid>-<slug>` 分支上创建（或复用）隔离的 git worktree；推送 issue 分支并开 MR——拒绝任何不以 `feature#*` / `bug#*` 命名的分支 |
 | `loopx gitlab`, `loopx secrets`, `loopx auth` | GitLab REST 辅助工具与缓存；钥匙串中的连接器机密；Google/LinkedIn OAuth 登录 |
 | `loopx serve`, `loopx chat-tool` | 仪表盘后端和 Mac 应用的 API；仪表盘聊天助手唯一可以运行的命令 |
 | `loopx loop`, `loopx events`, `loopx ledger`, `loopx metrics`, `loopx cost`, `loopx risk`, `loopx learning` | 循环定义（init、validate、audit、eval 等）、事件台账以及基于它生成的报告 |
@@ -357,7 +357,7 @@ loopx run topic-loop    # the topic monitor loop
 这些边界是固定的，不会随时间或多次成功而放宽（参见 [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)）：
 
 - **从不合并 merge request。** 循环的工作止于“MR 已创建、验证通过”——合并始终是人工手动步骤。
-- 每次代码变更都在独立的 git worktree 中、在 `loop/issue-<iid>` 分支上进行，绝不直接在目标分支上修改。
+- 每次代码变更都在独立的 git worktree 中、在 `feature#<iid>-<slug>` / `bug#<iid>-<slug>` 分支上进行，绝不直接在目标分支上修改。
 - 只有当循环自己重新运行代理记录的测试/lint 命令并通过，且 diff 只涉及与该 issue 相关的文件时，才会创建 MR。
 - 不允许任意 shell 命令、不升级依赖、不读取 `.env`/凭据/SSH 密钥——只允许 `instructions/loopx/gitlab-issue.md` 中的命令白名单。
 - issue 逐个按顺序处理，绝不并行。

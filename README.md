@@ -63,7 +63,7 @@ Only the GitLab issues and topic monitor loops are on by default. Turn on the re
 
 - **It never merges.** It stops at an open merge request, and merging is always your call.
 - **It never sends email**, and it never deletes or moves any.
-- **It only touches projects you list.** Each change is made on its own `loop/issue-<iid>` branch in an isolated worktree, and a merge request opens only if your project's own lint and tests pass.
+- **It only touches projects you list.** Each change is made on its own `feature#<iid>-<slug>` / `bug#<iid>-<slug>` branch in an isolated worktree, and a merge request opens only if your project's own lint and tests pass.
 - **Your secrets stay in the macOS Keychain**, never in plain files.
 
 The full list is in [Safety boundaries](docs/reference.md#safety-boundaries).

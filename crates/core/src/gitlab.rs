@@ -457,32 +457,62 @@ impl Client {
     }
 
     /// Is the loop done with this issue for good: closed, or the MR from its
-    /// `loop/issue-<iid>` branch merged? Decides when that branch is deleted.
-    pub fn issue_finished(&self, project_id: &str, iid: i64) -> Result<bool, GitlabError> {
+    /// local loop branch `branch` merged? Decides when that branch is deleted.
+    pub fn issue_finished(
+        &self,
+        project_id: &str,
+        iid: i64,
+        branch: &str,
+    ) -> Result<bool, GitlabError> {
         let base = format!("projects/{}", quote(project_id));
         let issue = self.get_json(&format!("{base}/issues/{iid}"))?;
         if issue.get("state").and_then(Value::as_str) == Some("closed") {
             return Ok(true);
         }
-        let branch = crate::worktree::branch_name(&iid.to_string());
         let merged = self.get_all(
             &format!("{base}/merge_requests"),
-            &[("source_branch", &branch), ("state", "merged")],
+            &[("source_branch", branch), ("state", "merged")],
         )?;
         Ok(!merged.is_empty())
     }
 
-    /// The open merge request from the loop's `loop/issue-<iid>` branch, as
-    /// `{iid, web_url, created_at}`, or `None` when there is none.
+    /// The loop's branches for issue `iid` on the remote: any `feature#<iid>…`
+    /// or `bug#<iid>…` branch (whatever slug it was created with), then the
+    /// legacy `loop/issue-<iid>`, which is always included because it may only
+    /// survive as a merged or closed MR's source branch.
+    pub fn loop_branches(&self, project_id: &str, iid: i64) -> Result<Vec<String>, GitlabError> {
+        let n = u64::try_from(iid).unwrap_or(0);
+        let found = self.get_all(
+            &format!("projects/{}/repository/branches", quote(project_id)),
+            &[("search", &format!("#{iid}"))],
+        )?;
+        let mut out: Vec<String> = found
+            .iter()
+            .filter_map(|b| b.get("name").and_then(Value::as_str))
+            .filter(|b| crate::providers::branch::is_loop_branch(b, n))
+            .map(str::to_string)
+            .collect();
+        out.push(crate::providers::branch::legacy_branch_name(n));
+        Ok(out)
+    }
+
+    /// The open merge request from one of the loop's branches for issue `iid`
+    /// ([`Self::loop_branches`]), as `{iid, web_url, created_at}`, or `None`.
     pub fn loop_merge_request(
         &self,
         project_id: &str,
         iid: i64,
     ) -> Result<Option<Value>, GitlabError> {
         let base = format!("projects/{}/merge_requests", quote(project_id));
-        let branch = crate::worktree::branch_name(&iid.to_string());
-        let open = self.get_all(&base, &[("source_branch", &branch), ("state", "opened")])?;
-        let Some(mr) = open.into_iter().next() else {
+        let mut mr = None;
+        for branch in self.loop_branches(project_id, iid)? {
+            let open = self.get_all(&base, &[("source_branch", &branch), ("state", "opened")])?;
+            if let Some(found) = open.into_iter().next() {
+                mr = Some(found);
+                break;
+            }
+        }
+        let Some(mr) = mr else {
             return Ok(None);
         };
         let mr_iid = mr.get("iid").cloned().unwrap_or(Value::Null);
@@ -743,6 +773,11 @@ mod tests {
             (
                 200,
                 "Content-Type: application/json\r\n",
+                json!([{"name": "feature#70-other"}, {"name": "bug#7-login-crash"}]).to_string(),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
                 json!([{"iid": 5, "web_url": "https://g.test/mr/5", "state": "opened", "created_at": "2026-11-06T09:00:00Z"}])
                     .to_string(),
             ),
@@ -757,14 +792,37 @@ mod tests {
         assert!(mr.get("notes").is_none());
         let requests = served.requests.lock().unwrap();
         assert!(
-            requests[0].contains("source_branch=loop%2Fissue-7")
-                && requests[0].contains("state=opened"),
+            requests[0].contains("/repository/branches") && requests[0].contains("search=%237"),
             "{}",
             requests[0]
         );
-        assert_eq!(requests.len(), 1, "only the MR lookup, no notes request");
-        drop(requests);
+        assert!(
+            requests[1].contains("source_branch=bug%237-login-crash")
+                && requests[1].contains("state=opened"),
+            "{}",
+            requests[1]
+        );
+        assert_eq!(requests.len(), 2, "branches, then the MR; no notes request");
+    }
+
+    #[test]
+    fn a_legacy_loop_branch_still_finds_its_merge_request() {
+        let url = stub(|path| {
+            if path.contains("/repository/branches") {
+                "[]"
+            } else if path.contains("source_branch=loop%2Fissue-7") {
+                r#"[{"iid": 3, "web_url": "u", "state": "opened"}]"#
+            } else {
+                "[]"
+            }
+        });
+        let client = Client::new(&url, "t".into());
+        assert_eq!(
+            client.loop_merge_request("g/web", 7).unwrap().unwrap()["iid"],
+            3
+        );
         assert!(client.loop_merge_request("g/web", 8).unwrap().is_none());
+        assert_eq!(client.loop_branches("g/web", 8).unwrap(), ["loop/issue-8"]);
     }
 
     #[test]
@@ -899,17 +957,16 @@ mod tests {
                 r#"{"iid": 1, "state": "closed"}"#
             } else if path.contains("/issues/") {
                 r#"{"state": "opened"}"#
-            } else if path.contains("source_branch=loop%2Fissue-2") && path.contains("state=merged")
-            {
+            } else if path.contains("source_branch=bug%232-x") && path.contains("state=merged") {
                 r#"[{"iid": 9, "state": "merged"}]"#
             } else {
                 "[]"
             }
         });
         let client = Client::new(&url, "t".into());
-        assert!(client.issue_finished("g/app", 1).unwrap());
-        assert!(client.issue_finished("g/app", 2).unwrap());
-        assert!(!client.issue_finished("g/app", 3).unwrap());
+        assert!(client.issue_finished("g/app", 1, "feature#1").unwrap());
+        assert!(client.issue_finished("g/app", 2, "bug#2-x").unwrap());
+        assert!(!client.issue_finished("g/app", 3, "feature#3").unwrap());
     }
 
     #[test]

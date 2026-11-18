@@ -25,7 +25,7 @@ Using the default install path, everything lands under one folder:
 │   ├── status/<loop_name>.json   #   every other registered loop's current/last run status
 │   └── history/<date>.{md,log}   #   every past run's report + log
 └── worktrees/                    # ← per-issue git worktrees for tracked projects (gitignored)
-    └── <project>-issue-<iid>/    #   that project's own checkout, on branch loop/issue-<iid>
+    └── <project>-issue-<iid>/    #   that project's own checkout, on branch feature#<iid>-<slug>
 ```
 
 `projects.json`, `topics.json`, `loops.json`, `instructions.md`, and `ai_cli.json` always resolve to `~/.loopx/…` regardless of where this repo is checked out. `projects.json`'s scaffolded `worktree_root` defaults to `~/.loopx/worktrees` too.
@@ -183,7 +183,7 @@ Expand for the full list
 | `loopx topic` | Topic registry (`topics.json`), the rolling 7-day dedup window per topic, and the topic monitor run (`loopx topic run`) |
 | `loopx inbox run`, `loopx loopkit` | The Inbox Triage runner; runs a LoopKit plugin |
 | `loopx notify`, `loopx notify-loop` | Posts a message to the configured Slack incoming webhook; routes a loop's notification to its connectors |
-| `loopx worktree new`, `loopx mr open` | Creates (or reuses) an isolated git worktree on a `loop/issue-<iid>` branch; pushes an issue branch and opens its MR — refuses anything not named `loop/issue-*` |
+| `loopx worktree new`, `loopx mr open` | Creates (or reuses) an isolated git worktree on a `feature#<iid>-<slug>` / `bug#<iid>-<slug>` branch; pushes an issue branch and opens its MR — refuses anything not named `feature#*` / `bug#*` |
 | `loopx screenshot` | Headless PNG of a page on localhost for an MR's before/after screenshots, using the Chrome already installed on the Mac: optionally starts an allowlisted dev server (`--serve "yarn dev"`), mocks backend calls (`--mock`), fakes a signed-in session (`--session`), and blocks every other origin. One `--timeout-s` budget (default 90 s) covers the server and the capture; a signal stops both and removes the temp Chrome profile |
 | `loopx gitlab`, `loopx secrets`, `loopx auth` | GitLab REST helpers and cache; connector secrets in the Keychain; Google/LinkedIn OAuth sign-ins |
 | `loopx serve`, `loopx chat-tool` | The dashboard backend and the Mac app's API; the one command the dashboard chat assistant may run |
@@ -203,7 +203,7 @@ Expand for the full list
 Fixed, and does not loosen with time or repeated success (see [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)):
 
 - **Never merges a merge request.** The loop's job ends at "MR opened, verification passing" — merging is always a manual human step.
-- Every code change happens on a `loop/issue-<iid>` branch, never on the target branch directly: in its own git worktree, or in the checkout itself for a project tracked with worktree off.
+- Every code change happens on a `feature#<iid>-<slug>` / `bug#<iid>-<slug>` branch, never on the target branch directly: in its own git worktree, or in the checkout itself for a project tracked with worktree off.
 - The agent works out each project's install/lint/test commands and logs them; an MR only opens after the loop itself re-runs that lint and test command and they pass, and the diff only touches files relevant to the issue.
 - No arbitrary shell, no dependency upgrades, no reading `.env`/credentials/SSH keys — only the command allow-list in `instructions/loopx/gitlab-issue.md`.
 - Issues are processed one at a time, sequentially, never in parallel.

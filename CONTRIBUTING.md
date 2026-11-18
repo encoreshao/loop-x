@@ -239,7 +239,7 @@ config, logs, error messages or test fixtures.
 ### Safety boundaries are product promises
 
 LoopX never merges, never sends or deletes email, and only touches listed
-projects on `loop/issue-<iid>` branches in isolated worktrees. A change that
+projects on `feature#<iid>-<slug>` / `bug#<iid>-<slug>` branches in isolated worktrees. A change that
 loosens any of these needs an explicit discussion first. The full list is in
 [`docs/reference.md#safety-boundaries`](docs/reference.md#safety-boundaries).
 

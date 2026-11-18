@@ -84,7 +84,7 @@ Chaque exécution planifiée (`loopx run issue-loop`) :
 1. Liste tous les tickets GitLab ouverts assignés au nom d'utilisateur configuré, sur chaque alias de projet de votre configuration.
 2. Les traite **un par un, jamais en parallèle**, en suivant la procédure de décision pas à pas de [`instructions/loopx/gitlab-issue.md`](https://github.com/encoreshao/loop-x/blob/main/instructions/loopx/gitlab-issue.md).
 3. Pour chaque ticket, fait exactement l'une des actions suivantes :
-  - **Le corriger** — dans un git worktree isolé, sur une branche `loop/issue-<iid>`, en n'ouvrant une merge request qu'une fois les commandes de lint/test du projet passées.
+  - **Le corriger** — dans un git worktree isolé, sur une branche `feature#<iid>-<slug>` / `bug#<iid>-<slug>`, en n'ouvrant une merge request qu'une fois les commandes de lint/test du projet passées.
   - **Y répondre** — publier un commentaire GitLab quand la demande ne nécessite aucune modification de code (une question, un point d'étape).
   - **L'escalader** — publier un commentaire GitLab demandant des précisions quand la demande est ambiguë ou quand la vérification échoue.
 4. Envoie un message Slack par ticket plus un récapitulatif de fin d'exécution (à chaque exécution, même les matins sans rien d'assigné).
@@ -188,7 +188,7 @@ Avec le chemin d'installation par défaut, tout se retrouve dans un seul dossier
 │   ├── status/<loop_name>.json   #   every other registered loop's current/last run status
 │   └── history/<date>.{md,log}   #   every past run's report + log
 └── worktrees/                    # ← per-issue git worktrees for tracked projects (gitignored)
-    └── <project>-issue-<iid>/    #   that project's own checkout, on branch loop/issue-<iid>
+    └── <project>-issue-<iid>/    #   that project's own checkout, on branch feature#<iid>-<slug>
 ```
 
 `projects.json`, `topics.json`, `loops.json`, `instructions.md` et `ai_cli.json` se résolvent toujours vers `~/.loopx/…`, quel que soit l'endroit où ce dépôt est cloné. Le `worktree_root` généré dans `projects.json` vaut lui aussi `~/.loopx/worktrees` par défaut.
@@ -338,7 +338,7 @@ Dépliez pour la liste complète
 | `loopx topic` | Le registre des sujets (`topics.json`), la fenêtre glissante de dédoublonnage de 7 jours par sujet et l'exécution du suivi de sujets (`loopx topic run`) |
 | `loopx inbox run`, `loopx loopkit` | Le runner Inbox Triage ; exécute un plugin LoopKit |
 | `loopx notify`, `loopx notify-loop` | Publie un message sur le webhook entrant Slack configuré ; route la notification d'une boucle vers ses connecteurs |
-| `loopx worktree new`, `loopx mr open` | Crée (ou réutilise) un worktree git isolé sur une branche `loop/issue-<iid>` ; pousse une branche de ticket et ouvre sa MR — refuse tout ce qui n'est pas nommé `loop/issue-*` |
+| `loopx worktree new`, `loopx mr open` | Crée (ou réutilise) un worktree git isolé sur une branche `feature#<iid>-<slug>` / `bug#<iid>-<slug>` ; pousse une branche de ticket et ouvre sa MR — refuse tout ce qui n'est pas nommé `feature#*` / `bug#*` |
 | `loopx gitlab`, `loopx secrets`, `loopx auth` | Utilitaires REST GitLab et cache ; secrets des connecteurs dans le Trousseau ; connexions OAuth Google/LinkedIn |
 | `loopx serve`, `loopx chat-tool` | Le backend du tableau de bord et l'API de l'application Mac ; la seule commande que l'assistant de chat du tableau de bord peut lancer |
 | `loopx loop`, `loopx events`, `loopx ledger`, `loopx metrics`, `loopx cost`, `loopx risk`, `loopx learning` | Définitions de boucles (init, validate, audit, eval, ...), le registre d'événements et les rapports qui en sont tirés |
@@ -357,7 +357,7 @@ Dépliez pour la liste complète
 Fixes, et ne se relâchent pas avec le temps ni avec les succès répétés (voir [`docs/tasks/gitlab-issue-loop.md`](https://github.com/encoreshao/loop-x/blob/main/docs/tasks/gitlab-issue-loop.md)) :
 
 - **Ne fusionne jamais une merge request.** Le travail de la boucle s'arrête à « MR ouverte, vérification réussie » — la fusion reste toujours une étape humaine manuelle.
-- Chaque modification de code se fait dans son propre git worktree, sur une branche `loop/issue-<iid>`, jamais directement sur la branche cible.
+- Chaque modification de code se fait dans son propre git worktree, sur une branche `feature#<iid>-<slug>` / `bug#<iid>-<slug>`, jamais directement sur la branche cible.
 - Une MR n'est ouverte que si la boucle relance elle-même avec succès les commandes de test/lint consignées par l'agent, et le diff ne touche que des fichiers pertinents pour le ticket.
 - Pas de shell arbitraire, pas de mise à jour de dépendances, pas de lecture de `.env`/identifiants/clés SSH — uniquement la liste de commandes autorisées de `instructions/loopx/gitlab-issue.md`.
 - Les tickets sont traités un par un, séquentiellement, jamais en parallèle.

@@ -295,9 +295,15 @@ enum WorktreeCommand {
 
 #[derive(Subcommand)]
 enum MrCommand {
-    /// Push a loop/issue-* branch and open a merge request
+    /// Push an issue branch (feature#*, bug#*, loop/issue-*) and open a merge request
     Open {
         /// `<repo_path> <branch> <target_branch> <title>`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Push new commits on an issue branch that already has a merge request
+    Push {
+        /// `<repo_path> <branch>`
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -399,6 +405,9 @@ fn main() -> ExitCode {
         Command::Mr {
             command: MrCommand::Open { args },
         } => git_cmds::mr_open(&args),
+        Command::Mr {
+            command: MrCommand::Push { args },
+        } => git_cmds::mr_push(&args),
         Command::MrFix { args } => mr_fix_cmd::run(&args),
         Command::ReleaseMr { args } => release_mr_cmd::run(&args),
         Command::Notify { args } => notify_cmd::run(&args),
