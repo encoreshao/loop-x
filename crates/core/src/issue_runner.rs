@@ -1234,10 +1234,26 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
     }
 }
 
+/// An escalation that only describes the loop's own machinery (a crashed or
+/// budget-stopped agent session, a missing handoff, a checkout it won't touch).
+/// It says nothing about the issue, so it goes to Slack only: no issue comment
+/// or `loop:needs-human` label for the issue's readers to puzzle over.
+pub(crate) fn loop_side_escalation(reason: &str) -> bool {
+    matches!(
+        reason,
+        "run_incomplete" | "handoff_invalid" | "checkout_problem" | "project_config_error"
+    )
+}
+
 /// The one Slack message for an issue the loop escalated.
 pub fn escalation_slack(issue_link: &str, reason: &str, stop_reason: Option<&str>) -> String {
+    let where_ = if loop_side_escalation(reason) {
+        "Nothing was posted on the issue - the details are in the loop's log."
+    } else {
+        "Needs a human - the details are on the issue."
+    };
     format!(
-        "*Escalated* {issue_link}\n{}\nNeeds a human - the details are on the issue.",
+        "*Escalated* {issue_link}\n{}\n{where_}",
         escalation_reason_text(reason, stop_reason)
     )
 }
@@ -1270,20 +1286,8 @@ pub fn escalation_comment(
     } else {
         format!("\n\n```\n{failure_text}\n```")
     };
+    // Loop-side reasons (`loop_side_escalation`) never reach here: Slack only.
     let (tried, failed) = match reason {
-        "handoff_invalid" => (
-            "I worked on this issue but did not leave a valid handoff, so the loop could not tell what to do next.".to_string(),
-            "The handoff file was missing or malformed; no merge request was opened.".to_string(),
-        ),
-        "run_incomplete" => (
-            "I started on this issue, but the run stopped before I finished, so no merge request was opened.".to_string(),
-            match stop_reason {
-                Some(s) => stop_reason_text(s)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("The run stopped early ({s}).")),
-                None => "The run stopped early (None).".to_string(),
-            },
-        ),
         "approval_denied" | "approval_timeout" | "approval_unavailable"
         | "approval_changes_requested" => (
             "I fixed this and the loop's own checks passed, but opening the merge request needs a human's approval first.".to_string(),
@@ -1299,10 +1303,6 @@ pub fn escalation_comment(
                     if fenced.is_empty() { "\n(No output.)" } else { &fenced }
                 ),
             },
-        ),
-        "checkout_problem" => (
-            "This project is worked on in its own checkout (worktree off), and the loop found that checkout in a state it will not touch, so no merge request was opened.".to_string(),
-            format!("What the loop found:{fenced}"),
         ),
         "mr_open_failed" => (
             "I fixed this and the loop's own checks passed, but the merge request could not be opened.".to_string(),
@@ -1741,15 +1741,25 @@ pub fn finalize_gated_issue(
     };
 
     let escalate = |reason: &str, failure_text: &str, stop_reason: Option<&str>| -> String {
-        let comment = escalation_comment(issue_iid, reason, failure_text, stop_reason);
-        post_issue_note(comment);
-        match host {
-            Some(h) => {
-                if let Err(e) = h.tracker.add_label(issue_n, NEEDS_HUMAN_LABEL) {
-                    log(&format!("issue label failed: {e}"));
-                }
+        if loop_side_escalation(reason) {
+            log(&format!(
+                "escalated {reason} (not posted on the issue): {}",
+                escalation_reason_text(reason, stop_reason)
+            ));
+            if !failure_text.is_empty() {
+                log(failure_text);
             }
-            None => api("PUT", &notes_path, json!({"add_labels": NEEDS_HUMAN_LABEL})),
+        } else {
+            let comment = escalation_comment(issue_iid, reason, failure_text, stop_reason);
+            post_issue_note(comment);
+            match host {
+                Some(h) => {
+                    if let Err(e) = h.tracker.add_label(issue_n, NEEDS_HUMAN_LABEL) {
+                        log(&format!("issue label failed: {e}"));
+                    }
+                }
+                None => api("PUT", &notes_path, json!({"add_labels": NEEDS_HUMAN_LABEL})),
+            }
         }
         let mut data = json!({"reason": reason, "gated": true});
         if let Some(s) = stop_reason.filter(|s| !s.is_empty()) {
@@ -4870,8 +4880,9 @@ mod tests {
             std::fs::read_to_string(t.local.join("mine.txt")).unwrap(),
             "user work"
         );
-        let notes = t.notes.lock().unwrap();
-        assert!(notes.iter().any(|n| n.contains("uncommitted")), "{notes:?}");
+        assert!(t.notes.lock().unwrap().is_empty(), "nothing on the issue");
+        let log = std::fs::read_to_string(&t.ctx.unified_log).unwrap();
+        assert!(log.contains("uncommitted"), "{log}");
     }
 
     #[test]
@@ -4886,11 +4897,9 @@ mod tests {
             .unwrap();
             failing()
         }));
-        let notes = t.notes.lock().unwrap();
-        assert!(
-            notes.iter().any(|n| n.contains("loopx worktree new")),
-            "{notes:?}"
-        );
+        assert!(t.notes.lock().unwrap().is_empty(), "nothing on the issue");
+        let log = std::fs::read_to_string(&t.ctx.unified_log).unwrap();
+        assert!(log.contains("loopx worktree new"), "{log}");
     }
 
     /// A worktree-on `web` (an `InPlace` checkout plus its issue worktree on
@@ -6596,7 +6605,7 @@ mod tests {
         let m = escalation_slack(&link, "run_incomplete", Some("agent_failed"));
         assert_eq!(
             m,
-            "*Escalated* <https://g.example/g/web/-/issues/7|web #7>\nThe agent session failed or timed out (details in the loop's log).\nNeeds a human - the details are on the issue."
+            "*Escalated* <https://g.example/g/web/-/issues/7|web #7>\nThe agent session failed or timed out (details in the loop's log).\nNothing was posted on the issue - the details are in the loop's log."
         );
         let m = escalation_slack(&link, "verification_failed", None);
         assert!(
@@ -6672,6 +6681,79 @@ mod tests {
             "{}",
             sent[0]
         );
+    }
+
+    #[test]
+    fn a_loop_side_failure_is_reported_on_slack_only_never_on_the_issue() {
+        // A crashed agent session, a missing handoff or a dirty checkout says
+        // nothing about the issue itself, so the issue gets no comment or label.
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"g": {"url": "https://g.example"}}}"#,
+        )
+        .unwrap();
+        let crashed = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Failed,
+            vec![],
+            "agent_failed",
+        );
+        let done = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Completed,
+            vec![],
+            "completed",
+        );
+        let cases = [
+            (&crashed, None, "escalated:run_incomplete"),
+            (&done, None, "escalated:handoff_invalid"),
+            (
+                &done,
+                Some("dirty".to_string()),
+                "escalated:checkout_problem",
+            ),
+        ];
+        for (result, checkout_problem, want) in cases {
+            let sent = Mutex::new(Vec::<String>::new());
+            let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+            let notes = Notes(Default::default());
+            let mut ctx = RunCtx::new(d.path().into());
+            ctx.events_dir = Some(d.path().join("events"));
+            let outcome = finalize_gated_issue(
+                result,
+                "web",
+                "7",
+                "r",
+                &ctx,
+                FinalizeDeps {
+                    gitlab: Some(&notes),
+                    notifier: Some(&notifier),
+                    handoff: Some(d.path().join("none.json")),
+                    project: Some(
+                        json!({"project_id": "g/p", "local_path": "/x", "instance": "g"}),
+                    ),
+                    gitlab_config_path: Some(gitlab.clone()),
+                    checkout_problem,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(outcome, want);
+            let calls = notes.0.lock().unwrap();
+            assert!(calls.is_empty(), "{want}: wrote to the issue {calls:?}");
+            let sent = sent.lock().unwrap();
+            assert_eq!(sent.len(), 1, "{want}: {sent:?}");
+            assert!(
+                sent[0].contains("Nothing was posted on the issue"),
+                "{want}: {}",
+                sent[0]
+            );
+        }
     }
 
     #[test]
@@ -6856,12 +6938,6 @@ mod tests {
         let c = escalation_comment("7", "mr_open_failed", "push rejected", None);
         assert!(c.contains("the merge request could not be opened"));
         assert!(c.contains("```\npush rejected\n```"));
-        let c = escalation_comment("7", "handoff_invalid", "", None);
-        assert!(c.contains("did not leave a valid handoff"));
-        let c = escalation_comment("7", "run_incomplete", "", Some("agent_failed"));
-        assert!(c.contains("The agent session failed or timed out"));
-        let c = escalation_comment("7", "run_incomplete", "", Some("weird"));
-        assert!(c.contains("The run stopped early (weird)."));
     }
 
     #[test]
