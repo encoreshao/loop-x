@@ -29,10 +29,10 @@ public enum StartScreen {
             """
         let footer = version.isEmpty ? "" : "<footer>v\(escape(version))</footer>"
         return """
-        <html><head><meta name='color-scheme' content='light dark'><style>
+        <html><head><meta charset='utf-8'><meta name='color-scheme' content='light dark'><style>
         .\(TitlebarChrome.dragStripClass){position:fixed;top:0;left:0;right:0;height:28px;z-index:10}
-        :root{--bg:#f5f5f7;--fg:#1d1d1f;--sub:#6e6e73;--accent:#0a84ff;--track:rgba(0,0,0,.08);--err:#c0392b;--mark:104px}
-        @media(prefers-color-scheme:dark){:root{--bg:#0b0b10;--fg:#f5f5f7;--sub:rgba(245,245,247,.55);--accent:#a78bfa;--track:rgba(255,255,255,.1);--err:#ff6b5e;--mark:180px}}
+        :root{--bg:#f5f5f7;--fg:#1d1d1f;--sub:#6e6e73;--accent:#0a84ff;--track:rgba(0,0,0,.08);--err:#c0392b;--mark:min(104px,24vh)}
+        @media(prefers-color-scheme:dark){:root{--bg:#0b0b10;--fg:#f5f5f7;--sub:rgba(245,245,247,.55);--accent:#a78bfa;--track:rgba(255,255,255,.1);--err:#ff6b5e;--mark:min(180px,34vh)}}
         html{background:var(--bg)}
         @media(prefers-color-scheme:dark){html{background:radial-gradient(ellipse at 50% 42%,#1b1530 0%,#0b0b10 70%) fixed,#0b0b10}}
         html,body{height:100%;margin:0;overflow:hidden}

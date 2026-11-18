@@ -83,6 +83,16 @@ import Testing
         #expect(!h.contains("Encore Shao") && !h.contains("mailto:") && !h.contains("daily grind"))
     }
 
+    @Test func theMarkShrinksInAShortWindowSoTheStatusNeverOverlapsTheName() {
+        let h = html()
+        #expect(h.contains("--mark:min(104px,24vh)"))
+        #expect(h.contains("--mark:min(180px,34vh)"))
+    }
+
+    @Test func declaresUTF8SoTheEllipsisRenders() {
+        #expect(html().hasPrefix("<html><head><meta charset='utf-8'>"))
+    }
+
     @Test func keepsTheTitlebarDragStrip() {
         #expect(html().contains("class='\(TitlebarChrome.dragStripClass)'"))
     }
