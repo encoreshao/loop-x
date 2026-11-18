@@ -34,6 +34,7 @@ outputs/agent-activity.json
 # Claude Code / superpowers runtime state - session-local, not project source
 .claude/
 .superpowers/
+.impeccable/
 
 # Design specs/plans written while building each feature - internal working
 # notes, not something someone using this loop needs; kept locally, not in git.
