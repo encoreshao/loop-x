@@ -22,6 +22,8 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     private var introPlayed = false
     private var introPending = false
     private var introTarget: URL?
+    /// Starts the intro hold when the start screen has actually loaded, not when its load was issued.
+    private var introHold = IntroHold()
 
     func show() {
         ensureWindow()
@@ -64,7 +66,10 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { readTheme() }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if let navigation, introHold.finished(ObjectIdentifier(navigation)) { endIntroAfterHold() }
+        readTheme()
+    }
     func reload() { webView?.reload() }
     func goBack() { webView?.goBack() }
     func goForward() { webView?.goForward() }
@@ -74,14 +79,24 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
     private func playIntro(then url: URL) -> Bool {
         guard !introPlayed else { return false }
         introPlayed = true; introPending = true; introTarget = url
-        webView?.loadHTMLString(Self.placeholder("Opening LoopX…", failed: false, version: appVersion), baseURL: nil)
+        let nav = webView?.loadHTMLString(Self.placeholder("Opening LoopX…", failed: false, version: appVersion), baseURL: nil)
         loadedBase = nil
+        if let nav { introHold.loading(ObjectIdentifier(nav)) }
+        // In case the start screen's load never reports finishing, start the hold anyway.
+        DispatchQueue.main.asyncAfter(deadline: .now() + IntroHold.fallbackSeconds) { [weak self] in
+            guard let self, self.introHold.fallback() else { return }
+            self.endIntroAfterHold()
+        }
+        return true
+    }
+
+    /// The start screen is on screen: hold it for `StartScreen.introSeconds`, then load the page.
+    private func endIntroAfterHold() {
         DispatchQueue.main.asyncAfter(deadline: .now() + StartScreen.introSeconds) { [weak self] in
-            guard let self, let target = self.introTarget else { return }
+            guard let self, self.introPending, let target = self.introTarget else { return }
             self.introPending = false
             self.webView?.load(URLRequest(url: target)); self.loadedBase = self.baseURLProvider()
         }
-        return true
     }
 
     private func showPlaceholder() {
