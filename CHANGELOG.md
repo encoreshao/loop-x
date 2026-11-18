@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Slack agent and dashboard chat: a message that starts with a dash (such as a Slack bullet, "- what's new on issue 12") no longer fails with "Claude Code exited with code 1"; Claude Code had read it as an unknown command-line option.
 - The issue loop no longer comments on (or labels `loop:needs-human`) an issue when the problem is the loop's own: an agent session that crashed, timed out or ran out of budget, a missing handoff, or a checkout it won't touch. These now go to Slack and the loop's log only, so an issue nobody has replied to no longer gets a second "I started on this issue, but the run stopped" comment after the loop's earlier answer. Escalations about the work itself (failed checks on a fix, an MR that could not be opened, approvals) still comment on the issue.
 
 ## [0.19.0] - 2026-11-17

@@ -213,6 +213,9 @@ impl ChatCommand {
             disallowed,
             "--append-system-prompt",
             &self.system_prompt(tools_description),
+            // Ends the options: a message starting with "-" (a Slack bullet)
+            // is otherwise read as an unknown option and claude exits 1.
+            "--",
             prompt,
         ]
         .iter()
@@ -1792,6 +1795,16 @@ mod tests {
         let cmd = &argv[4];
         assert!(cmd.starts_with("timeout 90 claude -p --output-format stream-json --include-partial-messages --verbose --safe-mode --allowedTools 'Bash(loopx chat-tool *)' --disallowedTools 'Read Write Edit Grep Glob Bash(git*)"));
         assert!(cmd.ends_with(" 'hi '\"'\"'there'\"'\"''"));
+    }
+
+    #[test]
+    fn a_prompt_starting_with_a_dash_is_not_read_as_a_claude_option() {
+        let c = ChatCommand::new("loopx chat-tool");
+        let words = inner_argv(&c.build_command("- what is new on issue 1", "T"));
+        assert_eq!(
+            &words[words.len() - 2..],
+            ["--", "- what is new on issue 1"]
+        );
     }
 
     #[test]
