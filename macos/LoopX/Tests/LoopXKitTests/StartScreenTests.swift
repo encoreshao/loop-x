@@ -36,8 +36,8 @@ import Testing
         let (gated, ungated) = motionSplit(html())
         #expect(gated.contains("animation:breathe") && gated.contains("animation:sheen") && gated.contains("animation:enter"))
         // The bar and the dot mean "still starting": never gated.
-        #expect(ungated.contains("animation:slide") && ungated.contains("animation:pulse"))
-        #expect(!gated.contains("animation:slide") && !gated.contains("animation:pulse"))
+        #expect(ungated.contains("animation:slide"))
+        #expect(!gated.contains("animation:slide"))
     }
 
     @Test func introHoldCoversTheEntrance() {
@@ -71,10 +71,10 @@ import Testing
         let h = html("<b>boom</b> & more", failed: true)
         #expect(h.contains("&lt;b>boom&lt;/b> &amp; more"))
         #expect(h.contains("class='retry' href='loopx-retry://now'"))
-        #expect(!h.contains("class='bar'") && !h.contains("class='dot'"))
+        #expect(!h.contains("class='bar'"))
         let starting = html()
         #expect(!starting.contains("loopx-retry"))
-        #expect(starting.contains("class='bar'") && starting.contains("class='dot'"))
+        #expect(starting.contains("class='bar'"))
     }
 
     @Test func showsVersionOnly() {
@@ -83,10 +83,30 @@ import Testing
         #expect(!h.contains("Encore Shao") && !h.contains("mailto:") && !h.contains("daily grind"))
     }
 
-    @Test func theMarkShrinksInAShortWindowSoTheStatusNeverOverlapsTheName() {
+    @Test func theMarkIsLargeAndShrinksOnlyInAShortWindow() {
         let h = html()
-        #expect(h.contains("--mark:min(104px,24vh)"))
-        #expect(h.contains("--mark:min(180px,34vh)"))
+        #expect(h.contains("--mark:min(220px,32vh)"))
+        #expect(h.components(separatedBy: "--mark:").count - 1 == 1, "one size for both modes")
+    }
+
+    @Test func bothModesShareOneLayoutWithTheTaglines() {
+        let h = html()
+        #expect(h.contains("<p class='line'>Your agents. Your Mac. Your call.</p>"))
+        #expect(h.contains("<p class='sub'>Handled while you do the real work.</p>"))
+        // Dark mode keeps the same column: the status is not pinned elsewhere, no extra dot.
+        #expect(!h.contains("position:fixed;bottom:44px") && !h.contains("class='dot'"))
+        // Order: mark, name, the two lines, then the bar and status.
+        let order = ["class='stage'", "<h1>", "class='line'", "class='sub'", "class='bar'"].map { h.range(of: $0)!.lowerBound }
+        #expect(order == order.sorted())
+    }
+
+    @Test func theMarkStandsOutFromTheLightBackground() {
+        let h = html()
+        let dark = h.components(separatedBy: "@media(prefers-color-scheme:dark){").dropFirst().joined()
+        let light = h.replacingOccurrences(of: dark, with: "")
+        // A coloured halo behind the mark and a richer mark in light mode too, not only in dark.
+        #expect(light.contains(".halo{position:absolute"))
+        #expect(light.contains("saturate("))
     }
 
     @Test func declaresUTF8SoTheEllipsisRenders() {
