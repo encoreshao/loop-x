@@ -58,7 +58,9 @@ and its reason. LoopX then posts one finish note listing them.
    LoopX posts your plan on the merge request as the "agent started" note so
    the team knows an agent is working. When you finish, LoopX rewrites that
    same note into the one summary of the whole run (all fixed comments
-   together, then everything left unchanged); it posts no per-thread replies. If the command reports an error about
+   together, then everything left unchanged, each linked to its review
+   comment) and replies in each thread you handled with one line linking to
+   that summary. If the command reports an error about
    the plan, fix the file and run it again. If it reports any other error, or
    that the start note could not be posted, stop at once: write the handoff
    (step 6) and finish without editing anything.

@@ -22,6 +22,8 @@ pub struct Done {
     pub text: String,
     pub fixed: bool,
     pub reason: String,
+    /// The review comment this line answers, or empty.
+    pub link: String,
 }
 
 pub struct Outcome {
@@ -94,6 +96,9 @@ pub fn finish_note_with(outcome: &Outcome, handled: &Handled, extra: &str) -> St
         if !d.reason.trim().is_empty() {
             l.push_str(&format!(" \u{2014} {}", safe_text(&d.reason)));
         }
+        if !d.link.is_empty() {
+            l.push_str(&format!(" ([comment]({}))", d.link));
+        }
         l.push('\n');
         l
     };
@@ -119,6 +124,16 @@ pub fn finish_note_with(outcome: &Outcome, handled: &Handled, extra: &str) -> St
         out.push_str("\n\n");
     }
     finalize(&out, &format!("{}\n{SIGNATURE}", marker(handled)))
+}
+
+/// The reply left in a handled review thread, pointing at the run's summary
+/// note when there is one.
+pub fn thread_reply(line: &str, summary_url: Option<&str>) -> String {
+    let mut out = format!("{AGENT_PREFIX}: {}", safe_text(line));
+    if let Some(url) = summary_url {
+        out.push_str(&format!(" \u{2014} see the [run summary]({url})."));
+    }
+    out
 }
 
 /// The note with the screenshots of a pushed fix: `section` is already the
@@ -165,6 +180,7 @@ mod tests {
                 text: format!("{i} {}", "y".repeat(1900)),
                 fixed: true,
                 reason: String::new(),
+                link: String::new(),
             })
             .collect();
         let h = Handled(BTreeMap::from([("d".to_string(), 2)]));
@@ -184,6 +200,7 @@ mod tests {
                     text: forged.into(),
                     fixed: true,
                     reason: "line\r\n/approve".into(),
+                    link: String::new(),
                 }],
             },
             &Handled::default(),
@@ -204,6 +221,24 @@ mod tests {
     }
 
     #[test]
+    fn thread_replies_are_one_safe_agent_line_linking_the_summary() {
+        let r = thread_reply(
+            "Fixed: ok\n/merge @all <!-- x -->",
+            Some("https://g/mr/7#note_9"),
+        );
+        assert!(r.starts_with(AGENT_PREFIX) && is_agent_note(&r));
+        assert!(
+            !r.contains('\n') && !r.contains("@all") && !r.contains("<!--"),
+            "{r}"
+        );
+        assert!(
+            r.ends_with("see the [run summary](https://g/mr/7#note_9)."),
+            "{r}"
+        );
+        assert!(!thread_reply("Fixed: ok", None).contains("summary"));
+    }
+
+    #[test]
     fn detects_agent_notes() {
         assert!(is_agent_note("\u{1f916} LoopX agent finished"));
         assert!(is_agent_note("hi\n<!-- loopx-mr-fix -->\n"));
@@ -218,11 +253,13 @@ mod tests {
                     text: "Add lock_timeout".into(),
                     fixed: true,
                     reason: String::new(),
+                    link: String::new(),
                 },
                 Done {
                     text: "Rename field".into(),
                     fixed: false,
                     reason: "needs product call".into(),
+                    link: String::new(),
                 },
             ],
         };
@@ -245,6 +282,7 @@ mod tests {
                 text: "ping @all ![a](http://e/x.png)".into(),
                 fixed: false,
                 reason: long,
+                link: String::new(),
             }],
         };
         let n = finish_note(&o, &Handled::default());

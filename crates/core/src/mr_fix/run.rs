@@ -8,7 +8,9 @@
 
 use super::feedback::{parse_marker_from_notes, pending, Handled, Item, Severity};
 use super::jobs::FixJob;
-use super::notes::{finish_note, finish_note_with, start_note, Done, Outcome, PlannedChange};
+use super::notes::{
+    finish_note, finish_note_with, start_note, thread_reply, Done, Outcome, PlannedChange,
+};
 use crate::loop_plugins::mr_review::{build_diff_text, DIFF_CAP_BYTES};
 use crate::mr_screenshots::{screenshots_section, ShotPair, UploadedPair};
 use serde_json::Value;
@@ -407,6 +409,48 @@ fn excerpt(item: &Item) -> String {
     }
 }
 
+/// The link to a thread's first comment on the merge request page.
+fn comment_link(web_url: &str, item: &Item) -> String {
+    item.notes
+        .iter()
+        .find(|n| !n["system"].as_bool().unwrap_or(false))
+        .and_then(|n| n["id"].as_i64())
+        .map(|id| note_url(web_url, id))
+        .unwrap_or_default()
+}
+
+fn note_url(web_url: &str, note_id: i64) -> String {
+    format!("{web_url}#note_{note_id}")
+}
+
+/// What to say in each handled thread: (discussion id, one line).
+type ThreadReplies = Vec<(String, String)>;
+
+fn reply_line(fixed: bool, text: &str, reason: &str) -> String {
+    if fixed {
+        format!("Fixed: {text}")
+    } else if reason.trim().is_empty() {
+        format!("Not changed: {text}")
+    } else {
+        format!("Not changed: {reason}")
+    }
+}
+
+/// Reply in each handled thread once the summary exists. A failed reply is
+/// logged; it never fails the run.
+fn reply_threads(
+    mr: &dyn MrApi,
+    replies: &ThreadReplies,
+    summary_url: Option<&str>,
+    out: &mut dyn Write,
+) {
+    for (id, line) in replies {
+        if let Err(e) = mr.reply(id, &thread_reply(line, summary_url)) {
+            let _ = writeln!(out, "could not reply in {id}: {e}");
+        }
+    }
+}
+
 /// The first path the MR adds, changes, renames or deletes that the agent
 /// session would load as its own configuration (settings, memory, MCP).
 fn agent_settings_path(changes: &[Value]) -> Option<String> {
@@ -483,9 +527,11 @@ fn gate(
 /// One finish note then records the skips as handled, so the next press does
 /// not pay for the same answer. Anything else without a start note is `None`
 /// (the caller refuses and posts nothing).
+#[allow(clippy::too_many_arguments)]
 fn planless_skips(
     mr: &dyn MrApi,
     ws: &dyn Workspace,
+    web_url: &str,
     dir: &Path,
     base: &str,
     items: &[Item],
@@ -513,16 +559,23 @@ fn planless_skips(
     }
     let mut done = Vec::new();
     let mut marked = Handled::default();
+    let mut replies = ThreadReplies::new();
     for it in &reported {
         let item = by_id[it.discussion_id.as_str()];
+        let text = if it.text.is_empty() {
+            excerpt(item)
+        } else {
+            it.text.clone()
+        };
+        replies.push((
+            it.discussion_id.clone(),
+            reply_line(false, &text, &it.reason),
+        ));
         done.push(Done {
-            text: if it.text.is_empty() {
-                excerpt(item)
-            } else {
-                it.text.clone()
-            },
+            text,
             fixed: false,
             reason: it.reason.clone(),
+            link: comment_link(web_url, item),
         });
         marked.0.insert(it.discussion_id.clone(), item.last_note_id);
     }
@@ -535,19 +588,23 @@ fn planless_skips(
                 text: excerpt(item),
                 fixed: false,
                 reason: "not addressed in this run".into(),
+                link: comment_link(web_url, item),
             });
         }
     }
     let mut res = result("done", format!("Fixed 0 of {}", items.len()));
-    match mr.post_note(&finish_note(&Outcome { items: done }, &marked)) {
+    let summary = match mr.post_note(&finish_note(&Outcome { items: done }, &marked)) {
         Ok(id) => {
             let _ = writeln!(out, "nothing to change; finish note {id} posted");
+            Some(note_url(web_url, id))
         }
         Err(e) => {
             let _ = writeln!(out, "could not post the finish note: {e}");
             res.summary.push_str(" (finish note not posted)");
+            None
         }
-    }
+    };
+    reply_threads(mr, &replies, summary.as_deref(), out);
     Some(res)
 }
 
@@ -683,7 +740,8 @@ pub fn run_reporting(
         let _ = writeln!(out, "{l}");
     }
     let Some((announced_at, start_id)) = *announced.borrow() else {
-        if let Some(res) = planless_skips(mr, ws, &dir, &base, &items, &handoff, out) {
+        if let Some(res) = planless_skips(mr, ws, &info.web_url, &dir, &base, &items, &handoff, out)
+        {
             return res;
         }
         let why = match &handoff {
@@ -728,8 +786,10 @@ pub fn run_reporting(
             it.text.clone()
         }
     };
+    let link_of = |id: &str| comment_link(&info.web_url, by_id[id]);
     let mut done = Vec::new();
     let mut marked = Handled::default();
+    let mut replies = ThreadReplies::new();
     // A fix counts only when it was pushed; claims with no commit are not
     // marked handled and get no reply, so the next press reconsiders them.
     let pushed = matches!(gated, Ok(true));
@@ -742,6 +802,7 @@ pub fn run_reporting(
                         text: text_of(it),
                         fixed: false,
                         reason: "reported fixed, but nothing was committed".into(),
+                        link: link_of(&it.discussion_id),
                     });
                     continue;
                 }
@@ -753,10 +814,15 @@ pub fn run_reporting(
                 } else {
                     it.reason.clone()
                 };
+                replies.push((
+                    it.discussion_id.clone(),
+                    reply_line(it.fixed, &text_of(it), &reason),
+                ));
                 done.push(Done {
                     text: text_of(it),
                     fixed: it.fixed,
                     reason,
+                    link: link_of(&it.discussion_id),
                 });
                 marked.0.insert(
                     it.discussion_id.clone(),
@@ -772,6 +838,7 @@ pub fn run_reporting(
                 text: "Nothing was pushed".into(),
                 fixed: false,
                 reason: format!("{reason}. The changes stay in the LoopX worktree."),
+                link: String::new(),
             });
             for it in &reported {
                 done.push(Done {
@@ -782,6 +849,7 @@ pub fn run_reporting(
                     } else {
                         it.reason.clone()
                     },
+                    link: link_of(&it.discussion_id),
                 });
             }
             result("failed", format!("Not pushed: {reason}"))
@@ -796,21 +864,23 @@ pub fn run_reporting(
                 text: excerpt(item),
                 fixed: false,
                 reason: "not addressed in this run".into(),
+                link: comment_link(&info.web_url, item),
             });
         }
     }
     let mut res = res;
     progress(5);
-    // One comment for the whole run: the start note is rewritten into the
-    // summary (fixed, not changed, screenshots) instead of adding more notes.
+    // The start note is rewritten into the run's summary; each handled thread
+    // then gets a one-line reply pointing at it.
     let shots = match (&handoff, pushed) {
         (Ok(h), true) => screenshots_markdown(mr, h, out),
         _ => String::new(),
     };
     let body = finish_note_with(&Outcome { items: done }, &marked, &shots);
-    match mr.update_note(start_id, &body) {
+    let summary = match mr.update_note(start_id, &body) {
         Ok(()) => {
             let _ = writeln!(out, "summary written into note {start_id}");
+            Some(start_id)
         }
         Err(e) => {
             let _ = writeln!(
@@ -820,14 +890,18 @@ pub fn run_reporting(
             match mr.post_note(&body) {
                 Ok(id) => {
                     let _ = writeln!(out, "finish note {id} posted");
+                    Some(id)
                 }
                 Err(e) => {
                     let _ = writeln!(out, "could not post the finish note: {e}");
                     res.summary.push_str(" (finish note not posted)");
+                    None
                 }
             }
         }
-    }
+    };
+    let summary_url = summary.map(|id| note_url(&info.web_url, id));
+    reply_threads(mr, &replies, summary_url.as_deref(), out);
     let _ = writeln!(out, "{}: {}", res.state, res.summary);
     res
 }
@@ -930,6 +1004,7 @@ mod tests {
                 title: "Add things".into(),
                 description: "desc".into(),
                 source_branch: "feat/x".into(),
+                web_url: MR_URL.into(),
                 changes: self.changes.borrow().clone(),
                 ..MrInfo::default()
             })
@@ -1146,6 +1221,8 @@ mod tests {
         }
     }
 
+    const MR_URL: &str = "https://gl.example/g/p/-/merge_requests/7";
+
     fn thread(id: &str, note_id: i64, body: &str) -> Value {
         json!({"id": id, "notes": [{"id": note_id, "body": body, "system": false,
             "resolvable": true, "resolved": false, "author": {"username": "rev"},
@@ -1341,7 +1418,15 @@ mod tests {
         assert_eq!(r.state, "done", "{log}");
         assert_eq!(
             *ev.borrow(),
-            ["note:start", "commit", "checks", "push", "note:finish"]
+            [
+                "note:start",
+                "commit",
+                "checks",
+                "push",
+                "note:finish",
+                "reply:d1",
+                "reply:d2"
+            ]
         );
         let start = &mr.starts.borrow()[0];
         assert!(start.starts_with(AGENT_PREFIX));
@@ -1430,11 +1515,17 @@ mod tests {
         assert_eq!(r.summary, "Fixed 1 of 3");
         let finish = mr.notes.borrow()[0].clone();
         assert!(
-            finish.contains("- [x] Set lock_timeout before the ALTER\n"),
+            finish.contains(&format!(
+                "- [x] Set lock_timeout before the ALTER ([comment]({MR_URL}#note_11))\n"
+            )),
             "{finish}"
         );
-        assert!(finish.contains("- [ ] Rename foo \u{2014} Low: style only, skipped\n"));
-        assert!(finish.contains("- [ ] please also add a test \u{2014} not addressed in this run"));
+        assert!(finish.contains(&format!(
+            "- [ ] Rename foo \u{2014} Low: style only, skipped ([comment]({MR_URL}#note_12))\n"
+        )));
+        assert!(finish.contains(&format!(
+            "- [ ] please also add a test \u{2014} not addressed in this run ([comment]({MR_URL}#note_13))"
+        )));
         assert!(is_agent_note(&finish));
         let notes: Vec<Value> = mr
             .discussions
@@ -1444,10 +1535,28 @@ mod tests {
             .collect();
         let h = parse_marker_from_notes(&notes, "bot");
         assert_eq!(h.0, BTreeMap::from([("d1".into(), 11), ("d2".into(), 12)]));
-        // One comment for the whole run: no per-thread replies, and no second note.
-        assert!(mr.replies.borrow().is_empty());
         assert_eq!(mr.notes.borrow().len(), 1);
         assert!(finish.contains("**Fixed**") && finish.contains("**Not changed**"));
+        // Each handled thread gets a short reply pointing back at the summary,
+        // posted after the summary exists; the unaddressed thread gets none.
+        let summary = format!("{MR_URL}#note_1000");
+        let replies = mr.replies.borrow();
+        assert_eq!(replies.len(), 2, "{replies:?}");
+        assert_eq!(replies[0].0, "d1");
+        assert!(replies[0].1.starts_with(AGENT_PREFIX), "{}", replies[0].1);
+        assert!(replies[0]
+            .1
+            .contains("Fixed: Set lock_timeout before the ALTER"));
+        assert!(replies[0].1.contains(&summary), "{}", replies[0].1);
+        assert_eq!(replies[1].0, "d2");
+        assert!(replies[1]
+            .1
+            .contains("Not changed: Low: style only, skipped"));
+        assert!(replies[1].1.contains(&summary));
+        let events = ev.borrow();
+        let finish_at = events.iter().position(|e| e == "note:finish").unwrap();
+        let first_reply = events.iter().position(|e| e.starts_with("reply:")).unwrap();
+        assert!(finish_at < first_reply, "{events:?}");
     }
 
     #[test]
@@ -1957,9 +2066,12 @@ mod tests {
         assert_eq!(r.summary, "Fixed 0 of 2");
         assert_eq!(
             *ev.borrow(),
-            ["note:finish"],
-            "one note, no push, no replies"
+            ["note:finish", "reply:d1", "reply:d2"],
+            "one note, no push, a reply per handled thread"
         );
+        assert!(mr.replies.borrow()[0]
+            .1
+            .contains(&format!("{MR_URL}#note_1000")));
         let finish = mr.notes.borrow()[0].clone();
         assert!(is_agent_note(&finish));
         assert!(finish.contains("- [ ] Set lock_timeout before the ALTER \u{2014} a question"));
