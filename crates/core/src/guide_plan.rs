@@ -17,7 +17,9 @@ const MAX_SUMMARY: usize = 200;
 pub struct FeaturePlan {
     pub slug: String,
     pub title: String,
+    #[serde(default)]
     pub summary: String,
+    #[serde(default)]
     pub files: Vec<String>,
     #[serde(default)]
     pub related: Vec<String>,
@@ -50,27 +52,28 @@ fn one_line_ok(s: &str, max: usize) -> bool {
     !s.trim().is_empty() && s.chars().count() <= max && !s.contains(['\n', '\r'])
 }
 
-fn check_files(label: &str, files: &mut Vec<String>, inv: &Inventory) -> Result<(), String> {
-    let mut seen = Vec::new();
+/// `s` on one line, whitespace collapsed, cut to `max` characters.
+fn one_line(s: &str, max: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let mut cut: String = flat.chars().take(max - 1).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('\u{2026}');
+    cut
+}
+
+/// Keep the first [`MAX_FILES_PER_PAGE`] distinct paths that are readable files of the project.
+fn keep_readable(files: &mut Vec<String>, inv: &Inventory) {
+    let mut seen: Vec<String> = Vec::new();
     files.retain(|f| {
-        let keep = !seen.contains(f);
-        seen.push(f.clone());
+        let keep = seen.len() < MAX_FILES_PER_PAGE && !seen.contains(f) && inv.readable(f);
+        if keep {
+            seen.push(f.clone());
+        }
         keep
     });
-    if files.len() > MAX_FILES_PER_PAGE {
-        return Err(format!(
-            "{label} names more than {MAX_FILES_PER_PAGE} files"
-        ));
-    }
-    for (i, f) in files.iter().enumerate() {
-        if !inv.readable(f) {
-            return Err(format!(
-                "{label} file #{} is not a readable file of the project",
-                i + 1
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Shape rules that need no inventory: used by `parse_plan` and by `load`.
@@ -112,22 +115,56 @@ fn check_shape(plan: &Plan) -> Result<(), String> {
     Ok(())
 }
 
+/// The model's plan, repaired rather than refused: a feature with a bad or repeated
+/// slug, an empty or secret-holding title or summary, or no readable file is dropped;
+/// lists past their caps, unknown files and unknown related slugs are cut. `Err` only
+/// when there is no JSON plan or no feature survives.
 pub fn parse_plan(reply: &str, inv: &Inventory) -> Result<Plan, String> {
     let json = json_slice(reply).ok_or("the reply holds no plan")?;
-    let mut plan: Plan =
-        serde_json::from_str(json).map_err(|_| "the plan did not parse".to_string())?;
-    check_shape(&plan)?;
-    if plan.features.is_empty() {
+    let raw: Plan = serde_json::from_str(json).map_err(|_| "the plan did not parse".to_string())?;
+    let mut features: Vec<FeaturePlan> = Vec::new();
+    for mut f in raw.features {
+        if features.len() == MAX_FEATURES {
+            break;
+        }
+        if check_slug(&f.slug).ok() != Some(Kind::Feature)
+            || features.iter().any(|k| k.slug == f.slug)
+        {
+            continue;
+        }
+        f.title = one_line(&f.title, MAX_TITLE);
+        f.summary = one_line(&f.summary, MAX_SUMMARY);
+        if f.title.is_empty()
+            || f.summary.is_empty()
+            || contains_secret(&f.title).is_some()
+            || contains_secret(&f.summary).is_some()
+        {
+            continue;
+        }
+        keep_readable(&mut f.files, inv);
+        if !f.files.is_empty() {
+            features.push(f);
+        }
+    }
+    if features.is_empty() {
         return Err("the plan names no features".to_string());
     }
-    for (i, f) in plan.features.iter_mut().enumerate() {
-        if f.files.is_empty() {
-            return Err(format!("feature #{} names no files", i + 1));
-        }
-        check_files(&format!("feature #{}", i + 1), &mut f.files, inv)?;
+    let slugs: Vec<String> = features.iter().map(|f| f.slug.clone()).collect();
+    for f in &mut features {
+        let own = f.slug.clone();
+        let mut seen: Vec<String> = Vec::new();
+        f.related.retain(|r| {
+            let keep = r != &own && slugs.contains(r) && !seen.contains(r);
+            if keep {
+                seen.push(r.clone());
+            }
+            keep
+        });
     }
-    check_files("architecture", &mut plan.architecture.files, inv)?;
-    check_files("data model", &mut plan.data_model.files, inv)?;
+    let mut plan = Plan { features, ..raw };
+    keep_readable(&mut plan.architecture.files, inv);
+    keep_readable(&mut plan.data_model.files, inv);
+    check_shape(&plan)?;
     Ok(plan)
 }
 
@@ -201,83 +238,101 @@ mod tests {
     }
 
     #[test]
-    fn related_may_name_only_slugs_in_the_same_plan() {
+    fn a_related_slug_not_in_the_plan_is_dropped() {
         let two = format!(
             "{},{}",
-            feat("feature-a", r#""a.rb""#, r#""feature-b""#),
+            feat(
+                "feature-a",
+                r#""a.rb""#,
+                r#""feature-b","feature-zzz","feature-a""#
+            ),
             feat("feature-b", r#""b.rb""#, "")
         );
-        assert!(parse_plan(&reply(&two), &base()).is_ok());
-        let bad = feat("feature-a", r#""a.rb""#, r#""feature-zzz""#);
-        assert!(parse_plan(&reply(&bad), &base())
-            .unwrap_err()
-            .contains("related"));
+        let p = parse_plan(&reply(&two), &base()).unwrap();
+        assert_eq!(p.features[0].related, ["feature-b"]);
     }
 
     #[test]
-    fn rejections_never_echo_the_offending_value() {
+    fn a_feature_with_a_bad_slug_or_a_secret_is_dropped_without_echoing_it() {
         let secret = "glpat-AAAAAAAAAAAAAAAAAAAA";
+        let good = feat("feature-ok", r#""a.rb""#, "");
         for bad in [
             feat("Feature-A", r#""a.rb""#, ""),
-            feat("feature-a", &format!(r#""{secret}""#), ""),
-            feat("feature-a", r#""../etc/passwd""#, ""),
-            feat("feature-a", r#""not-in-inventory.rb""#, ""),
-            feat("feature-a", r#""a.rb""#, &format!(r#""{secret}""#)),
+            feat("feature-a", r#""a.rb""#, "").replace("\"S.\"", &format!("\"token {secret}\"")),
         ] {
+            let p = parse_plan(&reply(&format!("{bad},{good}")), &base()).unwrap();
+            let slugs: Vec<&str> = p.features.iter().map(|f| f.slug.as_str()).collect();
+            assert_eq!(slugs, ["feature-ok"]);
             let err = parse_plan(&reply(&bad), &base()).unwrap_err();
-            assert!(
-                !err.contains(secret) && !err.contains("passwd") && !err.contains("Feature-A"),
-                "{err}"
-            );
+            assert!(!err.contains(secret) && !err.contains("Feature-A"), "{err}");
         }
     }
 
     #[test]
-    fn an_unreadable_or_env_path_is_refused() {
+    fn unknown_unreadable_and_env_paths_are_dropped_and_a_feature_left_with_none_is_dropped() {
         let mut i = base();
         i.entries.push(Entry {
             path: "big.rb".into(),
             size: 999_999,
             readable: false,
         });
-        let r = reply(&feat("feature-a", r#""big.rb""#, ""));
-        assert!(parse_plan(&r, &i).is_err());
-        let r = reply(&feat("feature-a", r#"".env""#, ""));
-        assert!(parse_plan(&r, &base()).is_err());
+        let r = reply(&format!(
+            "{},{}",
+            feat(
+                "feature-a",
+                r#""a.rb","big.rb",".env","../etc/passwd","not-in-inventory.rb""#,
+                ""
+            ),
+            feat("feature-b", r#""big.rb",".env""#, "")
+        ));
+        let p = parse_plan(&r, &i).unwrap();
+        assert_eq!(p.features.len(), 1);
+        assert_eq!(p.features[0].files, ["a.rb"]);
+        let only_bad = reply(&feat("feature-a", r#"".env""#, ""));
+        assert!(parse_plan(&only_bad, &base()).is_err());
     }
 
     #[test]
-    fn caps_are_enforced() {
+    fn caps_keep_the_first_features_and_files() {
         let many: Vec<String> = (0..13)
-            .map(|i| feat(&format!("feature-f{i}"), r#""a.rb""#, ""))
+            .map(|i| feat(&format!("feature-f{i}"), r#""a.rb""#, r#""feature-f12""#))
             .collect();
-        assert!(parse_plan(&reply(&many.join(",")), &base())
-            .unwrap_err()
-            .contains("12"));
+        let p = parse_plan(&reply(&many.join(",")), &base()).unwrap();
+        assert_eq!(p.features.len(), MAX_FEATURES);
+        assert_eq!(p.features[11].slug, "feature-f11");
+        assert!(p.features.iter().all(|f| f.related.is_empty()));
         let files: Vec<String> = (0..26).map(|i| format!("\"f{i}.rb\"")).collect();
         let paths: Vec<String> = (0..26).map(|i| format!("f{i}.rb")).collect();
         let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let i = inv(&refs);
         let r = reply(&feat("feature-a", &files.join(","), ""));
-        assert!(parse_plan(&r, &i).unwrap_err().contains("25"));
+        let p = parse_plan(&r, &inv(&refs)).unwrap();
+        assert_eq!(p.features[0].files.len(), MAX_FILES_PER_PAGE);
+        assert_eq!(p.features[0].files[24], "f24.rb");
     }
 
     #[test]
-    fn duplicate_slugs_a_feature_with_no_files_and_no_json_are_refused() {
-        let dup = format!("{0},{0}", feat("feature-a", r#""a.rb""#, ""));
-        assert!(parse_plan(&reply(&dup), &base())
-            .unwrap_err()
-            .contains("twice"));
-        assert!(parse_plan(&reply(&feat("feature-a", "", "")), &base()).is_err());
+    fn a_long_or_multiline_title_or_summary_is_cut_to_one_line() {
+        let long = "word ".repeat(100);
+        let r = reply(&feat("feature-a", r#""a.rb""#, ""))
+            .replace("\"T feature-a\"", &format!("\"{long}\""))
+            .replace("\"S.\"", "\"Line one.\\nLine two.\"");
+        let p = parse_plan(&r, &base()).unwrap();
+        assert!(p.features[0].title.chars().count() <= MAX_TITLE);
+        assert_eq!(p.features[0].summary, "Line one. Line two.");
+    }
+
+    #[test]
+    fn a_duplicate_slug_keeps_the_first_and_no_json_is_refused() {
+        let dup = format!(
+            "{},{}",
+            feat("feature-a", r#""a.rb""#, ""),
+            feat("feature-a", r#""b.rb""#, "")
+        );
+        let p = parse_plan(&reply(&dup), &base()).unwrap();
+        assert_eq!(p.features.len(), 1);
+        assert_eq!(p.features[0].files, ["a.rb"]);
         assert!(parse_plan("sorry, I cannot", &base()).is_err());
         assert!(parse_plan("", &base()).is_err());
-    }
-
-    #[test]
-    fn a_title_or_summary_with_a_secret_is_refused() {
-        let r = reply(&feat("feature-a", r#""a.rb""#, ""))
-            .replace("\"S.\"", "\"token glpat-AAAAAAAAAAAAAAAAAAAA\"");
-        assert!(parse_plan(&r, &base()).is_err());
     }
 
     #[test]

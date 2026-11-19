@@ -623,7 +623,7 @@ mod tests {
     fn an_invalid_plan_writes_nothing_and_calls_no_page() {
         let d = repo();
         let root = tempfile::tempdir().unwrap();
-        let bad = PLAN.replace("app/order.rb", "../../etc/passwd");
+        let bad = PLAN.replace("feature-", "Feature-");
         let f = fake(&bad, None);
         assert!(build(d.path(), &f, root.path()).is_err());
         assert_eq!(f.prompts.borrow().len(), 1);
