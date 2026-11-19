@@ -100,6 +100,19 @@ import Testing
         #expect(order == order.sorted())
     }
 
+    @Test func theHeadlineLeadsAndEachGroupHasItsOwnSpace() {
+        let h = html()
+        let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
+        // The headline is the largest text on the page, well above the 14px subtitle.
+        #expect(rule(".line").contains("font-size:var(--title)"))
+        #expect(h.contains("--title:clamp(24px,4.6vh,32px)"))
+        // Spacing is set per group (mark, name, headline, loader), not one flat gap.
+        #expect(rule("body").contains("gap:0"))
+        for sel in [".stage", "h1", ".line", ".bar"] {
+            #expect(rule(sel).contains("margin"), "\(sel) sets its own spacing")
+        }
+    }
+
     @Test func theMarkStandsOutFromTheLightBackground() {
         let h = html()
         let dark = h.components(separatedBy: "@media(prefers-color-scheme:dark){").dropFirst().joined()

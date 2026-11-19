@@ -31,26 +31,26 @@ public enum StartScreen {
         return """
         <html><head><meta charset='utf-8'><meta name='color-scheme' content='light dark'><style>
         .\(TitlebarChrome.dragStripClass){position:fixed;top:0;left:0;right:0;height:28px;z-index:10}
-        :root{--mark:min(220px,32vh);--fg:#1d1d1f;--sub:#6e6e73;--accent:#0a84ff;--track:rgba(0,0,0,.08);--err:#c0392b;
+        :root{--mark:min(220px,32vh);--title:clamp(24px,4.6vh,32px);--gap-l:clamp(18px,5vh,40px);--gap-m:clamp(12px,3vh,24px);--fg:#1d1d1f;--sub:#6e6e73;--accent:#0a84ff;--track:rgba(0,0,0,.08);--err:#c0392b;
         --halo:radial-gradient(circle,rgba(10,132,255,.20),rgba(224,69,123,.14) 45%,transparent 70%)}
         @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:rgba(245,245,247,.6);--accent:#a78bfa;--track:rgba(255,255,255,.1);--err:#ff6b5e;
         --halo:radial-gradient(circle,rgba(150,90,255,.42),rgba(255,70,140,.16) 45%,transparent 70%)}}
         html{background:radial-gradient(ellipse at 50% 38%,#ffffff 0%,#f5f5f7 55%,#e9e9ee 100%) fixed,#f5f5f7}
         @media(prefers-color-scheme:dark){html{background:radial-gradient(ellipse at 50% 38%,#1b1530 0%,#0b0b10 70%) fixed,#0b0b10}}
         html,body{height:100%;margin:0;overflow:hidden}
-        body{font:13px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:0 24px 24px;box-sizing:border-box}
-        .stage{position:relative;width:var(--mark);height:var(--mark);margin-bottom:6px}
+        body{font:13px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;text-align:center;padding:0 24px 24px;box-sizing:border-box}
+        .stage{position:relative;width:var(--mark);height:var(--mark);margin:0 0 var(--gap-l)}
         .mark{position:relative;width:100%;height:100%;object-fit:contain;display:block;filter:saturate(1.6) contrast(1.15) drop-shadow(0 6px 18px rgba(80,60,200,.18))}
         .halo{position:absolute;inset:-28%;border-radius:50%;background:var(--halo);filter:blur(14px);opacity:.8}
         .sheen{display:none}
-        h1{margin:0;font-size:28px;font-weight:700;color:var(--fg);line-height:1}
-        h1 .brand-name{display:block;height:34px;width:auto;margin:0 auto}h1 .brand-name.on-dark{display:none}
-        .line{margin:6px 0 0;font-size:20px;font-weight:600;letter-spacing:-.2px;color:var(--fg)}
-        .sub{margin:-4px 0 0;font-size:14px;color:var(--sub)}
-        .bar{position:relative;width:140px;height:3px;border-radius:2px;background:var(--track);overflow:hidden;margin-top:14px}
+        h1{margin:0 0 var(--gap-m);font-size:28px;font-weight:700;color:var(--fg);line-height:1}
+        h1 .brand-name{display:block;height:38px;width:auto;margin:0 auto}h1 .brand-name.on-dark{display:none}
+        .line{margin:0;font-size:var(--title);font-weight:700;letter-spacing:-.025em;line-height:1.15;color:var(--fg)}
+        .sub{margin:10px 0 0;font-size:15px;line-height:1.4;color:var(--sub)}
+        .bar{position:relative;width:140px;height:3px;border-radius:2px;background:var(--track);overflow:hidden;margin:var(--gap-l) 0 12px}
         .bar::after{content:'';position:absolute;top:0;left:-40%;width:40%;height:100%;border-radius:2px;background:var(--accent);animation:slide 1.4s ease-in-out infinite}
         .status{font-size:12.5px}
-        .fail{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:14px}
+        .fail{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:var(--gap-l)}
         .err{color:var(--err);max-width:420px;line-height:1.45;overflow-wrap:anywhere}
         .retry{display:inline-flex;align-items:center;height:30px;padding:0 16px;border-radius:15px;background:var(--accent);color:#fff;font-weight:600;text-decoration:none;transition:filter .2s ease-out}
         .retry:hover{filter:brightness(1.08)}
