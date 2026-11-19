@@ -26,6 +26,8 @@ pub const MAX_PLAN_TEXT: usize = 300;
 /// Handoff caps.
 const MAX_HANDOFF_ITEMS: usize = 100;
 const MAX_REPLY_TEXT: usize = 1000;
+/// Longest verification command the runner will run; a longer one is refused, never cut.
+pub const MAX_COMMAND_CHARS: usize = 8000;
 /// Prompt input caps.
 const MAX_THREADS: usize = 50;
 const MAX_NOTES_PER_THREAD: usize = 10;
@@ -236,7 +238,7 @@ fn capped(s: &str, n: usize) -> String {
 ///  "verification": {"lint": "<lint command or empty>", "test": "<test command>"}}
 /// ```
 ///
-/// Text is flattened to one line and capped; items over the cap are dropped.
+/// Text is flattened to one line and capped (commands are kept whole); items over the cap are dropped.
 pub fn parse_handoff(json: &str) -> Result<AgentHandoff, String> {
     let v: Value = serde_json::from_str(json).map_err(|e| format!("not valid JSON: {e}"))?;
     let items = v
@@ -262,8 +264,8 @@ pub fn parse_handoff(json: &str) -> Result<AgentHandoff, String> {
     Ok(AgentHandoff {
         items: out,
         verification: Verification {
-            lint: text(&ver, "lint", 500),
-            test: text(&ver, "test", 500),
+            lint: one_line(ver.get("lint").and_then(Value::as_str).unwrap_or("")),
+            test: one_line(ver.get("test").and_then(Value::as_str).unwrap_or("")),
         },
         // The agent session validates and resolves the files (it knows the dir).
         screenshots: Vec::new(),
@@ -2029,5 +2031,17 @@ mod tests {
         assert_eq!(h.verification.test, "make test");
         assert!(parse_handoff("{}").is_err());
         assert!(parse_handoff("x").is_err());
+    }
+
+    #[test]
+    fn parse_handoff_keeps_a_long_verification_command_whole() {
+        let files: Vec<String> = (0..60)
+            .map(|i| format!("spec/services/theme_research/file_{i}_spec.rb"))
+            .collect();
+        let lint = format!("bundle exec rubocop {}", files.join(" "));
+        let json =
+            serde_json::json!({"items": [], "verification": {"lint": lint, "test": "make test"}});
+        let h = parse_handoff(&json.to_string()).unwrap();
+        assert_eq!(h.verification.lint, lint);
     }
 }

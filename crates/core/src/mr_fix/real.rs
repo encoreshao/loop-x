@@ -1,7 +1,7 @@
 //! The production [`MrApi`] (a GitLab client on one merge request) and
 //! [`Workspace`] (the MR's git worktree, its checks and the push).
 
-use super::run::{CheckResult, Commit, MrApi, MrInfo, Verification, Workspace};
+use super::run::{CheckResult, Commit, MrApi, MrInfo, Verification, Workspace, MAX_COMMAND_CHARS};
 use crate::gitlab::Client;
 use crate::loop_verifiers::CommandVerifier;
 use crate::verify_commands::check_verify_command;
@@ -251,6 +251,11 @@ impl GitWorkspace {
                     return Err("no test command".into());
                 }
                 continue;
+            }
+            if cmd.chars().count() > MAX_COMMAND_CHARS {
+                return Err(format!(
+                    "refused {kind} command: over {MAX_COMMAND_CHARS} characters"
+                ));
             }
             check_verify_command(cmd).map_err(|e| format!("refused {kind} command: {e}"))?;
             chosen.push((kind, cmd));
@@ -967,6 +972,9 @@ mod tests {
         ] {
             assert!(ws.checks(&dir, &v(t, l)).is_err(), "{t} / {l}");
         }
+        let long = format!("make test {}", "x".repeat(MAX_COMMAND_CHARS));
+        let err = ws.checks(&dir, &v(&long, "")).unwrap_err();
+        assert!(err.contains("over"), "{err}");
     }
 
     #[test]
