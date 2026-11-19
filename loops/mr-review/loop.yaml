@@ -12,7 +12,7 @@ goal:
 
 agent:
   provider: claude
-  model: default
+  model: opus
 
 context:
   sources:

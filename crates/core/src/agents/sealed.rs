@@ -9,6 +9,7 @@ use super::{cursor, gemini, grok, kimi};
 use crate::ai_cli_config;
 use crate::ai_cli_safety::{self, CallSite};
 use crate::cost;
+use crate::models;
 use crate::proc::{self, ProcOutput};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -181,11 +182,13 @@ pub fn warn_if_unrestricted(cli: &str, site: CallSite, log: &mut dyn FnMut(&str)
 type Runner<'a> = &'a dyn Fn(&[String], &str, f64, &Path) -> std::io::Result<ProcOutput>;
 
 /// Injection points; `Default` is the production wiring.
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct SealedHooks<'a> {
     pub runner: Option<Runner<'a>>,
     pub cli_fn: Option<&'a dyn Fn() -> String>,
     pub command_fn: Option<&'a dyn Fn(Option<f64>) -> Vec<String>>,
+    /// Claude model; [`models::GENERAL`] when unset.
+    pub model: Option<&'a str>,
 }
 
 fn real_runner(
@@ -272,6 +275,9 @@ pub fn sealed_call(
         Some(f) => f(max_budget_usd),
         None => sealed_command_for(&cli, max_budget_usd),
     };
+    if cli == "claude" && hooks.command_fn.is_none() {
+        argv.extend(models::args(models::pick(hooks.model, models::GENERAL)));
+    }
     // Argv fallback for a CLI that cannot read stdin (see `prompt_in_argv`).
     let stdin_prompt = if prompt_in_argv(&cli) {
         argv.push(prompt.to_string());
@@ -436,6 +442,7 @@ mod tests {
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             },
         )
     }
@@ -502,6 +509,7 @@ mod tests {
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: Some(&command_fn),
+                model: None,
             },
         )
         .unwrap();
@@ -529,6 +537,7 @@ mod tests {
                 runner: Some(&exit),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             },
         )
         .unwrap_err();
@@ -550,6 +559,7 @@ mod tests {
                 runner: Some(&slow),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             },
         )
         .unwrap_err();
@@ -576,6 +586,7 @@ mod tests {
                 runner: None,
                 cli_fn: Some(&cli_fn),
                 command_fn: Some(&command_fn),
+                model: None,
             },
         )
         .unwrap();
@@ -635,6 +646,7 @@ mod tests {
                 runner: None,
                 cli_fn: Some(&cli_fn),
                 command_fn: Some(&command_fn),
+                model: None,
             },
         )
         .unwrap_err();
@@ -650,6 +662,39 @@ mod tests {
             e.0
         );
         assert_eq!(logs, ["FAILED (could not start claude)"]);
+    }
+
+    #[test]
+    fn a_sealed_claude_call_runs_on_the_general_model_unless_told_otherwise() {
+        let seen: std::sync::Mutex<Vec<Vec<String>>> = Default::default();
+        let runner = |argv: &[String], _: &str, _: f64, _: &Path| {
+            seen.lock().unwrap().push(argv.to_vec());
+            Ok(ProcOutput {
+                code: Some(0),
+                stdout: r#"{"result":"ok"}"#.into(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        };
+        let cli_fn = || "claude".to_string();
+        for (model, want) in [(None, crate::models::GENERAL), (Some("opus"), "opus")] {
+            sealed_call(
+                "p",
+                10.0,
+                &mut |_| {},
+                None,
+                &SealedHooks {
+                    runner: Some(&runner),
+                    cli_fn: Some(&cli_fn),
+                    command_fn: None,
+                    model,
+                },
+            )
+            .unwrap();
+            let argv = seen.lock().unwrap().pop().unwrap();
+            let i = argv.iter().position(|a| a == "--model").unwrap();
+            assert_eq!(argv[i + 1], want);
+        }
     }
 
     #[test]
@@ -743,6 +788,7 @@ mod tests {
                 runner: None,
                 cli_fn: Some(&cli_fn),
                 command_fn: Some(&command_fn),
+                model: None,
             },
         )
     }
@@ -777,6 +823,7 @@ mod tests {
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             },
         )
         .unwrap();
@@ -800,6 +847,7 @@ mod tests {
                     runner: Some(&runner),
                     cli_fn: Some(&cli_fn),
                     command_fn: None,
+                    model: None,
                 },
             )
             .unwrap_err()
@@ -870,6 +918,7 @@ mod tests {
                     runner: Some(&runner),
                     cli_fn: Some(&cli_fn),
                     command_fn: None,
+                    model: None,
                 },
             );
             let (argv, input) = seen.into_inner();

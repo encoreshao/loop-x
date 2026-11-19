@@ -236,6 +236,7 @@ pub fn doctor_cli_command(
         s("--disallowedTools"),
         doctor_disallowed_tools(exe),
     ]);
+    cmd.extend(crate::models::args(crate::models::CODE));
     cmd.extend(crate::cost::budget_args(max_budget_usd));
     cmd.extend([s("--output-format"), s("json"), s(prompt)]);
     cmd
@@ -379,6 +380,14 @@ mod tests {
             "/bin/loopx",
             Some(2.0),
         )
+    }
+
+    #[test]
+    fn claude_doctor_runs_on_the_code_model() {
+        let c = doctor_command("claude");
+        let i = c.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(c[i + 1], crate::models::CODE);
+        assert!(!doctor_command("codex").contains(&"--model".to_string()));
     }
 
     #[test]

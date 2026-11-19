@@ -250,6 +250,7 @@ pub(crate) struct JobFence {
     pub allowed: Vec<String>,
     pub denied: Vec<String>,
     pub budget_usd: f64,
+    pub model: &'static str,
     /// Directories besides the working directory the job's tools may reach.
     pub extra_dirs: Vec<PathBuf>,
 }
@@ -297,6 +298,7 @@ pub(crate) fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<Stri
         s("stream-json"),
         s("--verbose"),
     ]);
+    argv.extend(crate::models::args(fence.model));
     argv.extend(crate::cost::budget_args(Some(fence.budget_usd)));
     argv.push(s(prompt));
     argv
@@ -398,6 +400,7 @@ pub fn video_argv(
             allowed,
             denied,
             budget_usd: GENERATE_BUDGET_USD,
+            model: crate::models::GENERAL,
             extra_dirs: if linked { vec![out] } else { Vec::new() },
         },
     ))
@@ -441,6 +444,7 @@ pub fn scout_argv(
             allowed,
             denied,
             budget_usd: SCOUT_BUDGET_USD,
+            model: crate::models::GENERAL,
             extra_dirs: Vec::new(),
         },
     ))
@@ -1079,6 +1083,14 @@ mod tests {
             assert!(!refused(cmd), "{cmd} denied");
             assert!(allow.iter().any(|r| bash_rule_matches(r, cmd)), "{cmd}");
         }
+    }
+
+    #[test]
+    fn creator_jobs_run_on_the_general_model() {
+        let cwd = PathBuf::from("/cwd");
+        let a = scout_argv("claude", "P", &fence(&cwd), Path::new(SCOUT_SKILL)).unwrap();
+        let i = a.iter().position(|x| x == "--model").unwrap();
+        assert_eq!(a[i + 1], crate::models::GENERAL);
     }
 
     #[test]

@@ -122,6 +122,7 @@ pub fn cli_command(
         s("--disallowedTools"),
         disallowed_tools(home),
     ];
+    cmd.extend(crate::models::args(crate::models::GENERAL));
     cmd.extend(cost::budget_args(max_budget_usd));
     cmd.extend([s("--output-format"), s("json"), s(prompt)]);
     cmd
@@ -591,6 +592,13 @@ mod tests {
             assert!(d.contains(deny), "{deny}");
         }
         assert!(!d.contains("$HOME"));
+    }
+
+    #[test]
+    fn the_topic_run_uses_the_general_model() {
+        let c = cli_command("claude", "P", "/bin/loopx", "/Users/me", None);
+        let i = c.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(c[i + 1], crate::models::GENERAL);
     }
 
     #[test]

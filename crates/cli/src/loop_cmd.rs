@@ -307,9 +307,11 @@ fn agent_fn_for(
     };
     let agent = agents::get_agent(definition.agent.provider.as_deref(), None)?;
     let timeout = definition.stop_conditions.max_runtime_minutes * 60.0;
+    let model = definition.agent.model.clone();
     Ok(Box::new(move |_ctx: &LoopContext<'_>| {
         let mut opts = RunOptions::new(&cwd, timeout);
         opts.disallowed_tools = Some(DEFAULT_DISALLOWED_TOOLS.to_string());
+        opts.model = model.clone();
         let result = agent.run(&prompt, &opts);
         if result.status != AgentStatus::Success {
             let message = tail_chars(&result.output, 800);

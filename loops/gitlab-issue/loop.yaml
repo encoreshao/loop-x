@@ -16,11 +16,11 @@ goal:
 
 agent:
   provider: claude
-  model: default
-  # Used only by the MR-feedback path; the single-session issue run keeps `model`.
+  model: opus
+  # Per-phase overrides for the MR-feedback path; `model` covers the rest.
   models:
     plan: opus
-    execute: sonnet
+    execute: opus
     validate: opus
 
 context:

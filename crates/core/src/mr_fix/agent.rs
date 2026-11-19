@@ -215,6 +215,7 @@ pub fn fix_argv(
             allowed,
             denied,
             budget_usd: FIX_BUDGET_USD,
+            model: crate::models::CODE,
             extra_dirs: vec![scratch.to_path_buf()],
         },
     ))
@@ -831,6 +832,12 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn fix_now_runs_on_the_code_model() {
+        let a = fix_argv("claude", "P", &fence(Path::new("/wt")), Path::new("/s")).unwrap();
+        assert_eq!(flag(&a, "--model"), crate::models::CODE);
+    }
+
     #[test]
     fn fix_argv_rules_use_the_resolved_paths() {
         let d = tempfile::tempdir().unwrap();

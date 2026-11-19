@@ -120,6 +120,7 @@ mod tests {
             runner: Some(&runner),
             cli_fn: Some(&cli),
             command_fn: None,
+            model: None,
         };
         summarize(changes, &hooks, &mut |_| {})
     }

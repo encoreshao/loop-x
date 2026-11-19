@@ -1443,6 +1443,7 @@ fn sealed_fail(cli: &'static str, out: impl Fn() -> FakeRun) -> AiFail {
             runner: Some(&runner),
             cli_fn: Some(&cli_fn),
             command_fn: None,
+            model: None,
         },
     )
     .unwrap_err()

@@ -289,6 +289,7 @@ mod tests {
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             };
             let r = call_with("p", &hooks, &mut |m| logs.push(m.into()));
             assert_eq!(r.unwrap(), "hi", "{cli}");
@@ -322,6 +323,7 @@ mod tests {
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             };
             let e = call_with("p", &hooks, &mut |_| {}).unwrap_err();
             assert!(!e.contains("SECRET"), "{cli}: {e}");

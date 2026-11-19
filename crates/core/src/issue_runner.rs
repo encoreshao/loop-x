@@ -257,9 +257,10 @@ fn claude_command(
         disallowed,
     ]);
     cmd.extend(cost::budget_args(max_budget_usd));
-    if let Some(m) = model {
-        cmd.extend([s("--model"), s(m)]);
-    }
+    cmd.extend(crate::models::args(crate::models::pick(
+        model,
+        crate::models::CODE,
+    )));
     cmd.extend([s("--output-format"), s("json"), s(prompt)]);
     cmd
 }
@@ -5856,6 +5857,24 @@ mod tests {
         let i = c.iter().position(|a| a == "--model").unwrap();
         assert_eq!(c[i + 1], "opus");
         assert_eq!(c.last().unwrap(), "P");
+    }
+
+    #[test]
+    fn claude_command_without_a_model_runs_on_the_code_model() {
+        let c = cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            false,
+            None,
+            false,
+            &[],
+            None,
+        );
+        let i = c.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(c[i + 1], crate::models::CODE);
     }
 
     #[test]

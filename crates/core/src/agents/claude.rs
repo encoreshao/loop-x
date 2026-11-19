@@ -35,6 +35,10 @@ pub fn claude_args(prompt: &str, opts: &RunOptions) -> Vec<String> {
     if let Some(t) = &opts.disallowed_tools {
         args.extend(["--disallowedTools".to_string(), t.clone()]);
     }
+    args.extend(crate::models::args(crate::models::pick(
+        opts.model.as_deref(),
+        crate::models::GENERAL,
+    )));
     args.extend(cost::budget_args(opts.max_budget_usd));
     args.extend([
         "--output-format".to_string(),
@@ -247,11 +251,26 @@ mod tests {
                 "Read Edit",
                 "--disallowedTools",
                 "Bash(git merge*)",
+                "--model",
+                "sonnet",
                 "--output-format",
                 "json",
                 "a prompt"
             ]
         );
+    }
+
+    #[test]
+    fn the_model_is_the_declared_one_else_the_general_one() {
+        let d = tempfile::tempdir().unwrap();
+        let mut o = opts(d.path(), 5.0, "json");
+        let model = |o: &RunOptions| {
+            let a = claude_args("p", o);
+            a[a.iter().position(|x| x == "--model").unwrap() + 1].clone()
+        };
+        assert_eq!(model(&o), crate::models::GENERAL);
+        o.model = Some("opus".into());
+        assert_eq!(model(&o), "opus");
     }
 
     #[test]

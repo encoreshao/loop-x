@@ -77,6 +77,8 @@ pub struct RunOptions {
     pub output_format: String,
     /// `--max-budget-usd` cap (claude only).
     pub max_budget_usd: Option<f64>,
+    /// Claude model; [`crate::models::GENERAL`] when unset.
+    pub model: Option<String>,
 }
 
 impl RunOptions {
@@ -89,6 +91,7 @@ impl RunOptions {
             add_dirs: Vec::new(),
             output_format: "json".into(),
             max_budget_usd: None,
+            model: None,
         }
     }
 }

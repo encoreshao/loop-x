@@ -86,6 +86,7 @@ pub mod mail_time;
 pub mod memory_store;
 pub mod messages;
 pub mod metrics;
+pub mod models;
 pub mod mr;
 pub mod mr_feedback;
 pub mod mr_fix;

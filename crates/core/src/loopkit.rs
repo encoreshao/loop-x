@@ -320,6 +320,10 @@ fn call_model_with(
         None => crate::ai_cli_config::selected_cli(),
     };
     sealed::warn_if_unrestricted(&cli, crate::ai_cli_safety::CallSite::Plugin, &mut sink);
+    let hooks = &SealedHooks {
+        model: hooks.model.or(ctx.definition.agent.model.as_deref()),
+        ..*hooks
+    };
     sealed::sealed_call(prompt, timeout, &mut sink, cap, hooks)
         .map(|r| ModelAnswer {
             text: r.text,
@@ -2022,10 +2026,60 @@ retry: {enabled: true, max_attempts: 2}
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             };
             call_model_with("p", &ctx, &hooks).unwrap();
             let got = logs.lock().unwrap().iter().any(|l| l.contains("WARNING"));
             assert_eq!(got, warns, "{cli}");
+        }
+    }
+
+    #[test]
+    fn the_sealed_claude_call_runs_on_the_loops_model_else_the_general_one() {
+        let w = world();
+        let mut def =
+            LoopDefinition::from_yaml(&w.dir.path().join("loops/demo/loop.yaml")).unwrap();
+        let seen: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+        let s = seen.clone();
+        let runner = move |argv: &[String], _: &str, _: f64, _: &std::path::Path| {
+            s.lock().unwrap().push(argv.to_vec());
+            Ok(crate::proc::ProcOutput {
+                code: Some(0),
+                stdout: r#"{"result":"hi"}"#.into(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+        };
+        let cli_fn = || "claude".to_string();
+        let hooks = SealedHooks {
+            runner: Some(&runner),
+            cli_fn: Some(&cli_fn),
+            ..Default::default()
+        };
+        for (declared, want) in [
+            (Some("opus"), "opus"),
+            (Some("default"), crate::models::GENERAL),
+            (None, crate::models::GENERAL),
+        ] {
+            def.agent.model = declared.map(String::from);
+            let ctx = LoopContext {
+                loop_name: "demo-loop".into(),
+                run_id: "r".into(),
+                now: Utc::now(),
+                definition: Arc::new(def.clone()),
+                settings: json!({}),
+                history_dir: w.dir.path().join("h"),
+                log: Arc::new(|_| {}),
+                repo_root: w.dir.path().to_path_buf(),
+                force: false,
+                call_budget_usd: None,
+                model: None,
+                state_dir: None,
+            };
+            call_model_with("p", &ctx, &hooks).unwrap();
+            let argv = seen.lock().unwrap().pop().unwrap();
+            let i = argv.iter().position(|a| a == "--model").unwrap();
+            assert_eq!(argv[i + 1], want, "{declared:?}");
         }
     }
 
@@ -2066,6 +2120,7 @@ retry: {enabled: true, max_attempts: 2}
                 runner: Some(&runner),
                 cli_fn: Some(&cli_fn),
                 command_fn: None,
+                model: None,
             };
             let e = call_model_with("p", &ctx, &hooks).unwrap_err();
             let text = format!("{e:?}");

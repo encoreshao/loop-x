@@ -14,7 +14,7 @@ goal:
 
 agent:
   provider: claude
-  model: default
+  model: sonnet
 
 context:
   sources:

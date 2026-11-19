@@ -322,6 +322,7 @@ mod tests {
             runner: None,
             cli_fn: Some(&cli_fn),
             command_fn: Some(&found),
+            model: None,
         };
         assert_eq!(
             run_sealed_with("p", 30.0, &hooks),
@@ -332,6 +333,7 @@ mod tests {
             runner: None,
             cli_fn: Some(&cli_fn),
             command_fn: Some(&missing),
+            model: None,
         };
         assert_eq!(
             run_sealed_with("p", 30.0, &hooks),

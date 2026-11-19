@@ -211,6 +211,8 @@ impl ChatCommand {
             &allowed,
             "--disallowedTools",
             disallowed,
+            "--model",
+            crate::models::GENERAL,
             "--append-system-prompt",
             &self.system_prompt(tools_description),
             // Ends the options: a message starting with "-" (a Slack bullet)
@@ -247,6 +249,8 @@ impl ChatCommand {
             "claude",
             "-p",
             "--safe-mode",
+            "--model",
+            crate::models::GENERAL,
             "--disallowedTools",
             "Bash Read Write Edit Grep Glob WebFetch WebSearch",
             &prompt,
@@ -1795,6 +1799,16 @@ mod tests {
         let cmd = &argv[4];
         assert!(cmd.starts_with("timeout 90 claude -p --output-format stream-json --include-partial-messages --verbose --safe-mode --allowedTools 'Bash(loopx chat-tool *)' --disallowedTools 'Read Write Edit Grep Glob Bash(git*)"));
         assert!(cmd.ends_with(" 'hi '\"'\"'there'\"'\"''"));
+    }
+
+    #[test]
+    fn chat_and_its_titles_run_on_the_general_model() {
+        let c = ChatCommand::new("loopx chat-tool");
+        for argv in [c.build_command("hi", "T"), c.build_title_command("u", "r")] {
+            let words = shlex::split(argv.last().unwrap()).unwrap();
+            let i = words.iter().position(|a| a == "--model").unwrap();
+            assert_eq!(words[i + 1], crate::models::GENERAL);
+        }
     }
 
     #[test]
