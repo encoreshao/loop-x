@@ -2266,5 +2266,11 @@
   "Drag chats here": "Faites glisser des conversations ici",
   "Move to folder": "Déplacer vers un dossier",
   "No folder": "Aucun dossier",
-  "Move chat {title} to a folder": "Déplacer la conversation {title} vers un dossier"
+  "Move chat {title} to a folder": "Déplacer la conversation {title} vers un dossier",
+  "Exit code {code}": "Code de sortie {code}",
+  "Failed {n} runs in a row": "Échec {n} exécutions de suite",
+  "Run output": "Sortie de l’exécution",
+  "Log entries": "Entrées du journal",
+  "The output of this run was not recorded.": "La sortie de cette exécution n’a pas été enregistrée.",
+  "Open all logs": "Ouvrir tous les journaux"
 }

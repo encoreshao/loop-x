@@ -371,7 +371,7 @@ fn logs_body(ctx: &UiCtx) -> String {
 
 /// `_log_entry_html`, with the GitLab prefixes already computed once per page
 /// (Python recomputes them per entry from the same files; the result is equal).
-fn log_entry_html(entry: &LogEntry, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
+pub(crate) fn log_entry_html(entry: &LogEntry, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
     let header = match (&entry.source, &entry.detail, &entry.timestamp) {
         (Some(source), Some(detail), Some(ts)) => format!(
             "<span class='log-entry-source'>{}</span>\

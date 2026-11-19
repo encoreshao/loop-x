@@ -125,7 +125,7 @@ fn link(ctx: &UiCtx, item: &Value) -> String {
         }
         Some("sign_in") if text(item, "probe") == "ai_cli" => (crate::ui::ai_cli::SETTINGS_HREF.to_string(), ctx.t("Open AI CLI settings")),
         Some("sign_in") => ("/connectors".to_string(), ctx.t("Reconnect")),
-        Some("loop_failed") => ("/runs?view=logs".to_string(), ctx.t("See the log")),
+        Some("loop_failed") => (sheet_href(&text(item, "loop")), ctx.t("See the log")),
         Some("slack_listener") => (
             crate::ui::pages::slack_agent::listener_href(ctx.state),
             ctx.t("Open Slack settings"),
@@ -282,17 +282,116 @@ fn mr_thread_actions(ctx: &UiCtx, item: &Value) -> String {
     )
 }
 
-fn row(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
+/// How long ago the item started, or "" when it has no time.
+fn ago(item: &Value) -> String {
     let since = text(item, "since");
+    if since.is_empty() {
+        return since;
+    }
+    // Sign-in and run times are naive local; read them as such, not as UTC.
+    match loopx_core::needs_you::parse_time(&since) {
+        Some(t) => relative_time_dt(Utc::now(), t.fixed_offset()),
+        None => relative_time(Utc::now(), &since),
+    }
+}
+
+fn sheet_href(loop_name: &str) -> String {
+    format!("{PATH}?log={}", pyfmt::quote(loop_name, ""))
+}
+
+/// The end of a failed run's own output: from where the run started writing in
+/// the day's shared history log, at most the last 64 KB. `None` when the status
+/// names no log, or one that is not a plain file name in `outputs/history`.
+fn failed_run_output(state: &UiState, status: &Value) -> Option<(String, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let name = status["last_log"].as_str()?;
+    let plain = std::path::Path::new(name).file_name().is_some_and(|f| f == name);
+    if !plain || !name.ends_with(".log") {
+        return None;
+    }
+    let mut f = std::fs::File::open(state.repo_root.join("outputs/history").join(name)).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = status["last_log_offset"].as_u64().unwrap_or(0).min(len);
+    f.seek(SeekFrom::Start(start.max(len.saturating_sub(TAIL)))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    Some((format!("outputs/history/{name}"), String::from_utf8_lossy(&buf).trim_end().to_string()))
+}
+
+/// The right-hand sheet behind a failed loop's "See the log": what failed, its
+/// recent lines in the unified log and the run's own output.
+fn loop_log_sheet(ctx: &UiCtx, items: &[Value]) -> String {
+    let Some(name) = ctx.query().first("log").map(str::to_string) else {
+        return String::new();
+    };
+    let Some(item) = items.iter().find(|i| i["kind"] == "loop_failed" && text(i, "loop") == name) else {
+        return String::new();
+    };
+    let status = snapshot::loop_statuses(&paths(ctx.state).outputs).remove(&name).unwrap_or(Value::Null);
+    let mut facts = vec![ago(item)];
+    if let Some(code) = item["exit_code"].as_i64() {
+        facts.push(ctx.tf("Exit code {code}", &[("code", &code.to_string())]));
+    }
+    if let Some(n) = item["consecutive_failures"].as_i64().filter(|n| *n > 1) {
+        facts.push(ctx.tf("Failed {n} runs in a row", &[("n", &n.to_string())]));
+    }
+    facts.retain(|f| !f.is_empty());
+    let facts = pyfmt::escape(&facts.join(" · "));
+
+    let log_path = loopx_core::run_history::unified_log_path(&ctx.state.repo_root);
+    let tail = loopx_core::run_history::read_unified_log_tail(2000, &log_path).unwrap_or_default();
+    let prefixes = crate::ui::gitlab::issue_url_prefixes(ctx.state);
+    let mut entries: Vec<_> = loopx_core::run_history::parse_unified_log_entries(&tail)
+        .into_iter()
+        .filter(|e| e.source.as_deref() == Some(name.as_str()))
+        .collect();
+    entries.reverse();
+    entries.truncate(20);
+    let entries = if entries.is_empty() {
+        format!("<p class='muted'>{}</p>", pyfmt::escape(&ctx.t("No log entries yet.")))
+    } else {
+        let inner: String = entries.iter().map(|e| crate::ui::pages::runs::log_entry_html(e, &prefixes)).collect();
+        format!("<div class='log-entries'>{inner}</div>")
+    };
+    let output = match failed_run_output(ctx.state, &status) {
+        Some((path, out)) if !out.is_empty() => format!(
+            "<p class='ny-sheet-path'><code>{}</code></p><pre class='ny-sheet-output'>{}</pre>",
+            pyfmt::escape(&path),
+            pyfmt::escape(&out),
+        ),
+        _ => format!("<p class='muted'>{}</p>", pyfmt::escape(&ctx.t("The output of this run was not recorded."))),
+    };
+    let close = pyfmt::escape(&ctx.t("Close"));
+    format!(
+        "<a class='ny-sheet-backdrop' href='{PATH}' aria-label='{close}' tabindex='-1'></a>\
+<aside class='ny-sheet' role='dialog' aria-modal='true' aria-labelledby='ny-sheet-title'>\
+<header class='ny-sheet-head'><div><h2 id='ny-sheet-title'>{title}</h2><p class='muted'>{facts}</p></div>\
+<a class='ny-sheet-close' href='{PATH}' aria-label='{close}' title='{close}'>{x}</a></header>\
+<section class='ny-sheet-section'><h3>{output_label}</h3>{output}</section>\
+<section class='ny-sheet-section'><h3>{entries_label}</h3>{entries}</section>\
+<footer class='ny-sheet-foot'>\
+<form method='post' action='/needs-you/dismiss'>{csrf}<input type='hidden' name='id' value='{id}'><button type='submit' class='btn btn-neutral'>{dismiss}</button></form>\
+<a class='btn btn-neutral' href='/runs?view=logs'>{all}</a></footer></aside>\
+<script>(function(){{var o=document.querySelector('.ny-sheet-output');if(o)o.scrollTop=o.scrollHeight;\
+document.addEventListener('keydown',function(e){{if(e.key==='Escape')location.href='{PATH}';}});}})();</script>",
+        title = pyfmt::escape(&headline(ctx, item)),
+        x = icons::icon("close"),
+        output_label = pyfmt::escape(&ctx.t("Run output")),
+        entries_label = pyfmt::escape(&ctx.t("Log entries")),
+        csrf = ctx.csrf_input(),
+        id = pyfmt::escape(&text(item, "id")),
+        dismiss = pyfmt::escape(&ctx.t("Dismiss")),
+        all = pyfmt::escape(&ctx.t("Open all logs")),
+    )
+}
+
+fn row(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
+    let since = ago(item);
     let when = if since.is_empty() {
         String::new()
     } else {
-        // Sign-in and run times are naive local; read them as such, not as UTC.
-        let ago = match loopx_core::needs_you::parse_time(&since) {
-            Some(t) => relative_time_dt(Utc::now(), t.fixed_offset()),
-            None => relative_time(Utc::now(), &since),
-        };
-        format!(" <span class='muted'>· {}</span>", pyfmt::escape(&ago))
+        format!(" <span class='muted'>· {}</span>", pyfmt::escape(&since))
     };
     let stale = stale_guide_proposal(ctx, item);
     let (details, actions) = if item["kind"] == "mr_thread" {
@@ -328,8 +427,9 @@ fn body_html(ctx: &UiCtx) -> String {
         let rows: String = items.iter().map(|i| row(ctx, i, &prefixes)).collect();
         format!("<div class='card'><ul class='needs-you-list'>{rows}</ul></div>")
     };
+    let sheet = loop_log_sheet(ctx, &items);
     format!(
-        "<h1>{}</h1><p>{}</p>{}{list}",
+        "<h1>{}</h1><p>{}</p>{}{list}{sheet}",
         pyfmt::escape(&ctx.t("Needs you")),
         pyfmt::escape(&ctx.t(
             "What is waiting on you: approvals, escalated issues, review threads on the loop's merge requests, broken sign-ins and failed loops. Each one alerted you once; it stays here until it is dealt with."
@@ -1220,6 +1320,58 @@ mod tests {
         assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));
     }
 
+    fn failed_rss_loop(root: &std::path::Path, last_log: &str) {
+        let history = root.join("outputs/history");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("2026-11-19-rss.log"), "an earlier run\n<b>boom</b>: feed unreachable\n").unwrap();
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        std::fs::write(
+            root.join("logs/loop-engineering.log"),
+            "[2026-11-19 09:00:00] ---- rss-loop ---- run started ----\n\
+[2026-11-19 09:00:01] ---- topic-loop ---- run started ----\n\
+[2026-11-19 09:00:05] ---- rss-loop ---- run FAILED (exit 2) ----\n",
+        )
+        .unwrap();
+        loopx_core::status::write_status(
+            &root.join("outputs/status/rss-loop.json"),
+            "failed",
+            &[
+                ("last_exit_code", serde_json::json!(2)),
+                ("consecutive_failures", serde_json::json!(3)),
+                ("last_log", serde_json::json!(last_log)),
+                ("last_log_offset", serde_json::json!("an earlier run\n".len())),
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn see_the_log_opens_a_sheet_with_the_failed_runs_output_and_log_entries() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        failed_rss_loop(d.path(), "2026-11-19-rss.log");
+        let html = get(&st, "/needs-you?log=rss-loop");
+        let sheet = &html[html.find("class='ny-sheet'").expect("a sheet")..];
+        assert!(sheet.contains("rss-loop failed its last run"), "{sheet}");
+        assert!(sheet.contains("&lt;b&gt;boom&lt;/b&gt;: feed unreachable") && !sheet.contains("an earlier run"), "{sheet}");
+        assert!(sheet.contains("run FAILED (exit 2)") && !sheet.contains("topic-loop"), "{sheet}");
+        assert!(sheet.contains("outputs/history/2026-11-19-rss.log"), "{sheet}");
+        assert!(sheet.contains("href='/needs-you'") && sheet.contains("href='/runs?view=logs'"), "{sheet}");
+        assert!(sheet.contains("loop_failed:rss-loop"), "Dismiss from the sheet: {sheet}");
+    }
+
+    #[test]
+    fn the_sheet_never_reads_outside_the_run_history_or_opens_for_a_loop_that_did_not_fail() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        std::fs::write(d.path().join("secret.log"), "TOP SECRET").unwrap();
+        failed_rss_loop(d.path(), "../../secret.log");
+        let html = get(&st, "/needs-you?log=rss-loop");
+        assert!(html.contains("class='ny-sheet'") && !html.contains("TOP SECRET"), "{html}");
+        assert!(html.contains("The output of this run was not recorded."), "{html}");
+        assert!(!get(&st, "/needs-you?log=topic-loop").contains("class='ny-sheet'"));
+    }
+
     #[test]
     fn a_failed_loop_links_to_its_log_and_can_be_dismissed() {
         let d = tempfile::tempdir().unwrap();
@@ -1231,7 +1383,8 @@ mod tests {
         )
         .unwrap();
         let html = get(&st, "/needs-you");
-        assert!(html.contains("rss-loop failed its last run") && html.contains("href='/runs?view=logs'"), "{html}");
+        assert!(html.contains("rss-loop failed its last run") && html.contains("href='/needs-you?log=rss-loop'"), "{html}");
+        assert!(!html.contains("class='ny-sheet'"), "{html}");
         assert_eq!(post(&st, "/needs-you/dismiss", "id=loop_failed%3Arss-loop").status, 403);
         assert_eq!(post(&st, "/needs-you/dismiss", "csrf_token=tok&id=loop_failed%3Arss-loop").status, 303);
         assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));

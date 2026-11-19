@@ -2266,5 +2266,11 @@
   "Drag chats here": "将对话拖到这里",
   "Move to folder": "移到文件夹",
   "No folder": "无文件夹",
-  "Move chat {title} to a folder": "将对话 {title} 移到文件夹"
+  "Move chat {title} to a folder": "将对话 {title} 移到文件夹",
+  "Exit code {code}": "退出码 {code}",
+  "Failed {n} runs in a row": "连续失败 {n} 次",
+  "Run output": "运行输出",
+  "Log entries": "日志条目",
+  "The output of this run was not recorded.": "此次运行的输出未被记录。",
+  "Open all logs": "打开全部日志"
 }

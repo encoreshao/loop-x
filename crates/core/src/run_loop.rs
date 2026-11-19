@@ -322,6 +322,8 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
             &[
                 ("last_exit_code", json!(exit)),
                 ("consecutive_failures", json!(failures)),
+                ("last_log", json!(log_name)),
+                ("last_log_offset", json!(log_start.get())),
             ],
         );
         if entry.emit_run_events {
@@ -1457,6 +1459,12 @@ mod tests {
         let st = status::read_status(&d.path().join("outputs/status.json"));
         assert_eq!(st["state"], "failed");
         assert_eq!(st["last_exit_code"], 3);
+        let last_log = st["last_log"].as_str().unwrap();
+        assert!(
+            last_log.ends_with("-x.log") && !last_log.contains('/'),
+            "{st}"
+        );
+        assert_eq!(st["last_log_offset"], 0);
         let unified = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
         assert!(unified.contains("run FAILED (exit 3)"));
         let events = std::fs::read_to_string(

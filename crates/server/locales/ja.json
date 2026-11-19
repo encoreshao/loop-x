@@ -2266,5 +2266,11 @@
   "Drag chats here": "ここにチャットをドラッグ",
   "Move to folder": "フォルダに移動",
   "No folder": "フォルダなし",
-  "Move chat {title} to a folder": "チャット {title} をフォルダに移動"
+  "Move chat {title} to a folder": "チャット {title} をフォルダに移動",
+  "Exit code {code}": "終了コード {code}",
+  "Failed {n} runs in a row": "{n} 回連続で失敗",
+  "Run output": "実行の出力",
+  "Log entries": "ログエントリ",
+  "The output of this run was not recorded.": "この実行の出力は記録されていません。",
+  "Open all logs": "すべてのログを開く"
 }
