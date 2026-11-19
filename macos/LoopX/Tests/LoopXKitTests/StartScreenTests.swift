@@ -91,8 +91,8 @@ import Testing
 
     @Test func bothModesShareOneLayoutWithTheTaglines() {
         let h = html()
-        #expect(h.contains("<p class='line'>Your agents. Your Mac. Your call.</p>"))
-        #expect(h.contains("<p class='sub'>Handled while you do the real work.</p>"))
+        #expect(h.contains("<p class='line'>Hello, future.</p>"))
+        #expect(h.contains("<p class='sub'>We're building a world where <b>agents handle the busywork</b> and people do <b>what matters most</b>. It starts on your Mac.</p>"))
         // Dark mode keeps the same column: the status is not pinned elsewhere, no extra dot.
         #expect(!h.contains("position:fixed;bottom:44px") && !h.contains("class='dot'"))
         // Order: mark, name, the two lines, then the bar and status.
@@ -105,12 +105,32 @@ import Testing
         let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
         // The headline is the largest text on the page, well above the 14px subtitle.
         #expect(rule(".line").contains("font-size:var(--title)"))
-        #expect(h.contains("--title:clamp(24px,4.6vh,32px)"))
+        #expect(h.contains("--title:clamp(30px,6vh,44px)"))
         // Spacing is set per group (mark, name, headline, loader), not one flat gap.
         #expect(rule("body").contains("gap:0"))
         for sel in [".stage", "h1", ".line", ".bar"] {
             #expect(rule(sel).contains("margin"), "\(sel) sets its own spacing")
         }
+    }
+
+    @Test func theTaglinesHaveRoomToBreathe() {
+        let h = html()
+        let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
+        #expect(rule(".line").contains("line-height:1.3"))
+        #expect(rule(".sub").contains("line-height:1.6"))
+        #expect(rule(".sub").contains("margin:var(--gap-s) auto 0"))
+        #expect(rule(".sub").contains("max-width:"), "the subtitle wraps into even lines")
+    }
+
+    @Test func nameHeadlineAndSubtitleEachHaveTheirOwnStyle() {
+        let h = html()
+        let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
+        // The name is a small signature: spaced capitals as text, a short wordmark as images.
+        #expect(rule("h1").contains("text-transform:uppercase") && rule("h1").contains("letter-spacing:.3em"))
+        #expect(h.contains("h1 .brand-name{display:block;height:30px"))
+        // The headline carries the brand gradient; the subtitle stays quiet with its keywords in ink.
+        #expect(rule(".line").contains("background-clip:text") && rule(".line").contains("var(--grad)"))
+        #expect(rule(".sub b").contains("color:var(--fg)"))
     }
 
     @Test func theMarkStandsOutFromTheLightBackground() {
