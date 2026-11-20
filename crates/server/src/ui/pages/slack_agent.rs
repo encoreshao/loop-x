@@ -355,7 +355,7 @@ pub(super) fn listener_card(ctx: &UiCtx, account: &Account, confirm: bool) -> St
             pill("pill-red", ctx.t("Not running")),
             String::new(),
             ctx.tf(
-                "It stopped unexpectedly, or was stopped outside Loop X. Restart it; if that fails, uninstall and install again. Log: {path}",
+                "It stopped unexpectedly, or was stopped outside LoopX. Restart it; if that fails, uninstall and install again. Log: {path}",
                 &[("path", &log.display().to_string())],
             ),
             true,
@@ -439,7 +439,7 @@ onclick=\"document.getElementById('slack-install-sheet').showModal();return fals
             "<form method='post' action='/connectors/slack/uninstall' class='slack-inline-form'>{csrf}{}\
 <button type='submit' class='btn btn-neutral' data-confirm=\"{}\">{} {}</button></form>",
             hidden_id(id),
-            h(&ctx.t("Uninstall the background listener? Slack messages stop reaching Loop X until you install it again.")),
+            h(&ctx.t("Uninstall the background listener? Slack messages stop reaching LoopX until you install it again.")),
             icons::icon("delete"),
             h(&ctx.t("Uninstall"))
         ));

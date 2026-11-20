@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/app-icon.png" alt="Loop X logo" width="200" height="200">
+  <img src="assets/app-icon.png" alt="LoopX logo" width="200" height="200">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> | <b>日本語</b> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.fr.md">Français</a>
 </p>
 
-<h1 align="center">Loop X Engineering</h1>
+<h1 align="center">LoopX Engineering</h1>
 
 <p align="center">
   <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
@@ -17,16 +17,16 @@
 
 <p align="center"><strong>Issue、メール、ステータス確認の日々の雑務から、あなたの時間を取り戻します。</strong></p>
 
-<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ macOS 版 Loop X をダウンロード</a></b> · または <code>brew install encoreshao/tap/loopx</code></p>
+<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ macOS 版 LoopX をダウンロード</a></b> · または <code>brew install encoreshao/tap/loopx</code></p>
 
 ---
 
-Loop X は、macOS 向けのローカルファーストな AI エージェントのオーケストレーションプラットフォームです。専門化された AI エージェントをスケジュールに沿って動かし、エンジニアリングの業務や日々のナレッジワークを自動化します。あなたが注意を向けるのは、判断が必要なことだけで済みます。
+LoopX は、macOS 向けのローカルファーストな AI エージェントのオーケストレーションプラットフォームです。専門化された AI エージェントをスケジュールに沿って動かし、エンジニアリングの業務や日々のナレッジワークを自動化します。あなたが注意を向けるのは、判断が必要なことだけで済みます。
 
 - **ループ。** それぞれが独自のタスク仕様、スケジュール、実行履歴を持つ、独立して設定できるワークフローです。
 - **AI エージェント。** Claude Code、Codex、Gemini、Kimi、Cursor などのコーディングエージェントがタスクを考え、作業を行います。
-- **あなたのエージェントをそのまま。** Loop X はモデルを同梱せず、トークンも販売しません。すでに使って料金を払っている AI CLI（Claude Code、Codex、Gemini、Kimi、Cursor のサブスクリプションや API キー）を動かすので、AI の追加料金も新しいアカウントも不要です。設定 → AI CLI でいつでも切り替えられます。
-- **オーケストレーション。** Loop X は各ループを個別に実行・管理し、タスクの発見からレビュー可能な成果物までを進めます。
+- **あなたのエージェントをそのまま。** LoopX はモデルを同梱せず、トークンも販売しません。すでに使って料金を払っている AI CLI（Claude Code、Codex、Gemini、Kimi、Cursor のサブスクリプションや API キー）を動かすので、AI の追加料金も新しいアカウントも不要です。設定 → AI CLI でいつでも切り替えられます。
+- **オーケストレーション。** LoopX は各ループを個別に実行・管理し、タスクの発見からレビュー可能な成果物までを進めます。
 - **人が判断する。** エージェントは Issue の修正やマージリクエスト、返信、ブリーフの下書きを作成します。マージなどの重要な操作は人が握ります。
 - **ローカルファースト。** すべて Mac 上で、既存のツールと認証情報を使って動作します。
 
@@ -48,7 +48,7 @@ Loop X は、macOS 向けのローカルファーストな AI エージェント
 1. **小さく始める。** 最初は GitLab Issue ループとトピック監視ループだけをオンにし、よく知っているプロジェクトを 1〜2 件登録します。
 2. **スケジュール前に 1 回実行する。** `loopx run issue-loop` を手動で実行し、結果を確認してからスケジューラーを読み込みます。
 3. **エージェントが選んだチェックを確認する。** エージェントが各プロジェクトの lint とテストのコマンドを判断し、Live ビューの各 Issue の下に記録します。ループ自身が再実行して通ったときだけマージリクエストが開かれます。保存済みの `lint_cmd`/`test_cmd` は出発点のヒントです。
-4. **すべてのマージリクエストをレビューする。** Loop X はオープンなマージリクエストで止まります。チームメイトの変更と同じように差分を読んでください。
+4. **すべてのマージリクエストをレビューする。** LoopX はオープンなマージリクエストで止まります。チームメイトの変更と同じように差分を読んでください。
 5. **明確な Issue を書く。** 期待する動作と再現手順を含めます。明確な Issue には修正が、曖昧な Issue には質問が返ります。
 6. **gate 検証モード（デフォルト）のままにする。** ループ自身がチェックを再実行し、失敗時にはエスカレーションします。
 7. **シークレットは Keychain に置く。** トークンはダッシュボードから追加し、設定ファイルや Issue 本文には書かないでください。
@@ -100,12 +100,12 @@ Loop X は、macOS 向けのローカルファーストな AI エージェント
 
 `config/loops.json.template` には 7 つのループが同梱されています。それぞれダッシュボードの **Loops** に専用ページがあり、`docs/tasks/` に個別の仕様があります。スケジュールはそのページで編集でき、下記の既定値はテンプレートのものです。
 
-| ループ | 内容 | 必要なもの | 既定のスケジュール | Loop X の外への書き込み |
+| ループ | 内容 | 必要なもの | 既定のスケジュール | LoopX の外への書き込み |
 | --- | --- | --- | --- | --- |
 | GitLab issues | 割り当てられた Issue を処理：修正・回答・エスカレーション | GitLab 設定（`~/.gitlab/config.json`） | 平日 10:00 | ブランチとマージリクエスト（マージはしない）、Issue コメント、Slack |
 | Topic monitor | 指定トピックをウェブで調査し、毎日ブリーフィングを送信 | トピック（`topics.json`） | 毎日 10:00 | Slack ダイジェスト |
 | Inbox triage | 新着メールにラベルを付け、緊急メールへの返信を下書き（既定では無効） | メールボックス（`mail` ケイパビリティ） | 平日 09:00 | メールのラベルと下書き（送信はしない） |
-| Daily Digest | 朝の1通のまとめ：ToDo、担当 Issue、レビュー待ちの MR、今日の会議、昨日の Loop X の作業（既定では無効） | `issues` コネクタ（カレンダーは任意） | 平日 09:30 | 通知のみ |
+| Daily Digest | 朝の1通のまとめ：ToDo、担当 Issue、レビュー待ちの MR、今日の会議、昨日の LoopX の作業（既定では無効） | `issues` コネクタ（カレンダーは任意） | 平日 09:30 | 通知のみ |
 | MR Review | あなたがレビュアーのマージリクエストを事前レビュー（既定では無効） | `merge_requests` コネクタ（GitLab） | 2 時間ごと | GitLab のドラフトノートのみ。公開・承認・通常ノートの投稿は一切しない |
 | Pipeline Doctor | 追跡中のプロジェクトと自分の MR の失敗した CI パイプラインを診断し、繰り返す失敗を指摘（既定では無効） | `pipelines` コネクタ（GitLab） | 毎時 | 通知のみ |
 | RSS Watch | フィードの新着エントリを関心に合わせてランク付けし、短いダイジェストを送信（既定では無効） | `feed` コネクタ（RSS） | 毎日 08:00 | 通知のみ |

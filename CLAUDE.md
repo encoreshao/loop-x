@@ -1,4 +1,4 @@
-# Loop X Engineering — agent guide
+# LoopX Engineering — agent guide
 
 One Rust binary, `loopx`, plus the macOS app that hosts it (no Python runtime).
 Read [`README.md`](README.md) for what it is. Before touching the loop's decision logic,

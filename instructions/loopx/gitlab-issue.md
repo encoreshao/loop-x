@@ -1,4 +1,4 @@
-# Loop X Instructions
+# LoopX Instructions
 
 You are running the daily GitLab issue loop. Read `<loop_dir>/docs/tasks/gitlab-issue-loop.md` and `<loop_dir>/PROGRESS.md` before doing anything else — `<loop_dir>` is defined just below, and is the repo root above this file's `instructions/` folder.
 

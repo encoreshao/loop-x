@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/app-icon.png" alt="Loop X logo" width="200" height="200">
+  <img src="assets/app-icon.png" alt="LoopX logo" width="200" height="200">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <a href="README.zh-CN.md">简体中文</a> | <b>Français</b>
 </p>
 
-<h1 align="center">Loop X Engineering</h1>
+<h1 align="center">LoopX Engineering</h1>
 
 <p align="center">
   <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
@@ -17,16 +17,16 @@
 
 <p align="center"><strong>Reprenez votre temps sur le quotidien des tickets, des e-mails et des points d'état.</strong></p>
 
-<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ Télécharger Loop X pour macOS</a></b> · ou <code>brew install encoreshao/tap/loopx</code></p>
+<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ Télécharger LoopX pour macOS</a></b> · ou <code>brew install encoreshao/tap/loopx</code></p>
 
 ---
 
-Loop X est une plateforme d'orchestration d'agents IA, locale d'abord, pour macOS. Elle exécute selon un planning des agents IA spécialisés qui automatisent les flux de travail d'ingénierie et le travail de connaissance de tous les jours, pour que vous ne consacriez votre attention qu'à ce qui demande votre jugement.
+LoopX est une plateforme d'orchestration d'agents IA, locale d'abord, pour macOS. Elle exécute selon un planning des agents IA spécialisés qui automatisent les flux de travail d'ingénierie et le travail de connaissance de tous les jours, pour que vous ne consacriez votre attention qu'à ce qui demande votre jugement.
 
 - **Boucles.** Des flux de travail indépendants et configurables, chacun avec sa spécification de tâche, son planning et son historique d'exécutions.
 - **Agents IA.** Des agents de code comme Claude Code, Codex, Gemini, Kimi et Cursor réfléchissent à la tâche et font le travail.
-- **Apportez votre propre agent.** Loop X n'embarque aucun modèle et ne vend pas de jetons. Il pilote la CLI d'IA que vous utilisez et payez déjà (abonnement ou clé API Claude Code, Codex, Gemini, Kimi ou Cursor) : pas de facture d'IA supplémentaire, pas de nouveau compte. Changez d'agent à tout moment dans Réglages → CLI d'IA.
-- **Orchestration.** Loop X exécute et gère chaque boucle séparément, de la découverte de la tâche jusqu'à un résultat prêt à relire.
+- **Apportez votre propre agent.** LoopX n'embarque aucun modèle et ne vend pas de jetons. Il pilote la CLI d'IA que vous utilisez et payez déjà (abonnement ou clé API Claude Code, Codex, Gemini, Kimi ou Cursor) : pas de facture d'IA supplémentaire, pas de nouveau compte. Changez d'agent à tout moment dans Réglages → CLI d'IA.
+- **Orchestration.** LoopX exécute et gère chaque boucle séparément, de la découverte de la tâche jusqu'à un résultat prêt à relire.
 - **L'humain décide.** Les agents corrigent des tickets et rédigent des merge requests, des réponses et des briefs. Vous gardez la main sur la fusion et sur toute autre action critique.
 - **Local d'abord.** Tout s'exécute sur votre Mac, avec vos outils et vos identifiants existants.
 
@@ -48,7 +48,7 @@ L'application locale montre ce qu'elle a fait, selon deux vues entre lesquelles 
 1. **Commencer petit.** Gardez d'abord seulement les boucles « tickets GitLab » et « veille thématique », et listez un ou deux projets que vous connaissez bien.
 2. **Faire une exécution avant de planifier.** Lancez `loopx run issue-loop` à la main et lisez le résultat avant de charger le planificateur.
 3. **Jeter un œil aux vérifications choisies par l'agent.** L'agent détermine les commandes de lint et de test de chaque projet et les consigne sous chaque ticket dans la vue Live. Une merge request ne s'ouvre que si la boucle les relance elle-même avec succès ; les `lint_cmd`/`test_cmd` enregistrés ne sont que des points de départ.
-4. **Relire chaque merge request.** Loop X s'arrête à une merge request ouverte. Lisez le diff comme celui d'un collègue.
+4. **Relire chaque merge request.** LoopX s'arrête à une merge request ouverte. Lisez le diff comme celui d'un collègue.
 5. **Rédiger des tickets clairs.** Indiquez le comportement attendu et comment le reproduire. Un ticket précis reçoit un correctif, un ticket vague reçoit une question.
 6. **Garder le mode de vérification gate** (par défaut) : la boucle relance elle-même les vérifications et escalade en cas d'échec.
 7. **Garder les secrets dans le trousseau.** Ajoutez les jetons via le tableau de bord, jamais dans des fichiers de configuration ni dans le texte d'un ticket.
@@ -100,12 +100,12 @@ Une troisième boucle (`loopx run inbox-triage-loop`) trie les boîtes de récep
 
 Sept boucles sont livrées dans `config/loops.json.template` ; chacune a sa page sous **Loops** dans le tableau de bord et sa propre spécification sous `docs/tasks/`. Le planning se modifie sur cette page ; les valeurs par défaut ci-dessous viennent du modèle.
 
-| Boucle | Ce qu'elle fait | Prérequis | Planning par défaut | Ce qu'elle écrit hors de Loop X |
+| Boucle | Ce qu'elle fait | Prérequis | Planning par défaut | Ce qu'elle écrit hors de LoopX |
 | --- | --- | --- | --- | --- |
 | GitLab issues | Traite vos tickets assignés : corrige, répond ou escalade | Config GitLab (`~/.gitlab/config.json`) | Jours ouvrés 10:00 | Branches et merge requests (jamais fusionnées), commentaires de tickets, Slack |
 | Topic monitor | Recherche vos sujets sur le web et envoie un briefing quotidien | Sujets (`topics.json`) | Tous les jours 10:00 | Digest Slack |
 | Inbox triage | Étiquette les nouveaux e-mails et rédige des brouillons de réponse aux messages urgents (désactivée par défaut) | Une boîte mail (capacité `mail`) | Jours ouvrés 09:00 | Étiquettes et brouillons (n'envoie jamais) |
-| Daily Digest | Un récapitulatif matinal : tâches, tickets assignés, MR à relire, réunions du jour, ce que Loop X a fait hier (désactivée par défaut) | Connecteur `issues` (agenda facultatif) | Jours ouvrés 09:30 | Notifications uniquement |
+| Daily Digest | Un récapitulatif matinal : tâches, tickets assignés, MR à relire, réunions du jour, ce que LoopX a fait hier (désactivée par défaut) | Connecteur `issues` (agenda facultatif) | Jours ouvrés 09:30 | Notifications uniquement |
 | MR Review | Pré-relit les merge requests dont vous êtes relecteur (désactivée par défaut) | Connecteur `merge_requests` (GitLab) | Toutes les 2 heures | Notes brouillon GitLab uniquement ; ne publie, n'approuve ni ne poste jamais de note normale |
 | Pipeline Doctor | Diagnostique les pipelines CI en échec sur les projets suivis et vos MR, et signale les échecs récurrents (désactivée par défaut) | Connecteur `pipelines` (GitLab) | Toutes les heures | Notifications uniquement |
 | RSS Watch | Classe les nouvelles entrées de flux selon vos centres d'intérêt et envoie un court digest (désactivée par défaut) | Connecteur `feed` (RSS) | Tous les jours 08:00 | Notifications uniquement |

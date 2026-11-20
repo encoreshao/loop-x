@@ -85,7 +85,7 @@ fn fit_title(brief: &str) -> String {
 
 /// The opening lines a release description can start with. The `release-mr` skill in the
 /// encore-skills repo (`skills/release-mr/SKILL.md`) keeps the same list and format rules
-/// for hand-written release MRs; Loop X does not read it, so change both together.
+/// for hand-written release MRs; LoopX does not read it, so change both together.
 /// The "focuses on" line is built in `opening_line` and only joins when the title brief
 /// names exactly three features.
 const OPENINGS: [&str; 7] = [

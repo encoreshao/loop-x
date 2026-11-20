@@ -34,7 +34,7 @@ pub const INFO: TypeInfo = TypeInfo {
     secret_label: Some("Bot token (xoxb-)"),
     external: false,
     brand: "slack",
-    description: "Use your Loop X agent from Slack mentions and direct messages, and answer approvals there. Everyone on the allowlist uses it as you.",
+    description: "Use your LoopX agent from Slack mentions and direct messages, and answer approvals there. Everyone on the allowlist uses it as you.",
     docs_url: "https://api.slack.com/apis/socket-mode",
     category: "chat",
     presets: &[],

@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/app-icon.png" alt="Loop X logo" width="200" height="200">
+  <img src="assets/app-icon.png" alt="LoopX logo" width="200" height="200">
 </p>
 
 <p align="center">
   <a href="README.md">English</a> | <a href="README.ja.md">日本語</a> | <b>简体中文</b> | <a href="README.fr.md">Français</a>
 </p>
 
-<h1 align="center">Loop X Engineering</h1>
+<h1 align="center">LoopX Engineering</h1>
 
 <p align="center">
   <a href="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml"><img src="https://github.com/encoreshao/loop-x/actions/workflows/rust.yml/badge.svg" alt="CI"></a>
@@ -17,16 +17,16 @@
 
 <p align="center"><strong>把你的时间从 issue、邮件和状态检查的日常琐事中夺回来。</strong></p>
 
-<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ 下载 macOS 版 Loop X</a></b> · 或运行 <code>brew install encoreshao/tap/loopx</code></p>
+<p align="center"><b><a href="https://github.com/encoreshao/loop-x/releases/latest">⬇ 下载 macOS 版 LoopX</a></b> · 或运行 <code>brew install encoreshao/tap/loopx</code></p>
 
 ---
 
-Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划运行各有专长的 AI 智能体，自动完成工程工作流和日常知识工作，让你只把注意力花在需要你判断的事情上。
+LoopX 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划运行各有专长的 AI 智能体，自动完成工程工作流和日常知识工作，让你只把注意力花在需要你判断的事情上。
 
 - **循环（Loop）。** 相互独立、可配置的工作流，各自有任务规范、计划和运行历史。
 - **AI 智能体。** Claude Code、Codex、Gemini、Kimi、Cursor 等编码智能体负责思考任务并完成工作。
-- **自带智能体 / 订阅。** Loop X 不内置模型，也不卖 token。它直接驱动你已在使用并付费的 AI CLI（Claude Code、Codex、Gemini、Kimi、Cursor 的订阅或 API 密钥），因此没有额外的 AI 费用，也无需新账号。随时可在“设置 → AI CLI”中切换。
-- **编排。** Loop X 独立运行并管理每个循环，从发现任务一直推进到可供审阅的结果。
+- **自带智能体 / 订阅。** LoopX 不内置模型，也不卖 token。它直接驱动你已在使用并付费的 AI CLI（Claude Code、Codex、Gemini、Kimi、Cursor 的订阅或 API 密钥），因此没有额外的 AI 费用，也无需新账号。随时可在“设置 → AI CLI”中切换。
+- **编排。** LoopX 独立运行并管理每个循环，从发现任务一直推进到可供审阅的结果。
 - **人在回路。** 智能体会修复 issue，并起草合并请求、回复和简报；合并及其他关键操作始终由你掌控。
 - **本地优先。** 一切都在你的 Mac 上运行，使用你现有的工具和凭据。
 
@@ -48,7 +48,7 @@ Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划�
 1. **从小处开始。** 起初只开启 GitLab issue 和主题监控两个循环，并只列出一两个你熟悉的项目。
 2. **调度前先试跑一次。** 手动运行 `loopx run issue-loop` 并查看结果，再加载调度器。
 3. **看一眼代理选的检查。** 代理会自行确定每个项目的 lint 和测试命令，并在 Live 视图的每个 issue 下记录。只有循环自己重新运行它们并通过，合并请求才会打开；已保存的 `lint_cmd`/`test_cmd` 只是它的起点提示。
-4. **审阅每一个合并请求。** Loop X 只会停在打开的合并请求上。请像审阅队友的代码一样查看差异。
+4. **审阅每一个合并请求。** LoopX 只会停在打开的合并请求上。请像审阅队友的代码一样查看差异。
 5. **把 issue 写清楚。** 写明预期行为和复现方式。清晰的 issue 会得到修复，含糊的 issue 会得到提问。
 6. **保持 gate 验证模式（默认）。** 循环会自己重新运行检查，并在失败时升级。
 7. **密钥放进钥匙串。** 通过仪表盘添加令牌，不要写进配置文件或 issue 正文。
@@ -100,12 +100,12 @@ Loop X 是面向 macOS 的本地优先 AI 智能体编排平台。它按计划�
 
 `config/loops.json.template` 内置 7 个循环；每个在仪表盘的 **Loops** 下都有独立页面，并在 `docs/tasks/` 下有各自的规格说明。调度可在该页面修改，下表为模板中的默认值。
 
-| 循环 | 作用 | 所需条件 | 默认调度 | 对 Loop X 之外的写入 |
+| 循环 | 作用 | 所需条件 | 默认调度 | 对 LoopX 之外的写入 |
 | --- | --- | --- | --- | --- |
 | GitLab issues | 处理分配给你的 issue：修复、答复或上报 | GitLab 配置（`~/.gitlab/config.json`） | 工作日 10:00 | 分支与合并请求（绝不合并）、issue 评论、Slack |
 | Topic monitor | 在网上调研你的主题并发送每日简报 | 主题（`topics.json`） | 每天 10:00 | Slack 摘要 |
 | Inbox triage | 为新邮件打标签，并为紧急邮件起草回复（默认禁用） | 邮箱（`mail` 能力） | 工作日 09:00 | 邮件标签与草稿（绝不发送） |
-| Daily Digest | 一份晨间简报：待办、分配给你的 issue、等你评审的 MR、今天的会议、Loop X 昨天做了什么（默认禁用） | `issues` 连接器（日历可选） | 工作日 09:30 | 仅通知 |
+| Daily Digest | 一份晨间简报：待办、分配给你的 issue、等你评审的 MR、今天的会议、LoopX 昨天做了什么（默认禁用） | `issues` 连接器（日历可选） | 工作日 09:30 | 仅通知 |
 | MR Review | 预先评审你担任评审人的合并请求（默认禁用） | `merge_requests` 连接器（GitLab） | 每 2 小时 | 仅 GitLab 草稿备注；从不发布、批准或发表普通备注 |
 | Pipeline Doctor | 诊断所跟踪项目和你名下 MR 中失败的 CI 流水线，并标出反复出现的失败（默认禁用） | `pipelines` 连接器（GitLab） | 每小时 | 仅通知 |
 | RSS Watch | 按你的兴趣为订阅源新条目排序并发送简短摘要（默认禁用） | `feed` 连接器（RSS） | 每天 08:00 | 仅通知 |

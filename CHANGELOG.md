@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Loop X Engineering are recorded here. The format
+All notable changes to LoopX Engineering are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 version is `0.x`, a minor bump may include breaking changes; those are called
@@ -23,6 +23,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 - Memory → Guide "Build guide" no longer fails with "the reply did not parse" on larger projects. The plan the AI proposes is now trimmed instead of refused when it names more than 12 features or 25 files per page, a file that is not in the project, or a related feature not in the plan. A feature with a bad slug or no readable files is dropped, and an overlong title or summary is shortened to one line.
 - MR review "Fix now": a long check command from the fix agent (a rubocop or rspec run over many files) is no longer cut at 500 characters, which ran a broken command ("No such file or directory: spec/services/theme_") and failed a fix whose checks would have passed. Commands are kept whole; one over 8000 characters is refused with that reason.
+- The last places that still said "Loop X" (the Slack agent page and connector, the dashboard chat assistant, the Daily Digest description and the translated READMEs) now say "LoopX".
 - Slack agent and dashboard chat: a message that starts with a dash (such as a Slack bullet, "- what's new on issue 12") no longer fails with "Claude Code exited with code 1"; Claude Code had read it as an unknown command-line option.
 - The issue loop no longer comments on (or labels `loop:needs-human`) an issue when the problem is the loop's own: an agent session that crashed, timed out or ran out of budget, a missing handoff, or a checkout it won't touch. These now go to Slack and the loop's log only, so an issue nobody has replied to no longer gets a second "I started on this issue, but the run stopped" comment after the loop's earlier answer. Escalations about the work itself (failed checks on a fix, an MR that could not be opened, approvals) still comment on the issue.
 

@@ -7,7 +7,7 @@ reference (how it runs, safety, behaviors, exit codes).
 ## Goal
 
 Mention `@LoopX` in Slack (a channel, a thread or a direct message) from a phone
-or any Slack client. Loop X on your Mac understands the request, runs a loop or
+or any Slack client. LoopX on your Mac understands the request, runs a loop or
 an ad-hoc agent task, and replies in the same thread with progress and a result.
 It is the same chat agent and tool registry as the dashboard's Office view, with
 Slack as the front door. It is not a hosted service: nothing is public, and
@@ -41,7 +41,7 @@ its incoming webhook.
    Information, App-Level Tokens, Generate Token and Scopes, with the
    `connections:write` scope. Both go to the macOS Keychain and are never shown
    again.
-3. **Add the Slack agent in Loop X.** Paste both tokens. Set **Allowed users** to
+3. **Add the Slack agent in LoopX.** Paste both tokens. Set **Allowed users** to
    your Slack member ID (your Slack profile, More, **Copy member ID**; it looks
    like `U01ABC2DEF`; names and `@handles` do not work). An empty list makes the
    listener refuse to start. Everyone on the list uses your agent as you, so list
@@ -92,7 +92,7 @@ After adding a scope, reinstall the app to the workspace, check whether the bot
 token on OAuth and Permissions changed (paste it again if it did), and restart
 the listener.
 
-### In Loop X (the connector fields)
+### In LoopX (the connector fields)
 
 | Field | Key | Default | Meaning |
 |---|---|---|---|
@@ -111,7 +111,7 @@ settings change another way, run `loopx slack restart`.
 
 ### Where things live
 
-Under the Loop X root (normally `~/.loopx`):
+Under the LoopX root (normally `~/.loopx`):
 
 | Path | What |
 |---|---|
@@ -255,7 +255,7 @@ Start with `loopx slack status` and the card. Then match the symptom:
 - **Install says "missing token" after saving the tokens.** See the Keychain
   service note below.
 - **Slack asks for admin approval when installing the app.** A workspace admin
-  must approve it first; nothing is wrong on the Loop X side.
+  must approve it first; nothing is wrong on the LoopX side.
 
 ## How it runs
 
@@ -268,7 +268,7 @@ Start with `loopx slack status` and the card. Then match the symptom:
   with an app-level token. No public URL, tunnel or relay.
 - Process: `loopx slack listen`, run by its own launchd agent
   `com.hermes.loopx-slack`, so Slack works while the Mac is awake even with the
-  Loop X app closed. The agent is installed only on an explicit button press.
+  LoopX app closed. The agent is installed only on an explicit button press.
   The install confirmation states four things: it writes
   `~/Library/LaunchAgents/com.hermes.loopx-slack.plist` and loads it with
   launchd; it runs in the background while you are logged in; it can start agent
@@ -296,7 +296,7 @@ Start with `loopx slack status` and the card. Then match the symptom:
   gets one fixed reply ("You're not authorized to use LoopX"), at most once per
   ten minutes per user, with no machine or setup detail.
 - **Everyone on the allowlist acts as you.** There are no per-user permissions:
-  each allowlisted person uses your full Loop X agent, gets replies built from
+  each allowlisted person uses your full LoopX agent, gets replies built from
   your mail and calendar by DM, and can press approval and catch-up buttons. To
   let teammates use it, add their member IDs and invite the bot to a channel;
   prefer to do that only while no mail or calendar connector is connected.

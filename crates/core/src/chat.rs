@@ -1777,7 +1777,7 @@ mod tests {
     fn prompt_texts_are_the_python_ones_with_the_command_swapped() {
         let c = ChatCommand::new("loopx chat-tool");
         let p = c.system_prompt("t1 (read): d.");
-        assert!(p.starts_with("You are the assistant embedded in the Loop X Engineering dashboard's Activity page chat box. The ONLY command you may run is `loopx chat-tool <action> [args]` - you have no other shell"));
+        assert!(p.starts_with("You are the assistant embedded in the LoopX Engineering dashboard's Activity page chat box. The ONLY command you may run is `loopx chat-tool <action> [args]` - you have no other shell"));
         assert!(p.contains(
             "\n\nConnector tools: run `loopx chat-tool call <tool> '<json>'` where <json>"
         ));

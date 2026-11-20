@@ -156,7 +156,7 @@ mod tests {
         let api = FakeApi {
             members: vec![
                 member("renovate[bot]", "Renovate", None),
-                member("loopx", "Loop X", None),
+                member("loopx", "LoopX", None),
                 member("ann", "Ann", None),
             ],
             me: "loopx".into(),
@@ -167,7 +167,7 @@ mod tests {
             "g/app",
             &[
                 change("renovate[bot]", "r@x.io", None),
-                change("Loop X", "l@x.io", None),
+                change("LoopX", "l@x.io", None),
                 change("Ann", "a@x.io", None),
             ],
         );
