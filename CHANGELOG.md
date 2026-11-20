@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Creator → Videos has a search field that filters the videos as you type: by name, fuzzily ("rd trp" finds "Road trip", ignoring case and accents), or by pasting part of a video's source link.
+
 ### Changed
 
 - Needs you: "See the log" on a failed loop opens a sheet on the right instead of the shared Logs page. It shows the exit code, how many runs in a row failed, the end of that run's own output (scrolled to the error) and the loop's latest log entries, with Dismiss and "Open all logs". Failed runs now record which history log and offset hold their output.

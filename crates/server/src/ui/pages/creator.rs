@@ -2392,10 +2392,12 @@ fn poster_card(ctx: &UiCtx, v: &VideoView<'_>) -> String {
         format!("<div class='cr-poster-tools'>{publish}{share}{folder}</div>")
     };
     format!(
-        "<li{}><button type='button' class='cr-poster' data-cr-open='{id}' aria-haspopup='dialog' aria-label=\"{}\">\
+        "<li{} data-cr-name=\"{}\" data-cr-link=\"{}\"><button type='button' class='cr-poster' data-cr-open='{id}' aria-haspopup='dialog' aria-label=\"{}\">\
 <span class='cr-poster-media'>{image}{play}{check}<span class='cr-poster-status'>{}</span></span>\
 <span class='cr-poster-title'>{}</span></button>{tools}</li>",
         if v.level == cstate::PublishLevel::All { " class='is-published'" } else { "" },
+        h(&v.p.title),
+        h(v.p.source_url.as_deref().unwrap_or("")),
         h(&ctx.tf("Open {title}", &[("title", &v.p.title)])),
         pill(v.status_kind, &v.status),
         h(&v.p.title),
@@ -2732,10 +2734,12 @@ fn missing_card(ctx: &UiCtx, slug: &str, rec: &cstate::Record, st: &CreatorState
     };
     let title = if rec.title.is_empty() { slug } else { &rec.title };
     format!(
-        "<li class='is-missing{}'><div class='cr-poster-static'>\
+        "<li class='is-missing{}' data-cr-name=\"{}\" data-cr-link=\"{}\"><div class='cr-poster-static'>\
 <span class='cr-poster-media'><span class='cr-poster-blank'>{}<small>{}</small></span><span class='cr-poster-status'>{status}</span></span>\
 <span class='cr-poster-title'>{}</span></div><div class='cr-poster-tools'>{}</div></li>",
         if published { " is-published" } else { "" },
+        h(title),
+        h(rec.source_url.as_deref().unwrap_or("")),
         icons::icon("video"),
         h(&ctx.t("Files removed")),
         h(title),
@@ -2772,12 +2776,23 @@ fn videos_tab(ctx: &UiCtx, jobs: &[JobRecord]) -> String {
         let mut posters: String = views.iter().map(|v| poster_card(ctx, v)).collect();
         posters.extend(gone.iter().map(|(slug, rec)| missing_card(ctx, slug, rec, &st)));
         let dialogs: String = views.iter().map(|v| video_dialog(ctx, v, &st)).collect();
+        let search = format!(
+            "<label class='cr-search-field cr-video-search'>{}<input type='search' data-cr-filter='cr-videos' \
+autocomplete='off' spellcheck='false' placeholder=\"{}\" aria-label=\"{}\"></label>",
+            icons::icon("search"),
+            h(&ctx.t("Search by name or link")),
+            h(&ctx.t("Search videos by name or source link"))
+        );
         format!(
             "{}{dialogs}",
             section(
                 &ctx.t("Videos"),
-                "",
-                &format!("<ul class='cr-grid'>{posters}</ul>")
+                &search,
+                &format!(
+                    "<ul class='cr-grid' id='cr-videos'>{posters}</ul>\
+<p class='cr-muted' data-cr-filter-empty='cr-videos' hidden>{}</p>",
+                    h(&ctx.t("No videos match your search."))
+                )
             )
         )
     };
@@ -3429,6 +3444,28 @@ mod tests {
             assert_eq!(r.status, 404, "{path}");
             assert!(!r.body_text().contains("secret"), "{path}");
         }
+    }
+
+    #[test]
+    fn videos_tab_offers_a_name_filter_over_its_posters() {
+        let fx = Fx::new();
+        let empty = fx.get("/creator?tab=videos").body_text();
+        assert!(!empty.contains("<input type='search' data-cr-filter"), "{empty}");
+        write_project(&fx, "T", true);
+        let body = fx.get("/creator?tab=videos").body_text();
+        assert!(
+            body.contains("<input type='search' data-cr-filter='cr-videos'"),
+            "{body}"
+        );
+        assert!(body.contains("<ul class='cr-grid' id='cr-videos'>"), "{body}");
+        assert!(
+            body.contains("<li data-cr-name=\"Demo short\" data-cr-link=\"https://example.com/talks/a\">"),
+            "{body}"
+        );
+        assert!(
+            body.contains("<p class='cr-muted' data-cr-filter-empty='cr-videos' hidden>No videos match your search.</p>"),
+            "{body}"
+        );
     }
 
     #[test]
@@ -4126,12 +4163,12 @@ mod tests {
         // An icon button in the card's actions marks it published everywhere.
         assert!(list.contains("action='/creator/published-all'"), "{list}");
         assert!(list.contains("name='on' value='1'"), "{list}");
-        assert!(!list.contains("<li class='is-published'>"), "{list}");
+        assert!(!list.contains("<li class='is-published' data-cr-name=\"Demo short\" data-cr-link=\"https://example.com/talks/a\">"), "{list}");
         let (_, ok) = flash_of(&fx.post("/creator/published-all", "csrf_token=tok&slug=demo&on=1&from=list"));
         assert_eq!(ok, "1");
         let body = fx.get("/creator?tab=videos").body_text();
         let list = &body[..body.find("<dialog class='cr-dialog'").unwrap()];
-        assert!(list.contains("<li class='is-published'>"), "{list}");
+        assert!(list.contains("<li class='is-published' data-cr-name=\"Demo short\" data-cr-link=\"https://example.com/talks/a\">"), "{list}");
         assert!(list.contains("<span class='cr-pill cr-pill-ok'>Published</span>"), "{list}");
         assert!(list.contains("cr-poster-check"), "{list}");
         // The same button now takes the mark back.
@@ -4140,7 +4177,7 @@ mod tests {
         assert_eq!(state.published["demo"].len(), 2, "WeChat and Douyin both marked");
         let (_, ok) = flash_of(&fx.post("/creator/published-all", "csrf_token=tok&slug=demo&on=0&from=list"));
         assert_eq!(ok, "1");
-        assert!(!fx.get("/creator?tab=videos").body_text().contains("<li class='is-published'>"));
+        assert!(!fx.get("/creator?tab=videos").body_text().contains("<li class='is-published' data-cr-name=\"Demo short\" data-cr-link=\"https://example.com/talks/a\">"));
     }
 
     #[test]
@@ -4187,7 +4224,7 @@ mod tests {
         std::fs::remove_dir_all(fx.project()).unwrap();
         let body = fx.get("/creator?tab=videos").body_text();
         let list = &body[..body.find("</ul>").unwrap_or(body.len())];
-        assert!(body.contains("<li class='is-missing is-published'>"), "{body}");
+        assert!(body.contains("<li class='is-missing is-published' data-cr-name=\"Demo short\" data-cr-link=\"https://example.com/talks/a\">"), "{body}");
         assert!(body.contains("Demo short"), "{list}");
         assert!(body.contains("<span class='cr-pill cr-pill-ok'>Published</span>"), "{body}");
         assert!(body.contains("action='/creator/videos/delete'") && body.contains("Remove record"), "{body}");

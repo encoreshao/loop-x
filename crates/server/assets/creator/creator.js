@@ -335,6 +335,43 @@
     }, 1000);
   }
 
+  // Videos filter: every typed word must match the name fuzzily (its letters in order, gaps
+  // allowed, ignoring case and accents: "rd trp" finds "Road trip") or appear in the source link.
+  function fold(s) {
+    return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  }
+  function fuzzy(name, word) {
+    var at = 0;
+    for (var i = 0; i < word.length; i++) {
+      at = name.indexOf(word[i], at);
+      if (at < 0) return false;
+      at++;
+    }
+    return true;
+  }
+  function applyFilter(input) {
+    var list = document.getElementById(input.getAttribute('data-cr-filter'));
+    if (!list) return;
+    var words = fold(input.value).split(/\s+/).filter(Boolean);
+    var shown = 0;
+    Array.prototype.forEach.call(list.children, function (item) {
+      var name = fold(item.getAttribute('data-cr-name') || '');
+      var link = (item.getAttribute('data-cr-link') || '').toLowerCase();
+      var match = words.every(function (w) { return fuzzy(name, w) || link.indexOf(w) >= 0; });
+      item.hidden = !match;
+      if (match) shown++;
+    });
+    var empty = document.querySelector('[data-cr-filter-empty="' + list.id + '"]');
+    if (empty) empty.hidden = shown > 0;
+  }
+  document.addEventListener('input', function (e) {
+    if (e.target.matches && e.target.matches('input[data-cr-filter]')) applyFilter(e.target);
+  });
+  // A browser that restores the field's text on Back gets the list filtered to match.
+  document.querySelectorAll('input[data-cr-filter]').forEach(function (input) {
+    if (input.value) applyFilter(input);
+  });
+
   // After Approve or a published toggle the page comes back with ?open=<slug>:
   // reopen that video's dialog.
   var wanted = new URLSearchParams(window.location.search).get('open');
