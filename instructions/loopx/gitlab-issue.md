@@ -242,6 +242,8 @@ loopx events emit --type issue.started --run-id "$LOOP_RUN_ID" --issue-run-id "$
 
 6. **Implement the minimal fix** inside the worktree: understand the root cause, make the smallest change that addresses it, no drive-by refactors, no unrelated files touched. If the fix visibly changes the UI and the harness gate is ON, take the "before" shots first, before editing any code — see "UI changes: before/after screenshots" below.
 
+   Before editing any code, write down 1-5 acceptance criteria from the issue and its comments: one testable sentence per behaviour the issue asks for, including the edge cases it implies (empty input, the boundary value, the error path). Phrase each as `WHEN <trigger> the system shall <behaviour>`, `IF <error condition> THEN the system shall <behaviour>`, or `The system shall <behaviour>`. As you implement, make sure each one is proved by a test: an existing test that already covers it, or a regression test you add. When no automated test is possible (a purely visual change, an external service), say why instead. If the harness gate is ON, these go into the handoff's `acceptance_criteria`; otherwise they are your checklist for step 7.
+
 Report the phase change before verifying:
 ```
 loopx status write running --current-issue "<alias> #<issue_iid>" --current-step "verifying"

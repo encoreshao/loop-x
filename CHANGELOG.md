@@ -18,6 +18,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- GitLab issue loop: before changing code the agent now writes 1-5 testable acceptance criteria for the issue ("WHEN ... the system shall ...") and ties each to the test that proves it. The merge request description shows them as an "Acceptance criteria" checklist, and the pre-MR review flags a criterion with no test and no reason why.
 - Needs you: "See the log" on a failed loop opens a sheet on the right instead of the shared Logs page. It shows the exit code, how many runs in a row failed, the end of that run's own output (scrolled to the error) and the loop's latest log entries, with Dismiss and "Open all logs". Failed runs now record which history log and offset hold their output.
 - Claude Code runs on a fixed model by default instead of the CLI's own default: code work (the issue loop, MR-feedback fixes, MR Review, Pipeline Doctor, the setup doctor and "Fix now") uses Opus, and everything else (chat, inbox triage, digests, topic monitor, release notes, Creator jobs and the other loops) uses Sonnet. A loop's `agent.model` in its `loop.yaml` still overrides it.
 - MR review "Fix now": each line of the run's summary comment links to the review comment it answers, and every thread the agent handled (fixed or deliberately left unchanged) gets a one-line reply ("Fixed: ..." or "Not changed: ...") linking back to the summary. Threads not addressed in the run get no reply.

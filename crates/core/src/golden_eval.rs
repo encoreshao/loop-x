@@ -56,6 +56,8 @@ pub struct Expect {
     pub handoff_command_contains: Option<String>,
     /// The issue worktree must have no uncommitted or untracked files.
     pub clean_worktree: bool,
+    /// A fix handoff must list at least one acceptance criterion.
+    pub acceptance_criteria: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +168,10 @@ pub fn parse_case(text: &str, path: &str) -> Result<GoldenCase, String> {
                 .map(str::to_string),
             clean_worktree: expect
                 .get("clean_worktree")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            acceptance_criteria: expect
+                .get("acceptance_criteria")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         },
@@ -469,6 +475,9 @@ pub fn grade(
             }
             .to_string(),
         );
+    }
+    if expect.acceptance_criteria && crate::pre_review::acceptance_criteria(handoff).is_empty() {
+        reasons.push("fix handoff has no acceptance criteria".to_string());
     }
     if expect.clean_worktree && !dirty.is_empty() {
         reasons.push(format!(
@@ -1075,6 +1084,7 @@ mod tests {
                 checks_pass: Some(true),
                 handoff_command_contains: None,
                 clean_worktree: false,
+                acceptance_criteria: false,
             },
         }
     }
@@ -1183,6 +1193,35 @@ mod tests {
     }
 
     #[test]
+    fn grade_requires_acceptance_criteria_when_expected() {
+        let mut c = case("fix");
+        c.expect.acceptance_criteria = true;
+        let bare = json!({"action": "fix"});
+        let (ok, why) = grade(&c, Some(&bare), &[], Some(true), &[], &no_read);
+        assert!(!ok);
+        assert_eq!(why, ["fix handoff has no acceptance criteria"]);
+        let with = json!({"action": "fix", "acceptance_criteria": [
+            {"id": "AC1", "statement": "WHEN x the system shall y", "test": "t"}
+        ]});
+        let (ok, why) = grade(&c, Some(&with), &[], Some(true), &[], &no_read);
+        assert!(ok, "{why:?}");
+    }
+
+    #[test]
+    fn grade_ignores_criteria_when_not_expected() {
+        let c = case("fix");
+        let (ok, why) = grade(
+            &c,
+            Some(&json!({"action": "fix"})),
+            &[],
+            Some(true),
+            &[],
+            &no_read,
+        );
+        assert!(ok, "{why:?}");
+    }
+
+    #[test]
     fn grade_checks_the_handoff_command_and_a_clean_worktree() {
         let mut c = case("setup_blocked");
         c.expect.checks_pass = None;
@@ -1214,13 +1253,15 @@ mod tests {
         assert!(c.expect.allowed_paths.is_empty());
         assert_eq!(c.expect.handoff_command_contains, None);
         assert!(!c.expect.clean_worktree);
+        assert!(!c.expect.acceptance_criteria);
         let strict = ok.replace(
             "{action: fix}",
-            "{action: setup_blocked, handoff_command_contains: pytest, clean_worktree: true}",
+            "{action: setup_blocked, handoff_command_contains: pytest, clean_worktree: true, acceptance_criteria: true}",
         );
         let c = parse_case(&strict, "p").unwrap();
         assert_eq!(c.expect.handoff_command_contains.as_deref(), Some("pytest"));
         assert!(c.expect.clean_worktree);
+        assert!(c.expect.acceptance_criteria);
         assert_eq!(
             parse_case("- a", "p").unwrap_err(),
             "p: case must be a mapping"

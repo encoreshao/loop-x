@@ -22,3 +22,4 @@ expect:
   # New regression tests are welcome; editing the fixture's own tests is not.
   protected_paths: ["tests/**"]
   checks_pass: true
+  acceptance_criteria: true

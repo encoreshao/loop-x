@@ -107,9 +107,14 @@ fn cap_diff(diff: &str) -> String {
 
 pub fn review_prompt(handoff: &Value, diff: &str) -> String {
     let text = |k: &str| handoff.get(k).and_then(Value::as_str).unwrap_or("");
+    let criteria: Vec<Value> = acceptance_criteria(handoff)
+        .iter()
+        .map(|c| json!({"id": c.id, "statement": c.statement, "test": c.test, "reason": c.reason}))
+        .collect();
     let item = json!({
         "title": text("title"),
         "description": text("description"),
+        "acceptance_criteria": criteria,
         "diff": cap_diff(diff),
     });
     PROMPT.replace("{{item_json}}", &item.to_string())
@@ -272,6 +277,79 @@ pub fn pre_review_section(result: &LoopResult) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+const MAX_CRITERIA: usize = 8;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Criterion {
+    pub id: String,
+    pub statement: String,
+    pub test: Option<String>,
+    pub reason: String,
+}
+
+/// The fix handoff's `acceptance_criteria`, read leniently: a missing or
+/// malformed list never makes the handoff invalid, it only yields fewer criteria.
+pub fn acceptance_criteria(handoff: &Value) -> Vec<Criterion> {
+    let Some(list) = handoff.get("acceptance_criteria").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let text = |c: &Value, k: &str| {
+        clip(
+            c.get(k).and_then(Value::as_str).unwrap_or(""),
+            MAX_LINE_CHARS,
+        )
+    };
+    list.iter()
+        .filter(|c| c.is_object())
+        .map(|c| Criterion {
+            id: text(c, "id"),
+            statement: text(c, "statement"),
+            test: Some(text(c, "test").replace('`', "'")).filter(|t| {
+                !matches!(
+                    t.trim().to_ascii_lowercase().as_str(),
+                    "" | "null" | "none" | "n/a" | "na" | "-"
+                )
+            }),
+            reason: text(c, "reason"),
+        })
+        .filter(|c| !c.id.is_empty() && !c.statement.is_empty())
+        .take(MAX_CRITERIA)
+        .collect()
+}
+
+/// A criterion the agent left without a test and without saying why.
+fn uncovered_criteria(handoff: &Value) -> Vec<Finding> {
+    acceptance_criteria(handoff)
+        .into_iter()
+        .filter(|c| c.test.is_none() && c.reason.is_empty())
+        .map(|c| Finding {
+            severity: "major".into(),
+            category: "tests".into(),
+            title: format!("acceptance criterion {} has no test", c.id),
+            body: c.statement,
+            path: String::new(),
+            line: None,
+            suggestion: "add a test that proves it, or say why none is possible".into(),
+        })
+        .collect()
+}
+
+pub fn acceptance_section(handoff: &Value) -> Option<String> {
+    let criteria = acceptance_criteria(handoff);
+    if criteria.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = criteria
+        .iter()
+        .map(|c| match &c.test {
+            Some(test) => format!("- [x] {}: {} (test: `{test}`)", c.id, c.statement),
+            None if c.reason.is_empty() => format!("- [ ] {}: {} (no test)", c.id, c.statement),
+            None => format!("- [ ] {}: {} (no test: {})", c.id, c.statement, c.reason),
+        })
+        .collect();
+    Some(format!("## Acceptance criteria\n\n{}", lines.join("\n")))
+}
+
 pub struct AgentReviewVerifier {
     pub name: String,
     pub work: IssueWork,
@@ -394,10 +472,11 @@ impl Verifier for AgentReviewVerifier {
             Ok(r) => r.text,
             Err((e, _)) => return self.error(format!("review call failed: {e}"), cost, start),
         };
-        let review = match parse_review(&text) {
+        let mut review = match parse_review(&text) {
             Ok(r) => r,
             Err(e) => return self.error(format!("review output unusable: {e}"), cost, start),
         };
+        review.findings.extend(uncovered_criteria(&handoff));
         let mut counts = json!({"blocker": 0, "major": 0, "minor": 0, "nit": 0});
         for f in &review.findings {
             if let Some(n) = counts.get_mut(f.severity.as_str()) {
@@ -840,5 +919,157 @@ mod tests {
             None
         );
         assert_eq!(pre_review_section(&loop_result(vec![])), None);
+    }
+
+    fn fix_with(criteria: serde_json::Value) -> serde_json::Value {
+        json!({"action": "fix", "branch": "feature#7-x", "target_branch": "main",
+               "title": "fix: #7 x", "acceptance_criteria": criteria})
+    }
+
+    fn with_criteria(f: &Fixture, criteria: serde_json::Value) {
+        let mut h: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&f.handoff).unwrap()).unwrap();
+        h["acceptance_criteria"] = criteria;
+        fs::write(&f.handoff, h.to_string()).unwrap();
+    }
+
+    fn approve() -> String {
+        reply(vec![], "approve")
+    }
+
+    #[test]
+    fn uncovered_criterion_is_a_major_tests_finding() {
+        let f = fixture("new\n");
+        with_criteria(
+            &f,
+            json!([{"id": "AC1", "statement": "WHEN x the system shall y", "test": null}]),
+        );
+        let r = run(&verifier(
+            &f,
+            invoker(Ok(&approve()), None, &Calls::default()),
+            &CostLedger::default(),
+            "claude",
+        ));
+        assert!(r.passed, "advisory, never blocking: {}", r.output);
+        assert_eq!(r.evidence["counts"]["major"], json!(1));
+        assert_eq!(
+            r.evidence["findings"][0]["title"],
+            "acceptance criterion AC1 has no test"
+        );
+        assert_eq!(r.evidence["findings"][0]["category"], "tests");
+    }
+
+    #[test]
+    fn criterion_with_reason_is_not_a_finding() {
+        let f = fixture("new\n");
+        with_criteria(
+            &f,
+            json!([{"id": "AC1", "statement": "s", "test": null, "reason": "visual only"}]),
+        );
+        let r = run(&verifier(
+            &f,
+            invoker(Ok(&approve()), None, &Calls::default()),
+            &CostLedger::default(),
+            "claude",
+        ));
+        assert_eq!(r.evidence["counts"]["major"], json!(0));
+    }
+
+    #[test]
+    fn no_criteria_no_synthetic_findings() {
+        let f = fixture("new\n");
+        let r = run(&verifier(
+            &f,
+            invoker(Ok(&approve()), None, &Calls::default()),
+            &CostLedger::default(),
+            "claude",
+        ));
+        assert_eq!(r.evidence["findings"], json!([]));
+    }
+
+    #[test]
+    fn review_prompt_includes_criteria() {
+        let handoff = fix_with(
+            json!([{"id": "AC1", "statement": "WHEN a the system shall b", "test": "t1"}]),
+        );
+        let prompt = review_prompt(&handoff, "+x\n");
+        assert!(prompt.contains("WHEN a the system shall b"), "{prompt}");
+        assert!(prompt.contains("\"acceptance_criteria\""), "{prompt}");
+    }
+
+    #[test]
+    fn placeholder_test_strings_count_as_no_test() {
+        let handoff = fix_with(json!([
+            {"id": "AC1", "statement": "s1", "test": "null"},
+            {"id": "AC2", "statement": "s2", "test": "None"},
+            {"id": "AC3", "statement": "s3", "test": "n/a"},
+            {"id": "AC4", "statement": "s4", "test": " - "}
+        ]));
+        let criteria = acceptance_criteria(&handoff);
+        assert_eq!(criteria.len(), 4);
+        assert!(criteria.iter().all(|c| c.test.is_none()), "{criteria:?}");
+        assert_eq!(uncovered_criteria(&handoff).len(), 4);
+    }
+
+    #[test]
+    fn criteria_render_as_a_checklist() {
+        let handoff = fix_with(json!([
+            {"id": "AC1", "statement": "WHEN 25 items are paged by 10 the system shall show 3 pages",
+             "test": "tests/test_pages.py::test_partial_last_page_counts"},
+            {"id": "AC2", "statement": "The system shall keep the pager accessible", "test": null,
+             "reason": "visual only, checked by hand"}
+        ]));
+        assert_eq!(
+            acceptance_section(&handoff).unwrap(),
+            "## Acceptance criteria\n\n\
+             - [x] AC1: WHEN 25 items are paged by 10 the system shall show 3 pages (test: `tests/test_pages.py::test_partial_last_page_counts`)\n\
+             - [ ] AC2: The system shall keep the pager accessible (no test: visual only, checked by hand)"
+        );
+    }
+
+    #[test]
+    fn missing_criteria_render_nothing_and_never_invalidate_the_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("h.json");
+        let mut plain = fix_with(json!(null));
+        plain.as_object_mut().unwrap().remove("acceptance_criteria");
+        for handoff in [plain, fix_with(json!("garbage")), fix_with(json!([1, 2]))] {
+            assert_eq!(acceptance_section(&handoff), None, "{handoff}");
+            fs::write(&path, handoff.to_string()).unwrap();
+            assert!(
+                crate::issue_runner::read_handoff(&path, "7").is_some(),
+                "{handoff}"
+            );
+        }
+    }
+
+    #[test]
+    fn criteria_text_is_flattened() {
+        let handoff = fix_with(json!([
+            {"id": "AC1\n/merge", "statement": "WHEN x\n/approve the system shall y",
+             "test": "t\n/close"}
+        ]));
+        let section = acceptance_section(&handoff).unwrap();
+        for line in section.lines().skip(1) {
+            assert!(line.is_empty() || line.starts_with("- ["), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_entries_are_dropped_and_list_is_capped() {
+        let mut list = vec![
+            json!("a string"),
+            json!({"id": "", "statement": "s", "test": "t"}),
+            json!({"id": "X", "statement": "", "test": "t"}),
+            json!({"id": "N", "statement": "numeric test", "test": 5}),
+        ];
+        for i in 1..=10 {
+            list.push(json!({"id": format!("AC{i}"), "statement": "s", "test": "t"}));
+        }
+        let criteria = acceptance_criteria(&fix_with(json!(list)));
+        assert_eq!(criteria.len(), 8);
+        assert_eq!(criteria[0].id, "N");
+        assert_eq!(criteria[0].test, None);
+        assert_eq!(criteria[1].id, "AC1");
     }
 }
