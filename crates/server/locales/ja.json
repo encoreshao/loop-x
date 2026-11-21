@@ -2278,5 +2278,14 @@
   "Run output": "実行の出力",
   "Log entries": "ログエントリ",
   "The output of this run was not recorded.": "この実行の出力は記録されていません。",
-  "Open all logs": "すべてのログを開く"
+  "Open all logs": "すべてのログを開く",
+  "Approve the spec for {project} #{iid}": "{project} #{iid} の仕様を承認",
+  "Read the whole spec on the issue": "仕様の全文を課題で読む",
+  "What should change (for Request changes)": "変更してほしい点（変更を依頼する場合）",
+  "What the next spec should do differently": "次の仕様で変えてほしいこと",
+  "That spec is not waiting on you.": "この仕様はあなたの判断を待っていません。",
+  "Choose what to do with the spec.": "仕様をどうするか選んでください。",
+  "Say what should change in the spec.": "仕様のどこを変えるべきか書いてください。",
+  "Spec approved — the next run implements it.": "仕様を承認しました — 次の実行で実装されます。",
+  "Changes requested — the next run writes a new spec.": "変更を依頼しました — 次の実行で新しい仕様が書かれます。"
 }

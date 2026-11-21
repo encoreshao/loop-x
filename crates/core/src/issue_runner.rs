@@ -25,7 +25,8 @@ use crate::runner_util::{
 };
 use crate::{
     ai_cli_config, approvals, cost, events, issue_report, issue_tracking_config, learning,
-    memory_store, mr, mr_screenshots, proc, prompt, setup_doctor, slack_report, worktree,
+    memory_store, mr, mr_screenshots, proc, prompt, setup_doctor, slack_report, spec_gate,
+    worktree,
 };
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
@@ -35,12 +36,13 @@ use std::sync::{Arc, Mutex};
 
 pub const DEFINITION_RELATIVE_PATH: &str = "loops/gitlab-issue/loop.yaml";
 pub const NEEDS_HUMAN_LABEL: &str = "loop:needs-human";
-const HANDOFF_ACTIONS: [&str; 5] = [
+const HANDOFF_ACTIONS: [&str; 6] = [
     "fix",
     "answer",
     "escalate",
     "wait_for_review",
     "setup_blocked",
+    "spec",
 ];
 const FAILURE_TAIL_CHARS: usize = 1500;
 const OPENER_TIMEOUT_SECONDS: u64 = 300;
@@ -77,7 +79,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 pub(crate) const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"acceptance_criteria\": [{\"id\": \"AC1\", \"statement\": \"<one testable sentence: WHEN <trigger> the system shall <behaviour>, IF <error condition> THEN the system shall <behaviour>, or The system shall <behaviour>>\", \"test\": \"<the test that proves it, e.g. spec/models/order_spec.rb:42 or tests/test_pages.py::test_partial_last_page_counts>\"}, {\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\": \"<only for a criterion no automated test can prove: why>\"}], \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\n`acceptance_criteria` are the ones you wrote in step 6, at most 8, ids AC1, AC2, ...; the loop shows them as a checklist in the merge request description, and its review flags a criterion that has neither a test nor a reason.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"acceptance_criteria\": [{\"id\": \"AC1\", \"statement\": \"<one testable sentence: WHEN <trigger> the system shall <behaviour>, IF <error condition> THEN the system shall <behaviour>, or The system shall <behaviour>>\", \"test\": \"<the test that proves it, e.g. spec/models/order_spec.rb:42 or tests/test_pages.py::test_partial_last_page_counts>\"}, {\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\": \"<only for a criterion no automated test can prove: why>\"}], \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\n`acceptance_criteria` are the ones you wrote in step 6, at most 8, ids AC1, AC2, ...; the loop shows them as a checklist in the merge request description, and its review flags a criterion that has neither a test nor a reason.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- spec mode (only when the prompt says Spec mode is ON): {\"action\": \"spec\", \"spec\": \"<the spec markdown>\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
 
 /// Asset-build commands the agent may run before taking a screenshot.
 pub(crate) const ASSET_BUILD_PATTERNS: [&str; 4] = [
@@ -160,8 +162,25 @@ pub fn allowed_tools(repo_root: &str, exe: &str, gate: bool, offline: bool) -> S
     t.join(" ")
 }
 
+/// Edit/Write denials for the spec approval state (`spec_gate`) under the
+/// memory root the runner reads it from; `//` is Claude's absolute-path form.
+fn spec_state_denied() -> Vec<String> {
+    let root = memory_store::default_memory_root().display().to_string();
+    let root = root.trim_end_matches('/');
+    ["Edit", "Write"]
+        .iter()
+        .flat_map(|tool| {
+            [
+                format!("{tool}(/{root}/*/spec/**)"),
+                format!("{tool}({root}/*/spec/**)"),
+            ]
+        })
+        .collect()
+}
+
 pub fn disallowed_tools(exe: &str, gate: bool, offline: bool) -> String {
     let mut parts = vec![DISALLOWED_TOOLS.to_string()];
+    parts.extend(spec_state_denied());
     if gate {
         parts.push(format!(
             "Bash(loopx mr open*) Bash({exe} mr open*) Bash(loopx mr push*) Bash({exe} mr push*) {}",
@@ -319,6 +338,7 @@ pub fn phase_disallowed_tools(repo_root: &str, exe: &str, phase: Phase) -> Strin
         .map(|s| s.to_string()),
     );
     parts.push(format!("Bash({exe}*)"));
+    parts.extend(spec_state_denied());
     for dir in ["instructions", "loops", "templates", "config", ".claude"] {
         parts.push(format!("Edit({repo_root}/{dir}/**)"));
         parts.push(format!("Write({repo_root}/{dir}/**)"));
@@ -402,7 +422,12 @@ pub struct RunFakes {
     /// Stands in for the read-only claude review call; `None` disables the
     /// review (an error result) rather than reaching a real model.
     pub review: Option<crate::pre_review::ReviewInvoker>,
+    /// Stands in for reading an issue's labels (`alias`, `iid`); `None` reads none.
+    pub issue_labels: Option<IssueLabelsFn>,
 }
+
+/// An issue's labels, or `None` when they could not be read.
+pub type IssueLabelsFn = Box<dyn Fn(&str, &str) -> Option<spec_gate::IssueLabels> + Send + Sync>;
 
 impl std::fmt::Debug for RunFakes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1154,7 +1179,8 @@ fn emit_verification_events(
 
 /// The agent's handoff JSON, or `None` when missing/malformed. A `fix` must
 /// name a loop branch of exactly this issue and carry a non-empty
-/// `target_branch` and `title`; a `setup_blocked` a non-empty `command` and `error`.
+/// `target_branch` and `title`; a `setup_blocked` a non-empty `command` and
+/// `error`; a `spec` a non-empty `spec`.
 pub fn read_handoff(path: &Path, issue_iid: &str) -> Option<Value> {
     let data: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     let action = data.get("action")?.as_str()?;
@@ -1179,6 +1205,9 @@ pub fn read_handoff(path: &Path, issue_iid: &str) -> Option<Value> {
                 return None;
             }
         }
+    }
+    if action == "spec" && data.get("spec")?.as_str()?.trim().is_empty() {
+        return None;
     }
     Some(data)
 }
@@ -1285,6 +1314,9 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
         "approval_unavailable" => {
             "The approval request for the merge request could not be created.".into()
         }
+        "spec_invalid" => {
+            "The agent's spec could not be posted (unsafe, unasked for, or a fix in a spec-only run), so nothing was posted on the issue.".into()
+        }
         other => format!("The loop stopped this issue ({}).", other.replace('_', " ")),
     }
 }
@@ -1301,6 +1333,7 @@ pub(crate) fn loop_side_escalation(reason: &str) -> bool {
             | "checkout_problem"
             | "project_config_error"
             | "guard_violation"
+            | "spec_invalid"
     )
 }
 
@@ -1603,6 +1636,183 @@ pub struct FinalizeDeps<'a> {
     /// Chat apps that take the approval request (`approval_relay`); `None`
     /// loads the configured ones.
     pub approval_channels: Option<Vec<Box<dyn crate::connectors::Connector>>>,
+    /// The runner asked this pass for a spec, not a fix (`spec_gate`).
+    pub spec_mode: bool,
+}
+
+/// The head of the spec comment the loop posts on the issue.
+const SPEC_COMMENT_HEAD: &str = "**Proposed spec** for this issue. Add the `loop:spec-approved` label, or approve it in LoopX, and the loop will implement it.";
+
+/// Where `spec_gate` state lives for this run.
+fn spec_memory_root(ctx: &RunCtx) -> PathBuf {
+    ctx.memory_root
+        .clone()
+        .unwrap_or_else(memory_store::default_memory_root)
+}
+
+/// A later pass's feedback, followed by the text every pass of this issue gets
+/// (the spec mode or approved spec).
+fn with_standing(feedback: String, standing: Option<&str>) -> String {
+    match standing {
+        Some(s) => format!("{feedback}\n\n{s}"),
+        None => feedback,
+    }
+}
+
+/// `spec_gate: true` on the project's own entry (never a top-level default).
+fn spec_required_flag(project: &Value) -> bool {
+    project
+        .get("spec_gate")
+        .is_some_and(crate::loop_serialize::truthy)
+}
+
+/// The issue's labels, or `None` when they could not be read. On GitLab
+/// also when `loop:spec-approved` was last added (its label events); a hosted
+/// tracker reports no label times, so its label never approves a spec.
+fn issue_labels(
+    ctx: &RunCtx,
+    alias: &str,
+    issue_iid: &str,
+    project: &Value,
+) -> Option<spec_gate::IssueLabels> {
+    if let Some(fakes) = &ctx.fakes {
+        return fakes
+            .issue_labels
+            .as_ref()
+            .and_then(|f| f(alias, issue_iid));
+    }
+    if cfg!(test) {
+        return None;
+    }
+    let n: u64 = issue_iid.parse().ok()?;
+    let read = if crate::hosted::is_hosted(project) {
+        crate::hosted::resolve_project(&crate::connectors_config::ConfigConnectors::real(), project)
+            .map_err(|e| e.to_string())
+            .and_then(|r| r.tracker.issue(n).map_err(|e| e.to_string()))
+            .map(|issue| spec_gate::IssueLabels {
+                names: issue.labels,
+                approved_added_at: None,
+            })
+    } else {
+        let project_id = project
+            .get("project_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let instance = project.get("instance").and_then(Value::as_str);
+        let base = format!("projects/{}/issues/{n}", quote(project_id));
+        Client::from_config(gitlab::load_config().as_ref(), instance, None)
+            .and_then(|c| {
+                let issue = c.get_json(&base)?;
+                let names: Vec<String> = issue["labels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|l| l.as_str().map(str::to_owned))
+                    .collect();
+                let approved_added_at = if names.iter().any(|l| l == spec_gate::SPEC_APPROVED_LABEL)
+                {
+                    match c.get_all(&format!("{base}/resource_label_events"), &[]) {
+                        Ok(events) => {
+                            spec_gate::latest_label_add(&events, spec_gate::SPEC_APPROVED_LABEL)
+                        }
+                        Err(e) => {
+                            ctx.log(&format!(
+                                "spec gate {alias} #{issue_iid}: label events: {e}"
+                            ));
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok(spec_gate::IssueLabels {
+                    names,
+                    approved_added_at,
+                })
+            })
+            .map_err(|e| e.to_string())
+    };
+    match read {
+        Ok(labels) => Some(labels),
+        Err(e) => {
+            ctx.log(&format!("spec gate {alias} #{issue_iid}: {e}"));
+            None
+        }
+    }
+}
+
+/// Where this issue stands with the spec gate. Gate mode only, and only for a
+/// project with a checkout; a failed label read falls back to the project
+/// flag and the stored state. A label approval is recorded as decided by "label".
+fn spec_gate_for(ctx: &RunCtx, alias: &str, issue_iid: &str, gate: bool) -> spec_gate::Gate {
+    let Some(project) = Config::load(&project_config_path(ctx))
+        .ok()
+        .and_then(|c| c.project(alias).ok())
+    else {
+        return spec_gate::Gate::Off;
+    };
+    let flag = spec_required_flag(&project);
+    if !gate {
+        if flag {
+            ctx.log(&format!(
+                "{alias} #{issue_iid}: spec gate is off in observe mode"
+            ));
+        }
+        return spec_gate::Gate::Off;
+    }
+    let has_checkout = project
+        .get("local_path")
+        .and_then(Value::as_str)
+        .is_some_and(|p| !p.trim().is_empty());
+    if !has_checkout {
+        return spec_gate::Gate::Off;
+    }
+    let root = spec_memory_root(ctx);
+    let state = spec_gate::load(&root, alias, issue_iid);
+    let labels = issue_labels(ctx, alias, issue_iid, &project);
+    if labels.is_none() {
+        ctx.log(&format!(
+            "spec gate {alias} #{issue_iid}: could not read the labels; using the project flag and the stored spec"
+        ));
+    }
+    let decision = spec_gate::gate(flag, labels.as_ref(), state.as_ref());
+    if decision == spec_gate::Gate::Off {
+        if state
+            .as_ref()
+            .is_some_and(|s| s.status != spec_gate::SpecStatus::Implemented)
+        {
+            ctx.log(&format!(
+                "spec gate {alias} #{issue_iid}: the stored spec is no longer asked for (no spec_gate flag, no {} label); the issue runs as usual",
+                spec_gate::SPEC_FIRST_LABEL
+            ));
+        }
+        return decision;
+    }
+    let label_approval = matches!(decision, spec_gate::Gate::Approved { .. })
+        && state
+            .as_ref()
+            .is_some_and(|s| s.status == spec_gate::SpecStatus::Awaiting);
+    if !label_approval {
+        return decision;
+    }
+    match spec_gate::decide(&root, alias, issue_iid, true, "", "label", Utc::now()) {
+        Ok(_) => {
+            ctx.log(&format!(
+                "spec gate {alias} #{issue_iid}: approved by the {} label",
+                spec_gate::SPEC_APPROVED_LABEL
+            ));
+            decision
+        }
+        // Decided on the dashboard meanwhile: that decision stands.
+        Err(e) => {
+            ctx.log(&format!("spec gate {alias} #{issue_iid}: {e}"));
+            spec_gate::gate(
+                flag,
+                labels.as_ref(),
+                spec_gate::load(&root, alias, issue_iid).as_ref(),
+            )
+        }
+    }
 }
 
 /// Rounds of "request changes" one issue gets in one run before it escalates.
@@ -1847,6 +2057,50 @@ pub fn finalize_gated_issue(
     let data = read_handoff(&handoff, issue_iid);
     let screens = mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid);
     let handoff_dir = handoff.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let action = data
+        .as_ref()
+        .and_then(|d| d.get("action"))
+        .and_then(Value::as_str);
+    if deps.spec_mode && action == Some("fix") {
+        return escalate("spec_invalid", "a fix handoff in a spec-only run", None);
+    }
+    if action == Some("spec") {
+        if !deps.spec_mode {
+            return escalate(
+                "spec_invalid",
+                "a spec handoff in a run that asked for none",
+                None,
+            );
+        }
+        let spec = data
+            .as_ref()
+            .and_then(|d| d.get("spec"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let body = match crate::mr_feedback::safe_reply_body(spec) {
+            Ok(b) => b,
+            Err(e) => return escalate("spec_invalid", &e, None),
+        };
+        post_issue_note(format!("{SPEC_COMMENT_HEAD}\n\n{body}"));
+        if let Err(e) = crate::spec_gate::record_posted(
+            &spec_memory_root(ctx),
+            alias,
+            issue_iid,
+            spec.trim(),
+            Utc::now(),
+        ) {
+            log(&format!("could not record the posted spec: {e}"));
+        }
+        emit(
+            "issue.completed",
+            json!({"outcome": "spec_posted", "gated": true, "action": "spec"}),
+        );
+        notify(
+            &bundle,
+            format!("*Spec posted* {issue_label}: waiting for approval"),
+        );
+        return "spec_posted".to_string();
+    }
     if let Some(outcome) = data
         .as_ref()
         .and_then(|d| d.get("action"))
@@ -2581,6 +2835,38 @@ pub fn run_one_issue(
         None
     };
 
+    // The spec gate decides before any agent call: write a spec, wait for its
+    // approval, or implement the approved one.
+    let (spec_mode, standing) = match spec_gate_for(ctx, alias, issue_iid, gate) {
+        spec_gate::Gate::Off => (false, None),
+        spec_gate::Gate::Awaiting => {
+            ctx.log(&format!(
+                "spec gate {alias} #{issue_iid}: the posted spec is waiting for approval; the agent does not run"
+            ));
+            let mut result = LoopResult::new(
+                &issue_run_id,
+                &issue_run_id,
+                &definition.name,
+                LoopState::Completed,
+                Vec::new(),
+                "awaiting_spec_approval",
+            );
+            result.agent_cost_usd = AgentCost::Usd(0.0);
+            return Ok(IssueRun {
+                result,
+                usage: None,
+                gate_outcome: Some("awaiting_spec_approval".into()),
+                setup_fixed: None,
+            });
+        }
+        spec_gate::Gate::NeedSpec { notes } => {
+            (true, Some(spec_gate::spec_mode_feedback(notes.as_deref())))
+        }
+        spec_gate::Gate::Approved { spec } => {
+            (false, Some(spec_gate::approved_spec_feedback(&spec)))
+        }
+    };
+
     // Worktree off: never start the agent on a checkout holding the user's
     // uncommitted work (a leftover restore record is healed by `worktree new`).
     let guard = checkout_guard(ctx, alias);
@@ -2594,7 +2880,7 @@ pub fn run_one_issue(
         definition,
         invoker.clone(),
         mode.clone(),
-        None,
+        standing.clone(),
         dirty_before,
         0,
     );
@@ -2640,7 +2926,7 @@ pub fn run_one_issue(
             issue_iid,
             definition,
         };
-        match after_setup_blocked(&issue, &invoker, &mode, pass) {
+        match after_setup_blocked(&issue, &invoker, &mode, pass, standing.as_deref()) {
             Ok(p) => p,
             Err(e) => return failed(e),
         }
@@ -2678,6 +2964,7 @@ pub fn run_one_issue(
                 setup_report: setup_report.take(),
                 setup_fixed: setup_fixed_for_report,
                 revisions_left: MAX_REVISIONS - revisions,
+                spec_mode,
                 // Tests never reach the configured chat apps.
                 approval_channels: fakes.map(|_| Vec::new()),
                 ..FinalizeDeps::default()
@@ -2701,7 +2988,7 @@ pub fn run_one_issue(
                 definition,
                 invoker.clone(),
                 mode.clone(),
-                Some(review_feedback(notes)),
+                Some(with_standing(review_feedback(notes), standing.as_deref())),
                 false,
                 result.iterations.len() as i64,
             )?;
@@ -2716,6 +3003,15 @@ pub fn run_one_issue(
             result.stop_reason = format!("gate:{}", outcome.split_once(':').map_or("", |x| x.1));
         }
         gate_outcome = Some(outcome);
+    }
+    if !spec_mode && standing.is_some() && gate_outcome.as_deref() == Some("mr_opened") {
+        match spec_gate::mark_implemented(&spec_memory_root(ctx), alias, issue_iid, Utc::now()) {
+            Ok(true) => ctx.log(&format!(
+                "spec gate {alias} #{issue_iid}: the approved spec is implemented; the gate is done with this issue"
+            )),
+            Ok(false) => {}
+            Err(e) => ctx.log(&format!("spec gate {alias} #{issue_iid}: {e}")),
+        }
     }
 
     // LoopRuntime counts a None cost as 0 in the budget, so record the raw,
@@ -2904,6 +3200,7 @@ fn after_setup_blocked(
     invoker: &Invoker,
     mode: &InvokeMode,
     pass: PassOutput,
+    standing: Option<&str>,
 ) -> Result<(PassOutput, SetupOutcome), String> {
     if pass.0.stop_reason.starts_with(GUARD_VIOLATION_PREFIX) {
         return Ok((pass, SetupOutcome::default()));
@@ -2972,7 +3269,10 @@ fn after_setup_blocked(
         issue.definition,
         invoker.clone(),
         mode.clone(),
-        Some(setup_doctor::doctor_feedback(&fixed)),
+        Some(with_standing(
+            setup_doctor::doctor_feedback(&fixed),
+            standing,
+        )),
         false,
         first.iterations.len() as i64,
     )
@@ -4840,6 +5140,7 @@ mod tests {
                     }),
                     gitlab_config_path: d.path().join("gitlab.json"),
                     review: None,
+                    issue_labels: None,
                 })),
                 memory_root: Some(d.path().join("memory")),
                 activity_file: d.path().join("agent-activity.json"),
@@ -5302,7 +5603,67 @@ mod tests {
                 notifier: Box::new(move |m: &str| slack.lock().unwrap().push(m.to_string())),
                 gitlab_config_path: self.t.d.path().join("gitlab.json"),
                 review: Some(review),
+                issue_labels: None,
             }));
+        }
+
+        fn configure_spec(&self, spec_gate: bool) {
+            std::fs::write(
+                self.t.ctx.config_path.as_ref().unwrap(),
+                json!({"gitlab_instance": "g", "worktree_root": self.t.d.path().join("wt").display().to_string(),
+                       "projects": {"web": {"project_id": "g/web", "local_path": self.t.path(),
+                                            "target_branch": "main", "use_worktree": true,
+                                            "spec_gate": spec_gate}}})
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        /// The issue's labels as the runner reads them (`None`: the read
+        /// fails); how many times it read them.
+        fn set_labels(&mut self, labels: Option<Vec<&'static str>>) -> Arc<Mutex<usize>> {
+            self.set_labels_at(labels, None)
+        }
+
+        /// As `set_labels`, with when `loop:spec-approved` was last added.
+        fn set_labels_at(
+            &mut self,
+            labels: Option<Vec<&'static str>>,
+            approved_added_at: Option<chrono::DateTime<Utc>>,
+        ) -> Arc<Mutex<usize>> {
+            let (notes, slack) = (self.t.notes.clone(), self.t.slack.clone());
+            let reads = Arc::new(Mutex::new(0));
+            let counter = reads.clone();
+            self.t.ctx.fakes = Some(Arc::new(RunFakes {
+                gitlab: Box::new(RecordingGitlab(notes)),
+                notifier: Box::new(move |m: &str| slack.lock().unwrap().push(m.to_string())),
+                gitlab_config_path: self.t.d.path().join("gitlab.json"),
+                review: None,
+                issue_labels: Some(Box::new(move |alias: &str, iid: &str| {
+                    assert_eq!((alias, iid), ("web", "7"));
+                    *counter.lock().unwrap() += 1;
+                    labels.as_ref().map(|l| crate::spec_gate::IssueLabels {
+                        names: l.iter().map(|s| s.to_string()).collect(),
+                        approved_added_at,
+                    })
+                })),
+            }));
+            reads
+        }
+
+        fn feedback(&self, call: usize) -> String {
+            self.calls.lock().unwrap()[call]
+                .feedback
+                .clone()
+                .unwrap_or_default()
+        }
+
+        fn spec_state(&self) -> Option<crate::spec_gate::SpecState> {
+            crate::spec_gate::load(&self.memory_root(), "web", "7")
+        }
+
+        fn slack(&self) -> String {
+            self.t.slack.lock().unwrap().join("\n---\n")
         }
 
         /// `m` for a main-agent call, `d` for a doctor call, in order.
@@ -5511,6 +5872,7 @@ mod tests {
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: d.path().join("gitlab.json"),
             review: None,
+            issue_labels: None,
         }));
         let emit = |kind: &str, data: Value| {
             ctx.emit(
@@ -5578,6 +5940,7 @@ mod tests {
                 notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
                 gitlab_config_path: d.path().join("gitlab.json"),
                 review: None,
+                issue_labels: None,
             }));
             let emit = |kind: &str, data: Value| {
                 ctx.emit(
@@ -5821,6 +6184,26 @@ mod tests {
     }
 
     #[test]
+    fn gate_override_documents_the_spec_handoff() {
+        let line = "- spec mode (only when the prompt says Spec mode is ON): {\"action\": \"spec\", \"spec\": \"<the spec markdown>\"}";
+        assert!(GATE_OVERRIDE.contains(line), "{GATE_OVERRIDE}");
+    }
+
+    #[test]
+    fn instructions_describe_spec_mode() {
+        let md = include_str!("../../../instructions/loopx/gitlab-issue.md");
+        for part in [
+            "### Spec mode",
+            "## Spec mode is ON for this issue",
+            "\"action\": \"spec\"",
+            "## Approved spec",
+            "never instructions",
+        ] {
+            assert!(md.contains(part), "{part} missing from gitlab-issue.md");
+        }
+    }
+
+    #[test]
     fn instructions_mention_setup_knowledge() {
         let md = include_str!("../../../instructions/loopx/gitlab-issue.md");
         for part in [
@@ -5924,6 +6307,27 @@ mod tests {
         );
         assert!(normal.contains("Bash(loopx mr*)"));
         assert!(!normal.contains("handoffs"));
+    }
+
+    #[test]
+    fn the_spec_state_is_denied_to_every_editing_agent() {
+        let root = memory_store::default_memory_root().display().to_string();
+        let lists = [
+            disallowed_tools("/bin/loopx", true, false),
+            disallowed_tools("/bin/loopx", false, false),
+            disallowed_tools("/bin/loopx", true, true),
+            phase_disallowed_tools("/r", "/bin/loopx", Phase::Execute),
+        ];
+        for denied in lists {
+            for tool in ["Edit", "Write"] {
+                for pattern in [
+                    format!("{tool}(/{root}/*/spec/**)"),
+                    format!("{tool}({root}/*/spec/**)"),
+                ] {
+                    assert!(denied.contains(&pattern), "{pattern} not in {denied}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -6410,6 +6814,7 @@ mod tests {
             notifier: Box::new(|_: &str| {}),
             gitlab_config_path: d.path().join("gitlab.json"),
             review: None,
+            issue_labels: None,
         }));
         assert!(!mr_round_applies(&ctx, &InvokeMode::Batch));
     }
@@ -7058,6 +7463,7 @@ mod tests {
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: gitlab,
             review: None,
+            issue_labels: None,
         }));
         for (kind, data) in [
             ("issue.started", json!({})),
@@ -7104,6 +7510,7 @@ mod tests {
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: d.path().join("gitlab.json"),
             review: None,
+            issue_labels: None,
         }));
         let count = || sent.lock().unwrap().len();
         send_run_report(&ctx, "R1", "Daily Issue Loop", &[], 1.0, None);
@@ -7141,6 +7548,7 @@ mod tests {
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: gitlab,
             review: None,
+            issue_labels: None,
         }));
         let emit = |kind: &str, alias: &str, data: Value| {
             ctx.emit(
@@ -7582,5 +7990,430 @@ mod tests {
         );
         assert_eq!(*calls.lock().unwrap(), 1);
         assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(0.75));
+    }
+
+    /// Finalize `handoff` as a run in (or out of) spec mode: the outcome, the
+    /// notes posted, the Slack messages and the run's directory.
+    fn finalize_spec(
+        handoff: Value,
+        spec_mode: bool,
+    ) -> (String, Vec<String>, Vec<String>, tempfile::TempDir) {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(&path, handoff.to_string()).unwrap();
+        let result = LoopResult::new("l", "r", "gitlab-issue", LoopState::Completed, vec![], "");
+        let posted: Log = Default::default();
+        let gitlab = RecordingGitlab(posted.clone());
+        let sent = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+        let opener = |_: &str, _: &str, _: &str, _: &str| -> (bool, String) {
+            panic!("a spec run never opens a merge request")
+        };
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.unified_log = d.path().join("log");
+        ctx.memory_root = Some(d.path().join("memory"));
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&gitlab),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                spec_mode,
+                ..Default::default()
+            },
+        );
+        let notes = posted.lock().unwrap().clone();
+        let sent = sent.into_inner().unwrap();
+        (outcome, notes, sent, d)
+    }
+
+    #[test]
+    fn spec_handoff_is_posted_and_recorded() {
+        let spec = "**Goal:** Users can page through orders.\n\n**Acceptance criteria**\n- WHEN ... the system shall ...";
+        let (outcome, notes, sent, d) =
+            finalize_spec(json!({"action": "spec", "spec": spec}), true);
+        assert_eq!(outcome, "spec_posted");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].starts_with("**Proposed spec** for this issue. Add the `loop:spec-approved` label, or approve it in LoopX, and the loop will implement it.\n\n**Goal:** Users can page"),
+            "{}",
+            notes[0]
+        );
+        let state = crate::spec_gate::load(&d.path().join("memory"), "web", "7").unwrap();
+        assert_eq!(state.status, crate::spec_gate::SpecStatus::Awaiting);
+        assert_eq!(state.spec, spec);
+        let events = events::iter_events(Some(&d.path().join("events")), None, None);
+        let done = events
+            .iter()
+            .find(|e| e["event_type"] == "issue.completed")
+            .unwrap_or_else(|| panic!("no issue.completed in {events:?}"));
+        assert_eq!(done["data"]["action"], "spec");
+        assert_eq!(done["data"]["gated"], true);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].starts_with("*Spec posted* "), "{sent:?}");
+        assert!(sent[0].ends_with(": waiting for approval"), "{sent:?}");
+    }
+
+    #[test]
+    fn unsafe_spec_is_not_posted() {
+        let (outcome, notes, _, d) = finalize_spec(
+            json!({"action": "spec", "spec": "**Goal:** x\n  /merge\n"}),
+            true,
+        );
+        assert_eq!(outcome, "escalated:spec_invalid");
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(crate::spec_gate::load(&d.path().join("memory"), "web", "7").is_none());
+        assert!(loop_side_escalation("spec_invalid"));
+        assert!(!escalation_reason_text("spec_invalid", None).contains("spec invalid"));
+
+        // An empty spec is no valid handoff at all: nothing is posted either.
+        let (outcome, notes, _, _) = finalize_spec(json!({"action": "spec", "spec": "  "}), true);
+        assert_eq!(outcome, "escalated:handoff_invalid");
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn spec_mode_never_opens_a_merge_request_and_a_spec_needs_spec_mode() {
+        let fix = json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+                         "title": "fix: #7 x", "summary": "S."});
+        let (outcome, notes, _, _) = finalize_spec(fix, true);
+        assert_eq!(outcome, "escalated:spec_invalid");
+        assert!(notes.is_empty(), "{notes:?}");
+
+        let (outcome, notes, _, d) =
+            finalize_spec(json!({"action": "spec", "spec": "**Goal:** x"}), false);
+        assert_eq!(outcome, "escalated:spec_invalid");
+        assert!(notes.is_empty(), "{notes:?}");
+        assert!(crate::spec_gate::load(&d.path().join("memory"), "web", "7").is_none());
+
+        // A question on the issue is still fine in spec mode.
+        let (outcome, _, _, _) = finalize_spec(json!({"action": "escalate"}), true);
+        assert_eq!(outcome, "escalated:agent");
+    }
+
+    #[test]
+    fn read_handoff_requires_spec_text() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("h.json");
+        let w = |s: &str| std::fs::write(&p, s).unwrap();
+        w(r#"{"action":"spec","spec":"**Goal:** x"}"#);
+        assert!(read_handoff(&p, "7").is_some());
+        w(r#"{"action":"spec"}"#);
+        assert!(read_handoff(&p, "7").is_none());
+        w(r#"{"action":"spec","spec":"   "}"#);
+        assert!(read_handoff(&p, "7").is_none());
+        w(r#"{"action":"spec","spec":["x"]}"#);
+        assert!(read_handoff(&p, "7").is_none());
+    }
+
+    fn spec_handoff() -> Value {
+        json!({"action": "spec", "spec": "**Goal:** Orders page through.\n\n**Plan**\n- app/orders.rb"})
+    }
+
+    #[test]
+    fn spec_flag_runs_spec_mode_then_posts() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        let reads = h.set_labels(Some(vec![]));
+        let run = h.run(vec![Step::Main(spec_handoff())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("spec_posted"),
+            "{}",
+            h.notes()
+        );
+        assert!(
+            h.feedback(0).contains("Spec mode is ON"),
+            "{}",
+            h.feedback(0)
+        );
+        assert!(h.notes().starts_with("**Proposed spec**"), "{}", h.notes());
+        assert_eq!(
+            h.spec_state().unwrap().status,
+            crate::spec_gate::SpecStatus::Awaiting
+        );
+        assert_eq!(*reads.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn awaiting_spec_skips_the_agent() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        h.set_labels(Some(vec![]));
+        h.run(vec![Step::Main(spec_handoff())]);
+        let events_before = h.event_types().len();
+        let notes_before = h.notes();
+        let run = h.run(vec![]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("awaiting_spec_approval"));
+        assert_eq!(h.kinds(), "m", "no second agent call");
+        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(0.0));
+        assert_eq!(run.result.final_state, LoopState::Completed);
+        assert_eq!(h.event_types().len(), events_before, "no new events");
+        assert_eq!(h.notes(), notes_before, "nothing posted again");
+    }
+
+    #[test]
+    fn approved_label_runs_the_fix_with_the_spec() {
+        let mut h = Doctored::new();
+        h.configure_spec(false);
+        crate::spec_gate::record_posted(
+            &h.memory_root(),
+            "web",
+            "7",
+            "**Goal:** Orders page through.",
+            Utc::now(),
+        )
+        .unwrap();
+        h.set_labels_at(
+            Some(vec![
+                "bug",
+                crate::spec_gate::SPEC_FIRST_LABEL,
+                crate::spec_gate::SPEC_APPROVED_LABEL,
+            ]),
+            Some(Utc::now() + Duration::minutes(1)),
+        );
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        let feedback = h.feedback(0);
+        assert!(feedback.contains("## Approved spec"), "{feedback}");
+        assert!(
+            feedback.contains("```text\n**Goal:** Orders page through.\n```"),
+            "{feedback}"
+        );
+        let state = h.spec_state().unwrap();
+        assert_eq!(state.status, crate::spec_gate::SpecStatus::Implemented);
+        assert_eq!(state.decided_by.as_deref(), Some("label"));
+    }
+
+    #[test]
+    fn dashboard_approval_runs_the_fix() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        let root = h.memory_root();
+        crate::spec_gate::record_posted(&root, "web", "7", "**Goal:** y", Utc::now()).unwrap();
+        crate::spec_gate::decide(&root, "web", "7", true, "", "dashboard", Utc::now()).unwrap();
+        h.set_labels(Some(vec![]));
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert!(h.feedback(0).contains("**Goal:** y"), "{}", h.feedback(0));
+        assert_eq!(
+            h.spec_state().unwrap().decided_by.as_deref(),
+            Some("dashboard")
+        );
+    }
+
+    #[test]
+    fn changes_requested_reruns_spec_mode_with_notes() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        let root = h.memory_root();
+        crate::spec_gate::record_posted(&root, "web", "7", "first", Utc::now()).unwrap();
+        crate::spec_gate::decide(
+            &root,
+            "web",
+            "7",
+            false,
+            "Cover the empty list too.",
+            "dashboard",
+            Utc::now(),
+        )
+        .unwrap();
+        h.set_labels(Some(vec![]));
+        let run = h.run(vec![Step::Main(spec_handoff())]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("spec_posted"));
+        let feedback = h.feedback(0);
+        assert!(feedback.contains("Spec mode is ON"), "{feedback}");
+        assert!(
+            feedback.contains("```text\nCover the empty list too.\n```"),
+            "{feedback}"
+        );
+        let state = h.spec_state().unwrap();
+        assert_eq!(state.status, crate::spec_gate::SpecStatus::Awaiting);
+        assert!(state.spec.starts_with("**Goal:** Orders"), "{state:?}");
+    }
+
+    #[test]
+    fn label_read_failure_falls_back_to_state() {
+        // Approved on the dashboard, labels unreadable, flag off: still the fix.
+        let mut h = Doctored::new();
+        h.configure_spec(false);
+        let root = h.memory_root();
+        crate::spec_gate::record_posted(&root, "web", "7", "**Goal:** z", Utc::now()).unwrap();
+        crate::spec_gate::decide(&root, "web", "7", true, "", "dashboard", Utc::now()).unwrap();
+        h.set_labels(None);
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert!(h.feedback(0).contains("**Goal:** z"));
+        let log = std::fs::read_to_string(&h.t.ctx.unified_log).unwrap_or_default();
+        assert!(log.contains("could not read the labels"), "{log}");
+
+        // Flag on, nothing stored, labels unreadable: spec mode, never blocked.
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        h.set_labels(None);
+        let run = h.run(vec![Step::Main(spec_handoff())]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("spec_posted"));
+    }
+
+    #[test]
+    fn spec_gate_off_is_unchanged() {
+        for labels in [Some(vec!["bug"]), None] {
+            let mut h = Doctored::new();
+            let failing = labels.is_none();
+            let reads = h.set_labels(labels);
+            let run = h.run(vec![Step::Main(h.fix())]);
+            assert_eq!(
+                run.gate_outcome.as_deref(),
+                Some("mr_opened"),
+                "{}",
+                h.notes()
+            );
+            assert_eq!(h.feedback(0), "", "no spec text in the prompt");
+            assert_eq!(
+                *reads.lock().unwrap(),
+                1,
+                "labels read once to see spec-first"
+            );
+            assert!(h.spec_state().is_none());
+            assert!(!h.memory_root().join("web").join("spec").exists());
+            let slack = h.slack();
+            assert!(!slack.to_lowercase().contains("spec"), "{slack}");
+            assert!(!h.notes().contains("spec"), "{}", h.notes());
+            let events = events::iter_events(h.t.ctx.events_dir.as_deref(), None, None);
+            assert!(
+                !events.iter().any(|e| e.to_string().contains("spec")),
+                "failing={failing}: {events:?}"
+            );
+        }
+
+        // Observe mode never reads labels and says once that the gate is off.
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        let reads = h.set_labels(Some(vec![crate::spec_gate::SPEC_FIRST_LABEL]));
+        let mut definition = gitlab_definition();
+        definition.verification.mode = "observe".into();
+        h.run_with(vec![Step::Main(json!({"action": "answer"}))], definition);
+        assert_eq!(*reads.lock().unwrap(), 0);
+        assert_eq!(h.feedback(0), "");
+        let log = std::fs::read_to_string(&h.t.ctx.unified_log).unwrap_or_default();
+        assert_eq!(
+            log.matches("spec gate is off in observe mode").count(),
+            1,
+            "{log}"
+        );
+    }
+
+    fn posted_spec(h: &Doctored) {
+        crate::spec_gate::record_posted(&h.memory_root(), "web", "7", "**Goal:** p", Utc::now())
+            .unwrap();
+    }
+
+    #[test]
+    fn a_stale_approved_label_leaves_the_spec_waiting() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        posted_spec(&h);
+        h.set_labels_at(
+            Some(vec![
+                crate::spec_gate::SPEC_FIRST_LABEL,
+                crate::spec_gate::SPEC_APPROVED_LABEL,
+            ]),
+            Some(Utc::now() - Duration::hours(1)),
+        );
+        let run = h.run(vec![]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("awaiting_spec_approval"));
+        assert_eq!(h.kinds(), "");
+        assert_eq!(
+            h.spec_state().unwrap().status,
+            crate::spec_gate::SpecStatus::Awaiting
+        );
+    }
+
+    #[test]
+    fn a_hosted_approved_label_leaves_the_spec_waiting() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        posted_spec(&h);
+        h.set_labels_at(Some(vec![crate::spec_gate::SPEC_APPROVED_LABEL]), None);
+        let run = h.run(vec![]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("awaiting_spec_approval"));
+        assert_eq!(
+            h.spec_state().unwrap().status,
+            crate::spec_gate::SpecStatus::Awaiting
+        );
+    }
+
+    #[test]
+    fn an_opened_mr_marks_the_approved_spec_implemented() {
+        let mut h = Doctored::new();
+        h.configure_spec(true);
+        posted_spec(&h);
+        crate::spec_gate::decide(
+            &h.memory_root(),
+            "web",
+            "7",
+            true,
+            "",
+            "dashboard",
+            Utc::now(),
+        )
+        .unwrap();
+        h.set_labels(Some(vec![]));
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        let state = h.spec_state().unwrap();
+        assert_eq!(state.status, crate::spec_gate::SpecStatus::Implemented);
+        assert_eq!(state.decided_by.as_deref(), Some("dashboard"));
+        // The next run of the issue is an ordinary one: no spec text, no new spec.
+        let run = h.run(vec![Step::Main(json!({"action": "wait_for_review"}))]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("waiting_for_review"));
+        assert_eq!(h.feedback(1), "");
+    }
+
+    #[test]
+    fn a_waiting_spec_no_longer_asked_for_lets_the_issue_run_as_usual() {
+        let mut h = Doctored::new();
+        h.configure_spec(false);
+        posted_spec(&h);
+        h.set_labels(Some(vec!["bug"]));
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(h.feedback(0), "");
+        let log = std::fs::read_to_string(&h.t.ctx.unified_log).unwrap_or_default();
+        assert_eq!(log.matches("no longer asked for").count(), 1, "{log}");
     }
 }

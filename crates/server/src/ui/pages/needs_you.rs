@@ -4,7 +4,9 @@
 //! escalation, a failed loop or a dead sign-in, and for a merge-request review
 //! thread the MR-feedback round handed over: Approve the plan, Post my reply,
 //! Plan again with my instructions, or Dismiss (`POST /needs-you/mr-thread`,
-//! `loopx_core::mr_feedback::decide_thread`). The topbar bell (`bell_html`)
+//! `loopx_core::mr_feedback::decide_thread`), and for a spec the issue loop
+//! posted: Approve or Request changes (`POST /needs-you/spec`,
+//! `loopx_core::spec_gate::decide`). The topbar bell (`bell_html`)
 //! counts them and polls `/needs-you/count`.
 
 use crate::snapshot::{self, Paths};
@@ -30,6 +32,7 @@ pub fn register(r: &mut Registry) {
     r.post("/needs-you/approval", post_approval);
     r.post("/needs-you/dismiss", post_dismiss);
     r.post("/needs-you/mr-thread", post_mr_thread);
+    r.post("/needs-you/spec", post_spec);
 }
 
 fn memory_root(state: &UiState) -> PathBuf {
@@ -102,6 +105,10 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
             "{project} #{iid}: a review thread on the merge request needs you ({reason})",
             &[("project", &f("project")), ("iid", &f("issue_iid")), ("reason", &f("reason"))],
         ),
+        Some("spec") => ctx.tf(
+            "Approve the spec for {project} #{iid}",
+            &[("project", &f("project")), ("iid", &f("issue_iid"))],
+        ),
         _ => f("title"),
     }
 }
@@ -112,6 +119,7 @@ fn icon_for(kind: &str) -> &'static str {
         "escalated" => "warning",
         "sign_in" => "login",
         "mr_thread" | "slack_listener" => "forum",
+        "spec" => "fact_check",
         _ => "error",
     }
 }
@@ -282,6 +290,43 @@ fn mr_thread_actions(ctx: &UiCtx, item: &Value) -> String {
     )
 }
 
+/// A posted spec: its opening text (escaped, it came from the agent), a link to
+/// the issue where the whole spec is, and Approve or Request changes.
+fn spec_details(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
+    let f = |k: &str| text(item, k);
+    let more = if item["body_truncated"] == true { "\u{2026}" } else { "" };
+    let link = match prefixes.get(&f("project")) {
+        Some(base) => format!(
+            "<p class='needs-you-links'><a href='{}/-/issues/{}' target='_blank' rel='noopener'>{}</a></p>",
+            pyfmt::escape(base),
+            pyfmt::escape(&f("issue_iid")),
+            pyfmt::escape(&ctx.t("Read the whole spec on the issue")),
+        ),
+        None => String::new(),
+    };
+    format!(
+        "<pre class='needs-you-spec-text'>{}{more}</pre>{link}",
+        pyfmt::escape(&f("body"))
+    )
+}
+
+fn spec_actions(ctx: &UiCtx, item: &Value) -> String {
+    format!(
+        "<form method='post' action='/needs-you/spec' class='needs-you-spec-form'>{csrf}\
+<input type='hidden' name='id' value='{id}'>\
+<label>{notes_label}<textarea name='notes' rows='3' maxlength='4000' required placeholder='{placeholder}'></textarea></label>\
+<div class='needs-you-buttons'>\
+<button type='submit' name='decision' value='approve' class='btn btn-primary' formnovalidate>{approve}</button>\
+<button type='submit' name='decision' value='request_changes' class='btn btn-neutral'>{changes}</button></div></form>",
+        csrf = ctx.csrf_input(),
+        id = pyfmt::escape(&text(item, "id")),
+        notes_label = pyfmt::escape(&ctx.t("What should change (for Request changes)")),
+        placeholder = pyfmt::escape(&ctx.t("What the next spec should do differently")),
+        approve = pyfmt::escape(&ctx.t("Approve")),
+        changes = pyfmt::escape(&ctx.t("Request changes")),
+    )
+}
+
 /// How long ago the item started, or "" when it has no time.
 fn ago(item: &Value) -> String {
     let since = text(item, "since");
@@ -396,6 +441,8 @@ fn row(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes
     let stale = stale_guide_proposal(ctx, item);
     let (details, actions) = if item["kind"] == "mr_thread" {
         (mr_thread_details(ctx, item, prefixes), mr_thread_actions(ctx, item))
+    } else if item["kind"] == "spec" {
+        (spec_details(ctx, item, prefixes), spec_actions(ctx, item))
     } else if stale {
         (stale_note(ctx), actions(ctx, item, true))
     } else {
@@ -419,7 +466,7 @@ fn body_html(ctx: &UiCtx) -> String {
             pyfmt::escape(&ctx.t("Nothing needs you right now.")),
         )
     } else {
-        let prefixes = if items.iter().any(|i| i["kind"] == "mr_thread") {
+        let prefixes = if items.iter().any(|i| i["kind"] == "mr_thread" || i["kind"] == "spec") {
             crate::ui::gitlab::issue_url_prefixes(ctx.state)
         } else {
             Default::default()
@@ -509,6 +556,42 @@ fn parse_thread_id(id: &str) -> Option<(String, i64, String)> {
     let iid = parts.next()?.parse().ok()?;
     let alias = parts.next().filter(|a| !a.is_empty())?;
     Some((alias.to_string(), iid, discussion.to_string()))
+}
+
+/// `spec:<alias>:<iid>`, with an alias that names a folder and a numeric iid.
+fn parse_spec_id(id: &str) -> Option<(String, String)> {
+    let (alias, iid) = id.strip_prefix("spec:")?.rsplit_once(':')?;
+    let alias_ok = !alias.is_empty() && alias != "." && alias != ".." && !alias.contains(['/', '\\']);
+    let iid_ok = !iid.is_empty() && iid.bytes().all(|b| b.is_ascii_digit());
+    (alias_ok && iid_ok).then(|| (alias.to_string(), iid.to_string()))
+}
+
+/// Approve a posted spec, or ask for a new one with notes. The issue loop's
+/// next run implements it, or writes the new spec.
+fn post_spec(ctx: &UiCtx) -> UiResponse {
+    use loopx_core::spec_gate::{self, SpecStatus};
+    let form = ctx.form();
+    let fail = |message: &str| UiResponse::flash_redirect(false, message, PATH);
+    let root = memory_root(ctx.state);
+    let waiting = parse_spec_id(form.first("id").unwrap_or(""))
+        .filter(|(alias, iid)| spec_gate::load(&root, alias, iid).is_some_and(|s| s.status == SpecStatus::Awaiting));
+    let Some((alias, iid)) = waiting else {
+        return fail(&ctx.t("That spec is not waiting on you."));
+    };
+    let approve = match form.first("decision") {
+        Some("approve") => true,
+        Some("request_changes") => false,
+        _ => return fail(&ctx.t("Choose what to do with the spec.")),
+    };
+    let notes = form.first("notes").unwrap_or("").trim().to_string();
+    if !approve && notes.is_empty() {
+        return fail(&ctx.t("Say what should change in the spec."));
+    }
+    match spec_gate::decide(&root, &alias, &iid, approve, &notes, "dashboard", Utc::now()) {
+        Ok(_) if approve => UiResponse::flash_redirect(true, &ctx.t("Spec approved \u{2014} the next run implements it."), PATH),
+        Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Changes requested \u{2014} the next run writes a new spec."), PATH),
+        Err(e) => fail(&e),
+    }
 }
 
 /// The run context a decision works in: this dashboard's checkout, config,
@@ -1388,5 +1471,74 @@ mod tests {
         assert_eq!(post(&st, "/needs-you/dismiss", "id=loop_failed%3Arss-loop").status, 403);
         assert_eq!(post(&st, "/needs-you/dismiss", "csrf_token=tok&id=loop_failed%3Arss-loop").status, 303);
         assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));
+    }
+
+    fn post_spec(dir: &std::path::Path, spec: &str) -> UiState {
+        loopx_core::spec_gate::record_posted(&dir.join("memory"), "web", "7", spec, chrono::Utc::now()).unwrap();
+        state(dir)
+    }
+
+    fn spec_state(dir: &std::path::Path) -> loopx_core::spec_gate::SpecState {
+        loopx_core::spec_gate::load(&dir.join("memory"), "web", "7").unwrap()
+    }
+
+    #[test]
+    fn a_posted_spec_shows_its_text_and_both_decisions() {
+        let d = tempfile::tempdir().unwrap();
+        let st = post_spec(d.path(), "**Goal:** <paging> works");
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("Approve the spec for web #7"), "{html}");
+        assert!(html.contains("**Goal:** &lt;paging&gt; works"), "{html}");
+        assert!(html.contains("action='/needs-you/spec'") && html.contains("name='csrf_token'"), "{html}");
+        assert!(html.contains("value='spec:web:7'"), "{html}");
+        assert!(html.contains("name='notes'"), "{html}");
+        assert!(html.contains("value='approve'") && html.contains("value='request_changes'"), "{html}");
+        assert!(!html.contains("action='/needs-you/dismiss'"), "a spec can't be dismissed: {html}");
+        assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 1}"#);
+        let req = UiRequest::get("/needs-you").with_header("cookie", "loop_lang=fr");
+        let fr = st.registry.dispatch(&st, &req).unwrap().body_text();
+        assert!(!fr.contains("Approve the spec for"), "translated");
+    }
+
+    #[test]
+    fn approving_a_spec_here_records_it_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        let st = post_spec(d.path(), "**Goal:** x");
+        let body = "id=spec%3Aweb%3A7&decision=approve";
+        assert_eq!(post(&st, "/needs-you/spec", body).status, 403);
+        assert_eq!(spec_state(d.path()).status, loopx_core::spec_gate::SpecStatus::Awaiting);
+        let r = post(&st, "/needs-you/spec", &format!("csrf_token=tok&{body}"));
+        let location = r.header("location").unwrap_or_default();
+        assert!(location.contains("ok=1"), "{location}");
+        assert!(location.contains("next%20run%20implements"), "{location}");
+        let s = spec_state(d.path());
+        assert_eq!(s.status, loopx_core::spec_gate::SpecStatus::Approved);
+        assert_eq!(s.decided_by.as_deref(), Some("dashboard"));
+        assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));
+        // Deciding twice is refused.
+        let r = post(&st, "/needs-you/spec", &format!("csrf_token=tok&{body}"));
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+    }
+
+    #[test]
+    fn request_changes_on_a_spec_needs_notes() {
+        let d = tempfile::tempdir().unwrap();
+        let st = post_spec(d.path(), "**Goal:** x");
+        let r = post(&st, "/needs-you/spec", "csrf_token=tok&id=spec%3Aweb%3A7&decision=request_changes&notes=+");
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+        assert_eq!(spec_state(d.path()).status, loopx_core::spec_gate::SpecStatus::Awaiting);
+        let r = post(
+            &st,
+            "/needs-you/spec",
+            "csrf_token=tok&id=spec%3Aweb%3A7&decision=request_changes&notes=Cover+empty+lists.",
+        );
+        let location = r.header("location").unwrap_or_default();
+        assert!(location.contains("ok=1") && location.contains("new%20spec"), "{location}");
+        let s = spec_state(d.path());
+        assert_eq!(s.status, loopx_core::spec_gate::SpecStatus::ChangesRequested);
+        assert_eq!(s.notes, "Cover empty lists.");
+        // A malformed or path-like id is refused, never resolved to a file.
+        let r = post(&st, "/needs-you/spec", "csrf_token=tok&id=spec%3A..%3A7&decision=approve");
+        assert!(r.header("location").unwrap_or_default().contains("ok=0"));
     }
 }

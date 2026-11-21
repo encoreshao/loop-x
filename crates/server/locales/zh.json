@@ -2278,5 +2278,14 @@
   "Run output": "运行输出",
   "Log entries": "日志条目",
   "The output of this run was not recorded.": "此次运行的输出未被记录。",
-  "Open all logs": "打开全部日志"
+  "Open all logs": "打开全部日志",
+  "Approve the spec for {project} #{iid}": "批准 {project} #{iid} 的规格说明",
+  "Read the whole spec on the issue": "在议题中阅读完整规格说明",
+  "What should change (for Request changes)": "需要修改的内容（用于请求修改）",
+  "What the next spec should do differently": "下一版规格说明应有何不同",
+  "That spec is not waiting on you.": "这份规格说明没有在等待你的决定。",
+  "Choose what to do with the spec.": "请选择如何处理这份规格说明。",
+  "Say what should change in the spec.": "请说明规格说明中需要修改的地方。",
+  "Spec approved — the next run implements it.": "规格说明已批准 — 下次运行将实现它。",
+  "Changes requested — the next run writes a new spec.": "已请求修改 — 下次运行将撰写新的规格说明。"
 }

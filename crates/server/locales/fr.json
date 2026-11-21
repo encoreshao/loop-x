@@ -2278,5 +2278,14 @@
   "Run output": "Sortie de l’exécution",
   "Log entries": "Entrées du journal",
   "The output of this run was not recorded.": "La sortie de cette exécution n’a pas été enregistrée.",
-  "Open all logs": "Ouvrir tous les journaux"
+  "Open all logs": "Ouvrir tous les journaux",
+  "Approve the spec for {project} #{iid}": "Approuver la spécification de {project} #{iid}",
+  "Read the whole spec on the issue": "Lire la spécification complète sur le ticket",
+  "What should change (for Request changes)": "Ce qui doit changer (pour Demander des modifications)",
+  "What the next spec should do differently": "Ce que la prochaine spécification doit faire autrement",
+  "That spec is not waiting on you.": "Cette spécification n’attend pas votre décision.",
+  "Choose what to do with the spec.": "Choisissez quoi faire de la spécification.",
+  "Say what should change in the spec.": "Indiquez ce qui doit changer dans la spécification.",
+  "Spec approved — the next run implements it.": "Spécification approuvée — la prochaine exécution l’implémente.",
+  "Changes requested — the next run writes a new spec.": "Modifications demandées — la prochaine exécution rédige une nouvelle spécification."
 }

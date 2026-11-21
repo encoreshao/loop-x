@@ -141,6 +141,7 @@ pub mod slack;
 pub mod slack_agent;
 pub mod slack_report;
 pub mod slides_store;
+pub mod spec_gate;
 pub mod status;
 pub mod todos;
 pub mod todos_draft;

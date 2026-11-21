@@ -103,6 +103,7 @@ Project object:
 | `local_path` | string | yes | Absolute checkout path. Dashboard saves it stripped, may be `""`. |
 | `target_branch` | string | yes | Branch worktrees are cut from / MRs target. May be `""` when saved from the UI. |
 | `use_worktree` | bool | optional | Default `true`. `false`: issues are worked on a `feature#<iid>-<slug>` / `bug#<iid>-<slug>` branch of `local_path` itself (refused when the checkout is dirty; the original branch is restored after the issue). |
+| `spec_gate` | bool | optional | Default `false`. `true`: in gate mode every issue first gets a spec posted on it and no code until the spec is approved (on Needs you, or on GitLab by adding the `loop:spec-approved` label after the spec was posted); see "Spec approval (opt-in)" in `docs/tasks/gitlab-issue-loop.md`. Per project only, no top-level default. The `loop:spec-first` label opts in a single issue. Not written by the dashboard; kept when it saves. |
 | `install_cmd` | string | optional | A **hint** only: the agent chooses its own commands (step 7 of `instructions/loopx/gitlab-issue.md`) and starts from this. Not written by the dashboard; kept when it saves. |
 | `lint_cmd` | string | optional | Hint, as above. In gate mode it is also the verifier's fallback when the agent logged no lint command. See `CLAUDE.md` on pass-an-explicit-path (`rubocop .`) and `--cache false`. |
 | `test_cmd` | string | optional | Hint, as above; the verifier's fallback when the agent logged no test command. |

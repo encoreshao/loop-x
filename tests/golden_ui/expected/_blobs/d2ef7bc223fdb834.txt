@@ -3150,6 +3150,16 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .needs-you-thread-form textarea { flex: 0 0 auto; min-width: 0; resize: vertical; }
 .needs-you-thread-form p { margin: 0; font-size: 0.8rem; }
 .needs-you-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+/* A posted spec: its opening text, then Approve or Request changes with notes
+   at full width. */
+.needs-you-spec { align-items: flex-start; }
+.needs-you-spec .needs-you-actions { flex: 1 1 100%; }
+.needs-you-spec-text { margin: 0.5rem 0 0; max-height: 14rem; overflow: auto; padding: 0.6rem 0.8rem; border-radius: 12px; background: var(--md-surface-container); color: var(--md-on-surface); font-family: var(--font-family-stack); font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.needs-you-spec-form { display: flex; flex: 1 1 100%; flex-direction: column; align-items: stretch; gap: 0.5rem; margin: 0; }
+.needs-you-spec-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
+.needs-you-spec-form textarea { box-sizing: border-box; height: 4.75rem; min-height: 4.75rem; padding: 0.45rem 0.65rem; border-radius: 12px; border: 0.5px solid color-mix(in srgb, var(--md-outline) 50%, transparent); background: var(--md-surface); color: var(--md-on-surface); font-family: var(--font-family-stack); font-size: 0.8rem; resize: vertical; transition: border-color 200ms ease; }
+.needs-you-spec-form textarea:focus { outline: none; border-color: var(--md-primary); }
+.needs-you-spec-form .btn { height: 2rem; }
 /* A failed loop's log, in a sheet over everything from the right. */
 .ny-sheet-backdrop { position: fixed; inset: 0; z-index: 110; background: rgba(0, 0, 0, 0.28); }
 .ny-sheet {

@@ -9,6 +9,9 @@
 //! here too, with the plan, the reviewer's comment and why it stopped; the
 //! user decides it (`mr_feedback::decide_thread`).
 //!
+//! A spec the issue loop posted for approval (`spec_gate`) waits here too,
+//! until it is approved or changes are requested.
+//!
 //! A project whose last weekly profile sync failed (`<home>/profile_sync.json`,
 //! next to the memory root) waits here too, with the guarded failure line only.
 //!
@@ -369,6 +372,55 @@ fn mr_threads(src: &Sources, dismissed: &Value) -> Vec<Value> {
     out
 }
 
+/// Specs the issue loop posted that wait on an approval
+/// (`<memory root>/<alias>/spec/<iid>.json`, status `awaiting`). Deciding is
+/// what clears them, so they can't be dismissed.
+fn specs(src: &Sources) -> Vec<Value> {
+    use crate::spec_gate::{self, SpecStatus};
+    let Ok(projects) = std::fs::read_dir(src.memory_root) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, String)> = projects
+        .flatten()
+        .filter_map(|p| {
+            let alias = p.file_name().to_str()?.to_string();
+            let dir = std::fs::read_dir(p.path().join("spec")).ok()?;
+            Some(
+                dir.flatten()
+                    .filter_map(|f| {
+                        let iid = f.file_name().to_str()?.strip_suffix(".json")?.to_string();
+                        iid.bytes()
+                            .all(|b| b.is_ascii_digit())
+                            .then(|| (alias.clone(), iid))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect();
+    found.sort();
+    found
+        .into_iter()
+        .filter_map(|(alias, iid)| {
+            let state = spec_gate::load(src.memory_root, &alias, &iid)?;
+            (state.status == SpecStatus::Awaiting).then(|| {
+                item(
+                    format!("spec:{alias}:{iid}"),
+                    "spec",
+                    format!("Approve the spec for {alias} #{iid}"),
+                    Some(&state.posted_at),
+                    json!({
+                        "project": alias,
+                        "issue_iid": iid,
+                        "body": state.spec.chars().take(400).collect::<String>(),
+                        "body_truncated": state.spec.chars().count() > 400,
+                    }),
+                )
+            })
+        })
+        .collect()
+}
+
 /// The installed Slack listener stopped on a problem only the user can fix
 /// (usually a rejected token). Its `last_error` is token-free by construction.
 /// Fixing it (the listener writes a new state) or dismissing it clears it; a
@@ -403,6 +455,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     items.extend(sign_ins(src, &dismissed));
     items.extend(failed_loops(src, &dismissed));
     items.extend(mr_threads(src, &dismissed));
+    items.extend(specs(src));
     items.extend(profile_sync_failures(src, &dismissed));
     items.extend(slack_listener(src, &dismissed));
     // Oldest first; an item with no time goes last.
@@ -860,6 +913,36 @@ mod tests {
         })
         .unwrap();
         assert_eq!(f.ids(), ["profile_sync:api", "profile_sync:web"]);
+    }
+
+    #[test]
+    fn spec_items_listed_while_awaiting() {
+        use crate::spec_gate;
+        let f = Fx::new();
+        let memory = f.p("memory");
+        let long = format!("**Goal:** paging\n{}", "x".repeat(600));
+        spec_gate::record_posted(&memory, "web", "7", &long, now()).unwrap();
+        spec_gate::record_posted(&memory, "api", "3", "**Goal:** y", now()).unwrap();
+        spec_gate::decide(&memory, "api", "3", true, "", "dashboard", now()).unwrap();
+        // A stray file in a spec folder is not a spec state.
+        std::fs::write(memory.join("web/spec/notes.txt"), "x").unwrap();
+        let items = f.collect();
+        assert_eq!(items.len(), 1, "{items:?}");
+        let i = &items[0];
+        assert_eq!(i["id"], "spec:web:7");
+        assert_eq!(i["kind"], "spec");
+        assert_eq!(i["dismissable"], false);
+        assert_eq!(i["project"], "web");
+        assert_eq!(i["issue_iid"], "7");
+        assert_eq!(i["title"], "Approve the spec for web #7");
+        assert_eq!(i["since"], now().to_rfc3339());
+        let body = i["body"].as_str().unwrap();
+        assert!(body.starts_with("**Goal:** paging"), "{body}");
+        assert_eq!(body.chars().count(), 400);
+        assert!(dismiss(&f.p("d.json"), "spec:web:7", now()).is_err());
+
+        spec_gate::decide(&memory, "web", "7", false, "More.", "dashboard", now()).unwrap();
+        assert!(f.collect().is_empty());
     }
 
     #[test]

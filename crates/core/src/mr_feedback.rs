@@ -522,6 +522,16 @@ fn hunk_around(diff: &str, line: Option<i64>) -> String {
         .unwrap_or_else(|| diff.to_string())
 }
 
+/// Whether a line of `text` would run as a GitLab quick action (`/label`,
+/// `/merge`, ...) when posted as a note.
+pub fn has_quick_action(text: &str) -> bool {
+    text.lines().any(|l| {
+        l.trim_start()
+            .strip_prefix('/')
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_alphabetic()))
+    })
+}
+
 /// The note the loop posts: the reply plus its signature. GitLab runs a line
 /// starting with `/` as a quick action (`/merge`, `/approve`, `/close`, ...)
 /// with the poster's token, the user's own here, so such a reply is refused.
@@ -530,12 +540,7 @@ pub fn safe_reply_body(text: &str) -> Result<String, String> {
     if text.is_empty() {
         return Err("the reply is empty".into());
     }
-    let quick_action = text.lines().any(|l| {
-        l.trim_start()
-            .strip_prefix('/')
-            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_alphabetic()))
-    });
-    if quick_action {
+    if has_quick_action(text) {
         return Err("reply contains a GitLab quick action".into());
     }
     Ok(format!("{text}\n\n{LOOP_SIGNATURE}"))

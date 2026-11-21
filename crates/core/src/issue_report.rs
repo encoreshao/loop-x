@@ -111,7 +111,8 @@ pub fn issue_lines(
                             .filter(|u| !u.is_empty())
                             .map(str::to_owned),
                     ),
-                    Some("answer") => Outcome::Answered,
+                    // A posted spec waits on a person, so it is news, never quiet.
+                    Some("answer" | "spec") => Outcome::Answered,
                     Some("wait_for_review") => Outcome::Waiting {
                         reminder_sent: data["reminder_sent"].as_bool().unwrap_or(false),
                     },
@@ -465,6 +466,25 @@ mod tests {
                 ("R_web_12".into(), "ignored".into()),
             ],
         )
+    }
+
+    #[test]
+    fn a_posted_spec_is_reported_and_never_quiet() {
+        let l = issue_lines(
+            "R",
+            &[
+                ev("issue.queued", "web", 7, json!({"title": "Paging"})),
+                ev(
+                    "issue.completed",
+                    "web",
+                    7,
+                    json!({"action": "spec", "gated": true}),
+                ),
+            ],
+            &[],
+        );
+        assert_eq!(l[0].outcome, Outcome::Answered);
+        assert!(!is_quiet(&l));
     }
 
     #[test]

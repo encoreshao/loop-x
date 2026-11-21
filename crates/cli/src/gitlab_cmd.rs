@@ -110,6 +110,17 @@ fn dispatch(argv: &[String]) -> Out {
         }
     }
     let command = args[0].clone();
+    // A quick action in a comment runs with the user's token (`/merge`, or a
+    // `/label` that approves the loop's own spec), so the agent can never post one.
+    if matches!(command.as_str(), "post-issue-comment" | "post-mr-comment")
+        && args
+            .get(3)
+            .is_some_and(|body| loopx_core::mr_feedback::has_quick_action(body))
+    {
+        return Err(format!(
+            "Refused: the {command} body has a line starting with '/', which GitLab would run as a quick action. Rephrase that line so it does not start with '/'."
+        ));
+    }
     // An alias bound through a connector account (`code_host`, e.g. GitHub)
     // answers the same commands in the same JSON shape.
     if instance_name.is_none() && command != "cache" {
@@ -447,6 +458,23 @@ mod tests {
         assert!(dispatch(&[])
             .unwrap_err()
             .starts_with("Usage: loopx gitlab"));
+    }
+
+    #[test]
+    fn a_comment_with_a_quick_action_line_is_refused_before_any_call() {
+        for command in ["post-issue-comment", "post-mr-comment"] {
+            for body in [
+                "Done.\n/label ~\"loop:spec-approved\"",
+                "  /merge",
+                "/approve",
+            ] {
+                let err = dispatch(&s(&[command, "no-such-alias-xyz", "7", body])).unwrap_err();
+                assert!(err.contains("quick action"), "{command} {body:?}: {err}");
+            }
+            let err =
+                dispatch(&s(&["--instance=x", command, "g/p", "7", "ok\n/close"])).unwrap_err();
+            assert!(err.contains("quick action"), "{err}");
+        }
     }
 
     #[test]
