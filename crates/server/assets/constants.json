@@ -657,7 +657,8 @@
    "handoff_invalid",
    "mr_open_failed",
    "project_config_error",
-   "run_incomplete"
+   "run_incomplete",
+   "guard_violation"
   ],
   "_GATE_AGREEMENT_THRESHOLD": 0.9,
   "_GITLAB_RECENT_EVENT_DAYS": 14,

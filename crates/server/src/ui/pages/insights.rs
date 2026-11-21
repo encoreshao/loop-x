@@ -935,6 +935,13 @@ fn gates_body(ctx: &UiCtx) -> String {
         gate_tile("error", &total.gated_blocks.to_string(), &ctx.t("Blocked by gate"), ""),
         gate_tile("autorenew", &total.retried_then_passed.to_string(), &retried_label, ""),
         gate_tile("warning", &total.escalated_verification.to_string(), &ctx.t("Escalated"), ""),
+        gate_tile(
+            "visibility",
+            &total.review_would_block.to_string(),
+            &ctx.t("Review would block"),
+            &ctx.t("Advisory: the review gate is in observe mode"),
+        ),
+        gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
     ]
     .concat();
     let rows: String = stats
@@ -942,13 +949,15 @@ fn gates_body(ctx: &UiCtx) -> String {
         .iter()
         .map(|(project, row)| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape(project),
                 row.issues,
                 escape(&gate_rate_text(ctx, row.agreement_rate)),
                 row.gated_blocks,
                 row.retried_then_passed,
-                row.escalated_verification
+                row.escalated_verification,
+                row.review_would_block,
+                row.security_would_block
             )
         })
         .collect();
@@ -956,13 +965,15 @@ fn gates_body(ctx: &UiCtx) -> String {
         format!("<p>{}</p>", escape(&ctx.t("No data yet for this breakdown.")))
     } else {
         format!(
-            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
+            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
             escape(&ctx.t("Project")),
             escape(&ctx.t("Issues")),
             escape(&ctx.t("Agreement rate")),
             escape(&ctx.t("Blocked by gate")),
             escape(&retried_label),
-            escape(&ctx.t("Escalated"))
+            escape(&ctx.t("Escalated")),
+            escape(&ctx.t("Review would block")),
+            escape(&ctx.t("Secret scan would block"))
         )
     };
     let chips: String = loop_yamls(&ctx.state.repo_root.join("loops"))

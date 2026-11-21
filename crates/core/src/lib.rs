@@ -2,6 +2,7 @@
 
 pub mod account_switch;
 pub mod agent_activity;
+pub mod agent_guard;
 pub mod agents;
 pub mod ai_cli_config;
 pub mod ai_cli_health;
@@ -101,6 +102,7 @@ pub mod node_env;
 pub mod oauth;
 pub mod parallel;
 pub mod policy;
+pub mod pre_review;
 pub mod proc;
 pub mod profile_build;
 pub mod profile_checkout;
@@ -130,6 +132,7 @@ pub mod runner_util;
 pub mod scheduler_health;
 pub mod screenshot;
 pub mod secrets;
+pub mod security_scan;
 pub mod seen_store;
 pub mod settings_store;
 pub mod setup_doctor;

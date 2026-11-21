@@ -47,13 +47,26 @@ actions:
 # failing output as feedback), and the loop, not the agent, pushes and opens
 # the merge request only after it passes. mode: observe would record the
 # result without enforcing it and let the agent open the MR itself.
+# agent_review (a read-only claude review of the branch's diff) and
+# security_scan (a model-free scan of the added lines for secrets) run after
+# project_commands passes and are skipped when it fails. `observe: true` keeps
+# them advisory: their result goes to the MR's "Pre-review" section and to
+# Harness -> Gates, never into a retry. security_scan must stay last.
 verification:
-  required: [project_commands]
+  required: [project_commands, agent_review, security_scan]
   mode: gate
 
 verifiers:
   - name: project_commands
     type: project_commands
+  - name: agent_review
+    type: agent_review
+    model: opus
+    max_cost_usd: 0.5
+    observe: true
+  - name: security_scan
+    type: security_scan
+    observe: true
 
 stop_conditions:
   max_iterations: 2

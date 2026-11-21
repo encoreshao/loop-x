@@ -5,12 +5,13 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-pub const ESCALATION_REASONS: [&str; 5] = [
+pub const ESCALATION_REASONS: [&str; 6] = [
     "verification_failed",
     "handoff_invalid",
     "mr_open_failed",
     "project_config_error",
     "run_incomplete",
+    "guard_violation",
 ];
 pub const AGREEMENT_THRESHOLD: f64 = 0.9;
 
@@ -23,6 +24,11 @@ pub struct GateBucket {
     pub retried_then_passed: i64,
     pub escalated_verification: i64,
     pub policy_denied: i64,
+    /// Issues whose last pre-MR review found a blocking problem (advisory gate).
+    pub review_would_block: i64,
+    pub review_errors: i64,
+    /// Issues whose last secret scan found a blocking hit (advisory gate).
+    pub security_would_block: i64,
     agreed: i64,
 }
 
@@ -71,6 +77,8 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
     let mut fixed: HashSet<String> = HashSet::new();
     let mut retried: Vec<(String, Option<String>)> = Vec::new();
     let mut retried_seen: HashSet<String> = HashSet::new();
+    // (gate, issue key) -> (project, would block, errored), last event wins.
+    let mut gate_last: BTreeMap<(&str, String), (Option<String>, bool, bool)> = BTreeMap::new();
     let null = Value::Null;
 
     for ev in events {
@@ -98,6 +106,16 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
                 if passed && iteration >= 2.0 && retried_seen.insert(key.clone()) {
                     retried.push((key.clone(), project.clone()));
                 }
+            }
+            "verification.review_completed" | "verification.security_completed" => {
+                let gate = if kind == "verification.review_completed" {
+                    "review"
+                } else {
+                    "security"
+                };
+                let errored = is_truthy(data.get("error"));
+                let blocks = !errored && data.get("observed_passed") == Some(&Value::Bool(false));
+                gate_last.insert((gate, key), (project, blocks, errored));
             }
             "issue.completed" => {
                 if data.get("action").and_then(Value::as_str) == Some("fix") {
@@ -150,6 +168,18 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
                 .entry(p.clone())
                 .or_default()
                 .retried_then_passed += 1;
+        }
+    }
+    for ((gate, _), (project, blocks, errored)) in &gate_last {
+        let apply = |b: &mut GateBucket| match (*gate, blocks, errored) {
+            ("review", _, true) => b.review_errors += 1,
+            ("review", true, _) => b.review_would_block += 1,
+            ("security", true, _) => b.security_would_block += 1,
+            _ => {}
+        };
+        apply(&mut stats.total);
+        if let Some(p) = project {
+            apply(stats.by_project.entry(p.clone()).or_default());
         }
     }
     for b in std::iter::once(&mut stats.total).chain(stats.by_project.values_mut()) {
@@ -296,5 +326,90 @@ mod tests {
         let s = gate_stats(&events);
         assert_eq!((s.total.issues, s.total.agreement_rate), (1, Some(1.0)));
         assert_eq!(s.total.retried_then_passed, 1);
+    }
+
+    fn review(iid: i64, observed_passed: bool, project: &str) -> Value {
+        ev(
+            "verification.review_completed",
+            Some(iid),
+            json!({"observed_passed": observed_passed, "mode": "observe"}),
+            project,
+        )
+    }
+
+    fn security(iid: i64, observed_passed: bool, project: &str) -> Value {
+        ev(
+            "verification.security_completed",
+            Some(iid),
+            json!({"observed_passed": observed_passed, "mode": "observe"}),
+            project,
+        )
+    }
+
+    #[test]
+    fn review_and_security_would_block_counted_per_project() {
+        let events = vec![
+            review(1, false, "web"),
+            security(1, false, "web"),
+            review(2, true, "web"),
+            review(3, false, "api"),
+            security(3, true, "api"),
+        ];
+        let s = gate_stats(&events);
+        assert_eq!(s.total.review_would_block, 2);
+        assert_eq!(s.total.security_would_block, 1);
+        assert_eq!(s.by_project["web"].review_would_block, 1);
+        assert_eq!(s.by_project["web"].security_would_block, 1);
+        assert_eq!(s.by_project["api"].review_would_block, 1);
+        assert_eq!(s.by_project["api"].security_would_block, 0);
+    }
+
+    #[test]
+    fn guard_violation_counts_as_an_escalation() {
+        let events = vec![ev(
+            "issue.escalated",
+            Some(1),
+            json!({"reason": "guard_violation", "gated": true}),
+            "web",
+        )];
+        let s = gate_stats(&events);
+        assert_eq!(s.total.escalated_verification, 1);
+        assert_eq!(s.by_project["web"].escalated_verification, 1);
+        assert_eq!(s.total.gated_blocks, 0);
+    }
+
+    #[test]
+    fn review_error_is_not_a_block() {
+        let events = vec![ev(
+            "verification.review_completed",
+            Some(1),
+            json!({"observed_passed": false, "error": true}),
+            "web",
+        )];
+        let s = gate_stats(&events);
+        assert_eq!(s.total.review_would_block, 0);
+        assert_eq!(s.total.review_errors, 1);
+    }
+
+    #[test]
+    fn retry_that_passed_review_counts_once() {
+        let events = vec![review(1, false, "web"), review(1, true, "web")];
+        assert_eq!(gate_stats(&events).total.review_would_block, 0);
+    }
+
+    #[test]
+    fn review_events_leave_agreement_rate_unchanged() {
+        let events = vec![
+            ev(
+                "verification.external_completed",
+                Some(1),
+                json!({"observed_passed": true, "mode": "observe"}),
+                "web",
+            ),
+            review(1, false, "web"),
+            ev("issue.completed", Some(1), json!({"action": "fix"}), "web"),
+        ];
+        let s = gate_stats(&events);
+        assert_eq!((s.total.issues, s.total.agreement_rate), (1, Some(1.0)));
     }
 }

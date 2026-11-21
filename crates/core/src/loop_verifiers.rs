@@ -26,6 +26,13 @@ pub const OUTPUT_TAIL_CHARS: usize = 4000;
 
 pub trait Verifier: Send {
     fn verify(&self, context: &LoopContext<'_>) -> VerificationResult;
+    fn skip_after_failure(&self) -> bool {
+        false
+    }
+    /// Names the skipped result when `skip_after_failure` applies.
+    fn name(&self) -> &str {
+        ""
+    }
 }
 
 fn elapsed_ms(start: Instant) -> i64 {
@@ -287,15 +294,12 @@ impl Verifier for DiffVerifier {
 type ProjectFn = Box<dyn Fn(&str) -> Result<Value, String> + Send>;
 type WorktreeRootFn = Box<dyn Fn() -> Result<PathBuf, String> + Send>;
 
-/// Re-runs the project's own `test_cmd`/`lint_cmd` (from projects.json) in the
-/// worktree the agent used for this issue. No worktree means no code change, so
-/// a vacuous pass; with `handoff_path` (gate mode) anything but
-/// `{"action": "fix"}` is vacuous too.
-pub struct ProjectCommandsVerifier {
-    pub name: String,
+/// Where an issue's fix lives: its project entry, the work dir the agent used
+/// and, in gate mode, the fix handoff. Shared by every verifier that looks at
+/// the fix.
+pub struct IssueWork {
     pub alias: String,
     pub issue_iid: String,
-    pub timeout_seconds: f64,
     pub handoff_path: Option<PathBuf>,
     /// projects.json to read when no `project_fn` is injected (default: the
     /// per-machine one, resolved at call time).
@@ -304,33 +308,25 @@ pub struct ProjectCommandsVerifier {
     worktree_root_fn: Option<WorktreeRootFn>,
 }
 
-impl ProjectCommandsVerifier {
-    pub fn new(name: &str, alias: &str, issue_iid: impl ToString, timeout_seconds: f64) -> Self {
+pub enum WorkDir {
+    Vacuous(&'static str),
+    Ready {
+        dir: PathBuf,
+        project: Value,
+        handoff: Option<Value>,
+    },
+}
+
+impl IssueWork {
+    pub fn new(alias: &str, issue_iid: impl ToString) -> Self {
         Self {
-            name: name.into(),
             alias: alias.into(),
             issue_iid: issue_iid.to_string(),
-            timeout_seconds,
             handoff_path: None,
             config_path: None,
             project_fn: None,
             worktree_root_fn: None,
         }
-    }
-
-    pub fn with_handoff_path(mut self, path: Option<PathBuf>) -> Self {
-        self.handoff_path = path;
-        self
-    }
-
-    pub fn with_config_path(mut self, path: Option<PathBuf>) -> Self {
-        self.config_path = path;
-        self
-    }
-
-    fn config(&self) -> Result<Config, String> {
-        let path = self.config_path.clone().unwrap_or_else(default_config_path);
-        Config::load(&path).map_err(|e| e.to_string())
     }
 
     /// Replace the projects.json lookup (tests, or a caller with its own config).
@@ -350,8 +346,38 @@ impl ProjectCommandsVerifier {
         self
     }
 
+    fn config(&self) -> Result<Config, String> {
+        let path = self.config_path.clone().unwrap_or_else(default_config_path);
+        Config::load(&path).map_err(|e| e.to_string())
+    }
+
+    pub fn resolve(&self) -> Result<WorkDir, String> {
+        self.resolve_raised().map_err(|r| r.text())
+    }
+
+    fn resolve_raised(&self) -> Result<WorkDir, Raised> {
+        let handoff = self.fix_handoff();
+        if self.handoff_path.is_some() && handoff.is_none() {
+            return Ok(WorkDir::Vacuous("no fix handoff - nothing to verify"));
+        }
+        let project = self.project()?;
+        if !crate::config::changes_code(&project) {
+            return Ok(WorkDir::Vacuous("issues-only project - no code to verify"));
+        }
+        let root = self.worktree_root()?;
+        let dir = expected_work_dir(&project, &root, &self.issue_iid);
+        if use_worktree(&project) && !dir.is_dir() {
+            return Ok(WorkDir::Vacuous("no worktree - nothing to verify"));
+        }
+        Ok(WorkDir::Ready {
+            dir,
+            project,
+            handoff,
+        })
+    }
+
     /// The fix handoff, if there is one: `None` for any other action.
-    fn fix_handoff(&self) -> Option<Value> {
+    pub fn fix_handoff(&self) -> Option<Value> {
         let path = self.handoff_path.as_ref()?;
         std::fs::read_to_string(path)
             .ok()
@@ -389,30 +415,72 @@ impl ProjectCommandsVerifier {
             message,
         })
     }
+}
+
+/// Re-runs the project's own `test_cmd`/`lint_cmd` (from projects.json) in the
+/// worktree the agent used for this issue. No worktree means no code change, so
+/// a vacuous pass; with `handoff_path` (gate mode) anything but
+/// `{"action": "fix"}` is vacuous too.
+pub struct ProjectCommandsVerifier {
+    pub name: String,
+    pub timeout_seconds: f64,
+    pub work: IssueWork,
+}
+
+impl ProjectCommandsVerifier {
+    pub fn new(name: &str, alias: &str, issue_iid: impl ToString, timeout_seconds: f64) -> Self {
+        Self {
+            name: name.into(),
+            timeout_seconds,
+            work: IssueWork::new(alias, issue_iid),
+        }
+    }
+
+    pub fn with_handoff_path(mut self, path: Option<PathBuf>) -> Self {
+        self.work.handoff_path = path;
+        self
+    }
+
+    pub fn with_config_path(mut self, path: Option<PathBuf>) -> Self {
+        self.work.config_path = path;
+        self
+    }
+
+    pub fn with_project_fn(
+        mut self,
+        f: impl Fn(&str) -> Result<Value, String> + Send + 'static,
+    ) -> Self {
+        self.work = self.work.with_project_fn(f);
+        self
+    }
+
+    pub fn with_worktree_root_fn(
+        mut self,
+        f: impl Fn() -> Result<PathBuf, String> + Send + 'static,
+    ) -> Self {
+        self.work = self.work.with_worktree_root_fn(f);
+        self
+    }
 
     fn run(&self) -> Result<VerificationResult, Raised> {
         let start = Instant::now();
-        let vacuous = |why: &str| VerificationResult {
-            name: self.name.clone(),
-            passed: true,
-            exit_code: None,
-            duration_ms: 0,
-            output: why.into(),
-            evidence: json!({"vacuous": true}),
+        let (worktree, project, handoff) = match self.work.resolve_raised()? {
+            WorkDir::Vacuous(why) => {
+                return Ok(VerificationResult {
+                    name: self.name.clone(),
+                    passed: true,
+                    exit_code: None,
+                    duration_ms: 0,
+                    output: why.into(),
+                    evidence: json!({"vacuous": true}),
+                })
+            }
+            WorkDir::Ready {
+                dir,
+                project,
+                handoff,
+            } => (dir, project, handoff),
         };
-        let handoff = self.fix_handoff();
-        if self.handoff_path.is_some() && handoff.is_none() {
-            return Ok(vacuous("no fix handoff - nothing to verify"));
-        }
-        let project = self.project()?;
-        if !crate::config::changes_code(&project) {
-            return Ok(vacuous("issues-only project - no code to verify"));
-        }
-        let root = self.worktree_root()?;
-        let worktree = expected_work_dir(&project, &root, &self.issue_iid);
-        if use_worktree(&project) && !worktree.is_dir() {
-            return Ok(vacuous("no worktree - nothing to verify"));
-        }
         let fail = |output: String| VerificationResult {
             name: self.name.clone(),
             passed: false,
@@ -518,6 +586,61 @@ pub fn expected_work_dir(project: &Value, worktree_root: &Path, issue_iid: &str)
     worktree_root.join(format!("{repo}-issue-{issue_iid}"))
 }
 
+fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(dir);
+    let out =
+        proc::run(&mut cmd, None, Some(Duration::from_secs(60))).map_err(|e| e.to_string())?;
+    if out.code == Some(0) {
+        Ok(out.stdout)
+    } else {
+        Err(out.stderr.trim().to_string())
+    }
+}
+
+/// What the branch would push: commits since it left `origin/<target>`, or the
+/// local `<target>` when there is no such remote branch.
+fn diff_base(dir: &Path, target: &str) -> Result<String, String> {
+    let remote = format!("origin/{target}");
+    git_in(dir, &["merge-base", "HEAD", &remote])
+        .or_else(|_| git_in(dir, &["merge-base", "HEAD", target]))
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("cannot diff against {target}: {e}"))
+}
+
+pub fn branch_diff(dir: &Path, target: &str) -> Result<String, String> {
+    let range = format!("{}..HEAD", diff_base(dir, target)?);
+    git_in(
+        dir,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            &range,
+        ],
+    )
+    .map_err(|e| format!("cannot diff against {target}: {e}"))
+}
+
+pub fn added_files(dir: &Path, target: &str) -> Result<Vec<String>, String> {
+    let range = format!("{}..HEAD", diff_base(dir, target)?);
+    git_in(
+        dir,
+        &["diff", "--name-only", "--diff-filter=AR", "-z", &range],
+    )
+    .map(|s| {
+        s.split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .map_err(|e| format!("cannot diff against {target}: {e}"))
+}
+
 /// The last `n` characters (Python `s[-n:]`).
 fn tail_chars(s: &str, n: usize) -> String {
     let count = s.chars().count();
@@ -534,6 +657,10 @@ impl Verifier for ProjectCommandsVerifier {
     fn verify(&self, _context: &LoopContext<'_>) -> VerificationResult {
         self.run()
             .unwrap_or_else(|raised| error_result(&self.name, &raised))
+    }
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -556,10 +683,17 @@ impl Verifier for ObserveOnly {
         result.evidence = Value::Object(evidence);
         result
     }
+
+    fn skip_after_failure(&self) -> bool {
+        self.inner.skip_after_failure()
+    }
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
 }
 
-/// Per-issue context for `project_commands` verifiers.
-#[derive(Debug, Clone)]
+/// Per-issue context for the verifiers that look at an issue's fix.
+#[derive(Clone)]
 pub struct IssueContext {
     pub alias: String,
     pub issue_iid: String,
@@ -567,6 +701,25 @@ pub struct IssueContext {
     pub handoff_path: Option<PathBuf>,
     /// Override of the projects.json path (default: the per-machine one).
     pub config_path: Option<PathBuf>,
+    pub review_invoker: Option<crate::pre_review::ReviewInvoker>,
+    pub costs: Option<crate::pre_review::CostLedger>,
+    pub issue_budget_usd: f64,
+    pub cli: String,
+}
+
+impl std::fmt::Debug for IssueContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IssueContext")
+            .field("alias", &self.alias)
+            .field("issue_iid", &self.issue_iid)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("handoff_path", &self.handoff_path)
+            .field("config_path", &self.config_path)
+            .field("review_invoker", &self.review_invoker.is_some())
+            .field("issue_budget_usd", &self.issue_budget_usd)
+            .field("cli", &self.cli)
+            .finish()
+    }
 }
 
 impl IssueContext {
@@ -577,7 +730,18 @@ impl IssueContext {
             timeout_seconds,
             handoff_path: None,
             config_path: None,
+            review_invoker: None,
+            costs: None,
+            issue_budget_usd: f64::INFINITY,
+            cli: "claude".into(),
         }
+    }
+
+    fn work(&self) -> IssueWork {
+        let mut work = IssueWork::new(&self.alias, &self.issue_iid);
+        work.handoff_path = self.handoff_path.clone();
+        work.config_path = self.config_path.clone();
+        work
     }
 }
 
@@ -599,12 +763,19 @@ pub fn build_verifiers(
     mode: &str,
 ) -> Result<Vec<Box<dyn Verifier>>, VerifierBuildError> {
     let mut verifiers: Vec<Box<dyn Verifier>> = Vec::new();
-    for spec in specs {
+    for (index, spec) in specs.iter().enumerate() {
         let name = spec.get("name").and_then(Value::as_str).ok_or_else(|| {
             VerifierBuildError(format!("verifier spec {} has no 'name'", py_repr(spec)))
         })?;
         let label = py_repr_str(name);
         let spec_type = spec.get("type");
+        if spec_type.and_then(Value::as_str) == Some("security_scan") && index + 1 != specs.len() {
+            return build_err(format!(
+                "verifier {label}: security_scan must be the last verifier"
+            ));
+        }
+        let observe = spec.get("observe").and_then(Value::as_bool) == Some(true);
+        let before = verifiers.len();
         match spec_type.and_then(Value::as_str) {
             Some("command") => {
                 let Some(command) = spec.get("command").and_then(Value::as_str) else {
@@ -646,7 +817,7 @@ pub fn build_verifiers(
                 )
                 .with_handoff_path(issue.handoff_path.clone())
                 .with_config_path(issue.config_path.clone());
-                if mode == "observe" {
+                if mode == "observe" && !observe {
                     verifiers.push(Box::new(ObserveOnly {
                         inner: Box::new(verifier),
                     }));
@@ -654,10 +825,56 @@ pub fn build_verifiers(
                     verifiers.push(Box::new(verifier));
                 }
             }
+            Some("security_scan") => {
+                let Some(issue) = issue else {
+                    return build_err(format!(
+                        "verifier {label}: type 'security_scan' requires issue context"
+                    ));
+                };
+                verifiers.push(Box::new(crate::security_scan::SecurityScanVerifier::new(
+                    name,
+                    issue.work(),
+                )));
+            }
+            Some("agent_review") => {
+                let Some(issue) = issue else {
+                    return build_err(format!(
+                        "verifier {label}: type 'agent_review' requires issue context"
+                    ));
+                };
+                let Some(invoker) = issue.review_invoker.clone() else {
+                    return build_err(format!(
+                        "verifier {label}: type 'agent_review' requires a review invoker"
+                    ));
+                };
+                let model = match spec.get("model").and_then(Value::as_str) {
+                    Some(m) => Some(m.to_string()),
+                    None => Some("opus".to_string()),
+                };
+                let cap = spec
+                    .get("max_cost_usd")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.5);
+                verifiers.push(Box::new(
+                    crate::pre_review::AgentReviewVerifier::new(
+                        name,
+                        issue.work(),
+                        invoker,
+                        issue.costs.clone().unwrap_or_default(),
+                    )
+                    .with_cli(&issue.cli)
+                    .with_model(model)
+                    .with_budget(cap, issue.issue_budget_usd),
+                ));
+            }
             _ => {
                 let shown = spec_type.map_or("None".to_string(), py_repr);
                 return build_err(format!("verifier {label}: unknown verifier type {shown}"));
             }
+        }
+        if observe && verifiers.len() > before {
+            let inner = verifiers.pop().expect("just pushed");
+            verifiers.push(Box::new(ObserveOnly { inner }));
         }
     }
     Ok(verifiers)
@@ -1216,5 +1433,79 @@ mod tests {
         let vs = build_verifiers(&spec, None, Some(&issue), "gate").unwrap();
         let r = run(vs[0].as_ref());
         assert!(!r.passed && r.evidence == json!({"error": true}));
+    }
+
+    fn origin_and_clone() -> (tempfile::TempDir, tempfile::TempDir) {
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+        let work = tempfile::tempdir().unwrap();
+        git(work.path(), &["init", "-q", "-b", "main"]);
+        fs::write(work.path().join("a.txt"), "old line\n").unwrap();
+        git(work.path(), &["add", "."]);
+        git(work.path(), &["commit", "-qm", "init"]);
+        git(
+            work.path(),
+            &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        );
+        git(work.path(), &["push", "-q", "origin", "main"]);
+        git(work.path(), &["checkout", "-qb", "feature#7-x"]);
+        fs::write(work.path().join("a.txt"), "old line\nnew line\n").unwrap();
+        fs::write(work.path().join("b.txt"), "b\n").unwrap();
+        git(work.path(), &["add", "."]);
+        git(work.path(), &["commit", "-qm", "change"]);
+        (origin, work)
+    }
+
+    #[test]
+    fn branch_diff_shows_commits_since_origin_target() {
+        let (_origin, work) = origin_and_clone();
+        // A local main that moved on must not leak into the diff.
+        git(work.path(), &["branch", "-f", "main", "HEAD"]);
+        let diff = branch_diff(work.path(), "main").unwrap();
+        assert!(diff.contains("+new line"), "{diff}");
+        assert!(diff.contains("b.txt"), "{diff}");
+    }
+
+    #[test]
+    fn branch_diff_falls_back_to_local_target() {
+        let (_origin, work) = origin_and_clone();
+        git(work.path(), &["remote", "remove", "origin"]);
+        let diff = branch_diff(work.path(), "main").unwrap();
+        assert!(diff.contains("+new line"), "{diff}");
+    }
+
+    #[test]
+    fn branch_diff_errors_name_the_branch() {
+        let (_origin, work) = origin_and_clone();
+        let err = branch_diff(work.path(), "nope").unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn added_files_lists_only_new_paths() {
+        let (_origin, work) = origin_and_clone();
+        assert_eq!(added_files(work.path(), "main").unwrap(), ["b.txt"]);
+    }
+
+    #[test]
+    fn observe_flag_wraps_in_gate_mode() {
+        let spec = [json!({"name": "r", "type": "command", "command": "false", "observe": true})];
+        let vs = build_verifiers(&spec, None, None, "gate").unwrap();
+        let r = run(vs[0].as_ref());
+        assert!(r.passed);
+        assert_eq!(r.evidence["observed_passed"], json!(false));
+    }
+
+    #[test]
+    fn security_scan_must_be_last() {
+        let spec = [
+            json!({"name": "sec", "type": "security_scan"}),
+            json!({"name": "c", "type": "command", "command": "true"}),
+        ];
+        let err = build_verifiers(&spec, None, None, "gate").err().unwrap();
+        assert_eq!(
+            err.0,
+            "verifier 'sec': security_scan must be the last verifier"
+        );
     }
 }

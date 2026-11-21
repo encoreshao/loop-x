@@ -7,6 +7,7 @@
 //! ([`CliInvoker`]): the dashboard's on-demand single issue, one issue inside the
 //! scheduled batch, and the batch's single end-of-run wrap-up.
 
+use crate::agent_guard;
 use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
 use crate::config::{default_config_path, Config};
 use crate::events::EventFields;
@@ -398,6 +399,9 @@ pub struct RunFakes {
     pub gitlab: Box<dyn GitlabCalls + Send + Sync>,
     pub notifier: Box<dyn Fn(&str) + Send + Sync>,
     pub gitlab_config_path: PathBuf,
+    /// Stands in for the read-only claude review call; `None` disables the
+    /// review (an error result) rather than reaching a real model.
+    pub review: Option<crate::pre_review::ReviewInvoker>,
 }
 
 impl std::fmt::Debug for RunFakes {
@@ -1054,6 +1058,43 @@ pub fn iteration_failed_verification(iteration: &IterationResult) -> bool {
     iteration.verification_results.iter().any(|r| !r.passed)
 }
 
+/// The review and security gates' own events, kept apart from
+/// `external_completed` so they never move the project-checks agreement rate.
+fn gate_event(
+    result: &crate::loop_result::VerificationResult,
+    mode: &str,
+    iteration: i64,
+) -> Option<(&'static str, Value)> {
+    let ev = &result.evidence;
+    let event_type = match ev.get("gate").and_then(Value::as_str)? {
+        "review" => "verification.review_completed",
+        "security" => "verification.security_completed",
+        _ => return None,
+    };
+    let mut data = json!({
+        "verifier": result.name,
+        "passed": result.passed,
+        "observed_passed": ev.get("observed_passed").cloned().unwrap_or(json!(result.passed)),
+        "mode": ev.get("mode").and_then(Value::as_str).unwrap_or(mode),
+        "iteration": iteration,
+    });
+    if ev.get("error").is_some_and(crate::loop_serialize::truthy) {
+        data["error"] = json!(true);
+    }
+    for key in ["verdict", "counts", "cost_usd"] {
+        if let Some(v) = ev.get(key) {
+            data[key] = v.clone();
+        }
+    }
+    if let Some(blocking) = ev.get("blocking").and_then(Value::as_array) {
+        data["blocking_rules"] = json!(blocking
+            .iter()
+            .filter_map(|h| h.get("rule").cloned())
+            .collect::<Vec<_>>());
+    }
+    Some((event_type, data))
+}
+
 /// `verification.external_skipped` for a vacuous pass (no worktree / no
 /// commands, or an iteration that never reached verification) and
 /// `external_completed` otherwise.
@@ -1084,6 +1125,10 @@ fn emit_verification_events(
                 .is_some_and(Vec::is_empty);
         if vacuous {
             ctx.emit("verification.external_skipped", Some(run_id), fields(None));
+            continue;
+        }
+        if let Some((event_type, data)) = gate_event(result, mode, iteration.iteration) {
+            ctx.emit(event_type, Some(run_id), fields(Some(data)));
             continue;
         }
         let mut data = json!({
@@ -1222,6 +1267,7 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
                 .into()
         }
         "project_config_error" => "The project's config could not be read.".into(),
+        "guard_violation" => "The agent changed git state it must not touch.".into(),
         "needs_clarification" => {
             "The issue needs clarification - the agent asked on the issue.".into()
         }
@@ -1250,7 +1296,11 @@ pub(crate) fn escalation_reason_text(reason: &str, stop_reason: Option<&str>) ->
 pub(crate) fn loop_side_escalation(reason: &str) -> bool {
     matches!(
         reason,
-        "run_incomplete" | "handoff_invalid" | "checkout_problem" | "project_config_error"
+        "run_incomplete"
+            | "handoff_invalid"
+            | "checkout_problem"
+            | "project_config_error"
+            | "guard_violation"
     )
 }
 
@@ -1538,6 +1588,8 @@ pub struct FinalizeDeps<'a> {
     pub approval_poll: Option<std::time::Duration>,
     /// A worktree-off checkout the loop could not keep safe; escalated first.
     pub checkout_problem: Option<String>,
+    /// Git state the agent changed and must not have (`agent_guard`).
+    pub guard_violation: Option<String>,
     /// A batch issue: the run posts one Slack report at the end, so only the
     /// approval request (which waits on a human) is sent from here.
     pub quiet: bool,
@@ -1789,6 +1841,9 @@ pub fn finalize_gated_issue(
     if let Some(problem) = &deps.checkout_problem {
         return escalate("checkout_problem", problem, None);
     }
+    if let Some(violation) = &deps.guard_violation {
+        return escalate("guard_violation", violation, None);
+    }
     let data = read_handoff(&handoff, issue_iid);
     let screens = mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid);
     let handoff_dir = handoff.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -1953,6 +2008,7 @@ pub fn finalize_gated_issue(
     };
     let checks: Vec<String> = ran.iter().map(|c| format!("- `{c}` \u{2705}")).collect();
     let summary = data.get("summary").and_then(Value::as_str).unwrap_or("");
+    let pre_review = crate::pre_review::pre_review_section(result);
     // Same shape the batch wrap-up reads from an agent-emitted fix event.
     let mr_url = match host {
         Some(h) => {
@@ -1965,6 +2021,9 @@ pub fn finalize_gated_issue(
                 &NoUploads,
                 &log,
             ) {
+                description = format!("{description}\n\n{section}");
+            }
+            if let Some(section) = &pre_review {
                 description = format!("{description}\n\n{section}");
             }
             match h
@@ -2004,6 +2063,9 @@ pub fn finalize_gated_issue(
                 &log,
             );
             if let Some(section) = section {
+                description = format!("{description}\n\n{section}");
+            }
+            if let Some(section) = &pre_review {
                 description = format!("{description}\n\n{section}");
             }
             api(
@@ -2243,6 +2305,66 @@ type PassOutput = (LoopResult, Vec<Option<f64>>, Vec<Option<Value>>);
 /// verification. `initial_feedback` goes to the first attempt;
 /// later attempts get the failed verification as feedback. `dirty_before`
 /// refuses every attempt (a worktree-off checkout holding the user's work).
+/// A pass whose agent tripped `agent_guard` ends with this stop reason, followed
+/// by what it changed; finalize escalates it as `guard_violation`.
+const GUARD_VIOLATION_PREFIX: &str = "guard_violation: ";
+
+/// The checkout the guard watches and whether the issue works in a worktree;
+/// `None` (no guard) for an unknown or issues-only project.
+fn guard_target(ctx: &RunCtx, alias: &str) -> Option<(PathBuf, bool)> {
+    let project = Config::load(&project_config_path(ctx))
+        .ok()?
+        .project(alias)
+        .ok()?;
+    let local = project
+        .get("local_path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())?;
+    Some((PathBuf::from(local), crate::config::use_worktree(&project)))
+}
+
+/// The `agent_review` call and the CLI it runs on: a test's fake (or a refusal
+/// when it has none) under `ctx.fakes`, else the read-only validate phase.
+fn review_invoker(
+    ctx: &RunCtx,
+    definition: &LoopDefinition,
+    alias: &str,
+    issue_iid: &str,
+) -> (crate::pre_review::ReviewInvoker, String) {
+    if let Some(fakes) = &ctx.fakes {
+        let invoker = fakes.review.clone().unwrap_or_else(|| {
+            Arc::new(|_: &str, _: Option<&str>, _: Option<f64>| {
+                Err(("review disabled under test fakes".to_string(), None))
+            })
+        });
+        return (invoker, "claude".into());
+    }
+    let (ctx, definition) = (ctx.clone(), definition.clone());
+    let (alias, issue_iid) = (alias.to_string(), issue_iid.to_string());
+    let invoker: crate::pre_review::ReviewInvoker = Arc::new(
+        move |prompt: &str, model: Option<&str>, budget: Option<f64>| {
+            if cfg!(test) {
+                return Err(("no real review call from a unit test".to_string(), None));
+            }
+            invoke_phase_with(
+                &ctx,
+                Phase::Validate,
+                model,
+                &definition,
+                prompt,
+                (&alias, &issue_iid),
+                budget,
+            )
+            .map(|out| crate::pre_review::ReviewReply {
+                text: out.text,
+                cost_usd: out.cost_usd,
+            })
+            .map_err(|e| (e.message, e.cost_usd))
+        },
+    );
+    (invoker, ai_cli_config::selected_cli())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_pass(
     ctx: &RunCtx,
@@ -2264,16 +2386,25 @@ fn run_pass(
     let raw_usages: Arc<Mutex<Vec<Option<Value>>>> = Arc::default();
     let handoff = gate.then(|| handoff_path(run_id, alias, issue_iid, &ctx.repo_root));
 
+    let max_cost = definition.stop_conditions.max_cost_usd;
     let mut issue = IssueContext::new(alias, issue_iid, timeout_seconds);
     issue.handoff_path = handoff.clone();
     issue.config_path = ctx.config_path.clone();
-
-    let max_cost = definition.stop_conditions.max_cost_usd;
+    issue.costs = Some(raw_costs.clone());
+    issue.issue_budget_usd = max_cost;
+    let (review_invoker, review_cli) = review_invoker(ctx, definition, alias, issue_iid);
+    issue.review_invoker = Some(review_invoker);
+    issue.cli = review_cli;
+    let guard_target = gate.then(|| guard_target(ctx, alias)).flatten();
+    let guard_hit: Arc<Mutex<Option<String>>> = Arc::default();
     let agent_fn: AgentFn = {
         let (raw_costs, raw_usages) = (raw_costs.clone(), raw_usages.clone());
         let (alias, issue_iid, run_id) =
             (alias.to_string(), issue_iid.to_string(), run_id.to_string());
         let handoff = handoff.clone();
+        let (guard_ctx, guard_hit) = (ctx.clone(), guard_hit.clone());
+        let iid_num: u64 = issue_iid.parse().unwrap_or(0);
+        let iid_num_i64: Option<i64> = issue_iid.parse().ok();
         Box::new(move |context| {
             if dirty_before {
                 return Err(AgentFailure {
@@ -2305,7 +2436,39 @@ fn run_pass(
                 timeout_seconds,
                 doctor: None,
             };
-            match invoker(&req) {
+            let before = guard_target
+                .as_ref()
+                .map(|(path, wt)| agent_guard::snapshot(path, iid_num, *wt));
+            let outcome = invoker(&req);
+            let cost_usd = match &outcome {
+                Ok(out) => out.cost_usd,
+                Err(e) => e.cost_usd,
+            };
+            if let (Some(before), Some((path, wt))) = (&before, &guard_target) {
+                let report =
+                    agent_guard::compare(before, &agent_guard::snapshot(path, iid_num, *wt));
+                if !report.warnings.is_empty() {
+                    guard_ctx.emit(
+                        "guard.warning",
+                        Some(&run_id),
+                        EventFields {
+                            issue_run_id: Some(format!("{run_id}_{alias}_{issue_iid}")),
+                            project: Some(alias.clone()),
+                            issue_iid: iid_num_i64,
+                            data: Some(json!({"warnings": report.warnings})),
+                        },
+                    );
+                }
+                if !report.violations.is_empty() {
+                    raw_costs.lock().unwrap().push(cost_usd);
+                    *guard_hit.lock().unwrap() = Some(report.violations.join("; "));
+                    return Err(AgentFailure {
+                        message: "guard_violation".into(),
+                        cost_usd,
+                    });
+                }
+            }
+            match outcome {
                 Ok(out) => {
                     raw_costs.lock().unwrap().push(out.cost_usd);
                     raw_usages.lock().unwrap().push(out.usage);
@@ -2374,9 +2537,13 @@ fn run_pass(
     if let Some(dir) = &ctx.events_dir {
         runtime = runtime.with_events_dir(dir.clone());
     }
-    let result = runtime
+    let mut result = runtime
         .start(definition, &issue_run_id, None)
         .map_err(|e| e.to_string())?;
+    if let Some(violation) = guard_hit.lock().unwrap().take() {
+        ctx.log(&format!("agent guard {alias} #{issue_iid}: {violation}"));
+        result.stop_reason = format!("{GUARD_VIOLATION_PREFIX}{violation}");
+    }
     let costs = raw_costs.lock().unwrap().clone();
     let usages = raw_usages.lock().unwrap().clone();
     Ok((result, costs, usages))
@@ -2496,6 +2663,10 @@ pub fn run_one_issue(
                 notifier,
                 gitlab_config_path: fakes.map(|f| f.gitlab_config_path.clone()),
                 checkout_problem: checkout_problem.take(),
+                guard_violation: result
+                    .stop_reason
+                    .strip_prefix(GUARD_VIOLATION_PREFIX)
+                    .map(str::to_owned),
                 quiet,
                 setup_report: setup_report.take(),
                 setup_fixed: setup_fixed_for_report,
@@ -2727,6 +2898,9 @@ fn after_setup_blocked(
     mode: &InvokeMode,
     pass: PassOutput,
 ) -> Result<(PassOutput, SetupOutcome), String> {
+    if pass.0.stop_reason.starts_with(GUARD_VIOLATION_PREFIX) {
+        return Ok((pass, SetupOutcome::default()));
+    }
     let Some(blocked) = issue.setup_blocked() else {
         return Ok((pass, SetupOutcome::default()));
     };
@@ -4658,6 +4832,7 @@ mod tests {
                         slack_sink.lock().unwrap().push(m.to_string())
                     }),
                     gitlab_config_path: d.path().join("gitlab.json"),
+                    review: None,
                 })),
                 memory_root: Some(d.path().join("memory")),
                 activity_file: d.path().join("agent-activity.json"),
@@ -4931,6 +5106,8 @@ mod tests {
         /// The main agent writes this handoff and leaves the listed
         /// untracked files in the worktree.
         MainLeaving(Value, Vec<&'static str>),
+        /// The main agent writes this handoff and pushes its branch itself.
+        MainPushing(Value),
         /// The doctor writes this result (none when `None`), a SETUP.md
         /// draft, and leaves the listed untracked files in the worktree.
         Doctor(Option<Value>, Vec<&'static str>),
@@ -5043,7 +5220,10 @@ mod tests {
                     .expect("an unscripted call");
                 assert_eq!(
                     req.doctor.is_some(),
-                    !matches!(step, Step::Main(_) | Step::MainLeaving(..)),
+                    !matches!(
+                        step,
+                        Step::Main(_) | Step::MainLeaving(..) | Step::MainPushing(_)
+                    ),
                     "call kind"
                 );
                 std::fs::create_dir_all(handoff.parent().unwrap()).unwrap();
@@ -5057,6 +5237,11 @@ mod tests {
                         for f in junk {
                             std::fs::write(wt.join(f), "uncommitted").unwrap();
                         }
+                        0.5
+                    }
+                    Step::MainPushing(h) => {
+                        std::fs::write(&handoff, h.to_string()).unwrap();
+                        sh(&wt, &["push", "-q", "origin", "loop/issue-7"]);
                         0.5
                     }
                     Step::Doctor(result, junk) => {
@@ -5101,6 +5286,16 @@ mod tests {
 
         fn run(&self, steps: Vec<Step>) -> IssueRun {
             self.run_with(steps, gitlab_definition())
+        }
+
+        fn set_review(&mut self, review: crate::pre_review::ReviewInvoker) {
+            let (notes, slack) = (self.t.notes.clone(), self.t.slack.clone());
+            self.t.ctx.fakes = Some(Arc::new(RunFakes {
+                gitlab: Box::new(RecordingGitlab(notes)),
+                notifier: Box::new(move |m: &str| slack.lock().unwrap().push(m.to_string())),
+                gitlab_config_path: self.t.d.path().join("gitlab.json"),
+                review: Some(review),
+            }));
         }
 
         /// `m` for a main-agent call, `d` for a doctor call, in order.
@@ -5308,6 +5503,7 @@ mod tests {
             gitlab: Box::new(Notes(Default::default())),
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: d.path().join("gitlab.json"),
+            review: None,
         }));
         let emit = |kind: &str, data: Value| {
             ctx.emit(
@@ -5374,6 +5570,7 @@ mod tests {
                 gitlab: Box::new(Notes(Default::default())),
                 notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
                 gitlab_config_path: d.path().join("gitlab.json"),
+                review: None,
             }));
             let emit = |kind: &str, data: Value| {
                 ctx.emit(
@@ -6171,6 +6368,7 @@ mod tests {
             gitlab: Box::new(NoUploads),
             notifier: Box::new(|_: &str| {}),
             gitlab_config_path: d.path().join("gitlab.json"),
+            review: None,
         }));
         assert!(!mr_round_applies(&ctx, &InvokeMode::Batch));
     }
@@ -6818,6 +7016,7 @@ mod tests {
             gitlab: Box::new(Notes(Default::default())),
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: gitlab,
+            review: None,
         }));
         for (kind, data) in [
             ("issue.started", json!({})),
@@ -6863,6 +7062,7 @@ mod tests {
             gitlab: Box::new(Notes(Default::default())),
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: d.path().join("gitlab.json"),
+            review: None,
         }));
         let count = || sent.lock().unwrap().len();
         send_run_report(&ctx, "R1", "Daily Issue Loop", &[], 1.0, None);
@@ -6899,6 +7099,7 @@ mod tests {
             gitlab: Box::new(Notes(Default::default())),
             notifier: Box::new(move |m: &str| sink.lock().unwrap().push(m.to_string())),
             gitlab_config_path: gitlab,
+            review: None,
         }));
         let emit = |kind: &str, alias: &str, data: Value| {
             ctx.emit(
@@ -7062,5 +7263,260 @@ mod tests {
         let inv: Invoker = Arc::new(|_| Ok(AgentOutput::default()));
         assert_eq!(main(&ctx, &[], inv.clone()), 2);
         assert_eq!(main(&ctx, &["r".into(), "harbor".into()], inv), 2);
+    }
+
+    #[test]
+    fn loop_definition_builds_with_review_and_security_gates() {
+        let def = gitlab_definition();
+        let mut issue = IssueContext::new("web", 7, 30.0);
+        issue.review_invoker = Some(Arc::new(|_: &str, _: Option<&str>, _: Option<f64>| {
+            Err(("unused".to_string(), None))
+        }));
+        let vs =
+            build_verifiers(&def.verifiers, None, Some(&issue), &def.verification.mode).unwrap();
+        let names: Vec<&str> = vs.iter().map(|v| v.name()).collect();
+        assert_eq!(names, ["project_commands", "agent_review", "security_scan"]);
+        assert!(vs[1].skip_after_failure() && vs[2].skip_after_failure());
+    }
+
+    #[test]
+    fn review_events_do_not_count_toward_gate_agreement() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let review = v(
+            "agent_review",
+            true,
+            "",
+            json!({"gate": "review", "verdict": "request_changes", "cost_usd": 0.2,
+                   "counts": {"blocker": 1, "major": 0, "minor": 0, "nit": 0},
+                   "observed_passed": false, "mode": "observe"}),
+        );
+        let security = v(
+            "security_scan",
+            true,
+            "",
+            json!({"gate": "security", "advisory": [], "observed_passed": true, "mode": "observe",
+                   "blocking": [{"rule": "aws_access_key", "path": "a", "line": 1}]}),
+        );
+        emit_verification_events(
+            &ctx,
+            "r",
+            "r_web_7",
+            "web",
+            "7",
+            "gate",
+            &iteration(vec![review, security]),
+        );
+        let evs = events::iter_events(ctx.events_dir.as_deref(), None, None);
+        let of = |t: &str| evs.iter().find(|e| e["event_type"] == t).cloned();
+        assert!(of("verification.external_completed").is_none(), "{evs:?}");
+        let review = of("verification.review_completed").expect("review event");
+        assert_eq!(review["data"]["observed_passed"], json!(false));
+        assert_eq!(review["data"]["verdict"], "request_changes");
+        assert_eq!(review["data"]["cost_usd"], json!(0.2));
+        let security = of("verification.security_completed").expect("security event");
+        assert_eq!(
+            security["data"]["blocking_rules"],
+            json!(["aws_access_key"])
+        );
+        assert_eq!(security["issue_iid"], json!(7));
+    }
+
+    fn finalize_fix_with(
+        handoff: Value,
+        extra: Vec<VerificationResult>,
+    ) -> Vec<(String, String, Value)> {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(&path, handoff.to_string()).unwrap();
+        let evidence = json!({"commands": [{"kind": "test", "command": "pnpm test", "passed": true, "source": "handoff"}]});
+        let mut results = vec![v("project_commands", true, "", evidence)];
+        results.extend(extra);
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Completed,
+            vec![iteration(results)],
+            "",
+        );
+        let notes = Notes(Default::default());
+        let opener = |_: &str, _: &str, _: &str, _: &str| {
+            (
+                true,
+                "remote:   https://gl.example/g/p/-/merge_requests/1489\n".to_string(),
+            )
+        };
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.unified_log = d.path().join("log");
+        let notifier = |_: &str| {};
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "mr_opened");
+        notes.0.into_inner().unwrap()
+    }
+
+    fn fix_handoff_json() -> Value {
+        json!({"action": "fix", "branch": "loop/issue-7", "target_branch": "main",
+               "title": "fix: #7 x", "summary": "S.", "description": "## What and why\n\n- Fix: f"})
+    }
+
+    #[test]
+    fn gated_fix_mr_description_has_pre_review_section() {
+        let review = v(
+            "agent_review",
+            true,
+            "",
+            json!({"gate": "review", "verdict": "comment", "summary": "fine overall",
+                   "findings": [{"severity": "minor", "category": "tests", "title": "missing edge test",
+                                 "path": "a.rb", "line": 3, "suggestion": "add one"}],
+                   "observed_passed": true, "mode": "observe"}),
+        );
+        let calls = finalize_fix_with(fix_handoff_json(), vec![review]);
+        let body = mr_description(&calls);
+        assert!(body.contains("## Pre-review (advisory)"), "{body}");
+        assert!(body.contains("- Review: comment — fine overall"), "{body}");
+        assert!(
+            body.contains("[minor/tests] a.rb:3 missing edge test — add one"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn observe_review_error_still_opens_the_mr() {
+        let review = v(
+            "agent_review",
+            true,
+            "review call failed: timed out\nmore",
+            json!({"gate": "review", "error": true, "observed_passed": false, "mode": "observe"}),
+        );
+        let calls = finalize_fix_with(fix_handoff_json(), vec![review]);
+        let body = mr_description(&calls);
+        assert!(
+            body.contains("- Review: could not run (review call failed: timed out)"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn guard_violation_escalates_loop_side_without_issue_comment() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("h.json");
+        std::fs::write(&path, fix_handoff_json().to_string()).unwrap();
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Failed,
+            vec![iteration(vec![])],
+            "agent_failed",
+        );
+        let notes = Notes(Default::default());
+        let opener = |_: &str, _: &str, _: &str, _: &str| -> (bool, String) {
+            panic!("a guard violation must never open an MR")
+        };
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.unified_log = d.path().join("log");
+        let slack = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| slack.lock().unwrap().push(m.to_string());
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                opener: Some(&opener),
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(path),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(d.path().join("none.json")),
+                require_approval: Some(false),
+                guard_violation: Some("loop branch feature#7-x was pushed to origin".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "escalated:guard_violation");
+        assert!(notes.0.into_inner().unwrap().is_empty(), "no GitLab call");
+        let evs = events::iter_events(ctx.events_dir.as_deref(), None, None);
+        let esc = evs
+            .iter()
+            .find(|e| e["event_type"] == "issue.escalated")
+            .expect("escalation event");
+        assert_eq!(esc["data"]["reason"], "guard_violation");
+        assert!(loop_side_escalation("guard_violation"));
+        let log = std::fs::read_to_string(d.path().join("log")).unwrap();
+        assert!(log.contains("feature#7-x"), "{log}");
+    }
+
+    #[test]
+    fn an_agent_that_pushes_its_branch_is_escalated_as_guard_violation() {
+        let h = Doctored::new();
+        let run = h.run(vec![Step::MainPushing(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("escalated:guard_violation"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(h.kinds(), "m", "the agent is not re-run");
+        assert!(h.notes().is_empty(), "nothing posted on the issue");
+    }
+
+    #[test]
+    fn a_push_is_not_lost_behind_a_setup_blocked_handoff() {
+        let h = Doctored::new();
+        let run = h.run(vec![Step::MainPushing(blocked(
+            "cannot load generated module",
+        ))]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("escalated:guard_violation"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(h.kinds(), "m", "no setup doctor after a guard violation");
+    }
+
+    #[test]
+    fn review_cost_counts_toward_issue_cost() {
+        let mut h = Doctored::new();
+        let calls = Arc::new(Mutex::new(0));
+        let c = calls.clone();
+        h.set_review(Arc::new(move |_: &str, _: Option<&str>, _: Option<f64>| {
+            *c.lock().unwrap() += 1;
+            Ok(crate::pre_review::ReviewReply {
+                text: json!({"summary": "s", "verdict": "approve", "findings": []}).to_string(),
+                cost_usd: Some(0.25),
+            })
+        }));
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(*calls.lock().unwrap(), 1);
+        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(0.75));
     }
 }

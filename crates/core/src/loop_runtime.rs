@@ -8,7 +8,7 @@ use crate::budget::{BudgetController, BudgetStatus, StopConditions as BudgetStop
 use crate::events::{self, EventFields};
 use crate::loop_definition::LoopDefinition;
 use crate::loop_progress::ProgressDetector;
-use crate::loop_result::{IterationResult, LoopResult};
+use crate::loop_result::{IterationResult, LoopResult, VerificationResult};
 use crate::loop_state::{transition, InvalidTransition, LoopState};
 use crate::loop_verifiers::Verifier;
 use crate::policy::{PolicyEngine, PolicyViolationError};
@@ -236,7 +236,23 @@ impl LoopRuntime {
                     definition,
                     previous: iterations_prev(&iterations, iteration_number),
                 };
-                verification_results = self.verifiers.iter().map(|v| v.verify(&ctx)).collect();
+                for v in &self.verifiers {
+                    let earlier_failed = verification_results
+                        .iter()
+                        .any(|r: &VerificationResult| !r.passed);
+                    verification_results.push(if earlier_failed && v.skip_after_failure() {
+                        VerificationResult {
+                            name: v.name().to_string(),
+                            passed: true,
+                            exit_code: None,
+                            duration_ms: 0,
+                            output: "skipped: an earlier check failed".into(),
+                            evidence: json!({"vacuous": true, "skipped": true}),
+                        }
+                    } else {
+                        v.verify(&ctx)
+                    });
+                }
                 all_passed = verification_results.iter().all(|r| r.passed);
                 self.emit(
                     if all_passed {
@@ -667,5 +683,51 @@ mod tests {
             .start(&definition(10, 3, &[], &[]), "run_ctx", None)
             .unwrap();
         assert_eq!(*seen.lock().unwrap(), [(1, None), (2, Some(1))]);
+    }
+
+    struct SkipsAfterFailure(Fake);
+    impl Verifier for SkipsAfterFailure {
+        fn verify(&self, c: &LoopContext<'_>) -> VerificationResult {
+            self.0.verify(c)
+        }
+        fn skip_after_failure(&self) -> bool {
+            true
+        }
+    }
+
+    fn two_verifiers(first: &Fake, second: &Fake) -> LoopRuntime {
+        LoopRuntime::new(
+            ok_agent(),
+            vec![
+                Box::new(first.clone()),
+                Box::new(SkipsAfterFailure(second.clone())),
+            ],
+        )
+        .with_events(Box::new(NoEvents))
+    }
+
+    #[test]
+    fn verifier_skipped_after_earlier_failure() {
+        let first = Fake::new(vec![vr("tests", false)]);
+        let second = Fake::new(vec![vr("review", true)]);
+        let r = two_verifiers(&first, &second)
+            .start(&definition(10, 1, &[], &[]), "run_skip", None)
+            .unwrap();
+        let skipped = &r.iterations[0].verification_results[1];
+        assert_eq!(second.calls(), 0);
+        assert!(skipped.passed);
+        assert_eq!(skipped.exit_code, None);
+        assert_eq!(skipped.output, "skipped: an earlier check failed");
+        assert_eq!(skipped.evidence, json!({"vacuous": true, "skipped": true}));
+    }
+
+    #[test]
+    fn verifier_runs_when_earlier_passed() {
+        let first = Fake::new(vec![vr("tests", true)]);
+        let second = Fake::new(vec![vr("review", true)]);
+        two_verifiers(&first, &second)
+            .start(&definition(10, 1, &[], &[]), "run_run", None)
+            .unwrap();
+        assert_eq!(second.calls(), 1);
     }
 }

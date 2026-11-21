@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- GitLab issue loop: before it opens a merge request, the loop now runs a read-only AI review of the fix's diff and a secret scan of the lines it adds. Both are advisory for now: their findings go into a "Pre-review" section of the MR description and onto Harness → Gates ("Review would block", "Secret scan would block"), and never stop the MR. The review runs only on Claude Code and counts toward the issue's budget. In gate mode the loop also checks git around each agent session: a pushed issue branch or a changed remote list escalates the issue as `guard_violation` (Slack and the loop's log only, counted under Escalated on Harness → Gates); a changed git hook or `core.hooksPath` is only logged as a warning.
 - Creator → Videos has a search field that filters the videos as you type: by name, fuzzily ("rd trp" finds "Road trip", ignoring case and accents), or by pasting part of a video's source link.
 
 ### Changed
