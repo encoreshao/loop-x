@@ -88,6 +88,22 @@ pub fn with_project_instructions(prompt: String, instructions: Option<&str>) -> 
     )
 }
 
+/// Names the MCP servers attached to this call, so the screenshot steps know
+/// whether path P is available. Nothing is appended without servers.
+pub fn with_mcp_servers(prompt: String, servers: &[String]) -> String {
+    if servers.is_empty() {
+        return prompt;
+    }
+    let names: Vec<String> = servers
+        .iter()
+        .map(|s| match s.as_str() {
+            "playwright" => "playwright (fallback screenshot path P)".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    format!("{prompt}\n\nMCP servers in this run: {}.", names.join(", "))
+}
+
 /// [`with_handoff`] for the note `LOOPX_HANDOFF_NOTE` points at, if any.
 pub fn with_env_handoff(prompt: String) -> String {
     with_handoff(prompt, std::env::var("LOOPX_HANDOFF_NOTE").ok().as_deref())

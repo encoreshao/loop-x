@@ -1,0 +1,7 @@
+{
+  "demo": {"ok": false, "at": "2026-01-15T08:10:00Z", "tools": [], "message": "timed out after 30s waiting for the server"},
+  "playwright": {"ok": true, "at": "2026-01-15T08:00:00Z", "message": "14 tools",
+    "tools": ["browser_click", "browser_close", "browser_console_messages", "browser_drag", "browser_fill_form",
+              "browser_handle_dialog", "browser_hover", "browser_navigate", "browser_navigate_back", "browser_press_key",
+              "browser_resize", "browser_snapshot", "browser_take_screenshot", "browser_wait_for"]}
+}

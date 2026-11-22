@@ -2170,6 +2170,20 @@ svg.brand-logo[fill="currentColor"] { color: #181717; }
 .account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; flex: 0 1 auto; }
 .account-actions .btn[class] { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
 .account-actions .btn .icon { font-size: 16px; }
+/* Connectors > MCP servers: one card per registered server. */
+.mcp-server { display: flex; flex-direction: column; gap: 0.75rem; }
+.mcp-server-rows { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
+.mcp-server-rows .pill-row { margin-top: 0; align-items: center; gap: 0.35rem; }
+.mcp-server-rows .pill { white-space: normal; overflow-wrap: anywhere; }
+.mcp-server-rows code { font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 6px; background: var(--md-surface-container-high); color: var(--md-on-surface-variant); overflow-wrap: anywhere; }
+.mcp-label { font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.mcp-hint { margin: 0; font-size: 0.8rem; color: var(--md-on-surface-variant); }
+.mcp-install { margin: 0; padding: 0.55rem 0.75rem; border-radius: 10px; background: var(--md-surface-container-high); overflow-x: auto; }
+.mcp-server-rows .mcp-install code { padding: 0; background: none; font-size: 0.8rem; color: var(--md-on-surface); user-select: all; }
+.mcp-server-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; padding-top: 0.75rem; border-top: 1px solid var(--md-outline-variant); }
+.mcp-server-actions form { margin: 0; }
+.mcp-server-actions .btn { height: 32px; padding: 0 0.9rem; font-size: 0.8rem; }
+.mcp-server-actions .btn .icon { font-size: 16px; }
 /* Connector gallery cards. Tiles (.connector-tile), the search box and the
    form's brand header (.connector-hero) read the --cg-* tokens below, which
    derive from the theme accent (--md-nav-*), so picking another accent on

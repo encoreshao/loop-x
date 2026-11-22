@@ -124,6 +124,15 @@ pub struct UiState {
     /// (`None` = the real one). Tests and the golden harness inject fakes.
     pub connector_store: Option<Arc<dyn loopx_core::connectors::secrets::SecretStore>>,
     pub connector_http: Option<Arc<dyn loopx_core::connectors::HttpClient>>,
+    /// Connectors -> MCP servers: the Keychain store for their secrets (`None` = the
+    /// real `loop-engineering.mcp` store), where global npm installs are looked for
+    /// (`None` = the real Node managers and login-shell `PATH`), this Mac's Chrome
+    /// (`None` = `find_chrome()`), and the Test button's deadline. `explicit`
+    /// pins all of them, so tests and the golden harness never reach the machine.
+    pub mcp_store: Option<Arc<dyn loopx_core::keychain::SecretStore>>,
+    pub mcp_toolchains: Option<(loopx_core::node_env::Toolchains, String)>,
+    pub mcp_chrome: Option<Option<PathBuf>>,
+    pub mcp_probe_deadline: std::time::Duration,
     /// Does `POST /connectors/linkedin/connect` really open the sign-in window / does
     /// `POST /loops/<name>/run-now` really start `run-loop-now.sh`?
     pub spawn_processes: bool,
@@ -207,6 +216,10 @@ impl UiState {
             claude_snapshot: None,
             connector_store: None,
             connector_http: None,
+            mcp_store: None,
+            mcp_toolchains: None,
+            mcp_chrome: None,
+            mcp_probe_deadline: loopx_core::mcp_probe::DEADLINE,
             spawn_processes: true,
             mr_feedback_deps: None,
             profile_agent: None,
@@ -245,6 +258,18 @@ impl UiState {
             }),
             connector_store: None,
             connector_http: None,
+            mcp_store: Some(Arc::new(loopx_core::keychain::MemoryStore::new(
+                loopx_core::mcp_registry::SERVICE_MCP,
+            ))),
+            mcp_toolchains: Some((
+                loopx_core::node_env::Toolchains {
+                    home: user_home.to_path_buf(),
+                    nvm_dir: None,
+                },
+                String::new(),
+            )),
+            mcp_chrome: Some(None),
+            mcp_probe_deadline: std::time::Duration::from_secs(3),
             spawn_processes: false,
             mr_feedback_deps: None,
             profile_agent: None,

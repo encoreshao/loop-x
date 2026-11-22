@@ -1700,6 +1700,99 @@
    }
   },
   {
+   "id": "hub-connectors-mcp",
+   "path": "/connectors?view=mcp",
+   "overlay": "mcp-servers",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-connectors-mcp.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-connectors-mcp.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-connectors-mcp.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-connectors-mcp.html"
+    }
+   }
+  },
+  {
+   "id": "hub-connectors-mcp-not-installed",
+   "path": "/connectors?view=mcp",
+   "overlay": "mcp-not-installed",
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-connectors-mcp-not-installed.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-connectors-mcp-not-installed.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-connectors-mcp-not-installed.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-connectors-mcp-not-installed.html"
+    }
+   }
+  },
+  {
+   "id": "hub-connectors-mcp-empty",
+   "path": "/connectors?view=mcp",
+   "overlay": null,
+   "results": {
+    "en": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "en/hub-connectors-mcp-empty.html"
+    },
+    "ja": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "ja/hub-connectors-mcp-empty.html"
+    },
+    "zh": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "zh/hub-connectors-mcp-empty.html"
+    },
+    "fr": {
+     "status": 200,
+     "content_type": "text/html; charset=utf-8",
+     "location": null,
+     "file": "fr/hub-connectors-mcp-empty.html"
+    }
+   }
+  },
+  {
    "id": "loops-catalog",
    "path": "/loops",
    "overlay": null,

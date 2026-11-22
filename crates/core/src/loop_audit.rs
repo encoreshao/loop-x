@@ -346,6 +346,24 @@ pub fn audit_with(
         ));
     }
 
+    if !definition.mcp_servers.is_empty() {
+        match definition.agent.provider.as_deref() {
+            None | Some("claude") => checks.push(check(
+                "mcp_servers",
+                Pass,
+                format!(
+                    "declares MCP servers: {}",
+                    definition.mcp_servers.join(", ")
+                ),
+            )),
+            Some(other) => checks.push(check(
+                "mcp_servers",
+                Warn,
+                format!("MCP servers attach only to Claude runs; {other} gets none"),
+            )),
+        }
+    }
+
     if definition.observability_enabled {
         checks.push(check("observability", Pass, "observability_enabled=True"));
     } else {
@@ -593,6 +611,35 @@ mod tests {
             r.check("credential_boundary").unwrap().detail,
             "permissions.credentials_read=True - agent must never read credentials"
         );
+    }
+
+    #[test]
+    fn audit_lists_mcp_servers_without_changing_the_score() {
+        assert!(audit(&compliant()).check("mcp_servers").is_none());
+        let mut v = compliant();
+        v["mcp_servers"] = json!(["playwright", "sentry"]);
+        let r = audit(&v);
+        let c = r.check("mcp_servers").unwrap();
+        assert_eq!(c.status, CheckStatus::Pass);
+        assert_eq!(c.detail, "declares MCP servers: playwright, sentry");
+        assert_eq!(r.score, Some(100.0));
+        v["agent"] = json!({"provider": "claude"});
+        assert_eq!(status(&audit(&v), "mcp_servers"), CheckStatus::Pass);
+    }
+
+    #[test]
+    fn audit_warns_for_a_non_claude_provider() {
+        let mut v = compliant();
+        v["mcp_servers"] = json!(["playwright"]);
+        v["agent"] = json!({"provider": "codex"});
+        let r = audit(&v);
+        let c = r.check("mcp_servers").unwrap();
+        assert_eq!(c.status, CheckStatus::Warn);
+        assert_eq!(
+            c.detail,
+            "MCP servers attach only to Claude runs; codex gets none"
+        );
+        assert_eq!(r.score, Some(100.0));
     }
 
     #[test]

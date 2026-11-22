@@ -1033,6 +1033,7 @@ fn render_page(ctx: &UiCtx, view: Option<&str>, p: &AddParams, flash: Option<&st
     let current = hub::resolve_view(&hub_page, view);
     let body = match current.key.as_str() {
         "add" => add_body(ctx, p),
+        "mcp" => super::connectors_mcp::body(ctx, flash, flash_ok),
         _ => accounts_body(ctx, flash, flash_ok),
     };
     render_hub_page(ctx, &hub_page, view, &body, &default_badge(ctx))

@@ -115,7 +115,11 @@ pub fn hubs() -> Vec<Hub> {
             "/connectors",
             "Connectors",
             "_SECTION_ICON_CONNECTORS",
-            vec![v("accounts", "Accounts"), v("add", "Add")],
+            vec![
+                v("accounts", "Accounts"),
+                v("add", "Add"),
+                v("mcp", "MCP servers"),
+            ],
         ),
         hub(
             "settings",

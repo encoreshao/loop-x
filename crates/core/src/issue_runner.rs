@@ -18,6 +18,7 @@ use crate::loop_runtime::{AgentFailure, AgentFn, AgentSuccess, LoopRuntime};
 use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::{build_verifiers, IssueContext};
+use crate::mcp_run::McpAttach;
 use crate::runner_util::{
     append_unified_log, could_not_start, emit_best_effort, failed_call_cost, head,
     notify_slack_best_effort, parse_envelope, resolved_program, tail, unified_log_path,
@@ -181,6 +182,7 @@ fn spec_state_denied() -> Vec<String> {
 pub fn disallowed_tools(exe: &str, gate: bool, offline: bool) -> String {
     let mut parts = vec![DISALLOWED_TOOLS.to_string()];
     parts.extend(spec_state_denied());
+    parts.extend(crate::mcp_registry::edit_denied(&crate::config::home_dir()));
     if gate {
         parts.push(format!(
             "Bash(loopx mr open*) Bash({exe} mr open*) Bash(loopx mr push*) Bash({exe} mr push*) {}",
@@ -208,6 +210,36 @@ pub fn cli_command(
     offline: bool,
     extra_dirs: &[String],
     model: Option<&str>,
+) -> Vec<String> {
+    cli_command_with_mcp(
+        ai_cli,
+        prompt,
+        repo_root,
+        worktree_root,
+        exe,
+        gate,
+        max_budget_usd,
+        offline,
+        extra_dirs,
+        model,
+        None,
+    )
+}
+
+/// [`cli_command`] with MCP servers attached; only a claude argv uses them.
+#[allow(clippy::too_many_arguments)]
+pub fn cli_command_with_mcp(
+    ai_cli: &str,
+    prompt: &str,
+    repo_root: &str,
+    worktree_root: &str,
+    exe: &str,
+    gate: bool,
+    max_budget_usd: Option<f64>,
+    offline: bool,
+    extra_dirs: &[String],
+    model: Option<&str>,
+    mcp: Option<&McpAttach>,
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
     let mut roots = vec![s(repo_root), s(worktree_root)];
@@ -247,6 +279,7 @@ pub fn cli_command(
         disallowed_tools(exe, gate, offline),
         max_budget_usd,
         model,
+        mcp,
     )
 }
 
@@ -254,10 +287,11 @@ pub fn cli_command(
 fn claude_command(
     prompt: &str,
     roots: &[String],
-    allowed: String,
-    disallowed: String,
+    mut allowed: String,
+    mut disallowed: String,
     max_budget_usd: Option<f64>,
     model: Option<&str>,
+    mcp: Option<&McpAttach>,
 ) -> Vec<String> {
     let s = |v: &str| v.to_string();
     let mut cmd = vec![s("claude"), s("-p")];
@@ -267,6 +301,21 @@ fn claude_command(
     // The Claude in Chrome integration, only for a run that is allowed its tools.
     if allowed.contains("mcp__claude-in-chrome__") {
         cmd.push(s("--chrome"));
+    }
+    if let Some(m) = mcp {
+        for rule in &m.allowed {
+            allowed.push(' ');
+            allowed.push_str(rule);
+        }
+        for rule in &m.denied {
+            disallowed.push(' ');
+            disallowed.push_str(rule);
+        }
+        cmd.extend([
+            s("--strict-mcp-config"),
+            s("--mcp-config"),
+            m.config.display().to_string(),
+        ]);
     }
     cmd.extend([
         s("--permission-mode"),
@@ -339,6 +388,7 @@ pub fn phase_disallowed_tools(repo_root: &str, exe: &str, phase: Phase) -> Strin
     );
     parts.push(format!("Bash({exe}*)"));
     parts.extend(spec_state_denied());
+    parts.extend(crate::mcp_registry::edit_denied(&crate::config::home_dir()));
     for dir in ["instructions", "loops", "templates", "config", ".claude"] {
         parts.push(format!("Edit({repo_root}/{dir}/**)"));
         parts.push(format!("Write({repo_root}/{dir}/**)"));
@@ -388,6 +438,7 @@ pub fn phase_cli_command(
         phase_disallowed_tools(repo_root, exe, phase),
         max_budget_usd,
         model,
+        None,
     )
 }
 
@@ -413,6 +464,17 @@ pub struct RunCtx {
     pub activity_file: PathBuf,
     /// A claude call with no hook activity for this long is stopped.
     pub stall_after: std::time::Duration,
+    /// Where MCP servers resolve from; `None` is the per-machine registry and Keychain.
+    pub mcp_env: Option<McpEnvHook>,
+}
+
+#[derive(Clone)]
+pub struct McpEnvHook(pub Arc<dyn Fn() -> crate::mcp_run::Env + Send + Sync>);
+
+impl std::fmt::Debug for McpEnvHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("McpEnvHook")
+    }
 }
 
 pub struct RunFakes {
@@ -453,6 +515,7 @@ impl RunCtx {
             memory_root: None,
             activity_file,
             stall_after: crate::agent_activity::STALL_AFTER,
+            mcp_env: None,
         }
     }
 
@@ -521,6 +584,8 @@ pub struct InvokeRequest {
     pub timeout_seconds: f64,
     /// `Some` runs the setup doctor for this issue instead of the main agent.
     pub doctor: Option<DoctorRequest>,
+    /// The loop definition's `mcp_servers`, attached to the main fix call only.
+    pub mcp_servers: Vec<String>,
 }
 
 /// What the setup doctor session is told about the blocked issue.
@@ -607,17 +672,102 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         text = t;
         env.extend(e);
     }
-    invoke_cli_with_prompt(
+    let ai_cli = ai_cli_config::selected_cli();
+    with_mcp(
         ctx,
-        &text,
-        req.timeout_seconds,
-        Some((&req.alias, &req.issue_iid)),
-        &env,
-        gate,
-        req.max_budget_usd,
-        offline,
-        None,
+        &req.mode,
+        (&req.alias, &req.issue_iid),
+        req.run_id.as_deref(),
+        &ai_cli,
+        &req.mcp_servers,
+        |mcp| {
+            let text = match mcp {
+                Some(m) => prompt::with_mcp_servers(text, &m.servers),
+                None => text,
+            };
+            invoke_cli_with_prompt(
+                ctx,
+                &text,
+                req.timeout_seconds,
+                Some((&req.alias, &req.issue_iid)),
+                &env,
+                gate,
+                req.max_budget_usd,
+                offline,
+                None,
+                mcp,
+            )
+        },
     )
+}
+
+/// Runs `call` with the declared MCP servers attached (Claude, online runs
+/// only); the run config is removed when `call` returns or unwinds.
+fn with_mcp<T>(
+    ctx: &RunCtx,
+    mode: &InvokeMode,
+    issue: (&str, &str),
+    run_id: Option<&str>,
+    ai_cli: &str,
+    declared: &[String],
+    call: impl FnOnce(Option<&McpAttach>) -> T,
+) -> T {
+    if declared.is_empty() || matches!(mode, InvokeMode::IssueFile(_)) {
+        return call(None);
+    }
+    let skip_all = |reason: &'static str| -> Vec<crate::mcp_run::Skip> {
+        declared
+            .iter()
+            .map(|n| crate::mcp_run::Skip {
+                name: n.clone(),
+                reason,
+            })
+            .collect()
+    };
+    let result = if ai_cli == "claude" {
+        let env = match &ctx.mcp_env {
+            Some(hook) => (hook.0)(),
+            None => crate::mcp_run::Env::real(&crate::config::home_dir()),
+        };
+        let screens = ctx.repo_root.join("outputs/screens");
+        let _ = std::fs::create_dir_all(&screens);
+        crate::mcp_run::attach(declared, &env, Some(&screens))
+    } else {
+        Err(skip_all("cli_unsupported"))
+    };
+    if let Err(skips) = &result {
+        if skips.iter().all(|s| s.reason == "not_registered") {
+            return call(None);
+        }
+    }
+    let (attached, skipped) = match &result {
+        Ok(Some(a)) => (a.servers.clone(), a.skipped.clone()),
+        Ok(None) => (Vec::new(), Vec::new()),
+        Err(skips) => (Vec::new(), skips.clone()),
+    };
+    ctx.log(&format!(
+        "{} #{}: {}",
+        issue.0,
+        issue.1,
+        crate::mcp_run::summary(&attached, &skipped)
+    ));
+    let issue_run_id = run_id.map(|r| format!("{r}_{}_{}", issue.0, issue.1));
+    let skipped_json: Vec<Value> = skipped
+        .iter()
+        .map(|s| json!({"name": s.name, "reason": s.reason}))
+        .collect();
+    ctx.emit(
+        "mcp.attached",
+        run_id,
+        EventFields {
+            issue_run_id,
+            project: Some(issue.0.to_string()),
+            issue_iid: issue.1.parse().ok(),
+            data: Some(json!({"servers": attached, "skipped": skipped_json})),
+        },
+    );
+    let attach = result.ok().flatten();
+    call(attach.as_ref())
 }
 
 /// The setup doctor session for a `setup_blocked` issue: its own prompt and
@@ -726,6 +876,7 @@ pub fn invoke_batch_end_of_run(
         None,
         false,
         None,
+        None,
     )
 }
 
@@ -798,6 +949,7 @@ fn invoke_cli_with_prompt(
     max_budget_usd: Option<f64>,
     offline: bool,
     model: Option<&str>,
+    mcp: Option<&McpAttach>,
 ) -> Result<AgentOutput, AgentError> {
     let worktree_root = worktree_root()?;
     let ai_cli = ai_cli_config::selected_cli();
@@ -810,7 +962,7 @@ fn invoke_cli_with_prompt(
     let extra_dirs = issue
         .map(|(alias, _)| in_place_dirs(&project_config_path(ctx), alias))
         .unwrap_or_default();
-    let argv = cli_command(
+    let argv = cli_command_with_mcp(
         &ai_cli,
         prompt_text,
         &repo_root,
@@ -821,8 +973,9 @@ fn invoke_cli_with_prompt(
         offline,
         &extra_dirs,
         model,
+        mcp,
     );
-    run_cli(
+    run_cli_with_mcp(
         ctx,
         &ai_cli,
         &argv,
@@ -830,6 +983,7 @@ fn invoke_cli_with_prompt(
         issue,
         env,
         max_budget_usd,
+        mcp,
     )
 }
 
@@ -844,7 +998,37 @@ fn run_cli(
     env: &[(String, String)],
     max_budget_usd: Option<f64>,
 ) -> Result<AgentOutput, AgentError> {
+    run_cli_with_mcp(
+        ctx,
+        ai_cli,
+        argv,
+        timeout_seconds,
+        issue,
+        env,
+        max_budget_usd,
+        None,
+    )
+}
+
+/// [`run_cli`] for a call with MCP servers attached: the claude process gets
+/// `MCP_TIMEOUT`, and every resolved secret is redacted from what is logged.
+#[allow(clippy::too_many_arguments)]
+fn run_cli_with_mcp(
+    ctx: &RunCtx,
+    ai_cli: &str,
+    argv: &[String],
+    timeout_seconds: f64,
+    issue: Option<(&str, &str)>,
+    env: &[(String, String)],
+    max_budget_usd: Option<f64>,
+    mcp: Option<&McpAttach>,
+) -> Result<AgentOutput, AgentError> {
+    let redact = |text: &str| match mcp {
+        Some(m) => m.redact(text),
+        None => text.to_string(),
+    };
     let report_failure = |reason: &str, detail: &str, event_reason: Option<&str>| {
+        let detail = &redact(detail);
         let label = issue
             .map(|(a, i)| format!(" for {a} #{i}"))
             .unwrap_or_default();
@@ -903,6 +1087,12 @@ fn run_cli(
     }
     for (k, v) in env {
         command.env(k, v);
+    }
+    if mcp.is_some() {
+        command.env(
+            crate::mcp_run::MCP_TIMEOUT_ENV.0,
+            crate::mcp_run::MCP_TIMEOUT_ENV.1,
+        );
     }
     let mut path = std::env::var("PATH").unwrap_or_default();
     // `node`/`npm`/... resolve to the Node each project needs, not whichever
@@ -1018,12 +1208,12 @@ fn run_cli(
         (out.stdout.clone(), None, None)
     };
 
-    println!("{result_text}");
-    ctx.log(&result_text);
+    println!("{}", redact(&result_text));
+    ctx.log(&redact(&result_text));
     // The CLI's stderr (warnings, partial errors on an otherwise-zero exit)
     // would otherwise vanish, since the run captures it.
     if !out.stderr.is_empty() {
-        ctx.log(&format!("{ai_cli} stderr:\n{}", out.stderr));
+        ctx.log(&format!("{ai_cli} stderr:\n{}", redact(&out.stderr)));
     }
     Ok(AgentOutput {
         cost_usd,
@@ -2673,6 +2863,7 @@ fn run_pass(
         let (guard_ctx, guard_hit) = (ctx.clone(), guard_hit.clone());
         let iid_num: u64 = issue_iid.parse().unwrap_or(0);
         let iid_num_i64: Option<i64> = issue_iid.parse().ok();
+        let mcp_servers = definition.mcp_servers.clone();
         Box::new(move |context| {
             if dirty_before {
                 return Err(AgentFailure {
@@ -2703,6 +2894,7 @@ fn run_pass(
                 max_budget_usd: cap,
                 timeout_seconds,
                 doctor: None,
+                mcp_servers: mcp_servers.clone(),
             };
             let before = guard_target
                 .as_ref()
@@ -3365,6 +3557,7 @@ fn run_doctor(
         run_id: Some(issue.run_id.to_string()),
         max_budget_usd: Some(config.max_cost_usd),
         timeout_seconds: config.max_runtime_minutes * 60.0,
+        mcp_servers: Vec::new(),
         doctor: Some(DoctorRequest {
             work_dir: work_dir.display().to_string(),
             blocked: blocked.clone(),
@@ -4330,6 +4523,7 @@ mod tests {
             memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
+            mcp_env: None,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -4422,6 +4616,7 @@ mod tests {
             memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
+            mcp_env: None,
         };
         let seen: Arc<Mutex<Vec<String>>> = Default::default();
         let chat: Box<dyn crate::connectors::Connector> = Box::new(AllowingChat(
@@ -4494,6 +4689,7 @@ mod tests {
             memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
+            mcp_env: None,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -4566,6 +4762,7 @@ mod tests {
             memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
+            mcp_env: None,
         };
         let slack = std::sync::Mutex::new(Vec::new());
         let notifier = |m: &str| slack.lock().unwrap().push(m.to_string());
@@ -4821,6 +5018,7 @@ mod tests {
             memory_root: Some(d.path().join("memory")),
             activity_file: d.path().join("agent-activity.json"),
             stall_after: crate::agent_activity::STALL_AFTER,
+            mcp_env: None,
         };
         let notifier = |_: &str| {};
         let outcome = finalize_gated_issue(
@@ -5152,6 +5350,7 @@ mod tests {
                 memory_root: Some(d.path().join("memory")),
                 activity_file: d.path().join("agent-activity.json"),
                 stall_after: crate::agent_activity::STALL_AFTER,
+                mcp_env: None,
             };
             let me = Self {
                 d,
@@ -8469,5 +8668,556 @@ mod tests {
         assert_eq!(h.feedback(0), "");
         let log = std::fs::read_to_string(&h.t.ctx.unified_log).unwrap_or_default();
         assert_eq!(log.matches("no longer asked for").count(), 1, "{log}");
+    }
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use super::*;
+    use crate::keychain::SecretStore;
+    use crate::mcp_registry::PLAYWRIGHT_DENY;
+    use crate::mcp_run::tests::Fixture;
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn flag<'a>(argv: &'a [String], name: &str) -> &'a str {
+        let i = argv.iter().position(|a| a == name).unwrap();
+        &argv[i + 1]
+    }
+
+    fn mcp_ctx(dir: &Path, f: &Arc<Fixture>) -> RunCtx {
+        let mut ctx = RunCtx::new(dir.to_path_buf());
+        ctx.exe = "/opt/loopx/bin/loopx".into();
+        ctx.activity_file = dir.join("outputs/agent-activity.json");
+        ctx.events_dir = Some(dir.join("events"));
+        let f = f.clone();
+        ctx.mcp_env = Some(McpEnvHook(Arc::new(move || f.env())));
+        ctx
+    }
+
+    fn events(ctx: &RunCtx) -> Vec<Value> {
+        let Ok(entries) = std::fs::read_dir(ctx.events_dir.as_ref().unwrap()) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .flat_map(|e| crate::events::read_events_file(&e.path()))
+            .collect()
+    }
+
+    fn attach(f: &Fixture, declared: &[&str]) -> crate::mcp_run::McpAttach {
+        crate::mcp_run::attach(&names(declared), &f.env(), None)
+            .unwrap()
+            .unwrap()
+    }
+
+    fn argv(
+        ai_cli: &str,
+        gate: bool,
+        offline: bool,
+        mcp: Option<&crate::mcp_run::McpAttach>,
+    ) -> Vec<String> {
+        cli_command_with_mcp(
+            ai_cli,
+            "P",
+            "/r",
+            "/wt",
+            "/bin/loopx",
+            gate,
+            Some(1.0),
+            offline,
+            &[],
+            None,
+            mcp,
+        )
+    }
+
+    #[test]
+    fn cli_command_is_unchanged_without_mcp() {
+        let f = Fixture::new();
+        let a = attach(&f, &["playwright"]);
+        for (gate, offline) in [(false, false), (true, false), (false, true), (true, true)] {
+            let plain = cli_command(
+                "claude",
+                "P",
+                "/r",
+                "/wt",
+                "/bin/loopx",
+                gate,
+                Some(1.0),
+                offline,
+                &[],
+                None,
+            );
+            assert_eq!(argv("claude", gate, offline, None), plain);
+            assert!(!plain.iter().any(|x| x.contains("mcp-config")), "{plain:?}");
+            // Taking the attach's own parts back out gives the plain argv.
+            let mut with = argv("claude", gate, offline, Some(&a));
+            let i = with
+                .iter()
+                .position(|x| x == "--strict-mcp-config")
+                .unwrap();
+            with.drain(i..i + 3);
+            for list in ["--allowedTools", "--disallowedTools"] {
+                let j = with.iter().position(|x| x == list).unwrap();
+                let extra = if list == "--allowedTools" {
+                    &a.allowed
+                } else {
+                    &a.denied
+                };
+                for rule in extra {
+                    with[j + 1] = with[j + 1].replacen(&format!(" {rule}"), "", 1);
+                }
+            }
+            assert_eq!(with, plain, "gate={gate} offline={offline}");
+        }
+    }
+
+    #[test]
+    fn only_declared_servers_attach_and_denied_tools_stay_denied() {
+        let f = Fixture::new();
+        let a = attach(&f, &["playwright"]);
+        let c = argv("claude", true, false, Some(&a));
+        let allowed = flag(&c, "--allowedTools");
+        let mcp_allows: Vec<&str> = allowed
+            .split(' ')
+            .filter(|r| r.starts_with("mcp__"))
+            .collect();
+        let mut want = vec![crate::mcp_run::allow_rule("playwright")];
+        want.extend(CHROME_TOOLS.iter().map(|s| s.to_string()));
+        assert_eq!(mcp_allows.len(), want.len(), "{mcp_allows:?}");
+        for w in &want {
+            assert!(mcp_allows.contains(&w.as_str()), "{w}");
+        }
+        let denied = flag(&c, "--disallowedTools");
+        for t in PLAYWRIGHT_DENY {
+            assert!(denied.contains(&format!("mcp__playwright__{t}")), "{t}");
+        }
+        assert!(denied.contains("mcp__claude-in-chrome__javascript_tool"));
+        assert!(c.contains(&"--strict-mcp-config".to_string()));
+        assert!(c.contains(&"--chrome".to_string()));
+        assert_eq!(flag(&c, "--mcp-config"), a.config.to_string_lossy());
+        let strict = c.iter().position(|x| x == "--strict-mcp-config").unwrap();
+        let perm = c.iter().position(|x| x == "--permission-mode").unwrap();
+        assert!(strict < perm);
+        let cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(&a.config).unwrap()).unwrap();
+        let servers: Vec<&String> = cfg["mcpServers"].as_object().unwrap().keys().collect();
+        assert_eq!(servers, vec!["playwright"]);
+    }
+
+    #[test]
+    fn non_claude_clis_and_side_calls_get_no_mcp() {
+        let f = Arc::new(Fixture::new());
+        let a = attach(&f, &["playwright"]);
+        for cli in ["codex", "gemini", "kimi"] {
+            let c = argv(cli, true, false, Some(&a)).join(" ");
+            assert!(!c.contains("mcp-config"), "{cli}: {c}");
+            assert!(!c.contains("mcp__playwright"), "{cli}: {c}");
+        }
+        let phase = phase_cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            "x",
+            Phase::Execute,
+            None,
+            None,
+            &[],
+        );
+        assert!(!phase.join(" ").contains("mcp-config"));
+        let doctor = crate::setup_doctor::doctor_cli_command(
+            "claude",
+            "P",
+            "/r",
+            "/wt",
+            Path::new("/r/h.json"),
+            "x",
+            None,
+        );
+        assert!(!doctor.join(" ").contains("mcp-config"));
+
+        let d = tempfile::tempdir().unwrap();
+        let ctx = mcp_ctx(d.path(), &f);
+        let declared = names(&["playwright"]);
+        let seen = with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "codex",
+            &declared,
+            |m| m.is_none(),
+        );
+        assert!(seen);
+        let ev = events(&ctx);
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        assert_eq!(ev[0]["event_type"], "mcp.attached");
+        assert_eq!(ev[0]["data"]["servers"], json!([]));
+        assert_eq!(
+            ev[0]["data"]["skipped"],
+            json!([{"name": "playwright", "reason": "cli_unsupported"}])
+        );
+
+        let offline = InvokeMode::IssueFile(d.path().join("issue.json"));
+        assert!(with_mcp(
+            &ctx,
+            &offline,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &declared,
+            |m| m.is_none()
+        ));
+        assert_eq!(events(&ctx).len(), 1);
+        assert!(with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &[],
+            |m| m.is_none()
+        ));
+        assert_eq!(events(&ctx).len(), 1);
+    }
+
+    #[test]
+    fn secrets_never_reach_argv_logs_or_events() {
+        let f = Arc::new(Fixture::new());
+        let d = tempfile::tempdir().unwrap();
+        let ctx = mcp_ctx(d.path(), &f);
+        let argv_file = d.path().join("argv.txt");
+        let env_file = d.path().join("env.txt");
+        let script = crate::agents::testutil::script(
+            d.path(),
+            "fake-claude",
+            &format!(
+                "printf '%s\\n' \"$@\" > '{}'\nenv > '{}'\necho 'boom s3cret-value' >&2\nexit 1",
+                argv_file.display(),
+                env_file.display()
+            ),
+        );
+        let declared = names(&["demo"]);
+        let err = with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &declared,
+            |m| {
+                let m = m.unwrap();
+                let mut a = vec![script.display().to_string(), "-p".into()];
+                a.extend(argv("claude", true, false, Some(m)).into_iter().skip(2));
+                run_cli_with_mcp(
+                    &ctx,
+                    "claude",
+                    &a,
+                    30.0,
+                    Some(("web", "3")),
+                    &[],
+                    None,
+                    Some(m),
+                )
+            },
+        )
+        .unwrap_err();
+        assert!(!err.message.contains("s3cret-value"));
+        let args = std::fs::read_to_string(&argv_file).unwrap();
+        assert!(!args.contains("s3cret-value"), "{args}");
+        assert!(args.contains("--mcp-config"));
+        let env = std::fs::read_to_string(&env_file).unwrap();
+        assert!(env.contains("MCP_TIMEOUT=60000"), "{env}");
+        assert!(!env.contains("s3cret-value"));
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(!log.contains("s3cret-value"), "{log}");
+        assert!(log.contains(crate::mcp_run::REDACTED), "{log}");
+        assert!(log.contains("MCP: attached demo"), "{log}");
+        let ev = events(&ctx);
+        let all = serde_json::to_string(&ev).unwrap();
+        assert!(!all.contains("s3cret-value"), "{all}");
+        assert!(all.contains("mcp.attached"), "{all}");
+    }
+
+    /// Claude-style path globs: `**` crosses `/`, `*` does not.
+    fn path_glob(pat: &str, path: &str) -> bool {
+        fn go(p: &[u8], s: &[u8]) -> bool {
+            if p.is_empty() {
+                return s.is_empty();
+            }
+            if p.starts_with(b"**") {
+                return (0..=s.len()).any(|i| go(&p[2..], &s[i..]));
+            }
+            if p[0] == b'*' {
+                return (0..=s.len())
+                    .take_while(|&i| i == 0 || s[i - 1] != b'/')
+                    .any(|i| go(&p[1..], &s[i..]));
+            }
+            !s.is_empty() && p[0] == s[0] && go(&p[1..], &s[1..])
+        }
+        go(pat.as_bytes(), path.as_bytes())
+    }
+
+    #[test]
+    fn the_agent_cannot_read_the_run_config() {
+        let f = Fixture::new();
+        let a = attach(&f, &["demo"]);
+        let c = argv("claude", true, false, Some(&a));
+        let denied = flag(&c, "--disallowedTools");
+        let file = std::fs::canonicalize(&a.config).unwrap();
+        let file = file.to_string_lossy();
+        for kind in ["Read", "Edit", "Write", "Grep"] {
+            let covered = denied.split(' ').any(|r| {
+                r.strip_prefix(&format!("{kind}(/"))
+                    .and_then(|r| r.strip_suffix(')'))
+                    .is_some_and(|g| g.starts_with('/') && path_glob(g, &file))
+            });
+            assert!(covered, "{kind} of {file} not denied: {denied}");
+        }
+    }
+
+    #[test]
+    fn run_config_is_deleted_after_a_failed_or_timed_out_call() {
+        let f = Arc::new(Fixture::new());
+        let d = tempfile::tempdir().unwrap();
+        let ctx = mcp_ctx(d.path(), &f);
+        let declared = names(&["demo"]);
+        let mut seen = Vec::new();
+        let r: Result<(), String> = with_mcp(
+            &ctx,
+            &InvokeMode::Single,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &declared,
+            |m| {
+                seen.push(m.unwrap().config.clone());
+                Err("agent failed".into())
+            },
+        );
+        assert!(r.is_err());
+        let timeout = vec![
+            crate::agents::testutil::script(d.path(), "slow", "exec sleep 30")
+                .display()
+                .to_string(),
+            "-p".into(),
+            "P".into(),
+        ];
+        let e = with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &declared,
+            |m| {
+                seen.push(m.unwrap().config.clone());
+                run_cli_with_mcp(
+                    &ctx,
+                    "claude",
+                    &timeout,
+                    0.5,
+                    Some(("web", "3")),
+                    &[],
+                    None,
+                    m,
+                )
+            },
+        )
+        .unwrap_err();
+        assert!(e.message.starts_with("timed out"), "{}", e.message);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_mcp(
+                &ctx,
+                &InvokeMode::Batch,
+                ("web", "3"),
+                Some("r1"),
+                "claude",
+                &declared,
+                |m| {
+                    seen.push(m.unwrap().config.clone());
+                    panic!("runner bug")
+                },
+            )
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(seen.len(), 3);
+        for c in &seen {
+            assert!(!c.parent().unwrap().exists(), "{} left behind", c.display());
+        }
+    }
+
+    #[test]
+    fn a_missing_server_or_secret_skips_it_and_the_issue_still_runs() {
+        let f = Arc::new(Fixture::new());
+        f.store.delete("demo-token").unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let ctx = mcp_ctx(d.path(), &f);
+        let declared = names(&["demo", "sentry"]);
+        let out = with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &declared,
+            |m| {
+                assert!(m.is_none());
+                "handoff"
+            },
+        );
+        assert_eq!(out, "handoff");
+        let ev = events(&ctx);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(
+            ev[0]["data"]["skipped"],
+            json!([{"name": "demo", "reason": "secret_missing"}, {"name": "sentry", "reason": "not_registered"}])
+        );
+        assert_eq!(ev[0]["issue_iid"], 3);
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(
+            log.contains(
+                "MCP: attached none; skipped demo (secret_missing), sentry (not_registered)"
+            ),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn playwright_writes_into_the_loops_screens_dir() {
+        let f = Arc::new(Fixture::new());
+        let d = tempfile::tempdir().unwrap();
+        let ctx = mcp_ctx(d.path(), &f);
+        with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &names(&["playwright"]),
+            |m| {
+                let cfg: Value =
+                    serde_json::from_str(&std::fs::read_to_string(&m.unwrap().config).unwrap())
+                        .unwrap();
+                let args: Vec<String> =
+                    serde_json::from_value(cfg["mcpServers"]["playwright"]["args"].clone())
+                        .unwrap();
+                let i = args.iter().position(|a| a == "--output-dir").unwrap();
+                assert_eq!(
+                    args[i + 1],
+                    d.path().join("outputs/screens").to_string_lossy()
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn the_agent_cannot_edit_the_mcp_registry() {
+        let reg = crate::mcp_registry::path(&crate::config::home_dir());
+        let reg = reg.display().to_string();
+        let phase = phase_disallowed_tools("/r", "/bin/loopx", Phase::Execute);
+        for denied in [
+            disallowed_tools("/bin/loopx", true, false),
+            disallowed_tools("/bin/loopx", false, false),
+            phase,
+        ] {
+            for tool in ["Edit", "Write"] {
+                assert!(
+                    denied.contains(&format!("{tool}(/{reg})")),
+                    "{tool} //: {denied}"
+                );
+                assert!(
+                    denied.contains(&format!("{tool}({reg})")),
+                    "{tool} plain: {denied}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nothing_registered_stays_silent() {
+        let f = Arc::new(Fixture::new());
+        let d = tempfile::tempdir().unwrap();
+        let ctx = mcp_ctx(d.path(), &f);
+        let out = with_mcp(
+            &ctx,
+            &InvokeMode::Batch,
+            ("web", "3"),
+            Some("r1"),
+            "claude",
+            &names(&["sentry", "other"]),
+            |m| m.is_none(),
+        );
+        assert!(out);
+        assert!(events(&ctx).is_empty());
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap_or_default();
+        assert!(!log.contains("MCP:"), "{log}");
+    }
+
+    #[test]
+    fn path_p_uses_absolute_names_and_leaves_sign_in_to_a_and_b() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let issue =
+            std::fs::read_to_string(repo.join("instructions/loopx/gitlab-issue.md")).unwrap();
+        let p = issue
+            .lines()
+            .find(|l| l.contains("**Path P"))
+            .expect("path P paragraph");
+        assert!(
+            p.contains("a relative name lands in the wrong folder"),
+            "{p}"
+        );
+        assert!(!p.contains("is refused"), "{p}");
+        assert!(!p.to_lowercase().contains("fake a sign-in"), "{p}");
+        assert!(p.contains("path A or B"), "{p}");
+        let fix = std::fs::read_to_string(repo.join("instructions/loopx/mr-fix.md")).unwrap();
+        let fix = fix.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            fix.contains("a relative name lands in the wrong folder"),
+            "mr-fix.md"
+        );
+        assert!(!fix.contains("a relative name is refused"), "mr-fix.md");
+    }
+
+    #[test]
+    fn mcp_is_not_an_agent_subcommand() {
+        assert!(!AGENT_SUBCOMMANDS.contains(&"mcp"));
+        assert!(!OFFLINE_SUBCOMMANDS.contains(&"mcp"));
+        for gate in [true, false] {
+            let allowed = allowed_tools("/r", "/bin/loopx", gate, false);
+            assert!(!allowed.contains("loopx mcp"), "{allowed}");
+        }
+        let fix = crate::mr_fix::agent::fix_argv(
+            "claude",
+            "P",
+            &crate::creator::spawn::Fence {
+                cwd: Path::new("/wt"),
+                user_home: Path::new("/Users/u"),
+                loopx_home: Path::new("/lx"),
+                exe: "/bin/loopx",
+            },
+            Path::new("/s"),
+            None,
+        )
+        .unwrap();
+        assert!(!flag(&fix, "--allowedTools").contains("loopx mcp"));
+    }
+
+    #[test]
+    fn the_prompt_names_the_attached_servers_only_when_attached() {
+        assert_eq!(prompt::with_mcp_servers("P".into(), &[]), "P");
+        let p = prompt::with_mcp_servers("P".into(), &names(&["playwright"]));
+        assert_eq!(
+            p,
+            "P\n\nMCP servers in this run: playwright (fallback screenshot path P)."
+        );
+        assert_eq!(
+            prompt::with_mcp_servers("P".into(), &names(&["playwright", "demo"])),
+            "P\n\nMCP servers in this run: playwright (fallback screenshot path P), demo."
+        );
     }
 }

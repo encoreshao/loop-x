@@ -253,6 +253,26 @@ pub(crate) struct JobFence {
     pub model: &'static str,
     /// Directories besides the working directory the job's tools may reach.
     pub extra_dirs: Vec<PathBuf>,
+    /// MCP servers attached for this job; `None` keeps the empty inline config.
+    pub mcp: Option<McpArgs>,
+}
+
+/// The parts of an `mcp_run::McpAttach` a job's argv needs (it owns no file).
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpArgs {
+    pub config: PathBuf,
+    pub allowed: Vec<String>,
+    pub denied: Vec<String>,
+}
+
+impl From<&crate::mcp_run::McpAttach> for McpArgs {
+    fn from(a: &crate::mcp_run::McpAttach) -> Self {
+        McpArgs {
+            config: a.config.clone(),
+            allowed: a.allowed.clone(),
+            denied: a.denied.clone(),
+        }
+    }
 }
 
 /// `claude -p` sealed like `agents::sealed`'s command, but with tools:
@@ -264,14 +284,22 @@ pub(crate) struct JobFence {
 ///   `allowed-tools` frontmatter can widen them), narrowed by the allow / deny rules;
 /// - `default` permission mode (in -p mode whatever is not allowed is refused);
 /// - the prompt last.
-pub(crate) fn claude_argv(prompt: &str, cwd: &Path, fence: JobFence) -> Vec<String> {
+pub(crate) fn claude_argv(prompt: &str, cwd: &Path, mut fence: JobFence) -> Vec<String> {
     let s = |v: &str| v.to_string();
+    let mcp_config = match fence.mcp.take() {
+        Some(m) => {
+            fence.allowed.extend(m.allowed);
+            fence.denied.extend(m.denied);
+            m.config.display().to_string()
+        }
+        None => s(r#"{"mcpServers": {}}"#),
+    };
     let mut argv = vec![
         crate::runner_util::resolved_program("claude"),
         s("-p"),
         s("--strict-mcp-config"),
         s("--mcp-config"),
-        s(r#"{"mcpServers": {}}"#),
+        mcp_config,
         s("--setting-sources"),
         s("project,local"),
         s("--settings"),
@@ -402,6 +430,7 @@ pub fn video_argv(
             budget_usd: GENERATE_BUDGET_USD,
             model: crate::models::GENERAL,
             extra_dirs: if linked { vec![out] } else { Vec::new() },
+            mcp: None,
         },
     ))
 }
@@ -446,6 +475,7 @@ pub fn scout_argv(
             budget_usd: SCOUT_BUDGET_USD,
             model: crate::models::GENERAL,
             extra_dirs: Vec::new(),
+            mcp: None,
         },
     ))
 }

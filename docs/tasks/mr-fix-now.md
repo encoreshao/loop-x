@@ -104,6 +104,10 @@ is refused before anything is recorded.
   hook a project tracks (for example husky) can run then. Neither the agent nor
   the checks see `GITLAB_TOKEN`/`GITLAB_URL`.
 
+## MCP servers
+
+Fix now, and therefore the pipeline auto-fix (which runs Fix now jobs), reads the GitLab issue loop's `mcp_servers` from `loops/gitlab-issue/loop.yaml`: one list for both, see "MCP servers (Playwright)" in `docs/tasks/gitlab-issue-loop.md`. When a declared server resolves, the session's fence swaps the inline `--mcp-config '{"mcpServers": {}}'` for the private per-run config file, allows `mcp__<name>__*`, denies the server's `deny_tools` and the config's folder, and sets `MCP_TIMEOUT=60000`; the job log gets one line such as `MCP: attached playwright` or `MCP: attached none; skipped playwright (not_installed)`. Playwright writes only to the job's screens folder (`--output-dir`) and reaches only loopback (`--proxy-server http://127.0.0.1:9`). A server with Keychain secrets is skipped as `secrets_unsupported`: a secret given to an MCP server is visible to the agent (the server's tool results, and any command the agent runs can read the process tree), and the job log records the session unredacted. The agent may not Edit or Write `~/.loopx/mcp.json`, and `Bash(git diff --no-index*)` is denied with the run config's folder. Screenshots use `loopx screenshot` first and Playwright (path P) as the fallback. With no server configured, or a missing or invalid definition, the argv is unchanged and the job runs as before; Creator jobs never get MCP servers.
+
 ## Cleanup
 
 The worktree is removed only by `loopx mr-fix run` on a merged or closed MR.

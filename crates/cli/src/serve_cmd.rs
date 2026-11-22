@@ -26,6 +26,7 @@ pub fn run(args: &[String]) -> ExitCode {
             other => return fail(&format!("unknown argument {other}\n{USAGE}")),
         }
     }
+    loopx_core::mcp_run::sweep_stale(&std::env::temp_dir(), std::time::SystemTime::now());
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

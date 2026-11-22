@@ -307,21 +307,6 @@ fn fix(
     ));
     let cli = loopx_core::ai_cli_config::selected_cli();
     let user_home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let (argv_scratch, argv_exe, argv_home) = (scratch.clone(), exe.clone(), home.to_path_buf());
-    let argv = Box::new(move |prompt: &str| {
-        agent::fix_argv(
-            &cli,
-            prompt,
-            &Fence {
-                cwd: &worktree,
-                user_home: &user_home,
-                loopx_home: &argv_home,
-                exe: &argv_exe,
-            },
-            &argv_scratch,
-        )
-    });
-    let agent = ClaudeAgent::new(argv, scratch.clone(), &exe);
     let ws = GitWorkspace::new(&target.local_path, &target.worktree_root, iid);
     let record = job.cloned().unwrap_or_else(|| FixJob {
         id: String::new(),
@@ -354,19 +339,58 @@ fn fix(
     );
     let jobs_dir = jobs::jobs_dir(home);
     let job_id = job.map(|j| j.id.clone());
-    let result = runner::run_reporting(
-        &gitlab,
-        &ws,
-        &agent,
-        &record,
-        &mut std::io::stdout(),
-        &template,
-        &|step| {
-            if let Some(id) = &job_id {
-                let _ = jobs::set_step(&jobs_dir, id, step);
-            }
+    let declared = if cli == "claude" {
+        loopx_core::mr_fix::declared_servers(&loopx_core::runner_util::repo_root())
+    } else {
+        Vec::new()
+    };
+    // The same dir `ClaudeAgent` hands the prompt as {{SCREENS_DIR}}.
+    let screens = agent::screens_path(&std::fs::canonicalize(&scratch).unwrap_or(scratch.clone()));
+    let mut out = std::io::stdout();
+    let result = agent::with_mcp(
+        &declared,
+        || loopx_core::mcp_run::Env::real(home),
+        &screens,
+        &mut out,
+        |mcp| {
+            let mcp_args = mcp.map(agent::McpArgs::from);
+            let (argv_scratch, argv_exe, argv_home) =
+                (scratch.clone(), exe.clone(), home.to_path_buf());
+            let argv = Box::new(move |prompt: &str| {
+                agent::fix_argv(
+                    &cli,
+                    prompt,
+                    &Fence {
+                        cwd: &worktree,
+                        user_home: &user_home,
+                        loopx_home: &argv_home,
+                        exe: &argv_exe,
+                    },
+                    &argv_scratch,
+                    mcp_args.as_ref(),
+                )
+            });
+            let mut agent = ClaudeAgent::new(argv, scratch.clone(), &exe);
+            agent.extra_env = agent::mcp_env(mcp);
+            let template = match mcp {
+                Some(m) => loopx_core::prompt::with_mcp_servers(template, &m.servers),
+                None => template,
+            };
+            runner::run_reporting(
+                &gitlab,
+                &ws,
+                &agent,
+                &record,
+                &mut std::io::stdout(),
+                &template,
+                &|step| {
+                    if let Some(id) = &job_id {
+                        let _ = jobs::set_step(&jobs_dir, id, step);
+                    }
+                },
+                ci,
+            )
         },
-        ci,
     );
     announce_in_slack(
         &gitlab,

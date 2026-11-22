@@ -146,6 +146,22 @@ code first, commit, then take them, and if they cannot be taken, say why in
    click is reached by a temporary page or mock, never by committing one: the
    worktree must stay clean (`git status`) and screenshot files go only to
    `{{SCREENS_DIR}}`.
+
+   **Fallback, path P (Playwright).** Only when the prompt says the MCP
+   servers in this run include `playwright`, and only when the command above
+   failed or cannot show the state (an interaction, or a flow it cannot
+   mock): start the page with `{{LOOPX_EXE}} screenshot serve start --serve
+   "<dev server command>" --cwd {{WORKTREE}} --url http://localhost:<port>/<page>`,
+   open that localhost URL with `mcp__playwright__browser_navigate` (wait
+   with `mcp__playwright__browser_snapshot` or `browser_wait_for` until it
+   shows the change), save it with `mcp__playwright__browser_take_screenshot`
+   and `filename` set to the absolute path `{{SCREENS_DIR}}/1-after.png` (a
+   relative name lands in the wrong folder; always use an absolute name inside
+   `{{SCREENS_DIR}}`), then
+   `mcp__playwright__browser_close` and always `{{LOOPX_EXE}} screenshot serve
+   stop`, even after a failure. Never navigate off localhost, never type a
+   real credential, and never call `browser_evaluate`,
+   `browser_run_code_unsafe` or `browser_file_upload` (they are denied).
 3. Look at each image (`Read` it) before listing it. Skip one that is blank, an
    error page, or shows real personal data.
 4. Stop after two failed attempts and explain in `screenshots_note`. There is

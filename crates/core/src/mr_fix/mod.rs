@@ -7,6 +7,17 @@ pub mod real;
 pub mod run;
 pub mod slack;
 
+/// The MCP servers Fix now attaches: the GitLab issue loop's `mcp_servers`, so
+/// one list covers both (and the pipeline auto-fix, which runs Fix now jobs).
+/// A missing or invalid definition attaches none.
+pub fn declared_servers(repo_root: &std::path::Path) -> Vec<String> {
+    crate::loop_definition::LoopDefinition::from_yaml(
+        &repo_root.join(crate::issue_runner::DEFINITION_RELATIVE_PATH),
+    )
+    .map(|d| d.mcp_servers)
+    .unwrap_or_default()
+}
+
 /// Whether `s` is a well-formed `account:project!iid` merge request reference.
 pub fn valid_mr_ref(s: &str) -> bool {
     let Some((account, rest)) = s.split_once(':') else {
@@ -33,7 +44,22 @@ pub fn valid_mr_ref(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_mr_ref;
+    use super::{declared_servers, valid_mr_ref};
+
+    #[test]
+    fn fix_now_reads_servers_from_the_issue_loop_definition() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(declared_servers(d.path()).is_empty());
+        let file = d.path().join(crate::issue_runner::DEFINITION_RELATIVE_PATH);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let base = "name: x\nversion: 1\ntrigger: {type: manual}\ngoal: {type: issue_resolution}\n";
+        std::fs::write(&file, base).unwrap();
+        assert!(declared_servers(d.path()).is_empty());
+        std::fs::write(&file, format!("{base}mcp_servers: [playwright]\n")).unwrap();
+        assert_eq!(declared_servers(d.path()), vec!["playwright"]);
+        std::fs::write(&file, format!("{base}mcp_servers: [Bad_Name]\n")).unwrap();
+        assert!(declared_servers(d.path()).is_empty());
+    }
 
     #[test]
     fn mr_refs_must_be_account_project_iid() {

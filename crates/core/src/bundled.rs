@@ -190,6 +190,26 @@ mod tests {
     }
 
     #[test]
+    fn bundled_issue_definition_audits_clean_with_mcp_servers() {
+        let (_, text) = FILES
+            .iter()
+            .find(|(r, _)| *r == "loops/gitlab-issue/loop.yaml")
+            .expect("bundled");
+        let d = crate::loop_definition::LoopDefinition::from_yaml_str(text, "bundled").unwrap();
+        assert_eq!(d.mcp_servers, vec!["playwright"]);
+        let report = crate::loop_audit::audit_definition(&d);
+        assert!(
+            !report.has_fail(),
+            "{}",
+            crate::loop_audit::format_report(&report)
+        );
+        assert_eq!(
+            report.check("mcp_servers").unwrap().status,
+            crate::loop_audit::CheckStatus::Pass
+        );
+    }
+
+    #[test]
     fn bundled_autofix_definition_audits_clean() {
         let (_, text) = FILES
             .iter()

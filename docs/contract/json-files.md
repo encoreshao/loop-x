@@ -594,6 +594,32 @@ UTC `isoformat(timespec="seconds")` (`2026-10-22T10:00:00+00:00`).
 probe ids are `mailbox:<name>` and `connector:<id>`; times are naive local `isoformat()`. Written by `auth_health.run_if_due`
 (scheduler poll, at most every 6 hours; alerts repeat after 24 hours; a soft failure alerts on its 2nd consecutive check).
 
+## MCP server registry (`<LOOP_ENGINEERING_HOME>/mcp.json`)
+
+Per machine, never in the repo, no template. Rust only (`crates/core/src/mcp_registry.rs`); Atomic + 0600 under
+the file's `flock` (`.mcp.json.lock`); saving or removing one entry keeps every other entry as it was, and a
+file that does not parse is never overwritten. `{<name>: <entry>}`, name `^[a-z0-9][a-z0-9-]{0,31}$`. Each entry
+has exactly one launch form:
+
+- `"command": "<absolute path to an executable>"` (a relative path, `npx` or `npm` is invalid), or
+- `"npm_global": {"package": "@playwright/mcp", "version": "0.0.84", "bin": "playwright-mcp"}`: a global npm
+  install LoopX finds by reading files (exact version only).
+
+plus `args` (strings), `env` (`{VAR: value}`, plain config only), `env_secrets` (`{VAR: "keychain:<account>"}`,
+account `^[A-Za-z0-9._-]{1,64}$`, always in Keychain service `loop-engineering.mcp`) and `deny_tools` (bare tool
+names). Variable names are `^[A-Z_][A-Z0-9_]{0,63}$`; `PATH`, `HOME`, `NODE_OPTIONS`, `NODE_PATH`, `DYLD_*` and
+`LD_*` are refused. Names starting with `claude` are reserved. A Playwright entry may not use `--extension`,
+`--cdp-endpoint`, `--cdp-header`, `--allow-unrestricted-file-access`, `--user-data-dir`, `--storage-state`, `--config`
+or `PLAYWRIGHT_MCP_*` variables. One invalid entry does not hide the others. A secret given to a server is
+visible to the agent that uses it (tool results, the process tree its commands can read): give a server only
+what you would give the agent. The issue loop's agent and Fix now may not Edit or Write this file. A loop declares names with `mcp_servers` in
+its `loop.yaml`.
+
+## MCP test results (`<repo root>/outputs/connectors/mcp-test-results.json`)
+
+`{<name>: {ok, at, tools: [name, ... at most 200], message}}`, written atomically under the file's `flock` by
+the Connectors -> MCP servers Test button and `loopx mcp test`. `message` is redacted (secrets become `•••`).
+
 ## Eval summaries (`$LOOP_EVALS_DIR`, default `<repo root>/outputs/evals/`)
 
 - `last.json` (default `loop eval` run only): `{finished_at, results: [{name, passed, reasons: [detail]}]}`.

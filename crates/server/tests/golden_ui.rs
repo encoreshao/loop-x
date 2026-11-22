@@ -94,17 +94,61 @@ fn build_fixture(overlay: Option<&str>, now: DateTime<Utc>, token: &str) -> Fixt
             }
         });
     }
-    let state = UiState::explicit(
+    let userhome = tmp.path().join("userhome");
+    for name in ["checkout", "home"] {
+        each_file(&tmp.path().join(name), &mut |p| {
+            if let Ok(text) = fs::read_to_string(p) {
+                if text.contains("@USERHOME@") {
+                    fs::write(p, text.replace("@USERHOME@", &userhome.to_string_lossy())).unwrap();
+                }
+            }
+        });
+    }
+    if overlay.is_some_and(|o| o.starts_with("mcp-")) {
+        fs::write(userhome.join("Chrome"), "").unwrap();
+    }
+    if overlay == Some("mcp-servers") {
+        fake_mcp_install(&userhome);
+    }
+    let mut state = UiState::explicit(
         &tmp.path().join("checkout"),
         &tmp.path().join("home"),
-        &tmp.path().join("userhome"),
+        &userhome,
         &tmp.path().join("update"),
         token,
         Some(now),
     )
     .with_events_dir(&tmp.path().join("events"))
     .with_evals_dir(&tmp.path().join("evals"));
+    state.mcp_chrome = Some(Some(userhome.join("Chrome")));
     Fixture { _tmp: tmp, state }
+}
+
+/// A global `@playwright/mcp@0.0.84` under `<userhome>/.nvm` (symlinks cannot
+/// live in the overlay) and the `demo` server's command.
+fn fake_mcp_install(userhome: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let exec = |p: &Path, body: &str| {
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let prefix = userhome.join(".nvm/versions/node/v20.15.0");
+    let pkg = prefix.join("lib/node_modules/@playwright/mcp");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(
+        pkg.join("package.json"),
+        r#"{"name": "@playwright/mcp", "version": "0.0.84"}"#,
+    )
+    .unwrap();
+    fs::write(pkg.join("cli.js"), "").unwrap();
+    exec(&prefix.join("bin/node"), "echo v20.15.0");
+    std::os::unix::fs::symlink(
+        "../lib/node_modules/@playwright/mcp/cli.js",
+        prefix.join("bin/playwright-mcp"),
+    )
+    .unwrap();
+    exec(&userhome.join("demo-mcp"), "exit 0");
 }
 
 fn normalize(text: &str) -> String {

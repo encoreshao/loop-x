@@ -12,6 +12,7 @@ mod issues_cmd;
 mod loop_cmd;
 mod loopkit_cmd;
 mod loops_cmd;
+mod mcp_cmd;
 mod memory_cmd;
 mod messages_cmd;
 mod metrics_cmd;
@@ -65,6 +66,11 @@ enum Command {
     },
     /// Secret store: `migrate [--dry-run] [--yes]`, `list`, `set`, `delete`
     Secrets {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// MCP servers: `list`, `test <name>`, `add-playwright`, `remove <name>`, `secret set|delete <account>`
+    Mcp {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -365,6 +371,7 @@ fn main() -> ExitCode {
         Command::Update { args } => update_cmd::run(&args),
         Command::Auth { args } => auth_cmd::run(&args),
         Command::Secrets { args } => secrets_cmd::run(&args),
+        Command::Mcp { args } => mcp_cmd::run(&args),
         Command::Loopkit { args } => loopkit_cmd::run(&args),
         Command::Loops { args } => loops_cmd::loops(&args),
         Command::AiCli { args } => loops_cmd::ai_cli(&args),

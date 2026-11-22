@@ -1,0 +1,16 @@
+{
+  "playwright": {
+    "npm_global": {"package": "@playwright/mcp", "version": "0.0.84", "bin": "playwright-mcp"},
+    "args": ["--browser", "chrome", "--executable-path", "@USERHOME@/Chrome", "--headless", "--isolated", "--no-webmcp"],
+    "env": {"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1"},
+    "env_secrets": {},
+    "deny_tools": ["browser_run_code_unsafe", "browser_evaluate", "browser_file_upload", "browser_install"]
+  },
+  "demo": {
+    "command": "@USERHOME@/demo-mcp",
+    "args": [],
+    "env": {"DEMO_MODE": "on"},
+    "env_secrets": {"DEMO_TOKEN": "keychain:demo-token"},
+    "deny_tools": []
+  }
+}

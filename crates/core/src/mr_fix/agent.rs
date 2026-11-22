@@ -9,7 +9,9 @@
 //! nothing here: it re-validates the plan and gates the push on its own checks.
 
 use super::run::{parse_handoff, parse_plan, Agent, AgentHandoff, Announce};
+pub use crate::creator::spawn::McpArgs;
 use crate::creator::spawn::{claude_argv, common_denied, Fence, JobFence};
+use crate::mcp_run::McpAttach;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -154,6 +156,7 @@ pub fn fix_argv(
     prompt: &str,
     f: &Fence<'_>,
     scratch: &Path,
+    mcp: Option<&McpArgs>,
 ) -> Result<Vec<String>, String> {
     if cli != "claude" {
         return Err(format!(
@@ -197,6 +200,7 @@ pub fn fix_argv(
         }
     }
     denied.extend(strs(&GIT_DENIED));
+    denied.extend(crate::mcp_registry::edit_denied(f.loopx_home));
     for sub in LOOPX_DENIED {
         denied.push(format!("Bash(loopx {sub}*)"));
         denied.push(format!("Bash({} {sub}*)", f.exe));
@@ -217,6 +221,7 @@ pub fn fix_argv(
             budget_usd: FIX_BUDGET_USD,
             model: crate::models::CODE,
             extra_dirs: vec![scratch.to_path_buf()],
+            mcp: mcp.cloned(),
         },
     ))
 }
@@ -291,14 +296,23 @@ pub fn announce_request(
     Err("LoopX did not confirm the start note in time; do not edit anything".into())
 }
 
-/// The session's process: in `dir`, with the plan path, without credentials.
-fn agent_command(argv: &[String], dir: &Path, plan: &Path) -> Result<Command, String> {
+/// The session's process: in `dir`, with the plan path and `extra` (never a
+/// scrubbed credential), without credentials.
+fn agent_command(
+    argv: &[String],
+    dir: &Path,
+    plan: &Path,
+    extra: &[(String, String)],
+) -> Result<Command, String> {
     let (program, args) = argv.split_first().ok_or("empty agent command")?;
     let mut cmd = Command::new(program);
     cmd.args(args)
         .current_dir(dir)
         .env(PLAN_ENV, plan)
         .stdin(Stdio::null());
+    for (k, v) in extra.iter().filter(|(k, _)| !k.starts_with("GITLAB_")) {
+        cmd.env(k, v);
+    }
     for k in super::real::SCRUBBED_ENV {
         cmd.env_remove(k);
     }
@@ -308,6 +322,47 @@ fn agent_command(argv: &[String], dir: &Path, plan: &Path) -> Result<Command, St
         cmd.process_group(0);
     }
     Ok(cmd)
+}
+
+/// Runs `call` (the whole fix session) with the declared MCP servers attached
+/// and one job-log line naming what attached and what was skipped; the run
+/// config is removed when `call` returns or unwinds. `env` is only built when
+/// servers are declared.
+pub fn with_mcp<T>(
+    declared: &[String],
+    env: impl FnOnce() -> crate::mcp_run::Env,
+    screens: &Path,
+    log: &mut dyn std::io::Write,
+    call: impl FnOnce(Option<&McpAttach>) -> T,
+) -> T {
+    if declared.is_empty() {
+        return call(None);
+    }
+    let _ = std::fs::create_dir_all(screens);
+    let attach = match crate::mcp_run::attach_without_secrets(declared, &env(), Some(screens)) {
+        Ok(a) => {
+            if let Some(a) = &a {
+                let _ = writeln!(log, "{}", a.summary());
+            }
+            a
+        }
+        Err(skips) => {
+            if !skips.iter().all(|s| s.reason == "not_registered") {
+                let _ = writeln!(log, "{}", crate::mcp_run::summary(&[], &skips));
+            }
+            None
+        }
+    };
+    call(attach.as_ref())
+}
+
+/// The session's extra environment when servers are attached.
+pub fn mcp_env(mcp: Option<&McpAttach>) -> Vec<(String, String)> {
+    mcp.map(|_| {
+        let (k, v) = crate::mcp_run::MCP_TIMEOUT_ENV;
+        vec![(k.to_string(), v.to_string())]
+    })
+    .unwrap_or_default()
 }
 
 /// Builds the session argv from the final prompt.
@@ -324,6 +379,8 @@ pub struct ClaudeAgent {
     pub exe: String,
     pub timeout: Duration,
     pub poll: Duration,
+    /// Set on the session after the credential scrub (`MCP_TIMEOUT` when servers attach).
+    pub extra_env: Vec<(String, String)>,
 }
 
 impl ClaudeAgent {
@@ -341,6 +398,7 @@ impl ClaudeAgent {
             scratch,
             timeout: Duration::from_secs(60 * 60),
             poll: Duration::from_millis(500),
+            extra_env: Vec::new(),
         }
     }
 
@@ -416,7 +474,7 @@ impl Agent for ClaudeAgent {
             .replace("{{LOOPX_EXE}}", &self.exe)
             .replace("{{ANNOUNCE}}", &self.announce_cmd);
         let argv = (self.argv)(&prompt)?;
-        let mut cmd = agent_command(&argv, dir, &plan)?;
+        let mut cmd = agent_command(&argv, dir, &plan, &self.extra_env)?;
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("cannot start {}: {e}", argv[0]))?;
@@ -519,6 +577,7 @@ mod tests {
             "PROMPT",
             &fence(Path::new("/wt/repo-mr-7")),
             Path::new("/tmp/job1"),
+            None,
         )
         .unwrap()
     }
@@ -706,6 +765,7 @@ mod tests {
             &["claude".to_string(), "-p".to_string()],
             Path::new("/wt"),
             Path::new("/s/plan.json"),
+            &[],
         )
         .unwrap();
         let envs: Vec<_> = cmd.get_envs().collect();
@@ -765,6 +825,7 @@ mod tests {
                 exe: EXE,
             },
             Path::new("/tmp/job1"),
+            None,
         )
         .unwrap();
         for file in [
@@ -834,7 +895,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fix_now_runs_on_the_code_model() {
-        let a = fix_argv("claude", "P", &fence(Path::new("/wt")), Path::new("/s")).unwrap();
+        let a = fix_argv(
+            "claude",
+            "P",
+            &fence(Path::new("/wt")),
+            Path::new("/s"),
+            None,
+        )
+        .unwrap();
         assert_eq!(flag(&a, "--model"), crate::models::CODE);
     }
 
@@ -849,7 +917,7 @@ mod tests {
         let scratch_link = d.path().join("scratch-link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         std::os::unix::fs::symlink(&scratch_real, &scratch_link).unwrap();
-        let a = fix_argv("claude", "P", &fence(&link), &scratch_link).unwrap();
+        let a = fix_argv("claude", "P", &fence(&link), &scratch_link, None).unwrap();
         let allowed = rules(flag(&a, "--allowedTools"));
         assert!(
             allowed.contains(&format!("Edit(/{}/**)", real.display()).as_str()),
@@ -873,7 +941,8 @@ mod tests {
     #[test]
     fn fix_argv_refuses_a_non_claude_cli() {
         for cli in ["codex", "cursor", "gemini", ""] {
-            let e = fix_argv(cli, "p", &fence(Path::new("/wt")), Path::new("/s")).unwrap_err();
+            let e =
+                fix_argv(cli, "p", &fence(Path::new("/wt")), Path::new("/s"), None).unwrap_err();
             assert!(e.contains("Claude CLI"), "{e}");
         }
     }
@@ -1101,5 +1170,318 @@ mod tests {
         let t = Instant::now();
         assert!(agent.run(d.path(), "p", &announce).is_err());
         assert!(t.elapsed() < Duration::from_secs(20));
+    }
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use super::*;
+    use crate::keychain::SecretStore;
+    use crate::mcp_registry::PLAYWRIGHT_DENY;
+    use crate::mcp_run::tests::Fixture;
+    use crate::mcp_run::McpAttach;
+
+    const EXE: &str = "/opt/bin/loopx";
+
+    fn fence(cwd: &Path) -> Fence<'_> {
+        Fence {
+            cwd,
+            user_home: Path::new("/Users/u"),
+            loopx_home: Path::new("/sandbox/lx"),
+            exe: EXE,
+        }
+    }
+
+    fn flag<'a>(argv: &'a [String], name: &str) -> &'a str {
+        let i = argv.iter().position(|a| a == name).unwrap();
+        &argv[i + 1]
+    }
+
+    fn argv(mcp: Option<&McpAttach>) -> Vec<String> {
+        let args = mcp.map(McpArgs::from);
+        fix_argv(
+            "claude",
+            "PROMPT",
+            &fence(Path::new("/wt/repo-mr-7")),
+            Path::new("/tmp/job1"),
+            args.as_ref(),
+        )
+        .unwrap()
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn fix_argv_without_servers_is_unchanged() {
+        let a = argv(None);
+        assert_eq!(
+            a[1..5],
+            [
+                "-p",
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers": {}}"#
+            ]
+        );
+        assert!(!flag(&a, "--allowedTools").contains("mcp__"));
+        let f = Fixture::new();
+        let attach = crate::mcp_run::attach(&names(&["playwright"]), &f.env(), None)
+            .unwrap()
+            .unwrap();
+        let mut with = argv(Some(&attach));
+        with[4] = r#"{"mcpServers": {}}"#.into();
+        for (list, extra) in [
+            ("--allowedTools", &attach.allowed),
+            ("--disallowedTools", &attach.denied),
+        ] {
+            let i = with.iter().position(|x| x == list).unwrap();
+            for rule in extra {
+                with[i + 1] = with[i + 1].replacen(&format!(" {rule}"), "", 1);
+            }
+        }
+        assert_eq!(with, a);
+    }
+
+    #[test]
+    fn fix_argv_with_playwright_uses_the_run_file_and_allows_only_playwright() {
+        let f = Fixture::new();
+        let attach = crate::mcp_run::attach(&names(&["playwright"]), &f.env(), None)
+            .unwrap()
+            .unwrap();
+        let a = argv(Some(&attach));
+        assert_eq!(flag(&a, "--mcp-config"), attach.config.to_string_lossy());
+        assert_eq!(a.iter().filter(|x| *x == "--mcp-config").count(), 1);
+        assert!(a.contains(&"--strict-mcp-config".to_string()));
+        let allowed = flag(&a, "--allowedTools");
+        let mcp: Vec<&str> = allowed
+            .split(' ')
+            .filter(|r| r.starts_with("mcp__"))
+            .collect();
+        assert_eq!(mcp, vec!["mcp__playwright__*"]);
+        let denied = flag(&a, "--disallowedTools");
+        for t in PLAYWRIGHT_DENY {
+            assert!(denied.contains(&format!("mcp__playwright__{t}")), "{t}");
+        }
+        let dir = std::fs::canonicalize(attach.config.parent().unwrap()).unwrap();
+        for kind in ["Read", "Edit", "Write", "Grep"] {
+            assert!(
+                denied.contains(&format!("{kind}(/{}/**)", dir.display())),
+                "{kind}"
+            );
+        }
+        assert_eq!(flag(&a, "--tools"), FIX_TOOLS);
+    }
+
+    #[test]
+    fn creator_jobs_stay_sealed() {
+        let a = crate::creator::spawn::scout_argv(
+            "claude",
+            "P",
+            &fence(Path::new("/Users/u/.video-scout")),
+            Path::new("/Users/u/.claude/skills/video-scout"),
+        )
+        .unwrap();
+        assert_eq!(flag(&a, "--mcp-config"), r#"{"mcpServers": {}}"#);
+        assert!(!a.join(" ").contains("mcp__playwright"));
+    }
+
+    fn run_job(
+        f: &Fixture,
+        declared: &[&str],
+        script: &str,
+        timeout: Duration,
+    ) -> (Result<AgentHandoff, String>, String, Vec<PathBuf>) {
+        let d = tempfile::tempdir().unwrap();
+        let scratch = d.path().join("job");
+        let screens = screens_path(&scratch);
+        let wt = d.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let mut log: Vec<u8> = Vec::new();
+        let mut seen = Vec::new();
+        let result = with_mcp(
+            &names(declared),
+            || f.env(),
+            &screens,
+            &mut log,
+            |mcp| {
+                if let Some(m) = mcp {
+                    seen.push(m.config.clone());
+                }
+                let args = mcp.map(McpArgs::from);
+                let script = script.to_string();
+                let mut agent = ClaudeAgent::new(
+                    Box::new(move |_p: &str| {
+                        let _ = &args;
+                        Ok(vec!["/bin/sh".into(), "-c".into(), script.clone()])
+                    }),
+                    scratch.clone(),
+                    EXE,
+                );
+                agent.poll = Duration::from_millis(20);
+                agent.timeout = timeout;
+                agent.extra_env = mcp_env(mcp);
+                agent.run(&wt, "p", &|_| Ok(()))
+            },
+        );
+        (result, String::from_utf8(log).unwrap(), seen)
+    }
+
+    #[test]
+    fn fix_now_run_config_is_deleted_when_the_job_ends() {
+        let f = Fixture::new();
+        for (script, timeout) in [
+            ("exit 0", Duration::from_secs(20)),
+            ("exit 1", Duration::from_secs(20)),
+            ("sleep 30", Duration::from_millis(300)),
+        ] {
+            let (r, _, seen) = run_job(&f, &["playwright"], script, timeout);
+            assert!(r.is_err(), "{script}: no handoff written");
+            assert_eq!(seen.len(), 1, "{script}");
+            assert!(
+                !seen[0].parent().unwrap().exists(),
+                "{script}: run config left behind"
+            );
+        }
+    }
+
+    #[test]
+    fn fix_now_job_log_names_servers_but_never_a_secret() {
+        let f = Fixture::new();
+        let (_, log, _) = run_job(
+            &f,
+            &["playwright", "demo", "nope"],
+            "exit 0",
+            Duration::from_secs(20),
+        );
+        assert!(
+            log.contains("MCP: attached playwright; skipped demo (secrets_unsupported), nope (not_registered)"),
+            "{log}"
+        );
+        assert!(!log.contains("s3cret-value"), "{log}");
+        assert!(!log.contains("demo-token"), "{log}");
+    }
+
+    #[test]
+    fn fix_now_runs_without_playwright_when_it_is_not_installed() {
+        let f = Fixture::new();
+        let mut env = f.env();
+        env.toolchains.home = f.root.path().join("nohome");
+        let d = tempfile::tempdir().unwrap();
+        let mut log: Vec<u8> = Vec::new();
+        let a = with_mcp(
+            &names(&["playwright"]),
+            move || env,
+            d.path(),
+            &mut log,
+            |mcp| {
+                assert!(mcp.is_none());
+                argv(None)
+            },
+        );
+        assert_eq!(flag(&a, "--mcp-config"), r#"{"mcpServers": {}}"#);
+        let log = String::from_utf8(log).unwrap();
+        assert!(
+            log.contains("MCP: attached none; skipped playwright (not_installed)"),
+            "{log}"
+        );
+        let mut log: Vec<u8> = Vec::new();
+        assert!(with_mcp(
+            &[],
+            || panic!("no env without servers"),
+            d.path(),
+            &mut log,
+            |m| m.is_none()
+        ));
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn fix_now_points_playwright_at_the_jobs_screens_dir() {
+        let f = Fixture::new();
+        let d = tempfile::tempdir().unwrap();
+        let screens = d.path().join("screens");
+        let mut log: Vec<u8> = Vec::new();
+        with_mcp(
+            &names(&["playwright"]),
+            || f.env(),
+            &screens,
+            &mut log,
+            |m| {
+                let cfg: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&m.unwrap().config).unwrap())
+                        .unwrap();
+                let args = cfg["mcpServers"]["playwright"]["args"]
+                    .as_array()
+                    .unwrap()
+                    .clone();
+                let i = args.iter().position(|a| a == "--output-dir").unwrap();
+                assert_eq!(args[i + 1], screens.to_string_lossy().as_ref());
+            },
+        );
+    }
+
+    #[test]
+    fn fix_now_cannot_edit_the_mcp_registry() {
+        let a = argv(None);
+        let denied = flag(&a, "--disallowedTools");
+        for tool in ["Edit", "Write"] {
+            assert!(
+                denied.contains(&format!("{tool}(//sandbox/lx/mcp.json)")),
+                "{tool}: {denied}"
+            );
+            assert!(
+                denied.contains(&format!("{tool}(/sandbox/lx/mcp.json)")),
+                "{tool}: {denied}"
+            );
+        }
+    }
+
+    #[test]
+    fn fix_now_stays_silent_when_nothing_is_registered() {
+        let f = Fixture::new();
+        let d = tempfile::tempdir().unwrap();
+        let mut log: Vec<u8> = Vec::new();
+        assert!(with_mcp(
+            &names(&["sentry"]),
+            || f.env(),
+            d.path(),
+            &mut log,
+            |m| m.is_none()
+        ));
+        assert!(log.is_empty(), "{}", String::from_utf8_lossy(&log));
+    }
+
+    #[test]
+    fn the_fix_agent_gets_mcp_timeout_but_never_gitlab_credentials() {
+        let f = Fixture::new();
+        f.store.set("x", "y").unwrap();
+        let extra = vec![
+            ("MCP_TIMEOUT".to_string(), "60000".to_string()),
+            ("GITLAB_TOKEN".to_string(), "leak".to_string()),
+        ];
+        let cmd = agent_command(
+            &["claude".to_string(), "-p".to_string()],
+            Path::new("/wt"),
+            Path::new("/s/plan.json"),
+            &extra,
+        )
+        .unwrap();
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.contains(&(
+            std::ffi::OsStr::new("MCP_TIMEOUT"),
+            Some(std::ffi::OsStr::new("60000"))
+        )));
+        assert!(
+            envs.contains(&(std::ffi::OsStr::new("GITLAB_TOKEN"), None)),
+            "{envs:?}"
+        );
+        let attach = crate::mcp_run::attach(&names(&["demo"]), &f.env(), None).unwrap();
+        assert_eq!(
+            mcp_env(attach.as_ref()),
+            vec![("MCP_TIMEOUT".to_string(), "60000".to_string())]
+        );
+        assert!(mcp_env(None).is_empty());
     }
 }

@@ -1051,6 +1051,7 @@ pub fn agent_child_main(argv: &[String]) -> i32 {
         max_budget_usd: max_budget,
         timeout_seconds: timeout,
         doctor: None,
+        mcp_servers: Vec::new(),
     });
     let out = match result {
         Ok(o) => json!({"cost_usd": o.cost_usd, "error": Value::Null}),

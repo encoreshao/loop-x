@@ -23,6 +23,11 @@ agent:
     execute: opus
     validate: opus
 
+# Attaches only when registered in ~/.loopx/mcp.json and installed globally
+# (Settings -> Connectors -> MCP servers), and only to Claude runs.
+# Fix now and the pipeline auto-fix read this same list.
+mcp_servers: [playwright]
+
 context:
   sources:
     - issue

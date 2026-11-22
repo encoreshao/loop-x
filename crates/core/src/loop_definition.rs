@@ -223,6 +223,9 @@ pub struct LoopDefinition {
     pub verifiers: Vec<Value>,
     pub permissions: PermissionsConfig,
     pub observability_enabled: bool,
+    /// Names in the per-machine MCP registry (`mcp_registry`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<String>,
 }
 
 fn section<'a>(data: &'a Value, key: &str) -> Result<Option<&'a Value>, DefinitionError> {
@@ -344,6 +347,21 @@ fn parse_phase_models(agent: Option<&Value>) -> Result<PhaseModels, DefinitionEr
         execute: opt_string(Some(v), "execute", "agent.models.execute")?,
         validate: opt_string(Some(v), "validate", "agent.models.validate")?,
     })
+}
+
+fn parse_mcp_servers(data: &Value) -> Result<Vec<String>, DefinitionError> {
+    let names = string_list(Some(data), "mcp_servers", "mcp_servers")?;
+    for (i, n) in names.iter().enumerate() {
+        if !crate::mcp_registry::valid_name(n) {
+            return invalid(format!(
+                "LoopDefinition: 'mcp_servers[{i}]' must be lowercase letters, digits and -, got '{n}'"
+            ));
+        }
+        if names[..i].contains(n) {
+            return invalid(format!("LoopDefinition: 'mcp_servers[{i}]' repeats '{n}'"));
+        }
+    }
+    Ok(names)
 }
 
 impl LoopDefinition {
@@ -497,6 +515,7 @@ impl LoopDefinition {
                 "observability_enabled",
                 true,
             )?,
+            mcp_servers: parse_mcp_servers(data)?,
         })
     }
 
@@ -548,6 +567,46 @@ mod tests {
         let mut v = minimal();
         v["agent"] = agent;
         v
+    }
+
+    #[test]
+    fn mcp_servers_parses_and_defaults_empty() {
+        assert!(LoopDefinition::from_value(&minimal())
+            .unwrap()
+            .mcp_servers
+            .is_empty());
+        let mut v = minimal();
+        v["mcp_servers"] = json!(["playwright", "sentry-2"]);
+        let d = LoopDefinition::from_value(&v).unwrap();
+        assert_eq!(d.mcp_servers, vec!["playwright", "sentry-2"]);
+        assert_eq!(
+            serde_json::to_value(&d).unwrap()["mcp_servers"],
+            json!(["playwright", "sentry-2"])
+        );
+    }
+
+    #[test]
+    fn bad_or_duplicate_mcp_server_names_are_invalid() {
+        for (list, want) in [
+            (json!(["ok", "Bad_Name"]), "mcp_servers[1]"),
+            (json!(["playwright", "playwright"]), "mcp_servers[1]"),
+            (json!("playwright"), "mcp_servers"),
+            (json!([1]), "mcp_servers"),
+        ] {
+            let mut v = minimal();
+            v["mcp_servers"] = list;
+            let e = err(&v);
+            assert!(e.contains(want), "{e}");
+        }
+    }
+
+    #[test]
+    fn existing_definitions_serialize_unchanged() {
+        for v in [minimal(), example()] {
+            let d = LoopDefinition::from_value(&v).unwrap();
+            let out = serde_json::to_value(&d).unwrap();
+            assert!(out.get("mcp_servers").is_none(), "{out}");
+        }
     }
 
     #[test]
