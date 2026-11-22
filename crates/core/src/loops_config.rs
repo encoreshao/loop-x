@@ -316,15 +316,35 @@ pub fn list_loops(
         )));
     }
     let loops = migrate_renamed(read_json_array(config_path)?);
-    let template = template_path.map_or_else(default_template_path, Path::to_path_buf);
-    let missing = missing_template_loops(&loops, &template);
+    let template = match template_path {
+        Some(p) => read_json_array(p).unwrap_or_default(),
+        None => default_template_entries(&default_template_path()),
+    };
+    let missing = missing_template_loops(&loops, template);
     Ok(loops.into_iter().chain(missing).collect())
 }
 
-fn missing_template_loops(loops: &[Value], template_path: &Path) -> Vec<Value> {
-    let Ok(template) = read_json_array(template_path) else {
-        return Vec::new();
-    };
+const BUNDLED_TEMPLATE: &str = include_str!("../../../config/loops.json.template");
+
+pub(crate) fn bundled_template_entries() -> Vec<Value> {
+    serde_json::from_str::<Value>(BUNDLED_TEMPLATE)
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+}
+
+/// The template next to the binary when there is one (a checkout), else the
+/// copy built into it: an installed app has no template on disk, and without
+/// this a loop added in a release would never appear in its list.
+pub(crate) fn default_template_entries(path: &Path) -> Vec<Value> {
+    if path.is_file() {
+        read_json_array(path).unwrap_or_default()
+    } else {
+        bundled_template_entries()
+    }
+}
+
+fn missing_template_loops(loops: &[Value], template: Vec<Value>) -> Vec<Value> {
     template
         .into_iter()
         .filter(|entry| !loops.iter().any(|l| l.get("name") == entry.get("name")))
@@ -768,6 +788,36 @@ mod tests {
         let names: Vec<_> = all.iter().map(|l| l["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["issue-loop", "topic-loop", "new-loop"]);
         assert!(all[0].get("x").is_none(), "the user's own entry wins");
+    }
+
+    #[test]
+    fn an_installed_binary_without_a_template_file_uses_the_bundled_one() {
+        let d = tempfile::tempdir().unwrap();
+        let entries = default_template_entries(&d.path().join("no-template.json"));
+        let names: Vec<_> = entries.iter().filter_map(|l| l["name"].as_str()).collect();
+        assert!(names.contains(&"mr-autofix-loop"), "{names:?}");
+        assert!(names.contains(&"pipeline-doctor-loop"), "{names:?}");
+    }
+
+    #[test]
+    fn a_template_file_on_disk_wins_over_the_bundled_one() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("loops.json.template");
+        std::fs::write(&path, json!([{"name": "only-loop"}]).to_string()).unwrap();
+        let entries = default_template_entries(&path);
+        assert_eq!(entries, vec![json!({"name": "only-loop"})]);
+    }
+
+    #[test]
+    fn bundled_template_parses_and_matches_the_checkout() {
+        let on_disk: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/loops.json.template"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bundled_template_entries(), on_disk);
     }
 
     #[test]
