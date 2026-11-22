@@ -18,6 +18,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Pipeline Auto-fix (off by default): when Pipeline Doctor diagnoses a failed pipeline on a merge request the issue loop opened as a test failure or lint, LoopX starts one Fix now run on it; a second failure, a failed fix or a cap escalates to Needs you and Slack instead. Loops can now be triggered by LoopX's own events (`trigger.type: event`).
 - Office: each colleague shows what stage their work is at (classifying, coding, verifying, reviewing, security scan, awaiting spec approval, awaiting you, blocked), and a colleague waiting on you shows the Needs you item in their panel.
 - Creator → Videos has a search field that filters the videos as you type: by name, fuzzily ("rd trp" finds "Road trip", ignoring case and accents), or by pasting part of a video's source link.
+- Needs you: a waiting spec has a Dismiss button. A dismissed spec leaves the list and the issue runs as usual, without spec approval.
+- Harness → Gates: the "Review would block" tile also says how many pre-MR reviews could not run, when any failed.
 - Creator has a Settings sheet (top right of the page) where you pick the video layout for generated shorts: Classic, Backdrop, Cinema, Quote, Split or Banner, each with a matching cover (inspire-video's new `layout` manifest field). Every Generate job, from the page or from chat, uses the saved layout, and a retry keeps the layout the video was first made with. An inspire-video install from before layouts offers only Classic until it is updated.
 
 ### Changed
@@ -31,6 +33,9 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Pipeline Auto-fix: a stop because the branch moved, or because an automatic CI fix was already made, now says so on Needs you and in Slack instead of "the automatic fix changed nothing". Pressing Fix now just as the loop starts its own fix no longer uses up the loop's one attempt; it shows as "a Fix now run was already in progress" instead of a failed fix. Events that arrived during a long pause (up to a week back) still trigger the loop afterwards, and old escalation records and CI-failure files are cleaned up after 30 days.
+- A loop run that exits with code 75 is reported as skipped only when its runner says so on its last line; otherwise it is a failure.
+- GitLab issue loop: a skipped pre-MR review or secret scan no longer shows "project checks skipped" in the live trace, an acceptance criterion with a numeric or missing id is kept (as `AC<n>`), and criteria with no test are listed first in the review's findings so they are never cut off.
 - The installed Mac app now lists loops added in a newer release (such as Pipeline Auto-fix) on the Loops page, switched off until you enable them. Before, only a checkout could see new loops, because the app had no copy of the loops template.
 - Memory → Guide "Build guide" no longer fails with "the reply did not parse" on larger projects. The plan the AI proposes is now trimmed instead of refused when it names more than 12 features or 25 files per page, a file that is not in the project, or a related feature not in the plan. A feature with a bad slug or no readable files is dropped, and an overlong title or summary is shortened to one line.
 - MR review "Fix now": a long check command from the fix agent (a rubocop or rspec run over many files) is no longer cut at 500 characters, which ran a broken command ("No such file or directory: spec/services/theme_") and failed a fix whose checks would have passed. Commands are kept whole; one over 8000 characters is refused with that reason.

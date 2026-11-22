@@ -35,6 +35,11 @@ const MAX_THREADS: usize = 50;
 const MAX_NOTES_PER_THREAD: usize = 10;
 const MAX_NOTE_CHARS: usize = 4000;
 const MAX_DESCRIPTION_CHARS: usize = 8000;
+/// A CI-mode job's summary when it pushed nothing for these reasons;
+/// Pipeline Auto-fix escalates each with its own reason.
+pub const CI_BRANCH_MOVED: &str =
+    "The branch moved since the failure was diagnosed; nothing pushed.";
+pub const CI_ALREADY_FIXED: &str = "An automatic CI fix was already made on this merge request.";
 
 /// What the runner needs to know about the merge request.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -739,10 +744,7 @@ pub fn run_reporting(
                 "the merge request is at {}, not the diagnosed {}; nothing posted",
                 info.sha, f.sha
             );
-            return result(
-                "nothing",
-                "The branch moved since the failure was diagnosed; nothing pushed.",
-            );
+            return result("nothing", CI_BRANCH_MOVED);
         }
     }
     progress(1);
@@ -763,10 +765,7 @@ pub fn run_reporting(
                     out,
                     "an earlier ci: fix is recorded as handled; nothing posted"
                 );
-                return result(
-                    "nothing",
-                    "An automatic CI fix was already made on this merge request.",
-                );
+                return result("nothing", CI_ALREADY_FIXED);
             }
             vec![item]
         }
@@ -800,10 +799,7 @@ pub fn run_reporting(
                 "the branch is at {base}, not the diagnosed {}; nothing posted",
                 f.sha
             );
-            return result(
-                "nothing",
-                "The branch moved since the failure was diagnosed; nothing pushed.",
-            );
+            return result("nothing", CI_BRANCH_MOVED);
         }
     }
     let prompt = build_prompt(

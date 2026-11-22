@@ -5,8 +5,8 @@
 //! thread the MR-feedback round handed over: Approve the plan, Post my reply,
 //! Plan again with my instructions, or Dismiss (`POST /needs-you/mr-thread`,
 //! `loopx_core::mr_feedback::decide_thread`), and for a spec the issue loop
-//! posted: Approve or Request changes (`POST /needs-you/spec`,
-//! `loopx_core::spec_gate::decide`). The topbar bell (`bell_html`)
+//! posted: Approve, Request changes or Dismiss (`POST /needs-you/spec`,
+//! `loopx_core::spec_gate::decide` / `dismiss`). The topbar bell (`bell_html`)
 //! counts them and polls `/needs-you/count`.
 
 use crate::snapshot::{self, Paths};
@@ -136,6 +136,8 @@ fn autofix_reason(ctx: &UiCtx, reason: &str) -> String {
         "already_attempted" => ctx.t("it already had its one automatic attempt"),
         "fix_failed" => ctx.t("the automatic fix failed"),
         "fix_nothing" => ctx.t("the automatic fix changed nothing"),
+        "branch_moved" => ctx.t("the branch moved after the failure was diagnosed"),
+        "already_handled" => ctx.t("an automatic CI fix was already made on it"),
         "daily_cap" => ctx.t("the daily limit of automatic fixes was reached"),
         "low_confidence" => ctx.t("the diagnosis was not confident enough"),
         "job_busy" => ctx.t("a Fix now run was already in progress"),
@@ -335,7 +337,7 @@ fn mr_thread_actions(ctx: &UiCtx, item: &Value) -> String {
 }
 
 /// A posted spec: its opening text (escaped, it came from the agent), a link to
-/// the issue where the whole spec is, and Approve or Request changes.
+/// the issue where the whole spec is, and Approve, Request changes or Dismiss.
 fn spec_details(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes) -> String {
     let f = |k: &str| text(item, k);
     let more = if item["body_truncated"] == true { "\u{2026}" } else { "" };
@@ -361,13 +363,15 @@ fn spec_actions(ctx: &UiCtx, item: &Value) -> String {
 <label>{notes_label}<textarea name='notes' rows='3' maxlength='4000' required placeholder='{placeholder}'></textarea></label>\
 <div class='needs-you-buttons'>\
 <button type='submit' name='decision' value='approve' class='btn btn-primary' formnovalidate>{approve}</button>\
-<button type='submit' name='decision' value='request_changes' class='btn btn-neutral'>{changes}</button></div></form>",
+<button type='submit' name='decision' value='request_changes' class='btn btn-neutral'>{changes}</button>\
+<button type='submit' name='decision' value='dismiss' class='btn btn-neutral' formnovalidate>{dismiss}</button></div></form>",
         csrf = ctx.csrf_input(),
         id = pyfmt::escape(&text(item, "id")),
         notes_label = pyfmt::escape(&ctx.t("What should change (for Request changes)")),
         placeholder = pyfmt::escape(&ctx.t("What the next spec should do differently")),
         approve = pyfmt::escape(&ctx.t("Approve")),
         changes = pyfmt::escape(&ctx.t("Request changes")),
+        dismiss = pyfmt::escape(&ctx.t("Dismiss")),
     )
 }
 
@@ -623,6 +627,12 @@ fn post_spec(ctx: &UiCtx) -> UiResponse {
     let Some((alias, iid)) = waiting else {
         return fail(&ctx.t("That spec is not waiting on you."));
     };
+    if form.first("decision") == Some("dismiss") {
+        return match spec_gate::dismiss(&root, &alias, &iid, "dashboard", Utc::now()) {
+            Ok(_) => UiResponse::flash_redirect(true, &ctx.t("Spec dismissed \u{2014} the issue runs as usual."), PATH),
+            Err(e) => fail(&e),
+        };
+    }
     let approve = match form.first("decision") {
         Some("approve") => true,
         Some("request_changes") => false,
@@ -1359,6 +1369,18 @@ mod tests {
     }
 
     #[test]
+    fn autofix_items_name_a_moved_branch_and_an_earlier_fix() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        autofix_event(d.path(), "abc", "", "branch_moved");
+        autofix_event(d.path(), "def", "", "already_handled");
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("the branch moved after the failure was diagnosed"), "{html}");
+        assert!(html.contains("an automatic CI fix was already made on it"), "{html}");
+        assert!(!html.contains("it needs a human"), "{html}");
+    }
+
+    #[test]
     fn autofix_item_links_only_http_urls() {
         let d = tempfile::tempdir().unwrap();
         let st = state(d.path());
@@ -1605,7 +1627,7 @@ mod tests {
         assert!(html.contains("value='spec:web:7'"), "{html}");
         assert!(html.contains("name='notes'"), "{html}");
         assert!(html.contains("value='approve'") && html.contains("value='request_changes'"), "{html}");
-        assert!(!html.contains("action='/needs-you/dismiss'"), "a spec can't be dismissed: {html}");
+        assert!(!html.contains("action='/needs-you/dismiss'"), "a spec is dismissed through its own form: {html}");
         assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 1}"#);
         let req = UiRequest::get("/needs-you").with_header("cookie", "loop_lang=fr");
         let fr = st.registry.dispatch(&st, &req).unwrap().body_text();
@@ -1630,6 +1652,21 @@ mod tests {
         // Deciding twice is refused.
         let r = post(&st, "/needs-you/spec", &format!("csrf_token=tok&{body}"));
         assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+    }
+
+    #[test]
+    fn dismissing_a_spec_turns_its_gate_off_and_needs_csrf() {
+        let d = tempfile::tempdir().unwrap();
+        let st = post_spec(d.path(), "**Goal:** x");
+        assert!(get(&st, "/needs-you").contains("value='dismiss'"));
+        let body = "id=spec%3Aweb%3A7&decision=dismiss";
+        assert_eq!(post(&st, "/needs-you/spec", body).status, 403);
+        assert_eq!(spec_state(d.path()).status, loopx_core::spec_gate::SpecStatus::Awaiting);
+        let r = post(&st, "/needs-you/spec", &format!("csrf_token=tok&{body}"));
+        let location = r.header("location").unwrap_or_default();
+        assert!(location.contains("ok=1") && location.contains("runs%20as%20usual"), "{location}");
+        assert_eq!(spec_state(d.path()).status, loopx_core::spec_gate::SpecStatus::Dismissed);
+        assert!(get(&st, "/needs-you").contains("Nothing needs you right now."));
     }
 
     #[test]

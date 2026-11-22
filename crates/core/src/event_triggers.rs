@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_PENDING: usize = 20;
 const SEEN_WINDOW_DAYS: i64 = 30;
+/// How far back a tick reads the event log after a long pause (under the seen window).
+const MAX_LOOKBACK_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Subscription {
@@ -117,6 +119,9 @@ pub struct Inbox {
     pub armed_at: String,
     #[serde(default)]
     pub pending: Vec<Value>,
+    /// The last tick that read the event log for this loop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collected_at: Option<String>,
 }
 
 pub fn inbox_path(state_dir: &Path, loop_name: &str) -> PathBuf {
@@ -195,6 +200,7 @@ pub fn put_back(state_dir: &Path, loop_name: &str, event: Value) {
         let mut inbox = load_inbox(&path).unwrap_or_else(|| Inbox {
             armed_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             pending: Vec::new(),
+            collected_at: None,
         });
         inbox.pending.insert(0, event);
         save_inbox(&path, &inbox)
@@ -262,6 +268,7 @@ fn collect_locked(
             let inbox = Inbox {
                 armed_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
                 pending: Vec::new(),
+                collected_at: None,
             };
             if let Err(e) = save_inbox(path, &inbox) {
                 eprintln!("event_triggers: cannot arm {}: {e}", sub.loop_name);
@@ -273,10 +280,13 @@ fn collect_locked(
         eprintln!("event_triggers: {}: unreadable armed_at", sub.loop_name);
         return 0;
     };
-    let yesterday = (now - Duration::days(1)).format("%Y-%m-%d").to_string();
+    let last = inbox.collected_at.as_deref().and_then(parse_iso);
+    let from =
+        (last.unwrap_or(armed_at) - Duration::days(1)).max(now - Duration::days(MAX_LOOKBACK_DAYS));
+    let from_day = from.format("%Y-%m-%d").to_string();
     let today = now.format("%Y-%m-%d").to_string();
     let mut added = 0;
-    for event in crate::events::iter_events(Some(events_dir), Some(&yesterday), Some(&today)) {
+    for event in crate::events::iter_events(Some(events_dir), Some(&from_day), Some(&today)) {
         let Some(id) = event.get("event_id").and_then(Value::as_str) else {
             continue;
         };
@@ -290,9 +300,11 @@ fn collect_locked(
         inbox.pending.push(event);
         added += 1;
     }
-    if added == 0 {
+    let new_day = last.is_none_or(|t| t.date_naive() != now.date_naive());
+    if added == 0 && !new_day {
         return 0;
     }
+    inbox.collected_at = Some(now.to_rfc3339_opts(SecondsFormat::Millis, true));
     if inbox.pending.len() > MAX_PENDING {
         let dropped = inbox.pending.len() - MAX_PENDING;
         inbox.pending.drain(..dropped);
@@ -431,6 +443,38 @@ mod tests {
     }
 
     #[test]
+    fn events_from_a_long_pause_still_queue_up_to_a_week_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (events, state) = (tmp.path().join("events"), tmp.path().join("state"));
+        let t0 = Utc::now() - Duration::days(20);
+        collect(&sub(), &events, &state, t0);
+        let tick = t0 + Duration::days(10);
+        assert_eq!(collect(&sub(), &events, &state, tick), 0);
+        write(
+            &events,
+            &[
+                event("day_before_last_tick", tick - Duration::days(1), good()),
+                event("three_days", tick + Duration::hours(1), good()),
+            ],
+        );
+        let after_pause = tick + Duration::days(3);
+        assert_eq!(collect(&sub(), &events, &state, after_pause), 2);
+        let resumed = after_pause + Duration::days(9);
+        write(
+            &events,
+            &[
+                event("eight_days", resumed - Duration::days(8), good()),
+                event("six_days", resumed - Duration::days(6), good()),
+            ],
+        );
+        assert_eq!(
+            collect(&sub(), &events, &state, resumed),
+            1,
+            "capped at 7 days"
+        );
+    }
+
+    #[test]
     fn concurrent_collects_add_each_event_once() {
         let tmp = tempfile::tempdir().unwrap();
         let (events, state) = (tmp.path().join("events"), tmp.path().join("state"));
@@ -497,6 +541,7 @@ mod tests {
         let inbox = Inbox {
             armed_at: "2026-01-01T00:00:00.000Z".into(),
             pending: vec![waiting, event("e1", now, good()), event("e2", now, good())],
+            collected_at: None,
         };
         save_inbox(&inbox_path(state, "l"), &inbox).unwrap();
         assert_eq!(ready_count(state, "l", now), 2);

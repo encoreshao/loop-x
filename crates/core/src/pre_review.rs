@@ -300,9 +300,12 @@ pub fn acceptance_criteria(handoff: &Value) -> Vec<Criterion> {
         )
     };
     list.iter()
-        .filter(|c| c.is_object())
-        .map(|c| Criterion {
-            id: text(c, "id"),
+        .enumerate()
+        .filter(|(_, c)| c.is_object())
+        .map(|(i, c)| Criterion {
+            id: Some(text(c, "id"))
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| format!("AC{}", i + 1)),
             statement: text(c, "statement"),
             test: Some(text(c, "test").replace('`', "'")).filter(|t| {
                 !matches!(
@@ -476,7 +479,7 @@ impl Verifier for AgentReviewVerifier {
             Ok(r) => r,
             Err(e) => return self.error(format!("review output unusable: {e}"), cost, start),
         };
-        review.findings.extend(uncovered_criteria(&handoff));
+        review.findings.splice(0..0, uncovered_criteria(&handoff));
         let mut counts = json!({"blocker": 0, "major": 0, "minor": 0, "nit": 0});
         for f in &review.findings {
             if let Some(n) = counts.get_mut(f.severity.as_str()) {
@@ -1068,8 +1071,45 @@ mod tests {
         }
         let criteria = acceptance_criteria(&fix_with(json!(list)));
         assert_eq!(criteria.len(), 8);
-        assert_eq!(criteria[0].id, "N");
-        assert_eq!(criteria[0].test, None);
-        assert_eq!(criteria[1].id, "AC1");
+        assert_eq!(criteria[0].id, "AC2");
+        assert_eq!(criteria[1].id, "N");
+        assert_eq!(criteria[1].test, None);
+        assert_eq!(criteria[2].id, "AC1");
+    }
+
+    #[test]
+    fn a_non_string_id_falls_back_to_its_position() {
+        let criteria = acceptance_criteria(&fix_with(json!([
+            {"id": "AC1", "statement": "s1", "test": "t"},
+            {"id": 1, "statement": "s2", "test": "t"},
+            {"statement": "s3", "test": "t"}
+        ])));
+        let ids: Vec<&str> = criteria.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["AC1", "AC2", "AC3"]);
+    }
+
+    #[test]
+    fn uncovered_criteria_survive_the_evidence_cap() {
+        let f = fixture("new\n");
+        with_criteria(&f, json!([{"id": "AC1", "statement": "s", "test": null}]));
+        let many = (0..MAX_EVIDENCE_FINDINGS)
+            .map(|_| finding("nit", "maintainability"))
+            .collect();
+        let r = run(&verifier(
+            &f,
+            invoker(Ok(&reply(many, "comment")), None, &Calls::default()),
+            &CostLedger::default(),
+            "claude",
+        ));
+        let titles: Vec<&str> = r.evidence["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f["title"].as_str())
+            .collect();
+        assert!(
+            titles.contains(&"acceptance criterion AC1 has no test"),
+            "{titles:?}"
+        );
     }
 }

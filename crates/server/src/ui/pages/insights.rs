@@ -930,6 +930,11 @@ fn gates_body(ctx: &UiCtx) -> String {
         &[("threshold", &threshold.to_string())],
     );
     let retried_label = ctx.t("Retried \u{2192} passed");
+    let mut review_note = ctx.t("Advisory: the review gate is in observe mode");
+    if total.review_errors > 0 {
+        let errors = ctx.tf("{n} could not run", &[("n", &total.review_errors.to_string())]);
+        review_note = format!("{review_note} \u{00b7} {errors}");
+    }
     let tiles = [
         gate_tile("fact_check", &gate_rate_text(ctx, total.agreement_rate), &ctx.t("Agreement rate"), &rate_note),
         gate_tile("error", &total.gated_blocks.to_string(), &ctx.t("Blocked by gate"), ""),
@@ -939,7 +944,7 @@ fn gates_body(ctx: &UiCtx) -> String {
             "visibility",
             &total.review_would_block.to_string(),
             &ctx.t("Review would block"),
-            &ctx.t("Advisory: the review gate is in observe mode"),
+            &review_note,
         ),
         gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
     ]
@@ -1177,4 +1182,46 @@ fn audit_body(ctx: &UiCtx) -> String {
         })
         .collect();
     format!("\n{heading}\n<div class=\"grid\">\n{cards}\n</div>\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ui::routes::UiRequest;
+    use crate::ui::state::UiState;
+    use chrono::{TimeZone, Utc};
+
+    fn gates_page(review_events: &[&str]) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", Some(now));
+        std::fs::create_dir_all(&state.events_dir).unwrap();
+        let lines: Vec<String> = review_events
+            .iter()
+            .enumerate()
+            .map(|(i, data)| {
+                format!(
+                    r#"{{"event_type":"verification.review_completed","run_id":"r","project":"p","issue_iid":{i},"timestamp":"2026-11-22T10:00:00Z","data":{data}}}"#
+                )
+            })
+            .collect();
+        std::fs::write(state.events_dir.join("2026-11-22.jsonl"), lines.join("\n") + "\n").unwrap();
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        String::from_utf8(r.body).unwrap()
+    }
+
+    #[test]
+    fn the_review_tile_counts_reviews_that_could_not_run() {
+        let html = gates_page(&[
+            r#"{"error":"timeout"}"#,
+            r#"{"error":"bad json"}"#,
+            r#"{"observed_passed":false}"#,
+        ]);
+        assert!(html.contains("2 could not run"), "{html}");
+    }
+
+    #[test]
+    fn the_review_tile_says_nothing_about_errors_when_there_are_none() {
+        let html = gates_page(&[r#"{"observed_passed":false}"#]);
+        assert!(!html.contains("could not run"), "{html}");
+    }
 }

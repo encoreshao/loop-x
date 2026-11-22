@@ -79,7 +79,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 pub(crate) const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"acceptance_criteria\": [{\"id\": \"AC1\", \"statement\": \"<one testable sentence: WHEN <trigger> the system shall <behaviour>, IF <error condition> THEN the system shall <behaviour>, or The system shall <behaviour>>\", \"test\": \"<the test that proves it, e.g. spec/models/order_spec.rb:42 or tests/test_pages.py::test_partial_last_page_counts>\"}, {\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\": \"<only for a criterion no automated test can prove: why>\"}], \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\n`acceptance_criteria` are the ones you wrote in step 6, at most 8, ids AC1, AC2, ...; the loop shows them as a checklist in the merge request description, and its review flags a criterion that has neither a test nor a reason.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- spec mode (only when the prompt says Spec mode is ON): {\"action\": \"spec\", \"spec\": \"<the spec markdown>\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"acceptance_criteria\": [{\"id\": \"AC1\", \"statement\": \"<one testable sentence: WHEN <trigger> the system shall <behaviour>, IF <error condition> THEN the system shall <behaviour>, or The system shall <behaviour>>\", \"test\": \"<the test that proves it, e.g. spec/models/order_spec.rb:42 or tests/test_pages.py::test_partial_last_page_counts>\"}, {\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\": \"<only for a criterion no automated test can prove: why>\"}], \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\n`acceptance_criteria` are the 1-5 you wrote in step 6, ids AC1, AC2, ...; the loop shows them as a checklist in the merge request description, and its review flags a criterion that has neither a test nor a reason.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- spec mode (only when the prompt says Spec mode is ON): {\"action\": \"spec\", \"spec\": \"<the spec markdown>\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
 
 /// Asset-build commands the agent may run before taking a screenshot.
 pub(crate) const ASSET_BUILD_PATTERNS: [&str; 4] = [
@@ -1120,8 +1120,9 @@ fn gate_event(
     Some((event_type, data))
 }
 
-/// `verification.external_skipped` for a vacuous pass (no worktree / no
-/// commands, or an iteration that never reached verification) and
+/// `verification.external_skipped` for a vacuous project-checks pass (no
+/// worktree / no commands, or an iteration that never reached verification),
+/// nothing for a vacuous gate or a check skipped after a failure, and
 /// `external_completed` otherwise.
 fn emit_verification_events(
     ctx: &RunCtx,
@@ -1148,8 +1149,12 @@ fn emit_verification_events(
                 .get("commands")
                 .and_then(Value::as_array)
                 .is_some_and(Vec::is_empty);
+        let gate_or_after_failure = ev.get("gate").is_some()
+            || ev.get("skipped").is_some_and(crate::loop_serialize::truthy);
         if vacuous {
-            ctx.emit("verification.external_skipped", Some(run_id), fields(None));
+            if !gate_or_after_failure {
+                ctx.emit("verification.external_skipped", Some(run_id), fields(None));
+            }
             continue;
         }
         if let Some((event_type, data)) = gate_event(result, mode, iteration.iteration) {
@@ -1777,10 +1782,12 @@ fn spec_gate_for(ctx: &RunCtx, alias: &str, issue_iid: &str, gate: bool) -> spec
     }
     let decision = spec_gate::gate(flag, labels.as_ref(), state.as_ref());
     if decision == spec_gate::Gate::Off {
-        if state
-            .as_ref()
-            .is_some_and(|s| s.status != spec_gate::SpecStatus::Implemented)
-        {
+        if state.as_ref().is_some_and(|s| {
+            !matches!(
+                s.status,
+                spec_gate::SpecStatus::Implemented | spec_gate::SpecStatus::Dismissed
+            )
+        }) {
             ctx.log(&format!(
                 "spec gate {alias} #{issue_iid}: the stored spec is no longer asked for (no spec_gate flag, no {} label); the issue runs as usual",
                 spec_gate::SPEC_FIRST_LABEL
@@ -2562,10 +2569,6 @@ fn sum_usages(usages: &[Option<Value>]) -> Option<Value> {
 /// raw (un-coerced) cost and usage of each agent call it made.
 type PassOutput = (LoopResult, Vec<Option<f64>>, Vec<Option<Value>>);
 
-/// One runtime pass over an issue: the agent under the loop's budget and
-/// verification. `initial_feedback` goes to the first attempt;
-/// later attempts get the failed verification as feedback. `dirty_before`
-/// refuses every attempt (a worktree-off checkout holding the user's work).
 /// A pass whose agent tripped `agent_guard` ends with this stop reason, followed
 /// by what it changed; finalize escalates it as `guard_violation`.
 const GUARD_VIOLATION_PREFIX: &str = "guard_violation: ";
@@ -2626,6 +2629,10 @@ fn review_invoker(
     (invoker, ai_cli_config::selected_cli())
 }
 
+/// One runtime pass over an issue: the agent under the loop's budget and
+/// verification. `initial_feedback` goes to the first attempt;
+/// later attempts get the failed verification as feedback. `dirty_before`
+/// refuses every attempt (a worktree-off checkout holding the user's work).
 #[allow(clippy::too_many_arguments)]
 fn run_pass(
     ctx: &RunCtx,
@@ -6143,7 +6150,7 @@ mod tests {
             "\"statement\"",
             "\"test\"",
             "{\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\"",
-            "at most 8",
+            "the 1-5 you wrote in step 6",
         ] {
             assert!(GATE_OVERRIDE.contains(part), "{part}: {GATE_OVERRIDE}");
         }
@@ -7770,6 +7777,53 @@ mod tests {
             json!(["aws_access_key"])
         );
         assert_eq!(security["issue_iid"], json!(7));
+    }
+
+    #[test]
+    fn skipped_or_vacuous_gates_do_not_report_project_checks_skipped() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let failed = v(
+            "project_commands",
+            false,
+            "",
+            json!({"commands": [{"kind": "test", "command": "pnpm test", "passed": false}]}),
+        );
+        let skipped = |name: &str| v(name, true, "", json!({"vacuous": true, "skipped": true}));
+        let vacuous_scan = v(
+            "security_scan",
+            true,
+            "",
+            json!({"vacuous": true, "gate": "security"}),
+        );
+        emit_verification_events(
+            &ctx,
+            "r",
+            "r_web_7",
+            "web",
+            "7",
+            "gate",
+            &iteration(vec![
+                failed,
+                skipped("agent_review"),
+                skipped("security_scan"),
+            ]),
+        );
+        emit_verification_events(
+            &ctx,
+            "r",
+            "r_web_7",
+            "web",
+            "7",
+            "gate",
+            &iteration(vec![vacuous_scan]),
+        );
+        let evs = events::iter_events(ctx.events_dir.as_deref(), None, None);
+        let count = |t: &str| evs.iter().filter(|e| e["event_type"] == t).count();
+        assert_eq!(count("verification.external_completed"), 1, "{evs:?}");
+        assert_eq!(count("verification.external_skipped"), 0, "{evs:?}");
+        assert_eq!(count("verification.security_completed"), 0, "{evs:?}");
     }
 
     fn finalize_fix_with(

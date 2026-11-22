@@ -476,7 +476,10 @@ pub fn grade(
             .to_string(),
         );
     }
-    if expect.acceptance_criteria && crate::pre_review::acceptance_criteria(handoff).is_empty() {
+    if expect.acceptance_criteria
+        && handoff.get("action").and_then(Value::as_str) == Some("fix")
+        && crate::pre_review::acceptance_criteria(handoff).is_empty()
+    {
         reasons.push("fix handoff has no acceptance criteria".to_string());
     }
     if expect.clean_worktree && !dirty.is_empty() {
@@ -1205,6 +1208,18 @@ mod tests {
         ]});
         let (ok, why) = grade(&c, Some(&with), &[], Some(true), &[], &no_read);
         assert!(ok, "{why:?}");
+    }
+
+    #[test]
+    fn grade_checks_criteria_only_on_a_fix_handoff() {
+        let mut c = case("fix");
+        c.expect.acceptance_criteria = true;
+        let escalate = json!({"action": "escalate", "reason": "unclear"});
+        let (_, why) = grade(&c, Some(&escalate), &[], Some(true), &[], &no_read);
+        assert!(
+            !why.iter().any(|w| w.contains("acceptance criteria")),
+            "{why:?}"
+        );
     }
 
     #[test]

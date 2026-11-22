@@ -25,6 +25,9 @@ use std::time::{Duration, Instant};
 pub const TIMEOUT_EXIT_CODE: i32 = 124;
 /// Exit code of a scheduled run its precheck found nothing to do for (`EX_TEMPFAIL`).
 pub const PRECHECK_SKIPPED_EXIT: i32 = 75;
+/// A runner that exits [`PRECHECK_SKIPPED_EXIT`] is skipped only when its last
+/// output line starts with this; otherwise the exit is a failure.
+pub const SKIP_MARKER: &str = "loopx: skipped:";
 /// Exit code of a scheduled run held back near the AI subscription's usage limit.
 pub const QUOTA_PAUSED_EXIT: i32 = 76;
 /// How long a loop's `schedule.precheck` command may take.
@@ -489,6 +492,15 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         ];
         tried.push(next);
     };
+    if exit == PRECHECK_SKIPPED_EXIT
+        && !ends_with_skip_marker(&run_output(&log_path, log_start.get()))
+    {
+        // Never hand 75 on: the queue would record this failure as skipped.
+        return match fail(exit) {
+            PRECHECK_SKIPPED_EXIT => 1,
+            code => code,
+        };
+    }
     if exit == PRECHECK_SKIPPED_EXIT {
         let _ = status::write_status(&status_path, "idle", &[("last_exit_code", json!(exit))]);
         append_unified_log(
@@ -578,6 +590,19 @@ fn quota_pause(opts: &RunLoopOpts) -> Option<String> {
     );
     let _ = quota::write_pause(&path, &pause);
     Some(format!("{}, until {}", pause.reason, local_hm(pause.until)))
+}
+
+/// The line a runner prints last before exiting [`PRECHECK_SKIPPED_EXIT`].
+pub fn skip_line(why: &str) -> String {
+    format!("{SKIP_MARKER} {why}")
+}
+
+fn ends_with_skip_marker(output: &str) -> bool {
+    output
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| l.trim_start().starts_with(SKIP_MARKER))
 }
 
 /// The last 64 KB this run wrote to the day's log, from `start`.
@@ -1346,10 +1371,43 @@ mod tests {
     }
 
     #[test]
+    fn a_skip_line_is_recognised_only_as_the_last_line() {
+        let line = skip_line("no pending events");
+        assert!(ends_with_skip_marker(&format!("starting\n{line}\n\n")));
+        assert!(!ends_with_skip_marker(&format!("{line}\npanicked\n")));
+        assert!(!ends_with_skip_marker(""));
+    }
+
+    #[test]
+    fn exit_75_without_the_skip_marker_is_a_failure() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        let exe = fake_exe(
+            d.path(),
+            &format!(
+                "echo '{SKIP_MARKER} early'; echo 'then it crashed'; exit {PRECHECK_SKIPPED_EXIT}"
+            ),
+        );
+        let code = with_env(d.path(), || {
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
+        });
+        assert_ne!(code, PRECHECK_SKIPPED_EXIT);
+        assert_ne!(code, 0);
+        let st = status::read_status(&d.path().join("outputs/status.json"));
+        assert_eq!(st["state"], "failed", "{st}");
+        let log = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(log.contains("FAILED"), "{log}");
+        assert!(!log.contains("skipped: nothing to do"), "{log}");
+    }
+
+    #[test]
     fn a_runner_that_finds_nothing_to_do_is_skipped_not_failed() {
         let d = tempfile::tempdir().unwrap();
         setup(d.path(), false, 30);
-        let exe = fake_exe(d.path(), &format!("exit {PRECHECK_SKIPPED_EXIT}"));
+        let exe = fake_exe(
+            d.path(),
+            &format!("echo '{SKIP_MARKER} no pending events'; exit {PRECHECK_SKIPPED_EXIT}"),
+        );
         let code = with_env(d.path(), || {
             run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
         });

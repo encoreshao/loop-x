@@ -4,7 +4,7 @@
 
 use crate::loop_result::VerificationResult;
 use crate::loop_runtime::LoopContext;
-use crate::loop_verifiers::{added_files, branch_diff, IssueWork, Verifier, WorkDir};
+use crate::loop_verifiers::{branch_changes, IssueWork, Verifier, WorkDir};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -271,12 +271,8 @@ impl Verifier for SecurityScanVerifier {
             .get("target_branch")
             .and_then(Value::as_str)
             .unwrap_or("main");
-        let diff = match branch_diff(&dir, target) {
-            Ok(d) => d,
-            Err(e) => return error(e),
-        };
-        let added = match added_files(&dir, target) {
-            Ok(a) => a,
+        let (diff, added) = match branch_changes(&dir, target) {
+            Ok(changes) => changes,
             Err(e) => return error(e),
         };
         scan_result(&self.name, &scan(&diff, &added), start)

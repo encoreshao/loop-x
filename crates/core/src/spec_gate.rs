@@ -22,6 +22,7 @@ pub enum SpecStatus {
     Approved,
     ChangesRequested,
     Implemented,
+    Dismissed,
 }
 
 /// An issue's labels as its tracker reports them.
@@ -140,6 +141,38 @@ fn safe_key(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', '\0'])
 }
 
+fn valid_issue(alias: &str, iid: &str) -> Result<(), String> {
+    if !safe_key(alias) || iid.is_empty() || !iid.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("invalid issue {alias} #{iid}"));
+    }
+    Ok(())
+}
+
+/// Drop the awaiting spec: the gate is off for the issue from now on, so it
+/// runs as usual.
+pub fn dismiss(
+    memory_root: &Path,
+    alias: &str,
+    iid: &str,
+    by: &str,
+    now: DateTime<Utc>,
+) -> Result<SpecState, String> {
+    valid_issue(alias, iid)?;
+    locked(memory_root, alias, iid, || {
+        let mut state = load(memory_root, alias, iid)
+            .ok_or_else(|| format!("no spec is waiting for {alias} #{iid}"))?;
+        if state.status != SpecStatus::Awaiting {
+            return Err(format!("the spec for {alias} #{iid} was already decided"));
+        }
+        state.status = SpecStatus::Dismissed;
+        state.decided_at = Some(now.to_rfc3339());
+        state.decided_by = Some(by.to_string());
+        save(memory_root, alias, iid, &state).map_err(|e| e.to_string())?;
+        Ok(state)
+    })
+    .map_err(|e| e.to_string())?
+}
+
 /// Approve the awaiting spec, or ask for changes (`notes` required).
 pub fn decide(
     memory_root: &Path,
@@ -150,9 +183,7 @@ pub fn decide(
     by: &str,
     now: DateTime<Utc>,
 ) -> Result<SpecState, String> {
-    if !safe_key(alias) || iid.is_empty() || !iid.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("invalid issue {alias} #{iid}"));
-    }
+    valid_issue(alias, iid)?;
     let notes = notes.trim();
     if !approve && notes.is_empty() {
         return Err("say what should change in the spec".into());
@@ -231,7 +262,7 @@ pub fn gate(flag: bool, labels: Option<&IssueLabels>, state: Option<&SpecState>)
             )
     };
     match s.status {
-        SpecStatus::Implemented => Gate::Off,
+        SpecStatus::Implemented | SpecStatus::Dismissed => Gate::Off,
         SpecStatus::Approved => Gate::Approved {
             spec: s.spec.clone(),
         },
@@ -548,6 +579,26 @@ mod tests {
         let s = decide(d.path(), "web", "8", false, "Split it.", "dashboard", now()).unwrap();
         assert_eq!(s.status, SpecStatus::ChangesRequested);
         assert_eq!(s.notes, "Split it.");
+    }
+
+    #[test]
+    fn a_dismissed_spec_turns_the_gate_off_and_leaves_needs_you() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(dismiss(d.path(), "web", "7", "dashboard", now()).is_err());
+        record_posted(d.path(), "web", "7", "**Goal:** x", now()).unwrap();
+        let s = dismiss(d.path(), "web", "7", "dashboard", now()).unwrap();
+        assert_eq!(s.status, SpecStatus::Dismissed);
+        assert_eq!(s.decided_by.as_deref(), Some("dashboard"));
+        assert_eq!(load(d.path(), "web", "7"), Some(s.clone()));
+        assert!(awaiting(d.path()).is_empty());
+        assert_eq!(gate(true, None, Some(&s)), Gate::Off);
+        assert_eq!(
+            gate(false, Some(&labels(&[SPEC_FIRST_LABEL])), Some(&s)),
+            Gate::Off
+        );
+        assert!(dismiss(d.path(), "web", "7", "dashboard", now()).is_err());
+        assert!(decide(d.path(), "web", "7", true, "", "dashboard", now()).is_err());
+        assert!(dismiss(d.path(), "..", "7", "dashboard", now()).is_err());
     }
 
     #[test]

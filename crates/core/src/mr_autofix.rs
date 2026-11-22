@@ -30,6 +30,9 @@ const MAX_VERIFY_TRIES: u64 = 5;
 const VERIFY_GIVE_UP_HOURS: i64 = 24;
 const VERIFY_FAILURES: &str = "_verify_failures";
 const ESCALATED_KEY: &str = "escalated";
+const ESCALATED_KEEP_DAYS: i64 = 30;
+/// A finished job's `<id>.ci.json` is kept this long, for debugging.
+const CI_FILE_KEEP_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Verified {
@@ -121,12 +124,15 @@ fn load_ledger(path: &Path) -> Result<Map<String, Value>, String> {
 }
 
 /// Read-modify-write of the ledger under its lock; an unreadable ledger is left as it is.
+/// Every write also drops escalations older than [`ESCALATED_KEEP_DAYS`].
 fn update_ledger<T>(
     path: &Path,
+    now: DateTime<Utc>,
     f: impl FnOnce(&mut Map<String, Value>) -> T,
 ) -> Result<T, String> {
     file_lock::with_lock(path, || {
         let mut ledger = load_ledger(path)?;
+        prune_escalated(&mut ledger, now);
         let out = f(&mut ledger);
         let text = crate::pyjson::to_string_pretty(&Value::Object(ledger)) + "\n";
         file_lock::write_atomic(path, text.as_bytes())
@@ -134,6 +140,27 @@ fn update_ledger<T>(
             .map_err(|e| format!("cannot write {}: {e}", path.display()))
     })
     .map_err(|e| format!("cannot lock {}: {e}", path.display()))?
+}
+
+/// Escalations are `{"key", "at"}`; an older bare-string entry is dated now,
+/// so it ages out like the rest.
+fn prune_escalated(ledger: &mut Map<String, Value>, now: DateTime<Utc>) {
+    let Some(list) = ledger.get_mut(ESCALATED_KEY).and_then(Value::as_array_mut) else {
+        return;
+    };
+    let stamp = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let cutoff = now - Duration::days(ESCALATED_KEEP_DAYS);
+    for e in list.iter_mut() {
+        if let Some(key) = e.as_str() {
+            *e = json!({"key": key, "at": stamp});
+        }
+    }
+    list.retain(|e| {
+        e["at"]
+            .as_str()
+            .and_then(crate::seen_store::parse_iso)
+            .is_none_or(|at| at > cutoff)
+    });
 }
 
 fn attempts<'a>(ledger: &'a Map<String, Value>, key: &str) -> &'a [Value] {
@@ -155,8 +182,15 @@ fn attempts_since(ledger: &Map<String, Value>, since: DateTime<Utc>) -> usize {
         .count()
 }
 
-fn set_result(path: &Path, key: &str, event_id: &str, job_id: Option<&str>, result: &str) {
-    let updated = update_ledger(path, |ledger| {
+fn set_result(
+    path: &Path,
+    now: DateTime<Utc>,
+    key: &str,
+    event_id: &str,
+    job_id: Option<&str>,
+    result: &str,
+) {
+    let updated = update_ledger(path, now, |ledger| {
         let Some(list) = ledger.get_mut(key).and_then(Value::as_array_mut) else {
             return;
         };
@@ -170,6 +204,23 @@ fn set_result(path: &Path, key: &str, event_id: &str, job_id: Option<&str>, resu
     if let Err(e) = updated {
         eprintln!("mr-autofix: {e}");
     }
+}
+
+fn remove_attempt(
+    path: &Path,
+    now: DateTime<Utc>,
+    key: &str,
+    event_id: &str,
+) -> Result<(), String> {
+    update_ledger(path, now, |ledger| {
+        let Some(list) = ledger.get_mut(key).and_then(Value::as_array_mut) else {
+            return;
+        };
+        list.retain(|a| a["event_id"] != event_id);
+        if list.is_empty() {
+            ledger.remove(key);
+        }
+    })
 }
 
 pub fn ci_failure_of(ev: &Value) -> CiFailure {
@@ -253,16 +304,17 @@ impl Ctx<'_> {
     /// (through the event) a Needs you item.
     fn escalate(&self, v: &Verified, sha: &str, pipeline_id: i64, reason: &str) -> String {
         let key = format!("{}@{sha}", v.key);
-        let fresh = update_ledger(self.ledger, |ledger| {
+        let fresh = update_ledger(self.ledger, self.now, |ledger| {
             let list = ledger.entry(ESCALATED_KEY).or_insert_with(|| json!([]));
             if !list.is_array() {
                 *list = json!([]);
             }
             let list = list.as_array_mut().expect("just made an array");
-            if list.iter().any(|k| k == key.as_str()) {
+            if list.iter().any(|e| e["key"] == key.as_str()) {
                 return false;
             }
-            list.push(json!(key));
+            let at = self.now.to_rfc3339_opts(SecondsFormat::Secs, true);
+            list.push(json!({"key": key, "at": at}));
             true
         });
         match fresh {
@@ -325,7 +377,14 @@ impl Ctx<'_> {
                 if !mr_ref.is_empty() && self.api.job_running(&mr_ref) {
                     continue;
                 }
-                set_result(self.ledger, key, &text("event_id"), None, "timed_out");
+                set_result(
+                    self.ledger,
+                    self.now,
+                    key,
+                    &text("event_id"),
+                    None,
+                    "timed_out",
+                );
                 let v = Verified {
                     mr_ref: if mr_ref.is_empty() {
                         key.clone()
@@ -391,7 +450,7 @@ impl Ctx<'_> {
             "job_id": null, "at": now.to_rfc3339_opts(SecondsFormat::Secs, true), "result": "started",
             "mr_ref": v.mr_ref, "web_url": v.web_url});
         // Checked and recorded under one lock, so two runs never both record an attempt.
-        let recorded = update_ledger(self.ledger, |ledger| {
+        let recorded = update_ledger(self.ledger, self.now, |ledger| {
             if attempts(ledger, &v.key).len() >= MAX_ATTEMPTS_PER_MR {
                 return Some("already_attempted");
             }
@@ -412,21 +471,51 @@ impl Ctx<'_> {
         }
         let job_id = match self.api.start_fix(&v.mr_ref, &v.title, &ci) {
             Ok(id) => id,
+            Err(e) if self.api.job_running(&v.mr_ref) => {
+                if let Err(le) = remove_attempt(self.ledger, self.now, &v.key, &event_id) {
+                    eprintln!("mr-autofix: {le}");
+                }
+                eprintln!(
+                    "mr-autofix: {}: a Fix now run started meanwhile ({e})",
+                    v.mr_ref
+                );
+                return escalate("job_busy");
+            }
             Err(e) => {
-                set_result(self.ledger, &v.key, &event_id, None, "failed");
+                set_result(self.ledger, self.now, &v.key, &event_id, None, "failed");
                 eprintln!("mr-autofix: {}: could not start Fix now: {e}", v.mr_ref);
                 return escalate("fix_failed");
             }
         };
-        set_result(self.ledger, &v.key, &event_id, Some(&job_id), "started");
+        set_result(
+            self.ledger,
+            self.now,
+            &v.key,
+            &event_id,
+            Some(&job_id),
+            "started",
+        );
         let outcome = self.api.wait(&job_id, FIX_TIMEOUT);
         let (result, reason) = match &outcome {
             FixOutcome::Done(_) => ("done", None),
+            FixOutcome::Nothing(s) if s == crate::mr_fix::run::CI_BRANCH_MOVED => {
+                ("nothing", Some("branch_moved"))
+            }
+            FixOutcome::Nothing(s) if s == crate::mr_fix::run::CI_ALREADY_FIXED => {
+                ("nothing", Some("already_handled"))
+            }
             FixOutcome::Nothing(_) => ("nothing", Some("fix_nothing")),
             FixOutcome::Failed(_) => ("failed", Some("fix_failed")),
             FixOutcome::TimedOut => ("timed_out", Some("fix_failed")),
         };
-        set_result(self.ledger, &v.key, &event_id, Some(&job_id), result);
+        set_result(
+            self.ledger,
+            self.now,
+            &v.key,
+            &event_id,
+            Some(&job_id),
+            result,
+        );
         match (outcome, reason) {
             (FixOutcome::Done(summary), _) => {
                 self.emit(
@@ -466,6 +555,8 @@ pub fn reason_words(reason: &str) -> &'static str {
         "already_attempted" => "it already had its one automatic attempt",
         "fix_failed" => "the automatic fix failed",
         "fix_nothing" => "the automatic fix changed nothing",
+        "branch_moved" => "the branch moved after the failure was diagnosed",
+        "already_handled" => "an automatic CI fix was already made on it",
         "daily_cap" => "the daily limit of automatic fixes was reached",
         "low_confidence" => "the diagnosis was not confident enough",
         "job_busy" => "a Fix now run was already in progress",
@@ -659,6 +750,30 @@ impl AutofixApi for RealApi {
     }
 }
 
+/// Deletes the `<job id>.ci.json` of a job whose record is gone, or that
+/// started more than [`CI_FILE_KEEP_DAYS`] ago (job ids start with their UTC start time).
+pub fn prune_ci_files(jobs_dir: &Path, now: DateTime<Utc>) {
+    let cutoff = (now - Duration::days(CI_FILE_KEEP_DAYS))
+        .format("%Y%m%dT%H%M%S")
+        .to_string();
+    let Ok(entries) = std::fs::read_dir(jobs_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".ci.json") else {
+            continue;
+        };
+        let started = id.split('-').next().unwrap_or("");
+        let old = started.len() == 15 && started < cutoff.as_str();
+        if old || !jobs_dir.join(format!("{id}.json")).exists() {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                eprintln!("mr-autofix: cannot delete {name}: {e}");
+            }
+        }
+    }
+}
+
 fn write_private(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -701,7 +816,10 @@ pub fn main(argv: &[String]) -> i32 {
         }
     };
     if !is_enabled(&entry) {
-        println!("mr-autofix: the loop is switched off; nothing done");
+        println!(
+            "{}",
+            crate::run_loop::skip_line("mr-autofix: the loop is switched off; nothing done")
+        );
         return crate::run_loop::PRECHECK_SKIPPED_EXIT;
     }
     let limits = Limits::from_settings(entry.get("settings").unwrap_or(&Value::Null));
@@ -713,6 +831,7 @@ pub fn main(argv: &[String]) -> i32 {
         jobs_dir: jobs::jobs_dir(&home),
         exe,
     };
+    prune_ci_files(&api.jobs_dir, Utc::now());
     let notify = |line: &str| {
         crate::runner_util::notify_slack_best_effort(line, None, None);
     };
@@ -730,7 +849,10 @@ pub fn main(argv: &[String]) -> i32 {
         println!("mr-autofix: {line}");
     }
     if report.lines.is_empty() {
-        println!("mr-autofix: no pending events");
+        println!(
+            "{}",
+            crate::run_loop::skip_line("mr-autofix: no pending events")
+        );
         return crate::run_loop::PRECHECK_SKIPPED_EXIT;
     }
     0
@@ -756,6 +878,8 @@ mod tests {
     struct Fake {
         verify: VerifyFn,
         busy: Cell<bool>,
+        /// The user presses Fix now just before this run's start: the start is refused.
+        busy_on_start: Cell<bool>,
         outcome: RefCell<FixOutcome>,
         started: RefCell<Vec<(String, CiFailure)>>,
         ledger: PathBuf,
@@ -769,6 +893,7 @@ mod tests {
                     verified_from(ev, &gitlab_mr(ev), "me", "work").map_err(VerifyError::Refused)
                 }),
                 busy: Cell::new(false),
+                busy_on_start: Cell::new(false),
                 outcome: RefCell::new(FixOutcome::Done("Fixed 1 of 1".into())),
                 started: RefCell::new(Vec::new()),
                 ledger: ledger.to_path_buf(),
@@ -785,6 +910,10 @@ mod tests {
             self.busy.get()
         }
         fn start_fix(&self, mr_ref: &str, _title: &str, ci: &CiFailure) -> Result<String, String> {
+            if self.busy_on_start.get() {
+                self.busy.set(true);
+                return Err("a fix for this merge request is already running".into());
+            }
             let ledger = load_ledger(&self.ledger).unwrap();
             let recorded = ledger
                 .values()
@@ -1057,6 +1186,14 @@ mod tests {
             (FixOutcome::Failed("checks failed".into()), "fix_failed"),
             (FixOutcome::TimedOut, "fix_failed"),
             (FixOutcome::Nothing("Fixed 0 of 1".into()), "fix_nothing"),
+            (
+                FixOutcome::Nothing(crate::mr_fix::run::CI_BRANCH_MOVED.into()),
+                "branch_moved",
+            ),
+            (
+                FixOutcome::Nothing(crate::mr_fix::run::CI_ALREADY_FIXED.into()),
+                "already_handled",
+            ),
         ] {
             let fx = Fx::new();
             let api = Fake::new(&fx.ledger);
@@ -1067,6 +1204,7 @@ mod tests {
             assert_eq!(esc[0]["data"]["reason"], reason);
             assert_eq!(fx.slack.borrow().len(), 1);
             assert!(fx.slack.borrow()[0].contains("work:9!7"));
+            assert_ne!(reason_words(reason), reason_words("unknown"), "{reason}");
             assert!(fx.emitted("mr_autofix.completed").is_empty());
             fx.go(&api, vec![ev("e1", "abc", 100, 0.9, 7)], &Limits::default());
             assert_eq!(fx.slack.borrow().len(), 1, "{reason}: once");
@@ -1116,6 +1254,20 @@ mod tests {
     }
 
     #[test]
+    fn a_fix_now_pressed_meanwhile_frees_the_attempt_and_says_it_was_busy() {
+        let fx = Fx::new();
+        let api = Fake::new(&fx.ledger);
+        api.busy_on_start.set(true);
+        let lines = fx.go(&api, vec![ev("e1", "abc", 100, 0.9, 7)], &Limits::default());
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let escalated = fx.emitted("mr_autofix.escalated");
+        assert_eq!(escalated.len(), 1, "{lines:?}");
+        assert_eq!(escalated[0]["data"]["reason"], "job_busy");
+        assert!(attempts(&fx.ledger(), KEY7).is_empty(), "{:?}", fx.ledger());
+        assert_eq!(fx.pending(), 0);
+    }
+
+    #[test]
     fn each_run_handles_one_event_and_leaves_the_rest_for_the_next() {
         let fx = Fx::new();
         let api = Fake::new(&fx.ledger);
@@ -1137,6 +1289,58 @@ mod tests {
     fn write_ledger(fx: &Fx, v: Value) {
         std::fs::create_dir_all(fx.ledger.parent().unwrap()).unwrap();
         std::fs::write(&fx.ledger, v.to_string()).unwrap();
+    }
+
+    #[test]
+    fn escalations_older_than_thirty_days_are_pruned_on_write() {
+        let fx = Fx::new();
+        let api = Fake::new(&fx.ledger);
+        let ago =
+            |days: i64| (now() - Duration::days(days)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        write_ledger(
+            &fx,
+            json!({ESCALATED_KEY: ["legacy@1",
+                {"key": "old@2", "at": ago(31)}, {"key": "recent@3", "at": ago(29)}]}),
+        );
+        fx.go(&api, vec![ev("e1", "abc", 100, 0.1, 7)], &Limits::default());
+        let keys: Vec<String> = fx.ledger()[ESCALATED_KEY]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["key"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(keys, ["legacy@1", "recent@3", &format!("{KEY7}@abc")]);
+        fx.go(&api, vec![ev("e2", "abc", 101, 0.1, 7)], &Limits::default());
+        assert_eq!(
+            fx.emitted("mr_autofix.escalated").len(),
+            1,
+            "still once per (MR, sha)"
+        );
+    }
+
+    #[test]
+    fn ci_files_of_old_or_vanished_jobs_are_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        for (id, record) in [
+            ("20261001T000000-aaaaaaaa", true),
+            ("20261120T000000-bbbbbbbb", true),
+            ("20261120T000000-cccccccc", false),
+        ] {
+            std::fs::write(dir.join(format!("{id}.ci.json")), "{}").unwrap();
+            if record {
+                std::fs::write(dir.join(format!("{id}.json")), "{}").unwrap();
+            }
+        }
+        prune_ci_files(dir, now());
+        let mut left: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".ci.json"))
+            .collect();
+        left.sort();
+        assert_eq!(left, ["20261120T000000-bbbbbbbb.ci.json"]);
     }
 
     #[test]

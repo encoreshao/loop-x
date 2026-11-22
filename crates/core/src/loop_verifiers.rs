@@ -610,6 +610,24 @@ fn diff_base(dir: &Path, target: &str) -> Result<String, String> {
 
 pub fn branch_diff(dir: &Path, target: &str) -> Result<String, String> {
     let range = format!("{}..HEAD", diff_base(dir, target)?);
+    diff_of(dir, target, &range)
+}
+
+pub fn added_files(dir: &Path, target: &str) -> Result<Vec<String>, String> {
+    let range = format!("{}..HEAD", diff_base(dir, target)?);
+    added_in(dir, target, &range)
+}
+
+/// [`branch_diff`] and [`added_files`] from one merge-base.
+pub fn branch_changes(dir: &Path, target: &str) -> Result<(String, Vec<String>), String> {
+    let range = format!("{}..HEAD", diff_base(dir, target)?);
+    Ok((
+        diff_of(dir, target, &range)?,
+        added_in(dir, target, &range)?,
+    ))
+}
+
+fn diff_of(dir: &Path, target: &str, range: &str) -> Result<String, String> {
     git_in(
         dir,
         &[
@@ -620,17 +638,16 @@ pub fn branch_diff(dir: &Path, target: &str) -> Result<String, String> {
             "--no-ext-diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
-            &range,
+            range,
         ],
     )
     .map_err(|e| format!("cannot diff against {target}: {e}"))
 }
 
-pub fn added_files(dir: &Path, target: &str) -> Result<Vec<String>, String> {
-    let range = format!("{}..HEAD", diff_base(dir, target)?);
+fn added_in(dir: &Path, target: &str, range: &str) -> Result<Vec<String>, String> {
     git_in(
         dir,
-        &["diff", "--name-only", "--diff-filter=AR", "-z", &range],
+        &["diff", "--name-only", "--diff-filter=AR", "-z", range],
     )
     .map(|s| {
         s.split('\0')
@@ -1485,6 +1502,16 @@ mod tests {
     fn added_files_lists_only_new_paths() {
         let (_origin, work) = origin_and_clone();
         assert_eq!(added_files(work.path(), "main").unwrap(), ["b.txt"]);
+    }
+
+    #[test]
+    fn branch_changes_matches_the_diff_and_added_files() {
+        let (_origin, work) = origin_and_clone();
+        let (diff, added) = branch_changes(work.path(), "main").unwrap();
+        assert_eq!(diff, branch_diff(work.path(), "main").unwrap());
+        assert_eq!(added, added_files(work.path(), "main").unwrap());
+        let err = branch_changes(work.path(), "nope").unwrap_err();
+        assert!(err.contains("nope"), "{err}");
     }
 
     #[test]
