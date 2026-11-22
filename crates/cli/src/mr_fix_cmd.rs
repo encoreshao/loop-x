@@ -17,15 +17,54 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str =
-    "Usage: loopx mr-fix run <account:project!iid>\n       loopx mr-fix announce <plan-file>";
+const USAGE: &str = "Usage: loopx mr-fix run <account:project!iid> [--ci-failure <file>]\n       loopx mr-fix announce <plan-file>";
+
+#[derive(Debug)]
+enum Cmd<'a> {
+    Run {
+        mr_ref: &'a str,
+        ci: Option<&'a str>,
+    },
+    Announce(&'a str),
+}
+
+fn parse_args(args: &[String]) -> Result<Cmd<'_>, String> {
+    match args {
+        [sub, mr_ref] if sub == "run" => Ok(Cmd::Run { mr_ref, ci: None }),
+        [sub, mr_ref, flag, file] if sub == "run" && flag == "--ci-failure" => Ok(Cmd::Run {
+            mr_ref,
+            ci: Some(file),
+        }),
+        [sub, draft] if sub == "announce" => Ok(Cmd::Announce(draft)),
+        _ => Err(USAGE.to_string()),
+    }
+}
+
+/// The CI failure a Pipeline Auto-fix run hands over: only a file LoopX wrote
+/// in its own jobs directory is accepted (no symlink out of it).
+fn load_ci_failure(file: &str, jobs_dir: &Path) -> Result<runner::CiFailure, String> {
+    let dir = jobs_dir
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", jobs_dir.display()))?;
+    let path = Path::new(file)
+        .canonicalize()
+        .map_err(|e| format!("cannot read the CI failure file {file}: {e}"))?;
+    if !path.starts_with(&dir) {
+        return Err(format!(
+            "the CI failure file must be inside {}",
+            dir.display()
+        ));
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read the CI failure file: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("bad CI failure file: {e}"))
+}
 
 pub fn run(args: &[String]) -> ExitCode {
-    let result = match args {
-        [sub, mr_ref] if sub == "run" => run_fix(mr_ref),
-        [sub, draft] if sub == "announce" => announce(Path::new(draft)),
-        _ => Err(USAGE.to_string()),
-    };
+    let result = parse_args(args).and_then(|cmd| match cmd {
+        Cmd::Run { mr_ref, ci } => run_fix(mr_ref, ci),
+        Cmd::Announce(draft) => announce(Path::new(draft)),
+    });
     match result {
         Ok(code) => code,
         Err(e) => {
@@ -181,7 +220,7 @@ fn announce_in_slack(
     loopx_core::slack_report::send(&report, None);
 }
 
-fn run_fix(mr_ref: &str) -> Result<ExitCode, String> {
+fn run_fix(mr_ref: &str, ci_file: Option<&str>) -> Result<ExitCode, String> {
     if !valid_mr_ref(mr_ref) {
         return Err(format!(
             "{mr_ref:?} is not a valid merge request reference (account:project!iid)"
@@ -189,6 +228,7 @@ fn run_fix(mr_ref: &str) -> Result<ExitCode, String> {
     }
     let home = home_dir();
     let dir = jobs::jobs_dir(&home);
+    let ci = ci_file.map(|f| load_ci_failure(f, &dir)).transpose()?;
     let job = own_job(&dir, mr_ref);
     // Refused before anything is recorded: the other runner owns that record.
     #[cfg(unix)]
@@ -199,12 +239,17 @@ fn run_fix(mr_ref: &str) -> Result<ExitCode, String> {
     if job.is_none() {
         eprintln!("mr-fix: no running job record for {mr_ref}; none will be updated");
     }
-    let outcome = fix(mr_ref, &home, job.as_ref());
+    let outcome = fix(mr_ref, &home, job.as_ref(), ci.as_ref());
     finish_outcome(&dir, job.as_ref(), outcome)
 }
 
 /// Everything after the record lookup; any `Err` becomes the job's failure reason.
-fn fix(mr_ref: &str, home: &Path, job: Option<&FixJob>) -> Result<RunResult, String> {
+fn fix(
+    mr_ref: &str,
+    home: &Path,
+    job: Option<&FixJob>,
+    ci: Option<&runner::CiFailure>,
+) -> Result<RunResult, String> {
     let (account, project, iid) = split_ref(mr_ref);
     let paths = loopx_core::connectors_config::Paths::default();
     let kind = loopx_core::connectors_config::get_account(account, &paths)
@@ -321,6 +366,7 @@ fn fix(mr_ref: &str, home: &Path, job: Option<&FixJob>) -> Result<RunResult, Str
                 let _ = jobs::set_step(&jobs_dir, id, step);
             }
         },
+        ci,
     );
     announce_in_slack(
         &gitlab,
@@ -363,6 +409,65 @@ mod tests {
         j.pid = None;
         assert!(check_owner(Some(&j), 5000, 1).is_ok());
         assert!(check_owner(None, 5000, 1).is_ok());
+    }
+
+    fn ci_json() -> String {
+        serde_json::json!({"pipeline_id": 555, "sha": "abc", "category": "lint", "culprit": "x",
+            "explanation": "e", "suggested_fix": "f", "failed_jobs": ["lint"], "web_url": "https://gl/p/555"})
+        .to_string()
+    }
+
+    #[test]
+    fn ci_failure_file_outside_the_jobs_dir_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let jobs_dir = jobs::jobs_dir(home.path());
+        std::fs::create_dir_all(&jobs_dir).unwrap();
+        let inside = jobs_dir.join("j1.ci.json");
+        std::fs::write(&inside, ci_json()).unwrap();
+        let ci = load_ci_failure(&inside.display().to_string(), &jobs_dir).unwrap();
+        assert_eq!((ci.pipeline_id, ci.sha.as_str()), (555, "abc"));
+
+        let outside = home.path().join("ci.json");
+        std::fs::write(&outside, ci_json()).unwrap();
+        let e = load_ci_failure(&outside.display().to_string(), &jobs_dir).unwrap_err();
+        assert!(e.contains("must be inside"), "{e}");
+        let sneaky = jobs_dir.join("../ci.json");
+        assert!(load_ci_failure(&sneaky.display().to_string(), &jobs_dir).is_err());
+        #[cfg(unix)]
+        {
+            let link = jobs_dir.join("link.json");
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(load_ci_failure(&link.display().to_string(), &jobs_dir).is_err());
+        }
+        let bad = jobs_dir.join("bad.json");
+        std::fs::write(&bad, "{\"pipeline_id\": \"x\"}").unwrap();
+        assert!(load_ci_failure(&bad.display().to_string(), &jobs_dir).is_err());
+        assert!(load_ci_failure(
+            &jobs_dir.join("missing.json").display().to_string(),
+            &jobs_dir
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn the_ci_flag_is_parsed_and_a_bad_file_fails_before_any_record() {
+        let e = parse_args(&["run".into(), "a:1!1".into(), "--ci-failure".into()]).unwrap_err();
+        assert!(e.contains("Usage"), "{e}");
+        assert!(parse_args(&["run".into(), "a:1!1".into(), "--other".into(), "f".into()]).is_err());
+        assert!(matches!(
+            parse_args(&[
+                "run".into(),
+                "a:1!1".into(),
+                "--ci-failure".into(),
+                "f".into()
+            ]),
+            Ok(Cmd::Run { ci: Some(_), .. })
+        ));
+        assert!(matches!(
+            parse_args(&["run".into(), "a:1!1".into()]),
+            Ok(Cmd::Run { ci: None, .. })
+        ));
+        assert!(USAGE.contains("--ci-failure"));
     }
 
     #[test]

@@ -250,6 +250,11 @@ impl LoopRuntime {
                             evidence: json!({"vacuous": true, "skipped": true}),
                         }
                     } else {
+                        self.emit(
+                            "verification.check_started",
+                            run_id,
+                            json!({"iteration": iteration_number, "verifier": v.name()}),
+                        );
                         v.verify(&ctx)
                     });
                 }
@@ -600,6 +605,7 @@ mod tests {
                 "loop.started",
                 "iteration.started",
                 "verification.started",
+                "verification.check_started",
                 "verification.passed",
                 "iteration.completed",
                 "loop.completed"
@@ -704,6 +710,74 @@ mod tests {
             ],
         )
         .with_events(Box::new(NoEvents))
+    }
+
+    struct Named(&'static str, Fake, bool);
+    impl Verifier for Named {
+        fn verify(&self, c: &LoopContext<'_>) -> VerificationResult {
+            self.1.verify(c)
+        }
+        fn skip_after_failure(&self) -> bool {
+            self.2
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<Mutex<Vec<(String, Value)>>>);
+    impl EventSink for Recorder {
+        fn emit(&self, t: &str, _: &str, data: Value) -> Result<(), String> {
+            self.0.lock().unwrap().push((t.to_string(), data));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn check_started_precedes_each_run_verifier_and_not_skipped_ones() {
+        let rec = Recorder::default();
+        let tests = Fake::new(vec![vr("project_commands", false)]);
+        let review = Fake::new(vec![]);
+        let scan = Fake::new(vec![vr("security_scan", true)]);
+        LoopRuntime::new(
+            ok_agent(),
+            vec![
+                Box::new(Named("project_commands", tests, false)),
+                Box::new(Named("agent_review", review.clone(), true)),
+                Box::new(Named("security_scan", scan, false)),
+            ],
+        )
+        .with_events(Box::new(rec.clone()))
+        .start(&definition(10, 1, &[], &[]), "run_cs", None)
+        .unwrap();
+        let events = rec.0.lock().unwrap().clone();
+        let seq: Vec<String> = events
+            .iter()
+            .filter(|(t, _)| t.starts_with("verification."))
+            .map(|(t, d)| match d.get("verifier").and_then(Value::as_str) {
+                Some(v) => format!("{t}:{v}"),
+                None => t.clone(),
+            })
+            .collect();
+        assert_eq!(
+            seq,
+            [
+                "verification.started",
+                "verification.check_started:project_commands",
+                "verification.check_started:security_scan",
+                "verification.failed",
+            ]
+        );
+        assert_eq!(review.calls(), 0);
+        let started = events
+            .iter()
+            .find(|(t, _)| t == "verification.check_started")
+            .unwrap();
+        assert_eq!(
+            started.1,
+            json!({"iteration": 1, "verifier": "project_commands"})
+        );
     }
 
     #[test]

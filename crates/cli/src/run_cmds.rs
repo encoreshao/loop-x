@@ -81,22 +81,34 @@ pub fn scheduler(args: &[String]) -> ExitCode {
     // it resets) instead of being queued now. Manual runs already queued still run.
     let cli = loopx_core::ai_cli_config::selected_cli();
     let pause = quota::active_pause(&quota::pause_path(), &cli, chrono::Utc::now());
-    let queued = match pause {
-        Some(p) => {
-            println!(
-                "loop_scheduler: {cli} paused until {} ({}); nothing queued",
-                p.until.with_timezone(&Local).format("%H:%M"),
-                p.reason
-            );
-            Vec::new()
-        }
-        None => loop_scheduler::enqueue_due_loops(
-            &loops,
-            &loop_scheduler::default_state_path(),
-            &queue,
-            Local::now().naive_local(),
-        ),
-    };
+    if let Some(p) = &pause {
+        println!(
+            "loop_scheduler: {cli} paused until {} ({}); nothing queued",
+            p.until.with_timezone(&Local).format("%H:%M"),
+            p.reason
+        );
+    }
+    let queued = loop_scheduler::tick_enqueue(
+        pause.is_some(),
+        || {
+            loop_scheduler::enqueue_due_loops(
+                &loops,
+                &loop_scheduler::default_state_path(),
+                &queue,
+                Local::now().naive_local(),
+            )
+        },
+        || {
+            loop_scheduler::enqueue_event_loops(
+                &loops,
+                &loopx_core::runner_util::repo_root(),
+                &loopx_core::events::default_events_dir(),
+                &loopx_core::config::home_dir().join("event_triggers"),
+                &queue,
+                chrono::Utc::now(),
+            )
+        },
+    );
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));
     }

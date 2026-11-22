@@ -6,6 +6,7 @@
 //! (`scheduler_heartbeat.json` in the loopx home). The report reads that, the run
 //! queue, the scheduler state and the loops registry; it never changes any of them.
 
+use crate::event_triggers::{self, Subscription};
 use crate::loop_scheduler::{self, isoformat};
 use crate::loops_config;
 use crate::run_queue::{Entry, RunQueue};
@@ -77,6 +78,14 @@ fn hhmm(schedule: &Value) -> String {
     format!("{:02}:{:02}", n("hour"), n("minute"))
 }
 
+/// The trigger in a few words: `on event <type>` for an event loop, else its schedule.
+pub fn describe_trigger(schedule: &Value, sub: Option<&Subscription>) -> String {
+    match sub {
+        Some(s) => format!("on event {}", s.on),
+        None => describe_schedule(schedule),
+    }
+}
+
 /// The schedule in a few words, e.g. `weekly Mon,Fri at 09:30`.
 pub fn describe_schedule(schedule: &Value) -> String {
     const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -122,12 +131,16 @@ pub fn describe_schedule(schedule: &Value) -> String {
 }
 
 /// The first whole minute after `now` at which the loop is due, with the state as
-/// it is now. `None` when disabled or nothing falls inside the horizon.
+/// it is now. `None` when disabled, event-triggered, or nothing falls inside the horizon.
 pub fn next_due(
     loop_: &Value,
+    sub: Option<&Subscription>,
     state: &loop_scheduler::SchedulerState,
     now: NaiveDateTime,
 ) -> Option<NaiveDateTime> {
+    if sub.is_some() {
+        return None;
+    }
     let start = now.with_second(0)?.with_nanosecond(0)? + Duration::minutes(1);
     (0..NEXT_DUE_HORIZON_DAYS * 24 * 60)
         .map(|m| start + Duration::minutes(m))
@@ -150,11 +163,18 @@ fn last_run(entries: &[Entry], name: &str) -> Value {
 
 /// The whole picture. `alive` checks a queue entry's pid (injected for tests).
 pub fn report(loop_home: &Path, now: NaiveDateTime, alive: &dyn Fn(i64) -> bool) -> Value {
-    report_with_template(loop_home, None, now, alive)
+    report_with_template(
+        loop_home,
+        &crate::runner_util::repo_root(),
+        None,
+        now,
+        alive,
+    )
 }
 
 fn report_with_template(
     loop_home: &Path,
+    repo_root: &Path,
     template: Option<&Path>,
     now: NaiveDateTime,
     alive: &dyn Fn(i64) -> bool,
@@ -200,16 +220,17 @@ fn report_with_template(
             let name = l.get("name").and_then(Value::as_str).unwrap_or_default();
             let enabled = l.get("enabled").is_none_or(loops_config::py_truthy);
             let schedule = l.get("schedule").cloned().unwrap_or(Value::Null);
+            let sub = event_triggers::subscription_for(name, repo_root);
             let due_now = loop_scheduler::is_due(l, &state, now);
             let next = if enabled && !due_now {
-                next_due(l, &state, now).map(isoformat)
+                next_due(l, sub.as_ref(), &state, now).map(isoformat)
             } else {
                 None
             };
             json!({
                 "name": name,
                 "enabled": enabled,
-                "schedule": describe_schedule(&schedule),
+                "schedule": describe_trigger(&schedule, sub.as_ref()),
                 "last_attempted_at": state.get(name).and_then(|s| s.get("last_attempted_at")).cloned().unwrap_or(Value::Null),
                 "due_now": enabled && due_now,
                 "next_due": next,
@@ -371,7 +392,7 @@ mod tests {
     }
 
     fn report(home: &Path, now: NaiveDateTime, alive: &dyn Fn(i64) -> bool) -> Value {
-        report_with_template(home, Some(&home.join("no-template.json")), now, alive)
+        report_with_template(home, home, Some(&home.join("no-template.json")), now, alive)
     }
 
     fn home_with_loops(loops: Value) -> tempfile::TempDir {
@@ -475,6 +496,25 @@ mod tests {
         assert_eq!(l("off-loop")["due_now"], false);
         let text = render(&r);
         assert!(text.contains("disabled") && text.contains("next 2026-10-30 09:00"));
+    }
+
+    #[test]
+    fn an_event_loop_is_described_by_its_event_and_has_no_next_slot() {
+        let t = home_with_loops(json!([
+            {"name": "mr-autofix-loop", "enabled": true, "entry_point": "bin.mr_autofix"},
+        ]));
+        let def = t.path().join("loops/mr-autofix");
+        std::fs::create_dir_all(&def).unwrap();
+        std::fs::write(
+            def.join("loop.yaml"),
+            "name: mr-autofix-loop\nversion: 1\ntrigger:\n  type: event\n  on: pipeline_doctor.diagnosed\ngoal:\n  type: g\n",
+        )
+        .unwrap();
+        let r = report(t.path(), at(12, 0), &|_| true);
+        let l = &r["loops"][0];
+        assert_eq!(l["schedule"], "on event pipeline_doctor.diagnosed");
+        assert_eq!(l["next_due"], Value::Null);
+        assert_eq!(l["due_now"], false);
     }
 
     #[test]

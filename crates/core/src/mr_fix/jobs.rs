@@ -315,12 +315,13 @@ pub fn stop(dir: &Path, id: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Launch `<exe> mr-fix run <mr_ref>` detached (own process group), output to `log`.
-/// `mr_ref` is one argv element, never interpreted by a shell.
-pub fn spawn_runner(log: &Path, exe: &str, mr_ref: &str) -> Result<i64, String> {
+/// Launch `<exe> mr-fix run <mr_ref> [extra...]` detached (own process group), output
+/// to `log`. Every argument is one argv element, never interpreted by a shell.
+pub fn spawn_runner(log: &Path, exe: &str, mr_ref: &str, extra: &[String]) -> Result<i64, String> {
     let argv: Vec<String> = [exe, "mr-fix", "run", mr_ref]
         .iter()
         .map(|s| s.to_string())
+        .chain(extra.iter().cloned())
         .collect();
     let cwd = log.parent().unwrap_or_else(|| Path::new("."));
     crate::creator::spawn::spawn_agent(&argv, cwd, log)
@@ -508,10 +509,43 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn spawn_runner_passes_extra_args_as_separate_argv() {
+        let d = tempfile::tempdir().unwrap();
+        let script = d.path().join("argv.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nfor a in \"$@\"; do echo \"arg=[$a]\"; done\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let log = d.path().join("j.log");
+        let extra = ["--ci-failure".to_string(), "/x/a b;rm -rf.json".to_string()];
+        spawn_runner(&log, &script.display().to_string(), "a:1!7", &extra).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let text = std::fs::read_to_string(&log).unwrap_or_default();
+            if text.contains("loopx-exit=0") {
+                assert!(
+                    text.contains("arg=[a:1!7]\narg=[--ci-failure]\narg=[/x/a b;rm -rf.json]"),
+                    "{text}"
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no exit marker: {text}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn spawn_runner_runs_the_given_exe_and_logs() {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("j.log");
-        let pid = spawn_runner(&log, "/bin/echo", "a:1!7").unwrap();
+        let pid = spawn_runner(&log, "/bin/echo", "a:1!7", &[]).unwrap();
         assert!(pid > 0);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {

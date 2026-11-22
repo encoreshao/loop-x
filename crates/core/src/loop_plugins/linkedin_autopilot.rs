@@ -1021,6 +1021,7 @@ mod tests {
             call_budget_usd: None,
             model: None,
             state_dir: None,
+            events_dir: None,
         }
     }
 

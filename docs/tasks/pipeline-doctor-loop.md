@@ -41,6 +41,20 @@ recurring items first, prefixed with a repeat marker. Each pipeline counts
 once (tracked in `recorded_pipelines.json` beside it), so a `--force`
 re-diagnosis does not inflate the count.
 
+## Events it emits
+
+After each diagnosis the loop emits `pipeline_doctor.diagnosed` (best effort;
+a failed emit never fails the item). `data` holds `account`, `project`
+(alias), `project_id`, `pipeline_id`, `sha`, `category`, `confidence` (0-1),
+`culprit`, `explanation`, `suggested_fix`, `failed_jobs` (up to 3 names),
+`recurring` and `web_url`. For an MR pipeline it also carries `mr_iid`,
+`source_branch`, `mr_web_url` and `mr_owned_by_loop` (the branch is one the
+issue loop names, `feature#<n>-...`); for a default-branch pipeline those are
+null and `mr_owned_by_loop` is false. Pipeline Auto-fix
+([mr-autofix-loop.md](mr-autofix-loop.md)) subscribes to it. The event log is
+untrusted (agents can write it), so a subscriber re-checks GitLab before
+acting.
+
 ## Safety boundary
 
 - No GitLab writes at all: only `GET` requests. The loop notifies, nothing else.

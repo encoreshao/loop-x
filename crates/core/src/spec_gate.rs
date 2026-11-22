@@ -65,6 +65,39 @@ pub fn load(memory_root: &Path, alias: &str, iid: &str) -> Option<SpecState> {
     serde_json::from_str(&text).ok()
 }
 
+/// Every spec still waiting for a decision, as `(alias, iid, state)` sorted by alias then iid.
+pub fn awaiting(memory_root: &Path) -> Vec<(String, String, SpecState)> {
+    let Ok(projects) = std::fs::read_dir(memory_root) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, String)> = projects
+        .flatten()
+        .filter_map(|p| {
+            let alias = p.file_name().to_str()?.to_string();
+            let dir = std::fs::read_dir(p.path().join("spec")).ok()?;
+            Some(
+                dir.flatten()
+                    .filter_map(|f| {
+                        let iid = f.file_name().to_str()?.strip_suffix(".json")?.to_string();
+                        iid.bytes()
+                            .all(|b| b.is_ascii_digit())
+                            .then(|| (alias.clone(), iid))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect();
+    found.sort();
+    found
+        .into_iter()
+        .filter_map(|(alias, iid)| {
+            let state = load(memory_root, &alias, &iid)?;
+            (state.status == SpecStatus::Awaiting).then_some((alias, iid, state))
+        })
+        .collect()
+}
+
 pub fn save(memory_root: &Path, alias: &str, iid: &str, state: &SpecState) -> io::Result<()> {
     let json = serde_json::to_string_pretty(state).map_err(io::Error::other)?;
     crate::file_lock::write_atomic(&path(memory_root, alias, iid), json.as_bytes())

@@ -396,7 +396,7 @@ impl PipelineDoctor {
         &self,
         conn: &dyn Connector,
         names: &HashMap<String, String>,
-    ) -> Result<Vec<(Value, String, Value)>, PluginError> {
+    ) -> Result<Vec<Found>, PluginError> {
         let me = conn.api("GET", "/user", &ApiOpts::default())?;
         let username = me.get("username").ok_or_else(|| key_err("username"))?;
         let rows = conn.api(
@@ -434,12 +434,24 @@ impl PipelineDoctor {
                     .filter(|l| !l.is_empty())
                     .cloned()
                     .unwrap_or_else(|| format!("project {}", py_str(pid)));
-                out.push((pid.clone(), label, pipe));
+                let text = |k: &str| {
+                    obj.get(k)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let mr = MrFacts {
+                    iid: obj.get("iid").cloned().unwrap_or(Value::Null),
+                    source_branch: text("source_branch"),
+                    web_url: text("web_url"),
+                };
+                out.push((pid.clone(), label, pipe, Some(mr)));
             }
         }
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn item(
         &self,
         conn: &dyn Connector,
@@ -448,6 +460,7 @@ impl PipelineDoctor {
         pid: &Value,
         label: &str,
         pipe: &Value,
+        mr: Option<&MrFacts>,
     ) -> Result<WorkItem, PluginError> {
         let pipe_id = pipe.get("id").ok_or_else(|| key_err("id"))?;
         let pid_s = py_str(pid);
@@ -489,13 +502,14 @@ impl PipelineDoctor {
             .filter(|v| py_truthy(v))
             .map(py_str)
             .unwrap_or_default();
-        Ok(WorkItem::new(
-            key,
-            format!("{label} #{}", py_str(pipe_id)),
-            json!({"account": aid, "project": label, "project_id": pid, "pipeline_id": pipe_id,
-                   "web_url": url, "jobs": out}),
-        )
-        .with_url(url))
+        let mut payload = json!({"account": aid, "project": label, "project_id": pid,
+                                 "pipeline_id": pipe_id, "sha": pipe.get("sha").cloned().unwrap_or(Value::Null),
+                                 "web_url": url, "jobs": out});
+        if let Some(mr) = mr {
+            payload["mr"] =
+                json!({"iid": mr.iid, "source_branch": mr.source_branch, "web_url": mr.web_url});
+        }
+        Ok(WorkItem::new(key, format!("{label} #{}", py_str(pipe_id)), payload).with_url(url))
     }
 
     fn store(&self, ctx: &LoopContext) -> FingerprintStore {
@@ -508,6 +522,67 @@ impl PipelineDoctor {
         let now = ctx.now;
         FingerprintStore::new(&base.join("fingerprints.json"), Some(Arc::new(move || now)))
     }
+}
+
+/// `(project id, label, pipeline row, MR facts for an MR pipeline)`.
+type Found = (Value, String, Value, Option<MrFacts>);
+
+struct MrFacts {
+    iid: Value,
+    source_branch: String,
+    web_url: String,
+}
+
+/// `pipeline_doctor.diagnosed`, which event-triggered loops subscribe to. Best
+/// effort: a failed emit never fails the item.
+fn emit_diagnosed(item: &WorkItem, diagnosis: &Value, web_url: &str, ctx: &LoopContext) {
+    let payload = &item.payload;
+    let failed_jobs: Vec<Value> = payload
+        .get("jobs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(3)
+        .filter_map(|j| j.get("name").cloned())
+        .collect();
+    let mr = payload.get("mr").filter(|m| m.is_object());
+    let branch = mr
+        .and_then(|m| m.get("source_branch"))
+        .and_then(Value::as_str);
+    let field = |k: &str| payload.get(k).cloned().unwrap_or(Value::Null);
+    let mut data = json!({
+        "account": field("account"),
+        "project": field("project"),
+        "project_id": field("project_id"),
+        "pipeline_id": field("pipeline_id"),
+        "sha": field("sha"),
+        "failed_jobs": failed_jobs,
+        "web_url": web_url,
+        "mr_iid": mr.and_then(|m| m.get("iid")).cloned().unwrap_or(Value::Null),
+        "source_branch": branch,
+        "mr_web_url": mr.and_then(|m| m.get("web_url")).cloned().unwrap_or(Value::Null),
+        "mr_owned_by_loop": branch.is_some_and(crate::providers::branch::is_any_loop_branch),
+    });
+    for key in [
+        "category",
+        "confidence",
+        "culprit",
+        "explanation",
+        "suggested_fix",
+        "recurring",
+    ] {
+        data[key] = diagnosis[key].clone();
+    }
+    let fields = crate::events::EventFields {
+        data: Some(data),
+        ..Default::default()
+    };
+    crate::runner_util::emit_best_effort(
+        "pipeline_doctor.diagnosed",
+        Some(&ctx.run_id),
+        fields,
+        ctx.events_dir.as_deref(),
+    );
 }
 
 impl LoopPlugin for PipelineDoctor {
@@ -577,7 +652,7 @@ impl LoopPlugin for PipelineDoctor {
             };
             let conn = conn.as_ref();
             let mut names: HashMap<String, String> = HashMap::new();
-            let mut found: Vec<(Value, String, Value)> = Vec::new();
+            let mut found: Vec<Found> = Vec::new();
             for project in mine {
                 let alias_of = || project.get("alias").map(py_str);
                 let result: Result<(), PluginError> = (|| {
@@ -599,7 +674,7 @@ impl LoopPlugin for PipelineDoctor {
                         .flatten()
                         .filter(|r| r.is_object())
                     {
-                        found.push((pid.clone(), py_str(alias), r.clone()));
+                        found.push((pid.clone(), py_str(alias), r.clone(), None));
                     }
                     Ok(())
                 })();
@@ -618,14 +693,14 @@ impl LoopPlugin for PipelineDoctor {
                     e.class
                 )),
             }
-            for (pid, label, pipe) in found {
+            for (pid, label, pipe, mr) in found {
                 let id = pipe.get("id").cloned().unwrap_or(Value::Null);
                 let key = format!("pipe:{aid}:{}#{}", py_str(&pid), py_str(&id));
                 if seen.contains(&key) || id.is_null() {
                     continue;
                 }
                 seen.insert(key.clone());
-                match self.item(conn, &key, &aid, &pid, &label, &pipe) {
+                match self.item(conn, &key, &aid, &pid, &label, &pipe, mr.as_ref()) {
                     Ok(item) => items.push(item),
                     Err(e) => ctx.log(&format!(
                         "pipeline-doctor: pipeline #{} failed to load: {}",
@@ -704,11 +779,13 @@ impl LoopPlugin for PipelineDoctor {
         } else {
             item.url.clone()
         };
+        let data = json!({
+            "category": category, "culprit": culprit, "explanation": explanation,
+            "suggested_fix": fix, "confidence": confidence, "recurring": recurring});
+        emit_diagnosed(item, &data, &url, ctx);
         Ok(Outcome::new(&item.key, Status::Done, summary)
             .with_url(url)
-            .with_data(json!({
-            "category": category, "culprit": culprit, "explanation": explanation,
-            "suggested_fix": fix, "confidence": confidence, "recurring": recurring})))
+            .with_data(data))
     }
 
     fn digest(&self, outcomes: &[Outcome], _ctx: &LoopContext) -> Option<String> {
@@ -806,6 +883,7 @@ mod tests {
                 call_budget_usd: None,
                 model: None,
                 state_dir: None,
+                events_dir: Some(root.join("events")),
             },
             logs,
         )
@@ -1218,6 +1296,106 @@ mod tests {
         let (c, _) = ctx();
         doctor(&g, vec![web()]).discover(&c).unwrap();
         assert_eq!(*details.lock().unwrap(), 20);
+    }
+
+    #[test]
+    fn mr_pipeline_items_carry_mr_facts_and_sha() {
+        let g = Arc::new(G::new().over(|p| {
+            if p.starts_with("/merge_requests?") {
+                return Some(Ok(json!([
+                    {"iid": 7, "project_id": 9, "source_branch": "feature#7-x", "web_url": "https://gl/mr/7",
+                     "head_pipeline": {"id": 200, "status": "failed", "sha": "abc7", "web_url": "https://gl/p/200"}}])));
+            }
+            if p.contains("/pipelines?status=failed") {
+                return Some(Ok(json!([{"id": 100, "sha": "main1", "web_url": "https://gl/p/100"}])));
+            }
+            None
+        }));
+        let (c, _) = ctx();
+        let items = doctor(&g, vec![web()]).discover(&c).unwrap();
+        let mr = items.iter().find(|i| i.key == "pipe:work:9#200").unwrap();
+        assert_eq!(mr.payload["sha"], "abc7");
+        assert_eq!(
+            mr.payload["mr"],
+            json!({"iid": 7, "source_branch": "feature#7-x", "web_url": "https://gl/mr/7"})
+        );
+        let main = items.iter().find(|i| i.key == "pipe:work:9#100").unwrap();
+        assert_eq!(main.payload["sha"], "main1");
+        assert!(main.payload.get("mr").is_none());
+    }
+
+    fn mr_item(branch: &str) -> WorkItem {
+        let mut it = item(200);
+        it.payload["sha"] = json!("abc7");
+        it.payload["mr"] = json!({"iid": 7, "source_branch": branch, "web_url": "https://gl/mr/7"});
+        it
+    }
+
+    fn diagnosed_events(root: &Path) -> Vec<Value> {
+        crate::events::iter_events(Some(&root.join("events")), None, None)
+            .into_iter()
+            .filter(|e| e["event_type"] == "pipeline_doctor.diagnosed")
+            .collect()
+    }
+
+    #[test]
+    fn diagnosed_event_marks_loop_branches_owned() {
+        let d = tempfile::tempdir().unwrap();
+        let (c, _) = ctx_at(d.path());
+        let p = bare().with_state_dir(&d.path().join("state"));
+        let lint = json!({"category": "lint", "culprit": "app/x.rb", "explanation": "e",
+                          "suggested_fix": "f", "confidence": 0.9});
+        p.after_item(&mr_item("feature#7-x"), &lint, &c).unwrap();
+        p.after_item(&mr_item("hotfix/x"), &lint, &c).unwrap();
+        let evs = diagnosed_events(d.path());
+        assert_eq!(evs.len(), 2);
+        let data = &evs[0]["data"];
+        assert_eq!(evs[0]["run_id"], "r");
+        assert_eq!(data["mr_owned_by_loop"], true);
+        assert_eq!(data["mr_iid"], 7);
+        assert_eq!(data["source_branch"], "feature#7-x");
+        assert_eq!(data["mr_web_url"], "https://gl/mr/7");
+        assert_eq!(data["sha"], "abc7");
+        assert_eq!(data["pipeline_id"], 200);
+        assert_eq!(data["project_id"], 9);
+        assert_eq!(data["project"], "web");
+        assert_eq!(data["account"], "work");
+        assert_eq!(data["category"], "lint");
+        assert_eq!(data["confidence"], 0.9);
+        assert_eq!(data["culprit"], "app/x.rb");
+        assert_eq!(data["failed_jobs"], json!(["rspec"]));
+        assert_eq!(data["recurring"], false);
+        assert_eq!(data["web_url"], "https://gl/p/200");
+        assert_eq!(evs[1]["data"]["mr_owned_by_loop"], false);
+    }
+
+    #[test]
+    fn default_branch_pipeline_event_has_no_mr() {
+        let d = tempfile::tempdir().unwrap();
+        let (c, _) = ctx_at(d.path());
+        bare()
+            .with_state_dir(&d.path().join("state"))
+            .after_item(&item(100), &flaky(), &c)
+            .unwrap();
+        let evs = diagnosed_events(d.path());
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0]["data"]["mr_iid"], Value::Null);
+        assert_eq!(evs[0]["data"]["mr_owned_by_loop"], false);
+        assert_eq!(evs[0]["data"]["category"], "flaky");
+    }
+
+    #[test]
+    fn emit_failure_never_fails_the_item() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut c, _) = ctx_at(d.path());
+        let blocker = d.path().join("not-a-dir");
+        std::fs::write(&blocker, "x").unwrap();
+        c.events_dir = Some(blocker.join("events"));
+        let out = bare()
+            .with_state_dir(&d.path().join("state"))
+            .after_item(&mr_item("feature#7-x"), &flaky(), &c)
+            .unwrap();
+        assert_eq!(out.status, Status::Done);
     }
 
     // ---- after_item / digest ----

@@ -54,6 +54,27 @@ you have submitted count; drafts that are still pending do not.
 Severity policy: Major and Medium findings are all addressed; Low is the
 agent's call, and it gives a reason when it skips one.
 
+## CI failure mode
+
+`loopx mr-fix run <ref> --ci-failure <file>` is how Pipeline Auto-fix
+([mr-autofix-loop.md](mr-autofix-loop.md)) starts a run; the button never
+does. `<file>` is a Pipeline Doctor diagnosis (`pipeline_id`, `sha`,
+`category`, `culprit`, `explanation`, `suggested_fix`, `failed_jobs`,
+`web_url`) and must resolve inside `<loopx home>/mr-fix/jobs/`, else the run
+is refused before anything is recorded.
+
+- The run works on one synthetic thread, `ci:<pipeline id>`, built from the
+  diagnosis and labelled as untrusted. Human review threads are left for a
+  Fix now pressed by hand.
+- Before the worktree is prepared (which runs the branch's install command),
+  the run ends as `nothing` if the merge request is a draft, if its head is
+  not the diagnosed `sha`, or if an earlier `ci:` fix is recorded as handled
+  on it. The worktree's head after preparing is checked against the `sha`
+  again.
+- Every other guard applies unchanged. The finish note's handled marker
+  records `ci:<pipeline id>`, which links to the pipeline; there is no thread
+  to reply in.
+
 ## Safety boundary
 
 - Never merges, approves or resolves threads.

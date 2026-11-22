@@ -67,6 +67,8 @@ After `project_commands`, two more verifiers look at the branch's diff against `
 
 Their results go into a "## Pre-review (advisory)" section of the MR description (`pre_review_section`) and into their own events, `verification.review_completed` and `verification.security_completed`, rather than `verification.external_completed`, so they never move the agreement rate below.
 
+Before each verifier actually runs (not when it is skipped after an earlier failure), the runtime emits `verification.check_started {iteration, verifier}` with the verifier's name (`project_commands`, `agent_review`, `security_scan`). It only says which check is in progress: the Office reads it to show "Verifying (tests)", "Reviewing" or "Security scan" while the check runs, and the live trace shows it as `checking: <verifier>`. Metrics ignore it.
+
 ### Agent guards
 
 In gate mode the runner snapshots git around every agent session (`crates/core/src/agent_guard.rs`): the issue's loop branches on `origin`, `git remote -v`, `core.hooksPath` and the files in the repository's `hooks/`. A loop branch that appeared or moved on the remote, or a changed remote list, escalates the issue as `guard_violation`, a loop-side escalation (Slack and the loop's log, no issue comment or label, counted under Escalated on Harness -> Gates); the agent is not re-run and no setup doctor runs. A changed hook or `core.hooksPath`, and a change to the user's own checkout during the session (worktree mode), are only `guard.warning` events: hooks are shared by every worktree of the project and rewritten by hook managers on install, and the user may be working in the checkout. Whatever git state can't be read (an unreachable remote, a failing `git`) is skipped, never counted as a change.

@@ -1,5 +1,6 @@
-// The details card of a colleague in the Office view: their state and loops, each with
-// Run now and Enable/Disable. A keyboard-reachable HTML overlay inside
+// The details card of a colleague in the Office view: what they wait on you for (their
+// Needs you items, linked to that page), their state and loops, each with Run now and
+// Enable/Disable. A keyboard-reachable HTML overlay inside
 // #office, cloned from the server-rendered `<template id="office-panel">`. Every
 // piece of loop data goes in through `textContent` or `encodeURIComponent`d URLs,
 // never as markup. Actions are same-origin POSTs carrying the page's CSRF token;
@@ -53,6 +54,36 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     li.append(a, chip);
     if (loop.kind !== "creator") li.append(actions);
     return li;
+  }
+
+  /// "Needs you": each item a colleague's loops wait on, with a link to its row on the
+  /// Needs you page (only a `/needs-you#` link is kept). Null when there is none.
+  function needsSection(who) {
+    const items = [];
+    for (const l of Array.isArray(who.loops) ? who.loops : []) {
+      for (const it of Array.isArray(l.needs_you) ? l.needs_you : []) if (it && typeof it.title === "string") items.push(it);
+    }
+    if (!items.length) return null;
+    const sec = document.createElement("section");
+    sec.className = "office-panel-needs";
+    const h = document.createElement("h3");
+    h.textContent = t("needs_you");
+    const ul = document.createElement("ul");
+    for (const it of items) {
+      const li = document.createElement("li");
+      const p = document.createElement("p");
+      p.textContent = it.title;
+      li.append(p);
+      if (typeof it.href === "string" && it.href.startsWith("/needs-you#")) {
+        const a = document.createElement("a");
+        a.href = it.href;
+        a.textContent = t("open_in_needs_you");
+        li.append(a);
+      }
+      ul.append(li);
+    }
+    sec.append(h, ul);
+    return sec;
   }
 
   /// The "Send out" and "Talk" controls: shops, calling back, and a conversation with a colleague
@@ -232,6 +263,11 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     const note = q(".office-panel-note");
     note.textContent = who.note ? t(who.note) : "";
     note.hidden = !who.note;
+    const oldNeeds = q(".office-panel-needs");
+    const needs = needsSection(who);
+    if (oldNeeds && needs) oldNeeds.replaceWith(needs);
+    else if (oldNeeds) oldNeeds.remove();
+    else if (needs) note.after(needs);
     const old = q(".office-panel-assign");
     const keep = old ? old.querySelector(".office-panel-topic") : null;
     const hadFocus = !!keep && document.activeElement === keep;
@@ -338,6 +374,15 @@ export function createPanel(root, i18n, csrfToken, hooks = {}) {
     },
     close() {
       close(false);
+    },
+    /// Scrolls the "Needs you" card into view and focuses its first link (keyboard path).
+    focusNeeds() {
+      const sec = el && q(".office-panel-needs");
+      if (!sec) return false;
+      sec.scrollIntoView({ block: "nearest" });
+      const link = sec.querySelector("a");
+      if (link) link.focus({ preventScroll: true });
+      return true;
     },
     /// Fresh states of the colleagues: re-draws the open card, or closes if it is gone.
     update(people) {

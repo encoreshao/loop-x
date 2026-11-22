@@ -522,7 +522,7 @@ fn fix_now(ctx: &UiCtx) -> UiResponse {
     // Only fetch the live list for a well-formed ref.
     let listed = if form_ref(ctx).is_some() { list_mrs(ctx) } else { Ok(Vec::new()) };
     let r = form_ref(ctx).unwrap_or_default();
-    fix_now_with(ctx, listed, &|log| jobs::spawn_runner(log, &exe, &r))
+    fix_now_with(ctx, listed, &|log| jobs::spawn_runner(log, &exe, &r, &[]))
 }
 
 fn fix_now_with(ctx: &UiCtx, listed: Result<Vec<AccountMrs>, String>, spawn: &jobs::Spawn<'_>) -> UiResponse {

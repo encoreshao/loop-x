@@ -69,6 +69,17 @@
     "requires": ["pipelines"]
   },
   {
+    "name": "mr-autofix-loop",
+    "label": "Pipeline Auto-fix",
+    "entry_point": "bin.mr_autofix",
+    "description": "When Pipeline Doctor finds a test or lint failure on a merge request the issue loop opened, starts one Fix now run on it; anything more goes to Needs you.",
+    "enabled": false,
+    "timeout_seconds": 2700,
+    "log_suffix": "-mr-autofix-loop",
+    "emit_run_events": false,
+    "settings": {"max_attempts_per_day": 3, "min_confidence": 0.7}
+  },
+  {
     "name": "rss-watch-loop",
     "label": "RSS Watch",
     "entry_point": "bin.loop_plugins.rss_watch",

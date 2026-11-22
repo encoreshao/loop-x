@@ -35,6 +35,18 @@ question, asks for a product decision, or that you cannot do safely is skipped
 with a reason ("needs a human: ..."), never silently dropped. Do not widen the
 work beyond what the threads ask for, and do not re-review the merge request.
 
+## CI failure
+
+When the only thread is `ci:<pipeline id>`, this run fixes a failed pipeline,
+not review feedback. The thread holds an automated diagnosis of the failure: a
+lead to check against the code and the failing tests or lint, not a fact. Fix
+the failing test or lint error at its root cause in the code. Never skip,
+delete, disable or loosen a test, and never relax a lint rule or add an ignore
+comment to make it pass. If the code and the diagnosis do not support a
+confident fix (the failure looks like infrastructure, a flaky test, or you
+cannot reproduce it), do not announce or edit: hand off the item with
+`"fixed": false` and the reason "not fixable: <why>".
+
 ## Steps, in this order
 
 If, after reading (step 1), no thread needs a code change (they are

@@ -306,6 +306,7 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
     match reason {
         "manual" => ctx.t("Manual"),
         "catch-up" => ctx.t("Catch-up"),
+        "event" => ctx.t("Event"),
         "outside" => ctx.t("Outside the queue"),
         _ => ctx.t("Scheduled"),
     }
@@ -646,6 +647,19 @@ mod tests {
         assert!(pill.contains("1 running") && pill.contains("2 queued"), "{pill}");
         let shell = st.registry.dispatch(&st, &UiRequest::get("/queue")).unwrap().body_text();
         assert!(shell.contains("id='queue-pill'") && shell.contains("1 running · 2 queued"));
+    }
+
+    #[test]
+    fn event_reason_has_a_label() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let q = RunQueue::new(d.path().join("run_queue.json"));
+        q.enqueue("mr-autofix-loop", Reason::Event, "2026-10-27T10:00:00").unwrap();
+        let html = get(&st, "/queue/fragment", "en");
+        assert!(html.contains(">Event<"), "{html}");
+        assert!(!html.contains(">Scheduled<"), "{html}");
+        let ja = get(&st, "/queue/fragment", "ja");
+        assert!(!ja.contains(">Event<"), "{ja}");
     }
 
     fn write_status(dir: &std::path::Path, rel: &str, body: &str) {

@@ -27,6 +27,27 @@ pub const PLUGINS: [(&str, &str); 8] = [
     ("stale_sweeper", "stale-sweeper-loop"),
 ];
 
+/// `(loop name, loops/<dir>)` for every loop whose `loop.yaml` the scheduler
+/// may read for an event trigger.
+const DEFINITION_DIRS: [(&str, &str); 9] = [
+    ("meeting-prep-loop", "calendar-prep"),
+    ("daily-digest-loop", "daily-digest"),
+    ("linkedin-autopilot-loop", "linkedin-autopilot"),
+    ("mr-review-loop", "mr-review"),
+    ("pipeline-doctor-loop", "pipeline-doctor"),
+    ("release-notes-loop", "release-notes"),
+    ("rss-watch-loop", "rss-watch"),
+    ("stale-sweeper-loop", "stale-sweeper"),
+    ("mr-autofix-loop", "mr-autofix"),
+];
+
+pub fn definition_dir_for(loop_name: &str) -> Option<&'static str> {
+    DEFINITION_DIRS
+        .iter()
+        .find(|(name, _)| *name == loop_name)
+        .map(|(_, dir)| *dir)
+}
+
 /// The plugin module name for an entry point: `bin.loop_plugins.<mod>`,
 /// `loop_plugins.<mod>`, a bare module name, or the plugin's loop name.
 pub fn module_for_entry(entry_point: &str) -> Option<&'static str> {
@@ -83,5 +104,35 @@ mod tests {
         assert_eq!(module_for_entry("rss-watch-loop"), Some("rss_watch"));
         assert_eq!(module_for_entry("meeting-prep-loop"), Some("calendar_prep"));
         assert_eq!(module_for_entry("bin.gitlab_loop_runner"), None);
+    }
+
+    struct NoConnectors;
+    impl ConnectorSource for NoConnectors {
+        fn accounts_with_capability(&self, _: &str) -> Vec<crate::connectors::Account> {
+            Vec::new()
+        }
+        fn load(
+            &self,
+            _: &str,
+        ) -> Result<Box<dyn crate::connectors::Connector>, crate::connectors::LoadFailure> {
+            Err(crate::connectors::LoadFailure::Unknown)
+        }
+    }
+
+    #[test]
+    fn definition_dir_for_every_plugin_matches_the_plugin() {
+        let mut checked = 0;
+        for (module, loop_name) in PLUGINS {
+            let Some(plugin) = build(module, Arc::new(NoConnectors)) else {
+                assert_eq!(definition_dir_for(loop_name), Some("linkedin-autopilot"));
+                continue;
+            };
+            assert_eq!(plugin.loop_name(), loop_name);
+            assert_eq!(definition_dir_for(loop_name), Some(plugin.definition_dir()));
+            checked += 1;
+        }
+        assert!(checked >= 7);
+        assert_eq!(definition_dir_for("mr-autofix-loop"), Some("mr-autofix"));
+        assert_eq!(definition_dir_for("issue-loop"), None);
     }
 }

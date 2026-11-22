@@ -107,6 +107,7 @@ fn item(id: String, kind: &str, title: String, since: Option<&str>, fields: Valu
                 | "mr_thread"
                 | "profile_sync_failed"
                 | "slack_listener"
+                | "mr_autofix"
         ),
     });
     if let (Some(v), Value::Object(f)) = (v.as_object_mut(), fields) {
@@ -202,6 +203,54 @@ fn escalations(src: &Sources, dismissed: &Value, now: DateTime<Utc>) -> Vec<Valu
                 format!("{project} #{iid} was escalated to you ({reason})"),
                 at,
                 json!({"project": project, "issue_iid": iid, "reason": reason}),
+            ))
+        })
+        .collect()
+}
+
+/// Pipeline Auto-fix escalations: the newest `mr_autofix.escalated` per
+/// `(mr_ref, sha)` in the window, until a newer `mr_autofix.completed` for the MR.
+fn autofix_escalations(src: &Sources, dismissed: &Value, now: DateTime<Utc>) -> Vec<Value> {
+    let cutoff = now - Duration::days(ESCALATION_DAYS);
+    let since = cutoff.format("%Y-%m-%d").to_string();
+    let at = |e: &Value| e["timestamp"].as_str().and_then(parse);
+    let mut escalated: BTreeMap<(String, String), Value> = BTreeMap::new();
+    let mut completed: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+    for e in crate::events::iter_events(Some(src.events_dir), Some(&since), None) {
+        let Some(mr_ref) = e["data"]["mr_ref"].as_str().map(str::to_string) else {
+            continue;
+        };
+        let Some(t) = at(&e) else { continue };
+        match e["event_type"].as_str() {
+            Some("mr_autofix.completed") => {
+                let newest = completed.entry(mr_ref).or_insert(t);
+                *newest = (*newest).max(t);
+            }
+            Some("mr_autofix.escalated") if t >= cutoff => {
+                let key = (mr_ref, e["data"]["sha"].as_str().unwrap_or("").to_string());
+                if escalated.get(&key).is_none_or(|old| at(old) <= Some(t)) {
+                    escalated.insert(key, e);
+                }
+            }
+            _ => {}
+        }
+    }
+    escalated
+        .into_iter()
+        .filter(|((mr_ref, _), e)| completed.get(mr_ref).is_none_or(|done| at(e) > Some(*done)))
+        .filter_map(|((mr_ref, sha), e)| {
+            let id = format!("mr_autofix:{mr_ref}:{sha}");
+            let since = e["timestamp"].as_str();
+            if dismissed_since(dismissed, &id, since) {
+                return None;
+            }
+            let reason = e["data"]["reason"].as_str().unwrap_or("");
+            Some(item(
+                id,
+                "mr_autofix",
+                format!("Automatic fix stopped on {mr_ref}: {reason}"),
+                since,
+                json!({"mr_ref": mr_ref, "mr_web_url": e["data"]["mr_web_url"], "reason": reason, "sha": sha}),
             ))
         })
         .collect()
@@ -376,47 +425,21 @@ fn mr_threads(src: &Sources, dismissed: &Value) -> Vec<Value> {
 /// (`<memory root>/<alias>/spec/<iid>.json`, status `awaiting`). Deciding is
 /// what clears them, so they can't be dismissed.
 fn specs(src: &Sources) -> Vec<Value> {
-    use crate::spec_gate::{self, SpecStatus};
-    let Ok(projects) = std::fs::read_dir(src.memory_root) else {
-        return Vec::new();
-    };
-    let mut found: Vec<(String, String)> = projects
-        .flatten()
-        .filter_map(|p| {
-            let alias = p.file_name().to_str()?.to_string();
-            let dir = std::fs::read_dir(p.path().join("spec")).ok()?;
-            Some(
-                dir.flatten()
-                    .filter_map(|f| {
-                        let iid = f.file_name().to_str()?.strip_suffix(".json")?.to_string();
-                        iid.bytes()
-                            .all(|b| b.is_ascii_digit())
-                            .then(|| (alias.clone(), iid))
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .flatten()
-        .collect();
-    found.sort();
-    found
+    crate::spec_gate::awaiting(src.memory_root)
         .into_iter()
-        .filter_map(|(alias, iid)| {
-            let state = spec_gate::load(src.memory_root, &alias, &iid)?;
-            (state.status == SpecStatus::Awaiting).then(|| {
-                item(
-                    format!("spec:{alias}:{iid}"),
-                    "spec",
-                    format!("Approve the spec for {alias} #{iid}"),
-                    Some(&state.posted_at),
-                    json!({
-                        "project": alias,
-                        "issue_iid": iid,
-                        "body": state.spec.chars().take(400).collect::<String>(),
-                        "body_truncated": state.spec.chars().count() > 400,
-                    }),
-                )
-            })
+        .map(|(alias, iid, state)| {
+            item(
+                format!("spec:{alias}:{iid}"),
+                "spec",
+                format!("Approve the spec for {alias} #{iid}"),
+                Some(&state.posted_at),
+                json!({
+                    "project": alias,
+                    "issue_iid": iid,
+                    "body": state.spec.chars().take(400).collect::<String>(),
+                    "body_truncated": state.spec.chars().count() > 400,
+                }),
+            )
         })
         .collect()
 }
@@ -452,6 +475,7 @@ pub fn collect(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
     let dismissed = read_json(src.dismissed);
     let mut items = approvals(src, now);
     items.extend(escalations(src, &dismissed, now));
+    items.extend(autofix_escalations(src, &dismissed, now));
     items.extend(sign_ins(src, &dismissed));
     items.extend(failed_loops(src, &dismissed));
     items.extend(mr_threads(src, &dismissed));
@@ -475,6 +499,7 @@ pub fn dismiss(path: &Path, id: &str, now: DateTime<Utc>) -> Result<(), String> 
         "mr_thread:",
         "profile_sync:",
         "slack_listener",
+        "mr_autofix:",
     ]
     .iter()
     .any(|p| id.starts_with(p))
@@ -793,6 +818,87 @@ mod tests {
         assert_eq!(items[0]["id"], "escalated:web#7");
         assert_eq!(items[0]["title"], "web #7 was escalated to you (ambiguous)");
         assert_eq!(items[0]["dismissable"], true);
+    }
+
+    fn autofix(f: &Fx, kind: &str, at: &str, sha: &str, reason: &str) {
+        f.event(
+            kind,
+            at,
+            0,
+            json!({"mr_ref": "work:9!7", "mr_web_url": "https://gl/g/p/-/merge_requests/7",
+                   "sha": sha, "pipeline_id": 100, "reason": reason}),
+        );
+    }
+
+    #[test]
+    fn autofix_escalation_is_listed_until_a_fix_completes() {
+        let f = Fx::new();
+        autofix(
+            &f,
+            "mr_autofix.escalated",
+            "2026-10-30T09:00:00+00:00",
+            "abc",
+            "fix_failed",
+        );
+        autofix(
+            &f,
+            "mr_autofix.escalated",
+            "2026-10-30T09:00:00+00:00",
+            "abc",
+            "fix_failed",
+        );
+        let items = f.collect();
+        assert_eq!(items.len(), 1, "{items:?}");
+        let it = &items[0];
+        assert_eq!(it["id"], "mr_autofix:work:9!7:abc");
+        assert_eq!(it["kind"], "mr_autofix");
+        assert_eq!(it["dismissable"], true);
+        assert_eq!(it["mr_ref"], "work:9!7");
+        assert_eq!(it["mr_web_url"], "https://gl/g/p/-/merge_requests/7");
+        assert_eq!(it["reason"], "fix_failed");
+        assert_eq!(it["since"], "2026-10-30T09:00:00+00:00");
+
+        autofix(
+            &f,
+            "mr_autofix.escalated",
+            "2026-10-30T10:00:00+00:00",
+            "def",
+            "already_attempted",
+        );
+        assert_eq!(
+            f.ids(),
+            ["mr_autofix:work:9!7:abc", "mr_autofix:work:9!7:def"]
+        );
+        autofix(
+            &f,
+            "mr_autofix.completed",
+            "2026-10-30T11:00:00+00:00",
+            "ghi",
+            "",
+        );
+        assert!(
+            f.collect().is_empty(),
+            "a newer completed fix clears the MR"
+        );
+        autofix(
+            &f,
+            "mr_autofix.escalated",
+            "2026-10-30T12:00:00+00:00",
+            "jkl",
+            "already_attempted",
+        );
+        assert_eq!(f.ids(), ["mr_autofix:work:9!7:jkl"]);
+
+        dismiss(&f.p("dismissed.json"), "mr_autofix:work:9!7:jkl", now()).unwrap();
+        assert!(f.collect().is_empty());
+        autofix(
+            &f,
+            "mr_autofix.escalated",
+            "2026-10-20T12:00:00+00:00",
+            "old",
+            "daily_cap",
+        );
+        assert!(f.collect().is_empty(), "older than 7 days");
     }
 
     #[test]

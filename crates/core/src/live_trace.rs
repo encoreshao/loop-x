@@ -162,6 +162,52 @@ pub fn describe(ev: &Value) -> Option<TraceLine> {
         "verification.passed" => (Level::Ok, format!("verification passed{iteration}")),
         "verification.failed" => (Level::Err, format!("verification failed{iteration}")),
         "verification.external_skipped" => (Level::Warn, "project checks skipped".to_string()),
+        "verification.check_started" => (Level::Run, format!("checking: {}", d("verifier"))),
+        "verification.review_completed" | "verification.security_completed" => {
+            let what = if kind == "verification.review_completed" {
+                "review"
+            } else {
+                "security scan"
+            };
+            let errored = data.get("error").is_some_and(|e| e == true);
+            let passed = data
+                .get("observed_passed")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            match (errored, passed, d("verdict")) {
+                (true, _, _) => (Level::Err, format!("{what} errored")),
+                (false, true, _) => (Level::Ok, format!("{what} passed")),
+                (false, false, "") => (Level::Warn, format!("{what} found problems")),
+                (false, false, verdict) => {
+                    (Level::Warn, format!("{what} found problems ({verdict})"))
+                }
+            }
+        }
+        "guard.warning" => {
+            let warnings: Vec<&str> = data
+                .get("warnings")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            (
+                Level::Warn,
+                format!("guard warning: {}", clip(&warnings.join("; "), 120)),
+            )
+        }
+        "mr_autofix.escalated" => (
+            Level::Warn,
+            format!("auto-fix escalated {} ({})", d("mr_ref"), d("reason")),
+        ),
+        "mr_autofix.completed" => (
+            Level::Ok,
+            format!(
+                "auto-fix pushed {}: {}",
+                d("mr_ref"),
+                clip(d("summary"), 80)
+            ),
+        ),
         "verification.external_completed" => {
             let pass = data.get("passed").and_then(Value::as_bool).unwrap_or(false);
             (
@@ -468,6 +514,79 @@ mod tests {
         assert_eq!(
             (b.text.as_str(), b.level),
             ("verification failed #2", Level::Err)
+        );
+    }
+
+    #[test]
+    fn trace_words_for_gate_and_autofix_events() {
+        let t = |kind: &str, data: Value| {
+            let l = describe(&ev(kind, data)).unwrap();
+            (l.text, l.level)
+        };
+        assert_eq!(
+            t(
+                "verification.check_started",
+                json!({"iteration": 1, "verifier": "agent_review"})
+            ),
+            ("checking: agent_review".into(), Level::Run)
+        );
+        assert_eq!(
+            t(
+                "verification.review_completed",
+                json!({"observed_passed": true})
+            ),
+            ("review passed".into(), Level::Ok)
+        );
+        assert_eq!(
+            t(
+                "verification.review_completed",
+                json!({"observed_passed": false, "verdict": "request_changes"})
+            ),
+            (
+                "review found problems (request_changes)".into(),
+                Level::Warn
+            )
+        );
+        assert_eq!(
+            t(
+                "verification.security_completed",
+                json!({"observed_passed": false})
+            ),
+            ("security scan found problems".into(), Level::Warn)
+        );
+        assert_eq!(
+            t(
+                "verification.security_completed",
+                json!({"observed_passed": true, "error": true})
+            ),
+            ("security scan errored".into(), Level::Err)
+        );
+        assert_eq!(
+            t(
+                "guard.warning",
+                json!({"warnings": ["ran git push", "edited .env"]})
+            ),
+            (
+                "guard warning: ran git push; edited .env".into(),
+                Level::Warn
+            )
+        );
+        assert_eq!(
+            t(
+                "mr_autofix.escalated",
+                json!({"mr_ref": "work:9!7", "reason": "already_attempted"})
+            ),
+            (
+                "auto-fix escalated work:9!7 (already_attempted)".into(),
+                Level::Warn
+            )
+        );
+        assert_eq!(
+            t(
+                "mr_autofix.completed",
+                json!({"mr_ref": "work:9!7", "summary": "Fixed 1 of 1"})
+            ),
+            ("auto-fix pushed work:9!7: Fixed 1 of 1".into(), Level::Ok)
         );
     }
 

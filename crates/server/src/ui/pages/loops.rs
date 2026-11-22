@@ -934,7 +934,14 @@ fn to_int(v: Option<&Value>) -> Option<i64> {
 
 pub(crate) fn schedule_summary(ctx: &UiCtx, loop_: &Value) -> String {
     let Some(schedule) = loop_.get("schedule").and_then(Value::as_object).filter(|s| !s.is_empty()) else {
-        return ctx.t("No schedule");
+        let name = loop_.get("name").and_then(Value::as_str).unwrap_or_default();
+        return match loopx_core::event_triggers::subscription_for(name, &ctx.state.repo_root) {
+            Some(sub) if sub.on == "pipeline_doctor.diagnosed" => {
+                ctx.t("Runs when Pipeline Doctor diagnoses a failure on a loop merge request")
+            }
+            Some(_) => ctx.t("Runs when a matching event happens"),
+            None => ctx.t("No schedule"),
+        };
     };
     let frequency = match schedule.get("frequency").and_then(Value::as_str) {
         Some(f @ ("daily" | "weekly" | "monthly" | "hourly")) => f,
@@ -1564,5 +1571,35 @@ mod history_name_tests {
         let html = history_body(&UiCtx::new(&state, &req), "daily-digest-loop", None, false);
         assert!(!html.contains("No history yet"), "{html}");
         assert!(html.contains("/loops/daily-digest-loop/history/2026-10-24_033051.md"), "{html}");
+    }
+}
+
+#[cfg(test)]
+mod event_trigger_tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+
+    #[test]
+    fn an_event_loop_says_what_triggers_it_instead_of_no_schedule() {
+        let dir = tempfile::tempdir().unwrap();
+        let def = dir.path().join("loops/mr-autofix");
+        std::fs::create_dir_all(&def).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/mr-autofix/loop.yaml"),
+            def.join("loop.yaml"),
+        )
+        .unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", None);
+        let req = UiRequest::get("/");
+        let ctx = UiCtx::new(&state, &req);
+        let autofix = json!({"name": "mr-autofix-loop", "enabled": false});
+        assert_eq!(
+            schedule_summary(&ctx, &autofix),
+            "Runs when Pipeline Doctor diagnoses a failure on a loop merge request"
+        );
+        assert_eq!(schedule_summary(&ctx, &json!({"name": "rss-watch-loop"})), "No schedule");
+        let ja_req = UiRequest::get("/").with_header("cookie", "loop_lang=ja");
+        let ja = schedule_summary(&UiCtx::new(&state, &ja_req), &autofix);
+        assert!(!ja.contains("Runs when"), "{ja}");
     }
 }

@@ -599,3 +599,25 @@ probe ids are `mailbox:<name>` and `connector:<id>`; times are naive local `isof
 - `last.json` (default `loop eval` run only): `{finished_at, results: [{name, passed, reasons: [detail]}]}`.
 - `golden-last.json` / `chat-last.json` (full paid runs only): `{finished_at, budget_usd, spent_usd,
   results: [{name, passed, reasons, cost_usd}], not_run: [name]}`.
+
+## Event triggers (`<LOOP_ENGINEERING_HOME>/event_triggers/`)
+
+- `<loop>.json`: `{armed_at, pending: [<event>]}`. `armed_at` (RFC 3339, UTC) is written by the first
+  scheduler tick that sees the loop's `trigger.type: event` subscription; older events never match.
+  `pending` holds full event objects from the event log, at most 20 (the oldest are dropped). The tick
+  appends, the loop's run empties it; both under the file's `flock` (`.<loop>.json.lock`), written
+  atomically.
+- `<loop>-events/seen.json`: a `SeenStore` (`{<event_id>: <iso time>}`, 30 days) so each event is matched once.
+
+## Pipeline Auto-fix ledger (`<LOOP_ENGINEERING_HOME>/mr-autofix/attempts.json`)
+
+`{<key>: [{sha, pipeline_id, event_id, job_id, at, result, mr_ref, web_url}], "escalated": ["<key>@<sha>"]}`.
+`<key>` is `<gitlab host>/<target project id>!<iid>`, built from GitLab's own answer, never from the
+event; `mr_ref` is the Fix now reference `account:<target project id>!<iid>`. An attempt is written
+(`result: "started"`) before its Fix now job is spawned, then updated to `done|nothing|failed|timed_out`
+with the job id. `escalated` (a reserved key) de-duplicates escalations per merge request and sha
+(`unverified:<event mr_ref>` for an event GitLab could never be asked about). Read-modify-write under
+the file's `flock`, written atomically; a ledger that exists but does not parse as an object stops the
+loop and is never overwritten (`attempts.json.reported` remembers that it was reported). Events put
+back after a failed GitLab check carry `_verify_failures` and `_retry_after` in the inbox. The CI failure handed to the job is
+`<LOOP_ENGINEERING_HOME>/mr-fix/jobs/<job id>.ci.json` (0600).

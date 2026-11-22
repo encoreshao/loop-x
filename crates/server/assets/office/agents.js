@@ -12,7 +12,8 @@
 // office (any hour): a few stops among the meeting nook, the pantry, the ping-pong table, the library
 // wall and the lounge (annex.js), at a pace that changes from leg to leg, with the odd pause on
 // the way; work calling them back sends them to their desk at a hurry.
-// Name tags, glyph bubbles and speech are canvas sprites, so a loop name is always text, never
+// Name tags, glyph bubbles, speech and the stage pill (what their work is at: coding, reviewing,
+// awaiting your spec approval...) are canvas sprites, so a loop name is always text, never
 // markup. Working people get a faint data beam to the AI centre rack.
 
 const V = new URL(import.meta.url).search;
@@ -149,6 +150,32 @@ export function createAgents(ctx) {
     }
     tex.needsUpdate = true;
   }
+  /// The stage pill above the name tag: the stage label and its scope, in the state's colour.
+  function drawStage(a) {
+    const key = a.stage ? `${a.stage.label}|${a.stage.scope}|${a.state}` : "";
+    if (a.stageKey === key) return;
+    a.stageKey = key;
+    const { c, tex } = a.pill.userData, x = c.getContext("2d");
+    x.clearRect(0, 0, c.width, c.height);
+    if (a.stage) {
+      const text = a.stage.scope ? `${a.stage.label} · ${a.stage.scope}` : a.stage.label;
+      x.font = "600 58px -apple-system,system-ui,sans-serif";
+      const w = Math.min(c.width - 8, x.measureText(text).width + 64);
+      x.fillStyle = "#" + (COLORS[a.state] || COLORS.idle).toString(16).padStart(6, "0");
+      x.beginPath();
+      x.roundRect((c.width - w) / 2, 8, w, c.height - 16, (c.height - 16) / 2);
+      x.fill();
+      x.fillStyle = a.state === "waiting" || a.state === "working" ? "#14161c" : "#fff";
+      x.textAlign = "center";
+      x.textBaseline = "middle";
+      x.fillText(text, c.width / 2, c.height / 2 + 2, w - 40);
+    }
+    tex.needsUpdate = true;
+  }
+  function showStage(a) {
+    drawStage(a);
+    a.pill.visible = !!a.stage && !a.trip && !a.said;
+  }
   /// Wraps `text` into the speech bubble (or hides the bubble when it is empty).
   function setSpeech(a, text) {
     if (a.said === text) return;
@@ -199,6 +226,11 @@ export function createAgents(ctx) {
     const bubble = sprite(0.8, 0.8, 128, 128);
     bubble.position.set(0, 2.6, 0);
     p.group.add(bubble);
+    // Above the name tag (which grows to 1.18x when highlighted), never bobbing.
+    const pill = sprite(3.2, 0.62, 720, 140);
+    pill.position.set(0, 4.2, 0);
+    pill.visible = false;
+    p.group.add(pill);
     const speech = sprite(3.6, 1.7, 640, 300);
     speech.position.set(0, 4.7, 0);
     speech.visible = false;
@@ -212,7 +244,7 @@ export function createAgents(ctx) {
     scene.add(beam);
     const seat = layout.seats[i];
     const a = {
-      name, title: role ? `${name} · ${role}` : name, idx: i, seat, state: null, loops: [], ...p, label, bubble, speech, beam,
+      name, title: role ? `${name} · ${role}` : name, idx: i, seat, state: null, loops: [], ...p, label, bubble, speech, beam, pill, stage: null, stageKey: null,
       said: null, glyph: null, chat: false, pendingUntil: 0, t0: phaseOf(name), sit: 1, wantSit: true, trip: null, roam: null, path: [],
       speed: 0, goal: WALK_SPEED, gait: 0, hold: 0, strollT: 3, nextRoam: between(FIRST_ROAM_S),
       yaw: 0, yawT: 0, pose: { lx: 0.15, rx: 0.15, lz: 0, rz: 0, hx: 0, bx: 0 },
@@ -227,6 +259,7 @@ export function createAgents(ctx) {
   function setState(a, s) {
     a.state = s;
     drawLabel(a);
+    showStage(a);
     setGlyph(a, a.trip && s === "idle" ? TRIP_GLYPH[a.trip.place] : GLYPHS[s] || null);
     a.mug.visible = s === "idle" && (!a.trip || a.trip.place === "coffee");
   }
@@ -237,9 +270,17 @@ export function createAgents(ctx) {
     if (a.loops.some((l) => l.state === "failed")) return "failed";
     return "idle";
   }
+  /// The stage to show: from a working loop first, then a waiting one, then any other.
+  const RANK = { working: 0, waiting: 1, failed: 2 };
+  function stageFor(a) {
+    const withStage = a.loops.filter((l) => typeof l.stage === "string" && l.stage && typeof l.stage_label === "string");
+    withStage.sort((x, y) => (RANK[x.state] ?? 3) - (RANK[y.state] ?? 3));
+    const l = withStage[0];
+    return l ? { key: l.stage, label: l.stage_label, scope: typeof l.stage_scope === "string" ? l.stage_scope : "", loop: l.name } : null;
+  }
   const ownerOf = (loopName) => people.find((a) => a.loops.some((l) => l.name === loopName)) || null;
   const view = (a) => ({
-    name: a.name, title: a.title, state: a.state, answering: a.chat, loops: a.loops,
+    name: a.name, title: a.title, state: a.state, answering: a.chat, loops: a.loops, stage: a.stage,
     free: a.state === "idle" && !a.chat && !a.roam, canTalk: a.state === "idle" && !a.chat && !a.trip, away: a.trip ? a.trip.place : null,
     note: a.chat ? "answering" : a.trip ? "at_" + a.trip.place : a.roam ? "at_roam" : null,
   });
@@ -594,6 +635,7 @@ export function createAgents(ctx) {
     a.head.rotation.x = ps.hx;
     a.body.position.x = ps.bx;
     a.bubble.position.y = 2.6 + Math.sin(k * 3) * 0.05;
+    a.pill.visible = !!a.stage && !a.trip && !a.said;
     // The mug stays in hand on a stroll, except where both hands are busy.
     const handsFull = a.roam && a.roam.phase === "in" && (a.roam.pose === "read" || a.roam.pose === "play");
     a.mug.visible = a.state === "idle" && (!a.trip || a.trip.place === "coffee") && !handsFull;
@@ -651,7 +693,9 @@ export function createAgents(ctx) {
       const jobs = loops.filter((l) => l.kind === "creator");
       people[VIDEO].loops.push(...jobs.sort(byName));
       loops.filter((l) => l.kind !== "creator").sort(byName).forEach((l, i) => people[i % LOOP_STAFF].loops.push(l));
+      for (const a of people) a.stage = stageFor(a);
       refreshStates();
+      for (const a of people) showStage(a);
     },
     tick(dt, t) {
       clock += dt;
@@ -759,6 +803,11 @@ export function createAgents(ctx) {
       talk = { a, b, t: 0, turn: 0, speaker: a, topic: text, line: 0 };
       say(a, b);
       return true;
+    },
+    /// Test hook: the stage `name`'s pill shows (`{key, label, scope, loop, visible}`), or null.
+    stageOf(name) {
+      const a = people.find((p) => p.name === name);
+      return a && a.stage ? { ...a.stage, visible: a.pill.visible } : null;
     },
     /// Test hook: who is where and what they are doing.
     debug() {

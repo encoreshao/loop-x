@@ -38,6 +38,47 @@ pub struct TriggerConfig {
     #[serde(rename = "type")]
     pub kind: String,
     pub schedule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
+    #[serde(rename = "where", skip_serializing_if = "serde_json::Map::is_empty")]
+    pub filter: serde_json::Map<String, Value>,
+}
+
+fn is_scalar(v: &Value) -> bool {
+    !matches!(v, Value::Array(_) | Value::Object(_))
+}
+
+fn parse_trigger(trigger: &Value) -> Result<TriggerConfig, DefinitionError> {
+    let kind = required_str(trigger, "type", "trigger.type")?;
+    let schedule = opt_string(Some(trigger), "schedule", "trigger.schedule")?;
+    let on = opt_string(Some(trigger), "on", "trigger.on")?;
+    let filter = match get(Some(trigger), "where") {
+        None => serde_json::Map::new(),
+        Some(Value::Object(map)) => {
+            for (key, value) in map {
+                let ok = match value {
+                    Value::Array(items) => items.iter().all(is_scalar),
+                    other => is_scalar(other),
+                };
+                if !ok {
+                    return invalid(format!(
+                        "LoopDefinition: 'trigger.where.{key}' must be a scalar or a list of scalars"
+                    ));
+                }
+            }
+            map.clone()
+        }
+        Some(_) => return invalid("LoopDefinition: 'trigger.where' must be a mapping"),
+    };
+    if kind == "event" && on.as_deref().is_none_or(|s| s.trim().is_empty()) {
+        return invalid("LoopDefinition: an event trigger needs a non-empty 'trigger.on'");
+    }
+    Ok(TriggerConfig {
+        kind,
+        schedule,
+        on,
+        filter,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -358,10 +399,7 @@ impl LoopDefinition {
         Ok(LoopDefinition {
             name: required_str(data, "name", "name")?,
             version,
-            trigger: TriggerConfig {
-                kind: required_str(trigger, "type", "trigger.type")?,
-                schedule: opt_string(Some(trigger), "schedule", "trigger.schedule")?,
-            },
+            trigger: parse_trigger(trigger)?,
             goal: GoalConfig {
                 kind: required_str(goal, "type", "goal.type")?,
             },
@@ -531,6 +569,77 @@ mod tests {
         let d = LoopDefinition::from_value(&with_agent(json!({"models": {"plan": ""}}))).unwrap();
         assert_eq!(d.agent.model_for(Phase::Plan), None);
         assert!(err(&with_agent(json!({"models": {"bogus": "x"}}))).contains("agent.models.bogus"));
+    }
+
+    #[test]
+    fn event_trigger_parses_on_and_where() {
+        let mut v = minimal();
+        v["trigger"] = json!({
+            "type": "event",
+            "on": "pipeline_doctor.diagnosed",
+            "where": {"mr_owned_by_loop": true, "category": ["test_failure", "lint"]},
+        });
+        let d = LoopDefinition::from_value(&v).unwrap();
+        assert_eq!(d.trigger.kind, "event");
+        assert_eq!(d.trigger.on.as_deref(), Some("pipeline_doctor.diagnosed"));
+        assert_eq!(d.trigger.filter["mr_owned_by_loop"], json!(true));
+        assert_eq!(
+            d.trigger.filter["category"],
+            json!(["test_failure", "lint"])
+        );
+        let out = serde_json::to_value(&d.trigger).unwrap();
+        assert_eq!(out["on"], v["trigger"]["on"]);
+        assert_eq!(out["where"], v["trigger"]["where"]);
+        v["trigger"] = json!({"type": "event", "on": "x.y"});
+        assert!(LoopDefinition::from_value(&v)
+            .unwrap()
+            .trigger
+            .filter
+            .is_empty());
+    }
+
+    #[test]
+    fn event_trigger_without_on_is_invalid() {
+        for trigger in [
+            json!({"type": "event"}),
+            json!({"type": "event", "on": ""}),
+            json!({"type": "event", "on": 3}),
+        ] {
+            let mut v = minimal();
+            v["trigger"] = trigger;
+            assert!(err(&v).contains("trigger.on"), "{}", err(&v));
+        }
+    }
+
+    #[test]
+    fn where_rejects_nested_objects() {
+        for (key, bad) in [
+            ("nested", json!({"a": 1})),
+            ("list_of_objects", json!([{"a": 1}])),
+            ("list_of_lists", json!([[1]])),
+        ] {
+            let mut v = minimal();
+            v["trigger"] = json!({"type": "event", "on": "x", "where": {key: bad}});
+            assert!(
+                err(&v).contains(&format!("trigger.where.{key}")),
+                "{}",
+                err(&v)
+            );
+        }
+        let mut v = minimal();
+        v["trigger"] = json!({"type": "event", "on": "x", "where": ["a"]});
+        assert!(err(&v).contains("trigger.where"));
+    }
+
+    #[test]
+    fn schedule_trigger_is_unchanged() {
+        let d = LoopDefinition::from_value(&example()).unwrap();
+        assert_eq!(d.trigger.on, None);
+        assert!(d.trigger.filter.is_empty());
+        assert_eq!(
+            serde_json::to_string(&d.trigger).unwrap(),
+            r#"{"type":"schedule","schedule":"0 10 * * 1-5"}"#
+        );
     }
 
     #[test]

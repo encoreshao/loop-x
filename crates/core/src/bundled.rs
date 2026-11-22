@@ -79,6 +79,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../loops/linkedin-autopilot/prompt.md"),
     ),
     (
+        "loops/mr-autofix/loop.yaml",
+        include_str!("../../../loops/mr-autofix/loop.yaml"),
+    ),
+    (
         "loops/mr-review/loop.yaml",
         include_str!("../../../loops/mr-review/loop.yaml"),
     ),
@@ -121,6 +125,11 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 const VERSION_MARKER: &str = ".loopx-bundled-version";
+
+/// The bundled text of `rel` (e.g. `loops/mr-autofix/loop.yaml`).
+pub fn text(rel: &str) -> Option<&'static str> {
+    FILES.iter().find(|(r, _)| *r == rel).map(|(_, t)| *t)
+}
 
 /// Write the bundled files under `root`. A git checkout (`.git` present) is
 /// never touched, so development edits stay authoritative. Elsewhere, missing
@@ -177,6 +186,38 @@ mod tests {
                 let rel = entry.strip_prefix(&repo).unwrap().to_str().unwrap();
                 assert!(FILES.iter().any(|(r, _)| *r == rel), "{rel} is not bundled");
             }
+        }
+    }
+
+    #[test]
+    fn bundled_autofix_definition_audits_clean() {
+        let (_, text) = FILES
+            .iter()
+            .find(|(r, _)| *r == "loops/mr-autofix/loop.yaml")
+            .expect("bundled");
+        let d = crate::loop_definition::LoopDefinition::from_yaml_str(text, "bundled").unwrap();
+        assert_eq!(d.name, "mr-autofix-loop");
+        assert_eq!(d.trigger.on.as_deref(), Some("pipeline_doctor.diagnosed"));
+        assert_eq!(d.stop_conditions.max_iterations, 1);
+        assert_eq!(d.stop_conditions.max_cost_usd, 10.0);
+        let report = crate::loop_audit::audit_definition(&d);
+        assert!(
+            !report.has_fail(),
+            "{}",
+            crate::loop_audit::format_report(&report)
+        );
+        let sub = crate::event_triggers::subscription_of("mr-autofix-loop", &d).unwrap();
+        let ev = |data: serde_json::Value| serde_json::json!({"event_type": "pipeline_doctor.diagnosed", "data": data});
+        assert!(crate::event_triggers::matches(
+            &sub,
+            &ev(serde_json::json!({"mr_owned_by_loop": true, "category": "test_failure"}))
+        ));
+        for data in [
+            serde_json::json!({"mr_owned_by_loop": false, "category": "lint"}),
+            serde_json::json!({"mr_owned_by_loop": true, "category": "flaky"}),
+            serde_json::json!({"mr_owned_by_loop": true, "category": "infra"}),
+        ] {
+            assert!(!crate::event_triggers::matches(&sub, &ev(data)));
         }
     }
 

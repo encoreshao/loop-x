@@ -2,13 +2,13 @@
 // with a note), mounts the renderer in #office, builds the world, runs day/night
 // and the render loop, and seats the three colleagues around the round desk, dealing
 // them the loops of `/office/state`. Test
-// hooks in the URL hash: `h=<hour>` overrides the clock, `left`/`right`/`in` pick a
+// hooks in the URL hash: `h=<hour>` overrides the clock, `sel=E1` opens a colleague, `left`/`right`/`in` pick a
 // camera (e.g. `#left&h=23`). Hovering a person highlights their name tag; clicking
 // one (or `select(name)`) opens the details panel and eases the camera to them,
 // clicking empty space or pressing Escape releases it. `window.__office` exposes
 // `debug()` (where everyone is), `setLoops(loops)` (draw these states instead),
 // `overflow`, `syncs`, and the test hooks `select(name|null)`, `selected()`,
-// `hover()`, `panelOpen()`, `screenOf(name)`, `focus()` and `dispose()`. The state
+// `hover()`, `panelOpen()`, `stageOf(name)`, `screenOf(name)`, `focus()` and `dispose()`. The state
 // stays live (live.js); `#stale=<ms>` and `#poll=<ms>` in the hash shorten its timers
 // for tests.
 import * as THREE from "three";
@@ -54,7 +54,7 @@ function showList(key = "no_webgl") {
   list.hidden = false;
 }
 
-/// `{camera, hour}` from the URL hash, e.g. `#left&h=23`.
+/// `{camera, hour, select}` from the URL hash, e.g. `#left&h=23` or `#sel=E1`.
 function hashHooks() {
   const parts = location.hash.replace(/^#/, "").split("&");
   const camera = ["left", "right", "in"].find((c) => parts.includes(c)) || null;
@@ -65,7 +65,8 @@ function hashHooks() {
   };
   // Floors keep a stray hash from hammering the server.
   const floor = (v, min) => (v === null ? null : Math.max(min, v));
-  return { camera, hour: h ? Number(h[1]) : null, staleMs: floor(num("stale"), 1000), pollMs: floor(num("poll"), 250), toastMs: floor(num("toast"), 500) };
+  const sel = parts.map((p) => p.match(/^sel=(E[1-5])$/)).find(Boolean);
+  return { camera, select: sel ? sel[1] : null, hour: h ? Number(h[1]) : null, staleMs: floor(num("stale"), 1000), pollMs: floor(num("poll"), 250), toastMs: floor(num("toast"), 500) };
 }
 
 function timeControl(onPick, initial) {
@@ -232,6 +233,7 @@ async function main() {
     if (selected && !panel.isOpen) release();
     office.overflow = agents.overflow;
     office.syncs += 1;
+    if (hooks.select && office.syncs === 1) select(hooks.select);
     requestRender();
   }
   async function fetchState() {
@@ -391,6 +393,8 @@ async function main() {
     }
     selected = who.name;
     panel.open(who);
+    // Someone waiting on you: their card opens on what they wait for.
+    if (who.state === "waiting") panel.focusNeeds();
     highlight();
     startFocus(who.name);
   }
@@ -441,6 +445,7 @@ async function main() {
   office.selected = () => selected;
   office.hover = () => hovered;
   office.panelOpen = () => panel.isOpen;
+  office.stageOf = (name) => agents.stageOf(name);
   office.screenOf = (name) => {
     const p = agents.positionOf(name);
     if (!p) return null;

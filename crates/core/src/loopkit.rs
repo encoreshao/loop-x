@@ -206,6 +206,8 @@ pub struct LoopContext {
     pub model: Option<ModelFn>,
     /// Override for the seen-store root (tests); `None` = `<root>/outputs/loops`.
     pub state_dir: Option<PathBuf>,
+    /// Where a plugin's domain events go; `None` = the default events dir.
+    pub events_dir: Option<PathBuf>,
 }
 
 impl LoopContext {
@@ -1016,6 +1018,7 @@ pub fn run_plugin(
         call_budget_usd: None,
         model: opts.model.clone(),
         state_dir: opts.state_dir.clone(),
+        events_dir: opts.events_dir.clone(),
     };
     let items = match plugin.discover(&ctx) {
         Ok(items) => items,
@@ -2010,6 +2013,7 @@ retry: {enabled: true, max_attempts: 2}
             call_budget_usd: None,
             model: None,
             state_dir: None,
+            events_dir: None,
         };
         let runner = |_: &[String], _: &str, _: f64, _: &std::path::Path| {
             Ok(crate::proc::ProcOutput {
@@ -2075,6 +2079,7 @@ retry: {enabled: true, max_attempts: 2}
                 call_budget_usd: None,
                 model: None,
                 state_dir: None,
+                events_dir: None,
             };
             call_model_with("p", &ctx, &hooks).unwrap();
             let argv = seen.lock().unwrap().pop().unwrap();
@@ -2100,6 +2105,7 @@ retry: {enabled: true, max_attempts: 2}
             call_budget_usd: None,
             model: None,
             state_dir: None,
+            events_dir: None,
         };
         for (cli, stdout) in [
             ("gemini", "SECRET not json"),
@@ -2154,6 +2160,7 @@ retry: {enabled: true, max_attempts: 2}
                 })
             })),
             state_dir: None,
+            events_dir: None,
         };
         default_call_model("p", &ctx).unwrap();
         let mut full = ctx.clone();
@@ -2184,6 +2191,7 @@ retry: {enabled: true, max_attempts: 2}
             call_budget_usd: None,
             model: None,
             state_dir: None,
+            events_dir: None,
         };
         let it = WorkItem::new("a", "T", json!({"p": 1})).with_url("https://x");
         let out = default_build_prompt("demo", &it, &ctx).unwrap();

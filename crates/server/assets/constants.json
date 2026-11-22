@@ -868,7 +868,8 @@
    "daily-digest-loop": "summarize",
    "release-notes-loop": "tag",
    "pipeline-doctor-loop": "stethoscope",
-   "stale-sweeper-loop": "archive"
+   "stale-sweeper-loop": "archive",
+   "mr-autofix-loop": "bolt"
   },
   "_LOOP_BRAND_ICONS": {
    "linkedin-autopilot-loop": "linkedin"

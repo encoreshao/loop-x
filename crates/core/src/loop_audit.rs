@@ -151,14 +151,21 @@ pub fn audit_with(
         },
         format!("goal.type={}", py_repr_str(&definition.goal.kind)),
     ));
+    let trigger = &definition.trigger;
+    let event_without_on =
+        trigger.kind == "event" && trigger.on.as_deref().is_none_or(|s| s.trim().is_empty());
+    let mut trigger_detail = format!("trigger.type={}", py_repr_str(&trigger.kind));
+    if let Some(on) = trigger.on.as_deref().filter(|_| trigger.kind == "event") {
+        trigger_detail.push_str(&format!(" on={}", py_repr_str(on)));
+    }
     checks.push(check(
         "trigger",
-        if definition.trigger.kind.is_empty() {
+        if trigger.kind.is_empty() || event_without_on {
             Fail
         } else {
             Pass
         },
-        format!("trigger.type={}", py_repr_str(&definition.trigger.kind)),
+        trigger_detail,
     ));
 
     let project_commands = definition
@@ -455,6 +462,22 @@ mod tests {
         assert!(r.missing_components.is_empty());
         assert_eq!(r.missing_reason, "");
         assert_eq!(r.score_text(), "100.0");
+    }
+
+    #[test]
+    fn event_trigger_without_on_fails_the_audit() {
+        let mut d = LoopDefinition::from_value(&compliant()).unwrap();
+        d.trigger.kind = "event".into();
+        let r = audit_definition(&d);
+        assert_eq!(r.check("trigger").unwrap().status, CheckStatus::Fail);
+        d.trigger.on = Some("pipeline_doctor.diagnosed".into());
+        let r = audit_definition(&d);
+        assert_eq!(r.check("trigger").unwrap().status, CheckStatus::Pass);
+        assert!(r
+            .check("trigger")
+            .unwrap()
+            .detail
+            .contains("pipeline_doctor.diagnosed"));
     }
 
     #[test]

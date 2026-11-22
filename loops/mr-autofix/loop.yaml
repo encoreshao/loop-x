@@ -1,0 +1,45 @@
+# Definition for Pipeline Auto-fix (crates/core/src/mr_autofix.rs, a native
+# runner). Queued by the scheduler tick when Pipeline Doctor diagnoses a test or
+# lint failure on a merge request the issue loop opened. Each event is
+# re-verified against GitLab, then gets at most one CI-mode Fix now run per
+# merge request; anything else escalates to Needs you and Slack.
+name: mr-autofix-loop
+version: 1
+
+trigger:
+  type: event
+  on: pipeline_doctor.diagnosed
+  where:
+    mr_owned_by_loop: true
+    category: [test_failure, lint]
+
+goal:
+  type: pipeline_autofix
+
+context:
+  sources:
+    - connector_data
+
+actions:
+  - fetch_connector_data
+  - modify_code
+  - post_public_comment
+  - send_notification
+
+# Fix now re-runs the agent's declared lint and test commands and pushes only
+# when they pass.
+verification:
+  required: [lint, tests]
+
+verifiers: []
+
+stop_conditions:
+  max_iterations: 1
+  max_runtime_minutes: 45
+  max_cost_usd: 10
+  no_progress_iterations: 1
+
+human_gates: []
+
+retry:
+  enabled: false

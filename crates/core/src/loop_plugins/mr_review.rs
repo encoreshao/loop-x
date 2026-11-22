@@ -1822,6 +1822,7 @@ mod tests {
             call_budget_usd: None,
             model: None,
             state_dir: Some(PathBuf::from("/nonexistent")),
+            events_dir: None,
         }
     }
 

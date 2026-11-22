@@ -197,7 +197,7 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
     // Only the scheduler's own runs are gated; "Run now" always runs.
     let scheduled = matches!(
         std::env::var("LOOPX_RUN_REASON").as_deref(),
-        Ok("scheduled" | "catch-up")
+        Ok("scheduled" | "catch-up" | "event")
     );
     // A loop on its own account has its own limits: the shared pause and usage
     // check are about the default account.
@@ -489,6 +489,17 @@ pub fn run_loop_now(opts: &RunLoopOpts, loop_name: &str, extra_args: &[String]) 
         ];
         tried.push(next);
     };
+    if exit == PRECHECK_SKIPPED_EXIT {
+        let _ = status::write_status(&status_path, "idle", &[("last_exit_code", json!(exit))]);
+        append_unified_log(
+            &format!(
+                "[{}] ---- {loop_name} ---- skipped: nothing to do ----",
+                stamp()
+            ),
+            &unified,
+        );
+        return PRECHECK_SKIPPED_EXIT;
+    }
     if exit != 0 {
         return fail(exit);
     }
@@ -761,6 +772,7 @@ pub fn run_entry(entry_point: &str, argv: &[String]) -> i32 {
         "bin.inbox_triage_runner" | "inbox-triage-loop" => {
             crate::inbox_runner::main(&crate::inbox_runner::InboxCtx::new(root), argv, None)
         }
+        "bin.mr_autofix" | "mr-autofix-loop" => crate::mr_autofix::main(argv),
         other => match crate::loop_plugins::run_entry(other, argv) {
             Some(code) => code,
             None => {
@@ -1095,6 +1107,28 @@ mod tests {
     }
 
     #[test]
+    fn event_reason_respects_the_quota_pause() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), true, 30);
+        std::fs::write(
+            d.path().join("ai_cli.json"),
+            r#"{"cli": "claude", "pause_above_percent": 90}"#,
+        )
+        .unwrap();
+        let marker = d.path().join("ran");
+        let mut o = opts(
+            d.path(),
+            fake_exe(d.path(), &format!("touch {}", marker.display())),
+        );
+        o.usage_probe = Some(usage_93);
+        let code = with_env(d.path(), || {
+            with_reason("event", || run_loop_now(&o, "issue-loop", &[]))
+        });
+        assert_eq!(code, QUOTA_PAUSED_EXIT);
+        assert!(!marker.exists(), "an event run waits for the reset too");
+    }
+
+    #[test]
     fn a_scheduled_run_over_the_usage_threshold_pauses_and_waits_for_the_reset() {
         let d = tempfile::tempdir().unwrap();
         setup(d.path(), true, 30);
@@ -1309,6 +1343,26 @@ mod tests {
         );
         let args = std::fs::read_to_string(&args_file).unwrap();
         assert_eq!(args.trim(), format!("-i -s -w {}", std::process::id()));
+    }
+
+    #[test]
+    fn a_runner_that_finds_nothing_to_do_is_skipped_not_failed() {
+        let d = tempfile::tempdir().unwrap();
+        setup(d.path(), false, 30);
+        let exe = fake_exe(d.path(), &format!("exit {PRECHECK_SKIPPED_EXIT}"));
+        let code = with_env(d.path(), || {
+            run_loop_now(&opts(d.path(), exe), "issue-loop", &[])
+        });
+        assert_eq!(code, PRECHECK_SKIPPED_EXIT);
+        let st = status::read_status(&d.path().join("outputs/status.json"));
+        assert_eq!(st["state"], "idle");
+        assert!(
+            st.get("consecutive_failures").is_none_or(|v| v.is_null()),
+            "{st}"
+        );
+        let log = std::fs::read_to_string(d.path().join("logs/loop-engineering.log")).unwrap();
+        assert!(log.contains("skipped: nothing to do"), "{log}");
+        assert!(!log.contains("FAILED"), "{log}");
     }
 
     #[test]

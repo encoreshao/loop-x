@@ -39,7 +39,7 @@ fn memory_root(state: &UiState) -> PathBuf {
     state.home_dir.join("memory")
 }
 
-fn paths(state: &UiState) -> Paths {
+pub(crate) fn paths(state: &UiState) -> Paths {
     let outputs = state.repo_root.join("outputs");
     Paths {
         events_dir: state.events_dir.clone(),
@@ -57,7 +57,7 @@ fn paths(state: &UiState) -> Paths {
     }
 }
 
-fn items(state: &UiState) -> Vec<Value> {
+pub(crate) fn items(state: &UiState) -> Vec<Value> {
     let p = paths(state);
     let loops = snapshot::loop_statuses(&p.outputs);
     snapshot::needs_you(&p, &loops, Utc::now())
@@ -71,8 +71,22 @@ fn text(item: &Value, key: &str) -> String {
     }
 }
 
+/// `ny-<id>` with every byte outside `[A-Za-z0-9-]` as `_XX`, so distinct ids
+/// never share an anchor and the result is safe in an attribute and a URL.
+pub(crate) fn anchor_id(id: &str) -> String {
+    let mut out = String::from("ny-");
+    for b in id.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("_{b:02X}"));
+        }
+    }
+    out
+}
+
 /// The item's line, translated.
-fn headline(ctx: &UiCtx, item: &Value) -> String {
+pub(crate) fn headline(ctx: &UiCtx, item: &Value) -> String {
     let f = |k: &str| text(item, k);
     match item["kind"].as_str() {
         Some("approval") if item["approval_kind"] == "profile-section" => ctx.tf(
@@ -109,7 +123,25 @@ fn headline(ctx: &UiCtx, item: &Value) -> String {
             "Approve the spec for {project} #{iid}",
             &[("project", &f("project")), ("iid", &f("issue_iid"))],
         ),
+        Some("mr_autofix") => ctx.tf(
+            "Automatic fix stopped on {mr}: {reason}",
+            &[("mr", &f("mr_ref")), ("reason", &autofix_reason(ctx, &f("reason")))],
+        ),
         _ => f("title"),
+    }
+}
+
+fn autofix_reason(ctx: &UiCtx, reason: &str) -> String {
+    match reason {
+        "already_attempted" => ctx.t("it already had its one automatic attempt"),
+        "fix_failed" => ctx.t("the automatic fix failed"),
+        "fix_nothing" => ctx.t("the automatic fix changed nothing"),
+        "daily_cap" => ctx.t("the daily limit of automatic fixes was reached"),
+        "low_confidence" => ctx.t("the diagnosis was not confident enough"),
+        "job_busy" => ctx.t("a Fix now run was already in progress"),
+        "verify_failed" => ctx.t("GitLab could not be checked"),
+        "ledger_corrupt" => ctx.t("its attempt ledger is unreadable"),
+        _ => ctx.t("it needs a human"),
     }
 }
 
@@ -120,6 +152,7 @@ fn icon_for(kind: &str) -> &'static str {
         "sign_in" => "login",
         "mr_thread" | "slack_listener" => "forum",
         "spec" => "fact_check",
+        "mr_autofix" => "git_pull_request",
         _ => "error",
     }
 }
@@ -142,6 +175,17 @@ fn link(ctx: &UiCtx, item: &Value) -> String {
             crate::ui::pages::memory::project_url(&text(item, "project"), None),
             ctx.t("Open the project's memory"),
         ),
+        Some("mr_autofix") => {
+            let url = text(item, "mr_web_url");
+            if !(url.starts_with("https://") || url.starts_with("http://")) {
+                return String::new();
+            }
+            return format!(
+                "<a class='btn btn-neutral' href='{}' target='_blank' rel='noopener'>{}</a>",
+                pyfmt::escape(&url),
+                pyfmt::escape(&ctx.t("Open the merge request")),
+            );
+        }
         _ => return String::new(),
     };
     format!("<a class='btn btn-neutral' href='{}'>{}</a>", pyfmt::escape(&href), pyfmt::escape(&label))
@@ -449,9 +493,10 @@ fn row(ctx: &UiCtx, item: &Value, prefixes: &crate::ui::markdown::GitlabPrefixes
         (String::new(), actions(ctx, item, false))
     };
     format!(
-        "<li class='needs-you-item needs-you-{kind}'>{}<div class='needs-you-text'>{}{when}{details}</div><div class='needs-you-actions'>{actions}</div></li>",
+        "<li id='{anchor}' class='needs-you-item needs-you-{kind}'>{}<div class='needs-you-text'>{}{when}{details}</div><div class='needs-you-actions'>{actions}</div></li>",
         icons::icon(icon_for(item["kind"].as_str().unwrap_or(""))),
         pyfmt::escape(&headline(ctx, item)),
+        anchor = anchor_id(&text(item, "id")),
         kind = pyfmt::escape(&text(item, "kind")),
     )
 }
@@ -1300,6 +1345,73 @@ mod tests {
         assert!(r.header("location").unwrap_or_default().contains("ok=0"));
         let r = post(&st, "/needs-you/mr-thread", "csrf_token=tok&id=escalated%3Aweb%237&decision=dismiss");
         assert!(r.header("location").unwrap_or_default().contains("ok=0"));
+    }
+
+    fn autofix_event(dir: &std::path::Path, sha: &str, url: &str, reason: &str) {
+        let events = dir.join("outputs/events");
+        std::fs::create_dir_all(&events).unwrap();
+        let now = chrono::Utc::now();
+        let line = serde_json::json!({"event_id": format!("e-{sha}"), "timestamp": loopx_core::events::fmt_timestamp(now),
+            "event_type": "mr_autofix.escalated", "run_id": "r",
+            "data": {"mr_ref": "work:9!7", "mr_web_url": url, "sha": sha, "pipeline_id": 100, "reason": reason}});
+        loopx_core::events::append_line(&events.join(format!("{}.jsonl", now.format("%Y-%m-%d"))), &format!("{line}\n"))
+            .unwrap();
+    }
+
+    #[test]
+    fn autofix_item_links_only_http_urls() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        autofix_event(d.path(), "abc", "https://gl.example/g/p/-/merge_requests/7", "fix_failed");
+        autofix_event(d.path(), "def", "javascript:alert(1)", "already_attempted");
+        let html = get(&st, "/needs-you");
+        assert!(
+            html.contains("Automatic fix stopped on work:9!7: the automatic fix failed"),
+            "{html}"
+        );
+        assert!(html.contains("it already had its one automatic attempt"), "{html}");
+        assert!(html.contains("href='https://gl.example/g/p/-/merge_requests/7'"), "{html}");
+        assert_eq!(html.matches("Open the merge request").count(), 1, "{html}");
+        assert!(!html.contains("javascript:"), "{html}");
+        assert_eq!(html.matches("action='/needs-you/dismiss'").count(), 2, "{html}");
+        assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 2}"#);
+        assert_eq!(post(&st, "/needs-you/dismiss", "id=mr_autofix%3Awork%3A9%217%3Aabc").status, 403);
+        let r = post(&st, "/needs-you/dismiss", "csrf_token=tok&id=mr_autofix%3Awork%3A9%217%3Aabc");
+        assert!(r.header("location").unwrap_or_default().contains("ok=1"), "{:?}", r.header("location"));
+        assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 1}"#);
+        let ja = st
+            .registry
+            .dispatch(&st, &UiRequest::get("/needs-you").with_header("cookie", "loop_lang=ja"))
+            .unwrap()
+            .body_text();
+        assert!(!ja.contains("Automatic fix stopped"), "{ja}");
+    }
+
+    #[test]
+    fn autofix_items_without_a_merge_request_read_in_words() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        autofix_event(d.path(), "s1", "", "ledger_corrupt");
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("its attempt ledger is unreadable"), "{html}");
+        assert!(!html.contains("Open the merge request"), "{html}");
+        let d2 = tempfile::tempdir().unwrap();
+        autofix_event(d2.path(), "s2", "", "verify_failed");
+        let html = get(&state(d2.path()), "/needs-you");
+        assert!(html.contains("GitLab could not be checked"), "{html}");
+    }
+
+    #[test]
+    fn needs_you_rows_have_anchor_ids() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        autofix_event(d.path(), "abc", "https://gl.example/mr/7", "fix_failed");
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("<li id='ny-mr_5Fautofix_3Awork_3A9_217_3Aabc' class='needs-you-item"), "{html}");
+        assert_eq!(super::anchor_id("spec:web:12"), "ny-spec_3Aweb_3A12");
+        assert_ne!(super::anchor_id("a_b"), super::anchor_id("a:b"));
+        assert_ne!(super::anchor_id("a-b"), super::anchor_id("a b"));
+        assert!(super::anchor_id("x'><script>").chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

@@ -386,6 +386,51 @@ pub fn enqueue_due_loops(
     queued
 }
 
+/// Collects new matching events into each event loop's inbox and queues the
+/// loop while its inbox is non-empty. A loop already queued or running drains
+/// the inbox itself; whatever it misses re-queues on the next tick.
+pub fn enqueue_event_loops(
+    loops: &[Value],
+    repo_root: &Path,
+    events_dir: &Path,
+    state_dir: &Path,
+    queue: &crate::run_queue::RunQueue,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<String> {
+    use crate::event_triggers;
+    use crate::run_queue::{Enqueued, Reason};
+    let stamp = isoformat(now.with_timezone(&chrono::Local).naive_local());
+    event_triggers::disarm_disabled(loops, repo_root, state_dir);
+    let mut queued = Vec::new();
+    for sub in event_triggers::subscriptions(loops, repo_root) {
+        event_triggers::collect(&sub, events_dir, state_dir, now);
+        if event_triggers::ready_count(state_dir, &sub.loop_name, now) == 0 {
+            continue;
+        }
+        match queue.enqueue(&sub.loop_name, Reason::Event, &stamp) {
+            Ok(Enqueued::Queued { .. }) => queued.push(sub.loop_name),
+            Ok(Enqueued::Coalesced { .. }) => {}
+            Err(e) => eprintln!("loop_scheduler: could not queue {}: {e}", sub.loop_name),
+        }
+    }
+    queued
+}
+
+/// The tick's queueing step: nothing at all while the AI subscription is
+/// paused, so event matches stay unseen until it resets.
+pub fn tick_enqueue(
+    paused: bool,
+    due: impl FnOnce() -> Vec<String>,
+    events: impl FnOnce() -> Vec<String>,
+) -> Vec<String> {
+    if paused {
+        return Vec::new();
+    }
+    let mut queued = due();
+    queued.extend(events());
+    queued
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -715,6 +760,139 @@ mod tests {
             queue.snapshot(10).recent.len(),
             1,
             "skipped once, not every tick"
+        );
+    }
+
+    fn event_loop_fixture(root: &Path) -> Vec<Value> {
+        let def = root.join("loops/mr-autofix");
+        std::fs::create_dir_all(&def).unwrap();
+        std::fs::write(
+            def.join("loop.yaml"),
+            "name: mr-autofix-loop\nversion: 1\ntrigger:\n  type: event\n  on: pipeline_doctor.diagnosed\n  where:\n    category: [lint]\ngoal:\n  type: pipeline_autofix\n",
+        )
+        .unwrap();
+        vec![json!({"name": "mr-autofix-loop", "enabled": true, "entry_point": "bin.mr_autofix"})]
+    }
+
+    fn diagnosed(events: &Path, id: &str, at: chrono::DateTime<chrono::Utc>) {
+        let e = json!({"event_id": id, "timestamp": crate::events::fmt_timestamp(at),
+            "event_type": "pipeline_doctor.diagnosed", "run_id": "r", "data": {"category": "lint"}});
+        std::fs::create_dir_all(events).unwrap();
+        crate::events::append_line(
+            &events.join(format!("{}.jsonl", at.format("%Y-%m-%d"))),
+            &format!("{e}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_event_loop_is_queued_once_per_match_and_never_by_time() {
+        let d = tempfile::tempdir().unwrap();
+        let (events, triggers) = (d.path().join("events"), d.path().join("event_triggers"));
+        let queue = crate::run_queue::RunQueue::new(d.path().join("q.json"));
+        let loops = event_loop_fixture(d.path());
+        let sp = d.path().join("state.json");
+        let t0 = chrono::Utc::now() - Duration::minutes(30);
+        for m in 0..(7 * 24 * 60) {
+            if m % 97 == 0 {
+                assert!(!is_due(
+                    &loops[0],
+                    &SchedulerState::new(),
+                    at(2026, 10, 22, 0, 0) + Duration::minutes(m)
+                ));
+            }
+        }
+        assert!(enqueue_due_loops(&loops, &sp, &queue, at(2026, 10, 22, 10, 0)).is_empty());
+
+        let tick = |now| enqueue_event_loops(&loops, d.path(), &events, &triggers, &queue, now);
+        assert!(tick(t0).is_empty(), "arming queues nothing");
+        diagnosed(&events, "e1", t0 + Duration::minutes(1));
+        assert_eq!(tick(t0 + Duration::minutes(2)), ["mr-autofix-loop"]);
+        let snap = queue.snapshot(10);
+        assert_eq!(snap.queued.len(), 1);
+        assert_eq!(snap.queued[0].reason, "event");
+
+        let claimed = queue.claim_next("t", 1).unwrap().unwrap();
+        crate::event_triggers::take_pending(&triggers, "mr-autofix-loop");
+        queue
+            .finish(&claimed.id, "done", Some(0), None, "t")
+            .unwrap();
+        assert!(
+            tick(t0 + Duration::minutes(3)).is_empty(),
+            "no new event, nothing queued"
+        );
+        assert!(queue.snapshot(10).queued.is_empty());
+    }
+
+    #[test]
+    fn re_enabling_an_event_loop_re_arms_it_instead_of_replaying() {
+        let d = tempfile::tempdir().unwrap();
+        let (events, triggers) = (d.path().join("events"), d.path().join("event_triggers"));
+        let queue = crate::run_queue::RunQueue::new(d.path().join("q.json"));
+        let on = event_loop_fixture(d.path());
+        let mut off = on.clone();
+        off[0]["enabled"] = json!(false);
+        let t0 = chrono::Utc::now() - Duration::minutes(30);
+        enqueue_event_loops(&on, d.path(), &events, &triggers, &queue, t0);
+        enqueue_event_loops(
+            &off,
+            d.path(),
+            &events,
+            &triggers,
+            &queue,
+            t0 + Duration::minutes(1),
+        );
+        diagnosed(&events, "while-off", t0 + Duration::minutes(2));
+        let t1 = t0 + Duration::minutes(3);
+        assert!(
+            enqueue_event_loops(&on, d.path(), &events, &triggers, &queue, t1).is_empty(),
+            "switching it back on arms it afresh"
+        );
+        assert_eq!(
+            crate::event_triggers::pending_count(&triggers, "mr-autofix-loop"),
+            0
+        );
+        diagnosed(&events, "after", t1 + Duration::minutes(1));
+        assert_eq!(
+            enqueue_event_loops(
+                &on,
+                d.path(),
+                &events,
+                &triggers,
+                &queue,
+                t1 + Duration::minutes(2)
+            ),
+            ["mr-autofix-loop"]
+        );
+    }
+
+    #[test]
+    fn paused_tick_leaves_events_unseen() {
+        let d = tempfile::tempdir().unwrap();
+        let (events, triggers) = (d.path().join("events"), d.path().join("event_triggers"));
+        let queue = crate::run_queue::RunQueue::new(d.path().join("q.json"));
+        let loops = event_loop_fixture(d.path());
+        let t0 = chrono::Utc::now() - Duration::minutes(30);
+        enqueue_event_loops(&loops, d.path(), &events, &triggers, &queue, t0);
+        diagnosed(&events, "e1", t0 + Duration::minutes(1));
+        let events_tick = || {
+            enqueue_event_loops(
+                &loops,
+                d.path(),
+                &events,
+                &triggers,
+                &queue,
+                t0 + Duration::minutes(2),
+            )
+        };
+        assert!(tick_enqueue(true, Vec::new, events_tick).is_empty());
+        assert_eq!(
+            crate::event_triggers::pending_count(&triggers, "mr-autofix-loop"),
+            0
+        );
+        assert_eq!(
+            tick_enqueue(false, Vec::new, events_tick),
+            ["mr-autofix-loop"]
         );
     }
 

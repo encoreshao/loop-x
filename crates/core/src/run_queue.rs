@@ -30,6 +30,8 @@ pub enum Reason {
     Manual,
     /// A slot missed while the Mac slept or the app was closed.
     CatchUp,
+    /// A matching event landed for an event-triggered loop.
+    Event,
 }
 
 impl Reason {
@@ -38,6 +40,7 @@ impl Reason {
             Reason::Scheduled => "scheduled",
             Reason::Manual => "manual",
             Reason::CatchUp => "catch-up",
+            Reason::Event => "event",
         }
     }
 

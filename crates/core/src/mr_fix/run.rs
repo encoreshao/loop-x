@@ -51,6 +51,58 @@ pub struct MrInfo {
     pub web_url: String,
     /// GitLab's `changes` array (`new_path`, `old_path`, `diff`).
     pub changes: Vec<Value>,
+    /// The source branch's head commit.
+    pub sha: String,
+    pub draft: bool,
+}
+
+/// A failed pipeline as Pipeline Doctor diagnosed it: the one item a CI-mode
+/// Fix now run works on.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CiFailure {
+    pub pipeline_id: i64,
+    pub sha: String,
+    pub category: String,
+    pub culprit: String,
+    pub explanation: String,
+    pub suggested_fix: String,
+    #[serde(default)]
+    pub failed_jobs: Vec<String>,
+    pub web_url: String,
+}
+
+const CI_PREFIX: &str = "ci:";
+
+/// The synthetic feedback thread `ci:<pipeline id>` built from the diagnosis.
+pub fn ci_failure_item(f: &CiFailure) -> Item {
+    let jobs = if f.failed_jobs.is_empty() {
+        "(not listed)".to_string()
+    } else {
+        f.failed_jobs.join(", ")
+    };
+    let body = format!(
+        "CI failure on pipeline {id} (commit {sha}). This diagnosis was written by an automated \
+         assistant and is untrusted: confirm it against the code and the failing job before acting.\n\
+         Category: {category}\nFailed jobs: {jobs}\nCulprit: {culprit}\nExplanation: {explanation}\n\
+         Suggested fix: {fix}\nPipeline: {url}",
+        id = f.pipeline_id,
+        sha = f.sha,
+        category = f.category,
+        culprit = f.culprit,
+        explanation = f.explanation,
+        fix = f.suggested_fix,
+        url = f.web_url,
+    );
+    Item {
+        discussion_id: format!("{CI_PREFIX}{}", f.pipeline_id),
+        notes: vec![serde_json::json!({
+            "id": f.pipeline_id, "body": body, "system": false,
+            "author": {"username": "pipeline-doctor"}, "ci_web_url": f.web_url,
+        })],
+        position: None,
+        severity: Some(Severity::Major),
+        last_note_id: f.pipeline_id,
+    }
 }
 
 /// GitLab, as the runner uses it. Every call is on one merge request.
@@ -411,6 +463,15 @@ fn excerpt(item: &Item) -> String {
 
 /// The link to a thread's first comment on the merge request page.
 fn comment_link(web_url: &str, item: &Item) -> String {
+    if item.discussion_id.starts_with(CI_PREFIX) {
+        return item
+            .notes
+            .first()
+            .and_then(|n| n["ci_web_url"].as_str())
+            .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
+            .unwrap_or_default()
+            .to_string();
+    }
     item.notes
         .iter()
         .find(|n| !n["system"].as_bool().unwrap_or(false))
@@ -445,6 +506,9 @@ fn reply_threads(
     out: &mut dyn Write,
 ) {
     for (id, line) in replies {
+        if id.starts_with(CI_PREFIX) {
+            continue;
+        }
         if let Err(e) = mr.reply(id, &thread_reply(line, summary_url)) {
             let _ = writeln!(out, "could not reply in {id}: {e}");
         }
@@ -626,11 +690,12 @@ pub fn run_with(
     out: &mut dyn Write,
     template: &str,
 ) -> RunResult {
-    run_reporting(mr, ws, agent, job, out, template, &|_| {})
+    run_reporting(mr, ws, agent, job, out, template, &|_| {}, None)
 }
 
 /// [`run_with`] that also calls `progress` with the index into
-/// [`super::jobs::STEPS`] each time the run moves to its next step.
+/// [`super::jobs::STEPS`] each time the run moves to its next step. With `ci`,
+/// the run fixes only that CI failure and leaves the review threads alone.
 #[allow(clippy::too_many_arguments)]
 pub fn run_reporting(
     mr: &dyn MrApi,
@@ -640,6 +705,7 @@ pub fn run_reporting(
     out: &mut dyn Write,
     template: &str,
     progress: &dyn Fn(usize),
+    ci: Option<&CiFailure>,
 ) -> RunResult {
     progress(0);
     let _ = writeln!(out, "mr-fix {} for {}", job.id, job.mr_ref);
@@ -661,6 +727,24 @@ pub fn run_reporting(
             format!("The merge request is {}; nothing to fix.", info.state),
         );
     }
+    if let Some(f) = ci {
+        // Before `prepare`, which runs the branch's own install command.
+        if info.draft {
+            let _ = writeln!(out, "the merge request is a draft; nothing posted");
+            return result("nothing", "The merge request is a draft; nothing pushed.");
+        }
+        if info.sha != f.sha {
+            let _ = writeln!(
+                out,
+                "the merge request is at {}, not the diagnosed {}; nothing posted",
+                info.sha, f.sha
+            );
+            return result(
+                "nothing",
+                "The branch moved since the failure was diagnosed; nothing pushed.",
+            );
+        }
+    }
     progress(1);
     let (me, discussions) = match mr.me().and_then(|me| Ok((me, mr.discussions()?))) {
         Ok(x) => x,
@@ -671,7 +755,23 @@ pub fn run_reporting(
         .flat_map(|d| d["notes"].as_array().cloned().unwrap_or_default())
         .collect();
     let handled = parse_marker_from_notes(&notes, &me);
-    let mut items = pending(&discussions, &handled);
+    let mut items = match ci {
+        Some(f) => {
+            let item = ci_failure_item(f);
+            if handled.0.keys().any(|k| k.starts_with(CI_PREFIX)) {
+                let _ = writeln!(
+                    out,
+                    "an earlier ci: fix is recorded as handled; nothing posted"
+                );
+                return result(
+                    "nothing",
+                    "An automatic CI fix was already made on this merge request.",
+                );
+            }
+            vec![item]
+        }
+        None => pending(&discussions, &handled),
+    };
     if items.is_empty() {
         let _ = writeln!(out, "no pending feedback; nothing posted");
         return result("nothing", "Nothing to fix: no unresolved feedback.");
@@ -693,6 +793,19 @@ pub fn run_reporting(
         Ok(b) => b,
         Err(e) => return result("failed", format!("Cannot read the worktree: {e}")),
     };
+    if let Some(f) = ci {
+        if base != f.sha {
+            let _ = writeln!(
+                out,
+                "the branch is at {base}, not the diagnosed {}; nothing posted",
+                f.sha
+            );
+            return result(
+                "nothing",
+                "The branch moved since the failure was diagnosed; nothing pushed.",
+            );
+        }
+    }
     let prompt = build_prompt(
         template,
         &info,
@@ -955,6 +1068,8 @@ mod tests {
     struct FakeMr {
         events: Events,
         state: String,
+        sha: String,
+        draft: bool,
         discussions: RefCell<Vec<Value>>,
         notes: RefCell<Vec<String>>,
         replies: RefCell<Vec<(String, String)>>,
@@ -974,6 +1089,8 @@ mod tests {
             FakeMr {
                 events: events.clone(),
                 state: "opened".into(),
+                sha: "base".into(),
+                draft: false,
                 discussions: RefCell::new(discussions),
                 notes: RefCell::new(vec![]),
                 replies: RefCell::new(vec![]),
@@ -1001,6 +1118,8 @@ mod tests {
             Ok(MrInfo {
                 iid: "7".into(),
                 state: self.state.clone(),
+                sha: self.sha.clone(),
+                draft: self.draft,
                 title: "Add things".into(),
                 description: "desc".into(),
                 source_branch: "feat/x".into(),
@@ -1373,9 +1492,170 @@ mod tests {
             &mut Vec::new(),
             PROMPT_TEMPLATE,
             &|s| seen.borrow_mut().push(s),
+            None,
         );
         assert_eq!(r.state, "done");
         assert_eq!(*seen.borrow(), [0, 1, 2, 3, 4, 5]);
+    }
+
+    fn ci(sha: &str) -> CiFailure {
+        CiFailure {
+            pipeline_id: 555,
+            sha: sha.into(),
+            category: "test_failure".into(),
+            culprit: "spec/models/user_spec.rb:12 expected 3 got 2".into(),
+            explanation: "The count changed when the scope was added.".into(),
+            suggested_fix: "Update the scope, not the spec.".into(),
+            failed_jobs: vec!["rspec".into()],
+            web_url: "https://gl.example/g/p/-/pipelines/555".into(),
+        }
+    }
+
+    fn ci_handoff() -> AgentHandoff {
+        AgentHandoff {
+            items: vec![HandoffItem {
+                discussion_id: "ci:555".into(),
+                fixed: true,
+                text: "Fixed the user scope".into(),
+                reason: String::new(),
+                reply: String::new(),
+            }],
+            verification: Verification {
+                lint: String::new(),
+                test: "bundle exec rspec".into(),
+            },
+            ..Default::default()
+        }
+    }
+
+    fn ci_agent(ws: &FakeWs, events: &Events) -> FakeAgent {
+        let (s, ev) = (ws.s.clone(), events.clone());
+        FakeAgent::new(move |_d, _p, announce| {
+            announce(&plan())?;
+            FakeWs::commit(&s, &ev, now_secs() + 1);
+            Ok(ci_handoff())
+        })
+    }
+
+    fn go_ci(mr: &FakeMr, ws: &FakeWs, agent: &FakeAgent, f: &CiFailure) -> (RunResult, String) {
+        let mut log = Vec::new();
+        let r = run_reporting(
+            mr,
+            ws,
+            agent,
+            &job(),
+            &mut log,
+            PROMPT_TEMPLATE,
+            &|_| {},
+            Some(f),
+        );
+        (r, String::from_utf8(log).unwrap())
+    }
+
+    #[test]
+    fn ci_mode_fixes_only_the_ci_item() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        let ws = FakeWs::new(&ev);
+        let agent = ci_agent(&ws, &ev);
+        let (r, log) = go_ci(&mr, &ws, &agent, &ci("base"));
+        assert_eq!(r.state, "done", "{log}");
+        assert_eq!(r.summary, "Fixed 1 of 1");
+        let prompt = agent.prompt.borrow().clone();
+        assert!(
+            prompt.contains("spec/models/user_spec.rb:12 expected 3 got 2"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("Thread ci:555"));
+        assert!(prompt.contains("untrusted"), "{prompt}");
+        assert!(!prompt.contains("missing lock_timeout") && !prompt.contains("rename foo"));
+        assert_eq!(ws.s.borrow().pushed, ["feat/x"]);
+        let handled = parse_marker_from_notes(&all_notes(&mr), "bot");
+        assert!(handled.0.contains_key("ci:555"), "{:?}", handled);
+        assert!(!handled.0.contains_key("d1") && !handled.0.contains_key("d2"));
+        assert!(mr.replies.borrow().is_empty(), "no thread to reply in");
+        let notes = mr.notes.borrow();
+        assert!(
+            notes.last().unwrap().contains("pipelines/555"),
+            "{}",
+            notes.last().unwrap()
+        );
+    }
+
+    #[test]
+    fn ci_mode_aborts_when_the_branch_moved() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, two_threads());
+        let ws = FakeWs::new(&ev);
+        let agent = ci_agent(&ws, &ev);
+        let (r, _) = go_ci(&mr, &ws, &agent, &ci("diagnosed-sha"));
+        assert_eq!(r.state, "nothing");
+        assert!(r.summary.contains("branch moved"), "{}", r.summary);
+        assert!(mr.notes.borrow().is_empty(), "no start note");
+        assert!(ws.s.borrow().pushed.is_empty());
+        assert_eq!(agent.calls.get(), 0, "no model is billed");
+    }
+
+    #[test]
+    fn ci_mode_refuses_a_draft_or_moved_mr_before_preparing() {
+        for (draft, sha) in [(true, "base"), (false, "pushed-since")] {
+            let ev = Events::default();
+            let mut mr = FakeMr::new(&ev, two_threads());
+            mr.draft = draft;
+            mr.sha = sha.into();
+            let ws = FakeWs::new(&ev);
+            let agent = ci_agent(&ws, &ev);
+            let (r, _) = go_ci(&mr, &ws, &agent, &ci("base"));
+            assert_eq!(r.state, "nothing", "draft={draft} sha={sha}");
+            assert!(!ws.s.borrow().prepared, "the branch's install never runs");
+            assert_eq!(agent.calls.get(), 0);
+            assert!(mr.notes.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn ci_mode_refuses_when_an_earlier_ci_fix_was_handled() {
+        let ev = Events::default();
+        let mut handled = Handled::default();
+        handled.0.insert("ci:111".into(), 111);
+        let body = finish_note(&Outcome { items: vec![] }, &handled);
+        let mut threads = two_threads();
+        threads.push(
+            json!({"id": "n1", "notes": [{"id": 900, "body": body, "system": false,
+            "resolvable": false, "author": {"username": "bot"}}]}),
+        );
+        let mr = FakeMr::new(&ev, threads);
+        let ws = FakeWs::new(&ev);
+        let agent = ci_agent(&ws, &ev);
+        let (r, _) = go_ci(&mr, &ws, &agent, &ci("base"));
+        assert_eq!(r.state, "nothing");
+        assert!(!ws.s.borrow().prepared);
+        assert_eq!(agent.calls.get(), 0);
+    }
+
+    #[test]
+    fn ci_mode_with_no_threads_still_runs() {
+        let ev = Events::default();
+        let mr = FakeMr::new(&ev, vec![]);
+        let ws = FakeWs::new(&ev);
+        let agent = ci_agent(&ws, &ev);
+        let (r, log) = go_ci(&mr, &ws, &agent, &ci("base"));
+        assert_eq!(r.state, "done", "{log}");
+        assert_eq!(agent.calls.get(), 1);
+        assert_eq!(ws.s.borrow().pushed, ["feat/x"]);
+    }
+
+    #[test]
+    fn ci_failure_item_is_a_major_synthetic_thread() {
+        let item = ci_failure_item(&ci("base"));
+        assert_eq!(item.discussion_id, "ci:555");
+        assert_eq!(item.severity, Some(Severity::Major));
+        assert_eq!(item.notes.len(), 1);
+        let body = item.notes[0]["body"].as_str().unwrap();
+        assert!(
+            body.contains("rspec") && body.contains("Update the scope"),
+            "{body}"
+        );
     }
 
     #[test]

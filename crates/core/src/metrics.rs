@@ -947,6 +947,40 @@ mod tests {
     }
 
     #[test]
+    fn check_started_events_leave_verification_metrics_unchanged() {
+        let base = vec![
+            at("verification.started", "a", "2026-09-04T10:00:00Z"),
+            at("verification.passed", "a", "2026-09-04T10:00:04Z"),
+        ];
+        let mut with = base.clone();
+        with.insert(
+            1,
+            at("verification.check_started", "a", "2026-09-04T10:00:01Z"),
+        );
+        with.push(at(
+            "verification.check_started",
+            "b",
+            "2026-09-04T10:00:09Z",
+        ));
+        let (a, b) = (
+            compute_verification_metrics(&base, None),
+            compute_verification_metrics(&with, None),
+        );
+        assert_eq!(
+            (
+                a.verification_total,
+                a.verification_passed,
+                a.average_verification_duration_ms
+            ),
+            (
+                b.verification_total,
+                b.verification_passed,
+                b.average_verification_duration_ms
+            )
+        );
+    }
+
+    #[test]
     fn first_pass_takes_the_earliest_outcome_not_the_latest() {
         let events = [
             at("verification.passed", "a", "2026-09-04T10:00:09Z"),

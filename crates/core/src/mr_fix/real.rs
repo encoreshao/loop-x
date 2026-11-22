@@ -42,6 +42,10 @@ pub fn mr_info(v: &Value) -> MrInfo {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default(),
+        sha: text("sha"),
+        draft: ["draft", "work_in_progress"]
+            .iter()
+            .any(|k| v.get(*k).and_then(Value::as_bool) == Some(true)),
     }
 }
 
@@ -616,6 +620,11 @@ mod tests {
         assert_eq!(i.project_path, "");
         let j = mr_info(&json!({"iid": 7, "references": {"full": "grp/sub/web!7"}}));
         assert_eq!(j.project_path, "grp/sub/web");
+        assert_eq!((j.sha.as_str(), j.draft), ("", false));
+        let k = mr_info(&json!({"iid": 7, "sha": "abc123", "draft": true}));
+        assert_eq!((k.sha.as_str(), k.draft), ("abc123", true));
+        let w = mr_info(&json!({"iid": 7, "work_in_progress": true}));
+        assert!(w.draft);
     }
 
     #[test]

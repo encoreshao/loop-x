@@ -247,10 +247,18 @@ fn script_json(v: &Value) -> String {
 
 fn client_strings(ctx: &UiCtx) -> Value {
     let mut all = base_strings(ctx);
-    for more in [assign_strings(ctx), toast_strings(ctx)] {
+    for more in [assign_strings(ctx), toast_strings(ctx), needs_you_strings(ctx)] {
         all.as_object_mut().unwrap().extend(more.as_object().unwrap().clone());
     }
     all
+}
+
+/// The panel's card for what a colleague is waiting on you for.
+fn needs_you_strings(ctx: &UiCtx) -> Value {
+    json!({
+        "needs_you": ctx.t("Needs you"),
+        "open_in_needs_you": ctx.t("Open in Needs you"),
+    })
 }
 
 /// The bottom-left notifications: a run starting, its step, its outcome.
@@ -389,6 +397,13 @@ pub fn office_view_html(ctx: &UiCtx) -> String {
 .office-menu-item[aria-selected='true']{{background:#0a84ff;color:#fff}}\
 @media(prefers-reduced-transparency:reduce){{.office-panel .office-menu{{background:#2a2a2e;-webkit-backdrop-filter:none;backdrop-filter:none}}}}\
 .office-panel-error{{margin:.8rem 0 0;color:#ff8a80}}\
+.office-panel-needs{{margin:0 0 .9rem;padding:.2rem .8rem;border-radius:12px;background:rgba(255,176,32,.1);box-shadow:inset 0 0 0 .5px rgba(255,176,32,.35)}}\
+.office-panel-needs h3{{margin:.55rem 0 .1rem;color:#ffcf70}}\
+.office-panel .office-panel-needs ul{{list-style:none;margin:0;padding:0}}\
+.office-panel-needs li{{padding:.5rem 0;border-top:.5px solid rgba(255,255,255,.12)}}.office-panel-needs li:first-child{{border-top:0}}\
+.office-panel-needs p{{margin:0 0 .4rem;line-height:1.35;word-break:break-word}}\
+.office-panel-needs a{{display:inline-flex;align-items:center;box-sizing:border-box;height:28px;padding:0 .8rem;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font-size:.8rem;text-decoration:none;transition:background .2s ease}}\
+.office-panel-needs a:hover{{background:rgba(255,255,255,.22)}}\
 .office-panel[aria-busy='true']{{cursor:progress}}\
 .office-stale{{position:absolute;left:50%;top:12px;transform:translateX(-50%);margin:0;padding:.25rem .8rem;border-radius:999px;background:rgba(120,70,0,.88);color:#fff;font-size:.8rem}}\
 .office-stale[hidden]{{display:none}}\
@@ -567,6 +582,21 @@ mod tests {
     }
 
     #[test]
+    fn office_page_ships_needs_you_strings() {
+        let f = fx(four());
+        let body = page(&f, "/office", None, None).body_text();
+        let i18n_at = body.find("id='office-i18n'>").unwrap();
+        for key in ["needs_you", "open_in_needs_you"] {
+            assert!(body[i18n_at..].contains(&format!("\"{key}\":")), "{key}");
+        }
+        assert!(body[i18n_at..].contains("\"open_in_needs_you\":\"Open in Needs you\""), "{}", &body[i18n_at..i18n_at + 200]);
+        assert!(body.contains(".office-panel-needs{"), "the card is styled by the office page");
+        assert!(body.contains(".office-panel-needs a{") && body.contains("height:"), "the link has an explicit height");
+        let ja = page(&f, "/office", None, Some("ja")).body_text();
+        assert!(!ja.contains("\"open_in_needs_you\":\"Open in Needs you\""));
+    }
+
+    #[test]
     fn disabled_loop_with_running_status_is_disabled() {
         let f = fx(four());
         f.status("off-loop", &running_now());
@@ -584,6 +614,142 @@ mod tests {
         assert_eq!(by(&doc, "issue-loop")["pending_approvals"], 1);
         assert_eq!(by(&doc, "never-loop")["state"], "idle");
         assert_eq!(doc["pending_approvals"], 1);
+    }
+
+    impl Fx {
+        fn event(&self, kind: &str, run: &str, issue: Option<(&str, i64)>, data: Value) {
+            let dir = &self.state.events_dir;
+            std::fs::create_dir_all(dir).unwrap();
+            let now = chrono::Utc::now();
+            let (issue_run_id, project, iid) = match issue {
+                Some((p, i)) => (json!(run), json!(p), json!(i)),
+                None => (Value::Null, Value::Null, Value::Null),
+            };
+            let line = json!({"event_id": loopx_core::events::new_uuid_hex(), "timestamp": loopx_core::events::fmt_timestamp(now),
+                "event_type": kind, "run_id": if issue.is_some() { "R" } else { run }, "issue_run_id": issue_run_id,
+                "project": project, "issue_iid": iid, "data": data});
+            loopx_core::events::append_line(&dir.join(format!("{}.jsonl", now.format("%Y-%m-%d"))), &format!("{line}\n"))
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+
+        fn reviewing(&self) {
+            self.event("issue.queued", "R_web_12", Some(("web", 12)), json!({}));
+            self.event("verification.started", "R_web_12", None, json!({"iteration": 1}));
+            self.event("verification.check_started", "R_web_12", None, json!({"iteration": 1, "verifier": "agent_review"}));
+        }
+
+        fn spec_awaiting(&self, iid: &str) {
+            let state = loopx_core::spec_gate::SpecState {
+                status: loopx_core::spec_gate::SpecStatus::Awaiting,
+                spec: "**Goal:** x".into(),
+                posted_at: chrono::Utc::now().to_rfc3339(),
+                decided_at: None,
+                decided_by: None,
+                notes: String::new(),
+            };
+            loopx_core::spec_gate::save(&self.state.home_dir.join("memory"), "web", iid, &state).unwrap();
+        }
+    }
+
+    #[test]
+    fn state_json_carries_the_issue_stage_and_scope() {
+        let f = fx(four());
+        f.status("issue-loop", &running_now());
+        f.reviewing();
+        let doc = f.get(None);
+        let l = by(&doc, "issue-loop");
+        assert_eq!(l["state"], "working");
+        assert_eq!(l["stage"], "reviewing");
+        assert_eq!(l["stage_label"], "Reviewing");
+        assert_eq!(l["stage_scope"], "web #12");
+        assert!(by(&doc, "busy-loop")["stage"].is_null(), "issue stages belong to the issue loop only");
+
+        f.event("issue.completed", "R_web_12", Some(("web", 12)), json!({"action": "fix"}));
+        let doc = f.get(None);
+        assert!(by(&doc, "issue-loop")["stage"].is_null(), "a finished run is not still reviewing");
+    }
+
+    #[test]
+    fn stage_label_is_translated() {
+        let f = fx(four());
+        f.status("issue-loop", &running_now());
+        f.reviewing();
+        let label = by(&f.get(Some("ja")), "issue-loop")["stage_label"].clone();
+        assert!(label.is_string() && label != "Reviewing", "{label}");
+    }
+
+    #[test]
+    fn spec_awaiting_shows_as_the_issue_loops_stage_and_waits() {
+        let f = fx(four());
+        f.spec_awaiting("12");
+        let doc = f.get(None);
+        let l = by(&doc, "issue-loop");
+        assert_eq!(l["state"], "waiting");
+        assert_eq!(l["stage"], "awaiting_spec");
+        assert_eq!(l["stage_label"], "Awaiting spec approval");
+        let ny = l["needs_you"].as_array().unwrap();
+        assert_eq!(ny.len(), 1);
+        assert_eq!(ny[0]["kind"], "spec");
+        assert_eq!(ny[0]["title"], "Approve the spec for web #12");
+        assert_eq!(ny[0]["href"], "/needs-you#ny-spec_3Aweb_3A12");
+    }
+
+    #[test]
+    fn needs_you_items_attach_only_to_their_loop() {
+        let f = fx(json!([
+            {"name": "issue-loop", "enabled": true},
+            {"name": "rss-watch-loop", "enabled": true},
+            {"name": "mr-autofix-loop", "enabled": true},
+        ]));
+        f.status("rss-watch-loop", r#"{"state":"failed","updated_at":"2026-11-20T09:00:00Z"}"#);
+        std::fs::write(
+            f.state.home_dir.join("auth_health.json"),
+            json!({"checks": {"mailbox:work": {"ok": false, "confirmed": true, "label": "work",
+                "message": "expired", "failing_since": "2026-11-20T06:00:00"}}})
+            .to_string(),
+        )
+        .unwrap();
+        f.event(
+            "mr_autofix.escalated",
+            "A",
+            None,
+            json!({"mr_ref": "work:9!7", "mr_web_url": "https://gl/x", "sha": "abc", "pipeline_id": 1, "reason": "fix_failed"}),
+        );
+        for i in 0..5 {
+            f.spec_awaiting(&format!("{}", 20 + i));
+        }
+        let doc = f.get(None);
+        let ids = |name: &str| -> Vec<String> {
+            by(&doc, name)["needs_you"].as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(ids("rss-watch-loop"), ["loop_failed:rss-watch-loop"]);
+        assert_eq!(by(&doc, "rss-watch-loop")["state"], "failed");
+        assert_eq!(by(&doc, "rss-watch-loop")["stage"], "blocked");
+        assert_eq!(ids("mr-autofix-loop"), ["mr_autofix:work:9!7:abc"]);
+        assert_eq!(by(&doc, "mr-autofix-loop")["state"], "waiting");
+        assert_eq!(by(&doc, "mr-autofix-loop")["stage"], "awaiting_you");
+        let issue = ids("issue-loop");
+        assert_eq!(issue.len(), 3, "at most three: {issue:?}");
+        assert!(issue.iter().all(|i| i.starts_with("spec:")), "{issue:?}");
+        let all: Vec<String> = ["issue-loop", "rss-watch-loop", "mr-autofix-loop"].iter().flat_map(|n| ids(n)).collect();
+        assert!(!all.iter().any(|i| i.starts_with("sign_in:")), "a sign-in belongs to no loop");
+        assert_eq!(super::super::super::office::owner_of(&json!({"kind": "sign_in"})), None);
+        assert_eq!(
+            super::super::super::office::owner_of(&json!({"kind": "approval"})).as_deref(),
+            Some("issue-loop")
+        );
+    }
+
+    #[test]
+    fn idle_loop_has_null_stage() {
+        let f = fx(four());
+        let doc = f.get(None);
+        for name in ["never-loop", "issue-loop", "off-loop"] {
+            let l = by(&doc, name);
+            assert!(l["stage"].is_null() && l["stage_label"].is_null(), "{name}: {l}");
+            assert_eq!(l["needs_you"], json!([]), "{name}");
+        }
     }
 
     #[test]
