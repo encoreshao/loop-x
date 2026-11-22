@@ -1,6 +1,7 @@
 //! Creator: video-scout catalogs, video files and agent jobs.
 
 pub mod jobs;
+pub mod layouts;
 pub mod logfmt;
 pub mod notify;
 pub mod progress;
@@ -97,6 +98,8 @@ pub struct VideoOptions {
     pub narration: Option<Narration>,
     /// Showcase only: the promo template (see [`templates`]), or none (the skill's default).
     pub template: Option<String>,
+    /// Generate only: the video layout (see [`layouts`]), or none (the skill's default).
+    pub layout: Option<String>,
 }
 
 impl Default for VideoOptions {
@@ -106,6 +109,7 @@ impl Default for VideoOptions {
             screenshots: None,
             narration: None,
             template: None,
+            layout: None,
         }
     }
 }

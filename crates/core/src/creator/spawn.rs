@@ -614,6 +614,7 @@ fn start_showcase_with(
             screenshots: None,
             narration,
             template,
+            layout: None,
         };
         return launch_video(
             jobs_dir,
@@ -634,6 +635,7 @@ fn start_showcase_with(
         screenshots: Some(staged.clone()),
         narration,
         template,
+        layout: None,
     };
     // New screenshots always make a new video, never a restart of an earlier one.
     let started = launch_video(
@@ -679,11 +681,13 @@ fn start_generate_with(
         return Err("confirm you hold the rights to use this video first".to_string());
     }
     let url = super::valid_source_url(url)?;
+    let saved = super::state::load(&super::state::state_path(env.loopx_home)).video_layout;
     let options = VideoOptions {
         platforms: super::parse_platforms(&options.platforms)?,
         screenshots: None,
         narration: None,
         template: None,
+        layout: options.layout.clone().or(saved),
     };
     // A link run before restarts that job (its files are reused) rather than adding a record.
     let earlier = jobs::latest_finished(jobs_dir, JobKind::Generate, &url).map(|j| j.id);
@@ -1621,6 +1625,7 @@ mod tests {
             screenshots: None,
             narration: None,
             template: None,
+            layout: None,
         };
         let rec = start_generate_with(
             &jobs_dir,
@@ -1658,6 +1663,7 @@ mod tests {
             screenshots: None,
             narration: None,
             template: None,
+            layout: None,
         };
         assert!(start_generate_with(
             &jobs_dir,
@@ -1668,6 +1674,81 @@ mod tests {
             &recorder(&calls)
         )
         .is_err());
+    }
+
+    #[test]
+    fn generate_uses_the_saved_layout_and_a_retry_keeps_it() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let lx = d.path().join("lx");
+        let jobs_dir = d.path().join("jobs");
+        install_clone(&home, false);
+        std::fs::create_dir_all(skills::data_dir(&home).join("video/src/layouts")).unwrap();
+        super::super::state::set_video_layout(
+            &super::super::state::state_path(&lx),
+            Some("cinema"),
+        )
+        .unwrap();
+        let env = JobEnv {
+            loopx_home: &lx,
+            ..env("claude", &home)
+        };
+        let calls = Calls::default();
+        let rec = start_generate_with(
+            &jobs_dir,
+            &env,
+            "https://example.com/v",
+            true,
+            &VideoOptions::default(),
+            &recorder(&calls),
+        )
+        .unwrap();
+        assert_eq!(rec.options.layout.as_deref(), Some("cinema"));
+        let first = calls.borrow()[0].0.last().unwrap().clone();
+        assert!(first.contains(r#""layout": "cinema""#), "{first}");
+        // A later settings change does not alter a retry of this video.
+        super::super::state::set_video_layout(&super::super::state::state_path(&lx), None).unwrap();
+        std::fs::write(&rec.log_path, "x\nloopx-exit=1\n").unwrap();
+        std::fs::write(
+            jobs_dir.join(format!("{}.json", rec.id)),
+            serde_json::json!({"id": rec.id, "kind": "generate", "key": rec.key, "state": "failed",
+                               "pid": null, "started_at": rec.started_at, "layout": "cinema"})
+            .to_string(),
+        )
+        .unwrap();
+        let again = retry_generate_with(&jobs_dir, &env, &rec.id, &recorder(&calls)).unwrap();
+        assert_eq!(again.options.layout.as_deref(), Some("cinema"));
+        assert!(calls.borrow()[1]
+            .0
+            .last()
+            .unwrap()
+            .contains(r#""layout": "cinema""#));
+    }
+
+    #[test]
+    fn a_skill_without_layouts_is_not_told_about_the_saved_one() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let lx = d.path().join("lx");
+        install_clone(&home, false);
+        super::super::state::set_video_layout(&super::super::state::state_path(&lx), Some("quote"))
+            .unwrap();
+        let env = JobEnv {
+            loopx_home: &lx,
+            ..env("claude", &home)
+        };
+        let calls = Calls::default();
+        start_generate_with(
+            &d.path().join("jobs"),
+            &env,
+            "https://example.com/v",
+            true,
+            &VideoOptions::default(),
+            &recorder(&calls),
+        )
+        .unwrap();
+        let prompt = calls.borrow()[0].0.last().unwrap().clone();
+        assert!(!prompt.contains("layout\": "), "{prompt}");
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::ui::pyfmt::{self, escape as h};
 use crate::ui::routes::{Registry, UiCtx, UiResponse};
 use crate::ui::shell::{render_shell, ShellOpts};
 use loopx_core::creator::jobs::{self, JobKind, JobRecord};
+use loopx_core::creator::layouts;
 use loopx_core::creator::scout::{self, ScoutRun, Source};
 use loopx_core::creator::spawn;
 use loopx_core::creator::state::{self as cstate, CreatorState};
@@ -66,6 +67,7 @@ pub fn register(r: &mut Registry) {
     r.post("/creator/published", published);
     r.post("/creator/published-all", published_all);
     r.post("/creator/videos/delete", delete_video);
+    r.post("/creator/settings", save_settings);
 }
 
 fn jobs_dir(ctx: &UiCtx) -> PathBuf {
@@ -141,6 +143,7 @@ fn generate(ctx: &UiCtx) -> UiResponse {
     }
     let options = VideoOptions {
         platforms,
+        layout: cstate::load(&state_path(ctx)).video_layout,
         ..VideoOptions::default()
     };
     match spawn::start_generate(&dir, &ctx.state.user_home, &url, true, &options) {
@@ -150,6 +153,19 @@ fn generate(ctx: &UiCtx) -> UiResponse {
             &to,
         ),
         Err(e) => fail(ctx.tf("Could not start the job: {detail}", &[("detail", &e)])),
+    }
+}
+
+fn save_settings(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let to = back(form.first("tab").unwrap_or("discover"));
+    let layout = match layouts::resolve(form.first("layout").unwrap_or("")) {
+        Ok(l) => l,
+        Err(_) => return UiResponse::flash_redirect(false, &ctx.t("Unknown video layout"), &to),
+    };
+    match cstate::set_video_layout(&state_path(ctx), layout.as_deref()) {
+        Ok(()) => UiResponse::flash_redirect(true, &ctx.t("Creator settings saved"), &to),
+        Err(e) => UiResponse::flash_redirect(false, &e, &to),
     }
 }
 
@@ -1534,6 +1550,144 @@ fn run_section(
 
 /// Paste a video address (YouTube, TED, X, ...) and generate a short from it
 /// directly, without a scout run first.
+fn layout_text(ctx: &UiCtx, id: &str) -> (String, String) {
+    match id {
+        "backdrop" => (
+            ctx.t("Backdrop"),
+            ctx.t("The video floats as a card over a blurred copy of itself, with captions on frosted glass."),
+        ),
+        "cinema" => (
+            ctx.t("Cinema"),
+            ctx.t("The video fills the screen with captions in the lower third. Best for one speaker in close-up."),
+        ),
+        "quote" => (
+            ctx.t("Quote"),
+            ctx.t("Text first: a large quote, with the video as a small thumbnail beside the byline."),
+        ),
+        "split" => (
+            ctx.t("Split"),
+            ctx.t("A two-block poster: the video on top, the headline and captions on a solid accent block below."),
+        ),
+        "banner" => (
+            ctx.t("Banner"),
+            ctx.t("Headline on an accent bar, full-width video and large captions on near-black."),
+        ),
+        _ => (
+            ctx.t("Classic"),
+            ctx.t("Title, the video and captions in one framed panel, and a speaker card. The safest choice."),
+        ),
+    }
+}
+
+/// A small 9:16 wireframe of a layout for its card; colors come from the page's tokens.
+fn layout_sketch(id: &str) -> &'static str {
+    match id {
+        "backdrop" => "<rect class='lw-bg' width='36' height='64'/><rect class='lw-blur' x='-4' y='14' width='44' height='30' rx='6'/>\
+<rect class='lw-line' x='9' y='7' width='18' height='2.5' rx='1'/><rect class='lw-video' x='5' y='18' width='26' height='15' rx='3'/>\
+<rect class='lw-glass' x='5' y='37' width='26' height='9' rx='3'/><rect class='lw-line' x='8' y='40' width='20' height='1.6' rx='.8'/>\
+<rect class='lw-soft' x='10' y='43' width='16' height='1.4' rx='.7'/>",
+        "cinema" => "<rect class='lw-video' width='36' height='64'/><rect class='lw-scrim' y='40' width='36' height='24'/>\
+<rect class='lw-on-dark' x='7' y='7' width='22' height='2.5' rx='1'/><rect class='lw-on-dark-soft' x='10' y='11' width='16' height='1.6' rx='.8'/>\
+<rect class='lw-on-dark' x='5' y='46' width='26' height='2' rx='1'/><rect class='lw-on-dark-soft' x='8' y='50' width='20' height='1.6' rx='.8'/>",
+        "quote" => "<rect class='lw-bg' width='36' height='64'/><rect class='lw-soft' x='5' y='6' width='12' height='1.6' rx='.8'/>\
+<text class='lw-mark' x='4' y='24'>\u{201C}</text><rect class='lw-line' x='5' y='27' width='26' height='3' rx='1.2'/>\
+<rect class='lw-line' x='5' y='32' width='22' height='3' rx='1.2'/><rect class='lw-soft' x='5' y='38' width='24' height='2' rx='1'/>\
+<rect class='lw-video' x='5' y='48' width='9' height='9' rx='2'/><rect class='lw-line' x='16' y='50' width='13' height='1.8' rx='.9'/>\
+<rect class='lw-soft' x='16' y='54' width='9' height='1.4' rx='.7'/>",
+        "split" => "<rect class='lw-video' width='36' height='32'/><rect class='lw-accent' y='32' width='36' height='32'/>\
+<rect class='lw-on-dark' x='5' y='37' width='24' height='2.6' rx='1'/><rect class='lw-on-dark' x='5' y='43' width='26' height='1.8' rx='.9'/>\
+<rect class='lw-on-dark-soft' x='5' y='47' width='20' height='1.6' rx='.8'/><rect class='lw-on-dark-soft' x='5' y='56' width='12' height='1.4' rx='.7'/>",
+        "banner" => "<rect class='lw-dark' width='36' height='64'/><rect class='lw-accent' y='8' width='36' height='8'/>\
+<rect class='lw-on-dark' x='6' y='11' width='24' height='2' rx='1'/><rect class='lw-video' y='20' width='36' height='20'/>\
+<rect class='lw-on-dark' x='5' y='45' width='26' height='2.6' rx='1'/><rect class='lw-on-dark-soft' x='8' y='50' width='20' height='1.8' rx='.9'/>",
+        _ => "<rect class='lw-bg' width='36' height='64'/><rect class='lw-soft' x='12' y='6' width='12' height='1.4' rx='.7'/>\
+<rect class='lw-line' x='7' y='9' width='22' height='2.5' rx='1'/><rect class='lw-soft' x='9' y='13' width='18' height='1.6' rx='.8'/>\
+<rect class='lw-panel' x='4' y='18' width='28' height='24' rx='3'/><rect class='lw-video' x='4' y='18' width='28' height='15' rx='3'/>\
+<rect class='lw-line' x='7' y='36' width='22' height='1.8' rx='.9'/><rect class='lw-panel' x='4' y='46' width='28' height='9' rx='2.5'/>\
+<rect class='lw-soft' x='7' y='49' width='14' height='1.6' rx='.8'/>",
+    }
+}
+
+/// Which layout a Generate here will use, with a shortcut to change it.
+fn layout_hint(ctx: &UiCtx) -> String {
+    let id = cstate::load(&state_path(ctx))
+        .video_layout
+        .filter(|_| layouts::supported(&engine_root(ctx)))
+        .unwrap_or_else(|| layouts::DEFAULT.to_string());
+    format!(
+        "<div class='cr-layout-hint'><span class='cr-muted'>{}</span>\
+<button type='button' class='cr-btn cr-btn-plain cr-btn-small' data-cr-open='cr-settings' aria-haspopup='dialog'>{}</button></div>",
+        h(&ctx.tf("Video layout: {name}", &[("name", &layout_text(ctx, &id).0)])),
+        h(&ctx.t("Change"))
+    )
+}
+
+fn settings_button(ctx: &UiCtx) -> String {
+    format!(
+        "<button type='button' class='cr-btn cr-btn-plain cr-settings-btn' data-cr-open='cr-settings' aria-haspopup='dialog'>{} {}</button>",
+        icons::icon("tune"),
+        h(&ctx.t("Settings"))
+    )
+}
+
+/// The Creator settings sheet: one form, one Save. It holds the video layout new Generate
+/// jobs use; a skill from before layouts offers only the classic frame.
+fn settings_sheet(ctx: &UiCtx, tab: &str) -> String {
+    let supported = layouts::supported(&engine_root(ctx));
+    let current = cstate::load(&state_path(ctx))
+        .video_layout
+        .filter(|_| supported)
+        .unwrap_or_else(|| layouts::DEFAULT.to_string());
+    let cards: String = layouts::LAYOUTS
+        .iter()
+        .map(|id| {
+            let (name, desc) = layout_text(ctx, id);
+            let off = !supported && *id != layouts::DEFAULT;
+            format!(
+                "<label class='cr-layout{}'><input type='radio' name='layout' value='{id}'{}{}>\
+<svg class='cr-layout-sketch' viewBox='0 0 36 64' aria-hidden='true'>{}</svg>\
+<span class='cr-layout-text'><span class='cr-layout-name'>{}</span><span class='cr-layout-desc'>{}</span></span></label>",
+                if off { " is-off" } else { "" },
+                if *id == current { " checked" } else { "" },
+                if off { " disabled" } else { "" },
+                layout_sketch(id),
+                h(&name),
+                h(&desc),
+            )
+        })
+        .collect();
+    let note = if supported {
+        String::new()
+    } else {
+        format!(
+            "<p class='cr-settings-note'>{} {}</p>",
+            icons::icon("warning"),
+            h(&ctx.t("The installed inspire-video skill has only the Classic layout. Update it to pick another."))
+        )
+    };
+    format!(
+        "<dialog class='cr-sheet cr-settings' id='cr-settings' aria-labelledby='cr-settings-title'>\
+<div class='cr-sheet-inner'><header class='cr-sheet-head'><h2 id='cr-settings-title'>{}</h2>\
+<button type='button' class='cr-icon-btn' data-cr-close aria-label=\"{}\">{}</button></header>\
+<form method='post' action='/creator/settings' class='cr-settings-form'>{}<input type='hidden' name='tab' value='{tab}'>\
+<div class='cr-settings-body'><div class='cr-field'><span class='cr-label'>{}</span>{}{note}\
+<div class='cr-layouts' role='radiogroup' aria-label=\"{}\">{cards}</div></div></div>\
+<footer class='cr-settings-foot'><button type='button' class='cr-btn cr-btn-plain' data-cr-close>{}</button>\
+<button type='submit' class='cr-btn cr-btn-primary'>{}</button></footer></form></div></dialog>",
+        h(&ctx.t("Creator settings")),
+        h(&ctx.t("Close")),
+        icons::icon("close"),
+        ctx.csrf_input(),
+        h(&ctx.t("Video layout")),
+        subtitle(&ctx.t(
+            "The frame every new generated video is rendered in, with a matching cover. Showcase videos use their promo template instead."
+        )),
+        h(&ctx.t("Video layout")),
+        h(&ctx.t("Cancel")),
+        h(&ctx.t("Save")),
+    )
+}
+
 fn link_panel(ctx: &UiCtx) -> String {
     section(
         &ctx.t("Generate from a link"),
@@ -1541,7 +1695,7 @@ fn link_panel(ctx: &UiCtx) -> String {
         &format!(
             "<div class='cr-surface'>{}<form method='post' action='/creator/generate' class='cr-link-form'>{}\
 <input type='hidden' name='tab' value='discover'>\
-<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>{}\
+<div class='cr-search'><div class='cr-search-field'>{}<input type='text' name='url' inputmode='url' autocomplete='off' spellcheck='false' required placeholder=\"{}\" aria-label=\"{}\"></div></div>{}{}\
 <div class='cr-item-actions cr-link-actions'>\
 <label class='cr-check'><input type='checkbox' name='rights' value='1' required>\
 <span class='cr-check-box' aria-hidden='true'></span><span class='cr-check-label'>{}</span></label>\
@@ -1554,6 +1708,7 @@ fn link_panel(ctx: &UiCtx) -> String {
             h(&ctx.t("Paste a video link, for example https://www.youtube.com/watch?v=...")),
             h(&ctx.t("Video link")),
             platform_picker(ctx),
+            layout_hint(ctx),
             h(&ctx.t("I own this video or have permission to reuse it")),
             icons::icon("video"),
             h(&ctx.t("Generate"))
@@ -2811,13 +2966,14 @@ fn page(ctx: &UiCtx) -> UiResponse {
         _ => discover_tab(ctx, &jobs),
     };
     let head = format!(
-        "<div class='page-title'><h1>{}</h1><p class='subtitle'>{}</p></div>{}{}",
+        "<div class='page-title'><h1>{}</h1><p class='subtitle'>{}</p></div>{}<div class='cr-bar'>{}{}</div>",
         h(&ctx.t("Creator")),
         h(&ctx.t(
             "Find source videos, generate short videos from them, review them and copy their publish info."
         )),
         flash_html(flash.as_deref(), ok),
-        tabs_html(ctx, tab)
+        tabs_html(ctx, tab),
+        settings_button(ctx)
     );
     UiResponse::html(render_shell(
         ctx,
@@ -2825,8 +2981,9 @@ fn page(ctx: &UiCtx) -> UiResponse {
         "creator",
         &default_badge(ctx),
         &format!(
-            "<style>{CREATOR_CSS}</style><div class='cr'>{head}{body}</div>{}<script>{CREATOR_JS}</script>",
-            log_sheet(ctx)
+            "<style>{CREATOR_CSS}</style><div class='cr'>{head}{body}</div>{}{}<script>{CREATOR_JS}</script>",
+            log_sheet(ctx),
+            settings_sheet(ctx, tab)
         ),
         ShellOpts::default(),
     ))
@@ -3325,6 +3482,46 @@ mod tests {
             assert_eq!(r.status, 403, "{path}");
         }
         assert_eq!(fx.job_files(), 0);
+    }
+
+    #[test]
+    fn settings_sheet_saves_the_video_layout_and_shows_it_picked() {
+        let fx = Fx::new();
+        let skill = fx.user().join(".inspire-video");
+        std::fs::create_dir_all(skill.join("skills/inspire-video")).unwrap();
+        std::fs::write(skill.join("skills/inspire-video/SKILL.md"), "x").unwrap();
+        std::fs::create_dir_all(skill.join("video/src/layouts")).unwrap();
+        assert_eq!(fx.post("/creator/settings", "layout=split").status, 403);
+        let (loc, ok) = flash_of(&fx.post(
+            "/creator/settings",
+            "csrf_token=tok&tab=library&layout=split",
+        ));
+        assert_eq!(ok, "1");
+        assert!(loc.starts_with("/creator?tab=library"), "{loc}");
+        assert_eq!(
+            cstate::load(&fx.state_path()).video_layout.as_deref(),
+            Some("split")
+        );
+        let body = fx.get("/creator").body_text();
+        assert!(body.contains("id='cr-settings'"), "{body}");
+        assert!(body.contains("value='split' checked"), "{body}");
+        assert!(body.contains("Video layout: Split"), "{body}");
+        let (_, ok) = flash_of(&fx.post("/creator/settings", "csrf_token=tok&layout=neon"));
+        assert_eq!(ok, "0");
+        assert_eq!(
+            cstate::load(&fx.state_path()).video_layout.as_deref(),
+            Some("split")
+        );
+    }
+
+    #[test]
+    fn settings_offer_only_classic_for_a_skill_without_layouts() {
+        let fx = Fx::new();
+        cstate::set_video_layout(&fx.state_path(), Some("cinema")).unwrap();
+        let body = fx.get("/creator").body_text();
+        assert!(body.contains("value='classic' checked"), "{body}");
+        assert!(body.contains("value='cinema' disabled"), "{body}");
+        assert!(body.contains("only the Classic layout"), "{body}");
     }
 
     #[test]

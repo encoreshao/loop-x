@@ -26,6 +26,8 @@ pub struct CreatorState {
     pub published: BTreeMap<String, Vec<String>>,
     /// slug -> what is remembered of the video.
     pub records: BTreeMap<String, Record>,
+    /// The layout new Generate jobs use (see `layouts`); none is the skill's default.
+    pub video_layout: Option<String>,
 }
 
 /// How far a video is published across the platforms it has text for.
@@ -138,10 +140,16 @@ fn from_value(v: &Value) -> CreatorState {
                 .collect()
         })
         .unwrap_or_default();
+    let video_layout = v
+        .pointer("/settings/video_layout")
+        .and_then(Value::as_str)
+        .filter(|l| super::layouts::is_known(l) && *l != super::layouts::DEFAULT)
+        .map(str::to_string);
     CreatorState {
         approved,
         published,
         records,
+        video_layout,
     }
 }
 
@@ -157,7 +165,12 @@ fn save(path: &Path, s: &CreatorState) -> Result<(), String> {
             )
         })
         .collect();
-    let v = json!({ "approved": s.approved, "published": s.published, "records": records });
+    let v = json!({
+        "approved": s.approved,
+        "published": s.published,
+        "records": records,
+        "settings": {"video_layout": s.video_layout},
+    });
     crate::settings_store::atomic_write_json(&v, path).map_err(|e| e.to_string())
 }
 
@@ -220,6 +233,18 @@ pub fn set_published_all(
     } else {
         s.published.remove(slug);
     }
+    save(path, &s)
+}
+
+/// Save the layout new Generate jobs use; `None` goes back to the skill's default.
+pub fn set_video_layout(path: &Path, layout: Option<&str>) -> Result<(), String> {
+    if let Some(bad) = layout.filter(|l| !super::layouts::is_known(l)) {
+        return Err(format!("unknown layout: {bad}"));
+    }
+    let mut s = load_for_update(path)?;
+    s.video_layout = layout
+        .filter(|l| *l != super::layouts::DEFAULT)
+        .map(str::to_string);
     save(path, &s)
 }
 
@@ -420,5 +445,22 @@ mod tests {
         let p = d.path().join("creator.json");
         assert!(set_published(&p, "a", "tiktok", true).is_err());
         assert!(!p.exists());
+    }
+
+    #[test]
+    fn video_layout_is_saved_alongside_the_marks_and_survives_other_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("creator.json");
+        assert_eq!(load(&p).video_layout, None);
+        set_video_layout(&p, Some("cinema")).unwrap();
+        set_approved(&p, "a", true).unwrap();
+        let s = load(&p);
+        assert_eq!(s.video_layout.as_deref(), Some("cinema"));
+        assert!(s.approved.contains("a"));
+        set_video_layout(&p, Some("classic")).unwrap();
+        assert_eq!(load(&p).video_layout, None);
+        assert!(set_video_layout(&p, Some("neon")).is_err());
+        std::fs::write(&p, r#"{"settings": {"video_layout": "neon"}}"#).unwrap();
+        assert_eq!(load(&p).video_layout, None);
     }
 }

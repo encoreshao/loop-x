@@ -81,6 +81,16 @@
     dialog.addEventListener('close', function () { onClose(dialog); });
   });
 
+  // Closing the settings sheet without saving puts the saved choice back.
+  var settings = document.getElementById('cr-settings');
+  if (settings) {
+    settings.addEventListener('close', function () {
+      var form = settings.querySelector('form');
+      if (form) form.reset();
+      if (settings.__opener && document.contains(settings.__opener)) settings.__opener.focus();
+    });
+  }
+
   document.addEventListener('click', function (ev) {
     var target = ev.target;
     var opener = target.closest && target.closest('[data-cr-open]');
@@ -95,7 +105,7 @@
       if (d) close(d);
       return;
     }
-    if (target.tagName === 'DIALOG' && target.classList.contains('cr-dialog')) {
+    if (target.tagName === 'DIALOG' && (target.classList.contains('cr-dialog') || target.classList.contains('cr-settings'))) {
       close(target);
       return;
     }
