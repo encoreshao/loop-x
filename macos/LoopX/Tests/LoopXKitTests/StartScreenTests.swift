@@ -91,8 +91,8 @@ import Testing
 
     @Test func bothModesShareOneLayoutWithTheTaglines() {
         let h = html()
-        #expect(h.contains("<p class='line'>Hello, future.</p>"))
-        #expect(h.contains("<p class='sub'>We're building a world where <b>agents handle the busywork</b> and people do <b>what matters most</b>. It starts on your Mac.</p>"))
+        #expect(h.contains("<p class='line'>Agents handle the busywork.<br>You do what matters.</p>"))
+        #expect(h.contains("<p class='sub'>LoopX runs scheduled AI loops on your Mac that work through issues, email and meetings, then hand you the result to approve. <b>Nothing ships without you.</b></p>"))
         // Dark mode keeps the same column: the status is not pinned elsewhere, no extra dot.
         #expect(!h.contains("position:fixed;bottom:44px") && !h.contains("class='dot'"))
         // Order: mark, name, the two lines, then the bar and status.

@@ -1,7 +1,7 @@
 import Foundation
 
 /// The page shown until a backend answers. Light and dark share one layout: the LoopX mark large
-/// over a soft halo, the name, the headline "Hello, future." in the brand gradient and the mission line with its keywords picked out, then a thin progress bar and the status line; only the version sits in the footer.
+/// over a soft halo, the name, the two-line headline in the brand gradient and the description with its closing promise picked out, then a thin progress bar and the status line; only the version sits in the footer.
 /// Light is a pale backdrop with a blue-pink halo and a richer mark so it stands out; dark is the
 /// glow stage, a violet halo breathing and a light sheen passing over the mark only. A failure swaps
 /// the bar for the reason and a Try again button.
@@ -75,8 +75,8 @@ public enum StartScreen {
         @keyframes sheen{0%{background-position:150% 0}55%,100%{background-position:-50% 0}}
         </style></head><body><div class='\(TitlebarChrome.dragStripClass)'></div>
         \(markHTML)<h1>\(name.isEmpty ? "LoopX" : name)</h1>
-        <p class='line'>Hello, future.</p>
-        <p class='sub'>We're building a world where <b>agents handle the busywork</b> and people do <b>what matters most</b>. It starts on your Mac.</p>
+        <p class='line'>Agents handle the busywork.<br>You do what matters.</p>
+        <p class='sub'>LoopX runs scheduled AI loops on your Mac that work through issues, email and meetings, then hand you the result to approve. <b>Nothing ships without you.</b></p>
         \(status)
         \(footer)
         </body></html>
