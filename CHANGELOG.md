@@ -37,6 +37,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- GitLab issue loop: a fix whose handoff names its work dir through a symlink (for example `/private/var/...` for `/var/...` on macOS, as `git rev-parse --show-toplevel` prints it) no longer fails its checks with "handoff cwd ... is not the issue's work dir" and costs another agent attempt.
 - Pipeline Auto-fix: a stop because the branch moved, or because an automatic CI fix was already made, now says so on Needs you and in Slack instead of "the automatic fix changed nothing". Pressing Fix now just as the loop starts its own fix no longer uses up the loop's one attempt; it shows as "a Fix now run was already in progress" instead of a failed fix. Events that arrived during a long pause (up to a week back) still trigger the loop afterwards, and old escalation records and CI-failure files are cleaned up after 30 days.
 - A loop run that exits with code 75 is reported as skipped only when its runner says so on its last line; otherwise it is a failure.
 - GitLab issue loop: a skipped pre-MR review or secret scan no longer shows "project checks skipped" in the live trace, an acceptance criterion with a numeric or missing id is kept (as `AC<n>`), and criteria with no test are listed first in the review's findings so they are never cut off.

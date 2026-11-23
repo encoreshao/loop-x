@@ -36,6 +36,14 @@ pub trait Verifier: Send {
     }
 }
 
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
 fn elapsed_ms(start: Instant) -> i64 {
     i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX)
 }
@@ -500,7 +508,7 @@ impl ProjectCommandsVerifier {
                 .and_then(|v| v.get("cwd"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            if Path::new(cwd) != worktree {
+            if !same_dir(Path::new(cwd), &worktree) {
                 return Ok(fail(format!(
                     "handoff cwd {cwd} is not the issue's work dir {}",
                     worktree.display()
@@ -1252,6 +1260,24 @@ mod tests {
             "{}",
             r.output
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cwd_through_a_symlink_to_the_work_dir_passes() {
+        let (d, v) = pc_gated(json!({}), json!({"test": "make test"}));
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(d.path().join("wt"), &link).unwrap();
+        let cwd = link.join("repo-issue-7").display().to_string();
+        fs::write(
+            d.path().join("handoff.json"),
+            json!({"action": "fix", "branch": "loop/issue-7",
+                   "verification": {"test": "make test", "cwd": cwd}})
+            .to_string(),
+        )
+        .unwrap();
+        let r = run(&v);
+        assert!(r.passed, "{}", r.output);
     }
 
     #[test]
