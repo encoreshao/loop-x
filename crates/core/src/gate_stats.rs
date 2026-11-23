@@ -29,6 +29,8 @@ pub struct GateBucket {
     pub review_errors: i64,
     /// Issues whose last secret scan found a blocking hit (advisory gate).
     pub security_would_block: i64,
+    /// Issues whose last dependency audit found a high/critical advisory (advisory gate).
+    pub dependency_would_block: i64,
     agreed: i64,
 }
 
@@ -107,11 +109,13 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
                     retried.push((key.clone(), project.clone()));
                 }
             }
-            "verification.review_completed" | "verification.security_completed" => {
-                let gate = if kind == "verification.review_completed" {
-                    "review"
-                } else {
-                    "security"
+            "verification.review_completed"
+            | "verification.security_completed"
+            | "verification.dependency_completed" => {
+                let gate = match kind {
+                    "verification.review_completed" => "review",
+                    "verification.security_completed" => "security",
+                    _ => "dependency",
                 };
                 let errored = is_truthy(data.get("error"));
                 let blocks = !errored && data.get("observed_passed") == Some(&Value::Bool(false));
@@ -175,6 +179,7 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
             ("review", _, true) => b.review_errors += 1,
             ("review", true, _) => b.review_would_block += 1,
             ("security", true, _) => b.security_would_block += 1,
+            ("dependency", true, _) => b.dependency_would_block += 1,
             _ => {}
         };
         apply(&mut stats.total);
@@ -362,6 +367,32 @@ mod tests {
         assert_eq!(s.by_project["web"].security_would_block, 1);
         assert_eq!(s.by_project["api"].review_would_block, 1);
         assert_eq!(s.by_project["api"].security_would_block, 0);
+    }
+
+    fn deps(iid: i64, data: Value, project: &str) -> Value {
+        ev(
+            "verification.dependency_completed",
+            Some(iid),
+            data,
+            project,
+        )
+    }
+
+    #[test]
+    fn dependency_would_block_counts_last_event_per_issue_and_skips_errors() {
+        let events = vec![
+            deps(1, json!({"observed_passed": false}), "web"),
+            deps(2, json!({"observed_passed": false}), "web"),
+            deps(2, json!({"observed_passed": true}), "web"),
+            deps(3, json!({"observed_passed": false, "error": true}), "api"),
+            deps(4, json!({"observed_passed": false}), "api"),
+        ];
+        let s = gate_stats(&events);
+        assert_eq!(s.total.dependency_would_block, 2);
+        assert_eq!(s.by_project["web"].dependency_would_block, 1);
+        assert_eq!(s.by_project["api"].dependency_would_block, 1);
+        assert_eq!(s.total.security_would_block, 0);
+        assert_eq!(s.total.review_would_block, 0);
     }
 
     #[test]

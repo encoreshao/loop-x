@@ -56,9 +56,12 @@ actions:
 # security_scan (a model-free scan of the added lines for secrets) run after
 # project_commands passes and are skipped when it fails. `observe: true` keeps
 # them advisory: their result goes to the MR's "Pre-review" section and to
-# Harness -> Gates, never into a retry. security_scan must stay last.
+# Harness -> Gates, never into a retry. dependency_audit runs the project's
+# own audit tool (npm, Yarn 1, pnpm, bundler-audit, cargo-audit, pip-audit) when
+# the branch changes a lockfile, skipping any tool that isn't installed.
+# security_scan must stay last.
 verification:
-  required: [project_commands, agent_review, security_scan]
+  required: [project_commands, agent_review, dependency_audit, security_scan]
   mode: gate
 
 verifiers:
@@ -68,6 +71,9 @@ verifiers:
     type: agent_review
     model: opus
     max_cost_usd: 0.5
+    observe: true
+  - name: dependency_audit
+    type: dependency_audit
     observe: true
   - name: security_scan
     type: security_scan

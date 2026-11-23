@@ -1281,9 +1281,11 @@ fn gate_event(
     iteration: i64,
 ) -> Option<(&'static str, Value)> {
     let ev = &result.evidence;
-    let event_type = match ev.get("gate").and_then(Value::as_str)? {
+    let gate = ev.get("gate").and_then(Value::as_str)?;
+    let event_type = match gate {
         "review" => "verification.review_completed",
         "security" => "verification.security_completed",
+        "dependency" => "verification.dependency_completed",
         _ => return None,
     };
     let mut data = json!({
@@ -1302,9 +1304,14 @@ fn gate_event(
         }
     }
     if let Some(blocking) = ev.get("blocking").and_then(Value::as_array) {
-        data["blocking_rules"] = json!(blocking
+        let (key, field) = if gate == "dependency" {
+            ("blocking_ids", "id")
+        } else {
+            ("blocking_rules", "rule")
+        };
+        data[key] = json!(blocking
             .iter()
-            .filter_map(|h| h.get("rule").cloned())
+            .filter_map(|h| h.get(field).cloned())
             .collect::<Vec<_>>());
     }
     Some((event_type, data))
@@ -7921,7 +7928,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_definition_builds_with_review_and_security_gates() {
+    fn loop_definition_orders_dependency_audit_before_security_scan() {
         let def = gitlab_definition();
         let mut issue = IssueContext::new("web", 7, 30.0);
         issue.review_invoker = Some(Arc::new(|_: &str, _: Option<&str>, _: Option<f64>| {
@@ -7930,8 +7937,22 @@ mod tests {
         let vs =
             build_verifiers(&def.verifiers, None, Some(&issue), &def.verification.mode).unwrap();
         let names: Vec<&str> = vs.iter().map(|v| v.name()).collect();
-        assert_eq!(names, ["project_commands", "agent_review", "security_scan"]);
-        assert!(vs[1].skip_after_failure() && vs[2].skip_after_failure());
+        assert_eq!(
+            names,
+            [
+                "project_commands",
+                "agent_review",
+                "dependency_audit",
+                "security_scan"
+            ]
+        );
+        assert!(vs[1..].iter().all(|v| v.skip_after_failure()));
+        let deps = def
+            .verifiers
+            .iter()
+            .find(|s| s["type"] == "dependency_audit")
+            .unwrap();
+        assert_eq!(deps["observe"], true);
     }
 
     #[test]
@@ -7976,6 +7997,41 @@ mod tests {
             json!(["aws_access_key"])
         );
         assert_eq!(security["issue_iid"], json!(7));
+    }
+
+    #[test]
+    fn dependency_audit_has_its_own_event_with_blocking_ids() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let deps = v(
+            "dependency_audit",
+            true,
+            "",
+            json!({"gate": "dependency", "ecosystems": ["npm"], "tools": {"npm": "ran"},
+                   "advisory": [], "observed_passed": false, "mode": "observe",
+                   "blocking": [{"package": "left-pad", "version": "1.0.1",
+                                 "id": "GHSA-aaaa-test-0001", "severity": "high"}]}),
+        );
+        let vacuous = v(
+            "dependency_audit",
+            true,
+            "npm is not installed - dependency audit skipped",
+            json!({"vacuous": true, "gate": "dependency", "tools": {"npm": "missing"}}),
+        );
+        for it in [vec![deps], vec![vacuous]] {
+            emit_verification_events(&ctx, "r", "r_web_7", "web", "7", "gate", &iteration(it));
+        }
+        let evs = events::iter_events(ctx.events_dir.as_deref(), None, None);
+        let kinds: Vec<&str> = evs
+            .iter()
+            .filter_map(|e| e["event_type"].as_str())
+            .collect();
+        assert_eq!(kinds, ["verification.dependency_completed"], "{evs:?}");
+        let data = &evs[0]["data"];
+        assert_eq!(data["observed_passed"], json!(false));
+        assert_eq!(data["blocking_ids"], json!(["GHSA-aaaa-test-0001"]));
+        assert!(data.get("blocking_rules").is_none(), "{data}");
     }
 
     #[test]

@@ -56,6 +56,28 @@ pub fn run(
     run_watched(cmd, input, timeout, None).map(|(out, _)| out)
 }
 
+/// [`run`] in its own process group, killed as a whole on timeout and once
+/// the child exits, so a grandchild cannot keep the pipes open.
+pub fn run_group(
+    cmd: &mut Command,
+    input: Option<&str>,
+    timeout: Option<Duration>,
+) -> std::io::Result<ProcOutput> {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(cmd, 0);
+    run_inner(cmd, input, timeout, None, true).map(|(out, _)| out)
+}
+
+#[cfg(unix)]
+fn kill_group(child: &std::process::Child) {
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_group(_child: &std::process::Child) {}
+
 /// A file the child touches while it makes progress; `after` without a change
 /// (counted from the start, if it never changes) means the child is stuck.
 #[derive(Debug, Clone)]
@@ -81,6 +103,16 @@ pub fn run_watched(
     timeout: Option<Duration>,
     stall: Option<&Stall>,
 ) -> std::io::Result<(ProcOutput, bool)> {
+    run_inner(cmd, input, timeout, stall, false)
+}
+
+fn run_inner(
+    cmd: &mut Command,
+    input: Option<&str>,
+    timeout: Option<Duration>,
+    stall: Option<&Stall>,
+    group: bool,
+) -> std::io::Result<(ProcOutput, bool)> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd.stdin(if input.is_some() {
         Stdio::piped()
@@ -103,6 +135,9 @@ pub fn run_watched(
     let mut next_stall_check = start;
     let (code, timed_out, stalled) = loop {
         if let Some(status) = child.try_wait()? {
+            if group {
+                kill_group(&child);
+            }
             break (exit_code(status), false, false);
         }
         let now = Instant::now();
@@ -114,6 +149,9 @@ pub fn run_watched(
             now.duration_since(last_activity(&s.file, start, started_at)) >= s.after
         });
         if stalled || deadline.is_some_and(|d| now >= d) {
+            if group {
+                kill_group(&child);
+            }
             let _ = child.kill();
             let _ = child.wait();
             break (None, true, stalled);
@@ -211,6 +249,37 @@ mod tests {
         .unwrap();
         assert!(!stalled && !o.timed_out);
         assert_eq!(o.stdout, "ok\n");
+    }
+
+    #[test]
+    fn group_timeout_kills_grandchildren_holding_the_pipes() {
+        let start = Instant::now();
+        let o = run_group(
+            &mut sh("echo partial; sleep 30 & wait"),
+            None,
+            Some(Duration::from_millis(300)),
+        )
+        .unwrap();
+        assert!(o.timed_out);
+        assert_eq!(o.stdout, "partial\n");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn group_run_returns_when_the_leader_exits() {
+        let start = Instant::now();
+        let o = run_group(&mut sh("sleep 30 & echo done"), None, None).unwrap();
+        assert!(o.success());
+        assert_eq!(o.stdout, "done\n");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

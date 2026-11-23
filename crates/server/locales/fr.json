@@ -823,6 +823,7 @@
   "Agreement rate": "Taux de concordance",
   "Blocked by gate": "Bloqué par la porte",
   "Review would block": "La revue bloquerait",
+  "Dependency audit would block": "L'audit des dépendances bloquerait",
   "Secret scan would block": "Le scan de secrets bloquerait",
   "Advisory: the review gate is in observe mode": "Indicatif : la porte de revue est en mode observation",
   "{n} could not run": "{n} n’ont pas pu s’exécuter",

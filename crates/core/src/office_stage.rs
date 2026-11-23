@@ -75,7 +75,7 @@ fn stage_of(event: &Value) -> Option<Stage> {
         "verification.check_started" => {
             match event.pointer("/data/verifier").and_then(Value::as_str) {
                 Some("agent_review") => Stage::Reviewing,
-                Some("security_scan") => Stage::SecurityScan,
+                Some("security_scan" | "dependency_audit") => Stage::SecurityScan,
                 _ => Stage::Verifying,
             }
         }
@@ -298,6 +298,15 @@ mod tests {
                     "R_web_12",
                     "2026-11-22T10:00:01.000Z",
                     json!({"verifier": "security_scan"}),
+                ),
+                Stage::SecurityScan,
+            ),
+            (
+                runtime(
+                    "verification.check_started",
+                    "R_web_12",
+                    "2026-11-22T10:00:01.000Z",
+                    json!({"verifier": "dependency_audit"}),
                 ),
                 Stage::SecurityScan,
             ),

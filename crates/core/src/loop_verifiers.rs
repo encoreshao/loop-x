@@ -19,6 +19,7 @@ use crate::verify_commands::check_verify_command;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How much of a command's output `ProjectCommandsVerifier` keeps in evidence.
@@ -722,6 +723,8 @@ pub struct IssueContext {
     pub costs: Option<crate::pre_review::CostLedger>,
     pub issue_budget_usd: f64,
     pub cli: String,
+    /// Runs `dependency_audit`'s tools (default: the installed ones).
+    pub audit_runner: Option<Arc<dyn crate::dependency_audit::AuditRunner>>,
 }
 
 impl std::fmt::Debug for IssueContext {
@@ -735,6 +738,7 @@ impl std::fmt::Debug for IssueContext {
             .field("review_invoker", &self.review_invoker.is_some())
             .field("issue_budget_usd", &self.issue_budget_usd)
             .field("cli", &self.cli)
+            .field("audit_runner", &self.audit_runner.is_some())
             .finish()
     }
 }
@@ -751,6 +755,7 @@ impl IssueContext {
             costs: None,
             issue_budget_usd: f64::INFINITY,
             cli: "claude".into(),
+            audit_runner: None,
         }
     }
 
@@ -852,6 +857,24 @@ pub fn build_verifiers(
                     name,
                     issue.work(),
                 )));
+            }
+            Some("dependency_audit") => {
+                let Some(issue) = issue else {
+                    return build_err(format!(
+                        "verifier {label}: type 'dependency_audit' requires issue context"
+                    ));
+                };
+                let runner = issue
+                    .audit_runner
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(crate::dependency_audit::SystemRunner::default()));
+                verifiers.push(Box::new(
+                    crate::dependency_audit::DependencyAuditVerifier::new(
+                        name,
+                        issue.work(),
+                        runner,
+                    ),
+                ));
             }
             Some("agent_review") => {
                 let Some(issue) = issue else {
@@ -1534,5 +1557,19 @@ mod tests {
             err.0,
             "verifier 'sec': security_scan must be the last verifier"
         );
+    }
+
+    #[test]
+    fn dependency_audit_needs_issue_context_and_skips_after_failure() {
+        let spec = [json!({"name": "deps", "type": "dependency_audit", "observe": true})];
+        let err = build_verifiers(&spec, None, None, "gate").err().unwrap();
+        assert_eq!(
+            err.0,
+            "verifier 'deps': type 'dependency_audit' requires issue context"
+        );
+        let issue = IssueContext::new("web", 7, 30.0);
+        let vs = build_verifiers(&spec, None, Some(&issue), "gate").unwrap();
+        assert_eq!(vs[0].name(), "deps");
+        assert!(vs[0].skip_after_failure());
     }
 }

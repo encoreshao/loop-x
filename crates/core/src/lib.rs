@@ -24,6 +24,7 @@ pub mod connectors_config;
 pub mod content_archive;
 pub mod cost;
 pub mod creator;
+pub mod dependency_audit;
 pub mod doctor;
 pub mod event_triggers;
 pub mod events;

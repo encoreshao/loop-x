@@ -823,6 +823,7 @@
   "Agreement rate": "一致率",
   "Blocked by gate": "ゲートでブロック",
   "Review would block": "レビューならブロック",
+  "Dependency audit would block": "依存関係監査ならブロック",
   "Secret scan would block": "シークレットスキャンならブロック",
   "Advisory: the review gate is in observe mode": "参考値: レビューゲートは観察モードです",
   "{n} could not run": "{n} 件は実行できませんでした",

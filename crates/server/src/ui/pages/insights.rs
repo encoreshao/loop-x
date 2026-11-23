@@ -946,6 +946,7 @@ fn gates_body(ctx: &UiCtx) -> String {
             &ctx.t("Review would block"),
             &review_note,
         ),
+        gate_tile("extension", &total.dependency_would_block.to_string(), &ctx.t("Dependency audit would block"), ""),
         gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
     ]
     .concat();
@@ -954,7 +955,7 @@ fn gates_body(ctx: &UiCtx) -> String {
         .iter()
         .map(|(project, row)| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape(project),
                 row.issues,
                 escape(&gate_rate_text(ctx, row.agreement_rate)),
@@ -962,6 +963,7 @@ fn gates_body(ctx: &UiCtx) -> String {
                 row.retried_then_passed,
                 row.escalated_verification,
                 row.review_would_block,
+                row.dependency_would_block,
                 row.security_would_block
             )
         })
@@ -970,7 +972,7 @@ fn gates_body(ctx: &UiCtx) -> String {
         format!("<p>{}</p>", escape(&ctx.t("No data yet for this breakdown.")))
     } else {
         format!(
-            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
+            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
             escape(&ctx.t("Project")),
             escape(&ctx.t("Issues")),
             escape(&ctx.t("Agreement rate")),
@@ -978,6 +980,7 @@ fn gates_body(ctx: &UiCtx) -> String {
             escape(&retried_label),
             escape(&ctx.t("Escalated")),
             escape(&ctx.t("Review would block")),
+            escape(&ctx.t("Dependency audit would block")),
             escape(&ctx.t("Secret scan would block"))
         )
     };

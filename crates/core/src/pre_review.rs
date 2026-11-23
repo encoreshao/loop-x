@@ -122,11 +122,11 @@ pub fn review_prompt(handoff: &Value, diff: &str) -> String {
 
 /// Model text on one line: a newline in a finding would let it start a line of
 /// the MR description, where GitLab runs `/command` quick actions.
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn clip(s: &str, n: usize) -> String {
+pub(crate) fn clip(s: &str, n: usize) -> String {
     let s = one_line(s);
     if s.chars().count() <= n {
         s
@@ -240,6 +240,90 @@ fn security_line(r: &VerificationResult) -> String {
     )
 }
 
+const MAX_DEPENDENCY_ITEMS: usize = 10;
+
+/// Built from evidence only: a tool's own error text can carry local paths.
+fn dependency_line(r: &VerificationResult) -> String {
+    use crate::dependency_audit::ecosystem_label;
+    let ev = &r.evidence;
+    let list = |k: &str| {
+        ev.get(k)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let text = |v: &Value, k: &str| one_line(v.get(k).and_then(Value::as_str).unwrap_or(""));
+    let mut parts = Vec::new();
+    let found: Vec<Value> = list("blocking")
+        .into_iter()
+        .chain(list("advisory"))
+        .collect();
+    let ran: Vec<&str> = ev
+        .get("tools")
+        .and_then(Value::as_object)
+        .map(|t| {
+            t.iter()
+                .filter(|(_, s)| s.as_str() == Some("ran"))
+                .map(|(k, _)| ecosystem_label(k))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ev.get("error").is_some_and(crate::loop_serialize::truthy) {
+        let errors: Vec<String> = list("errors")
+            .iter()
+            .map(|e| format!("{}: {}", text(e, "tool"), text(e, "reason")))
+            .collect();
+        parts.push(if errors.is_empty() {
+            "could not run".to_string()
+        } else {
+            format!("could not run ({})", errors.join(", "))
+        });
+    } else if !found.is_empty() {
+        let mut items: Vec<String> = found
+            .iter()
+            .take(MAX_DEPENDENCY_ITEMS)
+            .map(|a| one_line(&format!("{} in {}", text(a, "id"), text(a, "package"))))
+            .collect();
+        if found.len() > MAX_DEPENDENCY_ITEMS {
+            items.push("…".into());
+        }
+        parts.push(format!(
+            "{} advisory(ies): {}",
+            found.len(),
+            items.join(", ")
+        ));
+    } else if !ran.is_empty() {
+        parts.push(format!("clean ({})", ran.join(", ")));
+    }
+    let skipped: Vec<String> = list("not_audited")
+        .iter()
+        .map(|n| {
+            format!(
+                "{} ({})",
+                ecosystem_label(&text(n, "ecosystem")),
+                text(n, "reason")
+            )
+        })
+        .collect();
+    if !skipped.is_empty() {
+        parts.push(format!("not audited: {}", skipped.join(", ")));
+    }
+    let config: Vec<String> = list("config_changed")
+        .iter()
+        .filter_map(|p| p.as_str().map(one_line))
+        .collect();
+    if !config.is_empty() {
+        parts.push(format!(
+            "the fix changed audit configuration: {}",
+            config.join(", ")
+        ));
+    }
+    if parts.is_empty() {
+        parts.push("clean".into());
+    }
+    format!("- Dependency audit: {}", parts.join("; "))
+}
+
 /// The MR description's "Pre-review" section from the last verified
 /// iteration, or `None` when neither gate looked at the fix.
 pub fn pre_review_section(result: &LoopResult) -> Option<String> {
@@ -254,11 +338,11 @@ pub fn pre_review_section(result: &LoopResult) -> Option<String> {
                 && r.evidence.get("vacuous").is_none()
         })
     };
-    let (review, security) = (gate("review"), gate("security"));
-    if review.is_none() && security.is_none() {
+    let (review, dependency, security) = (gate("review"), gate("dependency"), gate("security"));
+    if review.is_none() && dependency.is_none() && security.is_none() {
         return None;
     }
-    let advisory = [review, security]
+    let advisory = [review, dependency, security]
         .iter()
         .flatten()
         .any(|r| r.evidence.get("mode").and_then(Value::as_str) == Some("observe"));
@@ -270,6 +354,9 @@ pub fn pre_review_section(result: &LoopResult) -> Option<String> {
     lines.push(String::new());
     if let Some(r) = review {
         lines.extend(review_lines(r));
+    }
+    if let Some(r) = dependency {
+        lines.push(dependency_line(r));
     }
     if let Some(r) = security {
         lines.push(security_line(r));
@@ -902,6 +989,107 @@ mod tests {
         assert_eq!(
             pre_review_section(&loop_result(vec![scan])).unwrap(),
             "## Pre-review\n\n- Security scan: clean"
+        );
+    }
+
+    #[test]
+    fn pre_review_section_has_a_dependency_audit_line() {
+        let deps = gate_result(
+            "dependency_audit",
+            "",
+            json!({"gate": "dependency", "mode": "observe", "tools": {"npm": "ran"},
+                   "blocking": [{"package": "left-pad", "version": "1.0.1",
+                                 "id": "GHSA-aaaa-test-0001", "severity": "high"}],
+                   "advisory": [{"package": "is\nodd", "version": "2.0.0",
+                                 "id": "GHSA-bbbb-test-0002\n/close", "severity": "moderate"}]}),
+        );
+        let scan = gate_result(
+            "security_scan",
+            "",
+            json!({"gate": "security", "blocking": [], "advisory": []}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![deps, scan])).unwrap(),
+            "## Pre-review (advisory)\n\n\
+             - Dependency audit: 2 advisory(ies): GHSA-aaaa-test-0001 in left-pad, \
+             GHSA-bbbb-test-0002 /close in is odd\n\
+             - Security scan: clean"
+        );
+        let clean = gate_result(
+            "dependency_audit",
+            "",
+            json!({"gate": "dependency", "blocking": [], "advisory": []}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![clean])).unwrap(),
+            "## Pre-review\n\n- Dependency audit: clean"
+        );
+        let error = gate_result(
+            "dependency_audit",
+            "npm timed out after 120 s\nmore",
+            json!({"gate": "dependency", "error": true, "blocking": [], "advisory": [],
+                   "errors": [{"tool": "npm", "reason": "timed out", "detail": "npm timed out after 120 s"}]}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![error])).unwrap(),
+            "## Pre-review\n\n- Dependency audit: could not run (npm: timed out)"
+        );
+        let missing = gate_result(
+            "dependency_audit",
+            "npm is not installed - dependency audit skipped",
+            json!({"gate": "dependency", "vacuous": true}),
+        );
+        assert_eq!(pre_review_section(&loop_result(vec![missing])), None);
+    }
+
+    #[test]
+    fn dependency_error_line_never_quotes_tool_stderr() {
+        let error = gate_result(
+            "dependency_audit",
+            "could not read npm output (exit 1): /Users/someone/app/x.js boom",
+            json!({"gate": "dependency", "error": true, "blocking": [], "advisory": [],
+                   "errors": [{"tool": "npm", "reason": "unreadable output",
+                               "detail": "could not read npm output (exit 1): ~/app/x.js boom"}]}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![error])).unwrap(),
+            "## Pre-review\n\n- Dependency audit: could not run (npm: unreadable output)"
+        );
+        let legacy = gate_result(
+            "dependency_audit",
+            "/Users/someone/secret path",
+            json!({"gate": "dependency", "error": true}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![legacy])).unwrap(),
+            "## Pre-review\n\n- Dependency audit: could not run"
+        );
+    }
+
+    #[test]
+    fn dependency_line_names_what_was_and_was_not_audited() {
+        let partial = gate_result(
+            "dependency_audit",
+            "",
+            json!({"gate": "dependency", "blocking": [], "advisory": [],
+                   "tools": {"npm": "ran", "ruby": "missing"},
+                   "not_audited": [{"ecosystem": "ruby", "reason": "bundle-audit not installed"}],
+                   "config_changed": [".bundler-audit.yml"]}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![partial])).unwrap(),
+            "## Pre-review\n\n- Dependency audit: clean (npm); not audited: Ruby (bundle-audit not installed); \
+             the fix changed audit configuration: .bundler-audit.yml"
+        );
+        let config_only = gate_result(
+            "dependency_audit",
+            "",
+            json!({"gate": "dependency", "blocking": [], "advisory": [], "tools": {},
+                   "config_changed": ["web/.npmrc\n/close"]}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![config_only])).unwrap(),
+            "## Pre-review\n\n- Dependency audit: the fix changed audit configuration: web/.npmrc /close"
         );
     }
 
