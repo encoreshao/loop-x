@@ -15,8 +15,10 @@
 )]
 
 use crate::connectors::{ApiOpts, Connector, ConnectorError, ConnectorSource};
+use crate::dependency_audit::{AuditRunner, SystemRunner};
 use crate::loopkit::{self, LoopContext, LoopPlugin, Outcome, PluginError, Status, WorkItem};
 use crate::loops_config::{py_str, py_truthy};
+use crate::mr_gates;
 use crate::providers::binding::{Binding, Endpoint};
 use crate::providers::{ChangeRequest, CrFilter, DiffPosition, DraftNote, ProviderError};
 use crate::seen_store::SeenStore;
@@ -24,6 +26,7 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub const DIFF_CAP_BYTES: usize = 150_000;
 pub const MAX_FINDINGS: usize = 15;
@@ -118,18 +121,246 @@ fn is_word(c: char) -> bool {
 }
 
 /// Draft notes are Markdown on GitLab: break word-start @mentions so a
-/// model-echoed @all / @group cannot notify anyone.
+/// model-echoed @all / @group cannot notify anyone, and a line-start `/`
+/// so it cannot run as a quick action once the user publishes the note.
 pub(crate) fn defuse(text: &str) -> String {
     let mut out = String::new();
     let mut prev: Option<char> = None;
+    let mut line_start = true;
     for c in text.chars() {
+        if c == '/' && line_start {
+            out.push('\u{200b}');
+        }
         out.push(c);
         if c == '@' && !prev.is_some_and(is_word) {
             out.push('\u{200b}');
         }
+        line_start = matches!(c, '\n' | '\r') || (line_start && c.is_whitespace());
         prev = Some(c);
     }
     out.replace("![", "!\u{200b}[")
+}
+
+fn flat_path(path: &str) -> String {
+    crate::pre_review::one_line(path).replace('`', "'")
+}
+
+pub const MAX_GATE_INLINE: usize = 5;
+pub const AUDIT_RUN_BUDGET: Duration = Duration::from_secs(300);
+const GATE_NOTE_BODY: &str = "LoopX's secret scan, the same check its own fixes pass before their merge request opens, matched this added line. The matched text is not repeated here. If it is a real credential, revoke it and remove it from the branch history; if it is a test value, move it under a test or fixture path.";
+
+pub(crate) fn gate_findings(security: &Value) -> Vec<Value> {
+    security
+        .pointer("/evidence/blocking")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|h| {
+            let path = h
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty())?;
+            let rule = crate::pre_review::one_line(
+                h.get("rule").and_then(Value::as_str).unwrap_or("secret"),
+            )
+            .replace('`', "'");
+            let line = h
+                .get("line")
+                .and_then(Value::as_i64)
+                .filter(|l| *l >= 1)
+                .unwrap_or(1);
+            Some(
+                json!({"path": path, "line": line, "severity": "blocker", "category": "security",
+                        "title": format!("Possible secret: `{rule}` (secret scan)"),
+                        "body": GATE_NOTE_BODY, "suggestion": "", "source": "secret_scan"}),
+            )
+        })
+        .take(MAX_GATE_INLINE)
+        .collect()
+}
+
+pub(crate) fn security_result(security: &Value) -> crate::loop_result::VerificationResult {
+    crate::loop_result::VerificationResult {
+        name: "security_scan".into(),
+        passed: security
+            .get("passed")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        exit_code: None,
+        duration_ms: 0,
+        output: security.get("output").map_or(String::new(), py_str),
+        evidence: security
+            .get("evidence")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum DependencyCheck {
+    Omitted,
+    /// Not run, already worded as a checks line.
+    Line(String),
+    /// Could not run (a files API error), already worded as a checks line.
+    Failed(String),
+    Ran(crate::loop_result::VerificationResult),
+}
+
+impl DependencyCheck {
+    fn blocks(&self) -> bool {
+        matches!(self, DependencyCheck::Ran(r) if !r.passed
+            && !r.evidence.get("error").is_some_and(crate::loop_serialize::truthy))
+    }
+
+    fn blocking(&self) -> usize {
+        match self {
+            DependencyCheck::Ran(r) => r
+                .evidence
+                .get("blocking")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len),
+            _ => 0,
+        }
+    }
+}
+
+/// `mr_review.gates_completed`: rule ids and advisory ids only, never a path,
+/// matched text or advisory title.
+fn emit_gates_event(
+    item: &WorkItem,
+    security: Option<&crate::loop_result::VerificationResult>,
+    dependency: &DependencyCheck,
+    posted: bool,
+    ctx: &LoopContext,
+) {
+    let Some(security) = security else { return };
+    let payload = &item.payload;
+    let reference = item
+        .meta
+        .get("ref")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+        .map_or_else(
+            || {
+                format!(
+                    "{}!{}",
+                    py_str(&payload["project_id"]),
+                    py_str(&payload["iid"])
+                )
+            },
+            str::to_string,
+        );
+    let project = reference
+        .rsplit_once(['!', '#'])
+        .map_or(reference.as_str(), |(p, _)| p)
+        .to_string();
+    let list = |r: &crate::loop_result::VerificationResult, k: &str| {
+        r.evidence
+            .get(k)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let ids = |r: &crate::loop_result::VerificationResult, k: &str| {
+        list(r, "blocking")
+            .iter()
+            .filter_map(|h| h.get(k).cloned())
+            .collect::<Vec<_>>()
+    };
+    let dependency = match dependency {
+        DependencyCheck::Ran(r) => json!({
+            "ran": true, "observed_passed": r.passed,
+            "error": r.evidence.get("error").is_some_and(crate::loop_serialize::truthy),
+            "blocking_ids": ids(r, "id")}),
+        DependencyCheck::Failed(_) => {
+            json!({"ran": false, "observed_passed": null, "error": true, "blocking_ids": []})
+        }
+        _ => json!({"ran": false, "observed_passed": null, "error": false, "blocking_ids": []}),
+    };
+    let data = json!({
+        "source": "human_mr", "mr": reference, "iid": payload["iid"],
+        "head_sha": payload["diff_refs"]["head_sha"], "posted": posted,
+        "security": {
+            "observed_passed": security.passed,
+            "blocking_rules": ids(security, "rule"),
+            "advisory": list(security, "advisory").len(),
+            "unscanned": security.evidence.get("unscanned").and_then(Value::as_u64).unwrap_or(0),
+        },
+        "dependency": dependency,
+    });
+    crate::runner_util::emit_best_effort(
+        "mr_review.gates_completed",
+        Some(&ctx.run_id),
+        crate::events::EventFields {
+            issue_run_id: None,
+            project: Some(project),
+            issue_iid: None,
+            data: Some(data),
+        },
+        ctx.events_dir.as_deref(),
+    );
+}
+
+/// The "Automated checks" lines, rendered by the same functions as the
+/// agent MR description's Pre-review section.
+pub(crate) fn gate_checks(
+    security: Option<&crate::loop_result::VerificationResult>,
+    dependency: &DependencyCheck,
+) -> Vec<String> {
+    let mut would = Vec::new();
+    if security.is_some_and(|s| !s.passed) {
+        would.push("secret scan");
+    }
+    if dependency.blocks() {
+        would.push("dependency audit");
+    }
+    let mut lines = Vec::new();
+    if !would.is_empty() {
+        lines.push(format!(
+            "\u{26d4} Would block a LoopX fix: {}",
+            would.join(", ")
+        ));
+    }
+    if let Some(s) = security {
+        let mut line = crate::pre_review::security_line(s);
+        let unscanned = s
+            .evidence
+            .get("unscanned")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let mut coverage = Vec::new();
+        if unscanned > 0 {
+            coverage.push(format!(
+                "{unscanned} file(s) without a text diff not scanned"
+            ));
+        }
+        if s.evidence.get("truncated").and_then(Value::as_bool) == Some(true) {
+            coverage.push("diff truncated".to_string());
+        }
+        if !coverage.is_empty() {
+            line.push_str(&format!(" ({})", coverage.join("; ")));
+        }
+        lines.push(line);
+    }
+    match dependency {
+        DependencyCheck::Omitted => {}
+        DependencyCheck::Line(l) | DependencyCheck::Failed(l) => lines.push(l.clone()),
+        DependencyCheck::Ran(r) => {
+            let mut line = crate::pre_review::dependency_line(r);
+            for n in r
+                .evidence
+                .get("notes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                line.push_str(&format!("; {n}"));
+            }
+            lines.push(line);
+        }
+    }
+    lines
 }
 
 fn drafts_path(mr: &Value) -> String {
@@ -355,7 +586,7 @@ fn post_all(
                 post_draft(
                     conn,
                     mr,
-                    &format!("`{path}:{}` {note}", py_str(&f["line"])),
+                    &format!("`{}:{}` {note}", flat_path(&path), py_str(&f["line"])),
                     None,
                 )?;
                 *fallback += 1;
@@ -449,7 +680,21 @@ pub fn summary_note(answer: &Value) -> Option<String> {
         .into_iter()
         .flatten()
         .collect();
-    if summary.is_empty() && overview.is_empty() && risks.is_empty() && findings.is_empty() {
+    let checks: Vec<String> = answer
+        .get("checks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|l| defuse(&crate::pre_review::one_line(l)))
+        .filter(|l| !l.is_empty())
+        .collect();
+    if summary.is_empty()
+        && overview.is_empty()
+        && risks.is_empty()
+        && findings.is_empty()
+        && checks.is_empty()
+    {
         return None;
     }
     let verdict = match answer.get("verdict").and_then(Value::as_str) {
@@ -460,6 +705,12 @@ pub fn summary_note(answer: &Value) -> Option<String> {
     let mut out = vec![format!("### LoopX pre-review \u{2014} {verdict}")];
     if !summary.is_empty() {
         out.push(defuse(&summary));
+    }
+    if !checks.is_empty() {
+        out.push(format!(
+            "**Automated checks** (the same model-free gates LoopX runs on its own fixes; advisory)\n{}",
+            checks.join("\n")
+        ));
     }
     if !overview.is_empty() {
         let bullets: Vec<String> = overview.iter().map(|b| format!("- {b}")).collect();
@@ -503,7 +754,7 @@ pub fn summary_note(answer: &Value) -> Option<String> {
                 "- {} \u{b7} {} \u{2014} `{}:{}` {}",
                 severity_badge(&text_of(f, "severity")),
                 area_label(&text_of(f, "category")),
-                py_str(&f["path"]).replace('`', "'"),
+                flat_path(&py_str(&f["path"])),
                 py_str(&f["line"]),
                 cell(&defuse(&title))
             ));
@@ -1043,6 +1294,8 @@ pub struct MrReview {
     poster: Option<Poster>,
     seen_fn: Option<SeenFn>,
     seen: Mutex<Option<SeenStore>>,
+    auditor: Option<Arc<dyn AuditRunner>>,
+    audit_spent: Mutex<Duration>,
 }
 
 impl MrReview {
@@ -1052,7 +1305,14 @@ impl MrReview {
             poster: None,
             seen_fn: None,
             seen: Mutex::new(None),
+            auditor: None,
+            audit_spent: Mutex::new(Duration::ZERO),
         }
+    }
+
+    pub fn with_auditor(mut self, auditor: Arc<dyn AuditRunner>) -> Self {
+        self.auditor = Some(auditor);
+        self
     }
 
     pub fn with_poster(mut self, poster: Poster) -> Self {
@@ -1204,6 +1464,7 @@ impl MrReview {
             "author": author.get("name").map_or(String::new(), py_str),
             "author_username": author.get("username").map_or(String::new(), py_str),
             "created_at": pick("created_at"),
+            "gates": {"security": mr_gates::gate_meta(&mr_gates::secret_scan(&changes, truncated))},
         });
         Ok(Some(
             WorkItem::new(
@@ -1225,6 +1486,87 @@ impl MrReview {
 }
 
 impl MrReview {
+    fn dependency_check(&self, conn: &dyn Connector, payload: &Value) -> DependencyCheck {
+        let changed: Vec<String> = payload
+            .get("changed_paths")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if !changed
+            .iter()
+            .any(|p| crate::dependency_audit::ecosystem_of(p).is_some())
+        {
+            return DependencyCheck::Omitted;
+        }
+        let not_run =
+            |why: &str| DependencyCheck::Line(format!("- Dependency audit: not run ({why})"));
+        if payload.get("provider").is_some_and(py_truthy) {
+            return not_run("GitLab only for now");
+        }
+        let sha = |k: &str| {
+            payload["diff_refs"]
+                .get(k)
+                .filter(|v| py_truthy(v))
+                .map(py_str)
+        };
+        let (Some(base), Some(head)) = (sha("base_sha"), sha("head_sha")) else {
+            return not_run("no base commit");
+        };
+        let spent = *self.audit_spent.lock().unwrap_or_else(|e| e.into_inner());
+        if spent >= AUDIT_RUN_BUDGET {
+            return DependencyCheck::Line(
+                "- Dependency audit skipped: this run's audit time is used up".into(),
+            );
+        }
+        let old_paths = payload
+            .get("old_paths")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let tree = match mr_gates::lockfile_tree(
+            conn,
+            &py_str(&payload["project_id"]),
+            &base,
+            &head,
+            &changed,
+            &old_paths,
+        ) {
+            Ok(Some(t)) => t,
+            Ok(None) => return DependencyCheck::Omitted,
+            Err(e) => {
+                return DependencyCheck::Failed(format!(
+                    "- Dependency audit: could not run ({})",
+                    e.class_name()
+                ))
+            }
+        };
+        let notes = || {
+            if tree.notes.is_empty() {
+                DependencyCheck::Omitted
+            } else {
+                not_run(&tree.notes.join("; "))
+            }
+        };
+        if tree.diff.is_empty() {
+            return notes();
+        }
+        let runner: Arc<dyn AuditRunner> = self
+            .auditor
+            .clone()
+            .unwrap_or_else(|| Arc::new(SystemRunner::default()));
+        let start = Instant::now();
+        let result = mr_gates::audit_lockfiles(&tree, runner.as_ref());
+        *self.audit_spent.lock().unwrap_or_else(|e| e.into_inner()) += start.elapsed();
+        // Nothing was audited at all (no added or upgraded package).
+        if result.evidence.get("ecosystems").is_none() {
+            return notes();
+        }
+        DependencyCheck::Ran(result)
+    }
+
     /// The pull requests a provider-hosted (GitHub) account asks the user to
     /// review, as an assignee or a requested reviewer; never their own or a
     /// draft. Same choices (skip, failed, "Review now") as GitLab's.
@@ -1328,6 +1670,7 @@ impl MrReview {
             "title": cr.title, "ref": reference,
             "author": cr.author, "author_username": cr.author,
             "created_at": listed.raw.get("created_at").map_or(String::new(), py_str),
+            "gates": {"security": mr_gates::gate_meta(&mr_gates::secret_scan(&changes, truncated))},
         });
         Ok(Some(
             WorkItem::new(
@@ -1391,6 +1734,7 @@ impl LoopPlugin for MrReview {
     }
 
     fn discover(&self, ctx: &LoopContext) -> Result<Vec<WorkItem>, PluginError> {
+        *self.audit_spent.lock().unwrap_or_else(|e| e.into_inner()) = Duration::ZERO;
         let state_root = ctx
             .state_dir
             .clone()
@@ -1581,7 +1925,19 @@ impl LoopPlugin for MrReview {
         }
         // Most severe first, so the cap keeps what matters.
         kept.sort_by_key(|f| std::cmp::Reverse(sev_rank(f["severity"].as_str().unwrap_or(""))));
-        kept.truncate(MAX_FINDINGS);
+        let security_meta = item
+            .meta
+            .pointer("/gates/security")
+            .filter(|v| v.is_object());
+        let security = security_meta.map(security_result);
+        // Gate findings first: at most MAX_GATE_INLINE, so the cap never drops them.
+        let kept: Vec<Value> = security_meta
+            .map(gate_findings)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(kept)
+            .take(MAX_FINDINGS)
+            .collect();
         let summary = answer
             .get("summary")
             .and_then(Value::as_str)
@@ -1619,13 +1975,20 @@ impl LoopPlugin for MrReview {
             std::cmp::Reverse(LEVELS.iter().position(|l| r["level"] == *l).unwrap_or(0))
         });
         risks.truncate(MAX_RISKS);
-        let cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
-                             "risks": risks, "findings": kept});
         let account = py_str(&payload["account"]);
         let conn = self
             .connectors
             .load(&account)
             .map_err(|_| PluginError::new("KeyError", account.clone()))?;
+        let dependency = self.dependency_check(conn.as_ref(), payload);
+        let checks = gate_checks(security.as_ref(), &dependency);
+        let would_block = security.as_ref().is_some_and(|s| !s.passed) || dependency.blocks();
+        let gates = json!({
+            "security_blocking": security.as_ref().map_or(0, |s| s.evidence.get("blocking").and_then(Value::as_array).map_or(0, Vec::len)),
+            "dependency_blocking": dependency.blocking(),
+        });
+        let cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
+                             "risks": risks, "findings": kept, "checks": checks});
         let url = payload.get("web_url").map_or(String::new(), py_str);
         let posted = match &self.poster {
             Some(p) => p(conn.as_ref(), payload, &cleaned),
@@ -1638,18 +2001,22 @@ impl LoopPlugin for MrReview {
             }
             None => post_review(conn.as_ref(), payload, &cleaned),
         };
+        let emit =
+            |posted: bool| emit_gates_event(item, security.as_ref(), &dependency, posted, ctx);
         let result = match posted {
             Ok(r) => r,
             // "skipped" is marked seen for this MR SHA, so a read-only token
             // does not pay for the same model call on every run.
             Err(PostError::Denied(m)) => {
-                return Ok(Outcome::new(&item.key, Status::Skipped, m).with_url(url))
+                emit(false);
+                return Ok(Outcome::new(&item.key, Status::Skipped, m).with_url(url));
             }
             Err(e) => return Err(e.into_plugin()),
         };
+        emit(true);
         let blockers = kept.iter().filter(|f| f["severity"] == "blocker").count();
         let drafts = result.get("drafts").and_then(Value::as_u64).unwrap_or(0);
-        let summary_text = match result.get("partial").filter(|v| py_truthy(v)) {
+        let mut summary_text = match result.get("partial").filter(|v| py_truthy(v)) {
             Some(p) => format!("{drafts} draft notes (partial: {})", py_str(p)),
             None => format!(
                 "{}: {} findings ({blockers} blocker), {} risks",
@@ -1658,11 +2025,14 @@ impl LoopPlugin for MrReview {
                 risks.len()
             ),
         };
+        if would_block {
+            summary_text.push_str(" \u{b7} checks would block");
+        }
         Ok(Outcome::new(&item.key, Status::Done, summary_text)
             .with_url(url)
             .with_data(
                 json!({"title": item.title, "drafts": drafts, "blockers": blockers,
-                              "verdict": verdict}),
+                              "verdict": verdict, "gates": gates}),
             ))
     }
 
@@ -1680,8 +2050,21 @@ impl LoopPlugin for MrReview {
                 .map(|o| o.data.get(k).and_then(Value::as_u64).unwrap_or(0))
                 .sum::<u64>()
         };
+        let gated = done
+            .iter()
+            .filter(|o| {
+                ["security_blocking", "dependency_blocking"]
+                    .iter()
+                    .any(|k| o.data["gates"].get(*k).and_then(Value::as_u64).unwrap_or(0) > 0)
+            })
+            .count();
+        let gated = if gated > 0 {
+            format!(", {gated} with checks that would block")
+        } else {
+            String::new()
+        };
         let mut lines = vec![format!(
-            "MR pre-review: {} MRs, {} draft notes ({} blockers). Open each MR \u{2192} Review \u{2192} Submit to publish.",
+            "MR pre-review: {} MRs, {} draft notes ({} blockers{gated}). Open each MR \u{2192} Review \u{2192} Submit to publish.",
             done.len(),
             sum("drafts"),
             sum("blockers")
@@ -1796,11 +2179,20 @@ mod tests {
         }
     }
 
+    struct NoTools;
+
+    impl AuditRunner for NoTools {
+        fn run(&self, cmd: &ToolCommand, _dir: &Path) -> AuditOutcome {
+            panic!("a test ran the real audit tool {}", cmd.tool)
+        }
+    }
+
     fn plugin_with(conn: Arc<Conn>) -> MrReview {
         MrReview::new(Arc::new(Source {
             accounts: vec![Account::new("work", "gitlab")],
             conn,
         }))
+        .with_auditor(Arc::new(NoTools))
     }
 
     fn repo() -> PathBuf {
@@ -1822,8 +2214,29 @@ mod tests {
             call_budget_usd: None,
             model: None,
             state_dir: Some(PathBuf::from("/nonexistent")),
-            events_dir: None,
+            events_dir: Some(shared_events_dir()),
         }
+    }
+
+    /// One events dir per test process, under `target/`, emptied on first use:
+    /// never the real events dir and never a leaked temp dir.
+    fn shared_events_dir() -> PathBuf {
+        static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let dir = repo().join("target/test-events/mr-review");
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        })
+        .clone()
+    }
+
+    /// A context whose events land in a dir of its own, for tests that read them.
+    fn ev_ctx() -> (tempfile::TempDir, LoopContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = c();
+        ctx.events_dir = Some(dir.path().to_path_buf());
+        (dir, ctx)
     }
 
     fn c() -> LoopContext {
@@ -2718,13 +3131,684 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
             "author": {"id": 2, "name": "Ana Lee", "username": "ana"},
             "created_at": "2026-10-01T09:00:00Z", "references": {"full": "web/app!7"}
         }]));
-        let items = plugin_with(conn).discover(&c()).unwrap();
+        let mut items = plugin_with(conn).discover(&c()).unwrap();
+        let gates = items[0].meta.as_object_mut().unwrap().remove("gates");
+        assert!(gates.is_some_and(|g| g["security"]["passed"] == true));
         assert_eq!(
             items[0].meta,
             json!({"label": "Fix login (web/app!7)", "title": "Fix login", "ref": "web/app!7", "author": "Ana Lee",
                    "author_username": "ana", "created_at": "2026-10-01T09:00:00Z"})
         );
         assert!(items[0].payload.get("meta").is_none());
+    }
+
+    fn aws_key() -> String {
+        format!("AKIA{}", "Z".repeat(16))
+    }
+
+    fn key_diff() -> Vec<Value> {
+        vec![
+            json!({"old_path": "config/app.rb", "new_path": "config/app.rb",
+                    "diff": format!("@@ -1,2 +1,3 @@\n a\n+KEY = \"{}\"\n c\n", aws_key())}),
+        ]
+    }
+
+    fn key_conn() -> Arc<Conn> {
+        Conn::new(|m, p, _| {
+            if p.contains("/diffs") {
+                return Ok(if p.contains("page=1") {
+                    json!(key_diff())
+                } else {
+                    json!([])
+                });
+            }
+            d_handler(m, p, None)
+        })
+    }
+
+    #[test]
+    fn discover_attaches_the_secret_scan_to_meta_not_payload() {
+        let items = plugin_with(key_conn()).discover(&c()).unwrap();
+        let it = &items[0];
+        let security = &it.meta["gates"]["security"];
+        assert_eq!(security["passed"], false);
+        assert_eq!(
+            security["evidence"]["blocking"][0]["rule"],
+            "aws_access_key"
+        );
+        assert_eq!(security["evidence"]["blocking"][0]["path"], "config/app.rb");
+        let keys: BTreeSet<&str> = it
+            .payload
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "account",
+                "project_id",
+                "iid",
+                "title",
+                "description",
+                "web_url",
+                "diff_refs",
+                "diff",
+                "truncated",
+                "changed_paths",
+                "old_paths"
+            ])
+        );
+        assert!(!it.meta.to_string().contains(&aws_key()));
+    }
+
+    #[test]
+    fn prompt_is_byte_identical_with_gates() {
+        let plugin = plugin_with(key_conn());
+        let it = plugin.discover(&c()).unwrap().remove(0);
+        assert!(it.meta["gates"].is_object());
+        let mut bare = it.clone();
+        bare.meta = Value::Null;
+        let with = plugin.build_prompt(&it, &c()).unwrap();
+        assert_eq!(with, plugin.build_prompt(&bare, &c()).unwrap());
+        assert_eq!(
+            with,
+            loopkit::default_build_prompt("mr-review", &bare, &c()).unwrap()
+        );
+        assert!(!with.contains("\"gates\""));
+    }
+
+    #[test]
+    fn hosted_items_carry_the_secret_scan_too() {
+        let it = gh_plugin(gh_conn()).discover(&c()).unwrap().remove(0);
+        let security = &it.meta["gates"]["security"];
+        assert_eq!(security["passed"], true);
+        assert_eq!(security["evidence"]["advisory"][0]["rule"], "dynamic_eval");
+        assert_eq!(
+            security["evidence"]["unscanned"], 0,
+            "a pure rename has nothing to scan"
+        );
+    }
+
+    fn gated_item(changes: &[Value]) -> WorkItem {
+        let mut it = item();
+        it.meta = json!({"ref": "group/app!7", "title": "t", "gates": {
+            "security": mr_gates::gate_meta(&mr_gates::secret_scan(changes, false))}});
+        it
+    }
+
+    fn keys_diff(n: usize) -> Vec<Value> {
+        let mut diff = format!("@@ -0,0 +1,{n} @@\n");
+        for _ in 0..n {
+            diff.push_str(&format!("+K = \"{}\"\n", aws_key()));
+        }
+        vec![json!({"old_path": "config/keys.rb", "new_path": "config/keys.rb", "diff": diff})]
+    }
+
+    fn run_gated(it: &WorkItem, answer: Value) -> (Outcome, Value) {
+        let posted = Arc::new(Mutex::new(vec![]));
+        let out = with_poster(posted.clone())
+            .after_item(it, &answer, &c())
+            .unwrap();
+        let cleaned = posted.lock().unwrap()[0].clone();
+        (out, cleaned)
+    }
+
+    fn checks(cleaned: &Value) -> Vec<String> {
+        cleaned["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn blocking_scan_hit_is_an_inline_blocker_draft() {
+        let (out, cleaned) = run_gated(
+            &gated_item(&key_diff()),
+            json!({"summary": "s", "findings": []}),
+        );
+        let f = &cleaned["findings"][0];
+        assert_eq!(
+            (
+                &f["path"],
+                &f["line"],
+                &f["severity"],
+                &f["category"],
+                &f["source"]
+            ),
+            (
+                &json!("config/app.rb"),
+                &json!(2),
+                &json!("blocker"),
+                &json!("security"),
+                &json!("secret_scan")
+            )
+        );
+        assert_eq!(
+            f["title"],
+            "Possible secret: `aws_access_key` (secret scan)"
+        );
+        let note = finding_note(f);
+        assert!(
+            note.starts_with("\u{1f534} **Blocker** \u{b7} Security"),
+            "{note}"
+        );
+        assert!(!note.contains(&aws_key()));
+        assert!(
+            out.summary.ends_with(" \u{b7} checks would block"),
+            "{}",
+            out.summary
+        );
+        assert_eq!(out.data["gates"]["security_blocking"], 1);
+        assert_eq!(out.data["gates"]["dependency_blocking"], 0);
+    }
+
+    #[test]
+    fn gate_findings_are_capped_and_counted() {
+        let (_, cleaned) = run_gated(
+            &gated_item(&keys_diff(8)),
+            json!({"summary": "s", "findings": []}),
+        );
+        let inline = cleaned["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["source"] == "secret_scan")
+            .count();
+        assert_eq!(inline, MAX_GATE_INLINE);
+        assert!(checks(&cleaned)
+            .iter()
+            .any(|l| l.starts_with("- Security scan: 8 finding(s)")));
+        assert!(summary_note(&cleaned).unwrap().contains("8 finding(s)"));
+    }
+
+    #[test]
+    fn gate_findings_survive_the_findings_cap() {
+        let ai: Vec<Value> = (0..15)
+            .map(|i| finding("app/a.rb", 2, "blocker", &i.to_string()))
+            .collect();
+        let (_, cleaned) = run_gated(
+            &gated_item(&keys_diff(2)),
+            json!({"summary": "s", "findings": ai}),
+        );
+        let findings = cleaned["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), MAX_FINDINGS);
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f["source"] == "secret_scan")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn summary_has_automated_checks_block_and_keeps_model_verdict() {
+        let (_, cleaned) = run_gated(
+            &gated_item(&key_diff()),
+            json!({"summary": "Fine.", "verdict": "approve", "overview": ["Adds a key"], "findings": []}),
+        );
+        assert_eq!(cleaned["verdict"], "approve");
+        let lines = checks(&cleaned);
+        assert!(
+            lines[0].starts_with("\u{26d4} Would block a LoopX fix: secret scan"),
+            "{lines:?}"
+        );
+        let note = summary_note(&cleaned).unwrap();
+        assert!(
+            note.starts_with("### LoopX pre-review \u{2014} \u{2705} Looks good to merge"),
+            "{note}"
+        );
+        let block = note.find("**Automated checks** (the same model-free gates LoopX runs on its own fixes; advisory)").unwrap();
+        assert!(block > note.find("Fine.").unwrap());
+        assert!(block < note.find("**What this MR does**").unwrap());
+    }
+
+    #[test]
+    fn clean_mr_says_secret_scan_clean() {
+        let (out, cleaned) =
+            run_gated(&gated_item(&diff()), json!({"summary": "", "findings": []}));
+        assert_eq!(checks(&cleaned), ["- Security scan: clean"]);
+        assert!(summary_note(&cleaned)
+            .unwrap()
+            .contains("- Security scan: clean"));
+        assert!(!out.summary.contains("checks would block"));
+    }
+
+    #[test]
+    fn unscanned_files_are_never_called_clean() {
+        let mut changes = diff();
+        changes.push(json!({"old_path": "logo.png", "new_path": "logo.png", "diff": ""}));
+        let mut it = gated_item(&changes);
+        it.meta["gates"]["security"]["evidence"]["truncated"] = json!(true);
+        let (_, cleaned) = run_gated(&it, json!({"summary": "", "findings": []}));
+        assert_eq!(
+            checks(&cleaned),
+            ["- Security scan: clean (1 file(s) without a text diff not scanned; diff truncated)"]
+        );
+    }
+
+    #[test]
+    fn gate_text_never_starts_a_line_with_a_quick_action() {
+        let evil = "a\n/approve.rb";
+        let security = json!({"passed": false, "output": "", "evidence": {
+            "gate": "security", "advisory": [],
+            "blocking": [{"rule": "aws_access_key", "path": evil, "line": 2}]}});
+        let findings = gate_findings(&security);
+        let mut it = item();
+        it.meta = json!({"gates": {"security": security}});
+        let (_, cleaned) = run_gated(&it, json!({"summary": "s", "findings": []}));
+        assert_eq!(cleaned["findings"][0]["path"], evil);
+        let mut notes = vec![finding_note(&findings[0]), summary_note(&cleaned).unwrap()];
+        let conn = Conn::new(|m, _, body| {
+            if m == "POST" && body.is_some_and(|b| b.get("position").is_some()) {
+                return Err(http_err(Some(400)));
+            }
+            Ok(json!([]))
+        });
+        post_review(&Shared(conn.clone()), &mr(), &cleaned).unwrap();
+        notes.extend(
+            conn.posts()
+                .iter()
+                .map(|b| b["note"].as_str().unwrap().to_string()),
+        );
+        for n in &notes {
+            assert!(!crate::mr_feedback::has_quick_action(n), "{n}");
+        }
+        let checks_text = gate_checks(
+            Some(&security_result(&security)),
+            &DependencyCheck::Line(
+                "- Dependency audit: 1 advisory(ies): GHSA-1 in x\n/merge @all".into(),
+            ),
+        )
+        .join("\n");
+        let rendered = summary_note(
+            &json!({"summary": "", "checks": checks_text.lines().collect::<Vec<_>>()}),
+        )
+        .unwrap();
+        assert!(
+            !crate::mr_feedback::has_quick_action(&rendered),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("@all"), "{rendered}");
+    }
+
+    #[test]
+    fn line_start_slash_is_neutralised_in_model_text() {
+        let f = json!({"path": "app/a.rb", "line": 2, "severity": "major", "category": "security",
+                       "title": "t", "body": "ok\n/merge", "suggestion": "x\n  /approve"});
+        let note = finding_note(&f);
+        assert!(!crate::mr_feedback::has_quick_action(&note), "{note}");
+        assert!(note.contains("ok\n\u{200b}/merge"), "{note}");
+        let summary = summary_note(&json!({"summary": "fine\n/close", "findings": []})).unwrap();
+        assert!(!crate::mr_feedback::has_quick_action(&summary), "{summary}");
+        assert_eq!(defuse("a/b /c"), "a/b /c");
+    }
+
+    #[test]
+    fn summary_index_flattens_paths() {
+        let note = summary_note(&json!({"summary": "s", "findings": [
+            {"path": "a\nb`c.rb", "line": 1, "severity": "major", "title": "t", "body": "b"}]}))
+        .unwrap();
+        assert!(note.contains("`a b'c.rb:1`"), "{note}");
+    }
+
+    // ---- dependency audit ----------------------------------------------------
+
+    use crate::dependency_audit::{AuditRunner, Outcome as AuditOutcome, ToolCommand};
+
+    struct FakeAudit {
+        out: AuditOutcome,
+        calls: Mutex<Vec<(&'static str, PathBuf)>>,
+    }
+
+    impl AuditRunner for FakeAudit {
+        fn run(&self, cmd: &ToolCommand, dir: &Path) -> AuditOutcome {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((cmd.tool, dir.to_path_buf()));
+            self.out.clone()
+        }
+    }
+
+    fn npm_audit(package: &str) -> AuditOutcome {
+        let stdout = json!({"vulnerabilities": {package: {"via": [{
+            "name": package, "severity": "high", "title": "Prototype pollution\n/merge @all",
+            "url": "https://github.com/advisories/GHSA-35jh-r3h4-6jhm"}]}}});
+        AuditOutcome::Finished {
+            code: Some(1),
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        }
+    }
+
+    fn lock(lodash: &str) -> String {
+        crate::mr_gates::tests::npm_lock(lodash)
+    }
+
+    /// A GitLab MR whose `web/package-lock.json` upgrades lodash.
+    fn lock_conn(files_status: Option<u16>) -> Arc<Conn> {
+        use base64::Engine;
+        Conn::new(move |m, p, _| {
+            if let Some(rest) = p.strip_prefix("/projects/9/repository/files/") {
+                if let Some(s) = files_status {
+                    return Err(http_err(Some(s)));
+                }
+                let content = match rest {
+                    "web%2Fpackage-lock.json?ref=b" => lock("4.17.20"),
+                    "web%2Fpackage-lock.json?ref=h" => lock("4.17.21"),
+                    "web%2Fpackage.json?ref=h" => "{\"name\": \"web\"}\n".into(),
+                    _ => return Err(http_err(Some(404))),
+                };
+                return Ok(json!({"size": content.len(), "encoding": "base64",
+                    "content": base64::engine::general_purpose::STANDARD.encode(content)}));
+            }
+            Ok(if m == "GET" {
+                json!([])
+            } else {
+                json!({"id": 1})
+            })
+        })
+    }
+
+    fn lock_item() -> WorkItem {
+        let mut it = gated_item(&diff());
+        it.payload["changed_paths"] = json!(["app/a.rb", "web/package-lock.json"]);
+        it
+    }
+
+    fn audited(conn: Arc<Conn>, runner: Arc<dyn AuditRunner>) -> MrReview {
+        MrReview::new(Arc::new(Source {
+            accounts: vec![Account::new("work", "gitlab")],
+            conn,
+        }))
+        .with_auditor(runner)
+    }
+
+    fn summary_posted(conn: &Conn) -> String {
+        conn.posts()
+            .iter()
+            .filter(|b| b.get("position").is_none())
+            .map(|b| b["note"].as_str().unwrap().to_string())
+            .next_back()
+            .unwrap()
+    }
+
+    #[test]
+    fn high_advisory_on_touched_package_appears_in_checks() {
+        let conn = lock_conn(None);
+        let runner = Arc::new(FakeAudit {
+            out: npm_audit("lodash"),
+            calls: Default::default(),
+        });
+        let out = audited(conn.clone(), runner.clone())
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        assert_eq!(out.status, Status::Done);
+        assert_eq!(runner.calls.lock().unwrap()[0].0, "npm");
+        let note = summary_posted(&conn);
+        assert!(
+            note.contains("\u{26d4} Would block a LoopX fix: dependency audit"),
+            "{note}"
+        );
+        assert!(
+            note.contains("- Dependency audit: 1 advisory(ies): GHSA-35jh-r3h4-6jhm in lodash"),
+            "{note}"
+        );
+        assert!(!note.contains("@all") && !crate::mr_feedback::has_quick_action(&note));
+        assert_eq!(out.data["gates"]["dependency_blocking"], 1);
+        assert!(out.summary.ends_with("checks would block"));
+        assert!(conn
+            .posts()
+            .iter()
+            .filter(|b| b.get("position").is_some())
+            .all(|b| !b["note"].as_str().unwrap().contains("GHSA")));
+    }
+
+    #[test]
+    fn advisory_on_untouched_package_is_ignored() {
+        let conn = lock_conn(None);
+        let runner = Arc::new(FakeAudit {
+            out: npm_audit("left-pad"),
+            calls: Default::default(),
+        });
+        let out = audited(conn.clone(), runner)
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        let note = summary_posted(&conn);
+        assert!(note.contains("- Dependency audit: clean (npm)"), "{note}");
+        assert!(!note.contains("Would block"), "{note}");
+        assert_eq!(out.data["gates"]["dependency_blocking"], 0);
+    }
+
+    #[test]
+    fn missing_audit_tool_still_posts_the_review() {
+        let conn = lock_conn(None);
+        let runner = Arc::new(FakeAudit {
+            out: AuditOutcome::Missing,
+            calls: Default::default(),
+        });
+        let out = audited(conn.clone(), runner)
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        assert_eq!(out.status, Status::Done);
+        let note = summary_posted(&conn);
+        assert!(note.contains("not installed"), "{note}");
+        assert!(note.starts_with("### LoopX pre-review"));
+    }
+
+    #[test]
+    fn audit_time_budget_skips_later_mrs() {
+        let conn = lock_conn(None);
+        let plugin = audited(conn.clone(), Arc::new(NoTools));
+        *plugin.audit_spent.lock().unwrap() = AUDIT_RUN_BUDGET;
+        plugin
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        let note = summary_posted(&conn);
+        assert!(
+            note.contains("- Dependency audit skipped: this run's audit time is used up"),
+            "{note}"
+        );
+        assert!(!conn
+            .calls()
+            .iter()
+            .any(|c| c.1.contains("/repository/files/")));
+        plugin.discover(&c()).unwrap();
+        assert_eq!(*plugin.audit_spent.lock().unwrap(), Duration::ZERO);
+    }
+
+    #[test]
+    fn audit_time_is_added_to_the_run_budget() {
+        let conn = lock_conn(None);
+        let runner = Arc::new(FakeAudit {
+            out: npm_audit("left-pad"),
+            calls: Default::default(),
+        });
+        let plugin = audited(conn, runner);
+        *plugin.audit_spent.lock().unwrap() = Duration::from_secs(10);
+        plugin
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        assert!(*plugin.audit_spent.lock().unwrap() > Duration::from_secs(10));
+    }
+
+    #[test]
+    fn files_api_error_is_a_could_not_run_line() {
+        let conn = lock_conn(Some(500));
+        let out = audited(conn.clone(), Arc::new(NoTools))
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        assert_eq!(out.status, Status::Done);
+        let note = summary_posted(&conn);
+        assert!(
+            note.contains("- Dependency audit: could not run (MailHTTPError)"),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn github_pull_request_gets_no_dependency_audit() {
+        let posted = Arc::new(Mutex::new(vec![]));
+        let conn = ok_conn();
+        let plugin = audited(conn.clone(), Arc::new(NoTools)).with_poster({
+            let posted = posted.clone();
+            Box::new(move |_c, _m, a| {
+                posted.lock().unwrap().push(a.clone());
+                Ok(json!({"drafts": 1, "fallback_general": 0}))
+            })
+        });
+        let mut it = lock_item();
+        it.payload["provider"] = json!("github");
+        plugin
+            .after_item(&it, &json!({"summary": "s", "findings": []}), &c())
+            .unwrap();
+        let cleaned = posted.lock().unwrap()[0].clone();
+        assert!(checks(&cleaned)
+            .contains(&"- Dependency audit: not run (GitLab only for now)".to_string()));
+        assert!(conn.calls().is_empty());
+    }
+
+    #[test]
+    fn no_lockfile_means_no_dependency_line() {
+        let (_, cleaned) = run_gated(
+            &gated_item(&diff()),
+            json!({"summary": "s", "findings": []}),
+        );
+        assert!(!checks(&cleaned).iter().any(|l| l.contains("Dependency")));
+    }
+
+    #[test]
+    fn no_test_runs_a_real_audit_tool() {
+        let result = std::panic::catch_unwind(|| {
+            NoTools.run(
+                &crate::dependency_audit::tool_command(
+                    crate::dependency_audit::Ecosystem::Npm,
+                    Path::new("package-lock.json"),
+                )
+                .unwrap(),
+                Path::new("."),
+            )
+        });
+        assert!(result.is_err());
+        assert!(plugin_with(ok_conn()).auditor.is_some());
+    }
+
+    // ---- gates event and digest ------------------------------------------------
+
+    fn gate_events(ctx: &LoopContext) -> Vec<Value> {
+        crate::events::iter_events(ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .filter(|e| e["event_type"] == "mr_review.gates_completed")
+            .collect()
+    }
+
+    #[test]
+    fn gates_event_is_emitted_once_per_reviewed_sha() {
+        let (_events, ctx) = ev_ctx();
+        let posted = Arc::new(Mutex::new(vec![]));
+        with_poster(posted)
+            .after_item(
+                &gated_item(&key_diff()),
+                &json!({"summary": "s", "findings": []}),
+                &ctx,
+            )
+            .unwrap();
+        let evs = gate_events(&ctx);
+        assert_eq!(evs.len(), 1, "{evs:?}");
+        let ev = &evs[0];
+        assert_eq!(ev["project"], "group/app");
+        assert_eq!(ev["issue_iid"], Value::Null);
+        assert_eq!(ev["run_id"], "r");
+        assert_eq!(
+            ev["data"],
+            json!({"source": "human_mr", "mr": "group/app!7", "iid": 7, "head_sha": "h", "posted": true,
+                   "security": {"observed_passed": false, "blocking_rules": ["aws_access_key"],
+                                "advisory": 0, "unscanned": 0},
+                   "dependency": {"ran": false, "observed_passed": null, "error": false, "blocking_ids": []}})
+        );
+    }
+
+    #[test]
+    fn gates_event_carries_no_paths_or_text() {
+        let (_events, ctx) = ev_ctx();
+        let conn = lock_conn(None);
+        let runner = Arc::new(FakeAudit {
+            out: npm_audit("lodash"),
+            calls: Default::default(),
+        });
+        let mut it = lock_item();
+        it.meta["gates"]["security"] =
+            mr_gates::gate_meta(&mr_gates::secret_scan(&key_diff(), false));
+        audited(conn, runner)
+            .after_item(&it, &json!({"summary": "s", "findings": []}), &ctx)
+            .unwrap();
+        let evs = gate_events(&ctx);
+        assert_eq!(evs.len(), 1);
+        let text = evs[0].to_string();
+        for leak in ["config/app.rb", "package-lock", "Prototype", &aws_key()] {
+            assert!(!text.contains(leak), "{leak} in {text}");
+        }
+        assert_eq!(
+            evs[0]["data"]["dependency"],
+            json!({"ran": true, "observed_passed": false, "error": false,
+                   "blocking_ids": ["GHSA-35jh-r3h4-6jhm"]})
+        );
+    }
+
+    #[test]
+    fn files_api_error_is_recorded_as_a_dependency_error() {
+        let (_events, ctx) = ev_ctx();
+        audited(lock_conn(Some(500)), Arc::new(NoTools))
+            .after_item(&lock_item(), &json!({"summary": "s", "findings": []}), &ctx)
+            .unwrap();
+        assert_eq!(
+            gate_events(&ctx)[0]["data"]["dependency"],
+            json!({"ran": false, "observed_passed": null, "error": true, "blocking_ids": []})
+        );
+    }
+
+    #[test]
+    fn read_only_token_still_records_gates_as_not_posted() {
+        let (_events, ctx) = ev_ctx();
+        let out = plugin_with(fake2(json!([]), Some(1), 403))
+            .after_item(
+                &gated_item(&key_diff()),
+                &json!({"summary": "s", "findings": []}),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out.status, Status::Skipped);
+        let evs = gate_events(&ctx);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0]["data"]["posted"], false);
+        assert_eq!(evs[0]["data"]["security"]["observed_passed"], false);
+    }
+
+    #[test]
+    fn digest_mentions_checks_that_would_block() {
+        let p = plugin_with(ok_conn());
+        let o = |gates: Value| {
+            Outcome::new("k", Status::Done, "x")
+                .with_url("https://gl/mr/1")
+                .with_data(json!({"title": "T", "drafts": 2, "blockers": 1, "gates": gates}))
+        };
+        let blocking = o(json!({"security_blocking": 1, "dependency_blocking": 0}));
+        let clean = o(json!({"security_blocking": 0, "dependency_blocking": 0}));
+        let text = p.digest(&[blocking.clone(), clean.clone()], &c()).unwrap();
+        assert!(
+            text.starts_with("MR pre-review: 2 MRs, 4 draft notes (2 blockers, 1 with checks that would block). Open each MR"),
+            "{text}"
+        );
+        let text = p.digest(&[clean], &c()).unwrap();
+        assert!(
+            text.starts_with("MR pre-review: 1 MRs, 2 draft notes (1 blockers). Open"),
+            "{text}"
+        );
     }
 
     fn ctx_in(dir: &Path) -> LoopContext {

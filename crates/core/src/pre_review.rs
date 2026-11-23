@@ -210,7 +210,7 @@ fn review_lines(r: &VerificationResult) -> Vec<String> {
     lines
 }
 
-fn security_line(r: &VerificationResult) -> String {
+pub(crate) fn security_line(r: &VerificationResult) -> String {
     let ev = &r.evidence;
     if ev.get("error").is_some() {
         return format!("- Security scan: could not run ({})", first_line(&r.output));
@@ -243,7 +243,7 @@ fn security_line(r: &VerificationResult) -> String {
 const MAX_DEPENDENCY_ITEMS: usize = 10;
 
 /// Built from evidence only: a tool's own error text can carry local paths.
-fn dependency_line(r: &VerificationResult) -> String {
+pub(crate) fn dependency_line(r: &VerificationResult) -> String {
     use crate::dependency_audit::ecosystem_label;
     let ev = &r.evidence;
     let list = |k: &str| {

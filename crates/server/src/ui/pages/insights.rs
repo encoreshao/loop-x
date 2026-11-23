@@ -950,6 +950,20 @@ fn gates_body(ctx: &UiCtx) -> String {
         gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
     ]
     .concat();
+    let human = &stats.human;
+    let human_tiles = [
+        gate_tile("fact_check", &human.mrs_checked.to_string(), &ctx.t("MRs checked"), ""),
+        gate_tile("search", &human.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
+        gate_tile("extension", &human.dependency_would_block.to_string(), &ctx.t("Dependency audit would block"), ""),
+    ]
+    .concat();
+    let human_card = format!(
+        "<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<p class='section-subtitle'>{}</p>\n<div class=\"dash-stats-grid\">{human_tiles}</div>\n</section>\n",
+        escape(&ctx.t("Human merge requests")),
+        escape(&ctx.t(
+            "The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked."
+        ))
+    );
     let rows: String = stats
         .by_project
         .iter()
@@ -999,7 +1013,7 @@ fn gates_body(ctx: &UiCtx) -> String {
         .collect();
     format!(
         "\n{}<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<div class=\"dash-stats-grid\">{tiles}</div>\n</section>\n\
-         <section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n{table}\n</section>\n\
+         {human_card}<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n{table}\n</section>\n\
          <section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<ul class='plain'>{chips}</ul>\n</section>\n",
         page_title(ctx, "Gates", "Does the external verifier agree with the agent, and what the gate did."),
         escape(&ctx.t("Last 7 days")),
@@ -1220,6 +1234,34 @@ mod tests {
             r#"{"observed_passed":false}"#,
         ]);
         assert!(html.contains("2 could not run"), "{html}");
+    }
+
+    #[test]
+    fn gates_page_shows_human_mr_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", Some(now));
+        std::fs::create_dir_all(&state.events_dir).unwrap();
+        let human = |mr: &str, sha: &str, secret: bool| {
+            format!(
+                r#"{{"event_type":"mr_review.gates_completed","run_id":"r","project":"g/app","issue_iid":null,"timestamp":"2026-11-22T10:00:00Z","data":{{"source":"human_mr","mr":"{mr}","iid":1,"head_sha":"{sha}","posted":true,"security":{{"observed_passed":{},"blocking_rules":[],"advisory":0,"unscanned":0}},"dependency":{{"ran":false,"observed_passed":null,"error":false,"blocking_ids":[]}}}}}}"#,
+                !secret
+            )
+        };
+        let lines = [human("g/app!1", "a", true), human("g/app!1", "b", false), human("g/app!2", "a", true)];
+        std::fs::write(state.events_dir.join("2026-11-22.jsonl"), lines.join("\n") + "\n").unwrap();
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        let card = &html[html.find("<h2>Human merge requests</h2>").expect("human MR card")..];
+        assert!(card.contains("The same model-free gates as LoopX fixes"), "{card}");
+        let tile = |label: &str| {
+            let end = card.find(&format!("<span class='dash-stat-label'>{label}</span>")).unwrap();
+            let start = card[..end].rfind("<span class='dash-stat-value'>").unwrap();
+            card[start..end].trim_start_matches("<span class='dash-stat-value'>").trim_end_matches("</span>").to_string()
+        };
+        assert_eq!(tile("MRs checked"), "2");
+        assert_eq!(tile("Secret scan would block"), "1");
+        assert_eq!(tile("Dependency audit would block"), "0");
     }
 
     #[test]

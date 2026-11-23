@@ -34,11 +34,22 @@ pub struct GateBucket {
     agreed: i64,
 }
 
+/// The same gates run by MR Review on human-authored MRs; counted per MR,
+/// its last checked head SHA wins.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HumanMrBucket {
+    pub mrs_checked: i64,
+    pub security_would_block: i64,
+    pub dependency_would_block: i64,
+    pub errors: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GateStats {
     pub total: GateBucket,
     /// Sorted by project name.
     pub by_project: BTreeMap<String, GateBucket>,
+    pub human: HumanMrBucket,
 }
 
 fn truthy_project(ev: &Value) -> Option<String> {
@@ -81,6 +92,7 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
     let mut retried_seen: HashSet<String> = HashSet::new();
     // (gate, issue key) -> (project, would block, errored), last event wins.
     let mut gate_last: BTreeMap<(&str, String), (Option<String>, bool, bool)> = BTreeMap::new();
+    let mut human_last: BTreeMap<(Option<String>, String), &Value> = BTreeMap::new();
     let null = Value::Null;
 
     for ev in events {
@@ -141,6 +153,12 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
                     }
                 }
             }
+            "mr_review.gates_completed"
+                if data.get("source").and_then(Value::as_str) == Some("human_mr") =>
+            {
+                let mr = data.get("mr").map(Value::to_string).unwrap_or_default();
+                human_last.insert((project, mr), data);
+            }
             "policy.denied" => {
                 stats.total.policy_denied += 1;
                 if let Some(p) = project {
@@ -186,6 +204,20 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
         if let Some(p) = project {
             apply(stats.by_project.entry(p.clone()).or_default());
         }
+    }
+    for data in human_last.values() {
+        let h = &mut stats.human;
+        let dependency = data.get("dependency").unwrap_or(&null);
+        let errored = is_truthy(dependency.get("error"));
+        h.mrs_checked += 1;
+        h.security_would_block +=
+            i64::from(data.pointer("/security/observed_passed") == Some(&Value::Bool(false)));
+        h.dependency_would_block += i64::from(
+            is_truthy(dependency.get("ran"))
+                && dependency.get("observed_passed") == Some(&Value::Bool(false))
+                && !errored,
+        );
+        h.errors += i64::from(errored);
     }
     for b in std::iter::once(&mut stats.total).chain(stats.by_project.values_mut()) {
         if b.issues > 0 {
@@ -442,5 +474,71 @@ mod tests {
         ];
         let s = gate_stats(&events);
         assert_eq!((s.total.issues, s.total.agreement_rate), (1, Some(1.0)));
+    }
+
+    fn human(mr: &str, sha: &str, secret: bool, dep: Value) -> Value {
+        json!({"event_type": "mr_review.gates_completed", "project": "group/app", "issue_iid": null,
+               "run_id": format!("run-{sha}"),
+               "data": {"source": "human_mr", "mr": mr, "iid": 7, "head_sha": sha, "posted": true,
+                        "security": {"observed_passed": !secret, "blocking_rules": [], "advisory": 0, "unscanned": 0},
+                        "dependency": dep}})
+    }
+
+    fn not_run() -> Value {
+        json!({"ran": false, "observed_passed": null, "error": false, "blocking_ids": []})
+    }
+
+    #[test]
+    fn human_mr_counts_use_the_latest_sha() {
+        let blocked = json!({"ran": true, "observed_passed": false, "error": false, "blocking_ids": ["GHSA-1"]});
+        let errored =
+            json!({"ran": true, "observed_passed": false, "error": true, "blocking_ids": []});
+        let events = vec![
+            human("group/app!7", "s1", true, blocked.clone()),
+            human("group/app!7", "s2", false, not_run()),
+            human("group/app!8", "s1", false, blocked),
+            human("group/app!9", "s1", false, errored),
+        ];
+        let s = gate_stats(&events);
+        assert_eq!(
+            s.human,
+            HumanMrBucket {
+                mrs_checked: 3,
+                security_would_block: 0,
+                dependency_would_block: 1,
+                errors: 1
+            }
+        );
+    }
+
+    #[test]
+    fn human_mr_events_do_not_touch_agent_buckets() {
+        let agent = vec![
+            ev("issue.completed", Some(1), json!({"action": "fix"}), "web"),
+            ev(
+                "verification.external_completed",
+                Some(1),
+                json!({"observed_passed": true}),
+                "web",
+            ),
+        ];
+        let mut both = agent.clone();
+        both.push(human("group/app!7", "s1", true, not_run()));
+        let (a, b) = (gate_stats(&agent), gate_stats(&both));
+        assert_eq!(a.total, b.total);
+        assert_eq!(a.by_project, b.by_project);
+        assert_eq!(b.human.security_would_block, 1);
+        let only = gate_stats(&[human("group/app!7", "s1", true, not_run())]);
+        assert_eq!(only.total, GateBucket::default());
+        assert!(only.by_project.is_empty());
+    }
+
+    #[test]
+    fn unknown_source_is_ignored() {
+        let mut e = human("group/app!7", "s1", true, not_run());
+        e["data"]["source"] = json!("agent");
+        let mut no_source = human("group/app!8", "s1", true, not_run());
+        no_source["data"].as_object_mut().unwrap().remove("source");
+        assert_eq!(gate_stats(&[e, no_source]).human, HumanMrBucket::default());
     }
 }

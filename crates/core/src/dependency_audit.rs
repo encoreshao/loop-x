@@ -927,7 +927,7 @@ const AUDIT_CONFIG_FILES: [&str; 5] = [
     ".yarnrc.yml",
     ".pnpmfile.cjs",
 ];
-const PACKAGE_JSON_AUDIT_KEYS: [&str; 3] = ["auditConfig", "ignoreCves", "ignoreGhsas"];
+pub(crate) const PACKAGE_JSON_AUDIT_KEYS: [&str; 3] = ["auditConfig", "ignoreCves", "ignoreGhsas"];
 
 /// Files in the diff that can silence or redirect an audit tool.
 pub fn audit_config_changes(diff: &str) -> Vec<String> {

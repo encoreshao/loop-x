@@ -22,6 +22,36 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Automated checks
+
+Every reviewed MR also passes the same model-free gates LoopX's own fixes pass
+before their merge request opens (`crates/core/src/mr_gates.rs`):
+
+- **Secret scan** (`security_scan::scan`, unchanged): runs at discovery on the
+  MR's API diff, rebuilt with `diff --git` separators so each hit names its own
+  file. A blocking hit (a key, token, private key, generic secret outside test
+  paths, an added `.env`) becomes an inline 🔴 Blocker · Security draft on its
+  line, at most 5 per MR; the summary counts all of them. Files without a text
+  diff (binary, collapsed, too large) and a truncated diff are named in the
+  line, never called clean.
+- **Dependency audit** (`dependency_audit::audit`, unchanged), GitLab only for
+  now: for each changed lockfile (at most 3 per MR, at most 10 MB) the loop
+  reads the file at the MR's base and head commits through the files API, plus
+  a sibling `package.json` at head for npm/Yarn/pnpm, into a temp dir, and
+  audits the packages the MR added or upgraded with the installed tool. At
+  most 5 minutes of audit time per run; later MRs say it was skipped.
+- Both appear under **Automated checks** in the overall draft, after the
+  verdict: an optional `⛔ Would block a LoopX fix: …` line, then the same
+  secret-scan and dependency lines LoopX writes into its own MR descriptions.
+  They are advisory: the model's verdict is never changed, nothing is blocked,
+  approved or published, and the model's prompt and input are unchanged (the
+  results live in the item's `meta`, which the model never sees).
+- Each reviewed MR commit emits `mr_review.gates_completed`
+  (`data.source = "human_mr"`; rule and advisory ids only, no path or text),
+  counted on Harness → Gates → **Human merge requests** (MRs checked, and how
+  many would have been blocked; the latest commit of each MR wins). GitHub
+  pull requests get the secret scan only.
+
 ## How it runs
 
 - Plugin: `crates/core/src/loop_plugins/mr_review.rs` on LoopKit (`crates/core/src/loopkit.rs`);
@@ -63,6 +93,15 @@ clears the requests it read.
   general draft note prefixed with `path:line`.
 - Fetch errors log only the exception class name; one failing account or MR
   does not stop the others.
+- Reads lockfiles through the files API into a temp dir and runs only installed
+  audit tools there (never an install, never the MR's tool config: no `.npmrc`,
+  `.yarnrc*`, `.pnpmfile.cjs` or `.cargo/` is fetched, and `package.json` is
+  reduced to its name, version, workspaces and dependency lists, so its audit
+  ignore lists never apply and are reported as a note; a path with `..`, a
+  leading `/` or `-`, or a control character is refused).
+- Gate text is model-free; paths are flattened to one line and a line-start
+  `/` is neutralised (in the model's text too), so no draft line can run a
+  GitLab quick action once published.
 
 ## Re-runs, partial failures and read-only tokens
 
