@@ -411,12 +411,16 @@ mod tests {
     #[test]
     fn idle_for_counts_silence_and_resets_on_any_frame_even_a_ping() {
         let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let (pong_tx, pong_rx) = std::sync::mpsc::channel::<()>();
         let (url, server) = fake_socket_server(move |ws| {
             let _ = go_rx.recv();
-            std::thread::sleep(Duration::from_millis(250));
             ws.send(Message::Ping(vec![1])).unwrap();
             let _ = ws.flush();
-            while ws.read().is_ok() {}
+            while let Ok(msg) = ws.read() {
+                if matches!(msg, Message::Pong(_)) {
+                    let _ = pong_tx.send(());
+                }
+            }
         });
         let mut client = SocketClient::connect(&url).unwrap();
         assert_eq!(client.next(Duration::from_millis(300)).unwrap(), None);
@@ -426,10 +430,15 @@ mod tests {
             client.idle_for()
         );
         go_tx.send(()).unwrap();
-        assert_eq!(client.next(Duration::from_millis(300)).unwrap(), None);
+        let pinged_after = Instant::now();
+        // The client answers the ping only after reading it, so a pong means the clock was reset.
+        while pong_rx.try_recv().is_err() {
+            assert!(pinged_after.elapsed() < Duration::from_secs(10), "no pong");
+            assert_eq!(client.next(Duration::from_millis(20)).unwrap(), None);
+        }
         assert!(
-            client.idle_for() < Duration::from_millis(200),
-            "{:?}",
+            client.idle_for() < pinged_after.elapsed(),
+            "{:?} not reset by the ping",
             client.idle_for()
         );
         drop(client);
