@@ -145,26 +145,7 @@ fn hold(argv: &[String]) -> Result<String, String> {
 }
 
 fn stop() -> Result<String, String> {
-    stop_in(&state_dir())
-}
-
-/// [`stop`] for the hold state kept in `dir`.
-fn stop_in(dir: &Path) -> Result<String, String> {
-    let Some(pid) = read_pid(dir) else {
-        return Ok("no dev server is held".into());
-    };
-    let _ = std::fs::write(dir.join("stop"), "");
-    let deadline = Instant::now() + Duration::from_secs(25);
-    while process_alive(pid) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    if process_alive(pid) {
-        let _ = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .status();
-    }
-    let _ = std::fs::remove_dir_all(dir);
-    Ok("dev server stopped".into())
+    loopx_core::screenshot::stop_holder(&state_dir())
 }
 
 #[cfg(test)]
@@ -205,6 +186,9 @@ mod tests {
         // here would race the other tests in this binary that read it.
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("outputs").join("screens").join(".server");
-        assert_eq!(stop_in(&dir).unwrap(), "no dev server is held");
+        assert_eq!(
+            loopx_core::screenshot::stop_holder(&dir).unwrap(),
+            "no dev server is held"
+        );
     }
 }

@@ -14,7 +14,7 @@ use crate::linkedin_humanize::Selector;
 use crate::loop_plugins::linkedin_autopilot::BrowserError;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read};
@@ -63,6 +63,110 @@ pub fn check_serve_command(cmd: &str) -> Result<ServeCommand, String> {
         }
     }
     Ok((env, argv))
+}
+
+/// The URL's host, lowercased, with IPv6 brackets kept (`[::1]`).
+fn url_host(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("://")?;
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit('@').next()?;
+    let host = match auth.strip_prefix('[') {
+        Some(v6) => format!("[{}]", v6.split(']').next()?),
+        None => auth.split(':').next()?.to_string(),
+    };
+    Some(host.to_ascii_lowercase())
+}
+
+/// Only pages served on this machine may be shot: never a staging or
+/// production site. A backslash, whitespace or control character is refused
+/// outright: browsers and ureq read `\` as `/` and drop tabs and newlines, so
+/// the host they would reach is not the one parsed here.
+pub fn is_local(url: &str) -> bool {
+    if url
+        .chars()
+        .any(|c| c == '\\' || c.is_whitespace() || c.is_control())
+    {
+        return false;
+    }
+    matches!(
+        url_host(url).as_deref(),
+        Some("localhost" | "127.0.0.1" | "[::1]")
+    )
+}
+
+/// host:port of an http(s) URL, for the "already served?" probe.
+pub fn host_port(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit('@').next()?;
+    if auth.is_empty() {
+        return None;
+    }
+    if auth
+        .rsplit_once(':')
+        .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
+    {
+        return Some(auth.to_string());
+    }
+    Some(format!(
+        "{auth}:{}",
+        if scheme == "https" { 443 } else { 80 }
+    ))
+}
+
+/// True when something already accepts connections at the URL's host:port.
+pub fn already_served(url: &str) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let Some(addr) = host_port(url) else {
+        return false;
+    };
+    let Ok(addrs) = addr.to_socket_addrs() else {
+        return false;
+    };
+    addrs
+        .into_iter()
+        .any(|a| TcpStream::connect_timeout(&a, Duration::from_secs(1)).is_ok())
+}
+
+/// Stops the `loopx screenshot serve` holder whose state is kept in `dir`
+/// (its `pid` file), and removes that state.
+pub fn stop_holder(dir: &Path) -> Result<String, String> {
+    use crate::run_control::process_alive;
+    let pid: Option<i64> = std::fs::read_to_string(dir.join("pid"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+    let Some(pid) = pid else {
+        return Ok("no dev server is held".into());
+    };
+    let _ = std::fs::write(dir.join("stop"), "");
+    let deadline = Instant::now() + Duration::from_secs(25);
+    while process_alive(pid) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    if process_alive(pid) {
+        // SAFETY: plain syscall on a pid the holder recorded for itself.
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    Ok("dev server stopped".into())
+}
+
+/// The dev server's environment on top of its command's own pairs.
+pub fn dev_server_env(serve_env: &[(String, String)]) -> Vec<(String, String)> {
+    const NO_TELEMETRY: [&str; 4] = [
+        "NEXT_TELEMETRY_DISABLED",
+        "NUXT_TELEMETRY_DISABLED",
+        "ASTRO_TELEMETRY_DISABLED",
+        "GATSBY_TELEMETRY_DISABLED",
+    ];
+    let mut env = serve_env.to_vec();
+    env.extend(crate::dependency_audit::corepack_offline_env());
+    env.extend(
+        NO_TELEMETRY
+            .iter()
+            .map(|k| (k.to_string(), "1".to_string())),
+    );
+    env
 }
 
 // ---- cleanup on a signal -------------------------------------------------------------
@@ -119,6 +223,14 @@ pub fn clean_up_on_signals() {
             std::thread::sleep(Duration::from_millis(50));
         });
     });
+}
+
+/// Stops every live dev server and Chrome, removes every live profile dir and
+/// exits with `code`: the last resort of a deadline watchdog.
+pub fn stop_everything_and_exit(code: i32) -> ! {
+    let mut l = live();
+    stop_all(&mut l);
+    std::process::exit(code)
 }
 
 /// Reaps `pid` (our own child) if it exited; true once it is gone.
@@ -303,7 +415,7 @@ impl Drop for DevServer {
 
 /// One canned backend answer. `url_pattern` is a substring of the request
 /// URL, or a glob over the whole URL when it contains `*`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MockRule {
     pub url_pattern: String,
     #[serde(default = "default_status")]
@@ -317,7 +429,7 @@ fn default_status() -> u16 {
 
 /// A fake signed-in session. Each cookie is a CDP `Network.setCookie` params
 /// object; one with neither `url` nor `domain` is set for the page URL.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Session {
     pub cookies: Vec<Value>,
@@ -445,32 +557,97 @@ impl ShotOptions {
 /// Loads `opts.url` in headless Chrome and writes the PNG to `opts.out`.
 /// Chrome is only ever the one on this machine; nothing fetches a browser.
 pub fn capture(opts: &ShotOptions) -> Result<(), String> {
-    let exe = match &opts.chrome {
-        Some(p) if p.is_file() => p.clone(),
-        Some(p) => return Err(format!("Google Chrome was not found at {}", p.display())),
-        None => (opts.find)().ok_or(
-            "Google Chrome was not found: install it in /Applications or set LOOPX_CHROME",
-        )?,
-    };
+    let exe = chrome_exe(&opts.chrome, opts.find)?;
     let origin =
         origin_of(&opts.url).ok_or_else(|| format!("{:?} is not an http(s) URL", opts.url))?;
-    let parent = opts
-        .profile_parent
-        .clone()
-        .unwrap_or_else(std::env::temp_dir);
-    let profile = parent.join(format!("loopx-shot-{}", uuid::Uuid::new_v4().simple()));
-    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
-        .create(&profile)
-        .map_err(|e| format!("could not make a Chrome profile dir: {e}"))?;
-    live().dirs.push(profile.clone());
-    // Chrome is closed inside `shoot`, before its profile goes.
-    let result = shoot(&exe, &profile, &origin, opts);
-    let removed = remove_profile(&profile);
-    live().dirs.retain(|d| d != &profile);
-    match (result, removed) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
-        (Err(e), Err(r)) => Err(format!("{e}; {r}")),
+    let browser = Browser {
+        exe: &exe,
+        origin: &origin,
+        mocks: &opts.mocks,
+        timeout: opts.timeout,
+        profile_parent: opts.profile_parent.clone(),
+    };
+    browser.run(|shot| shot.run(opts))
+}
+
+pub const CHROME_NOT_FOUND: &str =
+    "Google Chrome was not found: install it in /Applications or set LOOPX_CHROME";
+
+fn chrome_exe(chrome: &Option<PathBuf>, find: fn() -> Option<PathBuf>) -> Result<PathBuf, String> {
+    match chrome {
+        Some(p) if p.is_file() => Ok(p.clone()),
+        Some(p) => Err(format!("Google Chrome was not found at {}", p.display())),
+        None => find().ok_or_else(|| CHROME_NOT_FOUND.to_string()),
+    }
+}
+
+/// One headless Chrome on a throwaway profile, for one page.
+struct Browser<'a> {
+    exe: &'a Path,
+    origin: &'a str,
+    mocks: &'a [MockRule],
+    timeout: Duration,
+    profile_parent: Option<PathBuf>,
+}
+
+impl Browser<'_> {
+    fn run<T>(&self, f: impl FnOnce(&mut Shot) -> Result<T, String>) -> Result<T, String> {
+        let parent = self
+            .profile_parent
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        let profile = parent.join(format!("loopx-shot-{}", uuid::Uuid::new_v4().simple()));
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+            .create(&profile)
+            .map_err(|e| format!("could not make a Chrome profile dir: {e}"))?;
+        live().dirs.push(profile.clone());
+        // Chrome is closed inside `shoot`, before its profile goes.
+        let result = self.shoot(&profile, f);
+        let removed = remove_profile(&profile);
+        live().dirs.retain(|d| d != &profile);
+        match (result, removed) {
+            (Ok(v), Ok(())) => Ok(v),
+            (Err(e), Ok(())) | (Ok(_), Err(e)) => Err(e),
+            (Err(e), Err(r)) => Err(format!("{e}; {r}")),
+        }
+    }
+
+    fn shoot<T>(
+        &self,
+        profile: &Path,
+        f: impl FnOnce(&mut Shot) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let deadline = Instant::now() + self.timeout;
+        let launch = LaunchOptions {
+            chrome_path: Some(self.exe.to_path_buf()),
+            extra_args: QUIET_ARGS.iter().map(|a| a.to_string()).collect(),
+            startup_timeout: Some(call_limit(deadline).min(Duration::from_secs(30))),
+            on_spawn: Some(register_chrome),
+        };
+        let launched = Chrome::launch(profile, true, &launch);
+        let result = launched.map_err(browser_error).and_then(|chrome| {
+            let page = chrome
+                .page_within(call_limit(deadline))
+                .map_err(browser_error)?;
+            let mut shot = Shot {
+                chrome,
+                page,
+                origin: self.origin,
+                mocks: self.mocks,
+                deadline,
+                inflight: HashSet::new(),
+                last_network: Instant::now(),
+                navigated: false,
+                loaded: false,
+                seen: Seen::default(),
+            };
+            let result = f(&mut shot);
+            shot.chrome.close();
+            result
+        });
+        // Chrome is closed (or never came up) by now.
+        live().pids.clear();
+        result
     }
 }
 
@@ -561,23 +738,29 @@ struct Shot<'a> {
     last_network: Instant,
     navigated: bool,
     loaded: bool,
+    seen: Seen,
 }
 
-fn shoot(exe: &Path, profile: &Path, origin: &str, opts: &ShotOptions) -> Result<(), String> {
-    let deadline = Instant::now() + opts.timeout;
-    let launch = LaunchOptions {
-        chrome_path: Some(exe.to_path_buf()),
-        extra_args: QUIET_ARGS.iter().map(|a| a.to_string()).collect(),
-        startup_timeout: Some(call_limit(deadline).min(Duration::from_secs(30))),
-        on_spawn: Some(register_chrome),
-    };
-    let launched = Chrome::launch(profile, true, &launch);
-    let result = launched
-        .map_err(browser_error)
-        .and_then(|chrome| shoot_on(chrome, deadline, origin, opts));
-    // Chrome is closed (or never came up) by now.
-    live().pids.clear();
-    result
+/// What the page reported while it loaded, for [`probe`]. Each list keeps at
+/// most [`MAX_SEEN`] entries.
+#[derive(Default)]
+struct Seen {
+    exceptions: Vec<String>,
+    console_errors: Vec<String>,
+    failed_requests: Vec<String>,
+    documents: BTreeMap<String, u16>,
+    blocked: usize,
+    redirected_away: Option<String>,
+}
+
+const MAX_SEEN: usize = 5;
+const MAX_SEEN_CHARS: usize = 200;
+
+fn push_capped(list: &mut Vec<String>, text: &str) {
+    let text = crate::pre_review::clip(text, MAX_SEEN_CHARS);
+    if list.len() < MAX_SEEN && !text.is_empty() && !list.contains(&text) {
+        list.push(text);
+    }
 }
 
 /// How long one browser step may wait: what is left of the budget, at least
@@ -586,31 +769,6 @@ fn call_limit(deadline: Instant) -> Duration {
     deadline
         .saturating_duration_since(Instant::now())
         .clamp(Duration::from_secs(1), DEFAULT_CALL_TIMEOUT)
-}
-
-fn shoot_on(
-    chrome: Chrome,
-    deadline: Instant,
-    origin: &str,
-    opts: &ShotOptions,
-) -> Result<(), String> {
-    let page = chrome
-        .page_within(call_limit(deadline))
-        .map_err(browser_error)?;
-    let mut shot = Shot {
-        chrome,
-        page,
-        origin,
-        mocks: &opts.mocks,
-        deadline,
-        inflight: HashSet::new(),
-        last_network: Instant::now(),
-        navigated: false,
-        loaded: false,
-    };
-    let result = shot.run(opts);
-    shot.chrome.close();
-    result
 }
 
 fn auto_attach() -> Value {
@@ -636,33 +794,63 @@ impl Shot<'_> {
     }
 
     fn run(&mut self, opts: &ShotOptions) -> Result<(), String> {
-        let (width, height) = opts.viewport;
+        self.prepare(&opts.url, opts.viewport, &opts.session)?;
+        self.navigate(&opts.url, opts.timeout)?;
+        let href = self.eval("location.href")?;
+        if href
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("chrome-error:")
+        {
+            return Err(format!("could not load {}", opts.url));
+        }
+        if let Some(css) = &opts.wait_for {
+            if !self.wait_for(css)? {
+                return Err(format!("{css:?} never appeared on {}", opts.url));
+            }
+        }
+        self.settle(Duration::from_secs(10))?;
+        let png = self.screenshot(opts)?;
+        if let Some(dir) = opts.out.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        std::fs::write(&opts.out, png).map_err(|e| format!("{}: {e}", opts.out.display()))
+    }
+
+    /// Viewport, session, the request guard and interception, before any page loads.
+    fn prepare(
+        &mut self,
+        url: &str,
+        viewport: (u32, u32),
+        session: &Session,
+    ) -> Result<(), String> {
+        let (width, height) = viewport;
         self.send(
             "Emulation.setDeviceMetricsOverride",
             json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": false}),
         )?;
         self.send("Network.enable", json!({}))?;
-        for cookie in &opts.session.cookies {
+        for cookie in &session.cookies {
             let mut cookie = cookie.clone();
             let Some(fields) = cookie.as_object_mut() else {
                 return Err(format!("a session cookie is not an object: {cookie}"));
             };
             if !fields.contains_key("url") && !fields.contains_key("domain") {
-                fields.insert("url".into(), json!(opts.url));
+                fields.insert("url".into(), json!(url));
             }
             let r = self.send("Network.setCookie", cookie.clone())?;
             if r["success"] == json!(false) {
                 return Err(format!("Chrome refused the session cookie {cookie}"));
             }
         }
-        if !opts.session.local_storage.is_empty() {
+        if !session.local_storage.is_empty() {
             // Runs before the page's own scripts, on the page's origin only.
             let source = format!(
                 "(() => {{ if (location.origin !== {origin}) return; \
                  try {{ const e = {entries}; for (const k in e) localStorage.setItem(k, e[k]); }} \
                  catch (_) {{}} }})();",
                 origin = json!(self.origin),
-                entries = json!(opts.session.local_storage),
+                entries = json!(session.local_storage),
             );
             self.send(
                 "Page.addScriptToEvaluateOnNewDocument",
@@ -678,50 +866,46 @@ impl Shot<'_> {
         // Workers start paused so the guard is in place before their code runs.
         self.send("Target.setAutoAttach", auto_attach())?;
         self.lock_cdp().events.clear();
+        Ok(())
+    }
+
+    /// Navigates and waits for the load event; `Err` when it never loads.
+    fn navigate(&mut self, url: &str, budget: Duration) -> Result<(), String> {
         // `Page.navigate` only answers once the paused document request is
         // let through, so navigate from the page and answer requests meanwhile.
-        self.eval(&format!("location.href = {}; true", json!(opts.url)))?;
+        self.eval(&format!("location.href = {}; true", json!(url)))?;
         while !self.loaded {
             self.pump(Duration::from_millis(100))?;
             if Instant::now() >= self.deadline {
-                return Err(format!(
-                    "{} did not load within {}s",
-                    opts.url,
-                    opts.timeout.as_secs()
-                ));
+                return Err(format!("{url} did not load within {}s", budget.as_secs()));
             }
         }
-        let href = self.eval("location.href")?;
-        if href
-            .as_str()
-            .unwrap_or_default()
-            .starts_with("chrome-error:")
-        {
-            return Err(format!("could not load {}", opts.url));
-        }
-        if let Some(css) = &opts.wait_for {
-            let probe = format!("!!document.querySelector({})", json!(css));
-            let until = (Instant::now() + Duration::from_secs(15)).min(self.deadline);
-            while self.eval(&probe)? != json!(true) {
-                if Instant::now() >= until {
-                    return Err(format!("{css:?} never appeared on {}", opts.url));
-                }
-                self.pump(Duration::from_millis(250))?;
+        Ok(())
+    }
+
+    /// True once `css` matches, false after 15 s.
+    fn wait_for(&mut self, css: &str) -> Result<bool, String> {
+        let probe = format!("!!document.querySelector({})", json!(css));
+        let until = (Instant::now() + Duration::from_secs(15)).min(self.deadline);
+        while self.eval(&probe)? != json!(true) {
+            if Instant::now() >= until {
+                return Ok(false);
             }
+            self.pump(Duration::from_millis(250))?;
         }
-        // 500 ms with nothing in flight, but never more than 10 s of waiting.
-        let until = (Instant::now() + Duration::from_secs(10)).min(self.deadline);
+        Ok(true)
+    }
+
+    /// 500 ms with nothing in flight, but never more than `limit` of waiting.
+    fn settle(&mut self, limit: Duration) -> Result<(), String> {
+        let until = (Instant::now() + limit).min(self.deadline);
         while Instant::now() < until
             && !(self.inflight.is_empty()
                 && self.last_network.elapsed() >= Duration::from_millis(500))
         {
             self.pump(Duration::from_millis(100))?;
         }
-        let png = self.screenshot(opts)?;
-        if let Some(dir) = opts.out.parent().filter(|d| !d.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        std::fs::write(&opts.out, png).map_err(|e| format!("{}: {e}", opts.out.display()))
+        Ok(())
     }
 
     fn lock_cdp(&self) -> std::sync::MutexGuard<'_, crate::linkedin_cdp::Cdp> {
@@ -751,7 +935,13 @@ impl Shot<'_> {
         let p = &event["params"];
         let request_id = || p["requestId"].as_str().unwrap_or_default().to_string();
         match event["method"].as_str().unwrap_or_default() {
-            "Fetch.requestPaused" => self.answer(&self.session(event), p),
+            "Fetch.requestPaused" => {
+                let url = p["request"]["url"].as_str().unwrap_or_default();
+                if decide(url, self.origin, self.mocks) == Decision::Block {
+                    self.seen.blocked += 1;
+                }
+                self.answer(&self.session(event), p)
+            }
             "Target.attachedToTarget" => {
                 let child = CdpPage::new(
                     self.chrome.cdp.clone(),
@@ -779,6 +969,9 @@ impl Shot<'_> {
             // Blocked requests are not activity: an EventSource that keeps
             // reconnecting to a blocked origin must not hold the shot back.
             "Network.requestWillBeSent" => {
+                if let Some(to) = blocked_redirect(p, self.origin, self.mocks) {
+                    self.seen.redirected_away = Some(to);
+                }
                 let url = p["request"]["url"].as_str().unwrap_or_default();
                 if decide(url, self.origin, self.mocks) != Decision::Block {
                     self.last_network = Instant::now();
@@ -797,6 +990,45 @@ impl Shot<'_> {
                 self.navigated |= p["frame"]["url"] != json!("about:blank");
             }
             "Page.loadEventFired" if self.navigated => self.loaded = true,
+            "Runtime.exceptionThrown" => {
+                let d = &p["exceptionDetails"];
+                let text = d["exception"]["description"]
+                    .as_str()
+                    .or(d["text"].as_str())
+                    .unwrap_or("uncaught exception");
+                push_capped(&mut self.seen.exceptions, text);
+            }
+            "Runtime.consoleAPICalled" if p["type"] == json!("error") => {
+                let text: Vec<String> = p["args"]
+                    .as_array()
+                    .map(|a| a.iter().take(4).map(console_arg).collect())
+                    .unwrap_or_default();
+                push_capped(&mut self.seen.console_errors, &text.join(" "));
+            }
+            // Network-sourced entries are the requests this check blocked or
+            // that failed; `failed_requests` reports the ones that matter.
+            "Log.entryAdded"
+                if p["entry"]["level"] == json!("error")
+                    && p["entry"]["source"] != json!("network") =>
+            {
+                let text = p["entry"]["text"].as_str().unwrap_or_default();
+                push_capped(&mut self.seen.console_errors, text);
+            }
+            "Network.responseReceived" => {
+                let status = p["response"]["status"].as_u64().unwrap_or(0) as u16;
+                let url = p["response"]["url"].as_str().unwrap_or_default();
+                if p["type"] == json!("Document") {
+                    if let Some(frame) = p["frameId"].as_str() {
+                        self.seen.documents.insert(frame.to_string(), status);
+                    }
+                } else if status >= 400 && origin_of(url).as_deref() == Some(self.origin) {
+                    let path = url_path(url);
+                    // Chrome asks for it on its own; the page never did.
+                    if path != "/favicon.ico" {
+                        push_capped(&mut self.seen.failed_requests, &format!("{status} {path}"));
+                    }
+                }
+            }
             "Inspector.detached" | "Inspector.targetCrashed" => {
                 return Err("the page crashed".into())
             }
@@ -900,6 +1132,290 @@ impl Shot<'_> {
     }
 }
 
+// ---- probe: load a page and report what went wrong ----------------------------------
+
+fn console_arg(a: &Value) -> String {
+    match &a["value"] {
+        Value::String(s) => s.clone(),
+        Value::Null => a["description"].as_str().unwrap_or_default().to_string(),
+        v => v.to_string(),
+    }
+}
+
+/// The target of a top-level document redirect this check refuses to follow
+/// (another origin), from `Network.requestWillBeSent` params.
+fn blocked_redirect(p: &Value, origin: &str, mocks: &[MockRule]) -> Option<String> {
+    let url = p["request"]["url"].as_str()?;
+    (p["type"] == json!("Document")
+        && p.get("redirectResponse").is_some_and(Value::is_object)
+        && decide(url, origin, mocks) == Decision::Block)
+        .then(|| url.to_string())
+}
+
+/// The path of an http(s) URL, without its query or fragment.
+fn url_path(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let path = rest.find('/').map_or("/", |i| &rest[i..]);
+    path.split(['?', '#']).next().unwrap_or("/").to_string()
+}
+
+pub struct ProbeOptions {
+    pub url: String,
+    pub wait_for: Option<String>,
+    pub dark: bool,
+    pub viewport: (u32, u32),
+    pub mocks: Vec<MockRule>,
+    pub session: Session,
+    pub axe: bool,
+    /// The whole page, from launch to the axe result.
+    pub timeout: Duration,
+    pub chrome: Option<PathBuf>,
+    pub find: fn() -> Option<PathBuf>,
+    pub profile_parent: Option<PathBuf>,
+}
+
+impl ProbeOptions {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            wait_for: None,
+            dark: false,
+            viewport: (1280, 800),
+            mocks: Vec::new(),
+            session: Session::default(),
+            axe: false,
+            timeout: Duration::from_secs(30),
+            chrome: None,
+            find: crate::linkedin_cdp::find_chrome,
+            profile_parent: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PageReport {
+    pub final_url: String,
+    pub status: Option<u16>,
+    pub loaded: bool,
+    #[serde(default)]
+    pub load_error: Option<String>,
+    pub wait_for_found: Option<bool>,
+    pub blank: bool,
+    pub exceptions: Vec<String>,
+    pub console_errors: Vec<String>,
+    pub failed_requests: Vec<String>,
+    /// Requests this check refused to send (other origins).
+    #[serde(default)]
+    pub blocked_requests: usize,
+    /// The origin the page was asked for.
+    #[serde(default)]
+    pub requested_origin: String,
+    pub axe: Option<Result<Vec<crate::a11y::Violation>, String>>,
+}
+
+/// Loads `opts.url` in headless Chrome, the same guarded way [`capture`]
+/// does, and reports what the page did. `Err` only when Chrome itself could
+/// not be used; a page that fails to load is a report with `loaded: false`.
+pub fn probe(opts: &ProbeOptions) -> Result<PageReport, String> {
+    let exe = chrome_exe(&opts.chrome, opts.find)?;
+    let origin =
+        origin_of(&opts.url).ok_or_else(|| format!("{:?} is not an http(s) URL", opts.url))?;
+    let browser = Browser {
+        exe: &exe,
+        origin: &origin,
+        mocks: &opts.mocks,
+        timeout: opts.timeout,
+        profile_parent: opts.profile_parent.clone(),
+    };
+    browser.run(|shot| shot.probe(opts))
+}
+
+impl Shot<'_> {
+    fn probe(&mut self, opts: &ProbeOptions) -> Result<PageReport, String> {
+        self.prepare(&opts.url, opts.viewport, &opts.session)?;
+        let scheme = if opts.dark { "dark" } else { "light" };
+        self.send(
+            "Emulation.setEmulatedMedia",
+            json!({"features": [{"name": "prefers-color-scheme", "value": scheme}]}),
+        )?;
+        self.send("Runtime.enable", json!({}))?;
+        self.send("Log.enable", json!({}))?;
+        let mut report = PageReport {
+            requested_origin: self.origin.to_string(),
+            ..PageReport::default()
+        };
+        if let Err(e) = self.navigate(&opts.url, opts.timeout) {
+            report.load_error = Some(crate::pre_review::clip(&e, MAX_SEEN_CHARS));
+            self.fill_seen(&mut report);
+            self.redirected_away(&mut report);
+            return Ok(report);
+        }
+        report.final_url = self
+            .eval("location.href")?
+            .as_str()
+            .unwrap_or_default()
+            .into();
+        let main = self.send("Page.getFrameTree", json!({}))?;
+        report.status = main["frameTree"]["frame"]["id"]
+            .as_str()
+            .and_then(|id| self.seen.documents.get(id).copied());
+        report.loaded = !report.final_url.starts_with("chrome-error:");
+        if !report.loaded {
+            report.load_error = Some(format!("could not load {}", opts.url));
+            self.fill_seen(&mut report);
+            self.redirected_away(&mut report);
+            return Ok(report);
+        }
+        if let Some(css) = &opts.wait_for {
+            report.wait_for_found = Some(self.wait_for(css)?);
+        }
+        self.settle(Duration::from_secs(5))?;
+        report.blank = self.eval(
+            "(() => { const b = document.body; if (!b) return true; \
+             return b.innerText.trim() === '' && !document.querySelector('img,svg,canvas,video'); })()",
+        )? == json!(true);
+        // Before axe runs, so nothing axe does is counted against the page.
+        self.fill_seen(&mut report);
+        if opts.axe {
+            report.axe = Some(self.run_axe());
+        }
+        Ok(report)
+    }
+
+    /// A page that failed only because it redirected to another origin (an
+    /// SSO sign-in) counts as landing there, so it is skipped, not failed.
+    fn redirected_away(&self, report: &mut PageReport) {
+        if let Some(to) = &self.seen.redirected_away {
+            report.final_url = to.clone();
+            report.loaded = true;
+            report.status = None;
+            report.load_error = None;
+        }
+    }
+
+    fn fill_seen(&self, report: &mut PageReport) {
+        report.blocked_requests = self.seen.blocked;
+        report.exceptions = self.seen.exceptions.clone();
+        report.console_errors = self.seen.console_errors.clone();
+        report.failed_requests = self.seen.failed_requests.clone();
+    }
+
+    fn run_axe(&self) -> Result<Vec<crate::a11y::Violation>, String> {
+        let r = self.send(
+            "Runtime.evaluate",
+            json!({"expression": crate::a11y::run_expression(), "awaitPromise": true, "returnByValue": true}),
+        )?;
+        if let Some(ex) = r.get("exceptionDetails") {
+            let text = ex["exception"]["description"]
+                .as_str()
+                .or(ex["text"].as_str())
+                .unwrap_or("axe failed");
+            return Err(crate::pre_review::clip(
+                &format!("axe failed: {text}"),
+                MAX_SEEN_CHARS,
+            ));
+        }
+        crate::a11y::parse(&r["result"]["value"])
+    }
+}
+
+/// One thing wrong with a page. `rule` is one of `page-load`, `wait-for`,
+/// `page-error`, `blank-page` (blocking), `console-error`, `failed-request`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Problem {
+    pub rule: String,
+    pub detail: String,
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PageVerdict {
+    Skipped(String),
+    Checked(Vec<Problem>),
+}
+
+fn same_path(a: &str, b: &str) -> bool {
+    let norm = |p: &str| {
+        let p = p.split(['?', '#']).next().unwrap_or("/");
+        let p = p.trim_end_matches('/');
+        if p.is_empty() {
+            "/".to_string()
+        } else {
+            p.to_string()
+        }
+    };
+    norm(a) == norm(b)
+}
+
+/// An error a page throws when one of its requests is refused.
+fn caused_by_a_block(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    [
+        "failed to fetch",
+        "networkerror",
+        "err_blocked_by_client",
+        "load failed",
+        "websocket",
+    ]
+    .iter()
+    .any(|w| e.contains(w))
+}
+
+/// What a probe's report means for a page declared at `declared_path`.
+pub fn problems(report: &PageReport, declared_path: &str) -> PageVerdict {
+    let problem = |rule: &str, detail: &str, blocking: bool| Problem {
+        rule: rule.into(),
+        detail: crate::pre_review::clip(detail, MAX_SEEN_CHARS),
+        blocking,
+    };
+    if !report.loaded {
+        let why = report
+            .load_error
+            .as_deref()
+            .unwrap_or("the page did not load");
+        return PageVerdict::Checked(vec![problem("page-load", why, true)]);
+    }
+    if let Some(status) = report.status.filter(|s| *s >= 400) {
+        return PageVerdict::Checked(vec![problem(
+            "page-load",
+            &format!("status {status}"),
+            true,
+        )]);
+    }
+    let landed = url_path(&report.final_url);
+    let elsewhere = !report.requested_origin.is_empty()
+        && origin_of(&report.final_url).as_deref() != Some(report.requested_origin.as_str());
+    if elsewhere || !same_path(&landed, declared_path) {
+        return PageVerdict::Skipped(crate::pre_review::clip(
+            &format!("redirected to {landed} (sign-in?)"),
+            MAX_SEEN_CHARS,
+        ));
+    }
+    let mut out = Vec::new();
+    if report.wait_for_found == Some(false) {
+        out.push(problem(
+            "wait-for",
+            "the expected element never appeared",
+            true,
+        ));
+    }
+    for e in report.exceptions.iter().take(MAX_SEEN) {
+        let ours = e.contains("blocked by loopx screenshot")
+            || (report.blocked_requests > 0 && caused_by_a_block(e));
+        out.push(problem("page-error", e, !ours));
+    }
+    if report.blank {
+        out.push(problem("blank-page", "the page rendered nothing", true));
+    }
+    for e in report.console_errors.iter().take(MAX_SEEN) {
+        out.push(problem("console-error", e, false));
+    }
+    for e in report.failed_requests.iter().take(MAX_SEEN) {
+        out.push(problem("failed-request", e, false));
+    }
+    PageVerdict::Checked(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -931,6 +1447,24 @@ mod tests {
             .local_addr()
             .unwrap()
             .port()
+    }
+
+    #[test]
+    fn the_dev_server_env_never_downloads_a_package_manager_or_phones_home() {
+        let env = dev_server_env(&[("RAILS_ENV".into(), "test".into())]);
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("RAILS_ENV"), Some("test"));
+        for (k, v) in [
+            ("COREPACK_ENABLE_NETWORK", "0"),
+            ("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
+            ("npm_config_manage_package_manager_versions", "false"),
+            ("NEXT_TELEMETRY_DISABLED", "1"),
+            ("NUXT_TELEMETRY_DISABLED", "1"),
+            ("ASTRO_TELEMETRY_DISABLED", "1"),
+            ("GATSBY_TELEMETRY_DISABLED", "1"),
+        ] {
+            assert_eq!(get(k), Some(v), "{k}");
+        }
     }
 
     #[test]
@@ -1370,5 +1904,373 @@ fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localSt
             ));
         }
         assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    fn loaded(path: &str) -> PageReport {
+        PageReport {
+            final_url: format!("http://localhost:3000{path}"),
+            status: Some(200),
+            loaded: true,
+            ..PageReport::default()
+        }
+    }
+
+    fn rules(v: &PageVerdict) -> Vec<(String, bool)> {
+        match v {
+            PageVerdict::Checked(p) => p.iter().map(|p| (p.rule.clone(), p.blocking)).collect(),
+            PageVerdict::Skipped(why) => panic!("skipped: {why}"),
+        }
+    }
+
+    #[test]
+    fn problems_classifies_load_wait_for_error_blank_console_and_requests() {
+        assert!(rules(&problems(&loaded("/orders/new"), "/orders/new")).is_empty());
+        let failed = PageReport {
+            load_error: Some("http://localhost:3000/x did not load within 30s".into()),
+            ..PageReport::default()
+        };
+        assert_eq!(
+            rules(&problems(&failed, "/x")),
+            vec![("page-load".into(), true)]
+        );
+        let mut r = loaded("/x");
+        r.status = Some(500);
+        assert_eq!(rules(&problems(&r, "/x")), vec![("page-load".into(), true)]);
+        if let PageVerdict::Checked(p) = problems(&r, "/x") {
+            assert_eq!(p[0].detail, "status 500");
+        }
+        let mut r = loaded("/x");
+        r.wait_for_found = Some(false);
+        r.exceptions = vec!["TypeError: x is undefined".into()];
+        r.blank = true;
+        r.console_errors = vec!["boom".into()];
+        r.failed_requests = vec!["404 /api/me".into()];
+        assert_eq!(
+            rules(&problems(&r, "/x")),
+            vec![
+                ("wait-for".into(), true),
+                ("page-error".into(), true),
+                ("blank-page".into(), true),
+                ("console-error".into(), false),
+                ("failed-request".into(), false),
+            ]
+        );
+        r.wait_for_found = Some(true);
+        r.exceptions.clear();
+        r.blank = false;
+        assert!(rules(&problems(&r, "/x")).iter().all(|(_, b)| !b));
+    }
+
+    #[test]
+    fn a_redirect_to_another_path_is_skipped_not_failed() {
+        let r = loaded("/users/sign_in?return_to=%2Forders");
+        assert_eq!(
+            problems(&r, "/orders/new"),
+            PageVerdict::Skipped("redirected to /users/sign_in (sign-in?)".into())
+        );
+        // A query or trailing-slash change is the same page.
+        assert!(rules(&problems(&loaded("/orders?tab=2"), "/orders")).is_empty());
+        assert!(rules(&problems(&loaded("/orders/"), "/orders?x=1")).is_empty());
+        assert!(rules(&problems(&loaded("/"), "/")).is_empty());
+    }
+
+    #[test]
+    fn errors_caused_by_the_checks_own_blocking_never_block() {
+        let mut r = loaded("/x");
+        r.blocked_requests = 2;
+        r.exceptions = vec![
+            "SecurityError: blocked by loopx screenshot".into(),
+            "TypeError: Failed to fetch".into(),
+            "ReferenceError: total is not defined".into(),
+        ];
+        assert_eq!(
+            rules(&problems(&r, "/x")),
+            vec![
+                ("page-error".into(), false),
+                ("page-error".into(), false),
+                ("page-error".into(), true),
+            ]
+        );
+        // With nothing blocked, a failed fetch is the page's own problem.
+        r.blocked_requests = 0;
+        r.exceptions = vec!["TypeError: Failed to fetch".into()];
+        assert_eq!(
+            rules(&problems(&r, "/x")),
+            vec![("page-error".into(), true)]
+        );
+    }
+
+    #[test]
+    fn a_document_redirect_to_another_origin_is_recognised() {
+        let ev = |url: &str, kind: &str, redirect: bool| {
+            let mut p = serde_json::json!({"type": kind, "request": {"url": url}});
+            if redirect {
+                p["redirectResponse"] = serde_json::json!({"status": 302});
+            }
+            p
+        };
+        let o = "http://localhost:3000";
+        assert_eq!(
+            blocked_redirect(
+                &ev("https://sso.example.com/login?next=x", "Document", true),
+                o,
+                &[]
+            ),
+            Some("https://sso.example.com/login?next=x".into())
+        );
+        assert_eq!(
+            blocked_redirect(&ev("http://localhost:3000/login", "Document", true), o, &[]),
+            None
+        );
+        assert_eq!(
+            blocked_redirect(&ev("https://sso.example.com/", "Document", false), o, &[]),
+            None
+        );
+        assert_eq!(
+            blocked_redirect(&ev("https://cdn.example.com/a.js", "Script", true), o, &[]),
+            None
+        );
+        let r = PageReport {
+            final_url: "https://sso.example.com/login?next=x".into(),
+            loaded: true,
+            ..PageReport::default()
+        };
+        assert_eq!(
+            problems(&r, "/orders"),
+            PageVerdict::Skipped("redirected to /login (sign-in?)".into())
+        );
+    }
+
+    #[test]
+    fn a_redirect_to_another_origin_with_the_same_path_is_skipped() {
+        let r = PageReport {
+            final_url: "https://sso.example.com/orders".into(),
+            requested_origin: "http://localhost:3000".into(),
+            status: Some(200),
+            loaded: true,
+            ..PageReport::default()
+        };
+        assert_eq!(
+            problems(&r, "/orders"),
+            PageVerdict::Skipped("redirected to /orders (sign-in?)".into())
+        );
+        let same = PageReport {
+            final_url: "http://localhost:3000/orders".into(),
+            ..r
+        };
+        assert!(rules(&problems(&same, "/orders")).is_empty());
+    }
+
+    #[test]
+    fn page_text_is_flattened_and_capped() {
+        let mut r = loaded("/x");
+        r.exceptions = (0..9)
+            .map(|i| format!("/close #{i}\n{}", "e".repeat(900)))
+            .collect();
+        r.console_errors = (0..9).map(|i| format!("c{i}")).collect();
+        let PageVerdict::Checked(p) = problems(&r, "/x") else {
+            panic!()
+        };
+        assert_eq!(
+            p.iter().filter(|p| p.rule == "page-error").count(),
+            MAX_SEEN
+        );
+        assert_eq!(
+            p.iter().filter(|p| p.rule == "console-error").count(),
+            MAX_SEEN
+        );
+        for x in &p {
+            assert!(
+                x.detail.chars().count() <= MAX_SEEN_CHARS && !x.detail.contains('\n'),
+                "{x:?}"
+            );
+        }
+        let mut seen = Vec::new();
+        for i in 0..9 {
+            push_capped(&mut seen, &format!("x{i}\n{}", "y".repeat(500)));
+        }
+        push_capped(&mut seen, "x0");
+        assert_eq!(seen.len(), MAX_SEEN);
+        assert!(seen
+            .iter()
+            .all(|s| s.chars().count() <= MAX_SEEN_CHARS && !s.contains('\n')));
+        assert_eq!(url_path("http://h:1/a/b?c=d#e"), "/a/b");
+        assert_eq!(url_path("http://h:1"), "/");
+    }
+
+    #[test]
+    fn probe_without_chrome_is_an_error_and_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = ProbeOptions::new("http://127.0.0.1:9/");
+        opts.find = || None;
+        opts.profile_parent = Some(dir.path().to_path_buf());
+        assert_eq!(probe(&opts).unwrap_err(), CHROME_NOT_FOUND);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    fn probe_on(dir: &Path, page: &str, f: impl FnOnce(&mut ProbeOptions)) -> PageReport {
+        let profiles = tempfile::tempdir().unwrap();
+        let (mut server, port) = http_server(dir, &profiles.path().join("site.log"));
+        let mut opts = ProbeOptions::new(format!("http://127.0.0.1:{port}/{page}"));
+        opts.profile_parent = Some(profiles.path().to_path_buf());
+        f(&mut opts);
+        let r = probe(&opts);
+        let _ = server.kill();
+        let _ = server.wait();
+        let left: Vec<_> = std::fs::read_dir(profiles.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name() != "site.log")
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        r.unwrap()
+    }
+
+    #[test]
+    #[ignore = "launches the Chrome installed on this Mac"]
+    fn real_chrome_probe_reports_an_uncaught_error_and_a_contrast_violation() {
+        let site = tempfile::tempdir().unwrap();
+        std::fs::write(
+            site.path().join("index.html"),
+            r#"<!doctype html><html lang="en"><head><title>t</title>
+<meta http-equiv="Content-Security-Policy" content="script-src 'self'"></head>
+<body><main><h1>Orders</h1><p id="faint" style="color:#ccc;background:#fff">faint text</p></main>
+<script src="boom.js"></script></body></html>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            site.path().join("boom.js"),
+            "console.error('console says no'); setTimeout(() => { throw new Error('kaboom'); }, 0);",
+        )
+        .unwrap();
+        let r = probe_on(site.path(), "index.html", |o| {
+            o.axe = true;
+            o.wait_for = Some("#faint".into());
+        });
+        assert!(r.loaded && r.status == Some(200), "{r:?}");
+        assert_eq!(r.wait_for_found, Some(true));
+        assert!(r.exceptions.iter().any(|e| e.contains("kaboom")), "{r:?}");
+        assert!(
+            r.console_errors
+                .iter()
+                .any(|e| e.contains("console says no")),
+            "{r:?}"
+        );
+        let axe = r.axe.clone().unwrap().unwrap();
+        let contrast = axe
+            .iter()
+            .find(|v| v.id == "color-contrast")
+            .expect("contrast");
+        assert_eq!(contrast.impact, crate::a11y::Impact::Serious);
+        assert!(
+            contrast.targets.contains(&"#faint".to_string()),
+            "{contrast:?}"
+        );
+        assert!(
+            matches!(problems(&r, "/index.html"), PageVerdict::Checked(p) if p.iter().any(|p| p.rule == "page-error"))
+        );
+    }
+
+    #[test]
+    #[ignore = "launches the Chrome installed on this Mac"]
+    fn real_chrome_probe_blocks_off_origin_requests() {
+        let site = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        let (mut other, other_port) = http_server(logs.path(), &logs.path().join("other.log"));
+        let page = r#"<!doctype html><html><body><p>hi</p><img src="missing.png" alt="x"><script>
+fetch('http://127.0.0.1:OTHER/leak').catch(() => {});
+try { new WebSocket('ws://127.0.0.1:OTHER/ws'); } catch (_) {}
+try { navigator.sendBeacon('http://127.0.0.1:OTHER/beacon', 'x'); } catch (_) {}
+</script></body></html>"#;
+        std::fs::write(
+            site.path().join("index.html"),
+            page.replace("OTHER", &other_port.to_string()),
+        )
+        .unwrap();
+        let r = probe_on(site.path(), "index.html", |o| o.axe = true);
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(r.loaded, "{r:?}");
+        assert!(
+            r.failed_requests.iter().any(|f| f == "404 /missing.png"),
+            "{r:?}"
+        );
+        assert!(
+            !r.failed_requests.iter().any(|f| f.contains("favicon")),
+            "{r:?}"
+        );
+        assert!(
+            !r.console_errors.iter().any(|e| e.contains("ERR_BLOCKED")),
+            "{r:?}"
+        );
+        let log = std::fs::read_to_string(logs.path().join("other.log")).unwrap();
+        assert!(!log.contains("GET /") && !log.contains("POST /"), "{log}");
+    }
+
+    #[test]
+    #[ignore = "launches the Chrome installed on this Mac"]
+    fn real_chrome_probe_skips_a_page_that_redirects_to_another_origin() {
+        let port = free_port();
+        let script = format!(
+            "import http.server,socketserver\n\
+             class H(http.server.BaseHTTPRequestHandler):\n\
+             \x20def do_GET(self):\n\
+             \x20 self.send_response(302); self.send_header('Location','http://127.0.0.1:9/users/sign_in'); self.end_headers()\n\
+             \x20def log_message(self,*a): pass\n\
+             socketserver.TCPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+        );
+        let mut server = Command::new("python3")
+            .args(["-c", &script])
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+            assert!(Instant::now() < deadline, "server did not start");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let profiles = tempfile::tempdir().unwrap();
+        let mut opts = ProbeOptions::new(format!("http://127.0.0.1:{port}/orders"));
+        opts.profile_parent = Some(profiles.path().to_path_buf());
+        let r = probe(&opts);
+        let _ = server.kill();
+        let _ = server.wait();
+        let r = r.unwrap();
+        assert_eq!(
+            problems(&r, "/orders"),
+            PageVerdict::Skipped("redirected to /users/sign_in (sign-in?)".into()),
+            "{r:?}"
+        );
+        assert_eq!(std::fs::read_dir(profiles.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[ignore = "launches the Chrome installed on this Mac"]
+    fn real_chrome_probe_honours_dark_mode() {
+        let site = tempfile::tempdir().unwrap();
+        std::fs::write(
+            site.path().join("index.html"),
+            r#"<!doctype html><html><body><p id="m">scheme</p><script>
+document.getElementById('m').className = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+</script></body></html>"#,
+        )
+        .unwrap();
+        for dark in [true, false] {
+            let r = probe_on(site.path(), "index.html", |o| {
+                o.dark = dark;
+                o.wait_for = Some(if dark { "#m.dark" } else { "#m.light" }.into());
+            });
+            assert_eq!(r.wait_for_found, Some(true), "dark={dark}: {r:?}");
+            assert!(!r.blank);
+        }
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(
+            empty.path().join("index.html"),
+            "<!doctype html><html><body> </body></html>",
+        )
+        .unwrap();
+        let r = probe_on(empty.path(), "index.html", |_| {});
+        assert!(r.blank, "{r:?}");
+        let r = probe_on(empty.path(), "nope.html", |_| {});
+        assert_eq!(r.status, Some(404), "{r:?}");
     }
 }

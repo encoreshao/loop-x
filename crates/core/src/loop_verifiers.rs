@@ -587,7 +587,7 @@ pub fn expected_work_dir(project: &Value, worktree_root: &Path, issue_iid: &str)
     worktree_root.join(format!("{repo}-issue-{issue_iid}"))
 }
 
-fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(dir);
     let out =
@@ -601,7 +601,7 @@ fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
 
 /// What the branch would push: commits since it left `origin/<target>`, or the
 /// local `<target>` when there is no such remote branch.
-fn diff_base(dir: &Path, target: &str) -> Result<String, String> {
+pub(crate) fn diff_base(dir: &Path, target: &str) -> Result<String, String> {
     let remote = format!("origin/{target}");
     git_in(dir, &["merge-base", "HEAD", &remote])
         .or_else(|_| git_in(dir, &["merge-base", "HEAD", target]))
@@ -697,7 +697,11 @@ impl Verifier for ObserveOnly {
         };
         evidence.insert("observed_passed".into(), json!(result.passed));
         evidence.insert("mode".into(), json!("observe"));
-        result.passed = true;
+        // A hard failure (the worktree left on the wrong commit) is not advisory.
+        let hard = evidence
+            .get("hard_failure")
+            .is_some_and(crate::loop_serialize::truthy);
+        result.passed = !hard || result.passed;
         result.evidence = Value::Object(evidence);
         result
     }
@@ -725,6 +729,10 @@ pub struct IssueContext {
     pub cli: String,
     /// Runs `dependency_audit`'s tools (default: the installed ones).
     pub audit_runner: Option<Arc<dyn crate::dependency_audit::AuditRunner>>,
+    /// Runs `ui_check`'s browser check (default: `loopx screenshot check`).
+    pub ui_runner: Option<Arc<dyn crate::ui_check::UiCheckRunner>>,
+    /// The loop directory (`outputs/screens` lives under it).
+    pub repo_root: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for IssueContext {
@@ -739,6 +747,8 @@ impl std::fmt::Debug for IssueContext {
             .field("issue_budget_usd", &self.issue_budget_usd)
             .field("cli", &self.cli)
             .field("audit_runner", &self.audit_runner.is_some())
+            .field("ui_runner", &self.ui_runner.is_some())
+            .field("repo_root", &self.repo_root)
             .finish()
     }
 }
@@ -756,6 +766,8 @@ impl IssueContext {
             issue_budget_usd: f64::INFINITY,
             cli: "claude".into(),
             audit_runner: None,
+            ui_runner: None,
+            repo_root: None,
         }
     }
 
@@ -875,6 +887,27 @@ pub fn build_verifiers(
                         runner,
                     ),
                 ));
+            }
+            Some("ui_check") => {
+                let Some(issue) = issue else {
+                    return build_err(format!(
+                        "verifier {label}: type 'ui_check' requires issue context"
+                    ));
+                };
+                let runner = issue
+                    .ui_runner
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(crate::ui_check::SubprocessRunner::default()));
+                let root = issue
+                    .repo_root
+                    .clone()
+                    .unwrap_or_else(crate::runner_util::repo_root);
+                verifiers.push(Box::new(crate::ui_check::UiCheckVerifier::new(
+                    name,
+                    issue.work(),
+                    runner,
+                    root,
+                )));
             }
             Some("agent_review") => {
                 let Some(issue) = issue else {
@@ -1557,6 +1590,27 @@ mod tests {
             err.0,
             "verifier 'sec': security_scan must be the last verifier"
         );
+    }
+
+    #[test]
+    fn build_verifiers_wraps_ui_check_in_observe_only() {
+        let spec = [json!({"name": "ui", "type": "ui_check", "observe": true})];
+        let err = build_verifiers(&spec, None, None, "gate").err().unwrap();
+        assert_eq!(
+            err.0,
+            "verifier 'ui': type 'ui_check' requires issue context"
+        );
+        let issue = IssueContext::new("web", 7, 30.0);
+        let vs = build_verifiers(&spec, None, Some(&issue), "gate").unwrap();
+        assert_eq!(vs.len(), 1);
+        assert_eq!(vs[0].name(), "ui");
+        assert!(vs[0].skip_after_failure());
+        with_ctx(|ctx| {
+            let r = vs[0].verify(ctx);
+            assert!(r.passed);
+            assert_eq!(r.evidence["mode"], "observe");
+            assert_eq!(r.evidence["gate"], "ui");
+        });
     }
 
     #[test]

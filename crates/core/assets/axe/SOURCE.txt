@@ -1,0 +1,1 @@
+axe-core 4.14.0, unmodified; source: https://github.com/dequelabs/axe-core/tree/v4.14.0 (MPL-2.0)

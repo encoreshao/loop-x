@@ -58,6 +58,8 @@ pub struct Expect {
     pub clean_worktree: bool,
     /// A fix handoff must list at least one acceptance criterion.
     pub acceptance_criteria: bool,
+    /// A fix handoff must declare at least one page in `ui_checks`.
+    pub ui_checks: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +174,10 @@ pub fn parse_case(text: &str, path: &str) -> Result<GoldenCase, String> {
                 .unwrap_or(false),
             acceptance_criteria: expect
                 .get("acceptance_criteria")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ui_checks: expect
+                .get("ui_checks")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         },
@@ -481,6 +487,15 @@ pub fn grade(
         && crate::pre_review::acceptance_criteria(handoff).is_empty()
     {
         reasons.push("fix handoff has no acceptance criteria".to_string());
+    }
+    if expect.ui_checks
+        && handoff.get("action").and_then(Value::as_str) == Some("fix")
+        && handoff
+            .pointer("/ui_checks/pages")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    {
+        reasons.push("fix handoff declares no ui_checks pages".to_string());
     }
     if expect.clean_worktree && !dirty.is_empty() {
         reasons.push(format!(
@@ -1089,6 +1104,7 @@ mod tests {
                 handoff_command_contains: None,
                 clean_worktree: false,
                 acceptance_criteria: false,
+                ui_checks: false,
             },
         }
     }
@@ -1209,6 +1225,40 @@ mod tests {
         ]});
         let (ok, why) = grade(&c, Some(&with), &[], Some(true), &[], &no_read);
         assert!(ok, "{why:?}");
+    }
+
+    #[test]
+    fn ui_checks_expectation_requires_the_field() {
+        let mut c = case("fix");
+        c.expect.ui_checks = true;
+        for bare in [
+            json!({"action": "fix"}),
+            json!({"action": "fix", "ui_checks": {"serve": "yarn dev", "pages": []}}),
+            json!({"action": "fix", "ui_checks": "yes"}),
+        ] {
+            let (ok, why) = grade(&c, Some(&bare), &[], Some(true), &[], &no_read);
+            assert!(!ok, "{bare}");
+            assert_eq!(why, ["fix handoff declares no ui_checks pages"]);
+        }
+        let with = json!({"action": "fix", "ui_checks": {"serve": "yarn dev", "origin": "http://localhost:3000",
+                                                         "pages": [{"path": "/"}]}});
+        let (ok, why) = grade(&c, Some(&with), &[], Some(true), &[], &no_read);
+        assert!(ok, "{why:?}");
+        let yaml = |expect: &str| {
+            format!("name: n\nissue: {{title: t, body: b}}\nrepo:\n  files:\n    a.py: x\nexpect: {expect}\n")
+        };
+        assert!(
+            parse_case(&yaml("{action: fix, ui_checks: true}"), "p")
+                .unwrap()
+                .expect
+                .ui_checks
+        );
+        assert!(
+            !parse_case(&yaml("{action: fix}"), "p")
+                .unwrap()
+                .expect
+                .ui_checks
+        );
     }
 
     #[test]

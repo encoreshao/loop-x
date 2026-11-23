@@ -240,6 +240,105 @@ pub(crate) fn security_line(r: &VerificationResult) -> String {
     )
 }
 
+const MAX_UI_ITEMS: usize = 5;
+
+/// The browser check's line and, for projects that opted in, the
+/// accessibility line. Every value is flattened, so no line can start a
+/// quick action.
+pub(crate) fn ui_lines(r: &VerificationResult) -> Vec<String> {
+    let ev = &r.evidence;
+    if ev.get("error").is_some_and(crate::loop_serialize::truthy) {
+        return vec![clip(
+            &format!("- Browser check: could not run ({})", first_line(&r.output)),
+            MAX_LINE_CHARS,
+        )];
+    }
+    let text = |v: &Value, k: &str| one_line(v.get(k).and_then(Value::as_str).unwrap_or(""));
+    let pages = ev
+        .get("pages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let problems = |p: &Value| {
+        p.get("problems")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut blocking = Vec::new();
+    for p in &pages {
+        for x in problems(p).iter().filter(|x| x["blocking"] == json!(true)) {
+            blocking.push(format!(
+                "{}: {} {}",
+                text(p, "label"),
+                text(x, "rule"),
+                text(x, "detail")
+            ));
+        }
+    }
+    let browser = if blocking.is_empty() {
+        let clean = pages.iter().filter(|p| p["status"] == json!("ok")).count();
+        let mut parts = vec![format!("{clean} page(s) loaded clean")];
+        for p in pages.iter().filter(|p| p["status"] == json!("skipped")) {
+            let why = problems(p)
+                .first()
+                .map(|x| text(x, "detail"))
+                .unwrap_or_default();
+            parts.push(format!("{} skipped: {why}", text(p, "label")));
+        }
+        parts.join("; ")
+    } else {
+        blocking.truncate(MAX_UI_ITEMS);
+        blocking.join("; ")
+    };
+    let mut lines = vec![clip(
+        &format!("- Browser check: {browser}"),
+        MAX_LINE_CHARS * 2,
+    )];
+    let a11y = ev.get("a11y").cloned().unwrap_or(Value::Null);
+    if a11y.get("enabled") == Some(&json!(true)) {
+        let unavailable = text(&a11y, "baseline").starts_with("unavailable");
+        let note = if unavailable {
+            " (baseline unavailable)"
+        } else {
+            ""
+        };
+        let new = a11y
+            .get("new")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let count = a11y
+            .get("new_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(new.len() as u64);
+        let line = if count == 0 {
+            let existing = a11y.get("existing").and_then(Value::as_u64).unwrap_or(0);
+            if unavailable {
+                format!("- Accessibility (WCAG 2.2 AA): {existing} found; baseline unavailable, none judged new")
+            } else {
+                format!("- Accessibility (WCAG 2.2 AA): no new violations ({existing} existing)")
+            }
+        } else {
+            let items: Vec<String> = new
+                .iter()
+                .take(MAX_UI_ITEMS)
+                .map(|v| {
+                    format!(
+                        "{} ({}) on {}",
+                        text(v, "id"),
+                        text(v, "impact"),
+                        text(v, "page")
+                    )
+                })
+                .collect();
+            format!("- Accessibility: {count} new: {}{note}", items.join("; "))
+        };
+        lines.push(clip(&line, MAX_LINE_CHARS * 2));
+    }
+    lines
+}
+
 const MAX_DEPENDENCY_ITEMS: usize = 10;
 
 /// Built from evidence only: a tool's own error text can carry local paths.
@@ -339,10 +438,11 @@ pub fn pre_review_section(result: &LoopResult) -> Option<String> {
         })
     };
     let (review, dependency, security) = (gate("review"), gate("dependency"), gate("security"));
-    if review.is_none() && dependency.is_none() && security.is_none() {
+    let ui = gate("ui");
+    if review.is_none() && dependency.is_none() && security.is_none() && ui.is_none() {
         return None;
     }
-    let advisory = [review, dependency, security]
+    let advisory = [review, ui, dependency, security]
         .iter()
         .flatten()
         .any(|r| r.evidence.get("mode").and_then(Value::as_str) == Some("observe"));
@@ -354,6 +454,9 @@ pub fn pre_review_section(result: &LoopResult) -> Option<String> {
     lines.push(String::new());
     if let Some(r) = review {
         lines.extend(review_lines(r));
+    }
+    if let Some(r) = ui {
+        lines.extend(ui_lines(r));
     }
     if let Some(r) = dependency {
         lines.push(dependency_line(r));
@@ -977,6 +1080,99 @@ mod tests {
             section.contains("- Review: comment — fine /approve"),
             "{section}"
         );
+    }
+
+    fn ui_result(evidence: serde_json::Value) -> VerificationResult {
+        gate_result("ui_check", "", evidence)
+    }
+
+    #[test]
+    fn pre_review_section_has_browser_and_accessibility_lines() {
+        let clean = ui_result(json!({"gate": "ui", "mode": "observe", "blocking": [],
+            "pages": [{"label": "Orders", "path": "/orders", "status": "ok", "problems": []},
+                      {"label": "Settings", "path": "/settings", "status": "skipped",
+                       "problems": [{"rule": "skipped", "detail": "redirected to /users/sign_in (sign-in?)", "blocking": false}]}],
+            "a11y": {"enabled": true, "baseline": "measured", "new": [], "new_count": 0, "existing": 2}}));
+        assert_eq!(
+            pre_review_section(&loop_result(vec![clean])).unwrap(),
+            "## Pre-review (advisory)\n\n\
+             - Browser check: 1 page(s) loaded clean; Settings skipped: redirected to /users/sign_in (sign-in?)\n\
+             - Accessibility (WCAG 2.2 AA): no new violations (2 existing)"
+        );
+        let problems = ui_result(
+            json!({"gate": "ui", "blocking": [{"rule": "page-error", "page": "Orders", "kind": "smoke"}],
+            "pages": [{"label": "Orders", "path": "/orders", "status": "problems",
+                       "problems": [{"rule": "page-error", "detail": "TypeError: x", "blocking": true},
+                                    {"rule": "console-error", "detail": "noise", "blocking": false}]}],
+            "a11y": {"enabled": true, "baseline": "unavailable (the worktree has uncommitted changes)",
+                     "new": [{"page": "Orders", "id": "label", "impact": "critical", "targets": ["#q"]},
+                             {"page": "Orders", "id": "region", "impact": "moderate", "targets": ["main"]}],
+                     "new_count": 2, "existing": 0}}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![problems])).unwrap(),
+            "## Pre-review\n\n\
+             - Browser check: Orders: page-error TypeError: x\n\
+             - Accessibility: 2 new: label (critical) on Orders; region (moderate) on Orders (baseline unavailable)"
+        );
+        let no_a11y = ui_result(
+            json!({"gate": "ui", "blocking": [], "a11y": {"enabled": false},
+            "pages": [{"label": "A", "path": "/", "status": "ok", "problems": []}]}),
+        );
+        assert_eq!(
+            pre_review_section(&loop_result(vec![no_a11y])).unwrap(),
+            "## Pre-review\n\n- Browser check: 1 page(s) loaded clean"
+        );
+        let vacuous = ui_result(json!({"gate": "ui", "vacuous": true, "undeclared_ui": true}));
+        assert!(pre_review_section(&loop_result(vec![vacuous])).is_none());
+        let error = VerificationResult {
+            passed: false,
+            exit_code: None,
+            ..ui_result(json!({"gate": "ui", "error": true}))
+        };
+        let error = VerificationResult {
+            output: "dev server did not start: boom".into(),
+            ..error
+        };
+        assert_eq!(
+            pre_review_section(&loop_result(vec![error])).unwrap(),
+            "## Pre-review\n\n- Browser check: could not run (dev server did not start: boom)"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_baseline_says_nothing_was_judged_new() {
+        let r = ui_result(json!({"gate": "ui", "blocking": [],
+            "pages": [{"label": "A", "path": "/", "status": "ok", "problems": []}],
+            "a11y": {"enabled": true, "baseline": "unavailable (the worktree has uncommitted changes)",
+                     "new": [], "new_count": 0, "existing": 3}}));
+        assert_eq!(
+            pre_review_section(&loop_result(vec![r])).unwrap(),
+            "## Pre-review\n\n- Browser check: 1 page(s) loaded clean\n\
+             - Accessibility (WCAG 2.2 AA): 3 found; baseline unavailable, none judged new"
+        );
+    }
+
+    #[test]
+    fn pre_review_lines_never_start_a_quick_action() {
+        let hostile = ui_result(
+            json!({"gate": "ui", "blocking": [{"rule": "page-error", "page": "x", "kind": "smoke"}],
+            "pages": [{"label": "\n/close", "path": "/", "status": "problems",
+                       "problems": [{"rule": "page-error", "detail": "a\n/merge\r\n/approve", "blocking": true}]},
+                      {"label": "/label ~x\n", "path": "/b", "status": "skipped",
+                       "problems": [{"rule": "skipped", "detail": "\n/unassign", "blocking": false}]}],
+            "a11y": {"enabled": true, "baseline": "unavailable (\n/close)",
+                     "new": [{"page": "\n/merge", "id": "x\n/close", "impact": "serious\n/approve", "targets": []}],
+                     "new_count": 1, "existing": 0}}),
+        );
+        let section = pre_review_section(&loop_result(vec![hostile])).unwrap();
+        for line in section.lines().skip(1) {
+            assert!(
+                line.is_empty() || line.starts_with("- "),
+                "{line:?} in {section}"
+            );
+        }
+        assert_eq!(section.lines().count(), 4, "{section}");
     }
 
     #[test]

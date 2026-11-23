@@ -285,6 +285,13 @@ fn new_worktree_locked(
         if !Path::new(&wt).is_dir() {
             git_ok(repo_path, &["worktree", "add", &wt, &branch])?;
         }
+        // A runner stopped mid browser check can leave the worktree detached
+        // at the merge-base; merging there would build on the wrong commit.
+        crate::ui_check::recover_base_checkout(Path::new(&wt)).map_err(|e| {
+            Failure::new(format!(
+                "Worktree was left on the merge-base by a browser check and could not be restored ({e}): {wt}"
+            ))
+        })?;
         // Merging into a dirty worktree would mix leftover edits into the sync.
         if !git_stdout(&wt, &["status", "--porcelain"])?
             .trim()
@@ -386,6 +393,11 @@ pub fn reuse_worktree(
         git_ok(repo_path, &["worktree", "prune"])?;
         git_ok(repo_path, &["worktree", "add", &wt, &branch])?;
     }
+    crate::ui_check::recover_base_checkout(Path::new(&wt)).map_err(|e| {
+        Failure::new(format!(
+            "Worktree was left on the merge-base by a browser check and could not be restored ({e}): {wt}"
+        ))
+    })?;
     prepare_worktree(repo_path, &wt)?;
     Ok(wt)
 }
@@ -1449,6 +1461,31 @@ mod tests {
         assert_eq!(read("config/credentials/test.key"), None);
         assert_eq!(read("config/credentials/production.key"), None);
         assert_eq!(sh(Path::new(&wt), &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn a_worktree_left_on_the_merge_base_is_put_back_before_it_is_reused() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = clone_on_feature(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_worktree(&repo, "main", "7", &root, None).unwrap();
+        let w = Path::new(&wt);
+        let branch = sh(w, &["symbolic-ref", "--short", "HEAD"]);
+        std::fs::write(w.join("fix.txt"), "fix").unwrap();
+        sh(w, &["add", "fix.txt"]);
+        sh(w, &["commit", "-qm", "fix"]);
+        let sha = sh(w, &["rev-parse", "HEAD"]);
+        let guard = crate::ui_check::BaseCheckout::switch(w, "main", true).unwrap();
+        std::mem::forget(guard);
+        assert_ne!(sh(w, &["rev-parse", "HEAD"]), sha);
+        let again = new_worktree(&repo, "main", "7", &root, None).unwrap();
+        assert_eq!(again, wt);
+        assert_eq!(sh(w, &["symbolic-ref", "--short", "HEAD"]), branch);
+        assert_eq!(sh(w, &["rev-parse", "HEAD"]), sha);
+        let guard = crate::ui_check::BaseCheckout::switch(w, "main", true).unwrap();
+        std::mem::forget(guard);
+        reuse_worktree(&repo, "7", &root).unwrap();
+        assert_eq!(sh(w, &["rev-parse", "HEAD"]), sha);
     }
 
     /// `clone_on_feature` plus an MR source branch `fix/mr-src` pushed to origin

@@ -61,12 +61,18 @@ actions:
 # the branch changes a lockfile, skipping any tool that isn't installed.
 # security_scan must stay last.
 verification:
-  required: [project_commands, agent_review, dependency_audit, security_scan]
+  required: [project_commands, ui_check, agent_review, dependency_audit, security_scan]
   mode: gate
 
 verifiers:
   - name: project_commands
     type: project_commands
+  # ui_check loads the pages a UI fix declares (handoff `ui_checks`) in this
+  # Mac's headless Chrome on the branch's own dev server; projects with
+  # "verifiers": ["a11y"] also get axe-core, new violations vs the target only.
+  - name: ui_check
+    type: ui_check
+    observe: true
   - name: agent_review
     type: agent_review
     model: opus

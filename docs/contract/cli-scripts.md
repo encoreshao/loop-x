@@ -326,3 +326,7 @@ Per-file argparse detail beyond the above is intentionally shortened; before por
 - `metrics.py [--days N] [--project P] [--events-dir D]` is `loopx metrics`.
 - `update_runner.py run [--repo] [--state-dir] [--install-target]` is `loopx update run`; new: `update check|status|start|notification`.
 - `health.py` and `auth_health.py` have no CLI; they are `loopx_core::health` and `loopx_core::auth_health`.
+- `loopx screenshot check --spec FILE --out FILE` (internal, not in the usage text) is the `ui_check` verifier's subprocess: it starts the
+  declared dev server, probes each page in headless Chrome (optionally with axe-core) and writes a JSON report atomically to `--out`.
+  It re-validates the spec and exits 2 before starting anything when it is invalid; otherwise it exits 0 once a report is written,
+  including a partial one when its `deadline_s` (default 300) runs out. SIGTERM/SIGINT/SIGHUP stop its dev server and Chrome.

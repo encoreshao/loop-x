@@ -80,7 +80,7 @@ const OFFLINE_DENIED_SUBCOMMANDS: [&str; 5] = ["gitlab", "issues", "notify", "st
 
 pub(crate) const DISALLOWED_TOOLS: &str = "Bash(git merge*) Bash(git push --force*) Bash(git push -f*) Bash(git checkout*) Bash(git reset*) Bash(git clean*) Read(**/.env*) Read(**/*.key) Read(**/id_rsa*)";
 
-const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"acceptance_criteria\": [{\"id\": \"AC1\", \"statement\": \"<one testable sentence: WHEN <trigger> the system shall <behaviour>, IF <error condition> THEN the system shall <behaviour>, or The system shall <behaviour>>\", \"test\": \"<the test that proves it, e.g. spec/models/order_spec.rb:42 or tests/test_pages.py::test_partial_last_page_counts>\"}, {\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\": \"<only for a criterion no automated test can prove: why>\"}], \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\"}\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\n`acceptance_criteria` are the 1-5 you wrote in step 6, ids AC1, AC2, ...; the loop shows them as a checklist in the merge request description, and its review flags a criterion that has neither a test nor a reason.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- spec mode (only when the prompt says Spec mode is ON): {\"action\": \"spec\", \"spec\": \"<the spec markdown>\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
+const GATE_OVERRIDE: &str = "## Harness gate is ON for this run \u{2014} this overrides steps 9 and 10\n\nDo NOT run `loopx mr open` and do NOT push: skip step 9. The loop re-runs the project's checks itself and opens the merge request only if they pass.\n\nFor a fix, once it is committed on the issue's branch (the `<branch>` from step 5) and your own checks pass, do step 10 with these changes: annotate loop_last_action as \"fix_handed_off\" (not \"mr_opened: ...\"), still run `loopx issues comments mark-seen`, still record a learning if there is one (`loopx memory-store add` and its memory.created emit), and still cd back to the loop directory. Do NOT send the \"Finished\" Slack message and do NOT emit issue.completed \u{2014} the loop does both after it opens the merge request. Then write this JSON to <handoff_path> (also in $LOOP_HANDOFF_PATH) and stop:\n\n{\"action\": \"fix\", \"branch\": \"<branch>\", \"target_branch\": \"<target>\", \"title\": \"<fix|feat|refactor|test|chore|docs>: #<iid> <what was fixed or added, from the user's point of view, not the implementation's>\", \"summary\": \"<the comment the loop posts on the issue under the merge request link, as markdown, written for the person who filed it: first the line '**Goal:** <the outcome the issue asked for, now delivered, in one sentence from the user\u{2019}s view>', then 2-4 '- ' bullets of key results and metrics (what a user can now do, edge cases now handled, numbers that matter such as records affected or tests added). Outcomes only: no commands, file, class or method names, branches or commits, and no description of the steps you took \u{2014} all of that goes in the description; the loop appends the checks it ran as the last bullet>\", \"description\": \"<the merge request description, as markdown, following the create-mr template: '## What and why' starting with the line 'Closes #<iid>', then bullets '- Problem: <what was broken or missing, from the user's view>', '- Fix: <what changed to solve it>', '- Result: <how you confirmed it is actually fixed>'; '## How' with one bullet per non-obvious decision (skip what the diff makes obvious); '## Verified' with checked boxes for the original problem confirmed fixed, the tests and lint you ran (by command), and anything you checked by hand; and '## Related' only if the issue thread mentions another MR, a commit or a prior attempt, one line each. Bullets, not prose, readable in 30 seconds; never list every file you touched>\", \"verification\": {\"install\": \"<install command you used, or empty>\", \"lint\": \"<lint command, or empty if the repo has no linter>\", \"test\": \"<test command - required>\", \"cwd\": \"<absolute directory you ran them in: the worktree, or the checkout when worktree is off>\", \"stack\": \"<e.g. rails, node, python>\", \"summary\": \"<1-3 sentences: what you detected, which commands you chose and why, any setup you fixed>\"}, \"acceptance_criteria\": [{\"id\": \"AC1\", \"statement\": \"<one testable sentence: WHEN <trigger> the system shall <behaviour>, IF <error condition> THEN the system shall <behaviour>, or The system shall <behaviour>>\", \"test\": \"<the test that proves it, e.g. spec/models/order_spec.rb:42 or tests/test_pages.py::test_partial_last_page_counts>\"}, {\"id\": \"AC2\", \"statement\": \"<...>\", \"test\": null, \"reason\": \"<only for a criterion no automated test can prove: why>\"}], \"screenshots\": [{\"label\": \"<what this pair shows, e.g. the status select on the order form>\", \"before\": \"1-before.png\", \"after\": \"1-after.png\"}], \"screenshots_note\": \"<optional: one line on why a shot is missing>\", \"ui_checks\": {\"serve\": \"<the dev command you used for screenshots, e.g. yarn dev>\", \"origin\": \"http://localhost:<port>\", \"mocks\": \"<optional: mocks file name>\", \"session\": \"<optional: session file name>\", \"pages\": [{\"label\": \"<what this page shows>\", \"path\": \"/<path>\", \"wait_for\": \"<optional: a CSS selector your change renders>\", \"color_scheme\": \"light\", \"viewport\": \"1280x800\"}]}}\n\n`ui_checks` only for a visible UI change: the dev command and localhost origin you used for screenshots, and the pages and states your change touches (at most 6); the loop loads each one itself in headless Chrome and, for projects that opt in, checks accessibility; it never blocks the merge request in this version. `mocks`/`session` are file names inside outputs/screens/<alias>-<iid>/; omit `ui_checks` otherwise. When you declare `ui_checks`, stop any dev server you started yourself before writing this file (`loopx screenshot serve stop`, or the process you launched): the loop skips the check when the origin is already in use.\n\n`screenshots` and `screenshots_note` are only for a visible UI change (see \"UI changes: before/after screenshots\"); omit both otherwise. Take the \"after\" shots last, right before writing this file. List at most 6 pairs of PNG files of up to 5 MB each, named by file name inside outputs/screens/<alias>-<iid>/ in the loop directory; leave out `before` when there is none. The loop puts them in the merge request description and then deletes every image.\n\n`acceptance_criteria` are the 1-5 you wrote in step 6, ids AC1, AC2, ...; the loop shows them as a checklist in the merge request description, and its review flags a criterion that has neither a test nor a reason.\n\nThe loop re-runs exactly that lint and test command in that directory before it opens the merge request; a command outside the allowed stack commands, or a missing test command, fails verification.\n\nEvery issue in a gated run must end with a handoff file at that path, written after finishing the matching path as usual:\n- answered directly: {\"action\": \"answer\"}\n- escalated (needs clarification, or your own verification failed): {\"action\": \"escalate\"}\n- Wait for reviewer, or nothing to act on this run: {\"action\": \"wait_for_review\"}\n- spec mode (only when the prompt says Spec mode is ON): {\"action\": \"spec\", \"spec\": \"<the spec markdown>\"}\n- blocked by setup, not by your change (step 5's `loopx worktree new` failed for anything but a merge conflict, a step 7 check failed on a missing toolchain, dependency, submodule, built asset, database or credential, or step 7.1 found SETUP.md's Worktree prep steps you may not run and that are not done in this worktree): first commit your work in progress with only the files you changed (`git commit -m \"WIP #<iid>: <title>\"`, never `git add -A`/`.`) so `git status` is clean, then {\"action\": \"setup_blocked\", \"command\": \"<the exact command that failed>\", \"cwd\": \"<absolute directory you ran it in>\", \"error\": \"<the relevant error output, trimmed>\", \"diagnosis\": \"<one or two sentences: why this is setup, not your change>\"}; `command` and `error` are both required and non-empty (when no check ran, `command` is the check you would have run and `error` describes the missing prep) \u{2014} no GitLab comment, no Slack message; the loop runs a setup doctor and re-runs you if it fixes setup\nA missing or malformed handoff is escalated to a human.";
 
 /// Asset-build commands the agent may run before taking a screenshot.
 pub(crate) const ASSET_BUILD_PATTERNS: [&str; 4] = [
@@ -1286,6 +1286,7 @@ fn gate_event(
         "review" => "verification.review_completed",
         "security" => "verification.security_completed",
         "dependency" => "verification.dependency_completed",
+        "ui" => "verification.ui_completed",
         _ => return None,
     };
     let mut data = json!({
@@ -1313,6 +1314,20 @@ fn gate_event(
             .iter()
             .filter_map(|h| h.get(field).cloned())
             .collect::<Vec<_>>());
+    }
+    if gate == "ui" {
+        let blocking = ev.get("blocking").and_then(Value::as_array);
+        data["a11y_blocking"] = json!(blocking.map_or(0, |b| b
+            .iter()
+            .filter(|h| h.get("kind").and_then(Value::as_str) == Some("a11y"))
+            .count()));
+        data["a11y_new"] = json!(ev
+            .pointer("/a11y/new_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0));
+        data["undeclared_ui"] = json!(ev
+            .get("undeclared_ui")
+            .is_some_and(crate::loop_serialize::truthy));
     }
     Some((event_type, data))
 }
@@ -1348,7 +1363,10 @@ fn emit_verification_events(
                 .is_some_and(Vec::is_empty);
         let gate_or_after_failure = ev.get("gate").is_some()
             || ev.get("skipped").is_some_and(crate::loop_serialize::truthy);
-        if vacuous {
+        let undeclared_ui = ev
+            .get("undeclared_ui")
+            .is_some_and(crate::loop_serialize::truthy);
+        if vacuous && !undeclared_ui {
             if !gate_or_after_failure {
                 ctx.emit("verification.external_skipped", Some(run_id), fields(None));
             }
@@ -1421,6 +1439,30 @@ fn agent_outcome(action: &str) -> Option<&'static str> {
         "escalate" => Some("escalated:agent"),
         _ => None,
     }
+}
+
+/// The browser check's report that it could not put the worktree back on the
+/// branch: later attempts and gates would work on the wrong commit.
+fn worktree_moved(iteration: &IterationResult) -> Option<String> {
+    iteration
+        .verification_results
+        .iter()
+        .find(|r| {
+            r.evidence
+                .get("worktree_moved")
+                .is_some_and(crate::loop_serialize::truthy)
+        })
+        .map(|r| r.output.clone())
+}
+
+/// Marks a run whose last attempt left the worktree off its branch as a
+/// guard violation, which finalize escalates loop-side.
+fn escalate_if_worktree_moved(result: &mut LoopResult) -> bool {
+    let Some(moved) = result.iterations.iter().rev().find_map(worktree_moved) else {
+        return false;
+    };
+    result.stop_reason = format!("{GUARD_VIOLATION_PREFIX}{moved}");
+    true
 }
 
 fn last_failed_iteration(result: &LoopResult) -> Option<&IterationResult> {
@@ -2857,6 +2899,7 @@ fn run_pass(
     issue.config_path = ctx.config_path.clone();
     issue.costs = Some(raw_costs.clone());
     issue.issue_budget_usd = max_cost;
+    issue.repo_root = Some(ctx.repo_root.clone());
     let (review_invoker, review_cli) = review_invoker(ctx, definition, alias, issue_iid);
     issue.review_invoker = Some(review_invoker);
     issue.cli = review_cli;
@@ -2875,6 +2918,14 @@ fn run_pass(
             if dirty_before {
                 return Err(AgentFailure {
                     message: "checkout_dirty".into(),
+                    cost_usd: None,
+                });
+            }
+            if let Some(moved) = context.previous.and_then(worktree_moved) {
+                // The next attempt would build on the wrong commit.
+                *guard_hit.lock().unwrap() = Some(moved);
+                return Err(AgentFailure {
+                    message: "guard_violation".into(),
                     cost_usd: None,
                 });
             }
@@ -3010,6 +3061,11 @@ fn run_pass(
     if let Some(violation) = guard_hit.lock().unwrap().take() {
         ctx.log(&format!("agent guard {alias} #{issue_iid}: {violation}"));
         result.stop_reason = format!("{GUARD_VIOLATION_PREFIX}{violation}");
+    } else if escalate_if_worktree_moved(&mut result) {
+        ctx.log(&format!(
+            "browser check {alias} #{issue_iid}: {}",
+            result.stop_reason
+        ));
     }
     let costs = raw_costs.lock().unwrap().clone();
     let usages = raw_usages.lock().unwrap().clone();
@@ -6350,6 +6406,42 @@ mod tests {
     }
 
     #[test]
+    fn gate_override_lists_ui_checks() {
+        for part in [
+            "\"ui_checks\": {\"serve\": \"<the dev command",
+            "\"origin\": \"http://localhost:<port>\"",
+            "\"pages\": [{\"label\"",
+            "\"wait_for\"",
+            "\"color_scheme\": \"light\"",
+            "\"viewport\": \"1280x800\"",
+            "`ui_checks` only for a visible UI change",
+            "(at most 6)",
+            "it never blocks the merge request in this version",
+            "inside outputs/screens/<alias>-<iid>/",
+            "stop any dev server you started yourself before writing this file",
+        ] {
+            assert!(GATE_OVERRIDE.contains(part), "{part}: {GATE_OVERRIDE}");
+        }
+        let md = include_str!("../../../instructions/loopx/gitlab-issue.md");
+        let ui = &md[md.find("### UI changes").unwrap()..md.find("### Spec mode").unwrap()];
+        for part in [
+            "7. **Check it in a browser.**",
+            "`browser_console_messages`",
+            "## Verified",
+            "step 3(b) stays read-only",
+            "`ui_checks`",
+            "never a reason to escalate",
+            "Stop any dev server you started yourself",
+            "origin is busy",
+        ] {
+            assert!(
+                ui.contains(part),
+                "{part} missing from the UI changes steps"
+            );
+        }
+    }
+
+    #[test]
     fn gate_prompt_describes_acceptance_criteria() {
         for part in [
             "\"acceptance_criteria\": [{\"id\": \"AC1\"",
@@ -7941,6 +8033,7 @@ mod tests {
             names,
             [
                 "project_commands",
+                "ui_check",
                 "agent_review",
                 "dependency_audit",
                 "security_scan"
@@ -7953,6 +8046,25 @@ mod tests {
             .find(|s| s["type"] == "dependency_audit")
             .unwrap();
         assert_eq!(deps["observe"], true);
+    }
+
+    #[test]
+    fn loop_definition_orders_ui_check_after_project_commands_and_security_scan_last() {
+        let def = gitlab_definition();
+        let types: Vec<&str> = def
+            .verifiers
+            .iter()
+            .filter_map(|s| s["type"].as_str())
+            .collect();
+        assert_eq!(types[..2], ["project_commands", "ui_check"]);
+        assert_eq!(types.last(), Some(&"security_scan"));
+        let ui = def
+            .verifiers
+            .iter()
+            .find(|s| s["type"] == "ui_check")
+            .unwrap();
+        assert_eq!(ui["observe"], true);
+        assert_eq!(def.verification.required[1], "ui_check");
     }
 
     #[test]
@@ -7997,6 +8109,58 @@ mod tests {
             json!(["aws_access_key"])
         );
         assert_eq!(security["issue_iid"], json!(7));
+    }
+
+    #[test]
+    fn gate_event_maps_ui_with_blocking_rules_a11y_new_and_undeclared() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        let checked = v(
+            "ui_check",
+            true,
+            "Orders: page-error x",
+            json!({"gate": "ui", "observed_passed": false, "mode": "observe",
+                   "blocking": [{"rule": "page-error", "page": "Orders", "kind": "smoke"},
+                                {"rule": "color-contrast", "page": "Orders", "kind": "a11y", "impact": "serious"}],
+                   "a11y": {"enabled": true, "new_count": 3, "new": [], "existing": 1},
+                   "undeclared_ui": false}),
+        );
+        let undeclared = v(
+            "ui_check",
+            true,
+            "the fix changed UI files but declared no pages - browser check skipped",
+            json!({"vacuous": true, "gate": "ui", "undeclared_ui": true, "observed_passed": true}),
+        );
+        let quiet = v(
+            "ui_check",
+            true,
+            "no pages declared - browser check skipped",
+            json!({"vacuous": true, "gate": "ui", "undeclared_ui": false}),
+        );
+        for it in [vec![checked], vec![undeclared], vec![quiet]] {
+            emit_verification_events(&ctx, "r", "r_web_7", "web", "7", "gate", &iteration(it));
+        }
+        let evs = events::iter_events(ctx.events_dir.as_deref(), None, None);
+        let kinds: Vec<&str> = evs
+            .iter()
+            .filter_map(|e| e["event_type"].as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["verification.ui_completed", "verification.ui_completed"],
+            "{evs:?}"
+        );
+        let d0 = &evs[0]["data"];
+        assert_eq!(
+            d0["blocking_rules"],
+            json!(["page-error", "color-contrast"])
+        );
+        assert_eq!(d0["a11y_new"], json!(3));
+        assert_eq!(d0["a11y_blocking"], json!(1));
+        assert_eq!(d0["undeclared_ui"], json!(false));
+        assert_eq!(d0["observed_passed"], json!(false));
+        assert_eq!(evs[1]["data"]["undeclared_ui"], json!(true));
     }
 
     #[test]
@@ -8194,6 +8358,46 @@ mod tests {
             body.contains("- Review: could not run (review call failed: timed out)"),
             "{body}"
         );
+    }
+
+    #[test]
+    fn a_worktree_moved_by_the_browser_check_escalates_as_guard_violation() {
+        let moved = v(
+            "ui_check",
+            false,
+            "the browser check left the worktree at abc instead of feature#7-x def",
+            json!({"gate": "ui", "error": true, "worktree_moved": true, "hard_failure": true}),
+        );
+        let fine = v("ui_check", true, "", json!({"gate": "ui"}));
+        assert_eq!(worktree_moved(&iteration(vec![fine.clone()])), None);
+        assert_eq!(
+            worktree_moved(&iteration(vec![fine, moved.clone()])).as_deref(),
+            Some("the browser check left the worktree at abc instead of feature#7-x def")
+        );
+        let mut result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Escalated,
+            vec![iteration(vec![moved])],
+            "escalated",
+        );
+        assert!(escalate_if_worktree_moved(&mut result));
+        assert!(
+            result.stop_reason.starts_with(GUARD_VIOLATION_PREFIX),
+            "{}",
+            result.stop_reason
+        );
+        let mut clean = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Completed,
+            vec![],
+            "completed",
+        );
+        assert!(!escalate_if_worktree_moved(&mut clean));
+        assert_eq!(clean.stop_reason, "completed");
     }
 
     #[test]

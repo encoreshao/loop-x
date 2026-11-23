@@ -298,6 +298,14 @@ pub struct ToolCommand {
 }
 
 /// Keeps Corepack from downloading a package manager the project pins.
+/// [`NO_COREPACK_DOWNLOAD`] as owned pairs, for other child processes.
+pub(crate) fn corepack_offline_env() -> Vec<(String, String)> {
+    NO_COREPACK_DOWNLOAD
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
 const NO_COREPACK_DOWNLOAD: [(&str, &str); 3] = [
     ("COREPACK_ENABLE_NETWORK", "0"),
     ("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),

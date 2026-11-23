@@ -1,11 +1,11 @@
 //! `loopx screenshot`: headless capture of a page, optionally starting its
 //! dev server first (see `loopx_core::screenshot`).
 
+pub(crate) use loopx_core::screenshot::already_served;
 use loopx_core::screenshot::{
-    capture, check_serve_command, clean_up_on_signals, DevServer, MockRule, ServeCommand, Session,
-    ShotOptions,
+    capture, check_serve_command, clean_up_on_signals, is_local, DevServer, MockRule, ServeCommand,
+    Session, ShotOptions,
 };
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -117,68 +117,6 @@ pub(crate) fn parse_args(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// The URL's host, lowercased, with IPv6 brackets kept (`[::1]`).
-fn url_host(url: &str) -> Option<String> {
-    let (_, rest) = url.split_once("://")?;
-    let auth = rest.split(['/', '?', '#']).next()?;
-    let auth = auth.rsplit('@').next()?;
-    let host = match auth.strip_prefix('[') {
-        Some(v6) => format!("[{}]", v6.split(']').next()?),
-        None => auth.split(':').next()?.to_string(),
-    };
-    Some(host.to_ascii_lowercase())
-}
-
-/// Only pages served on this machine may be shot: never a staging or
-/// production site. A backslash, whitespace or control character is refused
-/// outright: browsers and ureq read `\` as `/` and drop tabs and newlines, so
-/// the host they would reach is not the one parsed here.
-fn is_local(url: &str) -> bool {
-    if url
-        .chars()
-        .any(|c| c == '\\' || c.is_whitespace() || c.is_control())
-    {
-        return false;
-    }
-    matches!(
-        url_host(url).as_deref(),
-        Some("localhost" | "127.0.0.1" | "[::1]")
-    )
-}
-
-/// host:port of an http(s) URL, for the "already served?" probe.
-fn host_port(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    let auth = rest.split(['/', '?', '#']).next()?;
-    let auth = auth.rsplit('@').next()?;
-    if auth.is_empty() {
-        return None;
-    }
-    if auth
-        .rsplit_once(':')
-        .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
-    {
-        return Some(auth.to_string());
-    }
-    Some(format!(
-        "{auth}:{}",
-        if scheme == "https" { 443 } else { 80 }
-    ))
-}
-
-/// True when something already accepts connections at the URL's host:port.
-pub(crate) fn already_served(url: &str) -> bool {
-    let Some(addr) = host_port(url) else {
-        return false;
-    };
-    let Ok(addrs) = addr.to_socket_addrs() else {
-        return false;
-    };
-    addrs
-        .into_iter()
-        .any(|a| TcpStream::connect_timeout(&a, Duration::from_secs(1)).is_ok())
-}
-
 fn read_json<T: serde::de::DeserializeOwned>(
     path: &std::path::Path,
     what: &str,
@@ -261,6 +199,9 @@ fn run_window(argv: &[String]) -> ExitCode {
 }
 
 pub fn run(argv: &[String]) -> ExitCode {
+    if argv.first().is_some_and(|a| a == "check") {
+        return crate::screenshot_check::run(&argv[1..]);
+    }
     if argv.first().is_some_and(|a| a == "serve") {
         return crate::screenshot_serve::run(&argv[1..]);
     }
@@ -292,6 +233,7 @@ pub fn run(argv: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loopx_core::screenshot::host_port;
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()

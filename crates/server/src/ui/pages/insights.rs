@@ -22,6 +22,26 @@ use std::path::Path;
 pub fn register(r: &mut Registry) {
     r.get("/insights", insights);
     r.get("/harness", harness);
+    r.get("/licenses/axe-core/*rest", axe_licence);
+}
+
+/// The licences of the axe-core bundled into the binary for the browser check.
+fn axe_licence(ctx: &UiCtx) -> UiResponse {
+    use loopx_core::a11y::{AXE_LICENSE, AXE_SOURCE, AXE_THIRD_PARTY_LICENSE};
+    let body = match ctx.param("rest") {
+        "LICENSE.txt" => AXE_LICENSE,
+        "LICENSE-3RD-PARTY.txt" => AXE_THIRD_PARTY_LICENSE,
+        "SOURCE.txt" => AXE_SOURCE,
+        _ => return UiResponse::not_found(ctx.lang),
+    };
+    UiResponse {
+        status: 200,
+        headers: vec![
+            ("Content-Type".to_string(), "text/plain; charset=utf-8".to_string()),
+            ("Cache-Control".to_string(), "public, max-age=86400".to_string()),
+        ],
+        body: body.as_bytes().to_vec(),
+    }
 }
 
 fn query_view(ctx: &UiCtx) -> Option<String> {
@@ -946,6 +966,9 @@ fn gates_body(ctx: &UiCtx) -> String {
             &ctx.t("Review would block"),
             &review_note,
         ),
+        gate_tile("space_dashboard", &total.ui_would_block.to_string(), &ctx.t("Browser check would block"), ""),
+        gate_tile("palette", &total.a11y_would_block.to_string(), &ctx.t("Accessibility would block"), ""),
+        gate_tile("edit_note", &total.ui_undeclared.to_string(), &ctx.t("UI fixes without a browser check"), ""),
         gate_tile("extension", &total.dependency_would_block.to_string(), &ctx.t("Dependency audit would block"), ""),
         gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
     ]
@@ -969,7 +992,7 @@ fn gates_body(ctx: &UiCtx) -> String {
         .iter()
         .map(|(project, row)| {
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 escape(project),
                 row.issues,
                 escape(&gate_rate_text(ctx, row.agreement_rate)),
@@ -977,6 +1000,9 @@ fn gates_body(ctx: &UiCtx) -> String {
                 row.retried_then_passed,
                 row.escalated_verification,
                 row.review_would_block,
+                row.ui_would_block,
+                row.a11y_would_block,
+                row.ui_undeclared,
                 row.dependency_would_block,
                 row.security_would_block
             )
@@ -986,7 +1012,7 @@ fn gates_body(ctx: &UiCtx) -> String {
         format!("<p>{}</p>", escape(&ctx.t("No data yet for this breakdown.")))
     } else {
         format!(
-            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
+            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
             escape(&ctx.t("Project")),
             escape(&ctx.t("Issues")),
             escape(&ctx.t("Agreement rate")),
@@ -994,6 +1020,9 @@ fn gates_body(ctx: &UiCtx) -> String {
             escape(&retried_label),
             escape(&ctx.t("Escalated")),
             escape(&ctx.t("Review would block")),
+            escape(&ctx.t("Browser check would block")),
+            escape(&ctx.t("Accessibility would block")),
+            escape(&ctx.t("UI fixes without a browser check")),
             escape(&ctx.t("Dependency audit would block")),
             escape(&ctx.t("Secret scan would block"))
         )
@@ -1262,6 +1291,56 @@ mod tests {
         assert_eq!(tile("MRs checked"), "2");
         assert_eq!(tile("Secret scan would block"), "1");
         assert_eq!(tile("Dependency audit would block"), "0");
+    }
+
+    #[test]
+    fn gates_page_counts_browser_accessibility_and_undeclared_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", Some(now));
+        std::fs::create_dir_all(&state.events_dir).unwrap();
+        let ui = |iid: i64, project: &str, data: &str| {
+            format!(
+                r#"{{"event_type":"verification.ui_completed","run_id":"r","project":"{project}","issue_iid":{iid},"timestamp":"2026-11-22T10:00:00Z","data":{data}}}"#
+            )
+        };
+        let lines = [
+            ui(1, "web", r#"{"observed_passed":false,"blocking_rules":["page-error"],"a11y_blocking":0}"#),
+            ui(2, "web", r#"{"observed_passed":false,"blocking_rules":["color-contrast"],"a11y_blocking":1}"#),
+            ui(3, "api", r#"{"observed_passed":true,"undeclared_ui":true}"#),
+        ];
+        std::fs::write(state.events_dir.join("2026-11-22.jsonl"), lines.join("\n") + "\n").unwrap();
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        let tile = |label: &str| {
+            let end = html.find(&format!("<span class='dash-stat-label'>{label}</span>")).expect(label);
+            let start = html[..end].rfind("<span class='dash-stat-value'>").unwrap();
+            html[start..end].trim_start_matches("<span class='dash-stat-value'>").trim_end_matches("</span>").to_string()
+        };
+        assert_eq!(tile("Browser check would block"), "1");
+        assert_eq!(tile("Accessibility would block"), "1");
+        assert_eq!(tile("UI fixes without a browser check"), "1");
+        assert!(html.contains("<th>UI fixes without a browser check</th>"), "{html}");
+        assert!(html.contains("<tr><td>web</td>"), "{html}");
+    }
+
+    #[test]
+    fn the_bundled_axe_core_licences_are_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", None);
+        let get = |path: &str| state.registry.dispatch(&state, &UiRequest::get(path)).unwrap();
+        for (path, needle) in [
+            ("/licenses/axe-core/LICENSE.txt", "Mozilla Public License"),
+            ("/licenses/axe-core/LICENSE-3RD-PARTY.txt", "MIT License"),
+            ("/licenses/axe-core/SOURCE.txt", "github.com/dequelabs/axe-core/tree/v"),
+        ] {
+            let r = get(path);
+            assert_eq!(r.status, 200, "{path}");
+            assert_eq!(r.content_type(), Some("text/plain; charset=utf-8"));
+            assert!(String::from_utf8(r.body).unwrap().contains(needle), "{path}");
+        }
+        assert_eq!(get("/licenses/axe-core/axe.min.js").status, 404);
+        assert_eq!(get("/licenses/axe-core/..%2fLICENSE.txt").status, 404);
     }
 
     #[test]

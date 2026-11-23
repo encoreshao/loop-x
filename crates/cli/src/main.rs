@@ -20,6 +20,7 @@ mod mr_fix_cmd;
 mod notify_cmd;
 mod release_mr_cmd;
 mod run_cmds;
+mod screenshot_check;
 mod screenshot_cmd;
 mod screenshot_serve;
 mod secrets_cmd;

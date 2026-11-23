@@ -31,6 +31,12 @@ pub struct GateBucket {
     pub security_would_block: i64,
     /// Issues whose last dependency audit found a high/critical advisory (advisory gate).
     pub dependency_would_block: i64,
+    /// Issues whose last browser check found a broken page (advisory gate).
+    pub ui_would_block: i64,
+    /// Issues whose last browser check found a new serious accessibility violation.
+    pub a11y_would_block: i64,
+    /// Issues whose last fix changed UI files but declared no pages to check.
+    pub ui_undeclared: i64,
     agreed: i64,
 }
 
@@ -93,6 +99,8 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
     // (gate, issue key) -> (project, would block, errored), last event wins.
     let mut gate_last: BTreeMap<(&str, String), (Option<String>, bool, bool)> = BTreeMap::new();
     let mut human_last: BTreeMap<(Option<String>, String), &Value> = BTreeMap::new();
+    // Issue key -> (project, smoke would block, a11y would block, undeclared UI).
+    let mut ui_last: BTreeMap<String, (Option<String>, bool, bool, bool)> = BTreeMap::new();
     let null = Value::Null;
 
     for ev in events {
@@ -132,6 +140,29 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
                 let errored = is_truthy(data.get("error"));
                 let blocks = !errored && data.get("observed_passed") == Some(&Value::Bool(false));
                 gate_last.insert((gate, key), (project, blocks, errored));
+            }
+            "verification.ui_completed" => {
+                if is_truthy(data.get("error")) {
+                    continue;
+                }
+                let blocks = data.get("observed_passed") == Some(&Value::Bool(false));
+                let rules = data
+                    .get("blocking_rules")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len) as u64;
+                let a11y = data
+                    .get("a11y_blocking")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                ui_last.insert(
+                    key,
+                    (
+                        project,
+                        blocks && rules > a11y,
+                        blocks && a11y > 0,
+                        is_truthy(data.get("undeclared_ui")),
+                    ),
+                );
             }
             "issue.completed" => {
                 if data.get("action").and_then(Value::as_str) == Some("fix") {
@@ -199,6 +230,17 @@ pub fn gate_stats(events: &[Value]) -> GateStats {
             ("security", true, _) => b.security_would_block += 1,
             ("dependency", true, _) => b.dependency_would_block += 1,
             _ => {}
+        };
+        apply(&mut stats.total);
+        if let Some(p) = project {
+            apply(stats.by_project.entry(p.clone()).or_default());
+        }
+    }
+    for (project, smoke, a11y, undeclared) in ui_last.values() {
+        let apply = |b: &mut GateBucket| {
+            b.ui_would_block += i64::from(*smoke);
+            b.a11y_would_block += i64::from(*a11y);
+            b.ui_undeclared += i64::from(*undeclared);
         };
         apply(&mut stats.total);
         if let Some(p) = project {
@@ -408,6 +450,58 @@ mod tests {
             data,
             project,
         )
+    }
+
+    fn ui(iid: i64, data: Value, project: &str) -> Value {
+        ev("verification.ui_completed", Some(iid), data, project)
+    }
+
+    #[test]
+    fn ui_and_a11y_would_block_count_the_last_event_per_issue_and_skip_errors() {
+        let smoke =
+            json!({"observed_passed": false, "blocking_rules": ["page-error"], "a11y_blocking": 0});
+        let a11y = json!({"observed_passed": false, "blocking_rules": ["color-contrast"], "a11y_blocking": 1});
+        let both = json!({"observed_passed": false, "blocking_rules": ["blank-page", "label"], "a11y_blocking": 1});
+        let events = vec![
+            ui(1, smoke.clone(), "web"),
+            ui(2, smoke.clone(), "web"),
+            ui(
+                2,
+                json!({"observed_passed": true, "blocking_rules": []}),
+                "web",
+            ),
+            ui(3, a11y, "api"),
+            ui(4, both, "api"),
+            ui(
+                5,
+                json!({"observed_passed": false, "error": true, "blocking_rules": ["page-error"]}),
+                "api",
+            ),
+            ui(
+                6,
+                json!({"observed_passed": true, "undeclared_ui": true}),
+                "web",
+            ),
+            ui(
+                7,
+                json!({"observed_passed": true, "undeclared_ui": true}),
+                "web",
+            ),
+            ui(
+                7,
+                json!({"observed_passed": true, "blocking_rules": []}),
+                "web",
+            ),
+        ];
+        let s = gate_stats(&events);
+        assert_eq!(s.total.ui_would_block, 2);
+        assert_eq!(s.total.a11y_would_block, 2);
+        assert_eq!(s.total.ui_undeclared, 1);
+        assert_eq!(s.by_project["web"].ui_would_block, 1);
+        assert_eq!(s.by_project["web"].ui_undeclared, 1);
+        assert_eq!(s.by_project["api"].ui_would_block, 1);
+        assert_eq!(s.by_project["api"].a11y_would_block, 2);
+        assert_eq!(s.total.dependency_would_block, 0);
     }
 
     #[test]
