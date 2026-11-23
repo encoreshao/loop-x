@@ -1918,6 +1918,7 @@ fn issue_labels(
     alias: &str,
     issue_iid: &str,
     project: &Value,
+    dismissed: bool,
 ) -> Option<spec_gate::IssueLabels> {
     if let Some(fakes) = &ctx.fakes {
         return fakes
@@ -1936,6 +1937,7 @@ fn issue_labels(
             .map(|issue| spec_gate::IssueLabels {
                 names: issue.labels,
                 approved_added_at: None,
+                spec_first_added_at: None,
             })
     } else {
         let project_id = project
@@ -1953,25 +1955,29 @@ fn issue_labels(
                     .flatten()
                     .filter_map(|l| l.as_str().map(str::to_owned))
                     .collect();
-                let approved_added_at = if names.iter().any(|l| l == spec_gate::SPEC_APPROVED_LABEL)
+                let has = |label: &str| names.iter().any(|l| l == label);
+                let events = if has(spec_gate::SPEC_APPROVED_LABEL)
+                    || (dismissed && has(spec_gate::SPEC_FIRST_LABEL))
                 {
-                    match c.get_all(&format!("{base}/resource_label_events"), &[]) {
-                        Ok(events) => {
-                            spec_gate::latest_label_add(&events, spec_gate::SPEC_APPROVED_LABEL)
-                        }
-                        Err(e) => {
+                    c.get_all(&format!("{base}/resource_label_events"), &[])
+                        .map_err(|e| {
                             ctx.log(&format!(
                                 "spec gate {alias} #{issue_iid}: label events: {e}"
-                            ));
-                            None
-                        }
-                    }
+                            ))
+                        })
+                        .unwrap_or_default()
                 } else {
-                    None
+                    Vec::new()
+                };
+                let added = |label: &str| {
+                    has(label)
+                        .then(|| spec_gate::latest_label_add(&events, label))
+                        .flatten()
                 };
                 Ok(spec_gate::IssueLabels {
+                    approved_added_at: added(spec_gate::SPEC_APPROVED_LABEL),
+                    spec_first_added_at: added(spec_gate::SPEC_FIRST_LABEL),
                     names,
-                    approved_added_at,
                 })
             })
             .map_err(|e| e.to_string())
@@ -2013,7 +2019,10 @@ fn spec_gate_for(ctx: &RunCtx, alias: &str, issue_iid: &str, gate: bool) -> spec
     }
     let root = spec_memory_root(ctx);
     let state = spec_gate::load(&root, alias, issue_iid);
-    let labels = issue_labels(ctx, alias, issue_iid, &project);
+    let dismissed = state
+        .as_ref()
+        .is_some_and(|s| s.status == spec_gate::SpecStatus::Dismissed);
+    let labels = issue_labels(ctx, alias, issue_iid, &project, dismissed);
     if labels.is_none() {
         ctx.log(&format!(
             "spec gate {alias} #{issue_iid}: could not read the labels; using the project flag and the stored spec"
@@ -5914,6 +5923,7 @@ mod tests {
                     labels.as_ref().map(|l| crate::spec_gate::IssueLabels {
                         names: l.iter().map(|s| s.to_string()).collect(),
                         approved_added_at,
+                        spec_first_added_at: None,
                     })
                 })),
             }));

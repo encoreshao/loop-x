@@ -832,6 +832,7 @@
   "MRs checked": "MR vérifiées",
   "The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked.": "Les mêmes contrôles sans modèle que pour les correctifs LoopX, exécutés par MR Review sur les MR qui vous sont assignées. À titre indicatif : rien n'est bloqué.",
   "Advisory: the review gate is in observe mode": "Indicatif : la porte de revue est en mode observation",
+  "1 could not run": "1 n’a pas pu s’exécuter",
   "{n} could not run": "{n} n’ont pas pu s’exécuter",
   "Retried → passed": "Réessayé → réussi",
   "Gates": "Portes",

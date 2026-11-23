@@ -728,7 +728,7 @@ fn parse_pip_audit(stdout: &str) -> Result<Vec<Advisory>, ParseError> {
             .and_then(Value::as_array)
             .ok_or_else(|| invalid("no `dependencies` list"))?,
     };
-    let mut out = Vec::new();
+    let mut out: Vec<Advisory> = Vec::new();
     for dep in deps {
         for vuln in dep
             .get("vulns")
@@ -736,16 +736,47 @@ fn parse_pip_audit(stdout: &str) -> Result<Vec<Advisory>, ParseError> {
             .into_iter()
             .flatten()
         {
-            out.push(Advisory {
+            let advisory = Advisory {
                 package: canonical_python_name(&text(dep, "name")),
                 version: text(dep, "version"),
                 id: text(vuln, "id"),
                 severity: "moderate",
-                title: first_line(&text(vuln, "description")).to_string(),
+                title: summary_sentence(&text(vuln, "description")),
+            };
+            // pip-audit lists an advisory once per vulnerability source.
+            let seen = out.iter().any(|a| {
+                a.id == advisory.id
+                    && a.package == advisory.package
+                    && a.version == advisory.version
             });
+            if !seen {
+                out.push(advisory);
+            }
         }
     }
     Ok(out)
+}
+
+const MAX_TITLE_CHARS: usize = 160;
+
+/// A prose description's first sentence, without a leading Markdown heading
+/// such as `### Impact`, cut to [`MAX_TITLE_CHARS`].
+fn summary_sentence(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| match l.starts_with('#') {
+            true => l.split_once("  ").map(|(_, rest)| rest.trim_start()),
+            false => Some(l),
+        })
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let sentence = line.find(". ").map_or(line, |i| &line[..=i]);
+    if sentence.chars().count() <= MAX_TITLE_CHARS {
+        return sentence.to_string();
+    }
+    let cut: String = sentence.chars().take(MAX_TITLE_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
 }
 
 pub fn parse_output(eco: Ecosystem, stdout: &str) -> Result<Vec<Advisory>, ParseError> {
@@ -1871,6 +1902,28 @@ mod tests {
         let legacy = r#"[{"name": "django", "version": "4.2.1", "vulns": [
               {"id": "PYSEC-0000-0005", "description": "SQL injection in a lookup.\nMore detail."}]}]"#;
         assert_eq!(parse_output(Ecosystem::Python, legacy).unwrap(), expected);
+    }
+
+    #[test]
+    fn pip_audit_lists_an_advisory_once_with_its_first_sentence() {
+        let out = r####"{"dependencies": [{"name": "Requests", "version": "2.19.0", "vulns": [
+            {"id": "PYSEC-0000-0007", "description": "### Impact  Since 2.3.0 the client leaks a header on redirect. More detail follows here."},
+            {"id": "PYSEC-0000-0007", "description": "The client leaks a header on redirect, from another source."},
+            {"id": "PYSEC-0000-0008", "description": "A very long single sentence without a stop that goes on and on about the problem in great detail so that it would overflow any reasonable summary line in a merge request description if kept whole as is"}
+        ]}], "fixes": []}"####;
+        let got = parse_output(Ecosystem::Python, out).unwrap();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0].id, "PYSEC-0000-0007");
+        assert_eq!(
+            got[0].title,
+            "Since 2.3.0 the client leaks a header on redirect."
+        );
+        assert_eq!(got[1].title.chars().count(), 160, "{}", got[1].title);
+        assert!(got[1].title.ends_with('…'));
+        assert_eq!(
+            summary_sentence("### Impact\n\nThe pager leaks. More."),
+            "The pager leaks."
+        );
     }
 
     #[test]

@@ -922,6 +922,14 @@ fn gate_rate_text(ctx: &UiCtx, rate: Option<f64>) -> String {
     rate.map_or_else(|| ctx.t("N/A"), |r| format!("{}%", fixed(r * 100.0, 0)))
 }
 
+fn could_not_run(ctx: &UiCtx, n: i64) -> String {
+    if n == 1 {
+        ctx.t("1 could not run")
+    } else {
+        ctx.tf("{n} could not run", &[("n", &n.to_string())])
+    }
+}
+
 fn gate_tile(icon: &str, value: &str, label: &str, note: &str) -> String {
     let note_html = if note.is_empty() {
         String::new()
@@ -952,7 +960,7 @@ fn gates_body(ctx: &UiCtx) -> String {
     let retried_label = ctx.t("Retried \u{2192} passed");
     let mut review_note = ctx.t("Advisory: the review gate is in observe mode");
     if total.review_errors > 0 {
-        let errors = ctx.tf("{n} could not run", &[("n", &total.review_errors.to_string())]);
+        let errors = could_not_run(ctx, total.review_errors);
         review_note = format!("{review_note} \u{00b7} {errors}");
     }
     let tiles = [
@@ -977,7 +985,12 @@ fn gates_body(ctx: &UiCtx) -> String {
     let human_tiles = [
         gate_tile("fact_check", &human.mrs_checked.to_string(), &ctx.t("MRs checked"), ""),
         gate_tile("search", &human.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
-        gate_tile("extension", &human.dependency_would_block.to_string(), &ctx.t("Dependency audit would block"), ""),
+        gate_tile(
+            "extension",
+            &human.dependency_would_block.to_string(),
+            &ctx.t("Dependency audit would block"),
+            &if human.errors > 0 { could_not_run(ctx, human.errors) } else { String::new() },
+        ),
     ]
     .concat();
     let human_card = format!(
@@ -1237,6 +1250,10 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     fn gates_page(review_events: &[&str]) -> String {
+        gates_page_in("en", review_events)
+    }
+
+    fn gates_page_in(lang: &str, review_events: &[&str]) -> String {
         let dir = tempfile::tempdir().unwrap();
         let now = Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap();
         let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", Some(now));
@@ -1251,8 +1268,15 @@ mod tests {
             })
             .collect();
         std::fs::write(state.events_dir.join("2026-11-22.jsonl"), lines.join("\n") + "\n").unwrap();
-        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        let req = UiRequest::get("/harness").with_header("cookie", &format!("loop_lang={lang}"));
+        let r = state.registry.dispatch(&state, &req).unwrap();
         String::from_utf8(r.body).unwrap()
+    }
+
+    #[test]
+    fn one_review_that_could_not_run_is_singular_in_french() {
+        let html = gates_page_in("fr", &[r#"{"error":"timeout"}"#]);
+        assert!(html.contains("1 n’a pas pu s’exécuter"), "{html}");
     }
 
     #[test]
@@ -1291,6 +1315,21 @@ mod tests {
         assert_eq!(tile("MRs checked"), "2");
         assert_eq!(tile("Secret scan would block"), "1");
         assert_eq!(tile("Dependency audit would block"), "0");
+    }
+
+    #[test]
+    fn human_mr_card_says_when_a_dependency_audit_could_not_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", Some(now));
+        std::fs::create_dir_all(&state.events_dir).unwrap();
+        let line = r#"{"event_type":"mr_review.gates_completed","run_id":"r","project":"g/app","issue_iid":null,"timestamp":"2026-11-22T10:00:00Z","data":{"source":"human_mr","mr":"g/app!1","iid":1,"head_sha":"a","posted":true,"security":{"observed_passed":true,"blocking_rules":[],"advisory":0,"unscanned":0},"dependency":{"ran":false,"observed_passed":null,"error":true,"blocking_ids":[]}}}"#;
+        std::fs::write(state.events_dir.join("2026-11-22.jsonl"), format!("{line}\n")).unwrap();
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        let card = &html[html.find("<h2>Human merge requests</h2>").expect("human MR card")..];
+        let card = &card[..card.find("</section>").unwrap()];
+        assert!(card.contains("1 could not run"), "{card}");
     }
 
     #[test]

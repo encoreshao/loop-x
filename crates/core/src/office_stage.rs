@@ -169,6 +169,32 @@ pub fn issue_stages(events: &[Value]) -> Vec<ActiveStage> {
     out
 }
 
+/// When the newest issue-loop run started: its `run.started` event, which only
+/// the issue loop emits and nothing rewrites mid-run.
+pub fn latest_run_start(events: &[Value]) -> Option<String> {
+    events
+        .iter()
+        .filter(|e| e.get("event_type").and_then(Value::as_str) == Some("run.started"))
+        .map(timestamp)
+        .filter(|t| !t.is_empty())
+        .max_by_key(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+}
+
+/// The stages whose newest event is from the current run: an issue run the
+/// previous run left without a final event (it was killed) is not in flight.
+/// An unreadable start keeps them all.
+pub fn since_run_start(active: &[ActiveStage], started_at: &str) -> Vec<ActiveStage> {
+    let parse = |t: &str| chrono::DateTime::parse_from_rfc3339(t).ok();
+    let Some(start) = parse(started_at) else {
+        return active.to_vec();
+    };
+    active
+        .iter()
+        .filter(|a| parse(&a.at).is_none_or(|at| at >= start))
+        .cloned()
+        .collect()
+}
+
 /// The one stage to show for a loop. A running loop shows its newest working
 /// stage (scope `+N` when more issues are in flight); otherwise what it waits on.
 pub fn loop_stage(
@@ -561,5 +587,41 @@ mod tests {
             assert_eq!(s[0].stage, Stage::Verifying);
             assert_eq!(s[0].scope, "", "a runtime-only run names no issue");
         }
+    }
+
+    #[test]
+    fn issue_runs_left_by_an_earlier_killed_run_are_not_in_flight() {
+        let at = |t: &str| ActiveStage {
+            stage: Stage::Coding,
+            scope: "web #12".into(),
+            at: t.into(),
+        };
+        let active = [
+            at("2026-11-22T10:05:00.000Z"),
+            at("2026-11-22T09:00:00.000Z"),
+        ];
+        let current = since_run_start(&active, "2026-11-22T10:00:00.000000+00:00");
+        assert_eq!(current, [active[0].clone()]);
+        assert_eq!(since_run_start(&active, "not a time"), active);
+    }
+
+    #[test]
+    fn the_run_start_is_the_newest_run_started_event() {
+        let events = [
+            runtime("run.started", "a", "2026-11-22T09:00:00.000Z", json!({})),
+            issue(
+                "issue.classified",
+                "b_web_12",
+                12,
+                "2026-11-22T10:30:00.000Z",
+                json!({}),
+            ),
+            runtime("run.started", "b", "2026-11-22T10:00:00.000Z", json!({})),
+        ];
+        assert_eq!(
+            latest_run_start(&events).as_deref(),
+            Some("2026-11-22T10:00:00.000Z")
+        );
+        assert_eq!(latest_run_start(&events[1..2]), None);
     }
 }

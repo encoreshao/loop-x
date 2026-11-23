@@ -832,6 +832,7 @@
   "MRs checked": "已检查的 MR",
   "The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked.": "与 LoopX 修复相同的无模型关卡，由 MR Review 在分配给你的 MR 上运行。仅供参考：不会拦截任何内容。",
   "Advisory: the review gate is in observe mode": "仅供参考：审查门禁处于观察模式",
+  "1 could not run": "1 次未能运行",
   "{n} could not run": "{n} 次未能运行",
   "Retried → passed": "重试后通过",
   "Gates": "门禁",

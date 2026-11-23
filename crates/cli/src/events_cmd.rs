@@ -46,6 +46,11 @@ fn cmd_emit(argv: &[String]) -> u8 {
         eprintln!("emit: --run-id is required");
         return 1;
     };
+    // Needs you trusts these to come from the auto-fix runner, which emits in-process.
+    if event_type.starts_with("mr_autofix.") {
+        eprintln!("emit: {event_type} events are written only by LoopX itself");
+        return 1;
+    }
     let mut data = None;
     if let Some(raw) = parse_flag(argv, "--data") {
         match serde_json::from_str::<Value>(raw) {

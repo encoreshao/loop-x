@@ -182,6 +182,7 @@ pub fn build_office_state(ctx: &UiCtx) -> Value {
     let issue_events =
         loopx_core::events::iter_events(Some(&state.events_dir), Some(&yesterday), Some(&today));
     let issue_active = office_stage::issue_stages(&issue_events);
+    let issue_run_start = office_stage::latest_run_start(&issue_events);
     let mut entries = Vec::new();
     for l in loops::list_loops(state).unwrap_or_default() {
         if !l.is_object() {
@@ -204,8 +205,10 @@ pub fn build_office_state(ctx: &UiCtx) -> Value {
             .filter(|i| !kind_is(i, "loop_failed") && !kind_is(i, "spec"))
             .count();
         let os = office_state(enabled, &run_state, pending.max(decisions + specs));
+        let current =
+            office_stage::since_run_start(&issue_active, issue_run_start.as_deref().unwrap_or(""));
         let (active, awaiting_spec): (&[_], usize) = if name == "issue-loop" {
-            (&issue_active, specs)
+            (&current, specs)
         } else {
             (&[], 0)
         };

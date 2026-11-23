@@ -2173,6 +2173,33 @@ fetch('http://127.0.0.1:9/api/me', {headers: {Authorization: 'Bearer ' + localSt
 
     #[test]
     #[ignore = "launches the Chrome installed on this Mac"]
+    fn real_chrome_axe_runs_on_a_page_with_an_amd_loader_and_commonjs_globals() {
+        let site = tempfile::tempdir().unwrap();
+        std::fs::write(
+            site.path().join("index.html"),
+            r#"<!doctype html><html lang="en"><head><title>t</title></head>
+<body><main><h1>Orders</h1><p id="faint" style="color:#ccc;background:#fff">faint text</p></main>
+<script src="loader.js"></script></body></html>"#,
+        )
+        .unwrap();
+        std::fs::write(
+            site.path().join("loader.js"),
+            "window.define = function (name) { if (typeof name !== 'string') throw new Error('Mismatched anonymous define() module'); };\n\
+             window.define.amd = {};\n\
+             window.module = { exports: { app: true } };",
+        )
+        .unwrap();
+        let r = probe_on(site.path(), "index.html", |o| {
+            o.axe = true;
+            o.wait_for = Some("#faint".into());
+        });
+        let axe = r.axe.clone().unwrap().unwrap_or_else(|e| panic!("{e}"));
+        assert!(axe.iter().any(|v| v.id == "color-contrast"), "{axe:?}");
+        assert!(r.exceptions.is_empty(), "{r:?}");
+    }
+
+    #[test]
+    #[ignore = "launches the Chrome installed on this Mac"]
     fn real_chrome_probe_blocks_off_origin_requests() {
         let site = tempfile::tempdir().unwrap();
         let logs = tempfile::tempdir().unwrap();

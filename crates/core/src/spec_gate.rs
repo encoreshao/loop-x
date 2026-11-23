@@ -32,6 +32,9 @@ pub struct IssueLabels {
     /// When `loop:spec-approved` was last added; `None` when the tracker does
     /// not say (then the label never approves a spec).
     pub approved_added_at: Option<DateTime<Utc>>,
+    /// When `loop:spec-first` was last added; re-adding it after a dismissal
+    /// asks for a new spec.
+    pub spec_first_added_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -241,7 +244,8 @@ pub fn mark_implemented(
 
 /// Where an issue stands. The approved label approves only a spec already
 /// posted and awaiting, and only when it was added after the spec was posted;
-/// it never opts an issue in on its own. With labels read, a waiting spec on
+/// it never opts an issue in on its own. Re-adding `loop:spec-first` after a
+/// dismissal asks for a new spec. With labels read, a waiting spec on
 /// an issue no longer opted in (no flag, no spec-first label) is off.
 pub fn gate(flag: bool, labels: Option<&IssueLabels>, state: Option<&SpecState>) -> Gate {
     let has = |name: &str| labels.is_some_and(|l| l.names.iter().any(|x| x == name));
@@ -261,7 +265,19 @@ pub fn gate(flag: bool, labels: Option<&IssueLabels>, state: Option<&SpecState>)
                 (Some(added), Some(posted)) if added > posted
             )
     };
+    let relabelled_after_dismissal = || {
+        let dismissed = s
+            .decided_at
+            .as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok());
+        has(SPEC_FIRST_LABEL)
+            && matches!(
+                (labels.and_then(|l| l.spec_first_added_at), dismissed),
+                (Some(added), Some(dismissed)) if added > dismissed
+            )
+    };
     match s.status {
+        SpecStatus::Dismissed if relabelled_after_dismissal() => Gate::NeedSpec { notes: None },
         SpecStatus::Implemented | SpecStatus::Dismissed => Gate::Off,
         SpecStatus::Approved => Gate::Approved {
             spec: s.spec.clone(),
@@ -332,6 +348,7 @@ mod tests {
         IssueLabels {
             names: names.iter().map(|s| s.to_string()).collect(),
             approved_added_at,
+            spec_first_added_at: None,
         }
     }
 
@@ -599,6 +616,26 @@ mod tests {
         assert!(dismiss(d.path(), "web", "7", "dashboard", now()).is_err());
         assert!(decide(d.path(), "web", "7", true, "", "dashboard", now()).is_err());
         assert!(dismiss(d.path(), "..", "7", "dashboard", now()).is_err());
+    }
+
+    #[test]
+    fn relabelling_spec_first_after_a_dismissal_asks_for_a_new_spec() {
+        let mut s = state(SpecStatus::Dismissed);
+        s.decided_at = Some(now().to_rfc3339());
+        let relabelled = |at: Option<DateTime<Utc>>| IssueLabels {
+            spec_first_added_at: at,
+            ..labels(&[SPEC_FIRST_LABEL])
+        };
+        assert_eq!(
+            gate(false, Some(&relabelled(Some(after()))), Some(&s)),
+            Gate::NeedSpec { notes: None }
+        );
+        assert_eq!(
+            gate(false, Some(&relabelled(Some(now()))), Some(&s)),
+            Gate::Off
+        );
+        assert_eq!(gate(false, Some(&relabelled(None)), Some(&s)), Gate::Off);
+        assert_eq!(gate(true, None, Some(&s)), Gate::Off);
     }
 
     #[test]

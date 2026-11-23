@@ -1537,10 +1537,13 @@ impl MrReview {
             Ok(Some(t)) => t,
             Ok(None) => return DependencyCheck::Omitted,
             Err(e) => {
+                let why = match e.status() {
+                    Some(code) => format!("GitLab answered HTTP {code} when reading the lockfiles"),
+                    None => "GitLab could not be reached to read the lockfiles".to_string(),
+                };
                 return DependencyCheck::Failed(format!(
-                    "- Dependency audit: could not run ({})",
-                    e.class_name()
-                ))
+                    "- Dependency audit: could not run ({why})"
+                ));
             }
         };
         let notes = || {
@@ -3646,7 +3649,9 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         assert_eq!(out.status, Status::Done);
         let note = summary_posted(&conn);
         assert!(
-            note.contains("- Dependency audit: could not run (MailHTTPError)"),
+            note.contains(
+                "- Dependency audit: could not run (GitLab answered HTTP 500 when reading the lockfiles)"
+            ),
             "{note}"
         );
     }

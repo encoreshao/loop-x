@@ -489,13 +489,26 @@ pub fn acceptance_criteria(handoff: &Value) -> Vec<Criterion> {
             MAX_LINE_CHARS,
         )
     };
+    let mut taken: std::collections::HashSet<String> = list
+        .iter()
+        .map(|c| text(c, "id"))
+        .filter(|id| !id.is_empty())
+        .collect();
+    let mut fallback_id = |i: usize| {
+        let id = (i + 1..)
+            .map(|n| format!("AC{n}"))
+            .find(|id| !taken.contains(id))
+            .expect("an unbounded range");
+        taken.insert(id.clone());
+        id
+    };
     list.iter()
         .enumerate()
         .filter(|(_, c)| c.is_object())
         .map(|(i, c)| Criterion {
             id: Some(text(c, "id"))
                 .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| format!("AC{}", i + 1)),
+                .unwrap_or_else(|| fallback_id(i)),
             statement: text(c, "statement"),
             test: Some(text(c, "test").replace('`', "'")).filter(|t| {
                 !matches!(
@@ -1443,6 +1456,20 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_id_never_reuses_one_the_agent_gave() {
+        let handoff = fix_with(json!([
+            {"id": "AC2", "statement": "s1", "test": "t"},
+            {"statement": "s2", "test": "t"},
+            {"statement": "s3", "test": "t"}
+        ]));
+        let ids: Vec<String> = acceptance_criteria(&handoff)
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, ["AC2", "AC3", "AC4"]);
+    }
+
+    #[test]
     fn malformed_entries_are_dropped_and_list_is_capped() {
         let mut list = vec![
             json!("a string"),
@@ -1455,7 +1482,7 @@ mod tests {
         }
         let criteria = acceptance_criteria(&fix_with(json!(list)));
         assert_eq!(criteria.len(), 8);
-        assert_eq!(criteria[0].id, "AC2");
+        assert_eq!(criteria[0].id, "AC11");
         assert_eq!(criteria[1].id, "N");
         assert_eq!(criteria[1].test, None);
         assert_eq!(criteria[2].id, "AC1");

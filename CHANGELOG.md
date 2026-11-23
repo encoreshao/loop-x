@@ -28,6 +28,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Spec approval: adding `loop:spec-first` to an issue again after its spec was dismissed asks for a new spec (GitLab).
 - GitLab issue loop: before changing code the agent now writes 1-5 testable acceptance criteria for the issue ("WHEN ... the system shall ...") and ties each to the test that proves it. The merge request description shows them as an "Acceptance criteria" checklist, and the pre-MR review flags a criterion with no test and no reason why.
 - Needs you: "See the log" on a failed loop opens a sheet on the right instead of the shared Logs page. It shows the exit code, how many runs in a row failed, the end of that run's own output (scrolled to the error) and the loop's latest log entries, with Dismiss and "Open all logs". Failed runs now record which history log and offset hold their output.
 - Claude Code runs on a fixed model by default instead of the CLI's own default: code work (the issue loop, MR-feedback fixes, MR Review, Pipeline Doctor, the setup doctor and "Fix now") uses Opus, and everything else (chat, inbox triage, digests, topic monitor, release notes, Creator jobs and the other loops) uses Sonnet. A loop's `agent.model` in its `loop.yaml` still overrides it.
@@ -37,6 +38,11 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- Dependency audit (issue loop and MR Review): a Python audit no longer lists each advisory twice (pip-audit reports one per vulnerability database), and its title is the description's first sentence instead of the whole text or a "### Impact" heading.
+- MR Review: a dependency audit that could not read the lockfiles says why ("GitLab answered HTTP 500 when reading the lockfiles") instead of an internal error name, and Harness → Gates → Human merge requests says how many audits could not run.
+- Harness → Gates: "1 could not run" is singular in French, Japanese and Chinese too.
+- GitLab issue loop: an acceptance criterion with no id never gets an id another criterion already has.
+- Office: an issue left mid-run by a stopped or killed run no longer shows as in flight once the loop runs again.
 - GitLab issue loop: a fix whose handoff names its work dir through a symlink (for example `/private/var/...` for `/var/...` on macOS, as `git rev-parse --show-toplevel` prints it) no longer fails its checks with "handoff cwd ... is not the issue's work dir" and costs another agent attempt.
 - Pipeline Auto-fix: a stop because the branch moved, or because an automatic CI fix was already made, now says so on Needs you and in Slack instead of "the automatic fix changed nothing". Pressing Fix now just as the loop starts its own fix no longer uses up the loop's one attempt; it shows as "a Fix now run was already in progress" instead of a failed fix. Events that arrived during a long pause (up to a week back) still trigger the loop afterwards, and old escalation records and CI-failure files are cleaned up after 30 days.
 - A loop run that exits with code 75 is reported as skipped only when its runner says so on its last line; otherwise it is a failure.
@@ -47,6 +53,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - The last places that still said "Loop X" (the Slack agent page and connector, the dashboard chat assistant, the Daily Digest description and the translated READMEs) now say "LoopX".
 - Slack agent and dashboard chat: a message that starts with a dash (such as a Slack bullet, "- what's new on issue 12") no longer fails with "Claude Code exited with code 1"; Claude Code had read it as an unknown command-line option.
 - The issue loop no longer comments on (or labels `loop:needs-human`) an issue when the problem is the loop's own: an agent session that crashed, timed out or ran out of budget, a missing handoff, or a checkout it won't touch. These now go to Slack and the loop's log only, so an issue nobody has replied to no longer gets a second "I started on this issue, but the run stopped" comment after the loop's earlier answer. Escalations about the work itself (failed checks on a fix, an MR that could not be opened, approvals) still comment on the issue.
+
+### Security
+
+- `loopx events emit` refuses `mr_autofix.*` events, so an agent can no longer add or hide Pipeline Auto-fix items on Needs you through it; only LoopX itself writes them.
 
 ## [0.19.0] - 2026-11-17
 

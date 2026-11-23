@@ -832,6 +832,7 @@
   "MRs checked": "チェックした MR",
   "The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked.": "LoopX の修正と同じモデル不使用のゲートを、MR Review があなたに割り当てられた MR に対して実行します。参考値のみで、何もブロックしません。",
   "Advisory: the review gate is in observe mode": "参考値: レビューゲートは観察モードです",
+  "1 could not run": "1 件は実行できませんでした",
   "{n} could not run": "{n} 件は実行できませんでした",
   "Retried → passed": "再試行後に合格",
   "Gates": "ゲート",
