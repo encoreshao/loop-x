@@ -26,7 +26,7 @@ use crate::runner_util::{
 };
 use crate::{
     ai_cli_config, approvals, cost, events, issue_report, issue_tracking_config, learning,
-    memory_store, mr, mr_screenshots, proc, prompt, setup_doctor, slack_report, spec_gate,
+    memory_store, mr, mr_screenshots, proc, prompt, quota, setup_doctor, slack_report, spec_gate,
     worktree,
 };
 use chrono::{Duration, Utc};
@@ -1010,6 +1010,35 @@ fn run_cli(
     )
 }
 
+/// An agent failure's message when the AI CLI refused for its usage limit.
+pub const USAGE_LIMIT_PREFIX: &str = "usage_limit: ";
+
+/// How many of the agent's latest steps a failure keeps.
+const AGENT_STEPS_KEPT: usize = 12;
+
+/// What the AI CLI itself said when a call failed: Claude's error envelope
+/// `result`, else the last line of stderr, else of stdout.
+fn cli_said(envelope: Option<&Value>, stderr: &str, stdout: &str) -> String {
+    let from_envelope = envelope
+        .and_then(|e| e.get("result"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|r| !r.is_empty());
+    let last_line = |text: &str| {
+        text.lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(str::to_owned)
+    };
+    let said = from_envelope
+        .map(str::to_owned)
+        .or_else(|| last_line(stderr))
+        .or_else(|| last_line(stdout))
+        .unwrap_or_default();
+    head(&said, 300)
+}
+
 /// [`run_cli`] for a call with MCP servers attached: the claude process gets
 /// `MCP_TIMEOUT`, and every resolved secret is redacted from what is logged.
 #[allow(clippy::too_many_arguments)]
@@ -1027,13 +1056,35 @@ fn run_cli_with_mcp(
         Some(m) => m.redact(text),
         None => text.to_string(),
     };
-    let report_failure = |reason: &str, detail: &str, event_reason: Option<&str>| {
+    // Issues run in parallel: each one's hooks write its own file, so agents
+    // never overwrite each other's record or mask each other's stall.
+    let activity_file = match issue {
+        Some((a, i)) => crate::agent_activity::for_task(&ctx.activity_file, a, i),
+        None => ctx.activity_file.clone(),
+    };
+    let report_failure = |reason: &str, detail: &str, said: &str, event_reason: Option<&str>| {
         let detail = &redact(detail);
+        let said = redact(said);
         let label = issue
             .map(|(a, i)| format!(" for {a} #{i}"))
             .unwrap_or_default();
+        let steps = issue
+            .map(|(a, i)| {
+                crate::agent_activity::last_call_steps(
+                    &activity_file,
+                    &format!("{a} #{i}"),
+                    AGENT_STEPS_KEPT,
+                )
+            })
+            .unwrap_or_default();
+        let steps: Vec<String> = steps.iter().map(|s| redact(s)).collect();
+        let steps_line = if steps.is_empty() {
+            String::new()
+        } else {
+            format!("\nagent steps: {}", steps.join(" → "))
+        };
         ctx.log(&format!(
-            "{ai_cli} invocation{label} FAILED ({reason}):\n{detail}"
+            "{ai_cli} invocation{label} FAILED ({reason}):\n{detail}{steps_line}"
         ));
         let run_id = std::env::var("LOOP_RUN_ID").ok().filter(|v| !v.is_empty());
         let issue_run_id = match (&run_id, issue) {
@@ -1051,6 +1102,8 @@ fn run_cli_with_mcp(
                     "reason": event_reason.unwrap_or(reason),
                     "cli": ai_cli,
                     "stderr_excerpt": tail(detail, STDERR_EXCERPT_CHARS),
+                    "message": said,
+                    "steps": steps,
                 })),
             },
         );
@@ -1059,12 +1112,6 @@ fn run_cli_with_mcp(
     let mut command = std::process::Command::new(&argv[0]);
     // Claude reports each tool call through hooks, so the dashboard can say what
     // it is doing and a wedged call is stopped long before its timeout.
-    // Issues run in parallel: each one's hooks write its own file, so agents
-    // never overwrite each other's record or mask each other's stall.
-    let activity_file = match issue {
-        Some((a, i)) => crate::agent_activity::for_task(&ctx.activity_file, a, i),
-        None => ctx.activity_file.clone(),
-    };
     let stall = (ai_cli == "claude").then(|| {
         let label = issue.map_or_else(|| "end of run".to_string(), |(a, i)| format!("{a} #{i}"));
         let settings = crate::agent_activity::hook_settings(&ctx.exe, &activity_file, &label);
@@ -1122,7 +1169,7 @@ fn run_cli_with_mcp(
         Ok(out) => out,
         Err(e) => {
             let detail = could_not_start(ai_cli, &argv[0], &e);
-            report_failure("failed to start", &detail, None);
+            report_failure("failed to start", &detail, &detail, None);
             return Err(AgentError {
                 message: detail,
                 cost_usd: None,
@@ -1159,9 +1206,20 @@ fn run_cli_with_mcp(
             .and_then(Value::as_str)
             == Some("error_max_budget_usd");
         let spent = failed_call_cost(envelope.as_ref(), budget, max_budget_usd);
-        report_failure(&reason, &detail, budget.then_some("budget_exceeded"));
+        let said = cli_said(envelope.as_ref(), &out.stderr, &out.stdout);
+        let limited = quota::limit_hit(&format!("{}\n{}", out.stdout, out.stderr));
+        let event_reason = if budget {
+            Some("budget_exceeded")
+        } else {
+            limited.then_some("usage_limit")
+        };
+        report_failure(&reason, &detail, &said, event_reason);
         return Err(AgentError {
-            message: reason,
+            message: if limited && !budget {
+                format!("{USAGE_LIMIT_PREFIX}{}", redact(&said))
+            } else {
+                reason
+            },
             cost_usd: spent,
         });
     }
@@ -1173,13 +1231,24 @@ fn run_cli_with_mcp(
             .filter(|p| p.get("is_error").is_some_and(crate::loop_serialize::truthy))
         {
             let budget = p.get("subtype").and_then(Value::as_str) == Some("error_max_budget_usd");
+            let said = cli_said(Some(p), &out.stderr, &out.stdout);
+            let limited = !budget && quota::limit_hit(&out.stdout);
             report_failure(
                 "error envelope on exit 0",
                 &out.stdout,
-                budget.then_some("budget_exceeded"),
+                &said,
+                if budget {
+                    Some("budget_exceeded")
+                } else {
+                    limited.then_some("usage_limit")
+                },
             );
             return Err(AgentError {
-                message: "claude reported an error".into(),
+                message: if limited {
+                    format!("{USAGE_LIMIT_PREFIX}{}", redact(&said))
+                } else {
+                    "claude reported an error".into()
+                },
                 cost_usd: failed_call_cost(Some(p), budget, max_budget_usd),
             });
         }
@@ -1197,9 +1266,19 @@ fn run_cli_with_mcp(
         match reply {
             Ok(text) => (text, None, None),
             Err(message) => {
-                report_failure("unusable output on exit 0", &message, None);
+                let limited = quota::limit_hit(&message);
+                report_failure(
+                    "unusable output on exit 0",
+                    &message,
+                    &message,
+                    limited.then_some("usage_limit"),
+                );
                 return Err(AgentError {
-                    message,
+                    message: if limited {
+                        format!("{USAGE_LIMIT_PREFIX}{}", redact(&message))
+                    } else {
+                        message
+                    },
                     cost_usd: None,
                 });
             }
@@ -1591,6 +1670,52 @@ pub fn escalation_slack(issue_link: &str, reason: &str, stop_reason: Option<&str
     format!(
         "*Escalated* {issue_link}\n{}\n{where_}",
         escalation_reason_text(reason, stop_reason)
+    )
+}
+
+/// The data of this issue run's latest `issue.agent_failed` event.
+fn last_agent_failure(ctx: &RunCtx, issue_run_id: &str) -> Option<Value> {
+    let since = (Utc::now() - Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    events::iter_events(ctx.events_dir.as_deref(), Some(&since), None)
+        .into_iter()
+        .rev()
+        .find(|e| e["event_type"] == "issue.agent_failed" && e["issue_run_id"] == issue_run_id)
+        .map(|e| e["data"].clone())
+}
+
+/// How many of the agent's last steps a Slack message names.
+const SLACK_STEPS: usize = 5;
+
+/// What the AI CLI said and the agent's last steps, as lines for Slack.
+pub fn agent_failure_lines(failure: &Value) -> String {
+    let mut out = String::new();
+    if let Some(said) = failure["message"].as_str().filter(|m| !m.trim().is_empty()) {
+        out.push_str(&format!("\nThe AI CLI said: {}", slack_text(said)));
+    }
+    let steps: Vec<&str> = failure["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !steps.is_empty() {
+        let last = &steps[steps.len().saturating_sub(SLACK_STEPS)..];
+        out.push_str(&format!("\nLast steps: {}", slack_text(&last.join(" → "))));
+    }
+    out
+}
+
+/// The Slack message for an issue put off because the AI CLI hit its usage limit.
+pub fn usage_limit_slack(issue_link: &str, said: &str) -> String {
+    let said = if said.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", slack_text(said))
+    };
+    format!(
+        "*Paused* {issue_link}\nThe AI CLI hit its usage limit{said}, so the agent could not work on it.\nNothing was posted on the issue - the next run picks it up."
     )
 }
 
@@ -2270,6 +2395,7 @@ pub fn finalize_gated_issue(
         ),
     };
 
+    let agent_failure = last_agent_failure(ctx, &issue_run_id);
     let escalate = |reason: &str, failure_text: &str, stop_reason: Option<&str>| -> String {
         if loop_side_escalation(reason) {
             log(&format!(
@@ -2298,10 +2424,37 @@ pub fn finalize_gated_issue(
         if let Some(s) = stop_reason.filter(|s| !s.is_empty()) {
             data["stop_reason"] = json!(s);
         }
+        let mut slack = escalation_slack(&issue_label, reason, stop_reason);
+        if let Some(failure) = agent_failure
+            .as_ref()
+            .filter(|_| reason == "run_incomplete")
+        {
+            for key in ["message", "steps"] {
+                if !failure[key].is_null() {
+                    data[key] = failure[key].clone();
+                }
+            }
+            slack.push_str(&agent_failure_lines(failure));
+        }
         emit("issue.escalated", data);
-        notify(&bundle, escalation_slack(&issue_label, reason, stop_reason));
+        notify(&bundle, slack);
         format!("escalated:{reason}")
     };
+
+    if result.stop_reason == USAGE_LIMIT {
+        let said = agent_failure
+            .as_ref()
+            .and_then(|f| f["message"].as_str())
+            .unwrap_or("")
+            .to_string();
+        log(&format!("deferred: the AI CLI hit its usage limit: {said}"));
+        emit(
+            "issue.deferred",
+            json!({"reason": USAGE_LIMIT, "message": said}),
+        );
+        notify(&bundle, usage_limit_slack(&issue_label, &said));
+        return DEFERRED_USAGE_LIMIT.to_string();
+    }
 
     if let Some(problem) = &deps.checkout_problem {
         return escalate("checkout_problem", problem, None);
@@ -2821,6 +2974,44 @@ type PassOutput = (LoopResult, Vec<Option<f64>>, Vec<Option<Value>>);
 /// by what it changed; finalize escalates it as `guard_violation`.
 const GUARD_VIOLATION_PREFIX: &str = "guard_violation: ";
 
+/// The stop reason of an issue whose agent the AI CLI refused for its usage limit.
+const USAGE_LIMIT: &str = "usage_limit";
+const DEFERRED_USAGE_LIMIT: &str = "deferred:usage_limit";
+
+/// Runs (by checkout and run id) whose AI CLI hit its usage limit, with what it
+/// said: their remaining issues wait for the next run instead of failing too.
+static LIMITED_RUNS: Mutex<Vec<(PathBuf, String, String)>> = Mutex::new(Vec::new());
+
+fn usage_limit_of_run(ctx: &RunCtx, run_id: &str) -> Option<String> {
+    LIMITED_RUNS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(root, id, _)| *root == ctx.repo_root && id == run_id)
+        .map(|(_, _, said)| said.clone())
+}
+
+/// Remember the limit for the rest of this run and pause scheduled runs, as
+/// `run_loop` does for a loop that exits on it.
+fn usage_limit_reached(ctx: &RunCtx, run_id: &str, said: &str) {
+    if usage_limit_of_run(ctx, run_id).is_none() {
+        LIMITED_RUNS.lock().unwrap().push((
+            ctx.repo_root.clone(),
+            run_id.to_string(),
+            said.to_string(),
+        ));
+    }
+    ctx.log(&format!("the AI CLI hit its usage limit: {said}"));
+    if ctx.fakes.is_none() && !cfg!(test) {
+        let pause = quota::Pause {
+            cli: ai_cli_config::selected_cli(),
+            until: Utc::now() + Duration::minutes(quota::DEFAULT_PAUSE_MINUTES),
+            reason: "the AI CLI reported its usage limit".into(),
+        };
+        let _ = quota::write_pause(&quota::pause_path(), &pause);
+    }
+}
+
 /// The checkout the guard watches and whether the issue works in a worktree;
 /// `None` (no guard) for an unknown or issues-only project.
 fn guard_target(ctx: &RunCtx, alias: &str) -> Option<(PathBuf, bool)> {
@@ -2914,7 +3105,9 @@ fn run_pass(
     issue.cli = review_cli;
     let guard_target = gate.then(|| guard_target(ctx, alias)).flatten();
     let guard_hit: Arc<Mutex<Option<String>>> = Arc::default();
+    let limit_hit: Arc<Mutex<Option<String>>> = Arc::default();
     let agent_fn: AgentFn = {
+        let limit_hit = limit_hit.clone();
         let (raw_costs, raw_usages) = (raw_costs.clone(), raw_usages.clone());
         let (alias, issue_iid, run_id) =
             (alias.to_string(), issue_iid.to_string(), run_id.to_string());
@@ -3006,6 +3199,9 @@ fn run_pass(
                 Err(e) => {
                     // A failed call may still have spent money; None = unknown.
                     raw_costs.lock().unwrap().push(e.cost_usd);
+                    if let Some(said) = e.message.strip_prefix(USAGE_LIMIT_PREFIX) {
+                        *limit_hit.lock().unwrap() = Some(said.to_string());
+                    }
                     Err(AgentFailure {
                         message: e.message,
                         cost_usd: e.cost_usd,
@@ -3070,6 +3266,9 @@ fn run_pass(
     if let Some(violation) = guard_hit.lock().unwrap().take() {
         ctx.log(&format!("agent guard {alias} #{issue_iid}: {violation}"));
         result.stop_reason = format!("{GUARD_VIOLATION_PREFIX}{violation}");
+    } else if let Some(said) = limit_hit.lock().unwrap().take() {
+        result.stop_reason = USAGE_LIMIT.to_string();
+        usage_limit_reached(ctx, run_id, &said);
     } else if escalate_if_worktree_moved(&mut result) {
         ctx.log(&format!(
             "browser check {alias} #{issue_iid}: {}",
@@ -3095,6 +3294,36 @@ pub fn run_one_issue(
     // The scheduled batch and the dashboard's single-issue run each end with
     // one Slack report; only the golden eval's offline mode skips it.
     let quiet = matches!(mode, InvokeMode::Batch | InvokeMode::Single);
+
+    if let Some(said) = usage_limit_of_run(ctx, run_id) {
+        ctx.log(&format!(
+            "{alias} #{issue_iid}: not started, the AI CLI hit its usage limit earlier in this run"
+        ));
+        ctx.emit(
+            "issue.deferred",
+            Some(run_id),
+            EventFields {
+                issue_run_id: Some(issue_run_id.clone()),
+                project: Some(alias.to_string()),
+                issue_iid: issue_iid.parse().ok(),
+                data: Some(json!({"reason": USAGE_LIMIT, "message": said})),
+            },
+        );
+        let result = LoopResult::new(
+            &issue_run_id,
+            &issue_run_id,
+            &definition.name,
+            LoopState::Stopped,
+            Vec::new(),
+            USAGE_LIMIT,
+        );
+        return Ok(IssueRun {
+            result,
+            usage: None,
+            gate_outcome: Some(DEFERRED_USAGE_LIMIT.into()),
+            setup_fixed: None,
+        });
+    }
 
     // New review feedback on the issue's merge request is handled first, in
     // its own plan/execute/validate calls; it never changes this run's path.
@@ -7355,6 +7584,256 @@ mod tests {
         let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
         assert!(!log.contains("--settings"), "{log}");
         assert!(!ctx.activity_file.exists());
+    }
+
+    const LIMIT_ENVELOPE: &str = r#"{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"api_error_type":"rate_limit_error","result":"You've hit your 5-hour limit · resets 12:20am (Asia/Shanghai)","total_cost_usd":0.17}"#;
+
+    /// A fake claude that records one tool call through the trace, then
+    /// prints `stdout` and `stderr` and exits 1.
+    fn failing_claude(dir: &Path, ctx: &RunCtx, stdout: &str, stderr: &str) -> Vec<String> {
+        let trace = crate::agent_activity::trace_path(&crate::agent_activity::for_task(
+            &ctx.activity_file,
+            "web",
+            "3",
+        ));
+        let step = r#"{"at":"2026-11-23T13:18:36+00:00","label":"web #3","event":"PreToolUse","tool":"Read","detail":"/i/gitlab-issue.md"}"#;
+        let body = format!(
+            "echo '{step}' >> '{}'\nprintf '%s' '{}'\nprintf '%s' '{stderr}' >&2\nexit 1",
+            trace.display(),
+            stdout.replace('\'', r"'\''"),
+        );
+        vec![script_cli(dir, &body), "-p".into(), "P".into()]
+    }
+
+    #[test]
+    fn a_claude_call_that_hits_the_usage_limit_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv = failing_claude(d.path(), &ctx, LIMIT_ENVELOPE, "");
+        let e = run_cli(&ctx, "claude", &argv, 30.0, Some(("web", "3")), &[], None).unwrap_err();
+        assert_eq!(
+            e.message,
+            format!(
+                "{USAGE_LIMIT_PREFIX}You've hit your 5-hour limit · resets 12:20am (Asia/Shanghai)"
+            )
+        );
+        assert_eq!(e.cost_usd, Some(0.17));
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(
+            log.contains("agent steps: Read: /i/gitlab-issue.md"),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn a_failed_claude_call_records_what_the_cli_said_and_the_agents_steps() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = claude_ctx(d.path());
+        let argv = failing_claude(
+            d.path(),
+            &ctx,
+            "",
+            "warning: x\nError: config file is invalid\n",
+        );
+        let e = run_cli(&ctx, "claude", &argv, 30.0, Some(("web", "3")), &[], None).unwrap_err();
+        assert_eq!(e.message, "exited 1");
+        assert_eq!(
+            cli_said(None, "warning: x\nError: config file is invalid\n", ""),
+            "Error: config file is invalid"
+        );
+        let log = std::fs::read_to_string(&ctx.unified_log).unwrap();
+        assert!(
+            log.contains("agent steps: Read: /i/gitlab-issue.md"),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn a_usage_limited_run_is_deferred_not_escalated() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"g": {"url": "https://g.example"}}}"#,
+        )
+        .unwrap();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.emit(
+            "issue.agent_failed",
+            Some("r"),
+            EventFields {
+                issue_run_id: Some("r_web_7".into()),
+                project: Some("web".into()),
+                issue_iid: Some(7),
+                data: Some(json!({"reason": "usage_limit", "message": "You've hit your 5-hour limit · resets 12:20am", "steps": ["Read: /i/gitlab-issue.md"]})),
+            },
+        );
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Failed,
+            vec![],
+            "usage_limit",
+        );
+        let sent = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+        let notes = Notes(Default::default());
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(d.path().join("none.json")),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(gitlab),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "deferred:usage_limit");
+        let types: Vec<Value> = events::iter_events(ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .map(|e| e["event_type"].clone())
+            .collect();
+        assert!(!types.contains(&json!("issue.escalated")), "{types:?}");
+        let deferred = events::iter_events(ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .find(|e| e["event_type"] == "issue.deferred")
+            .expect("issue.deferred");
+        assert_eq!(deferred["data"]["reason"], "usage_limit");
+        assert_eq!(
+            deferred["data"]["message"],
+            "You've hit your 5-hour limit · resets 12:20am"
+        );
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert!(
+            sent[0].starts_with("*Paused* <https://g.example/g/p/-/issues/7|web #7>\n"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains("You've hit your 5-hour limit · resets 12:20am"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            notes.0.lock().unwrap().is_empty(),
+            "nothing posted on the issue"
+        );
+    }
+
+    #[test]
+    fn a_crashed_runs_escalation_carries_what_the_cli_said_and_the_agents_steps() {
+        let d = tempfile::tempdir().unwrap();
+        let gitlab = d.path().join("gitlab.json");
+        std::fs::write(
+            &gitlab,
+            r#"{"instances": {"g": {"url": "https://g.example"}}}"#,
+        )
+        .unwrap();
+        let mut ctx = RunCtx::new(d.path().into());
+        ctx.events_dir = Some(d.path().join("events"));
+        ctx.emit(
+            "issue.agent_failed",
+            Some("r"),
+            EventFields {
+                issue_run_id: Some("r_web_7".into()),
+                project: Some("web".into()),
+                issue_iid: Some(7),
+                data: Some(json!({"reason": "exited 1", "message": "Error: config file is invalid", "steps": ["Read: /a", "Bash: make test"]})),
+            },
+        );
+        let result = LoopResult::new(
+            "l",
+            "r",
+            "gitlab-issue",
+            LoopState::Failed,
+            vec![],
+            "agent_failed",
+        );
+        let sent = Mutex::new(Vec::<String>::new());
+        let notifier = |m: &str| sent.lock().unwrap().push(m.to_string());
+        let notes = Notes(Default::default());
+        let outcome = finalize_gated_issue(
+            &result,
+            "web",
+            "7",
+            "r",
+            &ctx,
+            FinalizeDeps {
+                gitlab: Some(&notes),
+                notifier: Some(&notifier),
+                handoff: Some(d.path().join("none.json")),
+                project: Some(json!({"project_id": "g/p", "local_path": "/x", "instance": "g"})),
+                gitlab_config_path: Some(gitlab),
+                ..Default::default()
+            },
+        );
+        assert_eq!(outcome, "escalated:run_incomplete");
+        let escalated = events::iter_events(ctx.events_dir.as_deref(), None, None)
+            .into_iter()
+            .find(|e| e["event_type"] == "issue.escalated")
+            .unwrap();
+        assert_eq!(
+            escalated["data"]["message"],
+            "Error: config file is invalid"
+        );
+        assert_eq!(
+            escalated["data"]["steps"],
+            json!(["Read: /a", "Bash: make test"])
+        );
+        let sent = sent.lock().unwrap();
+        assert!(
+            sent[0].contains("\nThe AI CLI said: Error: config file is invalid\n"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains("Last steps: Read: /a → Bash: make test"),
+            "{}",
+            sent[0]
+        );
+    }
+
+    #[test]
+    fn after_one_issue_hits_the_usage_limit_the_rest_of_the_batch_waits() {
+        let t = InPlace::new();
+        t.set_use_worktree(true);
+        let definition = LoopDefinition::from_yaml(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../loops/gitlab-issue/loop.yaml"),
+        )
+        .unwrap();
+        let cfg = Config::load(t.ctx.config_path.as_ref().unwrap()).unwrap();
+        let started: Log = Default::default();
+        let st = started.clone();
+        let invoker: Invoker = Arc::new(move |req| {
+            st.lock().unwrap().push(req.issue_iid.clone());
+            Err(AgentError {
+                message: format!("{USAGE_LIMIT_PREFIX}You've hit your 5-hour limit"),
+                cost_usd: None,
+            })
+        });
+        let todo = [1, 2, 3]
+            .iter()
+            .map(|i| ("web".to_string(), json!({"iid": i, "title": "t"})))
+            .collect();
+        let runs = run_issue_batch(&t.ctx, "r1", &cfg, todo, &definition, invoker, 1).unwrap();
+        assert_eq!(
+            started.lock().unwrap().len(),
+            1,
+            "only the first issue reached the agent"
+        );
+        let outcomes: Vec<_> = runs.iter().map(|r| r.gate_outcome.clone()).collect();
+        assert_eq!(outcomes, vec![Some("deferred:usage_limit".to_string()); 3]);
+        assert!(runs.iter().all(|r| r.result.stop_reason == "usage_limit"));
+        let slack = t.slack.lock().unwrap();
+        assert!(slack.iter().all(|m| !m.contains("Escalated")), "{slack:?}");
     }
 
     #[test]

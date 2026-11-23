@@ -156,16 +156,28 @@ public struct Attention: Codable, Equatable, Sendable {
     public var issueIid: Int?
     public var reason: String?
     public var mrURL: String?
+    /// What the AI CLI said when the agent's call failed.
+    public var message: String?
+    /// The agent's last steps before it failed ("Read: src/app.rs").
+    public var steps: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case kind, at, project, reason
+        case kind, at, project, reason, message, steps
         case issueIid = "issue_iid", mrURL = "mr_url"
     }
 
     public init(kind: Kind, at: String, project: String? = nil, issueIid: Int? = nil,
-                reason: String? = nil, mrURL: String? = nil) {
+                reason: String? = nil, mrURL: String? = nil, message: String? = nil, steps: [String]? = nil) {
         self.kind = kind; self.at = at; self.project = project; self.issueIid = issueIid
-        self.reason = reason; self.mrURL = mrURL
+        self.reason = reason; self.mrURL = mrURL; self.message = message; self.steps = steps
+    }
+
+    /// "usage limit — You've hit your 5-hour limit": the reason and what the CLI said.
+    public var summary: String? {
+        let parts = [reason?.replacingOccurrences(of: "_", with: " "), message]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " — ")
     }
 
     public var date: Date? { Timestamps.parse(at) }

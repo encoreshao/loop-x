@@ -38,6 +38,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
+- GitLab issue loop: an agent the AI CLI refused for its usage limit ("You've hit your 5-hour limit · resets 12:20am") is no longer reported as a crashed run and escalated as `run_incomplete`. The issue is paused instead (Slack says "*Paused*" with the CLI's message, nothing is posted on the issue), the rest of the batch waits for the next run rather than failing the same way, and scheduled runs pause for an hour. The "You've hit your 5-hour / weekly limit" wording is now recognised everywhere the loops check for a usage limit.
+- When an issue loop agent fails, LoopX now shows what the AI CLI actually said and the agent's last steps instead of only "agent failed: exited 1": in the dashboard's live trace and `loopx watch`, the issue loop's last-run list (with an expandable list of the agent's steps), the Activity feed, the escalation and end-of-run Slack messages, the loop's log and the Mac app's notch.
 - Dependency audit (issue loop and MR Review): a Python audit no longer lists each advisory twice (pip-audit reports one per vulnerability database), and its title is the description's first sentence instead of the whole text or a "### Impact" heading.
 - MR Review: a dependency audit that could not read the lockfiles says why ("GitLab answered HTTP 500 when reading the lockfiles") instead of an internal error name, and Harness → Gates → Human merge requests says how many audits could not run.
 - Harness → Gates: "1 could not run" is singular in French, Japanese and Chinese too.

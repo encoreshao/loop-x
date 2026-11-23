@@ -39,6 +39,24 @@ import Testing
         #expect(!IslandDetail.make(task: task, events: [], attention: bad).chips.contains { if case .openMergeRequest = $0 { true } else { false } })
     }
 
+    @Test func aFailedAgentShowsWhatTheCLISaidAndItsLastSteps() {
+        let a = Attention(kind: .escalated, at: "2026-10-24T08:00:00Z", project: "web", issueIid: 7,
+                          reason: "usage_limit", message: "You've hit your 5-hour limit",
+                          steps: ["Read: /a", "Bash: make", "Grep: x", "Edit: /b"])
+        let d = IslandDetail.make(task: task, events: [ev("issue.agent_failed", at: "2026-10-24T08:00:00Z")], attention: a)
+        #expect(d.result == "usage limit — You've hit your 5-hour limit")
+        #expect(d.steps == ["Bash: make", "Grep: x", "Edit: /b"])
+        #expect(d.rows.map(\.tone) == [.failure])
+        let quiet = Attention(kind: .mrOpened, at: "2026-10-24T08:00:00Z", project: "web", issueIid: 7, steps: ["Read: /a"])
+        #expect(IslandDetail.make(task: task, events: [], attention: quiet).steps.isEmpty)
+    }
+
+    @Test func attentionDecodesWithoutTheNewFields() throws {
+        let old = try JSONDecoder().decode(Attention.self, from: Data(#"{"kind":"failed","at":"x","reason":"boom"}"#.utf8))
+        #expect(old.summary == "boom")
+        #expect(old.steps == nil)
+    }
+
     @Test func chipsAlwaysEndWithDashboardAndRunAgainOnlyWhenNotRunning() {
         let running = IslandDetail.make(task: task, events: [], attention: nil)
         #expect(running.chips == [.openDashboard])

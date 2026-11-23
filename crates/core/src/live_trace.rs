@@ -97,6 +97,31 @@ fn s<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
+/// " — <what the AI CLI said> (last steps: a → b)", from a failure event's data.
+fn failure_detail(data: &Value) -> String {
+    let said = data
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let steps: Vec<&str> = data
+        .get("steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut out = String::new();
+    if !said.is_empty() {
+        out.push_str(&format!(" — {}", clip(said, 200)));
+    }
+    if !steps.is_empty() {
+        let last = &steps[steps.len().saturating_sub(3)..];
+        out.push_str(&format!(" (last steps: {})", clip(&last.join(" → "), 200)));
+    }
+    out
+}
+
 fn clip(text: &str, max: usize) -> String {
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if one_line.chars().count() <= max {
@@ -222,10 +247,24 @@ pub fn describe(ev: &Value) -> Option<TraceLine> {
             }
             (Level::Ok, t)
         }
-        "issue.escalated" => (Level::Warn, format!("escalated: {}", d("reason"))),
+        "issue.escalated" => (
+            Level::Warn,
+            format!("escalated: {}{}", d("reason"), failure_detail(&data)),
+        ),
         "issue.agent_failed" => (
             Level::Err,
-            format!("agent failed: {}", clip(d("reason"), 100)),
+            format!(
+                "agent failed: {}{}",
+                clip(d("reason"), 100),
+                failure_detail(&data)
+            ),
+        ),
+        "issue.deferred" => (
+            Level::Warn,
+            format!(
+                "paused: the AI CLI hit its usage limit{}",
+                failure_detail(&data)
+            ),
         ),
         "loop.started" => (Level::Run, format!("loop started ({})", d("definition"))),
         "loop.completed" => (Level::Ok, format!("loop completed ({})", d("stop_reason"))),
@@ -504,6 +543,33 @@ mod tests {
         assert_eq!(l.scope, "kurrant.web #1528");
         assert_eq!(l.level, Level::Warn);
         assert_eq!(l.text, "escalated: verification_failed");
+    }
+
+    #[test]
+    fn a_failed_or_paused_agent_says_what_the_ai_cli_said() {
+        let said = json!({"reason": "usage_limit", "message": "You've hit your 5-hour limit · resets 12:20am"});
+        let failed = describe(&ev("issue.agent_failed", said.clone())).unwrap();
+        assert_eq!(
+            failed.text,
+            "agent failed: usage_limit — You've hit your 5-hour limit · resets 12:20am"
+        );
+        let paused = describe(&ev("issue.deferred", said)).unwrap();
+        assert_eq!(paused.level, Level::Warn);
+        assert_eq!(
+            paused.text,
+            "paused: the AI CLI hit its usage limit — You've hit your 5-hour limit · resets 12:20am"
+        );
+        let escalated = describe(&ev(
+            "issue.escalated",
+            json!({"reason": "run_incomplete", "message": "Error: bad config", "steps": ["Read: /a", "Bash: make"]}),
+        ))
+        .unwrap();
+        assert_eq!(
+            escalated.text,
+            "escalated: run_incomplete — Error: bad config (last steps: Read: /a → Bash: make)"
+        );
+        let bare = describe(&ev("issue.agent_failed", json!({"reason": "exited 1"}))).unwrap();
+        assert_eq!(bare.text, "agent failed: exited 1");
     }
 
     #[test]

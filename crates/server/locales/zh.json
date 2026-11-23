@@ -2364,5 +2364,9 @@
   "+{n} more": "另有 {n} 个",
   "Remove {name}?": "移除 {name}？",
   "No MCP server named {name}": "没有名为 {name} 的 MCP 服务器",
-  "Tools a loop's Claude runs can use. Only the servers a loop declares attach, and only to that run.": "循环的 Claude 运行可以使用的工具。只有循环声明的服务器才会接入，并且只接入该次运行。"
+  "Tools a loop's Claude runs can use. Only the servers a loop declares attach, and only to that run.": "循环的 Claude 运行可以使用的工具。只有循环声明的服务器才会接入，并且只接入该次运行。",
+  "Agent failed: {reason}": "代理失败：{reason}",
+  "Paused: the AI CLI hit its usage limit": "已暂停：AI CLI 已达到使用上限",
+  "Last steps: {steps}": "最近步骤：{steps}",
+  "Agent's last steps ({count})": "代理最近的步骤（{count}）"
 }

@@ -207,9 +207,71 @@ pub fn read(file: &Path) -> Option<Value> {
     v.is_object().then_some(v)
 }
 
+/// The steps `label`'s latest call took, oldest first and at most `limit`
+/// (the last ones): "Read: src/app.rs", "needs input: ...", from the trace.
+pub fn last_call_steps(activity_file: &Path, label: &str, limit: usize) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(trace_path(activity_file)) else {
+        return Vec::new();
+    };
+    let mut steps: Vec<String> = Vec::new();
+    for rec in text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    {
+        if rec.get("label").and_then(Value::as_str) != Some(label) {
+            continue;
+        }
+        let field = |k: &str| rec.get(k).and_then(Value::as_str).unwrap_or("");
+        match field("event") {
+            "Start" => steps.clear(),
+            "PreToolUse" if field("detail").is_empty() => steps.push(field("tool").to_string()),
+            "PreToolUse" => steps.push(format!("{}: {}", field("tool"), field("detail"))),
+            "Notification" => steps.push(format!("needs input: {}", field("detail"))),
+            _ => {}
+        }
+    }
+    let skip = steps.len().saturating_sub(limit);
+    steps.split_off(skip)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_calls_steps_are_read_back_from_the_trace() {
+        let d = tempfile::tempdir().unwrap();
+        let f = for_task(&d.path().join("agent-activity.json"), "web", "1");
+        let at = "2026-10-31T10:00:00+00:00";
+        let read = r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/r/old.rs"}}"#;
+        record(&f, read, "web #1", at).unwrap();
+        start(&f, "web #1", at).unwrap();
+        for stdin in [
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/r/a.rs"}}"#,
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_input":{"file_path":"/r/a.rs"}}"#,
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#,
+            r#"{"hook_event_name":"PreToolUse","tool_name":"TodoWrite","tool_input":{}}"#,
+        ] {
+            record(&f, stdin, "web #1", at).unwrap();
+        }
+        let other = r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/r/b.rs"}}"#;
+        record(
+            &for_task(&d.path().join("agent-activity.json"), "web", "2"),
+            other,
+            "web #2",
+            at,
+        )
+        .unwrap();
+        assert_eq!(
+            last_call_steps(&f, "web #1", 10),
+            ["Read: /r/a.rs", "Bash: cargo test", "TodoWrite"]
+        );
+        assert_eq!(
+            last_call_steps(&f, "web #1", 2),
+            ["Bash: cargo test", "TodoWrite"]
+        );
+        assert!(last_call_steps(&f, "web #9", 10).is_empty());
+    }
 
     #[test]
     fn settings_hook_every_event_into_the_file() {

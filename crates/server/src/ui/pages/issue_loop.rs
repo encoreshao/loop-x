@@ -254,6 +254,8 @@ struct IssueRow {
     detail: String,
     /// What the AI CLI itself said when the call failed (`issue.agent_failed`).
     cli_message: Option<String>,
+    /// The agent's last steps before it failed.
+    steps: Vec<String>,
     mr_url: String,
     timestamp: String,
     title: String,
@@ -318,6 +320,7 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                     outcome: "in_progress",
                     detail: String::new(),
                     cli_message: None,
+                    steps: Vec::new(),
                     mr_url: String::new(),
                     timestamp: String::new(),
                     title: String::new(),
@@ -359,9 +362,10 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                 };
                 row.mr_url = str_or_empty(data.get("mr_url"));
             }
-            "issue.escalated" => {
-                row.outcome = "escalated";
+            "issue.escalated" | "issue.deferred" => {
+                row.outcome = if etype == "issue.escalated" { "escalated" } else { "deferred" };
                 row.detail = str_or_empty(data.get("reason"));
+                keep_failure_detail(row, data);
             }
             "issue.failed" | "issue.agent_failed" => {
                 row.outcome = "failed";
@@ -371,10 +375,11 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
                 } else {
                     reason
                 };
-                row.cli_message = data
-                    .get("cli")
-                    .is_some_and(py_truthy)
-                    .then(|| str_or_empty(data.get("stderr_excerpt")));
+                row.cli_message = data.get("cli").is_some_and(py_truthy).then(|| {
+                    let said = str_or_empty(data.get("message"));
+                    if said.is_empty() { str_or_empty(data.get("stderr_excerpt")) } else { said }
+                });
+                row.steps = steps_of(data);
             }
             _ => continue,
         }
@@ -387,8 +392,32 @@ fn last_run_activity(ctx: &UiCtx) -> Option<Activity> {
     Some(Activity { updated_at: updated, issues, warning })
 }
 
+fn steps_of(data: &Map<String, Value>) -> Vec<String> {
+    data.get("steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// An escalation or pause after a failed call keeps what the CLI said; its own
+/// message and steps, when it carries them, win.
+fn keep_failure_detail(row: &mut IssueRow, data: &Map<String, Value>) {
+    let said = str_or_empty(data.get("message"));
+    if !said.is_empty() {
+        row.cli_message = Some(said);
+    }
+    let steps = steps_of(data);
+    if !steps.is_empty() {
+        row.steps = steps;
+    }
+}
+
 fn outcome_pill(outcome: &str) -> (&'static str, &'static str) {
     match outcome {
+        "deferred" => ("skipped", "Paused"),
         "fix" => ("done", "MR opened"),
         "answered" => ("done", "Answered"),
         "waiting" => ("skipped", "Waiting"),
@@ -584,11 +613,21 @@ fn last_run_card(ctx: &UiCtx, activity: &Option<Activity>) -> String {
                 pyfmt::escape(&issue.detail.replace('_', " "))
             )
         };
-        if let Some(message) = issue.cli_message.as_deref().filter(|_| issue.outcome == "failed") {
+        let failed_call = matches!(issue.outcome, "failed" | "escalated" | "deferred");
+        if let Some(message) = issue.cli_message.as_deref().filter(|_| failed_call) {
             if !message.is_empty() {
                 detail.push_str(&format!("<p class='result-summary'>{}</p>", pyfmt::escape(message)));
             }
-            detail.push_str(&format!("<p class='result-summary'>{}</p>", ai_cli::settings_link(ctx.lang)));
+            if issue.outcome != "escalated" {
+                detail.push_str(&format!("<p class='result-summary'>{}</p>", ai_cli::settings_link(ctx.lang)));
+            }
+        }
+        if failed_call && !issue.steps.is_empty() {
+            let items: String = issue.steps.iter().map(|s| format!("<li><code>{}</code></li>", pyfmt::escape(s))).collect();
+            detail.push_str(&format!(
+                "<details class='result-steps'><summary>{}</summary><ol>{items}</ol></details>",
+                pyfmt::escape(&ctx.tf("Agent's last steps ({count})", &[("count", &issue.steps.len().to_string())]))
+            ));
         }
         if !issue.checks.is_empty() {
             detail.push_str(&format!(
@@ -3547,6 +3586,37 @@ mod tests {
         assert!(html.contains("href='/settings?tab=ai-cli'"), "{html}");
         assert!(html.contains("<div class='flash flash-warning'>"), "{html}");
         assert!(html.contains("full tool access"), "{html}");
+    }
+
+    #[test]
+    fn an_escalated_or_paused_row_keeps_what_the_cli_said_and_the_agents_steps() {
+        let sb = Sandbox::new();
+        let dir = Some(sb.state.events_dir.as_path());
+        let fields = |iid: i64, data: Value| events::EventFields { project: Some("app".into()), issue_iid: Some(iid), data: Some(data), ..Default::default() };
+        events::emit(
+            "issue.agent_failed",
+            "run_1",
+            fields(7, json!({"reason": "exited 1", "cli": "claude", "stderr_excerpt": "{\"type\":\"result\"}", "message": "Error: bad <config>", "steps": ["Read: /i/gitlab-issue.md", "Bash: make test"]})),
+            dir,
+        )
+        .unwrap();
+        events::emit("issue.escalated", "run_1", fields(7, json!({"reason": "run_incomplete"})), dir).unwrap();
+        events::emit(
+            "issue.agent_failed",
+            "run_1",
+            fields(8, json!({"reason": "usage_limit", "cli": "claude", "message": "You've hit your 5-hour limit", "steps": []})),
+            dir,
+        )
+        .unwrap();
+        events::emit("issue.deferred", "run_1", fields(8, json!({"reason": "usage_limit", "message": "You've hit your 5-hour limit"})), dir).unwrap();
+        let html = live_body(&sb.ctx(), None, false);
+        assert!(html.contains("Error: bad &lt;config&gt;"), "{html}");
+        assert!(!html.contains("{&quot;type&quot;"), "the raw envelope is not shown: {html}");
+        assert!(html.contains("<details class='result-steps'>"), "{html}");
+        assert!(html.contains("<li><code>Bash: make test</code></li>"), "{html}");
+        assert!(html.contains("You&#x27;ve hit your 5-hour limit") || html.contains("You've hit your 5-hour limit"), "{html}");
+        assert!(html.contains("history-skipped'>Paused<"), "{html}");
+        assert!(html.contains("usage limit"), "{html}");
     }
 
     #[test]

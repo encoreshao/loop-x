@@ -19,8 +19,11 @@ public enum IslandChip: Equatable, Sendable {
 public struct IslandDetail: Equatable, Sendable {
     public var rows: [IslandRow]
     public var result: String?
+    /// A failed agent's last steps, oldest first.
+    public var steps: [String] = []
     public var chips: [IslandChip]
     public static let maxRows = 6
+    public static let maxSteps = 3
 
     public static func make(task: NotchTask, events: [RecentEvent], attention: Attention?) -> IslandDetail {
         let issue = task.detail.flatMap { $0.components(separatedBy: " · ").first }
@@ -34,6 +37,7 @@ public struct IslandDetail: Equatable, Sendable {
         }
 
         var result: String?
+        var steps: [String] = []
         var chips: [IslandChip] = []
         if let a = attention {
             let who = NotchState.describe(project: a.project, iid: a.issueIid, fallback: nil)
@@ -43,13 +47,14 @@ public struct IslandDetail: Equatable, Sendable {
                 if let url = a.mrURL.flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme?.lowercased()) {
                     chips.append(.openMergeRequest(url))
                 }
-            case .escalated: result = a.reason ?? "Needs your attention"
-            case .failed: result = a.reason ?? "Run failed"
+            case .escalated: result = a.summary ?? "Needs your attention"
+            case .failed: result = a.summary ?? "Run failed"
             }
+            if a.kind != .mrOpened { steps = Array((a.steps ?? []).suffix(maxSteps)) }
         }
         if task.state != .running, !LoopNames.isCreatorJob(task.name) { chips.append(.runAgain(loop: loopName(for: task))) }
         chips.append(.openDashboard)
-        return IslandDetail(rows: Array(rows), result: result, chips: chips)
+        return IslandDetail(rows: Array(rows), result: result, steps: steps, chips: chips)
     }
 
     /// The runnable loop behind a task: topics all run under the topic monitor.
@@ -65,8 +70,8 @@ public struct IslandDetail: Equatable, Sendable {
     static func tone(_ type: String) -> IslandTone {
         switch type {
         case "issue.completed", "run.completed": return .success
-        case "run.failed", "loop.failed": return .failure
-        case "issue.escalated": return .warning
+        case "run.failed", "loop.failed", "issue.agent_failed": return .failure
+        case "issue.escalated", "issue.deferred": return .warning
         case "run.started": return .active
         default: return .neutral
         }

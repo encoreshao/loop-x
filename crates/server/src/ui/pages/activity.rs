@@ -252,13 +252,48 @@ fn event_label(ctx: &UiCtx, ev: &Value) -> Option<String> {
             Some("answer") => ctx.t("Answered on the issue"),
             _ => ctx.t("Completed"),
         },
-        "issue.escalated" => match field("reason") {
-            Some(reason) => ctx.tf("Escalated: {reason}", &[("reason", &reason.replace('_', " "))]),
-            None => ctx.t("Escalated"),
-        },
+        "issue.escalated" => {
+            let label = match field("reason") {
+                Some(reason) => ctx.tf("Escalated: {reason}", &[("reason", &reason.replace('_', " "))]),
+                None => ctx.t("Escalated"),
+            };
+            with_cli_said(label, &data)
+        }
+        "issue.agent_failed" => with_cli_said(
+            ctx.tf("Agent failed: {reason}", &[("reason", &field("reason").unwrap_or_default().replace('_', " "))]),
+            &data,
+        ),
+        "issue.deferred" => with_cli_said(ctx.t("Paused: the AI CLI hit its usage limit"), &data),
         "loop.failed" => ctx.t("Loop failed"),
         _ => return None,
     })
+}
+
+/// `label — <what the AI CLI said>`, when a failure event recorded it.
+fn with_cli_said(label: String, data: &Value) -> String {
+    match data.get("message").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty()) {
+        Some(said) => format!("{label} — {said}"),
+        None => label,
+    }
+}
+
+/// The agent's last steps a failure event recorded, as one line.
+fn steps_line(ctx: &UiCtx, ev: &Value) -> String {
+    let steps: Vec<&str> = ev
+        .pointer("/data/steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if steps.is_empty() {
+        return String::new();
+    }
+    let last = steps[steps.len().saturating_sub(3)..].join(" → ");
+    format!(
+        "<small class='activity-feed-steps'>{}</small>",
+        pyfmt::escape(&ctx.tf("Last steps: {steps}", &[("steps", &last)]))
+    )
 }
 
 /// The newest meaningful ledger events of today and yesterday (UTC), newest first.
@@ -312,7 +347,8 @@ fn feed_html(ctx: &UiCtx, events: &[(Value, String)]) -> String {
             format!(
                 "<li><time datetime='{ts_attr}' title='{ts_attr}'>{when}</time>\
                  <span class='activity-feed-subject'>{subject}</span>\
-                 <span class='activity-feed-label'>{label}{mr}</span></li>",
+                 <span class='activity-feed-label'>{label}{mr}{steps}</span></li>",
+                steps = steps_line(ctx, ev),
                 ts_attr = pyfmt::escape(ts),
                 when = pyfmt::escape(&relative_time(now, ts)),
                 subject = pyfmt::escape(&subject),
@@ -516,6 +552,32 @@ mod tests {
         assert!(now.contains("href='https://gitlab.example.com/a/b/-/merge_requests/9'"), "{now}");
         assert!(!now.contains("/stop"), "{now}");
         assert!(!now.contains("line two"), "no log tail when idle: {now}");
+    }
+
+    #[test]
+    fn a_failed_or_paused_agent_shows_what_the_cli_said_and_its_last_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        write(
+            state.events_dir.join("2026-10-28.jsonl"),
+            &[
+                event(
+                    "2026-10-28T13:40:00.000Z",
+                    "issue.agent_failed",
+                    r#"{"reason": "exited 1", "message": "Error: bad <config>", "steps": ["Read: /a", "Bash: make test"]}"#,
+                ),
+                event(
+                    "2026-10-28T13:41:00.000Z",
+                    "issue.deferred",
+                    r#"{"reason": "usage_limit", "message": "You've hit your 5-hour limit"}"#,
+                ),
+            ]
+            .join("\n"),
+        );
+        let (now, _) = render(&state);
+        assert!(now.contains("Agent failed: exited 1 — Error: bad &lt;config&gt;"), "{now}");
+        assert!(now.contains("Last steps: Read: /a → Bash: make test"), "{now}");
+        assert!(now.contains("Paused: the AI CLI hit its usage limit — You"), "{now}");
     }
 
     #[test]

@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 /// `attention`, i.e. worth surfacing in the notch.
 pub const ATTENTION_WINDOW_MINUTES: i64 = 15;
 const RECENT_EVENTS: usize = 15;
-const INTERESTING: [&str; 9] = [
+const INTERESTING: [&str; 11] = [
     "run.started",
     "run.completed",
     "run.failed",
     "issue.queued",
+    "issue.agent_failed",
+    "issue.deferred",
     "issue.escalated",
     "issue.completed",
     "approval.requested",
@@ -189,7 +191,7 @@ fn attention(recent: &[Value], now: DateTime<Utc>) -> Value {
         }
         let data = &e["data"];
         let kind = match e["event_type"].as_str() {
-            Some("issue.escalated") => "escalated",
+            Some("issue.escalated" | "issue.deferred") => "escalated",
             Some("issue.completed")
                 if data["action"] == "fix" || data["outcome"] == "mr_opened" =>
             {
@@ -204,6 +206,8 @@ fn attention(recent: &[Value], now: DateTime<Utc>) -> Value {
             "project": e["project"],
             "issue_iid": e["issue_iid"],
             "reason": data["reason"],
+            "message": data["message"],
+            "steps": data["steps"],
             "mr_url": data["mr_url"],
         });
     }
@@ -1103,6 +1107,39 @@ mod tests {
 
         let later = now() + Duration::minutes(30);
         assert_eq!(build_snapshot(&p, later)["attention"], Value::Null);
+    }
+
+    #[test]
+    fn a_failed_or_paused_agent_surfaces_what_the_cli_said_and_its_steps() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        event(
+            d.path(),
+            "issue.agent_failed",
+            "2026-10-22T11:54:00.000Z",
+            json!({"reason": "usage_limit", "message": "You've hit your 5-hour limit", "steps": ["Read: /a"]}),
+        );
+        event(
+            d.path(),
+            "issue.deferred",
+            "2026-10-22T11:55:00.000Z",
+            json!({"reason": "usage_limit", "message": "You've hit your 5-hour limit", "steps": ["Read: /a"]}),
+        );
+        let s = build_snapshot(&p, now());
+        assert_eq!(s["attention"]["kind"], "escalated");
+        assert_eq!(s["attention"]["reason"], "usage_limit");
+        assert_eq!(s["attention"]["message"], "You've hit your 5-hour limit");
+        assert_eq!(s["attention"]["steps"], json!(["Read: /a"]));
+        let types: Vec<&Value> = s["recent_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| &e["type"])
+            .collect();
+        assert_eq!(
+            types,
+            [&json!("issue.agent_failed"), &json!("issue.deferred")]
+        );
     }
 
     #[test]

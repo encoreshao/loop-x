@@ -2364,5 +2364,9 @@
   "+{n} more": "他 {n} 個",
   "Remove {name}?": "{name} を削除しますか?",
   "No MCP server named {name}": "{name} という MCP サーバーはありません",
-  "Tools a loop's Claude runs can use. Only the servers a loop declares attach, and only to that run.": "ループの Claude 実行が使えるツールです。ループが宣言したサーバーだけが、その実行にだけ接続されます。"
+  "Tools a loop's Claude runs can use. Only the servers a loop declares attach, and only to that run.": "ループの Claude 実行が使えるツールです。ループが宣言したサーバーだけが、その実行にだけ接続されます。",
+  "Agent failed: {reason}": "エージェント失敗: {reason}",
+  "Paused: the AI CLI hit its usage limit": "一時停止: AI CLI が使用上限に達しました",
+  "Last steps: {steps}": "直近のステップ: {steps}",
+  "Agent's last steps ({count})": "エージェントの直近のステップ（{count}）"
 }

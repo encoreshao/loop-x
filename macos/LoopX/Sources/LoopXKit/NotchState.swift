@@ -87,7 +87,7 @@ public struct NotchState: Equatable, Sendable {
             let who = describe(project: a.project, iid: a.issueIid, fallback: nil)
             switch a.kind {
             case .escalated:
-                return alert(.escalate, "Needs your attention", a.reason ?? who, .orange,
+                return alert(.escalate, "Needs your attention", a.summary ?? who, .orange,
                              "exclamationmark.triangle.fill", key: a.key, extra: [.openDashboard])
             case .mrOpened:
                 var extra: [NotchAction] = []
@@ -98,7 +98,7 @@ public struct NotchState: Equatable, Sendable {
                 return alert(.mrOpened, "Merge request opened", who, .green, "checkmark.circle.fill",
                              key: a.key, extra: extra)
             case .failed:
-                return alert(.failed, "Run failed", a.reason ?? who, .red, "xmark.octagon.fill",
+                return alert(.failed, "Run failed", a.summary ?? who, .red, "xmark.octagon.fill",
                              key: a.key, extra: [.openDashboard])
             }
         }

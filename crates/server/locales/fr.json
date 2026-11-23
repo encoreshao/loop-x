@@ -2364,5 +2364,9 @@
   "+{n} more": "+{n} de plus",
   "Remove {name}?": "Retirer {name} ?",
   "No MCP server named {name}": "Aucun serveur MCP nommé {name}",
-  "Tools a loop's Claude runs can use. Only the servers a loop declares attach, and only to that run.": "Outils que les exécutions Claude d’une boucle peuvent utiliser. Seuls les serveurs déclarés par une boucle sont attachés, et seulement à cette exécution."
+  "Tools a loop's Claude runs can use. Only the servers a loop declares attach, and only to that run.": "Outils que les exécutions Claude d’une boucle peuvent utiliser. Seuls les serveurs déclarés par une boucle sont attachés, et seulement à cette exécution.",
+  "Agent failed: {reason}": "Échec de l’agent : {reason}",
+  "Paused: the AI CLI hit its usage limit": "En pause : la CLI IA a atteint sa limite d’utilisation",
+  "Last steps: {steps}": "Dernières étapes : {steps}",
+  "Agent's last steps ({count})": "Dernières étapes de l’agent ({count})"
 }

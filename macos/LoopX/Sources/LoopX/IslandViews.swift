@@ -144,6 +144,9 @@ struct DetailView: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
                 }
                 if let r = detail.result { Text(r).font(.system(size: 12, weight: .medium)).foregroundStyle(.white) }
+                ForEach(Array(detail.steps.enumerated()), id: \.offset) { _, step in
+                    Text(step).font(.system(size: 11).monospaced()).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                }
                 HStack(spacing: 6) {
                     ForEach(Array(detail.chips.enumerated()), id: \.offset) { _, chip in
                         capsule(Self.title(chip), Self.symbol(chip)) { island.perform(chip) }

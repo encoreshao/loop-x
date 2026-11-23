@@ -121,10 +121,18 @@ pub fn issue_lines(
             }
             "issue.escalated" => {
                 let reason = data["reason"].as_str().unwrap_or("escalated");
-                line.outcome = Outcome::Escalated(escalation_reason_text(
-                    reason,
-                    data["stop_reason"].as_str(),
-                ));
+                let mut why = escalation_reason_text(reason, data["stop_reason"].as_str());
+                if let Some(said) = cli_said(data) {
+                    why.push_str(&format!(" The AI CLI said: {said}"));
+                }
+                line.outcome = Outcome::Escalated(why);
+            }
+            "issue.deferred" => {
+                let mut why = "the AI CLI hit its usage limit".to_string();
+                if let Some(said) = cli_said(data) {
+                    why.push_str(&format!(": {said}"));
+                }
+                line.outcome = Outcome::Incomplete(why);
             }
             _ => {}
         }
@@ -137,6 +145,13 @@ pub fn issue_lines(
         }
     }
     lines.into_iter().map(|(_, l)| l).collect()
+}
+
+fn cli_said(data: &Value) -> Option<&str> {
+    data["message"]
+        .as_str()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -466,6 +481,40 @@ mod tests {
                 ("R_web_12".into(), "ignored".into()),
             ],
         )
+    }
+
+    #[test]
+    fn a_deferred_or_crashed_issue_says_what_the_ai_cli_said() {
+        let l = issue_lines(
+            "R",
+            &[
+                ev(
+                    "issue.deferred",
+                    "web",
+                    7,
+                    json!({"reason": "usage_limit", "message": "You've hit your 5-hour limit"}),
+                ),
+                ev(
+                    "issue.escalated",
+                    "web",
+                    8,
+                    json!({"reason": "run_incomplete", "stop_reason": "agent_failed", "message": "Error: bad config"}),
+                ),
+            ],
+            &[("R_web_7".into(), "stopped: usage_limit".into())],
+        );
+        assert_eq!(
+            l[0].outcome,
+            Outcome::Incomplete(
+                "the AI CLI hit its usage limit: You've hit your 5-hour limit".into()
+            )
+        );
+        assert_eq!(
+            l[1].outcome,
+            Outcome::Escalated(
+                "The agent session failed or timed out (details in the loop's log). The AI CLI said: Error: bad config".into()
+            )
+        );
     }
 
     #[test]

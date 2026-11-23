@@ -240,6 +240,10 @@ pub fn limit_hit(output: &str) -> bool {
     ]
     .iter()
     .any(|p| text.contains(p))
+        || (text.contains("hit your")
+            && ["-hour limit", "weekly limit", "daily limit"]
+                .iter()
+                .any(|w| text.contains(w)))
 }
 
 /// Whether a run's output says the AI CLI is not signed in, or its sign-in or
@@ -430,6 +434,8 @@ mod tests {
             "Claude AI usage limit reached|1793462400",
             "You've hit your usage limit. Upgrade or try again at 3pm.",
             "ERROR: You've hit your limit · resets 5pm",
+            "You've hit your 5-hour limit · resets 12:20am (Asia/Shanghai)",
+            "You've hit your weekly limit · resets Mon 9am",
             "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}",
             "[API Error: RESOURCE_EXHAUSTED]",
             "Error: You exceeded your current quota",
