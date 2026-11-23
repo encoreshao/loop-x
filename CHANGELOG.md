@@ -11,6 +11,8 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-23
+
 ### Added
 
 - Browser check for UI fixes (advisory): the GitLab issue loop now loads each page a UI fix declares in headless Chrome on the branch's own dev server and reports load failures, uncaught errors, missing elements and blank pages in the merge request's Pre-review section and on Harness → Gates. Projects with `"verifiers": ["a11y"]` also get an accessibility check (axe-core, WCAG 2.2 AA) that reports only violations new compared with the target branch. Uses this Mac's Chrome and a bundled axe-core; nothing is downloaded or installed.
@@ -793,7 +795,8 @@ later releases list only what changed since the previous one.
 - `install.sh`, `uninstall.sh` and `setup.sh` with launchd agents and an
   optional nginx front end.
 
-[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/encoreshao/loop-x/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/encoreshao/loop-x/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/encoreshao/loop-x/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/encoreshao/loop-x/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/encoreshao/loop-x/compare/v0.16.0...v0.17.0
