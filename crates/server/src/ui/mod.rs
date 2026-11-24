@@ -29,6 +29,7 @@ pub mod i18n;
 pub mod icons;
 pub mod live_cache;
 pub mod logos;
+pub mod loop_areas;
 pub mod markdown;
 pub mod nav;
 pub mod office;
