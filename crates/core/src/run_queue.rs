@@ -345,8 +345,8 @@ impl RunQueue {
 
     /// Fails every `running` entry whose process is gone (a worker that died).
     pub fn recover(&self, now: &str, alive: &dyn Fn(i64) -> bool) -> std::io::Result<usize> {
-        self.with_file(|f| {
-            let mut n = 0;
+        let ended = self.with_file(|f| {
+            let mut ended = Vec::new();
             for e in f.entries.iter_mut().filter(|e| e.state == "running") {
                 if !e.pid.is_some_and(alive) {
                     e.state = if e.cancel_requested {
@@ -357,11 +357,27 @@ impl RunQueue {
                     .into();
                     e.note = Some("The run's process ended without reporting a result".into());
                     e.finished_at = Some(now.to_string());
-                    n += 1;
+                    ended.push((e.loop_name.clone(), e.cancel_requested));
                 }
             }
-            n
-        })
+            ended
+        })?;
+        for (loop_name, cancelled) in &ended {
+            self.settle_loop_status(loop_name, *cancelled);
+        }
+        Ok(ended.len())
+    }
+
+    /// A run killed before it could write its own result leaves its loop's
+    /// status file saying `running` forever; mark it ended.
+    fn settle_loop_status(&self, loop_name: &str, cancelled: bool) {
+        let path = crate::loop_scheduler::status_path_for_loop(loop_name, self.path.parent());
+        let status = crate::status::read_status(&path);
+        if status.get("state").and_then(serde_json::Value::as_str) != Some("running") {
+            return;
+        }
+        let state = if cancelled { "stopped" } else { "failed" };
+        let _ = crate::status::write_status(&path, state, &[]);
     }
 
     pub fn snapshot(&self, recent: usize) -> Snapshot {
@@ -464,6 +480,12 @@ fn record_exit(queue: &RunQueue, entry: &Entry, code: Option<i32>, now: &dyn Fn(
         _ => ("failed", None),
     };
     let _ = queue.finish(&entry.id, state, code, note, &now());
+    let cancelled = queue
+        .read_file()
+        .entries
+        .iter()
+        .any(|e| e.id == entry.id && e.cancel_requested);
+    queue.settle_loop_status(&entry.loop_name, cancelled);
 }
 
 #[cfg(test)]
@@ -621,6 +643,76 @@ mod tests {
         assert!(snap.running.is_empty());
         assert_eq!(snap.recent[0].state, "failed");
         assert!(!q.is_active("a"));
+    }
+
+    fn loop_status(q: &RunQueue, loop_name: &str) -> serde_json::Value {
+        crate::status::read_status(&crate::loop_scheduler::status_path_for_loop(
+            loop_name,
+            q.path().parent(),
+        ))
+    }
+
+    fn set_loop_status(q: &RunQueue, loop_name: &str, doc: serde_json::Value) {
+        let path = crate::loop_scheduler::status_path_for_loop(loop_name, q.path().parent());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, doc.to_string()).unwrap();
+    }
+
+    #[test]
+    fn recovering_a_dead_run_clears_the_loops_running_status() {
+        let (_d, q) = queue();
+        q.enqueue("issue-loop", Reason::Scheduled, "t0").unwrap();
+        let a = q.claim_next("t1", 1).unwrap().unwrap();
+        q.set_pid(&a.id, 99).unwrap();
+        set_loop_status(
+            &q,
+            "issue-loop",
+            serde_json::json!({"state": "running", "current_issue": "web #1", "current_step": "analyzing"}),
+        );
+        assert_eq!(q.recover("t2", &|_| false).unwrap(), 1);
+        assert_eq!(loop_status(&q, "issue-loop")["state"], "failed");
+    }
+
+    #[test]
+    fn a_run_that_exits_without_reporting_leaves_its_loop_failed_or_stopped() {
+        let (_d, q) = queue();
+        q.enqueue("a", Reason::Scheduled, "t0").unwrap();
+        set_loop_status(
+            &q,
+            "a",
+            serde_json::json!({"state": "running", "current_step": "x"}),
+        );
+        drain(&q, &|| "now".to_string(), 1, &mut |_| {
+            std::process::Command::new("sh")
+                .args(["-c", "exit 1"])
+                .spawn()
+        });
+        assert_eq!(loop_status(&q, "a")["state"], "failed");
+
+        q.enqueue("b", Reason::Scheduled, "t0").unwrap();
+        let b = q.claim_next("t1", 1).unwrap().unwrap();
+        q.cancel(&b.id, "t2").unwrap();
+        set_loop_status(&q, "b", serde_json::json!({"state": "running"}));
+        record_exit(&q, &b, Some(143), &|| "t3".to_string());
+        assert_eq!(loop_status(&q, "b")["state"], "stopped");
+    }
+
+    #[test]
+    fn a_run_that_reported_its_own_result_keeps_it() {
+        let (_d, q) = queue();
+        q.enqueue("a", Reason::Scheduled, "t0").unwrap();
+        set_loop_status(
+            &q,
+            "a",
+            serde_json::json!({"state": "idle", "last_exit_code": 0}),
+        );
+        drain(&q, &|| "now".to_string(), 1, &mut |_| {
+            std::process::Command::new("sh")
+                .args(["-c", "exit 0"])
+                .spawn()
+        });
+        assert_eq!(loop_status(&q, "a")["state"], "idle");
+        assert_eq!(loop_status(&q, "a")["last_exit_code"], 0);
     }
 
     #[test]

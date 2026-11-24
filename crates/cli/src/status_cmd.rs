@@ -45,11 +45,27 @@ fn int_flag(args: &[String], flag: &str) -> Result<Option<Value>, String> {
 }
 
 fn write(args: &[String]) -> Result<(), String> {
-    let state = args.first().ok_or(WRITE_USAGE)?;
+    args.first().ok_or(WRITE_USAGE)?;
     let loop_name = flag_value(args, "--loop")?.unwrap_or("issue-loop");
+    write_to(&loop_scheduler::status_path_for_loop(loop_name, None), args)
+}
+
+/// A `running` update without `--pid` keeps the pid the run wrapper recorded,
+/// so Stop can still kill the run and a dead run can be told from a live one.
+fn write_to(path: &std::path::Path, args: &[String]) -> Result<(), String> {
+    let state = args.first().ok_or(WRITE_USAGE)?;
     let mut extra: Vec<(&str, Value)> = Vec::new();
-    if let Some(pid) = int_flag(args, "--pid")? {
-        extra.push(("pid", pid));
+    match int_flag(args, "--pid")? {
+        Some(pid) => extra.push(("pid", pid)),
+        None if state == "running" => {
+            let current = status::read_status(path);
+            if current.get("state").and_then(Value::as_str) == Some("running") {
+                if let Some(pid) = current.get("pid").filter(|p| p.is_i64()) {
+                    extra.push(("pid", pid.clone()));
+                }
+            }
+        }
+        None => {}
     }
     if let Some(code) = int_flag(args, "--exit-code")? {
         extra.push(("last_exit_code", code));
@@ -60,8 +76,7 @@ fn write(args: &[String]) -> Result<(), String> {
     if let Some(step) = flag_value(args, "--current-step")? {
         extra.push(("current_step", json!(step)));
     }
-    let path = loop_scheduler::status_path_for_loop(loop_name, None);
-    status::write_status(&path, state, &extra)
+    status::write_status(path, state, &extra)
         .map(|_| ())
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
@@ -94,6 +109,29 @@ mod tests {
         assert_eq!(flag_value(&args, "--loop").unwrap(), Some("x"));
         assert_eq!(int_flag(&args, "--pid").unwrap(), Some(json!(9)));
         assert_eq!(flag_value(&args, "--nope").unwrap(), None);
+    }
+
+    #[test]
+    fn a_progress_update_keeps_the_runs_recorded_pid() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("status.json");
+        write_to(&p, &s(&["running", "--pid", "4242"])).unwrap();
+        write_to(
+            &p,
+            &s(&[
+                "running",
+                "--current-issue",
+                "web #1",
+                "--current-step",
+                "analyzing",
+            ]),
+        )
+        .unwrap();
+        let doc = status::read_status(&p);
+        assert_eq!(doc["pid"], 4242);
+        assert_eq!(doc["current_step"], "analyzing");
+        write_to(&p, &s(&["idle"])).unwrap();
+        assert!(status::read_status(&p).get("pid").is_none());
     }
 
     #[test]
