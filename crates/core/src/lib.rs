@@ -146,6 +146,7 @@ pub mod seen_store;
 pub mod settings_store;
 pub mod setup_doctor;
 pub mod sha256;
+pub mod sidebar_pins;
 pub mod slack;
 pub mod slack_agent;
 pub mod slack_report;

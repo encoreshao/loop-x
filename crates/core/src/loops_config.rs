@@ -414,13 +414,27 @@ pub fn set_enabled(
     config_path: &Path,
     template_path: Option<&Path>,
 ) -> Outcome {
-    with_loop(name, config_path, template_path, |loop_| {
+    let enabled_before: Vec<String> = list_loops(config_path, template_path)
+        .unwrap_or_default()
+        .iter()
+        .filter(|l| l.get("enabled").is_none_or(py_truthy))
+        .filter_map(|l| l.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let message = with_loop(name, config_path, template_path, |loop_| {
         loop_.insert("enabled".into(), json!(enabled));
         Ok(format!(
             "{} {name}",
             if enabled { "Enabled" } else { "Disabled" }
         ))
-    })
+    })?;
+    // A pins problem never fails the enable itself.
+    let _ = crate::sidebar_pins::on_enabled_changed(
+        &crate::sidebar_pins::pins_path(config_path),
+        name,
+        enabled,
+        &enabled_before,
+    );
+    Ok(message)
 }
 
 /// The longest `ai_config_dir`.
@@ -923,6 +937,25 @@ mod tests {
             "No loop named 'zzz' in the loops registry"
         );
         assert_eq!(std::fs::read_to_string(&f.config).unwrap(), before);
+    }
+
+    #[test]
+    fn set_enabled_auto_pins_and_disable_unpins() {
+        let f = fx(json!([
+            {"name": "issue-loop", "enabled": true},
+            {"name": "rss-watch-loop", "enabled": false}
+        ]));
+        let pins = crate::sidebar_pins::pins_path(&f.config);
+        set_enabled("rss-watch-loop", true, &f.config, Some(&f.none)).unwrap();
+        assert_eq!(
+            crate::sidebar_pins::read(&pins),
+            crate::sidebar_pins::Stored::Pins(vec!["issue-loop".into(), "rss-watch-loop".into()])
+        );
+        set_enabled("issue-loop", false, &f.config, Some(&f.none)).unwrap();
+        assert_eq!(
+            crate::sidebar_pins::read(&pins),
+            crate::sidebar_pins::Stored::Pins(vec!["rss-watch-loop".into()])
+        );
     }
 
     #[test]
