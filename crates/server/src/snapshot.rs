@@ -288,6 +288,19 @@ fn enabled_loops(loops_config: &Path) -> Vec<Value> {
         .collect()
 }
 
+/// The loops the sidebar lists (pinned, then any other needing attention),
+/// for the Mac app's Loops menu.
+fn sidebar_loops(loops_config: &Path, waiting: &[Value]) -> Vec<Value> {
+    use crate::ui::sidebar_loops::{attention_loops, build, enabled_names};
+    use loopx_core::sidebar_pins::{effective, pins_path, read};
+    let registry = loopx_core::loops_config::list_loops(loops_config, None).unwrap_or_default();
+    let pins = effective(&read(&pins_path(loops_config)), &enabled_names(&registry));
+    build(&registry, &pins, &attention_loops(waiting))
+        .iter()
+        .map(|l| l.to_json())
+        .collect()
+}
+
 /// A listing of approvals without the page texts a proposal carries: a
 /// `profile-section` or `guide-page` approval's `target.old` and `target.new` (a whole
 /// section or guide page each) become `old_len`/`new_len` byte counts. Every other
@@ -393,6 +406,7 @@ pub fn build_snapshot(paths: &Paths, now: DateTime<Utc>) -> Value {
         "loops": loops,
         "disabled_loops": disabled,
         "enabled_loops": enabled_loops(&paths.loops_config),
+        "sidebar_loops": sidebar_loops(&paths.loops_config, &waiting),
         "topics": topics["topics"],
         "approvals": {"pending": pending},
         "queue": queue,
@@ -513,6 +527,39 @@ mod tests {
         assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted: {s}");
         std::fs::remove_file(&p.loops_config).unwrap();
         assert_eq!(build_snapshot(&p, now())["disabled_loops"], json!([]));
+    }
+
+    #[test]
+    fn the_snapshot_lists_the_sidebar_loops() {
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        std::fs::write(
+            &p.loops_config,
+            r#"[{"name": "issue-loop", "enabled": true},
+                {"name": "topic-loop", "enabled": true},
+                {"name": "mr-review-loop", "label": "MR Review", "enabled": true}]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            p.loops_config.with_file_name("sidebar_pins.json"),
+            r#"{"pinned": ["topic-loop"]}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(p.outputs.join("status")).unwrap();
+        std::fs::write(
+            p.outputs.join("status/mr-review-loop.json"),
+            r#"{"state": "failed", "updated_at": "2026-10-22T08:00:00+00:00"}"#,
+        )
+        .unwrap();
+        let s = build_snapshot(&p, now());
+        assert_eq!(
+            s["sidebar_loops"],
+            json!([
+                {"name": "topic-loop", "label": "Topic Monitor", "path": "/loops/topic-loop", "attention": false},
+                {"name": "mr-review-loop", "label": "MR Review", "path": "/loops/mr-review-loop", "attention": true}
+            ]),
+            "{s}"
+        );
     }
 
     #[test]

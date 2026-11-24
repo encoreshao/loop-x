@@ -44,6 +44,13 @@ import Testing
         #expect(try Snapshot.decode(Data("{}".utf8)).disabledLoops.isEmpty)
     }
 
+    @Test func decodesTheSidebarLoopsAndAMissingListIsNil() throws {
+        let s = try Snapshot.decode(Data(#"{"sidebar_loops":[{"name":"topic-loop","label":"Topic Monitor","path":"/loops/topic-loop","attention":false},{"name":"x"}]}"#.utf8))
+        #expect(s.sidebarLoops == [LoopRef(name: "topic-loop", label: "Topic Monitor")])
+        #expect(try Snapshot.decode(Data(#"{"sidebar_loops":[]}"#.utf8)).sidebarLoops == [])
+        #expect(try Snapshot.decode(Data("{}".utf8)).sidebarLoops == nil)
+    }
+
     @Test func decodesTheEnabledLoopsWithTheirLabels() throws {
         let s = try Snapshot.decode(Data(#"{"enabled_loops":[{"name":"mr-review-loop","label":"MR Review"},{"name":"x"}]}"#.utf8))
         #expect(s.enabledLoops == [LoopRef(name: "mr-review-loop", label: "MR Review")])

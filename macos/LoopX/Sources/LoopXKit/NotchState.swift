@@ -49,6 +49,8 @@ public struct NotchState: Equatable, Sendable {
     public var disabledLoops: Set<String> = []
     /// The enabled loops in the sidebar's order; the Mac Loops menu lists exactly these.
     public var enabledLoops: [LoopRef] = []
+    /// The sidebar's loop list, when the backend sends one; the Loops menu follows it.
+    public var sidebarLoops: [LoopRef]?
 
     public static let alertWindow: TimeInterval = 120
 
@@ -64,6 +66,7 @@ public struct NotchState: Equatable, Sendable {
         state.needsYou = s.needsYou.count
         state.disabledLoops = s.disabledLoops
         state.enabledLoops = s.enabledLoops
+        state.sidebarLoops = s.sidebarLoops
         return state
     }
 

@@ -66,13 +66,14 @@ public enum DashboardMenu {
         ]),
     ]
 
-    /// The sections with the Loops section built from the enabled loops (⌘1 All Loops, ⌘2...⌘9 for the first
-    /// eight, the rest without a shortcut), so the menu matches the sidebar. With no list (an older backend,
-    /// no registry) the built-in loops stay.
-    public static func sections(enabled: [LoopRef]) -> [Section] {
-        guard !enabled.isEmpty else { return sections }
+    /// The sections with the Loops section built like the sidebar: All Loops (⌘1), then `sidebar` (⌘2...⌘9 for the
+    /// first eight, the rest without a shortcut). An older backend sends no `sidebar`: the enabled loops are listed
+    /// instead, and with neither the built-in loops stay.
+    public static func sections(enabled: [LoopRef], sidebar: [LoopRef]? = nil) -> [Section] {
+        let listed: [LoopRef]
+        if let sidebar { listed = sidebar } else if !enabled.isEmpty { listed = enabled } else { return sections }
         var entries = [Entry("All Loops", "/loops", Shortcut("1"))]
-        for (i, l) in enabled.enumerated() {
+        for (i, l) in listed.enumerated() {
             let key = i < 8 ? String(i + 2) : ""
             entries.append(Entry(l.label, "/loops/\(l.name)", Shortcut(key)))
         }

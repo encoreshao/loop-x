@@ -28,6 +28,26 @@ import Testing
         #expect(titles == ["All Loops", "Issues", "Topic Monitor", "Inbox Triage"])
     }
 
+    @Test func theMenuFollowsTheSidebarLoopsWhenTheBackendSendsThem() {
+        let enabled = [LoopRef(name: "issue-loop", label: "Issues"), LoopRef(name: "topic-loop", label: "Topic Monitor")]
+        let sidebar = [LoopRef(name: "topic-loop", label: "Topic Monitor"), LoopRef(name: "mr-review-loop", label: "MR Review")]
+        let loops = DashboardMenu.sections(enabled: enabled, sidebar: sidebar).first { $0.title == "Loops" }!
+        #expect(loops.entries.map(\.title) == ["All Loops", "Topic Monitor", "MR Review"])
+        #expect(loops.entries.map(\.shortcut.key) == ["1", "2", "3"])
+    }
+
+    @Test func anEmptySidebarListShowsOnlyAllLoops() {
+        let enabled = [LoopRef(name: "issue-loop", label: "Issues")]
+        let titles = DashboardMenu.sections(enabled: enabled, sidebar: []).first { $0.title == "Loops" }?.entries.map(\.title)
+        #expect(titles == ["All Loops"])
+    }
+
+    @Test func withoutASidebarListTheEnabledLoopsStay() {
+        let enabled = [LoopRef(name: "issue-loop", label: "Issues")]
+        let titles = DashboardMenu.sections(enabled: enabled, sidebar: nil).first { $0.title == "Loops" }?.entries.map(\.title)
+        #expect(titles == ["All Loops", "Issues"])
+    }
+
     @Test func sectionsFollowTheSidebarGroups() {
         #expect(DashboardMenu.sections.map(\.title) == ["Loops", "Creator", "Observe", "System"])
     }

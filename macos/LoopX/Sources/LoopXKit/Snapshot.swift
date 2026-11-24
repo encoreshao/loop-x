@@ -295,10 +295,12 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var disabledLoops: Set<String> = []
     /// The enabled loops in the sidebar's order, for the Loops menu.
     public var enabledLoops: [LoopRef] = []
+    /// The loops the sidebar lists (pinned, then any needing attention); nil from an older backend.
+    public var sidebarLoops: [LoopRef]?
 
     enum CodingKeys: String, CodingKey {
         case version, loops, topics, approvals, attention, queue
-        case disabledLoops = "disabled_loops", enabledLoops = "enabled_loops"
+        case disabledLoops = "disabled_loops", enabledLoops = "enabled_loops", sidebarLoops = "sidebar_loops"
         case appState = "app_state", recentEvents = "recent_events", needsYou = "needs_you"
     }
 
@@ -325,6 +327,10 @@ public struct Snapshot: Codable, Equatable, Sendable {
         disabledLoops = Set((try? c.decodeIfPresent([String].self, forKey: .disabledLoops)) ?? [])
         struct Raw: Decodable { var name: String?; var label: String? }
         enabledLoops = ((try? c.decodeIfPresent([Raw].self, forKey: .enabledLoops)) ?? []).compactMap {
+            guard let name = $0.name, let label = $0.label else { return nil }
+            return LoopRef(name: name, label: label)
+        }
+        sidebarLoops = (try? c.decodeIfPresent([Raw].self, forKey: .sidebarLoops))?.compactMap {
             guard let name = $0.name, let label = $0.label else { return nil }
             return LoopRef(name: name, label: label)
         }
