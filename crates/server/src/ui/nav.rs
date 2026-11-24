@@ -5,7 +5,7 @@
 use super::i18n::{self, Lang};
 use super::state::UiState;
 use super::template::{Scope, Template};
-use super::{consts, hub, pyfmt};
+use super::{consts, pyfmt};
 use serde_json::Value;
 
 /// `_nav_key`: the `_NAV_ITEMS` key a page key belongs to.
@@ -29,6 +29,7 @@ pub fn nav_link(
     icon: &str,
     active_page: &str,
     extra_class: &str,
+    after: &str,
 ) -> String {
     let classes: Vec<&str> = [extra_class, if key == active_page { "active" } else { "" }]
         .into_iter()
@@ -45,7 +46,8 @@ pub fn nav_link(
         .var("href", href)
         .var("label", label)
         .var("cls", cls)
-        .var("icon", icon);
+        .var("icon", icon)
+        .var("after", after);
     Template::named("nav_link")
         .render(&scope)
         .expect("nav_link template")
@@ -69,38 +71,30 @@ pub fn registered_loops(state: &UiState) -> Vec<Value> {
     .unwrap_or_default()
 }
 
-fn loop_children(state: &UiState, lang: Lang, active_page: &str, loops: &[Value]) -> String {
-    let mut links = String::new();
-    for entry in loops {
-        if !entry.is_object() {
-            continue;
-        }
-        let name = match entry.get("name") {
-            Some(Value::String(s)) => s.clone(),
-            Some(other) => loopx_core::pydumps::py_str(other),
-            None => String::new(),
-        };
-        if name.is_empty() || !loop_is_visible(state, entry) {
-            continue;
-        }
-        let page = hub::builtin_loop_page(&name)
-            .unwrap_or_else(|| hub::generic_loop_page(&name, Some(entry), false));
-        links.push_str(&nav_link(
-            lang,
-            &format!("loop:{name}"),
-            &format!("/loops/{}", pyfmt::quote(&name, "/")),
-            &page.label,
-            &page.icon,
-            active_page,
-            "nav-child",
-        ));
-    }
-    links
+fn loop_children(state: &UiState, lang: Lang, active_page: &str) -> String {
+    let dot = format!(
+        "<span class='nav-dot' role='img' aria-label='{}'></span>",
+        pyfmt::escape(&i18n::t(lang, "Needs attention", &[]))
+    );
+    super::sidebar_loops::for_state(state)
+        .iter()
+        .map(|l| {
+            nav_link(
+                lang,
+                &format!("loop:{}", l.name),
+                &l.path,
+                &l.label,
+                &l.icon,
+                active_page,
+                "nav-child",
+                if l.attention { &dot } else { "" },
+            )
+        })
+        .collect()
 }
 
 /// `_sidebar_html(active_page)`.
 pub fn sidebar_html(state: &UiState, lang: Lang, active_page: &str) -> String {
-    let loops = registered_loops(state);
     let nav_active = nav_key(active_page);
     let items = consts::list("dashboard_server", "_NAV_ITEMS");
     let mut nav_html = String::new();
@@ -126,9 +120,10 @@ pub fn sidebar_html(state: &UiState, lang: Lang, active_page: &str) -> String {
                 item[3].as_str().unwrap_or(""),
                 &nav_active,
                 "",
+                "",
             ));
             if key == "loops" {
-                nav_html.push_str(&loop_children(state, lang, active_page, &loops));
+                nav_html.push_str(&loop_children(state, lang, active_page));
             }
         }
     }
@@ -172,10 +167,76 @@ mod tests {
         ));
     }
 
+    fn sidebar_fixture(pins: Option<&str>) -> (tempfile::TempDir, UiState) {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, home) = (dir.path().join("repo"), dir.path().join("home"));
+        std::fs::create_dir_all(repo.join("outputs/status")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            home.join("loops.json"),
+            r#"[{"name": "issue-loop", "enabled": true},
+                {"name": "topic-loop", "enabled": true},
+                {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": true}]"#,
+        )
+        .unwrap();
+        if let Some(pins) = pins {
+            std::fs::write(home.join("sidebar_pins.json"), pins).unwrap();
+        }
+        let state = UiState::explicit(&repo, &home, dir.path(), dir.path(), "tok", None);
+        (dir, state)
+    }
+
+    #[test]
+    fn the_sidebar_lists_pinned_loops_then_loops_needing_attention() {
+        let (_d, state) = sidebar_fixture(Some(r#"{"pinned": ["topic-loop"]}"#));
+        std::fs::write(
+            state.status_path_for_loop("rss-watch-loop"),
+            r#"{"state": "failed", "updated_at": "2026-11-24T08:00:00+00:00"}"#,
+        )
+        .unwrap();
+        let html = sidebar_html(&state, Lang::En, "overview");
+        let topic = html
+            .find("href='/loops/topic-loop'")
+            .expect("pinned loop listed");
+        let rss = html
+            .find("href='/loops/rss-watch-loop'")
+            .expect("failing loop listed");
+        assert!(topic < rss);
+        assert!(
+            !html.contains("href='/loops/issue-loop'"),
+            "unpinned, healthy loop hidden"
+        );
+        let rss_link = &html[rss..rss + html[rss..].find("</a>").unwrap()];
+        assert!(rss_link.contains("nav-dot"), "{rss_link}");
+        let topic_link = &html[topic..topic + html[topic..].find("</a>").unwrap()];
+        assert!(!topic_link.contains("nav-dot"), "{topic_link}");
+    }
+
+    #[test]
+    fn a_get_never_writes_the_pins_file() {
+        let (_d, state) = sidebar_fixture(None);
+        let html = sidebar_html(&state, Lang::En, "overview");
+        assert!(
+            html.contains("href='/loops/rss-watch-loop'"),
+            "seeded from enabled loops"
+        );
+        assert!(!state.home_dir.join("sidebar_pins.json").exists());
+    }
+
+    #[test]
+    fn the_loops_link_reads_all_loops() {
+        let (_d, state) = sidebar_fixture(None);
+        let html = sidebar_html(&state, Lang::En, "overview");
+        assert!(
+            html.contains("<a href='/loops' title='All loops'"),
+            "{html}"
+        );
+    }
+
     #[test]
     fn link_markup() {
         assert_eq!(
-            nav_link(Lang::Fr, "runs", "/runs", "Runs", "<i/>", "runs", ""),
+            nav_link(Lang::Fr, "runs", "/runs", "Runs", "<i/>", "runs", "", ""),
             "<a href='/runs' title='Exécutions'><span class='nav-icon'><i/></span><span class='nav-label'>Exécutions</span></a>"
                 .replace("<a href='/runs' title='Exécutions'>", "<a href='/runs' title='Exécutions' class='active'>")
         );

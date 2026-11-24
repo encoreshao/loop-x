@@ -395,6 +395,7 @@ button:focus-visible,
 .sidebar-nav a.active { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
 .nav-icon { display: inline-flex; flex-shrink: 0; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--md-error); margin-left: auto; flex-shrink: 0; }
 /* One per _NAV_GROUPS entry that has a label (Overview stays label-less,
    it's the landing page rather than part of a category). Hidden when
    collapsed like every other nav label - see .sidebar-nav a below. */
@@ -826,6 +827,8 @@ html.collapsed .nav-label,
 html.collapsed .sidebar-group-label { display: none; }
 html.collapsed .sidebar-toggle .icon { transform: rotate(180deg); }
 html.collapsed .sidebar-nav a { justify-content: center; }
+html.collapsed .sidebar-nav a:has(.nav-dot) { position: relative; }
+html.collapsed .nav-dot { position: absolute; top: 6px; right: 14px; margin: 0; }
 html.collapsed .sidebar-top {
   /* Side-by-side, the brand icon and the toggle button (~20px + gap +
      ~28px ≈ 56px) don't fit the 64px collapsed rail's ~32px content box

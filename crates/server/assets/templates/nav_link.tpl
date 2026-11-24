@@ -1,1 +1,1 @@
-<a href='⟦href⟧' title='⟦label⟧'⟦cls⟧><span class='nav-icon'>⟦icon⟧</span><span class='nav-label'>⟦label⟧</span></a>
+<a href='⟦href⟧' title='⟦label⟧'⟦cls⟧><span class='nav-icon'>⟦icon⟧</span><span class='nav-label'>⟦label⟧</span>⟦after⟧</a>
