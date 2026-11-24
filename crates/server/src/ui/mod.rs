@@ -38,6 +38,7 @@ pub mod profile_jobs;
 pub mod pyfmt;
 pub mod routes;
 pub mod shell;
+pub mod sidebar_loops;
 pub mod state;
 pub mod template;
 pub mod update;

@@ -51,6 +51,7 @@ pub fn office_state(enabled: bool, run_state: &str, pending_approvals: usize) ->
 /// Auto-fix's escalations; anything else (a sign-in, the Slack listener) is nobody's.
 pub fn owner_of(item: &Value) -> Option<String> {
     match item.get("kind").and_then(Value::as_str)? {
+        "approval" if item.get("approval_kind").is_some() => None,
         "approval" | "escalated" | "mr_thread" | "spec" => Some("issue-loop".to_string()),
         "loop_failed" => item.get("loop").and_then(Value::as_str).map(str::to_string),
         "mr_autofix" => Some(loopx_core::mr_autofix::LOOP_NAME.to_string()),
@@ -268,6 +269,17 @@ pub fn build_office_state(ctx: &UiCtx) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_and_guide_approvals_light_no_loop() {
+        use serde_json::json;
+        let fix = json!({"kind": "approval", "project": "web", "issue_iid": "7"});
+        assert_eq!(owner_of(&fix).as_deref(), Some("issue-loop"));
+        for k in ["profile-section", "guide-page"] {
+            let other = json!({"kind": "approval", "approval_kind": k});
+            assert_eq!(owner_of(&other), None, "{k}");
+        }
+    }
 
     #[test]
     fn each_row_of_the_mapping() {
