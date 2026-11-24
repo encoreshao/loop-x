@@ -11,6 +11,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Changed
+
+- Sidebar: lists All loops plus the loops you pin (turning a loop on pins it, up to five) and any other loop that needs you, so it stays short as loops are added. All loops groups active loops into Code, Communication and Research & content, with a pin button on each loop. The Mac app's Loops menu shows the same list.
+
 ### Fixed
 
 - Chat: a new chat with Claude as the AI CLI gets its AI-written title again instead of keeping the first line of your question. The title request handed its prompt to Claude as a blocked-tool name, so Claude exited without answering.

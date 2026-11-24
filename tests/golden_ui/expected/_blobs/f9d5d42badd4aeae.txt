@@ -395,6 +395,7 @@ button:focus-visible,
 .sidebar-nav a.active { background: var(--md-nav-active-surface); color: var(--md-nav-active-on-surface); }
 .nav-icon { display: inline-flex; flex-shrink: 0; }
 .nav-label { overflow: hidden; text-overflow: ellipsis; }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--md-error); margin-left: auto; flex-shrink: 0; }
 /* One per _NAV_GROUPS entry that has a label (Overview stays label-less,
    it's the landing page rather than part of a category). Hidden when
    collapsed like every other nav label - see .sidebar-nav a below. */
@@ -826,6 +827,8 @@ html.collapsed .nav-label,
 html.collapsed .sidebar-group-label { display: none; }
 html.collapsed .sidebar-toggle .icon { transform: rotate(180deg); }
 html.collapsed .sidebar-nav a { justify-content: center; }
+html.collapsed .sidebar-nav a:has(.nav-dot) { position: relative; }
+html.collapsed .nav-dot { position: absolute; top: 6px; right: 14px; margin: 0; }
 html.collapsed .sidebar-top {
   /* Side-by-side, the brand icon and the toggle button (~20px + gap +
      ~28px ≈ 56px) don't fit the 64px collapsed rail's ~32px content box
@@ -1149,6 +1152,8 @@ html .chat-page.is-empty .activity-composer {
 .page-title { margin: 0.25rem 0 1.5rem; }
 .page-title h1 { margin-bottom: 0.35rem; }
 .page-title .subtitle { margin: 0; font-size: 0.95rem; }
+.loop-page-title { display: flex; align-items: center; gap: 0.6rem; }
+.loop-page-title h1 { margin-bottom: 0; }
 
 .section-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.85rem; }
 .section-header .icon,
@@ -1988,6 +1993,26 @@ a.loop-title:hover, a.loop-title:focus-visible { color: var(--md-primary); text-
 .loop-meta-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 .loop-meta-item .icon { font-size: 16px; }
 .loop-actions { display: flex; align-items: center; gap: 0.75rem; }
+.loop-area + .loop-area { border-top: 1px solid var(--md-outline-variant); margin-top: 0.75rem; padding-top: 0.75rem; }
+.loop-area-heading { margin: 0 0 0.4rem; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-on-surface-variant); }
+.loop-attention-dot { display: inline-block; width: 7px; height: 7px; margin-left: 0.4rem; border-radius: 50%; background: var(--md-error); vertical-align: middle; }
+.loop-pin-form { display: inline-flex; margin: 0; }
+.loop-pin-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid var(--md-outline-variant);
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+.loop-pin-btn .icon { font-size: 16px; }
+.loop-pin-btn:hover { background: var(--md-surface-container-high); }
+.loop-pin-btn[aria-pressed='true'] { color: var(--md-primary); border-color: transparent; background: color-mix(in srgb, var(--md-primary) 14%, transparent); }
 .loop-toggle { display: inline-flex; align-items: center; gap: 0.45rem; }
 .loop-toggle .switch[disabled] { opacity: 0.45; cursor: not-allowed; }
 .loop-toggle-text { font-size: 0.82rem; font-weight: 500; color: var(--md-on-surface-variant); min-width: 1.6rem; }

@@ -21,6 +21,7 @@ pub fn nav_key(page: &str) -> String {
 }
 
 /// `_nav_link`.
+#[allow(clippy::too_many_arguments)]
 pub fn nav_link(
     lang: Lang,
     key: &str,
