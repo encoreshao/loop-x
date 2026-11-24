@@ -1313,8 +1313,23 @@ fn catalog_parts(ctx: &UiCtx, loop_: &Value, csrf: &str, notify_accounts: &[Acco
     }
 }
 
-fn catalog_row(ctx: &UiCtx, loop_: &Value, csrf: &str, notify: &[Account], accounts: &Accounts) -> String {
+fn catalog_row(
+    ctx: &UiCtx,
+    loop_: &Value,
+    csrf: &str,
+    notify: &[Account],
+    accounts: &Accounts,
+    attention: bool,
+) -> String {
     let p = catalog_parts(ctx, loop_, csrf, notify, accounts);
+    let dot = if attention {
+        format!(
+            "<span class='loop-attention-dot' role='img' aria-label='{}'></span>",
+            h(&ctx.t("Needs attention"))
+        )
+    } else {
+        String::new()
+    };
     let status = read_status(ctx.state, &p.name);
     let last_run = match status.get("updated_at").filter(|v| py_truthy(v)) {
         Some(u) => format!(
@@ -1325,7 +1340,7 @@ fn catalog_row(ctx: &UiCtx, loop_: &Value, csrf: &str, notify: &[Account], accou
     };
     format!(
         "<li class='loop-row' data-loop='{}'><div class='loop-icon'>{}</div><div class='loop-main'>\
-<div class='loop-heading'>{}{}</div>{}<div class='loop-meta'>{}{last_run}{}</div>{}</div>\
+<div class='loop-heading'>{}{dot}{}</div>{}<div class='loop-meta'>{}{last_run}{}</div>{}</div>\
 <div class='loop-actions'>{}{}{}</div></li>",
         p.safe_name,
         p.icon,
@@ -1360,6 +1375,7 @@ fn catalog_tile(ctx: &UiCtx, loop_: &Value, csrf: &str, notify: &[Account], acco
 }
 
 fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
+    use crate::ui::loop_areas::{area_of, ORDER};
     let loops: Vec<Value> = list_loops(ctx.state)
         .unwrap_or_default()
         .into_iter()
@@ -1369,23 +1385,37 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
     let (active, available): (Vec<&Value>, Vec<&Value>) = loops.iter().partition(|l| is_visible(ctx.state, l));
     let accounts = Accounts(cc::list_accounts(&conn::paths(ctx.state)).unwrap_or_default());
     let notify: Vec<Account> = accounts.with("notify").into_iter().filter(|a| cc::is_valid_id(&a.id)).collect();
-    let section = |title: &str, hint: &str, rows: &[&Value], render: fn(&UiCtx, &Value, &str, &[Account], &Accounts) -> String, list_class: &str, attrs: &str| {
-        let inner = if rows.is_empty() {
+    let attention = crate::ui::sidebar_loops::attention_loops(&super::needs_you::items(ctx.state));
+    let section = |title: &str, hint: &str, count: usize, inner: String, attrs: &str| {
+        let inner = if count == 0 {
             format!("<p class='loop-empty'>{}</p>", h(&ctx.t("No loops here.")))
         } else {
-            format!(
-                "<ul class='{list_class}'>{}</ul>",
-                rows.iter().map(|l| render(ctx, l, &csrf, &notify, &accounts)).collect::<String>()
-            )
+            inner
         };
         format!(
             "<section class='card loop-section'{attrs}><div class='section-header'><h2>{}</h2>\
-<span class='badge-count'>{}</span></div><p class='loop-section-hint'>{}</p>{inner}</section>",
+<span class='badge-count'>{count}</span></div><p class='loop-section-hint'>{}</p>{inner}</section>",
             h(&ctx.t(title)),
-            rows.len(),
             h(&ctx.t(hint))
         )
     };
+    let grouped: String = ORDER
+        .iter()
+        .filter_map(|area| {
+            let rows: String = active
+                .iter()
+                .filter(|l| area_of(&field_str(l, "name"), Some(l)) == *area)
+                .map(|l| catalog_row(ctx, l, &csrf, &notify, &accounts, attention.contains(&field_str(l, "name"))))
+                .collect();
+            (!rows.is_empty()).then(|| {
+                format!(
+                    "<div class='loop-area'><h3 class='loop-area-heading'>{}</h3><ul class='loop-list'>{rows}</ul></div>",
+                    h(&ctx.t(area.label()))
+                )
+            })
+        })
+        .collect();
+    let tiles: String = available.iter().map(|l| catalog_tile(ctx, l, &csrf, &notify, &accounts)).collect();
     let head = format!(
         "<div class='page-title'><h1>{}</h1></div>{}",
         h(&ctx.t("Loops")),
@@ -1396,17 +1426,15 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
         section(
             "Active loops",
             "Loops that are on or have run. Turn them off, change when they run, or open one for details.",
-            &active,
-            catalog_row,
-            "loop-list",
+            active.len(),
+            grouped,
             ""
         ),
         section(
             "Available loops",
             "Loops you can add. Turn one on to start it on its schedule.",
-            &available,
-            catalog_tile,
-            "loop-gallery",
+            available.len(),
+            format!("<ul class='loop-gallery'>{tiles}</ul>"),
             " data-section='available'"
         )
     );
@@ -1732,5 +1760,73 @@ mod pin_tests {
         let issue = get("/loops/issue-loop");
         assert!(issue.contains("action='/loops/issue-loop/pin'"));
         assert!(issue.contains("aria-pressed='true'"));
+    }
+}
+
+#[cfg(test)]
+mod area_tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+
+    fn catalog(dir: &Path, loops: Value) -> String {
+        let st = UiState::explicit(dir, dir, dir, &dir.join("update"), "tok", None);
+        std::fs::write(dir.join("loops.json"), loops.to_string()).unwrap();
+        st.registry.dispatch(&st, &UiRequest::get("/loops")).unwrap().body_text()
+    }
+
+    #[test]
+    fn active_loops_are_grouped_by_area_in_order() {
+        let d = tempfile::tempdir().unwrap();
+        let html = catalog(
+            d.path(),
+            json!([
+                {"name": "topic-loop", "enabled": true},
+                {"name": "my-loop", "label": "Mine", "enabled": true},
+                {"name": "meeting-prep-loop", "label": "Meeting Prep", "enabled": true},
+                {"name": "issue-loop", "enabled": true},
+                {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": false}
+            ]),
+        );
+        let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
+        let heads = [
+            at("<h3 class='loop-area-heading'>Code</h3>"),
+            at("<h3 class='loop-area-heading'>Communication</h3>"),
+            at("<h3 class='loop-area-heading'>Research &amp; content</h3>"),
+            at("<h3 class='loop-area-heading'>Other</h3>"),
+        ];
+        assert!(heads.windows(2).all(|w| w[0] < w[1]), "{heads:?}");
+        assert!(heads[0] < at("data-loop='issue-loop'") && at("data-loop='issue-loop'") < heads[1]);
+        assert!(heads[1] < at("data-loop='meeting-prep-loop'") && at("data-loop='meeting-prep-loop'") < heads[2]);
+        assert!(heads[2] < at("data-loop='topic-loop'") && at("data-loop='topic-loop'") < heads[3]);
+        assert!(heads[3] < at("data-loop='my-loop'"));
+    }
+
+    #[test]
+    fn an_area_with_no_active_loop_has_no_heading() {
+        let d = tempfile::tempdir().unwrap();
+        let html = catalog(d.path(), json!([{"name": "issue-loop", "enabled": true}, {"name": "topic-loop", "enabled": false}]));
+        assert!(html.contains("<h3 class='loop-area-heading'>Code</h3>"));
+        assert!(!html.contains("<h3 class='loop-area-heading'>Research"));
+    }
+
+    #[test]
+    fn an_active_row_needing_attention_has_the_dot() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs/status")).unwrap();
+        std::fs::write(
+            d.path().join("outputs/status/rss-watch-loop.json"),
+            r#"{"state": "failed", "updated_at": "2026-11-24T08:00:00+00:00"}"#,
+        )
+        .unwrap();
+        let html = catalog(
+            d.path(),
+            json!([{"name": "issue-loop", "enabled": true}, {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": true}]),
+        );
+        let row = |name: &str| {
+            let at = html.find(&format!("data-loop='{name}'")).unwrap();
+            html[at..at + html[at..].find("</li>").unwrap()].to_string()
+        };
+        assert!(row("rss-watch-loop").contains("loop-attention-dot"), "{}", row("rss-watch-loop"));
+        assert!(!row("issue-loop").contains("loop-attention-dot"));
     }
 }

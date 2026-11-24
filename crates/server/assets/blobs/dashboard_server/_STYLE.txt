@@ -1993,6 +1993,9 @@ a.loop-title:hover, a.loop-title:focus-visible { color: var(--md-primary); text-
 .loop-meta-item { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 .loop-meta-item .icon { font-size: 16px; }
 .loop-actions { display: flex; align-items: center; gap: 0.75rem; }
+.loop-area + .loop-area { border-top: 1px solid var(--md-outline-variant); margin-top: 0.75rem; padding-top: 0.75rem; }
+.loop-area-heading { margin: 0 0 0.4rem; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--md-on-surface-variant); }
+.loop-attention-dot { display: inline-block; width: 7px; height: 7px; margin-left: 0.4rem; border-radius: 50%; background: var(--md-error); vertical-align: middle; }
 .loop-pin-form { display: inline-flex; margin: 0; }
 .loop-pin-btn {
   width: 32px;
