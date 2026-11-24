@@ -427,6 +427,10 @@ pub fn set_enabled(
             if enabled { "Enabled" } else { "Disabled" }
         ))
     })?;
+    let name = canonical_loop_name(name);
+    if enabled && enabled_before.iter().any(|n| n == name) {
+        return Ok(message);
+    }
     // A pins problem never fails the enable itself.
     let _ = crate::sidebar_pins::on_enabled_changed(
         &crate::sidebar_pins::pins_path(config_path),
@@ -955,6 +959,28 @@ mod tests {
         assert_eq!(
             crate::sidebar_pins::read(&pins),
             crate::sidebar_pins::Stored::Pins(vec!["rss-watch-loop".into()])
+        );
+    }
+
+    #[test]
+    fn an_old_loop_name_pins_the_canonical_loop() {
+        let f = fx(json!([{"name": "issue-loop", "enabled": false}]));
+        set_enabled("gitlab-loop", true, &f.config, Some(&f.none)).unwrap();
+        assert_eq!(
+            crate::sidebar_pins::read(&crate::sidebar_pins::pins_path(&f.config)),
+            crate::sidebar_pins::Stored::Pins(vec!["issue-loop".into()])
+        );
+    }
+
+    #[test]
+    fn enabling_a_loop_that_is_already_on_does_not_re_pin_it() {
+        let f = fx(json!([{"name": "issue-loop", "enabled": true}]));
+        let pins = crate::sidebar_pins::pins_path(&f.config);
+        std::fs::write(&pins, r#"{"pinned": []}"#).unwrap();
+        set_enabled("issue-loop", true, &f.config, Some(&f.none)).unwrap();
+        assert_eq!(
+            crate::sidebar_pins::read(&pins),
+            crate::sidebar_pins::Stored::Pins(vec![])
         );
     }
 

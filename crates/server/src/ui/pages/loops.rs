@@ -1405,7 +1405,7 @@ fn catalog_body(ctx: &UiCtx, flash: Option<&str>, ok: bool) -> String {
             let rows: String = active
                 .iter()
                 .filter(|l| area_of(&field_str(l, "name"), Some(l)) == *area)
-                .map(|l| catalog_row(ctx, l, &csrf, &notify, &accounts, attention.contains(&field_str(l, "name"))))
+                .map(|l| catalog_row(ctx, l, &csrf, &notify, &accounts, attention.contains(&field_str(l, "name")) && l.get("enabled").is_none_or(py_truthy)))
                 .collect();
             (!rows.is_empty()).then(|| {
                 format!(
@@ -1828,5 +1828,20 @@ mod area_tests {
         };
         assert!(row("rss-watch-loop").contains("loop-attention-dot"), "{}", row("rss-watch-loop"));
         assert!(!row("issue-loop").contains("loop-attention-dot"));
+    }
+
+    #[test]
+    fn a_disabled_loop_on_all_loops_has_no_dot() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("outputs/status")).unwrap();
+        std::fs::write(
+            d.path().join("outputs/status/rss-watch-loop.json"),
+            r#"{"state": "failed", "updated_at": "2026-11-24T08:00:00+00:00"}"#,
+        )
+        .unwrap();
+        let html = catalog(d.path(), json!([{"name": "rss-watch-loop", "label": "RSS Watch", "enabled": false}]));
+        let at = html.find("data-loop='rss-watch-loop'").expect("a disabled loop with a status stays listed");
+        let row = &html[at..at + html[at..].find("</li>").unwrap()];
+        assert!(!row.contains("loop-attention-dot"), "{row}");
     }
 }

@@ -99,7 +99,8 @@ pub fn on_enabled_changed(
     enabled_before: &[String],
 ) -> Result<(), String> {
     let pins = current(path, enabled_before)?;
-    let pin = enabled && (pins.iter().any(|p| p == name) || pins.len() < AUTO_PIN_LIMIT);
+    let shown = pins.iter().filter(|p| enabled_before.contains(p)).count();
+    let pin = enabled && (pins.iter().any(|p| p == name) || shown < AUTO_PIN_LIMIT);
     apply(path, pins, name, pin)
 }
 
@@ -142,7 +143,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(FILE_NAME);
         write(&p, r#"{"pinned": ["a", "b", "c", "d", "e"]}"#);
-        on_enabled_changed(&p, "f", true, &[]).unwrap();
+        on_enabled_changed(&p, "f", true, &names(&["a", "b", "c", "d", "e"])).unwrap();
         assert_eq!(read(&p), Stored::Pins(names(&["a", "b", "c", "d", "e"])));
     }
 
@@ -152,6 +153,21 @@ mod tests {
         let p = d.path().join(FILE_NAME);
         on_enabled_changed(&p, "c", true, &names(&["a", "b"])).unwrap();
         assert_eq!(read(&p), Stored::Pins(names(&["a", "b", "c"])));
+    }
+
+    #[test]
+    fn the_cap_counts_only_pins_of_enabled_loops() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(FILE_NAME);
+        write(
+            &p,
+            r#"{"pinned": ["a", "gone1", "gone2", "gone3", "gone4"]}"#,
+        );
+        on_enabled_changed(&p, "f", true, &names(&["a"])).unwrap();
+        assert_eq!(
+            read(&p),
+            Stored::Pins(names(&["a", "gone1", "gone2", "gone3", "gone4", "f"]))
+        );
     }
 
     #[test]
