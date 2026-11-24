@@ -151,6 +151,30 @@ pub fn stop_topic_loop_with(
     }
 }
 
+/// Marks every loop status that says `running` but whose recorded process is
+/// gone as `failed`: a run killed outright never writes its own result.
+/// Statuses with no pid are left alone. Returns how many were settled.
+pub fn settle_dead_runs(home: &Path) -> usize {
+    let outputs = home.join("outputs");
+    let mut paths = vec![outputs.join("status.json")];
+    if let Ok(dir) = std::fs::read_dir(outputs.join("status")) {
+        paths.extend(
+            dir.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "json")),
+        );
+    }
+    paths
+        .iter()
+        .filter(|path| {
+            let status = status::read_status(path);
+            status.get("state").and_then(Value::as_str) == Some("running")
+                && recorded_pid(&status).is_some_and(|p| !process_alive(p))
+                && status::write_status(path, "failed", &[]).is_ok()
+        })
+        .count()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerOutcome {
     AlreadyRunning,
@@ -362,6 +386,41 @@ mod tests {
         assert_eq!(status::read_status(&p)["state"], "stopped");
         status::write_status(&p, "running", &[]).unwrap();
         assert_eq!(stop_gitlab_loop(&p), StopOutcome::ClearedStale);
+    }
+
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn the_sweep_fails_only_running_loops_whose_recorded_process_is_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let path =
+            |loop_name| crate::loop_scheduler::status_path_for_loop(loop_name, Some(home.path()));
+        let mut done = Command::new("true").spawn().unwrap();
+        let dead = i64::from(done.id());
+        done.wait().unwrap();
+        let live = sleeper();
+        status::write_status(
+            &path("issue-loop"),
+            "running",
+            &[("pid", json!(dead)), ("current_step", json!("analyzing"))],
+        )
+        .unwrap();
+        status::write_status(&path("dead-loop"), "running", &[("pid", json!(dead))]).unwrap();
+        status::write_status(&path("live-loop"), "running", &[("pid", json!(live.id()))]).unwrap();
+        status::write_status(&path("no-pid-loop"), "running", &[]).unwrap();
+        status::write_status(&path("idle-loop"), "idle", &[("pid", json!(dead))]).unwrap();
+
+        assert_eq!(settle_dead_runs(home.path()), 2);
+
+        for (name, state) in [
+            ("issue-loop", "failed"),
+            ("dead-loop", "failed"),
+            ("live-loop", "running"),
+            ("no-pid-loop", "running"),
+            ("idle-loop", "idle"),
+        ] {
+            assert_eq!(status::read_status(&path(name))["state"], state, "{name}");
+        }
+        unsafe { libc::killpg(live.id() as i32, libc::SIGKILL) };
     }
 
     #[test]

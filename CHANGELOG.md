@@ -17,7 +17,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Fixed
 
-- A loop run that was killed or force-quit no longer stays "running" on its page forever: the run queue now marks it failed (or stopped), and the issue loop's progress updates keep the run's pid so Stop can still end it.
+- A loop run that was killed or force-quit no longer stays "running" on its page forever: the run queue marks it failed (or stopped), every scheduler tick fails any "running" loop whose process is gone, and the issue loop's progress updates keep the run's pid so Stop can still end it.
 - Chat: a new chat with Claude as the AI CLI gets its AI-written title again instead of keeping the first line of your question. The title request handed its prompt to Claude as a blocked-tool name, so Claude exited without answering.
 
 ## [0.20.0] - 2026-11-23

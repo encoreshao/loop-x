@@ -77,6 +77,14 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         }
     };
     let queue = run_queue::RunQueue::new(run_queue::default_queue_path());
+    // Only with no worker draining: one may have claimed an entry but not yet recorded its pid.
+    if let Some(_worker) = loop_scheduler::try_lock_poll(&run_queue::default_worker_lock_path()) {
+        let _ = queue.recover(
+            &loop_scheduler::isoformat(Local::now().naive_local()),
+            &|pid| loopx_core::run_control::process_alive(pid),
+        );
+    }
+    loopx_core::run_control::settle_dead_runs(&loopx_core::config::home_dir());
     // Near the AI subscription's usage limit: due loops stay due (and run once
     // it resets) instead of being queued now. Manual runs already queued still run.
     let cli = loopx_core::ai_cli_config::selected_cli();
