@@ -253,6 +253,7 @@ impl ChatCommand {
             crate::models::GENERAL,
             "--disallowedTools",
             "Bash Read Write Edit Grep Glob WebFetch WebSearch",
+            "--",
             &prompt,
         ]
         .iter()
@@ -2267,6 +2268,15 @@ mod tests {
             assert!(!words.iter().any(|w| w == "--yolo" || w == "--force"));
             assert!(!prompt.contains("chat-tool"), "{cli}");
         }
+    }
+
+    #[test]
+    fn claude_title_prompt_is_not_swallowed_by_the_variadic_disallowed_tools() {
+        let argv = ChatCommand::new("loopx chat-tool").build_title_command("u", "r");
+        let words = shlex::split(argv.last().unwrap()).unwrap();
+        let n = words.len();
+        assert_eq!(words[n - 2], "--", "{words:?}");
+        assert!(words[n - 1].starts_with("Write a short title"));
     }
 
     #[test]
