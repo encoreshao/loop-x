@@ -4,7 +4,9 @@
 //! POSTs that belong to those pages (run-now, settings, notify).
 
 use super::connectors as conn;
-use super::loops_common::{aware, flash_html, relative_time, render_loop_page, run_now_action_html, custom_select};
+use super::loops_common::{
+    aware, custom_select, flash_html, is_pinned, pin_button_html, relative_time, render_loop_page, run_now_action_html,
+};
 use crate::ui::badge::{default_badge, status_badge_markup};
 use crate::ui::consts;
 use crate::ui::hub::{self, Hub};
@@ -28,6 +30,7 @@ pub fn register(r: &mut Registry) {
     r.get("/loops/:name/history/:file", history_file);
     r.post("/loops/:name/settings", settings);
     r.post("/loops/:name/notify", notify);
+    r.post("/loops/:name/pin", pin);
 }
 
 pub(crate) const BUILTIN: [&str; 3] = ["issue-loop", "topic-loop", "inbox-triage-loop"];
@@ -1323,7 +1326,7 @@ fn catalog_row(ctx: &UiCtx, loop_: &Value, csrf: &str, notify: &[Account], accou
     format!(
         "<li class='loop-row' data-loop='{}'><div class='loop-icon'>{}</div><div class='loop-main'>\
 <div class='loop-heading'>{}{}</div>{}<div class='loop-meta'>{}{last_run}{}</div>{}</div>\
-<div class='loop-actions'>{}{}</div></li>",
+<div class='loop-actions'>{}{}{}</div></li>",
         p.safe_name,
         p.icon,
         p.title,
@@ -1332,6 +1335,7 @@ fn catalog_row(ctx: &UiCtx, loop_: &Value, csrf: &str, notify: &[Account], accou
         status_badge_markup(ctx.lang, &status),
         p.schedule_html,
         p.settings_html,
+        pin_button_html(ctx, &p.name, is_pinned(ctx.state, &p.name), "/loops"),
         p.toggle_html,
         p.open_html
     )
@@ -1458,6 +1462,33 @@ fn settings(ctx: &UiCtx) -> UiResponse {
         }
     };
     UiResponse::flash_redirect(ok, &message, &format!("{}?view=settings", loop_location(&name)))
+}
+
+fn pin(ctx: &UiCtx) -> UiResponse {
+    let name = ctx.param("name").to_string();
+    let form = ctx.form();
+    let page = loop_location(&name);
+    let back = match form.first("return_to") {
+        Some("/loops") => "/loops".to_string(),
+        _ => page,
+    };
+    let registry = list_loops(ctx.state).unwrap_or_default();
+    let label = loops_config::label_or_display_name(
+        &name,
+        registry.iter().find(|l| l.get("name").and_then(Value::as_str) == Some(name.as_str())),
+    );
+    if !registry.iter().any(|l| l.get("name").and_then(Value::as_str) == Some(name.as_str())) {
+        return UiResponse::flash_redirect(false, &ctx.tf("Unknown loop {name}", &[("name", &name)]), &back);
+    }
+    let pinned = form.first("pinned") == Some("1");
+    let path = loopx_core::sidebar_pins::pins_path(&ctx.state.loops_config_path());
+    let enabled = crate::ui::sidebar_loops::enabled_names(&registry);
+    let (ok, message) = match loopx_core::sidebar_pins::set_pinned(&path, &name, pinned, &enabled) {
+        Ok(()) if pinned => (true, ctx.tf("Pinned {name} to the sidebar", &[("name", &label)])),
+        Ok(()) => (true, ctx.tf("Unpinned {name} from the sidebar", &[("name", &label)])),
+        Err(e) => (false, ctx.tf("Couldn't update the sidebar pins: {error}", &[("error", &e)])),
+    };
+    UiResponse::flash_redirect(ok, &message, &back)
 }
 
 fn notify(ctx: &UiCtx) -> UiResponse {
@@ -1601,5 +1632,105 @@ mod event_trigger_tests {
         let ja_req = UiRequest::get("/").with_header("cookie", "loop_lang=ja");
         let ja = schedule_summary(&UiCtx::new(&state, &ja_req), &autofix);
         assert!(!ja.contains("Runs when"), "{ja}");
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+    use crate::ui::routes::UiRequest;
+    use axum::http::Method;
+    use loopx_core::sidebar_pins::{read, Stored};
+
+    fn fixture() -> (tempfile::TempDir, UiState) {
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        std::fs::write(
+            d.path().join("loops.json"),
+            json!([
+                {"name": "issue-loop", "enabled": true},
+                {"name": "rss-watch-loop", "label": "RSS Watch", "enabled": true}
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(d.path().join("sidebar_pins.json"), r#"{"pinned": ["issue-loop"]}"#).unwrap();
+        (d, st)
+    }
+
+    fn post(st: &UiState, path: &str, body: &str) -> UiResponse {
+        st.registry
+            .dispatch(st, &UiRequest::new(Method::POST, path).with_body(body.to_string()))
+            .unwrap()
+    }
+
+    fn pins(st: &UiState) -> Stored {
+        read(&st.home_dir.join("sidebar_pins.json"))
+    }
+
+    #[test]
+    fn pinning_a_loop_from_the_catalog_writes_the_pins_and_redirects_back() {
+        let (_d, st) = fixture();
+        let r = post(&st, "/loops/rss-watch-loop/pin", "csrf_token=tok&pinned=1&return_to=%2Floops");
+        assert_eq!(r.status, 303);
+        assert!(r.header("Location").unwrap().starts_with("/loops?flash="), "{:?}", r.header("Location"));
+        assert_eq!(pins(&st), Stored::Pins(vec!["issue-loop".into(), "rss-watch-loop".into()]));
+    }
+
+    #[test]
+    fn unpinning_removes_it() {
+        let (_d, st) = fixture();
+        let r = post(&st, "/loops/issue-loop/pin", "csrf_token=tok&pinned=0&return_to=%2Floops%2Fissue-loop");
+        assert!(r.header("Location").unwrap().starts_with("/loops/issue-loop?flash="));
+        assert_eq!(pins(&st), Stored::Pins(vec![]));
+    }
+
+    #[test]
+    fn pin_without_csrf_is_refused() {
+        let (_d, st) = fixture();
+        let r = post(&st, "/loops/rss-watch-loop/pin", "pinned=1");
+        assert_eq!(r.status, 403);
+        assert_eq!(pins(&st), Stored::Pins(vec!["issue-loop".into()]));
+    }
+
+    #[test]
+    fn pinning_an_unknown_loop_flashes_an_error_and_writes_nothing() {
+        let (_d, st) = fixture();
+        let r = post(&st, "/loops/nope-loop/pin", "csrf_token=tok&pinned=1");
+        assert!(r.header("Location").unwrap().contains("ok=0"));
+        assert_eq!(pins(&st), Stored::Pins(vec!["issue-loop".into()]));
+    }
+
+    #[test]
+    fn a_foreign_return_to_falls_back_to_the_loop_page() {
+        let (_d, st) = fixture();
+        let r = post(&st, "/loops/rss-watch-loop/pin", "csrf_token=tok&pinned=1&return_to=https%3A%2F%2Fevil");
+        assert!(r.header("Location").unwrap().starts_with("/loops/rss-watch-loop?flash="));
+    }
+
+    #[test]
+    fn the_catalog_row_and_loop_page_show_the_pin_state() {
+        let (_d, st) = fixture();
+        let get = |path: &str| {
+            st.registry
+                .dispatch(&st, &UiRequest::get(path))
+                .unwrap()
+                .body_text()
+        };
+        let catalog = get("/loops");
+        let row = |name: &str| {
+            let at = catalog.find(&format!("data-loop='{name}'")).unwrap();
+            catalog[at..at + catalog[at..].find("</li>").unwrap()].to_string()
+        };
+        assert!(row("issue-loop").contains("aria-pressed='true'"), "{}", row("issue-loop"));
+        assert!(row("issue-loop").contains("Unpin from sidebar"));
+        assert!(row("rss-watch-loop").contains("aria-pressed='false'"));
+        assert!(row("rss-watch-loop").contains("Pin to sidebar"));
+        let page = get("/loops/rss-watch-loop");
+        assert!(page.contains("action='/loops/rss-watch-loop/pin'"), "{page}");
+        assert!(page.contains("aria-pressed='false'"));
+        let issue = get("/loops/issue-loop");
+        assert!(issue.contains("action='/loops/issue-loop/pin'"));
+        assert!(issue.contains("aria-pressed='true'"));
     }
 }

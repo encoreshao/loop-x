@@ -41,7 +41,11 @@ pub fn render_loop_page(
     let current = hub::resolve_view(page, requested_view);
     let tabs = hub::tab_strip_html(ctx.lang, &page.path, &page.views, &current.key, "");
     let label = i18n::t(ctx.lang, &page.label, &[]);
-    let title = format!("<div class='page-title'><h1>{}</h1></div>", pyfmt::escape(&label));
+    let pin = pin_button_html(ctx, name, is_pinned(ctx.state, name), &page.path);
+    let title = format!(
+        "<div class='page-title loop-page-title'><h1>{}</h1>{pin}</div>",
+        pyfmt::escape(&label)
+    );
     let default = default_badge(ctx);
     render_shell(
         ctx,
@@ -54,6 +58,28 @@ pub fn render_loop_page(
             refresh_note: current.refresh,
             lazy_refresh: current.lazy_refresh,
         },
+    )
+}
+
+pub fn is_pinned(state: &crate::ui::state::UiState, name: &str) -> bool {
+    let registry = crate::ui::nav::registered_loops(state);
+    crate::ui::sidebar_loops::pins_for(state, &registry)
+        .iter()
+        .any(|p| p == name)
+}
+
+/// The pin/unpin toggle for a loop, posting to `/loops/<name>/pin`.
+pub fn pin_button_html(ctx: &UiCtx, name: &str, pinned: bool, return_to: &str) -> String {
+    let label = pyfmt::escape(&ctx.t(if pinned { "Unpin from sidebar" } else { "Pin to sidebar" }));
+    format!(
+        "<form method='post' action='/loops/{}/pin' class='loop-pin-form'>{}\
+<input type='hidden' name='pinned' value='{}'><input type='hidden' name='return_to' value='{}'>\
+<button type='submit' class='loop-pin-btn' aria-pressed='{pinned}' title='{label}' aria-label='{label}'>\
+<svg class='icon' aria-hidden='true'><use href='#i-push_pin'/></svg></button></form>",
+        pyfmt::quote(name, ""),
+        ctx.csrf_input(),
+        if pinned { "0" } else { "1" },
+        pyfmt::escape(return_to)
     )
 }
 
