@@ -2420,9 +2420,10 @@
   "Voice input settings saved.": "音声入力の設定を保存しました。",
   "OpenAI key removed.": "OpenAI キーを削除しました。",
   "Dictate": "音声入力",
-  "Listening - click to stop, Esc to cancel": "聞き取り中 - クリックで停止、Esc でキャンセル",
   "Transcribing…": "文字起こし中…",
   "Microphone access was denied. Allow it in System Settings > Privacy & Security > Microphone.": "マイクへのアクセスが拒否されました。システム設定 > プライバシーとセキュリティ > マイク で許可してください。",
   "This browser can't record audio.": "このブラウザでは録音できません。",
-  "Couldn't transcribe the recording.": "録音を文字起こしできませんでした。"
+  "Couldn't transcribe the recording.": "録音を文字起こしできませんでした。",
+  "Listening…": "聞き取り中…",
+  "Stop and transcribe": "停止して文字起こし"
 }

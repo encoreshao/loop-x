@@ -1594,13 +1594,15 @@
 <script>⟦flash_toast_script⟧</script>
 <script>
 (function() {
-  // Dictation for every chat box: a [data-voice-input] button records the microphone and
-  // puts the transcript into its form's textarea, to check before sending.
-  var MAX_MS = 120000;
+  // Dictation for every chat box: a [data-voice-input] button records the microphone while a
+  // live waveform covers the box, then puts the transcript into the textarea to check.
+  var MAX_MS = 120000, BAR = 3, GAP = 2, STEP_MS = 45;
   var T = {
     dictate: ⟦json.dumps(_t('Dictate'))⟧,
-    listening: ⟦json.dumps(_t('Listening - click to stop, Esc to cancel'))⟧,
+    listening: ⟦json.dumps(_t('Listening…'))⟧,
     transcribing: ⟦json.dumps(_t('Transcribing…'))⟧,
+    cancel: ⟦json.dumps(_t('Cancel'))⟧,
+    done: ⟦json.dumps(_t('Stop and transcribe'))⟧,
     denied: ⟦json.dumps(_t('Microphone access was denied. Allow it in System Settings > Privacy & Security > Microphone.'))⟧,
     unsupported: ⟦json.dumps(_t("This browser can't record audio."))⟧,
     failed: ⟦json.dumps(_t("Couldn't transcribe the recording."))⟧
@@ -1613,18 +1615,83 @@
     for (var i = 0; i < types.length; i++) if (MediaRecorder.isTypeSupported(types[i])) return types[i];
     return '';
   }
-  function setState(btn, state) {
-    var label = state === 'recording' ? T.listening : state === 'busy' ? T.transcribing : T.dictate;
-    btn.classList.toggle('is-recording', state === 'recording');
-    btn.classList.toggle('is-busy', state === 'busy');
-    btn.disabled = state === 'busy';
-    btn.setAttribute('aria-pressed', state === 'recording' ? 'true' : 'false');
-    btn.setAttribute('aria-label', label);
-    btn.title = label;
+  function clock(ms) {
+    var s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
   }
-  function insert(btn, text) {
-    var form = btn.closest('form');
-    var input = form && form.querySelector('textarea');
+  function overlay(form) {
+    var el = document.createElement('div');
+    el.className = 'voice-wave';
+    el.setAttribute('role', 'status');
+    el.innerHTML =
+      "<button type='button' class='voice-wave-btn' data-voice-cancel><svg class='icon' aria-hidden='true'><use href='#i-close'/></svg></button>" +
+      "<canvas class='voice-wave-canvas' aria-hidden='true'></canvas>" +
+      "<span class='voice-wave-label'><span class='md-spinner md-spinner-sm' aria-hidden='true'></span><span data-voice-text></span></span>" +
+      "<button type='button' class='voice-wave-btn voice-wave-done' data-voice-done><svg class='icon' aria-hidden='true'><use href='#i-check'/></svg></button>";
+    el.querySelector('[data-voice-cancel]').setAttribute('aria-label', T.cancel);
+    el.querySelector('[data-voice-cancel]').title = T.cancel;
+    el.querySelector('[data-voice-done]').setAttribute('aria-label', T.done);
+    el.querySelector('[data-voice-done]').title = T.done;
+    form.classList.add('is-dictating');
+    form.appendChild(el);
+    return el;
+  }
+  function draw(session) {
+    var canvas = session.canvas, ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = session.color;
+    var bars = Math.floor(w / (BAR + GAP)), levels = session.levels;
+    for (var i = 0; i < bars; i++) {
+      var level = levels[levels.length - bars + i] || 0;
+      var bh = Math.max(2, Math.min(h, level * h * 1.6));
+      var x = i * (BAR + GAP), y = (h - bh) / 2;
+      ctx.globalAlpha = 0.35 + 0.65 * Math.min(1, i / (bars * 0.25));
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, BAR, bh, BAR / 2); else ctx.rect(x, y, BAR, bh);
+      ctx.fill();
+    }
+  }
+  function tick(session) {
+    if (session.state !== 'recording') return;
+    var now = performance.now();
+    if (now - session.lastStep >= STEP_MS) {
+      session.lastStep = now;
+      var data = session.samples;
+      session.analyser.getByteTimeDomainData(data);
+      var sum = 0;
+      for (var i = 0; i < data.length; i++) { var v = (data[i] - 128) / 128; sum += v * v; }
+      session.levels.push(Math.min(1, Math.sqrt(sum / data.length) * 3.2));
+      if (session.levels.length > 600) session.levels.splice(0, session.levels.length - 600);
+      session.text.textContent = clock(now - session.started);
+    }
+    draw(session);
+    session.frame = requestAnimationFrame(function() { tick(session); });
+  }
+  function setLabel(session, state) {
+    session.state = state;
+    session.wave.classList.toggle('is-busy', state === 'busy');
+    session.text.textContent = state === 'busy' ? T.transcribing : clock(0);
+    session.wave.setAttribute('aria-label', state === 'busy' ? T.transcribing : T.listening);
+  }
+  function close(session) {
+    cancelAnimationFrame(session.frame);
+    clearTimeout(session.timer);
+    if (session.audio) session.audio.close().catch(function() {});
+    session.stream.getTracks().forEach(function(t) { t.stop(); });
+    session.form.classList.remove('is-dictating');
+    session.wave.classList.add('is-closing');
+    setTimeout(function() { session.wave.remove(); }, 200);
+    session.btn.setAttribute('aria-pressed', 'false');
+    if (active === session) active = null;
+  }
+  function insert(session, text) {
+    var input = session.form.querySelector('textarea');
     if (!input) return;
     var before = input.value;
     input.value = before && !/\s$/.test(before) ? before + ' ' + text : before + text;
@@ -1632,57 +1699,87 @@
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   }
-  function upload(btn, blob) {
-    setState(btn, 'busy');
-    fetch('/api/voice/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob })
+  function upload(session, blob) {
+    setLabel(session, 'busy');
+    draw(session);
+    session.abort = window.AbortController ? new AbortController() : null;
+    fetch('/api/voice/transcribe', {
+      method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob,
+      signal: session.abort ? session.abort.signal : undefined
+    })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
       .then(function(res) {
-        if (res.ok && res.data.text) insert(btn, res.data.text);
+        if (session.cancelled) return;
+        close(session);
+        if (res.ok && res.data.text) insert(session, res.data.text);
         else toast(res.data.error || T.failed);
       })
-      .catch(function() { toast(T.failed); })
-      .then(function() { setState(btn, 'idle'); });
+      .catch(function() {
+        if (session.cancelled) return;
+        close(session);
+        toast(T.failed);
+      });
   }
-  function stop(cancel) {
-    if (!active) return;
-    active.cancelled = cancel;
-    clearTimeout(active.timer);
-    if (active.recorder.state !== 'inactive') active.recorder.stop();
+  function finish(session, cancel) {
+    if (cancel) {
+      session.cancelled = true;
+      if (session.abort) session.abort.abort();
+      if (session.recorder.state !== 'inactive') session.recorder.stop();
+      close(session);
+      session.form.querySelector('textarea').focus();
+      return;
+    }
+    if (session.state === 'recording' && session.recorder.state !== 'inactive') session.recorder.stop();
   }
   function start(btn) {
     if (!window.MediaRecorder || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast(T.unsupported); return; }
+    var form = btn.closest('form');
+    if (!form) return;
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
       var type = pickType();
       var recorder = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
-      var session = { btn: btn, recorder: recorder, chunks: [], cancelled: false, timer: null };
+      var wave = overlay(form);
+      var session = {
+        btn: btn, form: form, stream: stream, recorder: recorder, wave: wave, chunks: [],
+        canvas: wave.querySelector('canvas'), text: wave.querySelector('[data-voice-text]'),
+        levels: [], started: performance.now(), lastStep: 0, cancelled: false,
+        color: getComputedStyle(wave).getPropertyValue('--voice-wave-color').trim() || '#0A84FF'
+      };
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      session.audio = new Ctx();
+      session.analyser = session.audio.createAnalyser();
+      session.analyser.fftSize = 1024;
+      session.samples = new Uint8Array(session.analyser.fftSize);
+      session.audio.createMediaStreamSource(stream).connect(session.analyser);
       active = session;
+      wave.querySelector('[data-voice-cancel]').addEventListener('click', function() { finish(session, true); });
+      wave.querySelector('[data-voice-done]').addEventListener('click', function() { finish(session, false); });
       recorder.ondataavailable = function(ev) { if (ev.data && ev.data.size) session.chunks.push(ev.data); };
       recorder.onstop = function() {
-        stream.getTracks().forEach(function(t) { t.stop(); });
-        if (active === session) active = null;
-        setState(btn, 'idle');
-        if (session.cancelled || !session.chunks.length) return;
-        upload(btn, new Blob(session.chunks, { type: recorder.mimeType || type || 'audio/webm' }));
+        if (session.cancelled) return;
+        if (!session.chunks.length) { close(session); return; }
+        cancelAnimationFrame(session.frame);
+        session.stream.getTracks().forEach(function(t) { t.stop(); });
+        upload(session, new Blob(session.chunks, { type: recorder.mimeType || type || 'audio/webm' }));
       };
       recorder.start();
-      session.timer = setTimeout(function() { stop(false); }, MAX_MS);
-      setState(btn, 'recording');
+      session.timer = setTimeout(function() { finish(session, false); }, MAX_MS);
+      btn.setAttribute('aria-pressed', 'true');
+      setLabel(session, 'recording');
+      tick(session);
+      wave.querySelector('[data-voice-done]').focus();
     }, function() { toast(T.denied); });
   }
   document.addEventListener('click', function(ev) {
     var btn = ev.target.closest && ev.target.closest('[data-voice-input]');
     if (!btn) return;
     ev.preventDefault();
-    if (active) {
-      var same = active.btn === btn;
-      stop(false);
-      if (same) return;
-    }
+    if (active) { finish(active, false); return; }
     start(btn);
   });
   document.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape' && active) { ev.preventDefault(); stop(true); }
-  });
+    if (ev.key === 'Escape' && active) { ev.preventDefault(); ev.stopPropagation(); finish(active, true); }
+  }, true);
 })();
 </script>
 

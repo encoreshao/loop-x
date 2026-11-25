@@ -2420,9 +2420,10 @@
   "Voice input settings saved.": "Réglages de saisie vocale enregistrés.",
   "OpenAI key removed.": "Clé OpenAI supprimée.",
   "Dictate": "Dicter",
-  "Listening - click to stop, Esc to cancel": "Écoute en cours - cliquez pour arrêter, Échap pour annuler",
   "Transcribing…": "Transcription…",
   "Microphone access was denied. Allow it in System Settings > Privacy & Security > Microphone.": "L’accès au micro a été refusé. Autorisez-le dans Réglages Système > Confidentialité et sécurité > Micro.",
   "This browser can't record audio.": "Ce navigateur ne peut pas enregistrer de son.",
-  "Couldn't transcribe the recording.": "Impossible de transcrire l’enregistrement."
+  "Couldn't transcribe the recording.": "Impossible de transcrire l’enregistrement.",
+  "Listening…": "Écoute…",
+  "Stop and transcribe": "Arrêter et transcrire"
 }

@@ -10,6 +10,10 @@ final class IslandModel: ObservableObject {
     @Published var confirmRun: String?
     enum Voice { case idle, recording, transcribing }
     @Published private(set) var voice: Voice = .idle
+    @Published private(set) var voiceLevels: [Float] = []
+    @Published private(set) var voiceStarted = Date()
+    private var meterTask: Task<Void, Never>?
+    private var transcribeTask: Task<Void, Never>?
     private let dictation = Dictation()
     private var session: String?
     private var streamTask: Task<Void, Never>?
@@ -27,7 +31,7 @@ final class IslandModel: ObservableObject {
     func open(_ id: String) { nav.open(id) }
     func back() { nav.back() }
     func pin() { nav.pin() }
-    func unpin() { dictation.cancel(); voice = .idle; streamTask?.cancel(); streamID = UUID(); reply = nil; status = nil; confirmRun = nil; session = nil; nav.unpin() }
+    func unpin() { cancelDictation(); streamTask?.cancel(); streamID = UUID(); reply = nil; status = nil; confirmRun = nil; session = nil; nav.unpin() }
 
     func detail(for taskID: String) -> (NotchTask, IslandDetail)? {
         guard let task = app.notch.tasks.first(where: { $0.id == taskID }) else { return nil }
@@ -64,25 +68,50 @@ final class IslandModel: ObservableObject {
                     status = "Microphone access is off for LoopX. Allow it in System Settings > Privacy & Security > Microphone."
                     return
                 }
-                do { try dictation.start(); voice = .recording }
-                catch { status = "Couldn't start recording: \(error.localizedDescription)" }
+                do {
+                    try dictation.start()
+                    voiceLevels = []
+                    voiceStarted = Date()
+                    voice = .recording
+                    meter()
+                } catch { status = "Couldn't start recording: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    func cancelDictation() {
+        meterTask?.cancel()
+        transcribeTask?.cancel()
+        dictation.cancel()
+        voice = .idle
+    }
+
+    private func meter() {
+        meterTask?.cancel()
+        meterTask = Task { [weak self] in
+            while let self, !Task.isCancelled, self.voice == .recording {
+                self.voiceLevels.append(self.dictation.level())
+                if self.voiceLevels.count > 120 { self.voiceLevels.removeFirst(self.voiceLevels.count - 120) }
+                try? await Task.sleep(for: .milliseconds(50))
             }
         }
     }
 
     private func transcribe(_ file: URL?) {
+        meterTask?.cancel()
         guard let file else { voice = .idle; status = "The recording stopped unexpectedly."; return }
         defer { try? FileManager.default.removeItem(at: file) }
         guard let api, let audio = try? Data(contentsOf: file) else { voice = .idle; return }
         voice = .transcribing
-        Task {
+        transcribeTask = Task {
             do {
                 let text = try await api.transcribe(audio: audio, contentType: Dictation.contentType)
+                guard !Task.isCancelled else { return }
                 let current = nav.inputText
                 nav.inputText = current.isEmpty || current.hasSuffix(" ") ? current + text : current + " " + text
-            } catch let e as IslandAPIError { status = e.message }
-            catch { status = error.localizedDescription }
-            voice = .idle
+            } catch let e as IslandAPIError { if !Task.isCancelled { status = e.message } }
+            catch { if !Task.isCancelled { status = error.localizedDescription } }
+            if !Task.isCancelled { voice = .idle }
         }
     }
 

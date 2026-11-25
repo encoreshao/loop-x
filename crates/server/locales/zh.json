@@ -2420,9 +2420,10 @@
   "Voice input settings saved.": "语音输入设置已保存。",
   "OpenAI key removed.": "已删除 OpenAI 密钥。",
   "Dictate": "语音输入",
-  "Listening - click to stop, Esc to cancel": "正在聆听 - 点击停止，按 Esc 取消",
   "Transcribing…": "正在转写…",
   "Microphone access was denied. Allow it in System Settings > Privacy & Security > Microphone.": "麦克风访问被拒绝。请在“系统设置 > 隐私与安全性 > 麦克风”中允许。",
   "This browser can't record audio.": "此浏览器无法录音。",
-  "Couldn't transcribe the recording.": "无法转写录音。"
+  "Couldn't transcribe the recording.": "无法转写录音。",
+  "Listening…": "正在聆听…",
+  "Stop and transcribe": "停止并转写"
 }

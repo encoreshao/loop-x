@@ -52,7 +52,7 @@
 <div class='chat-menu' id='chat-menu' role='menu' hidden>⟦suggestions_html⟧</div>
 </div>
 <div class='chat-composer-actions'>
-<button type='button' class='chat-voice-btn' data-voice-input aria-pressed='false' aria-label='⟦html.escape(_t('Dictate'))⟧' title='⟦html.escape(_t('Dictate'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-mic'/></svg><span class='md-spinner md-spinner-sm' aria-hidden='true'></span></button>
+<button type='button' class='chat-voice-btn' data-voice-input aria-pressed='false' aria-label='⟦html.escape(_t('Dictate'))⟧' title='⟦html.escape(_t('Dictate'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-mic'/></svg></button>
 <button type='submit' class='chat-send-btn' aria-label='⟦html.escape(_t('Send'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>
 </div>

@@ -217,22 +217,30 @@ struct InputBar: View {
     @FocusState private var focused: Bool
 
     var body: some View {
+        Group {
+            if island.voice == .idle { typing } else { VoiceBar(island: island) }
+        }
+        .frame(minHeight: 24)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Capsule().fill(Color.white.opacity(0.1)))
+        .overlay(Capsule().strokeBorder(Color.accentColor.opacity(island.voice == .idle ? 0 : 0.7), lineWidth: 1))
+        .animation(.easeOut(duration: 0.25), value: island.voice)
+        .onAppear { focused = true }
+    }
+
+    private var typing: some View {
         let blank = !enabled || island.nav.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        HStack(spacing: 8) {
+        return HStack(spacing: 8) {
             TextField(enabled ? "Ask LoopX or tell it what to run…" : placeholder, text: $island.nav.inputText)
                 .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(.white)
                 .disabled(!enabled).focused($focused).onSubmit { if !blank && !island.nav.isReplying { island.send() } }
             Button { island.toggleDictation() } label: {
-                Group {
-                    if island.voice == .transcribing { ProgressView().controlSize(.small) }
-                    else { Image(systemName: island.voice == .recording ? "stop.fill" : "mic.fill").font(.system(size: 11, weight: .bold)) }
-                }
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(island.voice == .recording ? Color.red.opacity(0.85) : Color.white.opacity(0.12)))
-                .foregroundStyle(.white)
+                Image(systemName: "mic.fill").font(.system(size: 11, weight: .bold))
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.white.opacity(0.12)))
+                    .foregroundStyle(.white)
             }
-            .buttonStyle(.plain).disabled(!enabled || island.voice == .transcribing)
-            .help(island.voice == .recording ? "Stop and transcribe" : "Dictate")
+            .buttonStyle(.plain).disabled(!enabled).help("Dictate")
             Button { island.send() } label: {
                 Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
                     .frame(width: 24, height: 24)
@@ -240,8 +248,62 @@ struct InputBar: View {
                     .foregroundStyle(blank || island.nav.isReplying ? Color.white.opacity(0.4) : .black)
             }.buttonStyle(.plain).disabled(blank || island.nav.isReplying)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Capsule().fill(Color.white.opacity(0.1)))
-        .onAppear { focused = true }
+    }
+}
+
+/// Recording: cancel, the live waveform, elapsed time and done fill the whole input bar.
+struct VoiceBar: View {
+    @ObservedObject var island: IslandModel
+
+    var body: some View {
+        let busy = island.voice == .transcribing
+        HStack(spacing: 8) {
+            Button { island.cancelDictation() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.white.opacity(0.12)))
+                    .foregroundStyle(.white)
+            }.buttonStyle(.plain).help("Cancel").keyboardShortcut(.cancelAction)
+            Waveform(levels: island.voiceLevels)
+                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
+                .opacity(busy ? 0.45 : 1)
+            if busy {
+                ProgressView().controlSize(.small)
+                Text("Transcribing…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+            } else {
+                TimelineView(.periodic(from: island.voiceStarted, by: 1)) { ctx in
+                    let s = max(0, Int(ctx.date.timeIntervalSince(island.voiceStarted)))
+                    Text(String(format: "%d:%02d", s / 60, s % 60))
+                        .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.7))
+                }
+                Button { island.toggleDictation() } label: {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.accentColor))
+                        .foregroundStyle(.white)
+                }.buttonStyle(.plain).help("Stop and transcribe").keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+}
+
+/// Newest level on the right; older ones scroll left and fade.
+struct Waveform: View {
+    var levels: [Float]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let bar: CGFloat = 2.5, gap: CGFloat = 2
+            let count = Int(size.width / (bar + gap))
+            let tail = levels.suffix(count)
+            let offset = count - tail.count
+            for (i, level) in tail.enumerated() {
+                let slot = offset + i
+                let h = max(2, min(size.height, CGFloat(level) * size.height * 1.3))
+                let rect = CGRect(x: CGFloat(slot) * (bar + gap), y: (size.height - h) / 2, width: bar, height: h)
+                let fade = 0.35 + 0.65 * min(1, Double(slot) / (Double(count) * 0.25))
+                ctx.fill(Path(roundedRect: rect, cornerRadius: bar / 2), with: .color(Color.accentColor.opacity(fade)))
+            }
+        }
     }
 }

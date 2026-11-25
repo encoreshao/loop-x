@@ -32,9 +32,17 @@ final class Dictation: NSObject, AVAudioRecorderDelegate {
         ]
         let r = try AVAudioRecorder(url: url, settings: settings)
         r.delegate = self
+        r.isMeteringEnabled = true
         cancelled = false
         guard r.record(forDuration: Self.maxSeconds) else { throw CocoaError(.fileWriteUnknown) }
         recorder = r
+    }
+
+    /// The current input level, 0...1, for the waveform.
+    func level() -> Float {
+        guard let r = recorder, r.isRecording else { return 0 }
+        r.updateMeters()
+        return max(0, min(1, (r.averagePower(forChannel: 0) + 50) / 50))
     }
 
     func stop() { recorder?.stop() }
