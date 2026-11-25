@@ -325,8 +325,17 @@ mod tests {
         let mut checked = 0;
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
-            // Skip this file's own test code and example literals.
-            let text = text.split("#[cfg(test)]").next().unwrap().to_string();
+            // Skip test modules (rustfmt closes a top-level `mod` with a lone `}` line).
+            let text = text
+                .split("#[cfg(test)]")
+                .enumerate()
+                .map(|(n, chunk)| {
+                    if n == 0 || !chunk.trim_start().starts_with("mod ") {
+                        return chunk;
+                    }
+                    chunk.find("\n}\n").map_or("", |end| &chunk[end + 3..])
+                })
+                .collect::<String>();
             let b = text.as_bytes();
             let mut i = 0;
             while i < b.len() {

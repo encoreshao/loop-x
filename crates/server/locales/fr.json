@@ -2435,5 +2435,10 @@
   "LoopX re-runs the project's lint and tests, then a second agent reviews the diff. In gate mode a failure sends the fix back to the agent, and to you if it still fails.": "LoopX relance le lint et les tests du projet, puis un second agent relit le diff. En mode gate, un échec renvoie le correctif à l’agent, puis à vous s’il échoue encore.",
   "These report problems without stopping a merge request. Each number counts issues whose last check would have blocked.": "Elles signalent les problèmes sans arrêter la merge request. Chaque nombre compte les tickets dont la dernière vérification aurait bloqué.",
   "Observe: the checks run and are recorded, nothing is blocked. Gate: a failed blocking check sends the fix back and stops the merge request. Set it with verification.mode in the loop's loop.yaml.": "Observe : les vérifications s’exécutent et sont enregistrées, rien n’est bloqué. Gate : une vérification bloquante échouée renvoie le correctif et arrête la merge request. Réglez-le avec verification.mode dans le loop.yaml de la boucle.",
-  "Fixes stopped because a blocking check failed.": "Correctifs arrêtés car une vérification bloquante a échoué."
+  "Fixes stopped because a blocking check failed.": "Correctifs arrêtés car une vérification bloquante a échoué.",
+  "Up next": "À suivre",
+  "Recent": "Récents",
+  "Nothing is running": "Rien n'est en cours",
+  "Nothing is waiting": "Rien n'est en attente",
+  "No runs yet": "Aucune exécution pour l'instant"
 }

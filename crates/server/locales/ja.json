@@ -2435,5 +2435,10 @@
   "LoopX re-runs the project's lint and tests, then a second agent reviews the diff. In gate mode a failure sends the fix back to the agent, and to you if it still fails.": "LoopX はプロジェクトの lint とテストを再実行し、続いて別のエージェントが差分をレビューします。ゲートモードでは失敗すると修正をエージェントに差し戻し、それでも失敗すればあなたに渡します。",
   "These report problems without stopping a merge request. Each number counts issues whose last check would have blocked.": "これらはマージリクエストを止めずに問題を報告します。各数値は、最後のチェックがブロックしていたはずの Issue の数です。",
   "Observe: the checks run and are recorded, nothing is blocked. Gate: a failed blocking check sends the fix back and stops the merge request. Set it with verification.mode in the loop's loop.yaml.": "観察：チェックは実行・記録されますが、何もブロックしません。ゲート：ブロッキングチェックが失敗すると修正を差し戻し、マージリクエストを止めます。ループの loop.yaml の verification.mode で設定します。",
-  "Fixes stopped because a blocking check failed.": "ブロッキングチェックが失敗したため止められた修正。"
+  "Fixes stopped because a blocking check failed.": "ブロッキングチェックが失敗したため止められた修正。",
+  "Up next": "次に実行",
+  "Recent": "最近の実行",
+  "Nothing is running": "実行中のものはありません",
+  "Nothing is waiting": "待機中のものはありません",
+  "No runs yet": "まだ実行はありません"
 }

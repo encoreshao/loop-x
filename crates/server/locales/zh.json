@@ -2435,5 +2435,10 @@
   "LoopX re-runs the project's lint and tests, then a second agent reviews the diff. In gate mode a failure sends the fix back to the agent, and to you if it still fails.": "LoopX 会重新运行项目的 lint 和测试，然后由另一个智能体审查差异。在门禁模式下，失败会把修复退回给智能体，若仍失败则交给你。",
   "These report problems without stopping a merge request. Each number counts issues whose last check would have blocked.": "这些检查会报告问题，但不会阻止合并请求。每个数字统计最后一次检查本会阻止的 Issue。",
   "Observe: the checks run and are recorded, nothing is blocked. Gate: a failed blocking check sends the fix back and stops the merge request. Set it with verification.mode in the loop's loop.yaml.": "观察：检查会运行并记录，但不阻止任何操作。门禁：阻断性检查失败会退回修复并阻止合并请求。在循环的 loop.yaml 中通过 verification.mode 设置。",
-  "Fixes stopped because a blocking check failed.": "因阻断性检查失败而被阻止的修复。"
+  "Fixes stopped because a blocking check failed.": "因阻断性检查失败而被阻止的修复。",
+  "Up next": "接下来",
+  "Recent": "最近运行",
+  "Nothing is running": "没有正在运行的任务",
+  "Nothing is waiting": "没有等待中的任务",
+  "No runs yet": "还没有运行记录"
 }

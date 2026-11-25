@@ -395,15 +395,15 @@ fn profile_row(ctx: &UiCtx, job: &loopx_core::profile_progress::JobView) -> Stri
     )
 }
 
-fn section(ctx: &UiCtx, title: &str, empty: &str, rows: Vec<String>) -> String {
+fn section(title: &str, empty: &str, rows: Vec<String>) -> String {
     let inner = if rows.is_empty() {
-        format!("<p>{}</p>", pyfmt::escape(&ctx.t(empty)))
+        format!("<p>{}</p>", pyfmt::escape(empty))
     } else {
         rows.concat()
     };
     format!(
         "<section class='card'><div class='section-header'><h2>{}</h2></div>{inner}</section>",
-        pyfmt::escape(&ctx.t(title)),
+        pyfmt::escape(title),
     )
 }
 
@@ -505,9 +505,9 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
         })
         .collect();
     [
-        section(ctx, "Running", "Nothing is running", running),
-        section(ctx, "Up next", "Nothing is waiting", queued),
-        section(ctx, "Recent", "No runs yet", recent),
+        section(&ctx.t("Running"), &ctx.t("Nothing is running"), running),
+        section(&ctx.t("Up next"), &ctx.t("Nothing is waiting"), queued),
+        section(&ctx.t("Recent"), &ctx.t("No runs yet"), recent),
     ]
     .concat()
 }
@@ -913,6 +913,16 @@ mod tests {
             .dispatch(st, &UiRequest::get(path).with_header("cookie", &format!("loop_lang={lang}")))
             .unwrap()
             .body_text()
+    }
+
+    #[test]
+    fn the_section_headings_and_empty_states_are_translated() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let html = get(&st, "/queue/fragment", "ja");
+        for english in ["Up next", "Recent<", "Nothing is running", "Nothing is waiting", "No runs yet"] {
+            assert!(!html.contains(english), "{english} left untranslated: {html}");
+        }
     }
 
     #[test]
