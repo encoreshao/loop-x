@@ -1,6 +1,6 @@
 //! The Insights hub (`/insights`: analytics, cost, budget, memory) and the
-//! Harness hub (`/harness`: gates, evals, audit): `_analytics_body`,
-//! `_cost_body`, `_budget_body`, `_gates_body`, `_evals_body` and `_audit_body` of
+//! Harness hub (`/harness`: gates, audit): `_analytics_body`,
+//! `_cost_body`, `_budget_body`, `_gates_body` and `_audit_body` of
 //! `bin/web/dashboard_server.py`; the Memory view lives in `memory.rs`, which also owns
 //! the only POST routes under this hub (`/insights/memory/...`) and shows their results
 //! through its own whitelisted `notice` codes. The flash query parameter is ignored by
@@ -98,7 +98,6 @@ fn harness(ctx: &UiCtx) -> UiResponse {
         .key
         .clone();
     let body = match key.as_str() {
-        "evals" => evals_body(ctx),
         "audit" => audit_body(ctx),
         _ => gates_body(ctx),
     };
@@ -930,21 +929,47 @@ fn could_not_run(ctx: &UiCtx, n: i64) -> String {
     }
 }
 
-fn gate_tile(icon: &str, value: &str, label: &str, note: &str) -> String {
-    let note_html = if note.is_empty() {
-        String::new()
-    } else {
-        format!("<span class='subtitle'>{}</span>", escape(note))
-    };
+fn gate_tile(icon: &str, value: &str, label: &str, detail: &str) -> String {
     let icon_svg = glyphs::icon_with(icon, "dash-stat-icon");
     format!(
         "<div class='dash-stat-tile'>\
          {icon_svg}\
          <span class='dash-stat-value'>{}</span>\
-         <span class='dash-stat-label'>{}</span>{note_html}</div>",
+         <span class='dash-stat-label'>{}</span>\
+         <span class='dash-stat-detail'>{}</span></div>",
         escape(value),
-        escape(label)
+        escape(label),
+        escape(detail)
     )
+}
+
+fn with_errors(ctx: &UiCtx, detail: String, errors: i64) -> String {
+    if errors > 0 {
+        format!("{detail} \u{00b7} {}", could_not_run(ctx, errors))
+    } else {
+        detail
+    }
+}
+
+fn gate_card(title: &str, subtitle: &str, grid: &str, tiles: &str) -> String {
+    format!(
+        "<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<p class='section-subtitle'>{}</p>\n<div class=\"dash-stats-grid {grid}\">{tiles}</div>\n</section>\n",
+        escape(title),
+        escape(subtitle)
+    )
+}
+
+fn check_name(ctx: &UiCtx, id: &str) -> String {
+    match id {
+        "project_commands" => ctx.t("Project checks"),
+        "ui_check" => ctx.t("Browser check"),
+        "agent_review" => ctx.t("Code review"),
+        "dependency_audit" => ctx.t("Dependency audit"),
+        "security_scan" => ctx.t("Secret scan"),
+        "lint" => ctx.t("Lint"),
+        "tests" => ctx.t("Tests"),
+        other => other.to_string(),
+    }
 }
 
 fn gates_body(ctx: &UiCtx) -> String {
@@ -953,53 +978,94 @@ fn gates_body(ctx: &UiCtx) -> String {
     let stats = gate_stats::gate_stats(&evs);
     let total = &stats.total;
     let threshold = (gate_stats::AGREEMENT_THRESHOLD * 100.0) as i64;
-    let rate_note = ctx.tf(
-        "Flip a loop to gate once this holds at {threshold}% or more over a week.",
-        &[("threshold", &threshold.to_string())],
-    );
+    let rate_detail = if total.agreement_rate.is_some() {
+        ctx.tf(
+            "How often the checks agreed the fix worked. Switch to gate at {threshold}% or more over a week.",
+            &[("threshold", &threshold.to_string())],
+        )
+    } else {
+        ctx.t("Only measured while a loop runs in observe mode.")
+    };
     let retried_label = ctx.t("Retried \u{2192} passed");
-    let mut review_note = ctx.t("Advisory: the review gate is in observe mode");
-    if total.review_errors > 0 {
-        let errors = could_not_run(ctx, total.review_errors);
-        review_note = format!("{review_note} \u{00b7} {errors}");
-    }
-    let tiles = [
-        gate_tile("fact_check", &gate_rate_text(ctx, total.agreement_rate), &ctx.t("Agreement rate"), &rate_note),
-        gate_tile("error", &total.gated_blocks.to_string(), &ctx.t("Blocked by gate"), ""),
-        gate_tile("autorenew", &total.retried_then_passed.to_string(), &retried_label, ""),
-        gate_tile("warning", &total.escalated_verification.to_string(), &ctx.t("Escalated"), ""),
+    let dependency_detail = ctx.t("A dependency has a known high or critical vulnerability.");
+    let secret_detail = ctx.t("Found a credential or key in the diff.");
+    let project_tiles = [
+        gate_tile("fact_check", &gate_rate_text(ctx, total.agreement_rate), &ctx.t("Agreement rate"), &rate_detail),
+        gate_tile(
+            "error",
+            &total.gated_blocks.to_string(),
+            &ctx.t("Blocked by gate"),
+            &ctx.t("Fixes stopped because a blocking check failed."),
+        ),
+        gate_tile(
+            "autorenew",
+            &total.retried_then_passed.to_string(),
+            &retried_label,
+            &ctx.t("Failed the checks first, then passed after the agent tried again."),
+        ),
+        gate_tile(
+            "warning",
+            &total.escalated_verification.to_string(),
+            &ctx.t("Escalated"),
+            &ctx.t("Handed back to you: failed checks, a bad handoff or a merge request that would not open."),
+        ),
         gate_tile(
             "visibility",
             &total.review_would_block.to_string(),
-            &ctx.t("Review would block"),
-            &review_note,
+            &ctx.t("Review blocked"),
+            &with_errors(
+                ctx,
+                ctx.t("A second agent reviewed the diff and found a blocker or a major bug."),
+                total.review_errors,
+            ),
         ),
-        gate_tile("space_dashboard", &total.ui_would_block.to_string(), &ctx.t("Browser check would block"), ""),
-        gate_tile("palette", &total.a11y_would_block.to_string(), &ctx.t("Accessibility would block"), ""),
-        gate_tile("edit_note", &total.ui_undeclared.to_string(), &ctx.t("UI fixes without a browser check"), ""),
-        gate_tile("extension", &total.dependency_would_block.to_string(), &ctx.t("Dependency audit would block"), ""),
-        gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
+    ]
+    .concat();
+    let advisory_tiles = [
+        gate_tile(
+            "space_dashboard",
+            &total.ui_would_block.to_string(),
+            &ctx.t("Browser check would block"),
+            &ctx.t("A page the fix changed failed to load or showed errors."),
+        ),
+        gate_tile(
+            "palette",
+            &total.a11y_would_block.to_string(),
+            &ctx.t("Accessibility would block"),
+            &ctx.t("A changed page gained a new serious accessibility problem."),
+        ),
+        gate_tile(
+            "edit_note",
+            &total.ui_undeclared.to_string(),
+            &ctx.t("UI fixes without a browser check"),
+            &ctx.t("The fix changed UI files but named no pages to check."),
+        ),
+        gate_tile(
+            "extension",
+            &total.dependency_would_block.to_string(),
+            &ctx.t("Dependency audit would block"),
+            &dependency_detail,
+        ),
+        gate_tile("search", &total.security_would_block.to_string(), &ctx.t("Secret scan would block"), &secret_detail),
     ]
     .concat();
     let human = &stats.human;
     let human_tiles = [
-        gate_tile("fact_check", &human.mrs_checked.to_string(), &ctx.t("MRs checked"), ""),
-        gate_tile("search", &human.security_would_block.to_string(), &ctx.t("Secret scan would block"), ""),
+        gate_tile(
+            "fact_check",
+            &human.mrs_checked.to_string(),
+            &ctx.t("MRs checked"),
+            &ctx.t("Merge requests assigned to you that MR Review checked."),
+        ),
+        gate_tile("search", &human.security_would_block.to_string(), &ctx.t("Secret scan would block"), &secret_detail),
         gate_tile(
             "extension",
             &human.dependency_would_block.to_string(),
             &ctx.t("Dependency audit would block"),
-            &if human.errors > 0 { could_not_run(ctx, human.errors) } else { String::new() },
+            &with_errors(ctx, dependency_detail.clone(), human.errors),
         ),
     ]
     .concat();
-    let human_card = format!(
-        "<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<p class='section-subtitle'>{}</p>\n<div class=\"dash-stats-grid\">{human_tiles}</div>\n</section>\n",
-        escape(&ctx.t("Human merge requests")),
-        escape(&ctx.t(
-            "The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked."
-        ))
-    );
     let rows: String = stats
         .by_project
         .iter()
@@ -1032,7 +1098,7 @@ fn gates_body(ctx: &UiCtx) -> String {
             escape(&ctx.t("Blocked by gate")),
             escape(&retried_label),
             escape(&ctx.t("Escalated")),
-            escape(&ctx.t("Review would block")),
+            escape(&ctx.t("Review blocked")),
             escape(&ctx.t("Browser check would block")),
             escape(&ctx.t("Accessibility would block")),
             escape(&ctx.t("UI fixes without a browser check")),
@@ -1040,149 +1106,57 @@ fn gates_body(ctx: &UiCtx) -> String {
             escape(&ctx.t("Secret scan would block"))
         )
     };
-    let chips: String = loop_yamls(&ctx.state.repo_root.join("loops"))
+    let modes: String = loop_yamls(&ctx.state.repo_root.join("loops"))
         .iter()
         .filter_map(|p| loop_audit::load(p).ok())
+        .filter(|(def, _)| !def.verification.required.is_empty())
         .map(|(def, _)| {
             let gate = def.verification.mode == "gate";
+            let checks: Vec<String> = def.verification.required.iter().map(|id| check_name(ctx, id)).collect();
             format!(
-                "<li><strong>{}</strong> <span class='pill {}'>{}</span></li>",
+                "<li><strong>{}</strong> <span class='pill {}'>{}</span> <span class='subtitle'>{}</span></li>",
                 escape(&def.name),
                 if gate { "pill-green" } else { "pill-grey" },
-                escape(&ctx.t(if gate { "gate" } else { "observe" }))
+                escape(&ctx.t(if gate { "gate" } else { "observe" })),
+                escape(&checks.join(", "))
             )
         })
         .collect();
-    format!(
-        "\n{}<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<div class=\"dash-stats-grid\">{tiles}</div>\n</section>\n\
-         {human_card}<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n{table}\n</section>\n\
-         <section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<ul class='plain'>{chips}</ul>\n</section>\n",
-        page_title(ctx, "Gates", "Does the external verifier agree with the agent, and what the gate did."),
-        escape(&ctx.t("Last 7 days")),
-        escape(&ctx.t("By project")),
-        escape(&ctx.t("Verification mode"))
-    )
-}
-
-// --------------------------------------------------------------------- evals
-
-fn read_eval_json(ctx: &UiCtx, name: &str) -> Option<Value> {
-    let data: Value = serde_json::from_str(&std::fs::read_to_string(ctx.state.evals_dir.join(name)).ok()?).ok()?;
-    data.is_object().then_some(data)
-}
-
-fn eval_card(ctx: &UiCtx, title: &str, data: &Option<Value>, empty_hint: &str, extra: &str) -> String {
-    let head = format!("<div class='section-header'><h2>{}</h2></div>", escape(title));
-    let data = match data {
-        Some(d) if d.as_object().is_some_and(|o| !o.is_empty()) => d,
-        _ => return format!("<section class=\"card\">{head}<p>{}</p></section>", escape(empty_hint)),
-    };
-    let results: Vec<Value> = data
-        .get("results")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let passed = results
-        .iter()
-        .filter(|r| r.is_object() && truthy(&r["passed"]))
-        .count();
-    let summary = ctx.tf(
-        "{passed}/{total} cases passed",
-        &[("passed", &passed.to_string()), ("total", &results.len().to_string())],
-    );
-    let finished = ctx.tf(
-        "Finished {when}",
-        &[("when", &data.get("finished_at").map_or_else(String::new, n_of))],
-    );
-    let table = if results.is_empty() {
-        format!("<p>{}</p>", escape(&ctx.t("No cases recorded.")))
+    let modes = if modes.is_empty() {
+        format!("<p>{}</p>", escape(&ctx.t("No loop declares verification checks.")))
     } else {
-        let rows: String = results
-            .iter()
-            .filter(|r| r.is_object())
-            .map(|r| {
-                let ok = truthy(&r["passed"]);
-                let cost_text = match r.get("cost_usd") {
-                    Some(Value::Number(n)) => format!("${}", fixed(n.as_f64().unwrap_or(0.0), 2)),
-                    _ => "\u{2014}".to_string(),
-                };
-                let reasons = r
-                    .get("reasons")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().map(n_of).collect::<Vec<_>>().join("; "))
-                    .unwrap_or_default();
-                format!(
-                    "<tr><td>{} {}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                    glyphs::icon(if ok { "check_circle" } else { "cancel" }),
-                    escape(&ctx.t(if ok { "Passed" } else { "Failed" })),
-                    escape(&r.get("name").map_or_else(String::new, n_of)),
-                    escape(&cost_text),
-                    escape(&reasons)
-                )
-            })
-            .collect();
-        format!(
-            "<div class='table-wrap'><table class='daemons'><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>{rows}</tbody></table></div>",
-            escape(&ctx.t("Result")),
-            escape(&ctx.t("Case")),
-            escape(&ctx.t("Cost")),
-            escape(&ctx.t("Reasons"))
-        )
+        format!("<ul class='plain'>{modes}</ul>")
     };
     format!(
-        "<section class=\"card\">{head}<p>{} \u{b7} {}</p>{extra}{table}</section>",
-        escape(&summary),
-        escape(&finished)
-    )
-}
-
-fn evals_body(ctx: &UiCtx) -> String {
-    let scripted = read_eval_json(ctx, "last.json");
-    let golden = read_eval_json(ctx, "golden-last.json");
-    let mut extra = String::new();
-    if let Some(g) = golden.as_ref().filter(|g| g.as_object().is_some_and(|o| !o.is_empty())) {
-        if let Some(spent) = g.get("spent_usd").and_then(|v| v.as_number()).and_then(|n| n.as_f64()) {
-            let budget = g
-                .get("budget_usd")
-                .and_then(|v| v.as_number())
-                .and_then(|n| n.as_f64())
-                .map_or_else(|| "?".to_string(), |b| fixed(b, 2));
-            let line = ctx.tf(
-                "Spent ${spent} of ${budget} budget",
-                &[("spent", &fixed(spent, 2)), ("budget", &budget)],
-            );
-            extra.push_str(&format!("<p>{}</p>", escape(&line)));
-        }
-        let not_run: Vec<String> = g
-            .get("not_run")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().map(n_of).collect())
-            .unwrap_or_default();
-        if !not_run.is_empty() {
-            extra.push_str(&format!(
-                "<p>{}: {}</p>",
-                escape(&ctx.t("Not run (budget reached)")),
-                escape(&not_run.join(", "))
-            ));
-        }
-    }
-    format!(
-        "\n{}{}\n{}\n",
-        page_title(ctx, "Evals", "Last scripted and golden evaluation runs."),
-        eval_card(
+        "\n{}{}{}{}<section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<p class='section-subtitle'>{}</p>\n{table}\n</section>\n\
+         <section class=\"card\">\n<div class=\"section-header\"><h2>{}</h2></div>\n<p class='section-subtitle'>{}</p>\n{modes}\n</section>\n",
+        page_title(
             ctx,
-            &ctx.t("Scripted evals"),
-            &scripted,
-            &ctx.t("No scripted run yet. Run `loop eval` to record one."),
-            ""
+            "Gates",
+            "After an agent says it fixed an issue, LoopX checks the work itself before the merge request opens. Numbers cover the last 7 days."
         ),
-        eval_card(
-            ctx,
-            &ctx.t("Golden evals"),
-            &golden,
-            &ctx.t("No golden run yet. Run `loop eval --golden` to record one."),
-            &extra
-        )
+        gate_card(
+            &ctx.t("Blocking checks"),
+            &ctx.t("LoopX re-runs the project's lint and tests, then a second agent reviews the diff. In gate mode a failure sends the fix back to the agent, and to you if it still fails."),
+            "gates-grid",
+            &project_tiles
+        ),
+        gate_card(
+            &ctx.t("Advisory checks"),
+            &ctx.t("These report problems without stopping a merge request. Each number counts issues whose last check would have blocked."),
+            "gates-grid",
+            &advisory_tiles
+        ),
+        gate_card(
+            &ctx.t("Human merge requests"),
+            &ctx.t("The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked."),
+            "gates-grid gates-grid-wide",
+            &human_tiles
+        ),
+        escape(&ctx.t("By project")),
+        escape(&ctx.t("The same counts for each project.")),
+        escape(&ctx.t("Verification mode")),
+        escape(&ctx.t("Observe: the checks run and are recorded, nothing is blocked. Gate: a failed blocking check sends the fix back and stops the merge request. Set it with verification.mode in the loop's loop.yaml."))
     )
 }
 
@@ -1380,6 +1354,51 @@ mod tests {
         }
         assert_eq!(get("/licenses/axe-core/axe.min.js").status, 404);
         assert_eq!(get("/licenses/axe-core/..%2fLICENSE.txt").status, 404);
+    }
+
+    #[test]
+    fn the_harness_hub_has_no_evals_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", None);
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness?view=evals")).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        assert!(!html.contains("view=evals"), "{html}");
+        assert!(!html.contains("Golden evals"), "{html}");
+        assert!(html.contains("<h1>Gates</h1>"), "{html}");
+    }
+
+    #[test]
+    fn gates_page_explains_every_check() {
+        let html = gates_page(&[]);
+        for needle in [
+            "LoopX re-runs the project",
+            "Only measured while a loop runs in observe mode.",
+            "Fixes stopped because a blocking check failed.",
+            "A second agent reviewed the diff and found a blocker",
+            "Found a credential or key in the diff.",
+        ] {
+            assert!(html.contains(needle), "missing {needle:?}");
+        }
+    }
+
+    #[test]
+    fn verification_mode_lists_only_loops_that_declare_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let loops = dir.path().join("loops");
+        for (name, yaml) in [
+            ("gitlab-issue", include_str!("../../../../../loops/gitlab-issue/loop.yaml")),
+            ("daily-digest", include_str!("../../../../../loops/daily-digest/loop.yaml")),
+        ] {
+            std::fs::create_dir_all(loops.join(name)).unwrap();
+            std::fs::write(loops.join(name).join("loop.yaml"), yaml).unwrap();
+        }
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", None);
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        let card = &html[html.find("<h2>Verification mode</h2>").expect("mode card")..];
+        assert!(card.contains("<strong>gitlab-issue-loop</strong> <span class='pill pill-green'>gate</span>"), "{card}");
+        assert!(card.contains("Project checks, Browser check, Code review, Dependency audit, Secret scan"), "{card}");
+        assert!(!card.contains("daily-digest"), "{card}");
     }
 
     #[test]

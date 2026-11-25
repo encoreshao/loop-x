@@ -18,6 +18,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Harness › Gates explains itself: checks are split into blocking (lint and tests, code review) and advisory (browser, accessibility, dependency audit, secret scan), every number says what it counts, and Verification mode lists only loops that run checks, with the checks they run.
 - Issue loop: the pre-MR review (Opus) now blocks. A blocker, or a major correctness or security finding, sends the fix back to the coder before the merge request opens; a review that cannot run stays advisory. The per-issue budget goes from $3 to $4.
 - Sidebar: lists All loops plus the loops you pin (turning a loop on pins it, up to five) and any other loop that needs you, so it stays short as loops are added. All loops groups active loops into Code, Communication and Research & content, with a pin button on each loop. The Mac app's Loops menu shows the same list.
 
@@ -25,6 +26,10 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 - A loop run that was killed or force-quit no longer stays "running" on its page forever: the run queue marks it failed (or stopped), every scheduler tick fails any "running" loop whose process is gone, and the issue loop's progress updates keep the run's pid so Stop can still end it.
 - Chat: a new chat with Claude as the AI CLI gets its AI-written title again instead of keeping the first line of your question. The title request handed its prompt to Claude as a blocked-tool name, so Claude exited without answering.
+
+### Removed
+
+- Harness › Evals. It only showed results of developer `loop eval` runs, which an installed LoopX never records, so it was always empty. The `loop eval` command still prints its results.
 
 ## [0.20.0] - 2026-11-23
 

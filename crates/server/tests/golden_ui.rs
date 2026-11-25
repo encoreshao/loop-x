@@ -71,7 +71,7 @@ struct Fixture {
 fn build_fixture(overlay: Option<&str>, now: DateTime<Utc>, token: &str) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let g = golden_dir();
-    for name in ["checkout", "home", "userhome", "update", "events", "evals"] {
+    for name in ["checkout", "home", "userhome", "update", "events"] {
         let dst = tmp.path().join(name);
         fs::create_dir_all(&dst).unwrap();
         copy_tree(&g.join("fixture").join(name), &dst);
@@ -81,7 +81,7 @@ fn build_fixture(overlay: Option<&str>, now: DateTime<Utc>, token: &str) -> Fixt
     }
     let stamp: SystemTime = (now - chrono::Duration::hours(1)).into();
     let pid = std::process::id().to_string();
-    for name in ["checkout", "home", "userhome", "update", "events", "evals"] {
+    for name in ["checkout", "home", "userhome", "update", "events"] {
         each_file(&tmp.path().join(name), &mut |p| {
             if let Ok(text) = fs::read_to_string(p) {
                 if text.contains("@PID@") {
@@ -118,8 +118,7 @@ fn build_fixture(overlay: Option<&str>, now: DateTime<Utc>, token: &str) -> Fixt
         token,
         Some(now),
     )
-    .with_events_dir(&tmp.path().join("events"))
-    .with_evals_dir(&tmp.path().join("evals"));
+    .with_events_dir(&tmp.path().join("events"));
     state.mcp_chrome = Some(Some(userhome.join("Chrome")));
     Fixture { _tmp: tmp, state }
 }

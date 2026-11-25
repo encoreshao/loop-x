@@ -894,6 +894,9 @@ html.collapsed .sidebar-top {
 .dash-stat-value { font-size: 1.15rem; font-weight: 700; }
 .dash-stat-label { font-size: 0.72rem; color: var(--md-on-surface-variant); }
 .dash-stat-detail { font-size: 0.68rem; color: var(--md-on-surface-variant); opacity: 0.85; }
+.gates-grid { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
+.gates-grid-wide { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.gates-grid .dash-stat-detail { line-height: 1.35; margin-top: 0.15rem; }
 .analytics-days-selector { display: flex; gap: 0.5rem; margin: 0 0 1rem 0; }
 .analytics-days-selector a { padding: 0.3rem 0.75rem; border-radius: 6px; background: var(--md-surface-container-low); color: var(--md-on-surface-variant); text-decoration: none; font-size: 0.85rem; }
 .analytics-days-selector a.active { background: var(--md-primary); color: var(--md-on-primary); }

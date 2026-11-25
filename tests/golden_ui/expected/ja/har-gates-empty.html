@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:bc43dfadde609ba2--></style>
+<style><!--@blob:c7d17231c2440ad2--></style>
 <script><!--@blob:0a7ed108466d8843--></script>
 </head>
 <body>
@@ -133,27 +133,35 @@
 <div class="main-scroll" id="main-scroll">
 <div class="wrap">
 
-<nav class='hub-tabs' aria-label='ページのセクション'><a class='hub-tab active' href='/harness?view=gates' aria-current='page'>ゲート</a><a class='hub-tab' href='/harness?view=evals'>評価</a><a class='hub-tab' href='/harness?view=audit'>監査</a></nav>
+<nav class='hub-tabs' aria-label='ページのセクション'><a class='hub-tab active' href='/harness?view=gates' aria-current='page'>ゲート</a><a class='hub-tab' href='/harness?view=audit'>監査</a></nav>
 <div class="page-title">
 <h1>ゲート</h1>
-<p class="subtitle">外部検証がエージェントの判断と一致しているか、そしてゲートが何をしたか。</p>
+<p class="subtitle">エージェントが Issue を修正したと報告すると、LoopX はマージリクエストを開く前に自ら作業を確認します。数値は直近 7 日間です。</p>
 </div>
 <section class="card">
-<div class="section-header"><h2>過去 7 日間</h2></div>
-<div class="dash-stats-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>N/A</span><span class='dash-stat-label'>一致率</span><span class='subtitle'>これが1週間 90% 以上で続いたら、ループをゲートモードに切り替えてください。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-error'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>ゲートでブロック</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-autorenew'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>再試行後に合格</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-warning'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>エスカレーション済み</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-visibility'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>レビューならブロック</span><span class='subtitle'>参考値: レビューゲートは観察モードです</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-space_dashboard'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>ブラウザチェックならブロック</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-palette'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>アクセシビリティならブロック</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-edit_note'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>ブラウザチェックのない UI 修正</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>依存関係監査ならブロック</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>シークレットスキャンならブロック</span></div></div>
+<div class="section-header"><h2>ブロッキングチェック</h2></div>
+<p class='section-subtitle'>LoopX はプロジェクトの lint とテストを再実行し、続いて別のエージェントが差分をレビューします。ゲートモードでは失敗すると修正をエージェントに差し戻し、それでも失敗すればあなたに渡します。</p>
+<div class="dash-stats-grid gates-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>N/A</span><span class='dash-stat-label'>一致率</span><span class='dash-stat-detail'>ループが観察モードで動いている間のみ計測します。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-error'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>ゲートでブロック</span><span class='dash-stat-detail'>ブロッキングチェックが失敗したため止められた修正。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-autorenew'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>再試行後に合格</span><span class='dash-stat-detail'>最初はチェックに失敗し、エージェントが再試行した後に合格したもの。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-warning'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>エスカレーション済み</span><span class='dash-stat-detail'>あなたに差し戻されたもの：チェックの失敗、不正なハンドオフ、または開けなかったマージリクエスト。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-visibility'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>レビューでブロック</span><span class='dash-stat-detail'>別のエージェントが差分をレビューし、ブロッカーまたは重大なバグを見つけました。</span></div></div>
+</section>
+<section class="card">
+<div class="section-header"><h2>参考チェック</h2></div>
+<p class='section-subtitle'>これらはマージリクエストを止めずに問題を報告します。各数値は、最後のチェックがブロックしていたはずの Issue の数です。</p>
+<div class="dash-stats-grid gates-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-space_dashboard'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>ブラウザチェックならブロック</span><span class='dash-stat-detail'>修正で変更したページが読み込めなかった、またはエラーを表示しました。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-palette'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>アクセシビリティならブロック</span><span class='dash-stat-detail'>変更したページに新たな重大なアクセシビリティの問題が生じました。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-edit_note'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>ブラウザチェックのない UI 修正</span><span class='dash-stat-detail'>修正は UI ファイルを変更しましたが、確認するページを指定していません。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>依存関係監査ならブロック</span><span class='dash-stat-detail'>依存関係に既知の高または重大な脆弱性があります。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>シークレットスキャンならブロック</span><span class='dash-stat-detail'>差分に認証情報またはキーが見つかりました。</span></div></div>
 </section>
 <section class="card">
 <div class="section-header"><h2>人が作成したマージリクエスト</h2></div>
 <p class='section-subtitle'>LoopX の修正と同じモデル不使用のゲートを、MR Review があなたに割り当てられた MR に対して実行します。参考値のみで、何もブロックしません。</p>
-<div class="dash-stats-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>チェックした MR</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>シークレットスキャンならブロック</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>依存関係監査ならブロック</span></div></div>
+<div class="dash-stats-grid gates-grid gates-grid-wide"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>チェックした MR</span><span class='dash-stat-detail'>MR Review が確認した、あなたに割り当てられたマージリクエスト。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>シークレットスキャンならブロック</span><span class='dash-stat-detail'>差分に認証情報またはキーが見つかりました。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>依存関係監査ならブロック</span><span class='dash-stat-detail'>依存関係に既知の高または重大な脆弱性があります。</span></div></div>
 </section>
 <section class="card">
 <div class="section-header"><h2>プロジェクト別</h2></div>
+<p class='section-subtitle'>同じ数値をプロジェクトごとに表示します。</p>
 <p>この内訳のデータはまだありません。</p>
 </section>
 <section class="card">
 <div class="section-header"><h2>検証モード</h2></div>
-<ul class='plain'></ul>
+<p class='section-subtitle'>観察：チェックは実行・記録されますが、何もブロックしません。ゲート：ブロッキングチェックが失敗すると修正を差し戻し、マージリクエストを止めます。ループの loop.yaml の verification.mode で設定します。</p>
+<p>検証チェックを宣言しているループはありません。</p>
 </section>
 
 </div>

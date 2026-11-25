@@ -104,11 +104,7 @@ pub fn hubs() -> Vec<Hub> {
             "/harness",
             "Harness",
             "_SECTION_ICON_AUDIT",
-            vec![
-                v("gates", "Gates"),
-                v("evals", "Evals"),
-                v("audit", "Audit"),
-            ],
+            vec![v("gates", "Gates"), v("audit", "Audit")],
         ),
         hub(
             "connectors",

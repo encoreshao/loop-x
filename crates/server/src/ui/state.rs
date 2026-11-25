@@ -97,8 +97,6 @@ pub struct UiState {
     /// The event ledger directory (`LOOP_EVENTS_DIR`, else `<repo_root>/outputs/events`
     /// like `bin/events.py`'s `default_events_dir`).
     pub events_dir: PathBuf,
-    /// `LOOP_EVALS_DIR` (default `<repo_root>/outputs/evals`): `last.json`, `golden-last.json`.
-    pub evals_dir: PathBuf,
     pub csrf_token: String,
     pub policy: RoutePolicy,
     pub fixed_now: Option<DateTime<Utc>>,
@@ -192,9 +190,6 @@ impl UiState {
             events_dir: std::env::var_os("LOOP_EVENTS_DIR")
                 .filter(|v| !v.is_empty())
                 .map_or_else(|| repo_root.join("outputs").join("events"), PathBuf::from),
-            evals_dir: std::env::var_os("LOOP_EVALS_DIR")
-                .filter(|v| !v.is_empty())
-                .map_or_else(|| repo_root.join("outputs").join("evals"), PathBuf::from),
             csrf_token: csrf::new_token(),
             policy: RoutePolicy::from_env(),
             fixed_now: std::env::var("LOOPX_FIXED_NOW")
@@ -248,7 +243,6 @@ impl UiState {
             user_home: user_home.to_path_buf(),
             update_dir: update_dir.to_path_buf(),
             events_dir: repo_root.join("outputs").join("events"),
-            evals_dir: repo_root.join("outputs").join("evals"),
             csrf_token: csrf_token.to_string(),
             policy: RoutePolicy::default(),
             fixed_now,
@@ -306,12 +300,6 @@ impl UiState {
     ) -> Self {
         self.connector_store = Some(store);
         self.connector_http = Some(http);
-        self
-    }
-
-    /// Point the eval results somewhere else (tests, the golden harness).
-    pub fn with_evals_dir(mut self, dir: &Path) -> Self {
-        self.evals_dir = dir.to_path_buf();
         self
     }
 

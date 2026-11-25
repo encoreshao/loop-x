@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:bc43dfadde609ba2--></style>
+<style><!--@blob:c7d17231c2440ad2--></style>
 <script><!--@blob:ca509fb7d7f4086e--></script>
 </head>
 <body>
@@ -133,27 +133,35 @@
 <div class="main-scroll" id="main-scroll">
 <div class="wrap">
 
-<nav class='hub-tabs' aria-label='页面分区'><a class='hub-tab active' href='/harness?view=gates' aria-current='page'>门禁</a><a class='hub-tab' href='/harness?view=evals'>评测</a><a class='hub-tab' href='/harness?view=audit'>审计</a></nav>
+<nav class='hub-tabs' aria-label='页面分区'><a class='hub-tab active' href='/harness?view=gates' aria-current='page'>门禁</a><a class='hub-tab' href='/harness?view=audit'>审计</a></nav>
 <div class="page-title">
 <h1>门禁</h1>
-<p class="subtitle">外部验证是否与智能体的判断一致，以及门禁做了什么。</p>
+<p class="subtitle">智能体报告已修复某个 Issue 后，LoopX 会在打开合并请求前自行检查这项工作。数字统计最近 7 天。</p>
 </div>
 <section class="card">
-<div class="section-header"><h2>最近 7 天</h2></div>
-<div class="dash-stats-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>100%</span><span class='dash-stat-label'>一致率</span><span class='subtitle'>当该比例在一周内保持在 90% 以上时，再将循环切换为门禁模式。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-error'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>被门禁拦截</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-autorenew'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>重试后通过</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-warning'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>已上报</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-visibility'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>审查会拦截</span><span class='subtitle'>仅供参考：审查门禁处于观察模式</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-space_dashboard'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>浏览器检查会拦截</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-palette'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>无障碍检查会拦截</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-edit_note'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>未做浏览器检查的 UI 修复</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>依赖审计会拦截</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>密钥扫描会拦截</span></div></div>
+<div class="section-header"><h2>阻断性检查</h2></div>
+<p class='section-subtitle'>LoopX 会重新运行项目的 lint 和测试，然后由另一个智能体审查差异。在门禁模式下，失败会把修复退回给智能体，若仍失败则交给你。</p>
+<div class="dash-stats-grid gates-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>100%</span><span class='dash-stat-label'>一致率</span><span class='dash-stat-detail'>检查认同修复有效的比例。一周内达到 90% 或以上时切换为门禁。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-error'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>被门禁拦截</span><span class='dash-stat-detail'>因阻断性检查失败而被阻止的修复。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-autorenew'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>重试后通过</span><span class='dash-stat-detail'>最初未通过检查，智能体重试后通过。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-warning'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>已上报</span><span class='dash-stat-detail'>交还给你处理：检查失败、交接无效或合并请求无法打开。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-visibility'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>审查已阻止</span><span class='dash-stat-detail'>另一个智能体审查了差异，发现了阻断问题或严重缺陷。</span></div></div>
+</section>
+<section class="card">
+<div class="section-header"><h2>建议性检查</h2></div>
+<p class='section-subtitle'>这些检查会报告问题，但不会阻止合并请求。每个数字统计最后一次检查本会阻止的 Issue。</p>
+<div class="dash-stats-grid gates-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-space_dashboard'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>浏览器检查会拦截</span><span class='dash-stat-detail'>修复改动的页面无法加载或出现错误。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-palette'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>无障碍检查会拦截</span><span class='dash-stat-detail'>改动的页面出现了新的严重无障碍问题。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-edit_note'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>未做浏览器检查的 UI 修复</span><span class='dash-stat-detail'>修复改动了 UI 文件，但没有指定要检查的页面。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>依赖审计会拦截</span><span class='dash-stat-detail'>某个依赖存在已知的高危或严重漏洞。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>0</span><span class='dash-stat-label'>密钥扫描会拦截</span><span class='dash-stat-detail'>在差异中发现了凭据或密钥。</span></div></div>
 </section>
 <section class="card">
 <div class="section-header"><h2>人工创建的合并请求</h2></div>
 <p class='section-subtitle'>与 LoopX 修复相同的无模型关卡，由 MR Review 在分配给你的 MR 上运行。仅供参考：不会拦截任何内容。</p>
-<div class="dash-stats-grid"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>2</span><span class='dash-stat-label'>已检查的 MR</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>密钥扫描会拦截</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>依赖审计会拦截</span></div></div>
+<div class="dash-stats-grid gates-grid gates-grid-wide"><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-fact_check'/></svg><span class='dash-stat-value'>2</span><span class='dash-stat-label'>已检查的 MR</span><span class='dash-stat-detail'>MR Review 检查过的、分配给你的合并请求。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-search'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>密钥扫描会拦截</span><span class='dash-stat-detail'>在差异中发现了凭据或密钥。</span></div><div class='dash-stat-tile'><svg class='icon dash-stat-icon' aria-hidden='true'><use href='#i-extension'/></svg><span class='dash-stat-value'>1</span><span class='dash-stat-label'>依赖审计会拦截</span><span class='dash-stat-detail'>某个依赖存在已知的高危或严重漏洞。</span></div></div>
 </section>
 <section class="card">
 <div class="section-header"><h2>按项目</h2></div>
-<div class='table-wrap'><table class='daemons'><thead><tr><th>项目</th><th>议题</th><th>一致率</th><th>被门禁拦截</th><th>重试后通过</th><th>已上报</th><th>审查会拦截</th><th>浏览器检查会拦截</th><th>无障碍检查会拦截</th><th>未做浏览器检查的 UI 修复</th><th>依赖审计会拦截</th><th>密钥扫描会拦截</th></tr></thead><tbody><tr><td>proj</td><td>10</td><td>100%</td><td>1</td><td>1</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td></tr></tbody></table></div>
+<p class='section-subtitle'>按项目显示相同的统计。</p>
+<div class='table-wrap'><table class='daemons'><thead><tr><th>项目</th><th>议题</th><th>一致率</th><th>被门禁拦截</th><th>重试后通过</th><th>已上报</th><th>审查已阻止</th><th>浏览器检查会拦截</th><th>无障碍检查会拦截</th><th>未做浏览器检查的 UI 修复</th><th>依赖审计会拦截</th><th>密钥扫描会拦截</th></tr></thead><tbody><tr><td>proj</td><td>10</td><td>100%</td><td>1</td><td>1</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td><td>1</td><td>0</td></tr></tbody></table></div>
 </section>
 <section class="card">
 <div class="section-header"><h2>验证模式</h2></div>
-<ul class='plain'><li><strong>gitlab-issue-loop</strong> <span class='pill pill-grey'>观察</span></li><li><strong>rss-watch-loop</strong> <span class='pill pill-grey'>观察</span></li></ul>
+<p class='section-subtitle'>观察：检查会运行并记录，但不阻止任何操作。门禁：阻断性检查失败会退回修复并阻止合并请求。在循环的 loop.yaml 中通过 verification.mode 设置。</p>
+<ul class='plain'><li><strong>gitlab-issue-loop</strong> <span class='pill pill-grey'>观察</span> <span class='subtitle'>项目检查</span></li></ul>
 </section>
 
 </div>
