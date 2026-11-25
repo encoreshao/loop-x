@@ -793,7 +793,7 @@ html.ai-panel-resizing, html.ai-panel-resizing * { cursor: col-resize !important
   padding: 0;
 }
 .ai-panel-composer textarea::placeholder { color: var(--md-on-surface-variant); opacity: 0.8; }
-.ai-panel-composer-toolbar { display: flex; justify-content: flex-end; }
+.ai-panel-composer-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: 0.35rem; }
 .ai-panel-send {
   width: 34px;
   height: 34px;
@@ -1141,6 +1141,36 @@ html .chat-page.is-empty .activity-composer {
 .chat-send-btn:hover { transform: translateY(-1px); }
 .chat-send-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 .chat-send-btn .icon { font-size: 22px; }
+.chat-composer-actions { display: flex; align-items: center; gap: 0.5rem; }
+.chat-voice-btn, .ai-panel-voice {
+  flex: 0 0 auto; border: none; border-radius: 50%; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--md-on-surface-variant);
+  transition: background 200ms ease, color 200ms ease, box-shadow 300ms ease;
+}
+.chat-voice-btn { width: 40px; height: 40px; }
+.ai-panel-voice { width: 34px; height: 34px; }
+.chat-voice-btn .icon { font-size: 22px; }
+.ai-panel-voice .icon { font-size: 20px; }
+.chat-voice-btn:hover, .ai-panel-voice:hover { background: var(--md-surface-container-high); color: var(--md-on-surface); }
+.chat-voice-btn.is-recording, .ai-panel-voice.is-recording { background: var(--md-error); color: var(--md-on-error); }
+.chat-voice-btn .md-spinner, .ai-panel-voice .md-spinner { display: none; }
+.chat-voice-btn.is-busy .md-spinner, .ai-panel-voice.is-busy .md-spinner { display: block; }
+.chat-voice-btn.is-busy .icon, .ai-panel-voice.is-busy .icon { display: none; }
+.chat-voice-btn:disabled, .ai-panel-voice:disabled { cursor: progress; background: transparent; }
+@media (prefers-reduced-motion: no-preference) {
+  .chat-voice-btn.is-recording, .ai-panel-voice.is-recording { animation: voice-pulse 1.4s ease-in-out infinite; }
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--md-error) 45%, transparent); }
+  50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--md-error) 0%, transparent); }
+}
+.voice-status { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
+.voice-status .flash { margin: 0; }
+.voice-status .lazy-loading { padding: 0.5rem 0; }
+.voice-status .lazy-loading .md-spinner { width: 28px; height: 28px; }
+.voice-key-form { display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; color: var(--md-on-surface-variant); }
+.voice-key-form .btn { height: 30px; }
 
 @media (max-width: 720px) {
   /* Restated here because the base .activity-composer rule above comes

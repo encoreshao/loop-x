@@ -22,6 +22,28 @@ import Testing
         #expect(try body(r) == ["text": "hi", "session": "s0"])
     }
 
+    @Test func transcribeSendsTheRecordingWithItsTypeAndToken() async throws {
+        let t = FakeTransport { _ in (200, #"{"text":"bonjour","engine":"local"}"#) }
+        let text = try await api(t).transcribe(audio: Data("m4a".utf8), contentType: "audio/mp4")
+        #expect(text == "bonjour")
+        let r = try #require(t.requests.first)
+        #expect(r.url?.path == "/api/voice/transcribe"); #expect(r.httpMethod == "POST")
+        #expect(r.value(forHTTPHeaderField: "X-LoopX-Token") == "tok")
+        #expect(r.value(forHTTPHeaderField: "Content-Type") == "audio/mp4")
+        #expect(r.httpBody == Data("m4a".utf8))
+    }
+
+    @Test func transcribeSurfacesTheBackendsMessage() async {
+        let t = FakeTransport { _ in (422, #"{"error":"Nothing was heard."}"#) }
+        await #expect(throws: IslandAPIError.voice("Nothing was heard.")) {
+            try await api(t).transcribe(audio: Data("x".utf8), contentType: "audio/mp4")
+        }
+        let denied = FakeTransport { _ in (403, #"{"error":"missing or wrong token"}"#) }
+        await #expect(throws: IslandAPIError.forbidden) {
+            try await api(denied).transcribe(audio: Data("x".utf8), contentType: "audio/mp4")
+        }
+    }
+
     @Test func blankTextNeverHitsTheNetwork() async {
         let t = FakeTransport { _ in (200, "{}") }
         await #expect(throws: IslandAPIError.blank) { try await api(t).startChat(text: "  ", session: nil) }

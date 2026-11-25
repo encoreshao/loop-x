@@ -222,6 +222,17 @@ struct InputBar: View {
             TextField(enabled ? "Ask LoopX or tell it what to run…" : placeholder, text: $island.nav.inputText)
                 .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(.white)
                 .disabled(!enabled).focused($focused).onSubmit { if !blank && !island.nav.isReplying { island.send() } }
+            Button { island.toggleDictation() } label: {
+                Group {
+                    if island.voice == .transcribing { ProgressView().controlSize(.small) }
+                    else { Image(systemName: island.voice == .recording ? "stop.fill" : "mic.fill").font(.system(size: 11, weight: .bold)) }
+                }
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(island.voice == .recording ? Color.red.opacity(0.85) : Color.white.opacity(0.12)))
+                .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain).disabled(!enabled || island.voice == .transcribing)
+            .help(island.voice == .recording ? "Stop and transcribe" : "Dictate")
             Button { island.send() } label: {
                 Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold))
                     .frame(width: 24, height: 24)

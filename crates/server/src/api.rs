@@ -36,6 +36,8 @@ pub struct AppState {
     pub started_at: String,
     /// Server-rendered pages (see [`crate::ui`]); anything they do not claim is proxied.
     pub ui: Arc<crate::ui::UiState>,
+    /// `voice.json` in the per-machine home.
+    pub voice_config: PathBuf,
     /// Serialised snapshots; one per change.
     pub tx: broadcast::Sender<Arc<String>>,
 }
@@ -63,6 +65,7 @@ impl AppState {
             version: loopx_core::VERSION.to_string(),
             started_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             ui: Arc::new(crate::ui::UiState::from_env(&root_for_ui)),
+            voice_config: home.join("voice.json"),
             tx,
         })
     }
@@ -82,6 +85,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/approvals", get(list_approvals))
         .route("/api/approvals/:id", post(decide));
     app = app.merge(crate::api_island::routes());
+    app = app.merge(crate::api_voice::routes());
     match loopx_core::oauth::OauthContext::from_env() {
         Ok(ctx) => app = app.merge(crate::oauth_routes::routes(std::sync::Arc::new(ctx))),
         Err(e) => eprintln!("oauth routes disabled: {e}"),

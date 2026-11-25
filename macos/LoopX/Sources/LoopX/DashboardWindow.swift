@@ -225,6 +225,14 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
         decisionHandler(.cancel)
     }
 
+    // The chat boxes' mic: only the local backend's pages may record, and macOS still asks once.
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let local = origin.protocol == "http" && ["127.0.0.1", "localhost"].contains(origin.host)
+        decisionHandler(local && type == .microphone ? .grant : .deny)
+    }
+
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                              for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         if let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()) { NSWorkspace.shared.open(url) }

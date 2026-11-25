@@ -11,6 +11,7 @@ public enum IslandAPIError: Error, Equatable, Sendable {
     case server(Int)
     case unreachable(String)
     case invalid
+    case voice(String)
 
     public var message: String {
         switch self {
@@ -22,6 +23,7 @@ public enum IslandAPIError: Error, Equatable, Sendable {
         case .server(let c): return "Backend error (HTTP \(c))."
         case .unreachable(let m): return "Cannot reach the backend: \(m)"
         case .invalid: return "Unexpected response from the backend."
+        case .voice(let m): return m
         }
     }
 }
@@ -59,6 +61,29 @@ public struct IslandAPI: Sendable {
             throw IslandAPIError.unknownLoop
         }
         _ = try await post("/api/loops/\(name)/run", [:])
+    }
+
+    /// The recording's transcript; the backend picks local Whisper or OpenAI.
+    public func transcribe(audio: Data, contentType: String) async throws -> String {
+        var req = URLRequest(url: baseURL.appendingPathComponent("/api/voice/transcribe"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 300
+        req.setValue(token, forHTTPHeaderField: "X-LoopX-Token")
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        req.httpBody = audio
+        let data: Data, http: HTTPURLResponse
+        do { (data, http) = try await transport.send(req) }
+        catch { throw IslandAPIError.unreachable((error as NSError).localizedDescription) }
+        let obj = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
+        switch http.statusCode {
+        case 200..<300:
+            guard let text = obj["text"] as? String else { throw IslandAPIError.invalid }
+            return text
+        case 403: throw IslandAPIError.forbidden
+        default:
+            if let message = obj["error"] as? String, !message.isEmpty { throw IslandAPIError.voice(message) }
+            throw IslandAPIError.server(http.statusCode)
+        }
     }
 
     public func streamURL(replyKey: String) -> URL {

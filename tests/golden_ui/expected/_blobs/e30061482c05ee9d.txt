@@ -1,0 +1,92 @@
+
+(function() {
+  // Dictation for every chat box: a [data-voice-input] button records the microphone and
+  // puts the transcript into its form's textarea, to check before sending.
+  var MAX_MS = 120000;
+  var T = {
+    dictate: "Dictate",
+    listening: "Listening - click to stop, Esc to cancel",
+    transcribing: "Transcribing\u2026",
+    denied: "Microphone access was denied. Allow it in System Settings > Privacy & Security > Microphone.",
+    unsupported: "This browser can't record audio.",
+    failed: "Couldn't transcribe the recording."
+  };
+  var active = null;
+  function toast(message) { if (window.loopxToast) window.loopxToast(message, false); }
+  function pickType() {
+    var types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+    if (!MediaRecorder.isTypeSupported) return '';
+    for (var i = 0; i < types.length; i++) if (MediaRecorder.isTypeSupported(types[i])) return types[i];
+    return '';
+  }
+  function setState(btn, state) {
+    var label = state === 'recording' ? T.listening : state === 'busy' ? T.transcribing : T.dictate;
+    btn.classList.toggle('is-recording', state === 'recording');
+    btn.classList.toggle('is-busy', state === 'busy');
+    btn.disabled = state === 'busy';
+    btn.setAttribute('aria-pressed', state === 'recording' ? 'true' : 'false');
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+  }
+  function insert(btn, text) {
+    var form = btn.closest('form');
+    var input = form && form.querySelector('textarea');
+    if (!input) return;
+    var before = input.value;
+    input.value = before && !/\s$/.test(before) ? before + ' ' + text : before + text;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+  function upload(btn, blob) {
+    setState(btn, 'busy');
+    fetch('/api/voice/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type || 'audio/webm' }, body: blob })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(res) {
+        if (res.ok && res.data.text) insert(btn, res.data.text);
+        else toast(res.data.error || T.failed);
+      })
+      .catch(function() { toast(T.failed); })
+      .then(function() { setState(btn, 'idle'); });
+  }
+  function stop(cancel) {
+    if (!active) return;
+    active.cancelled = cancel;
+    clearTimeout(active.timer);
+    if (active.recorder.state !== 'inactive') active.recorder.stop();
+  }
+  function start(btn) {
+    if (!window.MediaRecorder || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast(T.unsupported); return; }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+      var type = pickType();
+      var recorder = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+      var session = { btn: btn, recorder: recorder, chunks: [], cancelled: false, timer: null };
+      active = session;
+      recorder.ondataavailable = function(ev) { if (ev.data && ev.data.size) session.chunks.push(ev.data); };
+      recorder.onstop = function() {
+        stream.getTracks().forEach(function(t) { t.stop(); });
+        if (active === session) active = null;
+        setState(btn, 'idle');
+        if (session.cancelled || !session.chunks.length) return;
+        upload(btn, new Blob(session.chunks, { type: recorder.mimeType || type || 'audio/webm' }));
+      };
+      recorder.start();
+      session.timer = setTimeout(function() { stop(false); }, MAX_MS);
+      setState(btn, 'recording');
+    }, function() { toast(T.denied); });
+  }
+  document.addEventListener('click', function(ev) {
+    var btn = ev.target.closest && ev.target.closest('[data-voice-input]');
+    if (!btn) return;
+    ev.preventDefault();
+    if (active) {
+      var same = active.btn === btn;
+      stop(false);
+      if (same) return;
+    }
+    start(btn);
+  });
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape' && active) { ev.preventDefault(); stop(true); }
+  });
+})();

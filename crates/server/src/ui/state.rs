@@ -130,6 +130,9 @@ pub struct UiState {
     /// (`None` = `find_chrome()`), and the Test button's deadline. `explicit`
     /// pins all of them, so tests and the golden harness never reach the machine.
     pub mcp_store: Option<Arc<dyn loopx_core::keychain::SecretStore>>,
+    /// Where the OpenAI key for voice input is kept (`None` = the real `loop-engineering.config`
+    /// store); `explicit` pins an in-memory one.
+    pub voice_store: Option<Arc<dyn loopx_core::keychain::SecretStore>>,
     pub mcp_toolchains: Option<(loopx_core::node_env::Toolchains, String)>,
     pub mcp_chrome: Option<Option<PathBuf>>,
     pub mcp_probe_deadline: std::time::Duration,
@@ -217,6 +220,7 @@ impl UiState {
             connector_store: None,
             connector_http: None,
             mcp_store: None,
+            voice_store: None,
             mcp_toolchains: None,
             mcp_chrome: None,
             mcp_probe_deadline: loopx_core::mcp_probe::DEADLINE,
@@ -258,6 +262,9 @@ impl UiState {
             }),
             connector_store: None,
             connector_http: None,
+            voice_store: Some(Arc::new(loopx_core::keychain::MemoryStore::new(
+                loopx_core::keychain::SERVICE_CONFIG,
+            ))),
             mcp_store: Some(Arc::new(loopx_core::keychain::MemoryStore::new(
                 loopx_core::mcp_registry::SERVICE_MCP,
             ))),

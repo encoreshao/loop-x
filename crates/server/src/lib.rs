@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod api_island;
+pub mod api_voice;
 pub mod chat_tool;
 pub mod lock;
 pub mod oauth_routes;

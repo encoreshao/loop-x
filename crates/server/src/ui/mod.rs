@@ -42,6 +42,7 @@ pub mod sidebar_loops;
 pub mod state;
 pub mod template;
 pub mod update;
+pub mod voice;
 
 pub use routes::{Registry, UiCtx, UiRequest, UiResponse};
 pub use state::UiState;

@@ -1,4 +1,4 @@
-//! General view: Appearance, Notifications, AI CLI and Instructions tabs.
+//! General view: Appearance, Notifications, AI CLI, Instructions and Voice tabs.
 
 use crate::ui::ai_cli;
 use crate::ui::consts;
@@ -502,6 +502,8 @@ For one loop only, add a file under {per_loop} (gitlab-issue.md, topic-monitor.m
     render("settings_instructions_panel", &scope)
 }
 
+const VOICE_ICON: &str = "<svg class='icon' aria-hidden='true'><use href='#i-mic'/></svg>";
+
 pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, tab: &str) -> String {
     let csrf = ctx.csrf_input();
     let current_cli = loopx_core::ai_cli_config::get_selected_cli(&ctx.state.ai_cli_config_path());
@@ -511,6 +513,7 @@ pub fn body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool, tab: &str) -> Stri
         ("notifications", ctx.t("Notifications"), icon("_SECTION_ICON_SLACK"), notifications_panel(ctx, &csrf)),
         ("ai-cli", "AI CLI".to_string(), icon("_SECTION_ICON_AI_CLI"), ai_cli_panel(ctx, &csrf, &current_cli)),
         ("instructions", ctx.t("Instructions"), icon("_SECTION_ICON_INSTRUCTIONS"), instructions_panel(ctx, &csrf, &current_cli)),
+        ("voice", ctx.t("Voice"), VOICE_ICON, super::voice::panel(ctx, &csrf)),
     ];
     let active = if tabs.iter().any(|t| t.0 == tab) { tab } else { "notifications" };
     let buttons: String = tabs

@@ -164,6 +164,7 @@ pub mod topics;
 pub mod ui_check;
 pub mod update_check;
 pub mod verify_commands;
+pub mod voice;
 pub mod window_capture;
 pub mod worktree;
 

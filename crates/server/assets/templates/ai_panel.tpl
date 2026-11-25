@@ -25,6 +25,7 @@
 <input type='hidden' name='csrf_token' value="⟦html.escape(_CSRF_TOKEN)⟧">
 <textarea name='text' rows='1' placeholder='⟦html.escape(_t('Ask about this page, or paste a GitLab or GitHub issue link'))⟧' aria-label='⟦html.escape(_t('Message the assistant'))⟧'></textarea>
 <div class='ai-panel-composer-toolbar'>
+<button type='button' class='ai-panel-voice' data-voice-input aria-pressed='false' aria-label='⟦html.escape(_t('Dictate'))⟧' title='⟦html.escape(_t('Dictate'))⟧'><svg class='icon' aria-hidden='true'><use href='#i-mic'/></svg><span class='md-spinner md-spinner-sm' aria-hidden='true'></span></button>
 <button type='submit' class='ai-panel-send' aria-label='⟦html.escape(_t('Send'))⟧' title='⟦html.escape(_t('Send'))⟧' disabled><svg class='icon' aria-hidden='true'><use href='#i-arrow_upward'/></svg></button>
 </div>
 </form>

@@ -134,6 +134,7 @@ $ICON_KEY
     <key>CFBundleURLName</key><string>$BUNDLE_ID</string>
     <key>CFBundleURLSchemes</key><array><string>loopx</string></array>
   </dict></array>
+  <key>NSMicrophoneUsageDescription</key><string>LoopX turns what you say into chat messages.</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 $SPARKLE_KEYS

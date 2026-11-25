@@ -90,6 +90,7 @@ pub const NAMES: &[&str] = &[
     "webhook",
     "widgets",
     "push_pin",
+    "mic",
 ];
 
 pub fn is_known(name: &str) -> bool {

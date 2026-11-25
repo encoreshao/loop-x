@@ -13,6 +13,8 @@ pub(crate) mod general;
 mod posts;
 #[path = "settings/skills.rs"]
 mod skills;
+#[path = "settings/voice.rs"]
+pub(crate) mod voice;
 
 use crate::ui::badge::default_badge;
 use crate::ui::hub;
@@ -22,6 +24,7 @@ pub fn register(r: &mut Registry) {
     r.get("/settings", page);
     claude_account::register(r);
     posts::register(r);
+    voice::register(r);
 }
 
 fn page(ctx: &UiCtx) -> UiResponse {
