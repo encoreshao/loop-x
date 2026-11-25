@@ -111,12 +111,19 @@ pub fn review_prompt(handoff: &Value, diff: &str) -> String {
         .iter()
         .map(|c| json!({"id": c.id, "statement": c.statement, "test": c.test, "reason": c.reason}))
         .collect();
-    let item = json!({
+    let mut item = json!({
         "title": text("title"),
         "description": text("description"),
         "acceptance_criteria": criteria,
         "diff": cap_diff(diff),
     });
+    if let Some(failures) = handoff
+        .pointer("/tester/failures")
+        .and_then(Value::as_array)
+        .filter(|f| !f.is_empty())
+    {
+        item["unresolved_test_failures"] = json!(failures);
+    }
     PROMPT.replace("{{item_json}}", &item.to_string())
 }
 
@@ -563,6 +570,9 @@ pub struct AgentReviewVerifier {
     pub max_cost_usd: f64,
     pub issue_budget_usd: f64,
     pub cli: String,
+    /// A review that could not run passes (recorded as observe-mode), while
+    /// blocking findings still fail.
+    pub errors_advisory: bool,
     invoker: ReviewInvoker,
     costs: CostLedger,
 }
@@ -576,9 +586,15 @@ impl AgentReviewVerifier {
             max_cost_usd: 0.5,
             issue_budget_usd: f64::INFINITY,
             cli: "claude".into(),
+            errors_advisory: false,
             invoker,
             costs,
         }
+    }
+
+    pub fn with_errors_advisory(mut self, advisory: bool) -> Self {
+        self.errors_advisory = advisory;
+        self
     }
 
     pub fn with_cli(mut self, cli: &str) -> Self {
@@ -628,12 +644,12 @@ impl AgentReviewVerifier {
     }
 
     fn error(&self, why: String, cost: Option<f64>, start: Instant) -> VerificationResult {
-        self.result(
-            false,
-            why,
-            json!({"error": true, "gate": "review", "cost_usd": cost}),
-            start,
-        )
+        let mut evidence = json!({"error": true, "gate": "review", "cost_usd": cost});
+        if self.errors_advisory {
+            evidence["observed_passed"] = json!(false);
+            evidence["mode"] = json!("observe");
+        }
+        self.result(self.errors_advisory, why, evidence, start)
     }
 }
 
@@ -938,6 +954,43 @@ mod tests {
         assert!(!r.passed && r.evidence["error"] == json!(true));
         assert!(r.output.contains("timed out"));
         assert_eq!(*costs.lock().unwrap(), vec![Some(0.2)]);
+    }
+
+    #[test]
+    fn an_advisory_review_error_passes_but_blocking_findings_still_fail() {
+        let f = fixture("new\n");
+        let costs = CostLedger::default();
+        let r = run(&verifier(
+            &f,
+            invoker(Err("timed out"), Some(0.2), &Calls::default()),
+            &costs,
+            "claude",
+        )
+        .with_errors_advisory(true));
+        assert!(r.passed, "{}", r.output);
+        assert_eq!(r.evidence["observed_passed"], json!(false));
+        assert_eq!(r.evidence["mode"], "observe");
+
+        let text = reply(vec![finding("blocker", "correctness")], "request_changes");
+        let r = run(&verifier(
+            &f,
+            invoker(Ok(&text), Some(0.1), &Calls::default()),
+            &costs,
+            "claude",
+        )
+        .with_errors_advisory(true));
+        assert!(!r.passed, "{}", r.output);
+    }
+
+    #[test]
+    fn review_prompt_shows_the_testers_unresolved_failures_only_when_there_are_some() {
+        let mut handoff = fix_with(json!([]));
+        assert!(!review_prompt(&handoff, "+x\n").contains("\"unresolved_test_failures\":"));
+        handoff["tester"] = json!({"verdict": "fail", "failures": [
+            {"criterion": "AC2", "problem": "empty list raises", "evidence": "NoMethodError"}]});
+        let prompt = review_prompt(&handoff, "+x\n");
+        assert!(prompt.contains("\"unresolved_test_failures\":"), "{prompt}");
+        assert!(prompt.contains("empty list raises"), "{prompt}");
     }
 
     #[test]

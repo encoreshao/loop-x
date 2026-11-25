@@ -945,7 +945,10 @@ pub fn build_verifiers(
                     )
                     .with_cli(&issue.cli)
                     .with_model(model)
-                    .with_budget(cap, issue.issue_budget_usd),
+                    .with_budget(cap, issue.issue_budget_usd)
+                    .with_errors_advisory(
+                        spec.get("observe_errors").and_then(Value::as_bool) == Some(true),
+                    ),
                 ));
             }
             _ => {

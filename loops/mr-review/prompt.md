@@ -7,7 +7,7 @@ How to review (in this order):
 4. Performance: N+1 queries, queries without a usable index, unbounded loops or result sets, work in hot paths, missing pagination or batching, large allocations, blocking calls.
 5. Data and migrations: locking and long-running DDL on large tables, missing lock/statement timeouts, non-reversible or non-idempotent migrations, backfills, data loss, schema drift (e.g. structure.sql/schema.rb not matching).
 6. Reliability and compatibility: failure modes and recovery, timeouts, behaviour on partial failure, backwards compatibility of APIs, events, config and stored data, rollout and rollback safety.
-7. Tests: are the changed behaviours and the risky paths covered? Point at the specific missing case, not "add tests".
+7. Tests: are the changed behaviours and the risky paths covered? Point at the specific missing case, not "add tests". When the data has "unresolved_test_failures" (an automated tester's report that the code fails a criterion), check each one against the diff and report the real ones as findings.
 8. Maintainability only when it creates real risk (duplicated logic that will drift, misleading names, dead code).
 
 Rules for findings:

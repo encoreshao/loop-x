@@ -12,7 +12,7 @@ use crate::agents::{extract_new_cli_reply, new_cli_args, RunOptions};
 use crate::config::{default_config_path, Config};
 use crate::events::EventFields;
 use crate::gitlab::{self, quote, Client};
-use crate::loop_definition::{LoopDefinition, Phase};
+use crate::loop_definition::{IssueRole, LoopDefinition, Phase};
 use crate::loop_result::{AgentCost, IterationResult, LoopResult};
 use crate::loop_runtime::{AgentFailure, AgentFn, AgentSuccess, LoopRuntime};
 use crate::loop_serialize::write_result;
@@ -586,6 +586,18 @@ pub struct InvokeRequest {
     pub doctor: Option<DoctorRequest>,
     /// The loop definition's `mcp_servers`, attached to the main fix call only.
     pub mcp_servers: Vec<String>,
+    /// `Some` runs one session of a phased fix (see `issue_phases`).
+    pub phase: Option<PhaseCall>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PhaseCall {
+    pub role: IssueRole,
+    pub model: Option<String>,
+    /// The planner's plan (`Null` for the planner itself).
+    pub plan: Value,
+    /// The coder's fix handoff, for the tester (`Null` otherwise).
+    pub handoff: Value,
 }
 
 /// What the setup doctor session is told about the blocked issue.
@@ -639,6 +651,19 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
     if let Some(doctor) = &req.doctor {
         return invoke_doctor(ctx, req, doctor);
     }
+    let phase = req.phase.as_ref();
+    if let Some(call) = phase.filter(|c| c.role == IssueRole::Tester) {
+        let text = prompt::issue_tester(&ctx.repo_root, &req.issue_iid, &call.plan, &call.handoff);
+        return invoke_phase_cli(
+            ctx,
+            Phase::Execute,
+            call.model.as_deref(),
+            &text,
+            (&req.alias, &req.issue_iid),
+            req.max_budget_usd,
+            req.timeout_seconds,
+        );
+    }
     let base = match &req.mode {
         InvokeMode::Single => prompt::single_issue(&ctx.repo_root, &req.alias, &req.issue_iid),
         InvokeMode::Batch => prompt::batch_issue(&ctx.repo_root, &req.alias, &req.issue_iid),
@@ -652,7 +677,10 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         base,
         project_instructions(&project_config_path(ctx), &req.alias).as_deref(),
     );
-    let mut text = with_feedback(base, req.feedback.as_deref());
+    let mut text = match phase {
+        None => with_feedback(base, req.feedback.as_deref()),
+        Some(_) => base,
+    };
     let offline = matches!(req.mode, InvokeMode::IssueFile(_));
     // The golden eval always runs in gate mode.
     let gate = req.gate || offline;
@@ -672,6 +700,21 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         text = t;
         env.extend(e);
     }
+    if let Some(call) = phase {
+        let section = match call.role {
+            IssueRole::Planner => {
+                let handoff = env
+                    .iter()
+                    .find(|(k, _)| k == "LOOP_HANDOFF_PATH")
+                    .map(|(_, v)| PathBuf::from(v))
+                    .unwrap_or_default();
+                prompt::issue_planner(&ctx.repo_root, &handoff)
+            }
+            _ => prompt::issue_coder(&ctx.repo_root, &call.plan),
+        };
+        text = with_feedback(format!("{text}\n\n{section}"), req.feedback.as_deref());
+    }
+    let model = phase.and_then(|c| c.model.clone());
     let ai_cli = ai_cli_config::selected_cli();
     with_mcp(
         ctx,
@@ -694,7 +737,7 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
                 gate,
                 req.max_budget_usd,
                 offline,
-                None,
+                model.as_deref(),
                 mcp,
             )
         },
@@ -831,6 +874,26 @@ pub(crate) fn invoke_phase_with(
     issue: (&str, &str),
     max_budget_usd: Option<f64>,
 ) -> Result<AgentOutput, AgentError> {
+    invoke_phase_cli(
+        ctx,
+        phase,
+        model,
+        prompt,
+        issue,
+        max_budget_usd,
+        definition.stop_conditions.max_runtime_minutes * 60.0,
+    )
+}
+
+fn invoke_phase_cli(
+    ctx: &RunCtx,
+    phase: Phase,
+    model: Option<&str>,
+    prompt: &str,
+    issue: (&str, &str),
+    max_budget_usd: Option<f64>,
+    timeout_seconds: f64,
+) -> Result<AgentOutput, AgentError> {
     let worktree_root = worktree_root()?;
     let ai_cli = ai_cli_config::selected_cli();
     let repo_root = ctx.repo_root.display().to_string();
@@ -853,7 +916,7 @@ pub(crate) fn invoke_phase_with(
         ctx,
         &ai_cli,
         &argv,
-        definition.stop_conditions.max_runtime_minutes * 60.0,
+        timeout_seconds,
         Some(issue),
         &[hold_slack()],
         max_budget_usd,
@@ -2941,12 +3004,12 @@ pub struct IssueRun {
     pub setup_fixed: Option<usize>,
 }
 
-fn sum_or_none(values: &[Option<f64>]) -> Option<f64> {
+pub(crate) fn sum_or_none(values: &[Option<f64>]) -> Option<f64> {
     let priced: Vec<f64> = values.iter().flatten().copied().collect();
     (!priced.is_empty()).then(|| priced.iter().sum())
 }
 
-fn sum_usages(usages: &[Option<Value>]) -> Option<Value> {
+pub(crate) fn sum_usages(usages: &[Option<Value>]) -> Option<Value> {
     let real: Vec<&Value> = usages
         .iter()
         .flatten()
@@ -3102,6 +3165,9 @@ fn run_pass(
     issue.repo_root = Some(ctx.repo_root.clone());
     let (review_invoker, review_cli) = review_invoker(ctx, definition, alias, issue_iid);
     issue.review_invoker = Some(review_invoker);
+    // The reviewer runs only on claude, and so do the phases.
+    let phases = (gate && definition.agent.phases.enabled && review_cli == "claude")
+        .then(|| definition.agent.phases.clone());
     issue.cli = review_cli;
     let guard_target = gate.then(|| guard_target(ctx, alias)).flatten();
     let guard_hit: Arc<Mutex<Option<String>>> = Arc::default();
@@ -3116,6 +3182,7 @@ fn run_pass(
         let iid_num: u64 = issue_iid.parse().unwrap_or(0);
         let iid_num_i64: Option<i64> = issue_iid.parse().ok();
         let mcp_servers = definition.mcp_servers.clone();
+        let phase_ctx = ctx.clone();
         Box::new(move |context| {
             if dirty_before {
                 return Err(AgentFailure {
@@ -3155,11 +3222,23 @@ fn run_pass(
                 timeout_seconds,
                 doctor: None,
                 mcp_servers: mcp_servers.clone(),
+                phase: None,
             };
             let before = guard_target
                 .as_ref()
                 .map(|(path, wt)| agent_guard::snapshot(path, iid_num, *wt));
-            let outcome = invoker(&req);
+            let outcome = match (&phases, &handoff) {
+                (Some(phases), Some(handoff)) => crate::issue_phases::run(
+                    &crate::issue_phases::Phased {
+                        invoker: &invoker,
+                        phases,
+                        handoff,
+                        log: &|line| phase_ctx.log(line),
+                    },
+                    &req,
+                ),
+                _ => invoker(&req),
+            };
             let cost_usd = match &outcome {
                 Ok(out) => out.cost_usd,
                 Err(e) => e.cost_usd,
@@ -3859,6 +3938,7 @@ fn run_doctor(
         max_budget_usd: Some(config.max_cost_usd),
         timeout_seconds: config.max_runtime_minutes * 60.0,
         mcp_servers: Vec::new(),
+        phase: None,
         doctor: Some(DoctorRequest {
             work_dir: work_dir.display().to_string(),
             blocked: blocked.clone(),
@@ -5928,6 +6008,8 @@ mod tests {
         Doctor(Option<Value>, Vec<&'static str>),
         /// The doctor crashes before writing anything.
         DoctorCrash,
+        /// A phase session that only replies (the tester).
+        Reply(Value),
     }
 
     const DRAFT: &str = "# web setup\n\n## Worktree prep\n\n- make generate\n";
@@ -6037,7 +6119,10 @@ mod tests {
                     req.doctor.is_some(),
                     !matches!(
                         step,
-                        Step::Main(_) | Step::MainLeaving(..) | Step::MainPushing(_)
+                        Step::Main(_)
+                            | Step::MainLeaving(..)
+                            | Step::MainPushing(_)
+                            | Step::Reply(_)
                     ),
                     "call kind"
                 );
@@ -6078,6 +6163,13 @@ mod tests {
                         return Err(AgentError {
                             message: "timed out after 1500s".into(),
                             cost_usd: Some(1.0),
+                        })
+                    }
+                    Step::Reply(text) => {
+                        return Ok(AgentOutput {
+                            cost_usd: Some(0.25),
+                            usage: None,
+                            text: text.to_string(),
                         })
                     }
                 };
@@ -6210,6 +6302,109 @@ mod tests {
     fn doctor_result(status: &str, blockers: Value) -> Option<Value> {
         Some(json!({"status": status, "blockers": blockers,
                     "learning": "run make generate before make test"}))
+    }
+
+    impl Doctored {
+        fn plan(&self) -> Value {
+            json!({"action": "plan", "work_dir": self.wt.display().to_string(), "branch": "loop/issue-7",
+                   "target_branch": "main", "steps": ["fix it"],
+                   "acceptance_criteria": [{"id": "AC1", "statement": "s", "test": "make test"}]})
+        }
+
+        fn roles(&self) -> Vec<(Option<IssueRole>, Option<String>)> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| {
+                    let p = r.phase.as_ref();
+                    (p.map(|c| c.role), p.and_then(|c| c.model.clone()))
+                })
+                .collect()
+        }
+    }
+
+    fn tester_pass() -> Value {
+        json!({"verdict": "pass", "summary": "ok", "tests_added": [], "failures": [],
+               "acceptance_criteria": [{"id": "AC1", "statement": "s", "test": "Makefile::test"}]})
+    }
+
+    #[test]
+    fn a_phased_fix_plans_codes_and_tests_on_their_models_then_opens_the_mr() {
+        let h = Doctored::new();
+        let run = h.run(vec![
+            Step::Main(h.plan()),
+            Step::Main(h.fix()),
+            Step::Reply(tester_pass()),
+        ]);
+        assert_eq!(
+            h.roles(),
+            vec![
+                (Some(IssueRole::Planner), Some("opus".into())),
+                (Some(IssueRole::Coder), Some("sonnet".into())),
+                (Some(IssueRole::Tester), Some("sonnet".into())),
+            ]
+        );
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(1.25));
+    }
+
+    #[test]
+    fn a_blocking_review_sends_the_fix_back_to_the_coder_without_replanning() {
+        let mut h = Doctored::new();
+        let reviews = Arc::new(Mutex::new(std::collections::VecDeque::from(vec![
+            json!({"summary": "s", "verdict": "request_changes", "overview": [], "risks": [],
+                   "findings": [{"path": "Makefile", "line": 1, "severity": "blocker", "category": "correctness",
+                                 "title": "empty page count is off by one", "body": "b", "suggestion": "use ceil"}]}),
+            json!({"summary": "s", "verdict": "approve", "overview": [], "risks": [], "findings": []}),
+        ])));
+        h.set_review(Arc::new(move |_: &str, _: Option<&str>, _: Option<f64>| {
+            let reply = reviews
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("an unscripted review");
+            Ok(crate::pre_review::ReviewReply {
+                text: reply.to_string(),
+                cost_usd: Some(0.1),
+            })
+        }));
+        let run = h.run(vec![
+            Step::Main(h.plan()),
+            Step::Main(h.fix()),
+            Step::Reply(tester_pass()),
+            Step::Main(h.fix()),
+            Step::Reply(tester_pass()),
+        ]);
+        let roles: Vec<Option<IssueRole>> = h.roles().into_iter().map(|r| r.0).collect();
+        assert_eq!(
+            roles,
+            vec![
+                Some(IssueRole::Planner),
+                Some(IssueRole::Coder),
+                Some(IssueRole::Tester),
+                Some(IssueRole::Coder),
+                Some(IssueRole::Tester),
+            ]
+        );
+        let calls = h.calls.lock().unwrap();
+        let feedback = calls[3].feedback.as_deref().unwrap_or("");
+        assert!(
+            feedback.contains("empty page count is off by one"),
+            "{feedback}"
+        );
+        drop(calls);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
     }
 
     #[test]

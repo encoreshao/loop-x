@@ -1055,8 +1055,10 @@ pub fn agent_child_main(argv: &[String]) -> i32 {
     if let Some(log) = flag("--log") {
         ctx.unified_log = PathBuf::from(log);
     }
+    let definition_path = ctx.definition_path();
+    let log_ctx = ctx.clone();
     let invoker = issue_runner::cli_invoker(ctx);
-    let result = invoker(&issue_runner::InvokeRequest {
+    let req = issue_runner::InvokeRequest {
         alias: ALIAS.to_string(),
         issue_iid: ISSUE_IID.to_string(),
         mode: issue_runner::InvokeMode::IssueFile(PathBuf::from(issue_file)),
@@ -1067,7 +1069,30 @@ pub fn agent_child_main(argv: &[String]) -> i32 {
         timeout_seconds: timeout,
         doctor: None,
         mcp_servers: Vec::new(),
-    });
+        phase: None,
+    };
+    // The eval measures what the loop runs: phased when the definition says so.
+    let phases = crate::loop_definition::LoopDefinition::from_yaml(&definition_path)
+        .ok()
+        .map(|d| d.agent.phases)
+        .filter(|p| p.enabled);
+    let result = match &phases {
+        Some(phases) => crate::issue_phases::run(
+            &crate::issue_phases::Phased {
+                invoker: &invoker,
+                phases,
+                handoff: &issue_runner::handoff_path(
+                    run_id,
+                    ALIAS,
+                    &ISSUE_IID.to_string(),
+                    &log_ctx.repo_root,
+                ),
+                log: &|line| log_ctx.log(line),
+            },
+            &req,
+        ),
+        None => invoker(&req),
+    };
     let out = match result {
         Ok(o) => json!({"cost_usd": o.cost_usd, "error": Value::Null}),
         Err(e) => json!({"cost_usd": e.cost_usd, "error": e.message}),

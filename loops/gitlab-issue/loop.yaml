@@ -22,6 +22,18 @@ agent:
     plan: opus
     execute: opus
     validate: opus
+  # A gated fix runs as separate sessions (crates/core/src/issue_phases.rs):
+  # the planner (full issue context) decides and writes a plan with
+  # acceptance criteria, the coder implements it test-first, and the tester
+  # proves each criterion, adding tests only; its failures go back to the
+  # coder once. The agent_review verifier below is the reviewer. Answers,
+  # escalations, waits and specs finish in the planner. Claude only; other
+  # CLIs and observe mode run the single session.
+  phases:
+    enabled: true
+    planner: opus
+    coder: sonnet
+    tester: sonnet
 
 # Attaches only when registered in ~/.loopx/mcp.json and installed globally
 # (Settings -> Connectors -> MCP servers), and only to Claude runs.
@@ -55,8 +67,9 @@ actions:
 # agent_review (a read-only claude review of the branch's diff) and
 # security_scan (a model-free scan of the added lines for secrets) run after
 # project_commands passes and are skipped when it fails. `observe: true` keeps
-# them advisory: their result goes to the MR's "Pre-review" section and to
-# Harness -> Gates, never into a retry. dependency_audit runs the project's
+# a verifier advisory: its result goes to the MR's "Pre-review" section and to
+# Harness -> Gates, never into a retry; agent_review blocks (see below).
+# dependency_audit runs the project's
 # own audit tool (npm, Yarn 1, pnpm, bundler-audit, cargo-audit, pip-audit) when
 # the branch changes a lockfile, skipping any tool that isn't installed.
 # security_scan must stay last.
@@ -73,11 +86,14 @@ verifiers:
   - name: ui_check
     type: ui_check
     observe: true
+  # The reviewer: a blocker, or a major correctness/security finding, fails
+  # the iteration and goes back to the coder as feedback; a review that could
+  # not run stays advisory.
   - name: agent_review
     type: agent_review
     model: opus
-    max_cost_usd: 0.5
-    observe: true
+    max_cost_usd: 0.75
+    observe_errors: true
   - name: dependency_audit
     type: dependency_audit
     observe: true
@@ -108,7 +124,7 @@ stop_conditions:
   # call's spend still counts. Codex calls have no per-call cap and report
   # no cost (ledger total_cost_usd None), so for them the budget is only a
   # between-iterations check on $0.
-  max_cost_usd: 3
+  max_cost_usd: 4
   no_progress_iterations: 2
 
 human_gates:

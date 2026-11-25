@@ -11,8 +11,13 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ## [Unreleased]
 
+### Added
+
+- Issue loop: a fix now runs as separate sessions, each on its own model. The planner (Opus) reads the issue and writes a plan with acceptance criteria, the coder (Sonnet) implements it test-first, and the tester (Sonnet) independently proves each criterion and adds missing tests; its failures go back to the coder once. Set the models under `agent.phases` in `loops/gitlab-issue/loop.yaml`. Claude only; other CLIs still run one session.
+
 ### Changed
 
+- Issue loop: the pre-MR review (Opus) now blocks. A blocker, or a major correctness or security finding, sends the fix back to the coder before the merge request opens; a review that cannot run stays advisory. The per-issue budget goes from $3 to $4.
 - Sidebar: lists All loops plus the loops you pin (turning a loop on pins it, up to five) and any other loop that needs you, so it stays short as loops are added. All loops groups active loops into Code, Communication and Research & content, with a pin button on each loop. The Mac app's Loops menu shows the same list.
 
 ### Fixed

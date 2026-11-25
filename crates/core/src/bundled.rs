@@ -11,6 +11,18 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../instructions/loopx/gitlab-issue.md"),
     ),
     (
+        "instructions/loopx/issue-planner.md",
+        include_str!("../../../instructions/loopx/issue-planner.md"),
+    ),
+    (
+        "instructions/loopx/issue-coder.md",
+        include_str!("../../../instructions/loopx/issue-coder.md"),
+    ),
+    (
+        "instructions/loopx/issue-tester.md",
+        include_str!("../../../instructions/loopx/issue-tester.md"),
+    ),
+    (
         "instructions/loopx/mr-feedback-plan.md",
         include_str!("../../../instructions/loopx/mr-feedback-plan.md"),
     ),

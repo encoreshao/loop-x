@@ -92,6 +92,43 @@ pub struct AgentConfig {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub models: PhaseModels,
+    #[serde(skip_serializing_if = "IssuePhases::is_unset")]
+    pub phases: IssuePhases,
+}
+
+/// A gated issue fix split into separate sessions: a planner, a coder
+/// working test-first, and a tester; the `agent_review` verifier reviews.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct IssuePhases {
+    pub enabled: bool,
+    pub planner: Option<String>,
+    pub coder: Option<String>,
+    pub tester: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueRole {
+    Planner,
+    Coder,
+    Tester,
+}
+
+impl IssuePhases {
+    fn is_unset(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The model for `role`; `"default"` and empty mean "no flag".
+    pub fn model_for(&self, role: IssueRole) -> Option<&str> {
+        match role {
+            IssueRole::Planner => &self.planner,
+            IssueRole::Coder => &self.coder,
+            IssueRole::Tester => &self.tester,
+        }
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && *m != "default")
+    }
 }
 
 /// Per-phase model overrides for the MR-feedback path (plan/execute/validate).
@@ -349,6 +386,28 @@ fn parse_phase_models(agent: Option<&Value>) -> Result<PhaseModels, DefinitionEr
     })
 }
 
+fn parse_issue_phases(agent: Option<&Value>) -> Result<IssuePhases, DefinitionError> {
+    let Some(v) = get(agent, "phases") else {
+        return Ok(IssuePhases::default());
+    };
+    let Some(map) = v.as_object() else {
+        return invalid("LoopDefinition: 'agent.phases' must be a mapping");
+    };
+    for key in map.keys() {
+        if !["enabled", "planner", "coder", "tester"].contains(&key.as_str()) {
+            return invalid(format!(
+                "LoopDefinition: unknown key 'agent.phases.{key}' (expected enabled, planner, coder, tester)"
+            ));
+        }
+    }
+    Ok(IssuePhases {
+        enabled: bool_or(Some(v), "enabled", "agent.phases.enabled", false)?,
+        planner: opt_string(Some(v), "planner", "agent.phases.planner")?,
+        coder: opt_string(Some(v), "coder", "agent.phases.coder")?,
+        tester: opt_string(Some(v), "tester", "agent.phases.tester")?,
+    })
+}
+
 fn parse_mcp_servers(data: &Value) -> Result<Vec<String>, DefinitionError> {
     let names = string_list(Some(data), "mcp_servers", "mcp_servers")?;
     for (i, n) in names.iter().enumerate() {
@@ -425,6 +484,7 @@ impl LoopDefinition {
                 provider: opt_string(agent, "provider", "agent.provider")?,
                 model: opt_string(agent, "model", "agent.model")?,
                 models: parse_phase_models(agent)?,
+                phases: parse_issue_phases(agent)?,
             },
             context: ContextConfig {
                 sources: string_list(context, "sources", "context.sources")?,
@@ -628,6 +688,31 @@ mod tests {
         let d = LoopDefinition::from_value(&with_agent(json!({"models": {"plan": ""}}))).unwrap();
         assert_eq!(d.agent.model_for(Phase::Plan), None);
         assert!(err(&with_agent(json!({"models": {"bogus": "x"}}))).contains("agent.models.bogus"));
+    }
+
+    #[test]
+    fn issue_phases_parse_and_stay_out_of_the_serialized_form_when_absent() {
+        let d = LoopDefinition::from_value(&with_agent(json!({
+            "model": "opus",
+            "phases": {"enabled": true, "planner": "opus", "coder": "sonnet", "tester": " default "}
+        })))
+        .unwrap();
+        assert!(d.agent.phases.enabled);
+        assert_eq!(d.agent.phases.model_for(IssueRole::Planner), Some("opus"));
+        assert_eq!(d.agent.phases.model_for(IssueRole::Coder), Some("sonnet"));
+        assert_eq!(d.agent.phases.model_for(IssueRole::Tester), None);
+        let out = serde_json::to_value(&d).unwrap();
+        assert_eq!(out["agent"]["phases"]["coder"], "sonnet");
+
+        let d = LoopDefinition::from_value(&with_agent(json!({"model": "opus"}))).unwrap();
+        assert!(!d.agent.phases.enabled);
+        let out = serde_json::to_value(&d).unwrap();
+        assert!(out["agent"].get("phases").is_none(), "{out}");
+
+        assert!(err(&with_agent(json!({"phases": {"reviewer": "opus"}})))
+            .contains("agent.phases.reviewer"));
+        assert!(err(&with_agent(json!({"phases": {"enabled": "yes"}})))
+            .contains("agent.phases.enabled"));
     }
 
     #[test]

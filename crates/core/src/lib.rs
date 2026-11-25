@@ -52,6 +52,7 @@ pub mod inbox_seen;
 pub mod inbox_status;
 pub mod inbox_triage;
 pub mod issue_images;
+pub mod issue_phases;
 pub mod issue_report;
 pub mod issue_runner;
 pub mod issue_tracking_config;
