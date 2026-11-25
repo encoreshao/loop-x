@@ -832,37 +832,6 @@
    }
   },
   {
-   "id": "har-evals-empty",
-   "path": "/harness?view=evals",
-   "overlay": null,
-   "results": {
-    "en": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "en/har-evals-empty.html"
-    },
-    "ja": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "ja/har-evals-empty.html"
-    },
-    "zh": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "zh/har-evals-empty.html"
-    },
-    "fr": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "fr/har-evals-empty.html"
-    }
-   }
-  },
-  {
    "id": "har-audit-empty",
    "path": "/harness?view=audit",
    "overlay": null,
@@ -1572,37 +1541,6 @@
      "content_type": "text/html; charset=utf-8",
      "location": null,
      "file": "fr/har-gates-full.html"
-    }
-   }
-  },
-  {
-   "id": "har-evals-full",
-   "path": "/harness?view=evals",
-   "overlay": "insights-full",
-   "results": {
-    "en": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "en/har-evals-full.html"
-    },
-    "ja": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "ja/har-evals-full.html"
-    },
-    "zh": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "zh/har-evals-full.html"
-    },
-    "fr": {
-     "status": 200,
-     "content_type": "text/html; charset=utf-8",
-     "location": null,
-     "file": "fr/har-evals-full.html"
     }
    }
   },
