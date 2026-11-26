@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Chat can create GitLab issues (`gitlab.create_issue`) with a title, markdown description, assignees, labels and @mentions. Nothing is created until you click Approve; the follow-up message links the new issue.
 - Voice input in chat: a microphone button in the dashboard chat box, the side assistant panel and the Mac app's notch chat turns speech into text for you to check before sending. It uses your local faster-whisper install (any language, `small` model by default) and falls back to OpenAI's Whisper API with a key from Settings › General › Voice.
 - Issue loop: a fix now runs as separate sessions, each on its own model. The planner (Opus) reads the issue and writes a plan with acceptance criteria, the coder (Sonnet) implements it test-first, and the tester (Sonnet) independently proves each criterion and adds missing tests; its failures go back to the coder once. Set the models under `agent.phases` in `loops/gitlab-issue/loop.yaml`. Claude only; other CLIs still run one session.
 

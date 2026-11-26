@@ -200,6 +200,10 @@ pub fn chat_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
                     ctx.t("Comment on GitLab"),
                     ctx.t("Posts a comment on a GitLab issue."),
                 ),
+                "gitlab.create_issue" => (
+                    ctx.t("Create GitLab issue"),
+                    ctx.t("Creates a GitLab issue, with assignees, labels and @mentions."),
+                ),
                 "mail.send" => (
                     ctx.t("Send email"),
                     ctx.t("Sends a plain-text email from your Gmail mailbox, to at most 10 recipients."),
@@ -250,7 +254,7 @@ mod tests {
             .unwrap()
             .body_text();
         // Creator writes always need the Approve card, so review can't be turned off here.
-        assert_eq!(html.matches("name='auto_approve'").count(), 4, "{html}");
+        assert_eq!(html.matches("name='auto_approve'").count(), 5, "{html}");
         assert!(html.contains("value='mail.send'"), "{html}");
         assert!(!html.contains("value='creator.") && !html.contains("<code>creator."), "{html}");
     }

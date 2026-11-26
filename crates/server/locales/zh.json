@@ -2440,5 +2440,8 @@
   "Recent": "最近运行",
   "Nothing is running": "没有正在运行的任务",
   "Nothing is waiting": "没有等待中的任务",
-  "No runs yet": "还没有运行记录"
+  "No runs yet": "还没有运行记录",
+  "Creating issue": "正在创建议题",
+  "Create GitLab issue": "创建 GitLab 议题",
+  "Creates a GitLab issue, with assignees, labels and @mentions.": "创建 GitLab 议题，可设置负责人、标签和 @提及。"
 }

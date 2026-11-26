@@ -16,7 +16,7 @@ pub const BLOCK_TEMPLATE_NOTIFICATION_KEYS: [(&str, &str); 1] =
     [("inbox_triage_digest", "Inbox Triage: run digest")];
 
 /// The chat write tools (`bin/chat_tools/registry.py`, mode WRITE), name and description.
-pub const CHAT_WRITE_TOOLS: [(&str, &str); 4] = [
+pub const CHAT_WRITE_TOOLS: [(&str, &str); 5] = [
     (
         "calendar.create_event",
         "Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval)",
@@ -28,6 +28,10 @@ pub const CHAT_WRITE_TOOLS: [(&str, &str); 4] = [
     (
         "gitlab.comment",
         "Post a comment on a GitLab issue (needs the user's approval)",
+    ),
+    (
+        "gitlab.create_issue",
+        "Create a GitLab issue with assignees, labels and @mentions (needs the user's approval)",
     ),
     (
         "mail.send",

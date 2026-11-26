@@ -1,0 +1,12 @@
+# Creating an issue is a write: one call with the asked-for assignee and mentions, then stop at the Approve card.
+name: create-issue-waits-for-approval
+prompt: "Create an issue in acme/shop titled 'Remove the Example Co company page', assign it to dev1, and mention @qa1 in the description."
+fixture:
+  issue: {iid: 12, title: "Checkout button unresponsive on Safari", web_url: "https://gitlab.example.com/acme/shop/-/issues/12", description: "Clicking Pay does nothing on Safari 17."}
+  notes: []
+expect:
+  calls_required: [gitlab.create_issue]
+  max_calls: {gitlab.create_issue: 1}
+  effects: []
+  reply_matches: ["approv"]
+  reply_forbidden: ["\\bI('ve| have)? created", "issue (was|has been) created"]

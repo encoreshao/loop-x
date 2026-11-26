@@ -374,9 +374,18 @@ impl crate::connectors::Connector for StubConnector {
         _: &crate::connectors::ApiOpts,
     ) -> crate::connectors::ConnResult<Value> {
         let issue = &self.fixture["issue"];
+        if method == "POST" && path.ends_with("/issues") {
+            self.effect("gitlab.create_issue");
+            return Ok(
+                json!({"iid": 99, "web_url": "https://gitlab.example.com/acme/shop/-/issues/99"}),
+            );
+        }
         if method == "POST" {
             self.effect("gitlab.comment");
             return Ok(json!({"id": 1}));
+        }
+        if path.starts_with("/users") {
+            return Ok(json!([]));
         }
         if path.contains("/notes") {
             return Ok(self
@@ -851,9 +860,12 @@ mod tests {
     fn real_cases_load() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/chat");
         let all = load_cases(&dir, None).unwrap();
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 14);
         assert!(all.iter().any(|c| c.name == "profile-read"));
         assert!(all.iter().any(|c| c.name == "wiki-add-waits-for-approval"));
+        assert!(all
+            .iter()
+            .any(|c| c.name == "create-issue-waits-for-approval"));
         for name in [
             "creator-find-videos",
             "creator-generate-stops-at-approval",

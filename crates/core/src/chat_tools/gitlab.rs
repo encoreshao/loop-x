@@ -187,6 +187,115 @@ fn comment(_e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> To
     Ok(json!({"note_id": get(&note, "id")}))
 }
 
+const MAX_TITLE_CHARS: usize = 255;
+const MAX_ASSIGNEES: usize = 10;
+
+fn username_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$").expect("static regex"))
+}
+
+/// A comma-separated arg as trimmed, non-empty items.
+fn list_arg(args: &Map<String, Value>, key: &str) -> Vec<String> {
+    or_empty(args.get(key).unwrap_or(&Value::Null))
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn assignee_usernames(args: &Map<String, Value>) -> Result<Vec<String>, ToolError> {
+    let names: Vec<String> = list_arg(args, "assignees")
+        .into_iter()
+        .map(|n| n.trim_start_matches('@').to_string())
+        .collect();
+    if names.len() > MAX_ASSIGNEES {
+        return Err(ToolError::input(format!(
+            "at most {MAX_ASSIGNEES} assignees are allowed"
+        )));
+    }
+    if let Some(bad) = names.iter().find(|n| !username_re().is_match(n)) {
+        return Err(ToolError::input(format!(
+            "assignees must be GitLab usernames (got {bad:?}); look them up with gitlab.list_users"
+        )));
+    }
+    Ok(names)
+}
+
+fn check_create_issue(
+    _e: &Env,
+    _account: &str,
+    args: &Map<String, Value>,
+) -> Result<(), ToolError> {
+    let title = py_str(req(args, "title")?);
+    if title.trim().is_empty() {
+        return Err(ToolError::input("title is required"));
+    }
+    if title.chars().count() > MAX_TITLE_CHARS {
+        return Err(ToolError::input(format!(
+            "title must be at most {MAX_TITLE_CHARS} characters"
+        )));
+    }
+    assignee_usernames(args).map(|_| ())
+}
+
+/// The id of the active user with exactly this username.
+fn user_id(c: &dyn Connector, username: &str) -> Result<Value, ToolError> {
+    let users = c.api(
+        "GET",
+        &format!("/users?username={}", quote(username)),
+        &ApiOpts::default(),
+    )?;
+    users
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|u| {
+            get(u, "username")
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(username))
+        })
+        .map(|u| get(u, "id").clone())
+        .filter(|id| !id.is_null())
+        .ok_or_else(|| ToolError::input(format!("No GitLab user named {username}")))
+}
+
+/// Every assignee is resolved before the issue is created, so a wrong
+/// username creates nothing.
+fn create_issue(e: &Env, c: Option<&dyn Connector>, args: &Map<String, Value>) -> ToolResult {
+    let c = connector_of(c)?;
+    check_create_issue(e, "", args)?;
+    let project = py_str(req(args, "project")?);
+    let assignee_ids = assignee_usernames(args)?
+        .iter()
+        .map(|u| user_id(c, u))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut body = Map::new();
+    body.insert("title".into(), json!(py_str(req(args, "title")?).trim()));
+    let description = or_empty(args.get("description").unwrap_or(&Value::Null));
+    if !description.is_empty() {
+        body.insert("description".into(), json!(description));
+    }
+    if !assignee_ids.is_empty() {
+        body.insert("assignee_ids".into(), json!(assignee_ids));
+    }
+    let labels = list_arg(args, "labels");
+    if !labels.is_empty() {
+        body.insert("labels".into(), json!(labels.join(",")));
+    }
+    let issue = c.api(
+        "POST",
+        &format!("/projects/{}/issues", quote(&project)),
+        &ApiOpts::json(Value::Object(body)),
+    )?;
+    Ok(json!({"iid": get(&issue, "iid"), "web_url": get(&issue, "web_url")}))
+}
+
+pub(crate) fn checks() -> Vec<(&'static str, super::Check)> {
+    vec![("gitlab.create_issue", check_create_issue)]
+}
+
 static READ_ARGS: [Arg; 3] = [Arg::opt("url"), Arg::opt("project"), Arg::opt_int("iid")];
 static LIST_ARGS: [Arg; 2] = [Arg::req("project"), Arg::opt("state")];
 static USERS_ARGS: [Arg; 1] = [Arg::opt("search")];
@@ -195,6 +304,14 @@ static COMMENT_ARGS: [Arg; 4] = [
     Arg::opt("url"),
     Arg::opt("project"),
     Arg::opt_int("iid"),
+];
+
+static CREATE_ARGS: [Arg; 5] = [
+    Arg::req("project"),
+    Arg::req("title"),
+    Arg::opt("description"),
+    Arg::opt("assignees"),
+    Arg::opt("labels"),
 ];
 
 pub(crate) fn tools() -> Vec<Tool> {
@@ -234,6 +351,15 @@ pub(crate) fn tools() -> Vec<Tool> {
             connector_type: Some("gitlab"),
             handler: comment,
             select: Some(select_by_url),
+        },
+        Tool {
+            name: "gitlab.create_issue",
+            description: "Create a GitLab issue (project: path like group/repo; description: markdown, where @username mentions notify people; assignees and labels: comma-separated, assignees are GitLab usernames from gitlab.list_users; needs the user's approval)",
+            args: &CREATE_ARGS,
+            mode: Mode::Write,
+            connector_type: Some("gitlab"),
+            handler: create_issue,
+            select: None,
         },
     ]
 }
@@ -506,6 +632,115 @@ mod tests {
         );
         assert!(r["error"].is_string() && loaded.is_empty());
         assert!(!d.path().join("repo/outputs/chat-pending").exists());
+    }
+
+    #[test]
+    fn create_issue_resolves_assignees_then_posts_the_issue() {
+        let f = fake(vec![
+            ("/users?username=ann", json!([{"id": 7, "username": "ann"}])),
+            (
+                "/users?username=bob.k",
+                json!([{"id": 8, "username": "Bob.K"}]),
+            ),
+            (
+                "/projects/g%2Fp/issues",
+                json!({"iid": 31, "web_url": "https://gitlab.example.com/g/p/-/issues/31"}),
+            ),
+        ]);
+        let d = tempfile::tempdir().unwrap();
+        let (e, _) = env_with(d.path(), accounts(), &f);
+        let r = execute_tool(
+            &e,
+            "gitlab.create_issue",
+            &json!({"project": "g/p", "title": " Remove page ", "description": "cc @cat",
+                    "assignees": "ann, @bob.k", "labels": "privacy, ops"}),
+        );
+        assert_eq!(
+            r["result"],
+            json!({"iid": 31, "web_url": "https://gitlab.example.com/g/p/-/issues/31"})
+        );
+        let log = f.log();
+        assert_eq!(log.len(), 3, "{log:?}");
+        assert_eq!(
+            log[2],
+            json!(["POST", "/projects/g%2Fp/issues", {"title": "Remove page", "description": "cc @cat",
+                   "assignee_ids": [7, 8], "labels": "privacy,ops"}])
+        );
+    }
+
+    #[test]
+    fn create_issue_with_only_a_title_sends_only_the_title() {
+        let f = fake(vec![(
+            "/projects/g%2Fp/issues",
+            json!({"iid": 1, "web_url": "u"}),
+        )]);
+        let d = tempfile::tempdir().unwrap();
+        let (e, _) = env_with(d.path(), accounts(), &f);
+        let r = execute_tool(
+            &e,
+            "gitlab.create_issue",
+            &json!({"project": "g/p", "title": "T"}),
+        );
+        assert_eq!(r["result"]["iid"], 1);
+        assert_eq!(
+            f.log(),
+            [json!(["POST", "/projects/g%2Fp/issues", {"title": "T"}])]
+        );
+    }
+
+    #[test]
+    fn create_issue_with_an_unknown_assignee_creates_nothing() {
+        let f = fake(vec![("/users?username=ghost", json!([]))]);
+        let d = tempfile::tempdir().unwrap();
+        let (e, _) = env_with(d.path(), accounts(), &f);
+        let r = execute_tool(
+            &e,
+            "gitlab.create_issue",
+            &json!({"project": "g/p", "title": "T", "assignees": "ghost"}),
+        );
+        assert_eq!(r["error"], "No GitLab user named ghost");
+        assert!(f.log().iter().all(|c| c[0] != "POST"));
+    }
+
+    #[test]
+    fn create_issue_is_a_write_tool_so_run_only_proposes_it() {
+        let f = fake(vec![]);
+        let (r, _, _d) = go(
+            &f,
+            "gitlab.create_issue",
+            json!({"project": "g/p", "title": "Remove page", "assignees": "ann"}),
+            "s1",
+        );
+        assert_eq!(tool_mode("gitlab.create_issue"), Some(Mode::Write));
+        assert_eq!(r["status"], "pending_approval", "{r}");
+        assert_eq!(r["args"]["account"], "gl-main");
+        assert!(f.log().is_empty());
+    }
+
+    #[test]
+    fn create_issue_with_bad_args_never_reaches_an_approve_card() {
+        let long = "x".repeat(256);
+        for (args, error) in [
+            (
+                json!({"project": "g/p", "title": "  "}),
+                "title is required",
+            ),
+            (
+                json!({"project": "g/p", "title": long}),
+                "title must be at most 255 characters",
+            ),
+            (
+                json!({"project": "g/p", "title": "T", "assignees": "Maxime Dupont"}),
+                "assignees must be GitLab usernames",
+            ),
+        ] {
+            let (r, _, d) = go(&fake(vec![]), "gitlab.create_issue", args, "s1");
+            assert!(
+                r["error"].as_str().unwrap_or("").contains(error),
+                "{error}: {r}"
+            );
+            assert!(!d.path().join("repo/outputs/chat-pending").exists());
+        }
     }
 
     #[test]

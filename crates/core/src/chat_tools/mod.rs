@@ -510,6 +510,7 @@ fn precheck(name: &str) -> Option<Check> {
         .get_or_init(|| {
             let mut all = gdocs::checks();
             all.extend(creator::checks());
+            all.extend(gitlab::checks());
             all.extend(gsheets::checks());
             all.extend(slides::checks());
             all
@@ -1366,7 +1367,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 39);
+        assert_eq!(names.len(), 40);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1410,6 +1411,7 @@ mod tests {
                 "gdocs.edit",
                 "github.comment",
                 "gitlab.comment",
+                "gitlab.create_issue",
                 "gsheets.create",
                 "gsheets.create_from_template",
                 "gsheets.edit",

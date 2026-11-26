@@ -2440,5 +2440,8 @@
   "Recent": "Récents",
   "Nothing is running": "Rien n'est en cours",
   "Nothing is waiting": "Rien n'est en attente",
-  "No runs yet": "Aucune exécution pour l'instant"
+  "No runs yet": "Aucune exécution pour l'instant",
+  "Creating issue": "Création du ticket",
+  "Create GitLab issue": "Créer un ticket GitLab",
+  "Creates a GitLab issue, with assignees, labels and @mentions.": "Crée un ticket GitLab, avec responsables, libellés et @mentions."
 }

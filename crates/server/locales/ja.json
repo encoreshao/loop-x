@@ -2440,5 +2440,8 @@
   "Recent": "最近の実行",
   "Nothing is running": "実行中のものはありません",
   "Nothing is waiting": "待機中のものはありません",
-  "No runs yet": "まだ実行はありません"
+  "No runs yet": "まだ実行はありません",
+  "Creating issue": "Issue を作成中",
+  "Create GitLab issue": "GitLab Issue を作成",
+  "Creates a GitLab issue, with assignees, labels and @mentions.": "担当者、ラベル、@メンション付きで GitLab Issue を作成します。"
 }

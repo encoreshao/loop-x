@@ -92,6 +92,7 @@ pub const TOOL_LABELS: &[(&str, &str)] = &[
     ("gitlab.list_issues", "Listing issues"),
     ("gitlab.list_users", "Listing users"),
     ("gitlab.comment", "Commenting on issue"),
+    ("gitlab.create_issue", "Creating issue"),
     ("github.read_issue", "Reading issue"),
     ("github.read_pr", "Reading pull request"),
     ("github.comment", "Commenting"),
@@ -1137,6 +1138,10 @@ fn approval_text(lang: Lang, tool: &str, summary: &str, result: &Value) -> Strin
     } else {
         i18n::t(lang, "Approved and done: {tool} {summary}", &[("tool", tool), ("summary", summary)])
     };
+    if let Some(url) = result.pointer("/result/web_url").and_then(Value::as_str) {
+        text.push(' ');
+        text.push_str(url);
+    }
     let finds: Vec<String> = result
         .pointer("/result/unmatched")
         .and_then(Value::as_array)
@@ -1455,6 +1460,12 @@ mod tests {
         assert_eq!(approval_text(Lang::En, "gdocs.edit", "d1", &clean), "Approved and done: gdocs.edit d1");
         let failed = json!({"error": "nope"});
         assert_eq!(approval_text(Lang::En, "gdocs.edit", "d1", &failed), "gdocs.edit failed: nope");
+
+        let created = json!({"result": {"iid": 31, "web_url": "https://gitlab.example.com/g/p/-/issues/31"}});
+        assert_eq!(
+            approval_text(Lang::En, "gitlab.create_issue", "g/p", &created),
+            "Approved and done: gitlab.create_issue g/p https://gitlab.example.com/g/p/-/issues/31"
+        );
     }
 
     #[test]
