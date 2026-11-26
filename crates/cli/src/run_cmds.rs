@@ -117,6 +117,16 @@ pub fn scheduler(args: &[String]) -> ExitCode {
             )
         },
     );
+    // Not held back by a usage pause: a person is waiting on these.
+    let resumed = loopx_core::approval_park::tick(
+        &loopx_core::approval_park::default_dir(),
+        &loopx_core::approvals::default_dir(),
+        &loopx_core::connectors_config::ConfigConnectors::real(),
+        &queue,
+        chrono::Utc::now(),
+        &|m| eprintln!("loop_scheduler: {m}"),
+    );
+    let queued: Vec<String> = queued.into_iter().chain(resumed).collect();
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));
     }
@@ -214,6 +224,7 @@ fn spawn_run(exe: &str, entry: &run_queue::Entry) -> std::io::Result<std::proces
     use std::os::unix::process::CommandExt;
     Command::new(exe)
         .args(["run", &entry.loop_name])
+        .args(&entry.args)
         .env("LOOPX_RUN_REASON", &entry.reason)
         .process_group(0)
         .spawn()

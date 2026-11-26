@@ -116,10 +116,14 @@ An approval is a human's OK that the loop asks for before it opens a merge reque
 ```
 
 `status` is `pending`, then exactly one of `approved`, `denied`, `changes_requested`, `timeout`.
-The loop waits until `expires_at`; an undecided approval becomes `timeout` and the issue is
-escalated. `changes_requested` carries the reviewer's `notes`: the loop sends them back to the
-agent, which revises the fix in the same worktree, re-runs the checks and asks for a new approval
-(a new id). After two rounds of changes a third request escalates the issue with the notes.
+The loop does not wait: the run that asks parks the fix and ends, and the scheduler tick queues a
+single-issue `issue-loop <alias> <iid>` run (queue reason `approval`) within a minute of the
+decision. That run opens the merge request on `approved`, and escalates the issue on `denied` or on
+`timeout` (an undecided approval expires after 7 days by default; `approval_timeout_seconds` in
+`projects.json` overrides it). `changes_requested` carries the reviewer's `notes`: the resumed run
+sends them back to the agent, which revises the fix in the same worktree, re-runs the checks and
+asks for a new approval (a new id). After two rounds of changes a third request escalates the
+issue with the notes.
 
 ### `GET /api/approvals`
 

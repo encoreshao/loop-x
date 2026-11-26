@@ -5,8 +5,9 @@
 //!
 //! A request starts `pending`, and ends exactly once as `approved`, `denied`,
 //! `changes_requested` (with the reviewer's `notes`) or `timeout` (when
-//! `expires_at` passes undecided). The runner blocks in [`wait_for_decision`]:
-//! only `approved` proceeds, and `changes_requested` sends the notes back to the
+//! `expires_at` passes undecided). The issue loop does not wait for it: the fix
+//! is parked (`approval_park`) and a later run acts on the decision. Only
+//! `approved` proceeds, and `changes_requested` sends the notes back to the
 //! agent for another pass.
 
 use crate::events::{fmt_timestamp, new_uuid_hex};

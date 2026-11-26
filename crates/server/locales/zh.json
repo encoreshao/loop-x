@@ -2308,6 +2308,7 @@
   "Video layout": "视频布局",
   "The frame every new generated video is rendered in, with a matching cover. Showcase videos use their promo template instead.": "之后生成的每个视频都使用此画面布局，封面也随之匹配。展示视频改用其宣传模板。",
   "Event": "事件触发",
+  "Approval": "审批",
   "Runs when Pipeline Doctor diagnoses a failure on a loop merge request": "当 Pipeline Doctor 诊断出循环所建合并请求上的失败时运行",
   "Runs when a matching event happens": "在发生匹配的事件时运行",
   "Automatic fix stopped on {mr}: {reason}": "{mr} 的自动修复已停止：{reason}",

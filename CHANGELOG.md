@@ -19,6 +19,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Issue loop: a fix waiting for approval before its merge request no longer holds the run. The run parks the fix and ends, and within a minute of your decision a short run of that issue opens the MR, sends your requested changes back to the agent, or escalates. Approvals now wait up to 7 days by default instead of 30 minutes (`approval_timeout_seconds` still overrides it), Telegram buttons keep working with no run alive, and the run report lists the issue under "Waiting for your approval".
 - Harness › Gates explains itself: checks are split into blocking (lint and tests, code review) and advisory (browser, accessibility, dependency audit, secret scan), every number says what it counts, and Verification mode lists only loops that run checks, with the checks they run.
 - Issue loop: the pre-MR review (Opus) now blocks. A blocker, or a major correctness or security finding, sends the fix back to the coder before the merge request opens; a review that cannot run stays advisory. The per-issue budget goes from $3 to $4.
 - Sidebar: lists All loops plus the loops you pin (turning a loop on pins it, up to five) and any other loop that needs you, so it stays short as loops are added. All loops groups active loops into Code, Communication and Research & content, with a pin button on each loop. The Mac app's Loops menu shows the same list.

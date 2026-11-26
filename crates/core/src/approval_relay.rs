@@ -11,6 +11,7 @@
 use crate::approvals;
 use crate::connectors::{Connector, ConnectorSource, NOTIFY};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -25,6 +26,14 @@ struct Channel {
     conn: Box<dyn Connector>,
     handle: Value,
     offset: i64,
+}
+
+/// One chat channel's request, as a parked approval stores it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedChannel {
+    pub account: String,
+    pub handle: Value,
+    pub offset: i64,
 }
 
 pub struct Relay {
@@ -75,6 +84,49 @@ impl Relay {
             channels,
             last_poll: None,
             every: POLL_EVERY,
+        }
+    }
+
+    /// What [`Relay::restore`] needs to carry on in another process.
+    pub fn saved(&self) -> Vec<SavedChannel> {
+        self.channels
+            .iter()
+            .map(|ch| SavedChannel {
+                account: ch.conn.account().id.clone(),
+                handle: ch.handle.clone(),
+                offset: ch.offset,
+            })
+            .collect()
+    }
+
+    /// The relay [`Relay::saved`] described, its accounts loaded from `source`;
+    /// one that no longer loads is logged and left out. Polls are not spaced out.
+    pub fn restore(
+        saved: &[SavedChannel],
+        source: &dyn ConnectorSource,
+        log: &dyn Fn(&str),
+    ) -> Self {
+        let channels = saved
+            .iter()
+            .filter_map(|s| match source.load(&s.account) {
+                Ok(conn) => Some(Channel {
+                    conn,
+                    handle: s.handle.clone(),
+                    offset: s.offset,
+                }),
+                Err(e) => {
+                    log(&format!(
+                        "approval chat account {} is gone: {e:?}",
+                        s.account
+                    ));
+                    None
+                }
+            })
+            .collect();
+        Self {
+            channels,
+            last_poll: None,
+            every: Duration::ZERO,
         }
     }
 
@@ -366,6 +418,52 @@ mod tests {
             .map(|c| c.account().id.clone())
             .collect();
         assert_eq!(ids, ["dm-bot", "phone"]);
+    }
+
+    /// Loads every account as a `FakeChat` that answers with `replies`.
+    struct Answering(Mutex<Vec<Reply>>, Log);
+
+    impl ConnectorSource for Answering {
+        fn accounts_with_capability(&self, _c: &str) -> Vec<Account> {
+            Vec::new()
+        }
+        fn load(&self, id: &str) -> Result<Box<dyn Connector>, crate::connectors::LoadFailure> {
+            Ok(Box::new(FakeChat {
+                account: Account::new(id, "telegram"),
+                replies: Mutex::new(std::mem::take(&mut *self.0.lock().unwrap())),
+                fail_send: false,
+                seen: self.1.clone(),
+            }))
+        }
+    }
+
+    #[test]
+    fn a_saved_relay_restored_in_another_process_keeps_its_offset_and_records_the_answer() {
+        let d = tempfile::tempdir().unwrap();
+        let id = pending(d.path());
+        let seen: Log = Log::default();
+        let mut first = Relay::start(
+            vec![FakeChat::boxed(vec![Ok((5, None))], &seen)],
+            &json!({"id": id}),
+            &|_| {},
+        );
+        first.poll(d.path(), &id, &|_| {});
+        let saved = first.saved();
+        assert_eq!(
+            saved,
+            [SavedChannel {
+                account: "tg".into(),
+                handle: json!({"message_id": 1}),
+                offset: 5
+            }]
+        );
+
+        let source = Answering(Mutex::new(vec![Ok((9, Some(deny())))]), seen.clone());
+        let mut later = Relay::restore(&saved, &source, &|_| {});
+        later.poll(d.path(), &id, &|_| {});
+        assert_eq!(approvals::get(d.path(), &id).unwrap()["status"], "denied");
+        assert_eq!(later.saved()[0].offset, 9);
+        assert_eq!(seen.lock().unwrap().last().unwrap(), "poll 5");
     }
 
     #[test]

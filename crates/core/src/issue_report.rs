@@ -18,6 +18,8 @@ pub enum Outcome {
         reminder_sent: bool,
     },
     Escalated(String),
+    /// The fix passed its checks and waits for a person's OK before its MR opens.
+    AwaitingApproval,
     /// The issue's run never reached an outcome (crash, budget, timeout).
     Incomplete(String),
     /// Checked; nothing new to act on.
@@ -127,6 +129,7 @@ pub fn issue_lines(
                 }
                 line.outcome = Outcome::Escalated(why);
             }
+            "approval.requested" => line.outcome = Outcome::AwaitingApproval,
             "issue.deferred" => {
                 let mut why = "the AI CLI hit its usage limit".to_string();
                 if let Some(said) = cli_said(data) {
@@ -249,6 +252,14 @@ pub fn build(lines: &[IssueLine], facts: &RunFacts) -> Report {
         lines
             .iter()
             .filter(|l| l.outcome == Outcome::Answered)
+            .map(|l| item(l, l.title.clone()))
+            .collect(),
+    );
+    list(
+        "Waiting for your approval",
+        lines
+            .iter()
+            .filter(|l| l.outcome == Outcome::AwaitingApproval)
             .map(|l| item(l, l.title.clone()))
             .collect(),
     );
@@ -534,6 +545,28 @@ mod tests {
         );
         assert_eq!(l[0].outcome, Outcome::Answered);
         assert!(!is_quiet(&l));
+    }
+
+    #[test]
+    fn a_fix_waiting_for_approval_is_listed_and_never_quiet() {
+        let l = issue_lines(
+            "R",
+            &[
+                ev("issue.queued", "web", 7, json!({"title": "Paging"})),
+                ev(
+                    "approval.requested",
+                    "web",
+                    7,
+                    json!({"approval_id": "apr_1", "kind": "open_mr"}),
+                ),
+            ],
+            &[],
+        );
+        assert_eq!(l[0].outcome, Outcome::AwaitingApproval);
+        assert!(!is_quiet(&l));
+        let text = crate::slack_report::plain_text(&build(&l, &RunFacts::default()));
+        assert!(text.contains("Waiting for your approval"), "{text}");
+        assert!(text.contains("#7 (web)"), "{text}");
     }
 
     #[test]

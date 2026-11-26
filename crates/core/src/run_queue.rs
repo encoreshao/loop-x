@@ -32,6 +32,8 @@ pub enum Reason {
     CatchUp,
     /// A matching event landed for an event-triggered loop.
     Event,
+    /// A person decided an approval a parked issue was waiting on.
+    Approval,
 }
 
 impl Reason {
@@ -41,12 +43,13 @@ impl Reason {
             Reason::Manual => "manual",
             Reason::CatchUp => "catch-up",
             Reason::Event => "event",
+            Reason::Approval => "approval",
         }
     }
 
     fn priority(self) -> i32 {
         match self {
-            Reason::Manual => PRIORITY_MANUAL,
+            Reason::Manual | Reason::Approval => PRIORITY_MANUAL,
             _ => PRIORITY_SCHEDULED,
         }
     }
@@ -74,6 +77,9 @@ pub struct Entry {
     pub note: Option<String>,
     #[serde(default)]
     pub cancel_requested: bool,
+    /// Extra arguments for `loopx run <loop>`, e.g. one issue's `alias iid`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -188,10 +194,24 @@ impl RunQueue {
 
     /// Adds `loop_name` unless it is already queued or running.
     pub fn enqueue(&self, loop_name: &str, reason: Reason, now: &str) -> std::io::Result<Enqueued> {
+        self.enqueue_with_args(loop_name, &[], reason, now)
+    }
+
+    /// [`RunQueue::enqueue`] for `loopx run <loop> <args...>`; it coalesces only
+    /// with an entry of the same loop and the same args.
+    pub fn enqueue_with_args(
+        &self,
+        loop_name: &str,
+        args: &[String],
+        reason: Reason,
+        now: &str,
+    ) -> std::io::Result<Enqueued> {
         let loop_name = crate::loops_config::canonical_loop_name(loop_name);
         self.with_file(|f| {
             if let Some(e) = f.entries.iter().find(|e| {
-                e.loop_name == loop_name && matches!(e.state.as_str(), "queued" | "running")
+                e.loop_name == loop_name
+                    && e.args == args
+                    && matches!(e.state.as_str(), "queued" | "running")
             }) {
                 return Enqueued::Coalesced {
                     state: e.state.clone(),
@@ -210,6 +230,7 @@ impl RunQueue {
                 exit_code: None,
                 note: None,
                 cancel_requested: false,
+                args: args.to_vec(),
             };
             let id = entry.id.clone();
             f.entries.push(entry);
@@ -243,20 +264,28 @@ impl RunQueue {
                 exit_code: None,
                 note: Some(note.to_string()),
                 cancel_requested: false,
+                args: Vec::new(),
             });
         })
     }
 
     /// Starts the next waiting entry unless `max_running` are already running.
+    /// A loop that is already running is never started a second time.
     pub fn claim_next(&self, now: &str, max_running: usize) -> std::io::Result<Option<Entry>> {
         self.with_file(|f| {
-            if f.entries.iter().filter(|e| e.state == "running").count() >= max_running {
+            let running: Vec<String> = f
+                .entries
+                .iter()
+                .filter(|e| e.state == "running")
+                .map(|e| e.loop_name.clone())
+                .collect();
+            if running.len() >= max_running {
                 return None;
             }
             let next = f
                 .entries
                 .iter()
-                .filter(|e| e.state == "queued")
+                .filter(|e| e.state == "queued" && !running.contains(&e.loop_name))
                 .min_by(|a, b| waiting_order(a, b))?
                 .id
                 .clone();
@@ -518,6 +547,48 @@ mod tests {
             q.enqueue("issue-loop", Reason::Manual, "t1").unwrap(),
             Enqueued::Coalesced { .. }
         ));
+    }
+
+    #[test]
+    fn entries_with_args_coalesce_only_with_the_same_args() {
+        let (_d, q) = queue();
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        q.enqueue("issue-loop", Reason::Scheduled, "t0").unwrap();
+        let web7 = q
+            .enqueue_with_args("issue-loop", &args(&["web", "7"]), Reason::Event, "t1")
+            .unwrap();
+        assert!(matches!(web7, Enqueued::Queued { .. }), "{web7:?}");
+        assert!(matches!(
+            q.enqueue_with_args("issue-loop", &args(&["web", "7"]), Reason::Event, "t2")
+                .unwrap(),
+            Enqueued::Coalesced { .. }
+        ));
+        assert!(matches!(
+            q.enqueue_with_args("issue-loop", &args(&["web", "8"]), Reason::Event, "t3")
+                .unwrap(),
+            Enqueued::Queued { .. }
+        ));
+        let queued = q.snapshot(0).queued;
+        assert_eq!(queued.len(), 3);
+        assert_eq!(queued[1].args, ["web", "7"]);
+        assert!(queued[0].args.is_empty());
+    }
+
+    #[test]
+    fn a_loop_already_running_is_not_started_again() {
+        let (_d, q) = queue();
+        let args = vec!["web".to_string(), "7".to_string()];
+        q.enqueue("issue-loop", Reason::Scheduled, "t0").unwrap();
+        q.enqueue_with_args("issue-loop", &args, Reason::Event, "t1")
+            .unwrap();
+        q.enqueue("topic-loop", Reason::Scheduled, "t2").unwrap();
+        let first = q.claim_next("t", 3).unwrap().unwrap();
+        assert!(first.args.is_empty());
+        let next = q.claim_next("t", 3).unwrap().unwrap();
+        assert_eq!(next.loop_name, "topic-loop");
+        assert_eq!(q.claim_next("t", 3).unwrap(), None);
+        q.finish(&first.id, "done", Some(0), None, "t").unwrap();
+        assert_eq!(q.claim_next("t", 3).unwrap().unwrap().args, args);
     }
 
     #[test]

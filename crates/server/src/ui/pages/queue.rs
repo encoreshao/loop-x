@@ -307,6 +307,7 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
         "manual" => ctx.t("Manual"),
         "catch-up" => ctx.t("Catch-up"),
         "event" => ctx.t("Event"),
+        "approval" => ctx.t("Approval"),
         "outside" => ctx.t("Outside the queue"),
         _ => ctx.t("Scheduled"),
     }
@@ -350,11 +351,15 @@ fn row(ctx: &UiCtx, e: &Entry, detail: &str, actions: &str) -> String {
         _ => ("pill-outline", ctx.t("Skipped")),
     };
     format!(
-        "<div class='history-entry queue-row'><div class='history-entry-header'><strong>{}</strong>\
+        "<div class='history-entry queue-row'><div class='history-entry-header'><strong>{}{}</strong>\
          <div class='pill-row'><span class='pill {pill_class}'>{}</span><span class='pill pill-outline'>{}</span></div>\
          <div class='queue-actions'>{actions}</div></div>\
          <p class='history-entry-overview'>{}</p></div>",
         loop_name_html(ctx, &e.loop_name),
+        match e.args.as_slice() {
+            [alias, iid] => pyfmt::escape(&format!(" \u{b7} {alias} #{iid}")),
+            _ => String::new(),
+        },
         pyfmt::escape(&state_label),
         pyfmt::escape(&reason_label(ctx, &e.reason)),
         pyfmt::escape(detail),
@@ -422,6 +427,7 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
             exit_code: None,
             note: None,
             cancel_requested: false,
+            args: Vec::new(),
         };
         let progress = with_agent_activity(ctx, "issue-loop", progress_text(ctx.lang, &status));
         row(ctx, &e, &progress, "")
@@ -440,6 +446,7 @@ fn sections_html(ctx: &UiCtx, snap: &Snapshot) -> String {
             exit_code: None,
             note: None,
             cancel_requested: false,
+            args: Vec::new(),
         };
         let progress = progress_text(ctx.lang, &status);
         let since = status
@@ -647,6 +654,19 @@ mod tests {
         assert!(pill.contains("1 running") && pill.contains("2 queued"), "{pill}");
         let shell = st.registry.dispatch(&st, &UiRequest::get("/queue")).unwrap().body_text();
         assert!(shell.contains("id='queue-pill'") && shell.contains("1 running · 2 queued"));
+    }
+
+    #[test]
+    fn an_approval_resume_names_its_issue() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let q = RunQueue::new(d.path().join("run_queue.json"));
+        let args = ["web".to_string(), "7".to_string()];
+        q.enqueue_with_args("issue-loop", &args, Reason::Approval, "2026-10-27T10:00:00")
+            .unwrap();
+        let html = st.registry.dispatch(&st, &UiRequest::get("/queue/fragment")).unwrap().body_text();
+        assert!(html.contains("issue-loop") && html.contains(" · web #7</strong>"), "{html}");
+        assert!(html.contains(">Approval<"), "{html}");
     }
 
     #[test]

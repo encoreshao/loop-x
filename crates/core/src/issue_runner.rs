@@ -1961,10 +1961,15 @@ struct ScreenshotCleanup {
     data: Option<Value>,
     handoff_dir: PathBuf,
     screens_dir: PathBuf,
+    /// A parked fix keeps them for the merge request its approval opens.
+    keep: std::cell::Cell<bool>,
 }
 
 impl Drop for ScreenshotCleanup {
     fn drop(&mut self) {
+        if self.keep.get() {
+            return;
+        }
         mr_screenshots::remove_screenshots(
             self.data.as_ref(),
             &self.handoff_dir,
@@ -2049,8 +2054,9 @@ pub struct FinalizeDeps<'a> {
     pub require_approval: Option<bool>,
     /// Where approvals live (default `outputs/approvals`).
     pub approval_dir: Option<PathBuf>,
-    /// How often to look for a decision (default 1s).
-    pub approval_poll: Option<std::time::Duration>,
+    /// A parked fix whose approval was decided (the record and its status):
+    /// finalize acts on the decision instead of reading a handoff.
+    pub resumed: Option<(crate::approval_park::Parked, String)>,
     /// A worktree-off checkout the loop could not keep safe; escalated first.
     pub checkout_problem: Option<String>,
     /// Git state the agent changed and must not have (`agent_guard`).
@@ -2258,6 +2264,58 @@ fn spec_gate_for(ctx: &RunCtx, alias: &str, issue_iid: &str, gate: bool) -> spec
     }
 }
 
+/// The outcome of a gated fix parked until a person approves its merge request.
+pub const AWAITING_APPROVAL: &str = "awaiting_approval";
+/// How long the issue loop's approval waits by default; nothing is held up meanwhile.
+const APPROVAL_TIMEOUT_SECONDS: i64 = 7 * 24 * 3600;
+
+/// Where this run's parked fixes live (`approval_park`).
+fn parked_dir(ctx: &RunCtx) -> PathBuf {
+    ctx.repo_root.join("outputs").join("parked-approvals")
+}
+
+/// The check commands the verifier actually ran (the agent's logged ones,
+/// else the project's stored ones) and the MR description's pre-review section.
+fn checks_and_pre_review(
+    result: &LoopResult,
+    project: &Value,
+    data: &Value,
+    log: &dyn Fn(&str),
+) -> (Vec<String>, Option<String>) {
+    let ran: Vec<String> = result
+        .iterations
+        .last()
+        .into_iter()
+        .flat_map(|i| &i.verification_results)
+        .filter_map(|r| r.evidence.get("commands").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|c| c.get("command").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    let ran = if ran.is_empty() {
+        ["test_cmd", "lint_cmd"]
+            .iter()
+            .filter_map(|k| {
+                project
+                    .get(*k)
+                    .and_then(Value::as_str)
+                    .filter(|v| !v.is_empty())
+            })
+            .map(str::to_owned)
+            .collect()
+    } else {
+        ran
+    };
+    let acceptance = crate::pre_review::acceptance_section(data);
+    if acceptance.is_none() {
+        log("no acceptance criteria in the fix handoff");
+    }
+    let pre_review = [acceptance, crate::pre_review::pre_review_section(result)]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| format!("{a}\n\n{b}"));
+    (ran, pre_review)
+}
+
 /// Rounds of "request changes" one issue gets in one run before it escalates.
 pub const MAX_REVISIONS: usize = 2;
 /// The outcome prefix [`finalize_gated_issue`] returns when a reviewer asked for
@@ -2295,7 +2353,7 @@ fn approval_timeout_seconds(project: &Value) -> i64 {
             })
         })
         .filter(|s| *s > 0)
-        .unwrap_or(approvals::DEFAULT_TIMEOUT_SECONDS)
+        .unwrap_or(APPROVAL_TIMEOUT_SECONDS)
 }
 
 /// Gate mode's last step: open the MR (only after verification passed) or
@@ -2314,12 +2372,16 @@ pub fn finalize_gated_issue(
         .clone()
         .unwrap_or_else(|| handoff_path(run_id, alias, issue_iid, &ctx.repo_root));
     // Cleaned up whatever the outcome, so it reads the handoff itself (valid or not).
-    let _cleanup = ScreenshotCleanup {
-        data: std::fs::read_to_string(&handoff)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok()),
+    let cleanup = ScreenshotCleanup {
+        data: match &deps.resumed {
+            Some((parked, _)) => Some(parked.handoff.clone()),
+            None => std::fs::read_to_string(&handoff)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok()),
+        },
         handoff_dir: handoff.parent().unwrap_or(Path::new(".")).to_path_buf(),
         screens_dir: mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid),
+        keep: std::cell::Cell::new(false),
     };
     let issue_run_id = format!("{run_id}_{alias}_{issue_iid}");
     let iid_num: Option<i64> = issue_iid.parse().ok();
@@ -2525,7 +2587,10 @@ pub fn finalize_gated_issue(
     if let Some(violation) = &deps.guard_violation {
         return escalate("guard_violation", violation, None);
     }
-    let data = read_handoff(&handoff, issue_iid);
+    let data = match &deps.resumed {
+        Some((parked, _)) => Some(parked.handoff.clone()),
+        None => read_handoff(&handoff, issue_iid),
+    };
     let screens = mr_screenshots::screens_dir(&ctx.repo_root, alias, issue_iid);
     let handoff_dir = handoff.parent().unwrap_or(Path::new(".")).to_path_buf();
     let action = data
@@ -2614,85 +2679,105 @@ pub fn finalize_gated_issue(
         .to_string();
     let title = data["title"].as_str().unwrap_or_default().to_string();
 
+    let (ran, pre_review) = match &deps.resumed {
+        Some((parked, _)) => (parked.checks.clone(), parked.pre_review.clone()),
+        None => checks_and_pre_review(result, &project, &data, &log),
+    };
+    let summary = data.get("summary").and_then(Value::as_str).unwrap_or("");
+    let checks: Vec<String> = ran.iter().map(|c| format!("- `{c}` \u{2705}")).collect();
+
     // A human's OK before the merge request, when this project asks for one.
-    // The checks have already passed; this only decides whether to push.
-    if deps
-        .require_approval
-        .unwrap_or_else(|| approval_required(&project))
-    {
-        let dir = deps
-            .approval_dir
-            .clone()
-            .unwrap_or_else(|| ctx.repo_root.join("outputs").join("approvals"));
-        let request = approvals::NewApproval {
-            kind: "open_mr".into(),
-            run_id: run_id.to_string(),
-            project: alias.to_string(),
-            issue_iid: iid_num,
-            title: title.clone(),
-            branch: branch.clone(),
-            target_branch: target.clone(),
-            summary: data
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            timeout_seconds: approval_timeout_seconds(&project),
-            target: None,
-        };
-        let approval = match approvals::create(&dir, &request, Utc::now()) {
-            Ok(a) => a,
-            Err(e) => {
-                log(&format!("could not create an approval request: {e}"));
+    // The checks have already passed: the fix is parked and the run ends; the
+    // run after the decision comes back here with `resumed`.
+    let approvals_dir = deps
+        .approval_dir
+        .clone()
+        .unwrap_or_else(|| ctx.repo_root.join("outputs").join("approvals"));
+    match deps.resumed {
+        None if deps
+            .require_approval
+            .unwrap_or_else(|| approval_required(&project)) =>
+        {
+            let request = approvals::NewApproval {
+                kind: "open_mr".into(),
+                run_id: run_id.to_string(),
+                project: alias.to_string(),
+                issue_iid: iid_num,
+                title: title.clone(),
+                branch: branch.clone(),
+                target_branch: target.clone(),
+                summary: summary.to_string(),
+                timeout_seconds: approval_timeout_seconds(&project),
+                target: None,
+            };
+            let approval = match approvals::create(&approvals_dir, &request, Utc::now()) {
+                Ok(a) => a,
+                Err(e) => {
+                    log(&format!("could not create an approval request: {e}"));
+                    return escalate("approval_unavailable", &e.to_string(), None);
+                }
+            };
+            let approval_id = approval["id"].as_str().unwrap_or_default().to_string();
+            let channels = deps.approval_channels.unwrap_or_else(|| {
+                crate::approval_relay::channels(&crate::connectors_config::ConfigConnectors::real())
+            });
+            let relay = crate::approval_relay::Relay::start(channels, &approval, &log);
+            let parked = crate::approval_park::Parked {
+                approval_id: approval_id.clone(),
+                run_id: run_id.to_string(),
+                alias: alias.to_string(),
+                issue_iid: issue_iid.to_string(),
+                handoff: data.clone(),
+                checks: ran,
+                pre_review,
+                revisions_left: deps.revisions_left,
+                setup_fixed: deps.setup_fixed,
+                parked_at: crate::events::fmt_timestamp(Utc::now()),
+                relay: relay.saved(),
+                queued_at: None,
+            };
+            if let Err(e) = crate::approval_park::save(&parked_dir(ctx), &parked) {
+                log(&format!("could not park the fix: {e}"));
                 return escalate("approval_unavailable", &e.to_string(), None);
             }
-        };
-        let approval_id = approval["id"].as_str().unwrap_or_default().to_string();
-        emit(
-            "approval.requested",
-            json!({"approval_id": approval_id, "kind": "open_mr", "branch": branch, "expires_at": approval["expires_at"]}),
-        );
-        send(
-            &bundle,
-            format!(
-                "*Approval needed* {issue_label}: open MR `{branch}` \u{2192} `{target}`? Approve it in LoopX (expires {}).",
-                approval["expires_at"].as_str().unwrap_or("?")
-            ),
-        );
-        let poll = deps
-            .approval_poll
-            .unwrap_or(std::time::Duration::from_secs(1));
-        let channels = deps.approval_channels.unwrap_or_else(|| {
-            crate::approval_relay::channels(&crate::connectors_config::ConfigConnectors::real())
-        });
-        let mut relay = crate::approval_relay::Relay::start(channels, &approval, &log);
-        let status = approvals::wait_for_decision_with(&dir, &approval_id, poll, &mut || {
-            relay.poll(&dir, &approval_id, &log)
-        });
-        let decided_by = approvals::get(&dir, &approval_id)
-            .and_then(|a| a["decided_by"].as_str().map(str::to_owned));
-        relay.close(&status, decided_by.as_deref(), &log);
-        emit(
-            "approval.decided",
-            json!({"approval_id": approval_id, "status": status}),
-        );
-        if status == "changes_requested" {
-            let notes = approvals::get(&dir, &approval_id)
-                .and_then(|a| a["notes"].as_str().map(str::to_owned))
-                .unwrap_or_default();
-            if deps.revisions_left > 0 {
-                log("the reviewer asked for changes; sending them back to the agent");
-                return format!("{CHANGES_REQUESTED}{notes}");
-            }
-            return escalate("approval_changes_requested", &notes, None);
+            cleanup.keep.set(true);
+            emit(
+                "approval.requested",
+                json!({"approval_id": approval_id, "kind": "open_mr", "branch": branch, "expires_at": approval["expires_at"]}),
+            );
+            send(
+                &bundle,
+                format!(
+                    "*Approval needed* {issue_label}: open MR `{branch}` \u{2192} `{target}`? Approve it in LoopX (expires {}).",
+                    approval["expires_at"].as_str().unwrap_or("?")
+                ),
+            );
+            return AWAITING_APPROVAL.to_string();
         }
-        if status != "approved" {
-            let reason = if status == "timeout" {
-                "approval_timeout"
-            } else {
-                "approval_denied"
-            };
-            return escalate(reason, "", None);
+        None => {}
+        Some((parked, status)) => {
+            emit(
+                "approval.decided",
+                json!({"approval_id": parked.approval_id, "status": status}),
+            );
+            if status == "changes_requested" {
+                let notes = approvals::get(&approvals_dir, &parked.approval_id)
+                    .and_then(|a| a["notes"].as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                if deps.revisions_left > 0 {
+                    log("the reviewer asked for changes; sending them back to the agent");
+                    return format!("{CHANGES_REQUESTED}{notes}");
+                }
+                return escalate("approval_changes_requested", &notes, None);
+            }
+            if status != "approved" {
+                let reason = if status == "timeout" {
+                    "approval_timeout"
+                } else {
+                    "approval_denied"
+                };
+                return escalate(reason, "", None);
+            }
         }
     }
     // GitLab opens the MR from push options; any other host only gets the
@@ -2706,41 +2791,6 @@ pub fn finalize_gated_issue(
         return escalate("mr_open_failed", &tail(&detail, FAILURE_TAIL_CHARS), None);
     }
 
-    // The commands the verifier actually ran (the agent's logged ones),
-    // else the stored ones for a result without that evidence.
-    let ran: Vec<String> = result
-        .iterations
-        .last()
-        .into_iter()
-        .flat_map(|i| &i.verification_results)
-        .filter_map(|r| r.evidence.get("commands").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|c| c.get("command").and_then(Value::as_str).map(str::to_owned))
-        .collect();
-    let ran = if ran.is_empty() {
-        ["test_cmd", "lint_cmd"]
-            .iter()
-            .filter_map(|k| {
-                project
-                    .get(*k)
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.is_empty())
-            })
-            .map(str::to_owned)
-            .collect()
-    } else {
-        ran
-    };
-    let checks: Vec<String> = ran.iter().map(|c| format!("- `{c}` \u{2705}")).collect();
-    let summary = data.get("summary").and_then(Value::as_str).unwrap_or("");
-    let acceptance = crate::pre_review::acceptance_section(&data);
-    if acceptance.is_none() {
-        log("no acceptance criteria in the fix handoff");
-    }
-    let pre_review = [acceptance, crate::pre_review::pre_review_section(result)]
-        .into_iter()
-        .flatten()
-        .reduce(|a, b| format!("{a}\n\n{b}"));
     // Same shape the batch wrap-up reads from an agent-emitted fix event.
     let mr_url = match host {
         Some(h) => {
@@ -3359,6 +3409,72 @@ fn run_pass(
     Ok((result, costs, usages))
 }
 
+enum Resume {
+    /// No parked fix for this issue.
+    None,
+    /// Its approval is still pending: this run's outcome for the issue.
+    Waiting(Box<IssueRun>),
+    /// Its approval was decided: the record (taken from the store) and the status.
+    Decided(Box<crate::approval_park::Parked>, String),
+}
+
+fn resume_parked(
+    ctx: &RunCtx,
+    run_id: &str,
+    alias: &str,
+    issue_iid: &str,
+    definition: &LoopDefinition,
+) -> Resume {
+    let dir = parked_dir(ctx);
+    let Some(parked) = crate::approval_park::load(&dir, alias, issue_iid) else {
+        return Resume::None;
+    };
+    let approvals_dir = ctx.repo_root.join("outputs").join("approvals");
+    match crate::approval_park::decision(&approvals_dir, &parked, Utc::now()) {
+        None => {
+            ctx.log(&format!(
+                "{alias} #{issue_iid}: the fix is waiting for approval {}; the agent does not run",
+                parked.approval_id
+            ));
+            let issue_run_id = format!("{run_id}_{alias}_{issue_iid}");
+            let mut result = LoopResult::new(
+                &issue_run_id,
+                &issue_run_id,
+                &definition.name,
+                LoopState::Completed,
+                Vec::new(),
+                AWAITING_APPROVAL,
+            );
+            result.agent_cost_usd = AgentCost::Usd(0.0);
+            Resume::Waiting(Box::new(IssueRun {
+                result,
+                usage: None,
+                gate_outcome: Some(AWAITING_APPROVAL.into()),
+                setup_fixed: None,
+            }))
+        }
+        Some(status) => {
+            let Some(mut parked) = crate::approval_park::take(&dir, alias, issue_iid) else {
+                return Resume::None;
+            };
+            ctx.log(&format!(
+                "{alias} #{issue_iid}: approval {} is {status}; resuming the fix parked by {}",
+                parked.approval_id, parked.run_id
+            ));
+            if ctx.fakes.is_none() {
+                crate::approval_park::close_relay(
+                    &mut parked,
+                    &status,
+                    &approvals_dir,
+                    &crate::connectors_config::ConfigConnectors::real(),
+                    &|m| ctx.log(m),
+                );
+            }
+            Resume::Decided(Box::new(parked), status)
+        }
+    }
+}
+
 pub fn run_one_issue(
     ctx: &RunCtx,
     run_id: &str,
@@ -3404,11 +3520,23 @@ pub fn run_one_issue(
         });
     }
 
+    // A fix parked on its approval: nothing to do while it is pending; once
+    // decided, this run finishes it instead of starting the agent on the issue.
+    let resumed = if gate {
+        match resume_parked(ctx, run_id, alias, issue_iid, definition) {
+            Resume::None => None,
+            Resume::Waiting(run) => return Ok(*run),
+            Resume::Decided(parked, status) => Some((*parked, status)),
+        }
+    } else {
+        None
+    };
+
     // New review feedback on the issue's merge request is handled first, in
     // its own plan/execute/validate calls; it never changes this run's path.
     // Its spend is its own budget, on top of the pass's, and adds to the
     // issue's cost below.
-    let round_cost = if mr_round_applies(ctx, &mode) {
+    let round_cost = if resumed.is_none() && mr_round_applies(ctx, &mode) {
         run_mr_feedback_round(ctx, run_id, alias, issue_iid, definition)
     } else {
         None
@@ -3448,21 +3576,38 @@ pub fn run_one_issue(
 
     // Worktree off: never start the agent on a checkout holding the user's
     // uncommitted work (a leftover restore record is healed by `worktree new`).
-    let guard = checkout_guard(ctx, alias);
+    let guard = resumed
+        .is_none()
+        .then(|| checkout_guard(ctx, alias))
+        .flatten();
     let dirty_before = guard.as_ref().is_some_and(|g| !g.clean && !g.marked);
 
-    let started = run_pass(
-        ctx,
-        run_id,
-        alias,
-        issue_iid,
-        definition,
-        invoker.clone(),
-        mode.clone(),
-        standing.clone(),
-        dirty_before,
-        0,
-    );
+    let started = match &resumed {
+        Some(_) => Ok((
+            LoopResult::new(
+                &issue_run_id,
+                &issue_run_id,
+                &definition.name,
+                LoopState::Completed,
+                Vec::new(),
+                "",
+            ),
+            Vec::new(),
+            Vec::new(),
+        )),
+        None => run_pass(
+            ctx,
+            run_id,
+            alias,
+            issue_iid,
+            definition,
+            invoker.clone(),
+            mode.clone(),
+            standing.clone(),
+            dirty_before,
+            0,
+        ),
+    };
     // Whatever happened, a checkout branched in place goes back to the
     // user's branch (the push below needs only the branch ref).
     let checkout_problem = if dirty_before {
@@ -3497,7 +3642,7 @@ pub fn run_one_issue(
         Ok(p) => p,
         Err(e) => return failed(e),
     };
-    let (pass, setup) = if gate && checkout_problem.is_none() {
+    let (pass, setup) = if gate && checkout_problem.is_none() && resumed.is_none() {
         let issue = IssueArgs {
             ctx,
             run_id,
@@ -3513,10 +3658,16 @@ pub fn run_one_issue(
         (pass, SetupOutcome::default())
     };
     let (mut result, mut raw_costs, mut raw_usages) = pass;
-    let setup_fixed_for_report = setup.fixed;
+    let setup_fixed_for_report = match &resumed {
+        Some((parked, _)) => parked.setup_fixed,
+        None => setup.fixed,
+    };
     let mut setup_report = setup.report;
     let mut checkout_problem = checkout_problem;
-    let mut revisions = 0;
+    let mut revisions = resumed.as_ref().map_or(0, |(parked, _)| {
+        MAX_REVISIONS.saturating_sub(parked.revisions_left)
+    });
+    let mut resumed = resumed;
 
     let mut gate_outcome = None;
     // A reviewer's "request changes" sends the work back for another pass and
@@ -3543,6 +3694,7 @@ pub fn run_one_issue(
                 setup_report: setup_report.take(),
                 setup_fixed: setup_fixed_for_report,
                 revisions_left: MAX_REVISIONS - revisions,
+                resumed: resumed.take(),
                 spec_mode,
                 // Tests never reach the configured chat apps.
                 approval_channels: fakes.map(|_| Vec::new()),
@@ -4969,7 +5121,7 @@ mod tests {
     }
 
     #[test]
-    fn an_approval_can_be_answered_from_a_chat_app() {
+    fn an_approval_request_goes_to_the_chat_apps_and_the_fix_is_parked() {
         let d = tempfile::tempdir().unwrap();
         let handoff = d.path().join("h.json");
         std::fs::write(
@@ -5020,21 +5172,23 @@ mod tests {
                 gitlab_config_path: Some(d.path().join("none.json")),
                 require_approval: Some(true),
                 approval_dir: Some(approvals_dir.clone()),
-                approval_poll: Some(std::time::Duration::from_millis(5)),
                 approval_channels: Some(vec![chat]),
                 ..Default::default()
             },
         );
-        assert_eq!(outcome, "mr_opened");
-        let decided = approvals::list(&approvals_dir, None, Utc::now());
-        assert_eq!(decided[0]["decided_by"], "telegram:@ana");
-        assert_eq!(
-            *seen.lock().unwrap(),
-            [
-                "asked \"web\"",
-                "Approved by telegram:@ana: opening the merge request."
-            ]
-        );
+        assert_eq!(outcome, "awaiting_approval");
+        assert_eq!(*seen.lock().unwrap(), ["asked \"web\""]);
+        assert!(notes.0.into_inner().unwrap().is_empty(), "no MR yet");
+        let parked = crate::approval_park::load(
+            &d.path().join("outputs").join("parked-approvals"),
+            "web",
+            "7",
+        )
+        .expect("parked");
+        assert_eq!(parked.relay[0].account, "phone");
+        assert_eq!(parked.handoff["branch"], "loop/issue-7");
+        let pending = approvals::list(&approvals_dir, Some("pending"), Utc::now());
+        assert_eq!(pending[0]["id"], parked.approval_id.as_str());
     }
 
     /// Finalize a passed gated fix for `web #7` from `handoff`, with a push whose
@@ -6068,33 +6222,22 @@ mod tests {
             .unwrap();
         }
 
-        /// A reviewer in another thread answering each approval request in turn.
-        fn reviewer(
-            &self,
-            answers: Vec<(&'static str, Option<&'static str>)>,
-        ) -> std::thread::JoinHandle<()> {
+        /// A person deciding the one pending approval.
+        fn decide(&self, decision: &str, notes: Option<&str>) {
             let dir = self.t.d.path().join("outputs").join("approvals");
-            std::thread::spawn(move || {
-                for (decision, notes) in answers {
-                    loop {
-                        let pending = approvals::list(&dir, Some("pending"), Utc::now());
-                        if let Some(a) = pending.first() {
-                            let id = a["id"].as_str().unwrap();
-                            approvals::decide_with_notes(
-                                &dir,
-                                id,
-                                decision,
-                                notes,
-                                "test",
-                                Utc::now(),
-                            )
-                            .unwrap();
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                    }
-                }
-            })
+            let pending = approvals::list(&dir, Some("pending"), Utc::now());
+            assert_eq!(pending.len(), 1, "{pending:?}");
+            let id = pending[0]["id"].as_str().unwrap();
+            approvals::decide_with_notes(&dir, id, decision, notes, "test", Utc::now()).unwrap();
+        }
+
+        fn parked(&self) -> Option<crate::approval_park::Parked> {
+            let dir = self.t.d.path().join("outputs").join("parked-approvals");
+            crate::approval_park::load(&dir, "web", "7")
+        }
+
+        fn resume(&self, run_id: &str, steps: Vec<Step>) -> IssueRun {
+            self.run_as(run_id, steps, gitlab_definition())
         }
 
         fn fix(&self) -> Value {
@@ -6104,8 +6247,12 @@ mod tests {
         }
 
         fn run_with(&self, steps: Vec<Step>, definition: LoopDefinition) -> IssueRun {
+            self.run_as("r1", steps, definition)
+        }
+
+        fn run_as(&self, run_id: &str, steps: Vec<Step>, definition: LoopDefinition) -> IssueRun {
             let root = self.t.d.path().to_path_buf();
-            let handoff = handoff_path("r1", "web", "7", &root);
+            let handoff = handoff_path(run_id, "web", "7", &root);
             let (wt, calls) = (self.wt.clone(), self.calls.clone());
             let steps = Arc::new(Mutex::new(std::collections::VecDeque::from(steps)));
             let invoker: Invoker = Arc::new(move |req| {
@@ -6181,7 +6328,7 @@ mod tests {
             });
             run_one_issue(
                 &self.t.ctx,
-                "r1",
+                run_id,
                 "web",
                 "7",
                 &definition,
@@ -6408,33 +6555,72 @@ mod tests {
     }
 
     #[test]
-    fn requested_changes_go_back_to_the_agent_and_the_mr_opens_once_approved() {
+    fn an_approval_parks_the_issue_and_a_later_run_opens_the_mr_once_approved() {
         let h = Doctored::new();
         h.configure_with(true, true);
-        let reviewer = h.reviewer(vec![
-            ("request_changes", Some("Rename the helper to page_rows.")),
-            ("approve", None),
-        ]);
-        let run = h.run(vec![Step::Main(h.fix()), Step::Main(h.fix())]);
-        reviewer.join().unwrap();
-        assert_eq!(h.kinds(), "mm");
-        let calls = h.calls.lock().unwrap();
-        let feedback = calls[1].feedback.as_deref().unwrap_or("");
-        assert!(feedback.contains("asked for changes"), "{feedback}");
-        assert!(
-            feedback.contains("> Rename the helper to page_rows."),
-            "{feedback}"
-        );
-        assert!(feedback.contains("the issue's branch"), "{feedback}");
-        drop(calls);
+        let run = h.run(vec![Step::Main(h.fix())]);
+        assert_eq!(run.gate_outcome.as_deref(), Some("awaiting_approval"));
+        let parked = h.parked().expect("the fix is parked");
+        assert_eq!(parked.run_id, "r1");
+        assert_eq!(parked.checks, ["make test"]);
+        assert_eq!(parked.revisions_left, MAX_REVISIONS);
+        let dir = h.t.d.path().join("outputs").join("approvals");
+        let approval = approvals::get(&dir, &parked.approval_id).unwrap();
+        let expires =
+            chrono::DateTime::parse_from_rfc3339(approval["expires_at"].as_str().unwrap()).unwrap();
+        assert!(expires > Utc::now() + Duration::days(6), "{expires}");
+        assert!(h.slack().contains("Approval needed"), "{}", h.slack());
+        assert!(!h.notes().contains("merge_requests"), "{}", h.notes());
+
+        let waiting = h.resume("r2", vec![]);
+        assert_eq!(waiting.gate_outcome.as_deref(), Some("awaiting_approval"));
+        assert!(h.parked().is_some());
+
+        h.decide("approve", None);
+        let run = h.resume("r3", vec![]);
+        assert_eq!(h.kinds(), "m", "the agent runs only for the fix");
         assert_eq!(
             run.gate_outcome.as_deref(),
             Some("mr_opened"),
             "{}",
             h.notes()
         );
-        assert_eq!(run.result.iterations.len(), 2, "both passes' iterations");
-        assert_eq!(run.result.agent_cost_usd, AgentCost::Usd(1.0));
+        assert!(h.parked().is_none());
+        let types = h.event_types();
+        assert_eq!(
+            types.iter().filter(|t| *t == "approval.requested").count(),
+            1
+        );
+        assert_eq!(types.iter().filter(|t| *t == "approval.decided").count(), 1);
+    }
+
+    #[test]
+    fn requested_changes_go_back_to_the_agent_and_the_mr_opens_once_approved() {
+        let h = Doctored::new();
+        h.configure_with(true, true);
+        h.run(vec![Step::Main(h.fix())]);
+        h.decide("request_changes", Some("Rename the helper to page_rows."));
+        let run = h.resume("r2", vec![Step::Main(h.fix())]);
+        assert_eq!(h.kinds(), "mm");
+        let feedback = h.feedback(1);
+        assert!(feedback.contains("asked for changes"), "{feedback}");
+        assert!(
+            feedback.contains("> Rename the helper to page_rows."),
+            "{feedback}"
+        );
+        assert!(feedback.contains("the issue's branch"), "{feedback}");
+        assert_eq!(run.gate_outcome.as_deref(), Some("awaiting_approval"));
+        assert_eq!(h.parked().unwrap().revisions_left, MAX_REVISIONS - 1);
+
+        h.decide("approve", None);
+        let run = h.resume("r3", vec![]);
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("mr_opened"),
+            "{}",
+            h.notes()
+        );
+        assert_eq!(h.kinds(), "mm");
         let decided = h
             .event_types()
             .iter()
@@ -6447,30 +6633,43 @@ mod tests {
     fn changes_requested_again_after_two_revisions_escalate_with_the_notes() {
         let h = Doctored::new();
         h.configure_with(true, true);
-        let reviewer = h.reviewer(vec![
-            ("request_changes", Some("First round.")),
-            ("request_changes", Some("Second round.")),
-            (
-                "request_changes",
-                Some("Still not right: keep the old name."),
-            ),
-        ]);
-        let run = h.run(vec![
-            Step::Main(h.fix()),
-            Step::Main(h.fix()),
-            Step::Main(h.fix()),
-        ]);
-        reviewer.join().unwrap();
+        h.run(vec![Step::Main(h.fix())]);
+        h.decide("request_changes", Some("First round."));
+        h.resume("r2", vec![Step::Main(h.fix())]);
+        h.decide("request_changes", Some("Second round."));
+        h.resume("r3", vec![Step::Main(h.fix())]);
+        h.decide(
+            "request_changes",
+            Some("Still not right: keep the old name."),
+        );
+        let run = h.resume("r4", vec![]);
         assert_eq!(h.kinds(), "mmm");
         assert_eq!(
             run.gate_outcome.as_deref(),
             Some("escalated:approval_changes_requested")
         );
+        assert!(h.parked().is_none());
         let notes = h.notes();
         assert!(
             notes.contains("Still not right: keep the old name."),
             "{notes}"
         );
+    }
+
+    #[test]
+    fn a_denied_approval_escalates_without_the_agent() {
+        let h = Doctored::new();
+        h.configure_with(true, true);
+        h.run(vec![Step::Main(h.fix())]);
+        h.decide("deny", None);
+        let run = h.resume("r2", vec![]);
+        assert_eq!(h.kinds(), "m");
+        assert_eq!(
+            run.gate_outcome.as_deref(),
+            Some("escalated:approval_denied")
+        );
+        assert_eq!(run.result.final_state, LoopState::Escalated);
+        assert!(h.parked().is_none());
     }
 
     #[test]

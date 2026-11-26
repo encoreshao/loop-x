@@ -2308,6 +2308,7 @@
   "Video layout": "動画レイアウト",
   "The frame every new generated video is rendered in, with a matching cover. Showcase videos use their promo template instead.": "新しく生成するすべての動画に使うフレームで、カバーもそれに合わせます。ショーケース動画はプロモテンプレートを使います。",
   "Event": "イベント",
+  "Approval": "承認",
   "Runs when Pipeline Doctor diagnoses a failure on a loop merge request": "ループのマージリクエストで Pipeline Doctor が失敗を診断したときに実行",
   "Runs when a matching event happens": "一致するイベントが発生したときに実行",
   "Automatic fix stopped on {mr}: {reason}": "{mr} の自動修正を停止しました: {reason}",

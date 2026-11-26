@@ -2308,6 +2308,7 @@
   "Video layout": "Mise en page vidéo",
   "The frame every new generated video is rendered in, with a matching cover. Showcase videos use their promo template instead.": "Le cadre de chaque nouvelle vidéo générée, avec une couverture assortie. Les vidéos vitrine utilisent leur modèle promo.",
   "Event": "Événement",
+  "Approval": "Approbation",
   "Runs when Pipeline Doctor diagnoses a failure on a loop merge request": "S’exécute quand Pipeline Doctor diagnostique un échec sur une merge request d’une boucle",
   "Runs when a matching event happens": "S’exécute quand un événement correspondant se produit",
   "Automatic fix stopped on {mr}: {reason}": "Correction automatique arrêtée sur {mr} : {reason}",

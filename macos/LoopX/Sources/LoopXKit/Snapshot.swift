@@ -240,7 +240,7 @@ public struct NeedsYouItem: Codable, Equatable, Sendable, Identifiable {
 public struct QueueEntry: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var loop: String
-    /// `scheduled`, `manual` or `catch-up`.
+    /// `scheduled`, `manual`, `catch-up`, `event` or `approval`.
     public var reason: String
     /// `queued`, `running`, `done`, `failed`, `cancelled` or `skipped`.
     public var state: String
