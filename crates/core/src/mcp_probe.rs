@@ -341,6 +341,8 @@ mod tests {
                 },
                 launch_path: String::new(),
                 tmp_root: self.dir.path().join("tmp"),
+                launcher: PathBuf::from("loopx"),
+                launch_keys: Arc::new(MemoryStore::new(crate::mcp_run::LAUNCH_KEY_SERVICE)),
             }
         }
     }

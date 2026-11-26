@@ -100,15 +100,17 @@ jobs:
           mkdir -p dist stage
           cp target/aarch64-apple-darwin/release/loopx stage/loopx-arm64
           cp target/x86_64-apple-darwin/release/loopx stage/loopx-x86_64
+          # One identifier for every loopx binary: the Keychain trusts LoopX's items to
+          # "identifier loopx" plus this team's certificate (keychain::locked_to_this_app).
           if [ "$SIGN" = "true" ]; then
             for f in stage/loopx-arm64 stage/loopx-x86_64; do
-              codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"
+              codesign --force --options runtime --timestamp --identifier loopx --sign "$IDENTITY" "$f"
             done
           fi
           lipo -create -output stage/loopx-universal stage/loopx-arm64 stage/loopx-x86_64
           lipo -info stage/loopx-universal
           if [ "$SIGN" = "true" ]; then
-            codesign --force --options runtime --timestamp --sign "$IDENTITY" stage/loopx-universal
+            codesign --force --options runtime --timestamp --identifier loopx --sign "$IDENTITY" stage/loopx-universal
             codesign --verify --strict --verbose=2 stage/loopx-universal
           fi
           for arch in arm64 x86_64 universal; do
@@ -208,7 +210,7 @@ jobs:
           # inside-out) when the signing identity is available.
           bin/scripts/build_loopx_app.sh "$PWD/loopx-bin/loopx" --out dist/app/LoopX.app
           if [ -n "$CODESIGN_IDENTITY" ]; then
-            codesign --force --options runtime --timestamp -s "$CODESIGN_IDENTITY" dist/app/LoopX.app/Contents/Helpers/loopx
+            codesign --force --options runtime --timestamp --identifier loopx -s "$CODESIGN_IDENTITY" dist/app/LoopX.app/Contents/Helpers/loopx
             codesign --force --deep --options runtime --timestamp -s "$CODESIGN_IDENTITY" dist/app/LoopX.app
           else
             echo "::notice::no signing identity: shipping the ad-hoc signed app"

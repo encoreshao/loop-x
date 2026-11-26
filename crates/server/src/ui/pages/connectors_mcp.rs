@@ -50,6 +50,10 @@ fn env(state: &UiState) -> Env {
         toolchains,
         launch_path,
         tmp_root: std::env::temp_dir(),
+        launcher: std::env::current_exe().unwrap_or_default(),
+        launch_keys: Arc::new(loopx_core::keychain::MemoryStore::new(
+            loopx_core::mcp_run::LAUNCH_KEY_SERVICE,
+        )),
     }
 }
 

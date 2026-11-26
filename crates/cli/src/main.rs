@@ -203,6 +203,12 @@ enum Command {
     /// Internal: drains the run queue, one loop after another (started by `scheduler`)
     #[command(name = "queue-worker", hide = true)]
     QueueWorker,
+    /// Internal: starts an MCP server with its Keychain secrets (written into a run's MCP config)
+    #[command(name = "mcp-launch", hide = true)]
+    McpLaunch {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Internal: the supervised process behind `loopx run`
     #[command(name = "_entry", hide = true)]
     Entry {
@@ -373,6 +379,7 @@ fn main() -> ExitCode {
         Command::Auth { args } => auth_cmd::run(&args),
         Command::Secrets { args } => secrets_cmd::run(&args),
         Command::Mcp { args } => mcp_cmd::run(&args),
+        Command::McpLaunch { args } => mcp_cmd::launch(&args),
         Command::Loopkit { args } => loopkit_cmd::run(&args),
         Command::Loops { args } => loops_cmd::loops(&args),
         Command::AiCli { args } => loops_cmd::ai_cli(&args),

@@ -40,7 +40,12 @@ open dist/LoopX.app
 - Auto-update is on only when both `SPARKLE_FEED_URL` (https) and
   `SPARKLE_PUBLIC_ED_KEY` (base64 Ed25519 public key) are set at build time;
   setting only one is an error. See [RELEASING.md](RELEASING.md).
-- The app is ad-hoc signed, so the first launch may need right-click > Open.
+- Without `--sign IDENTITY` (or `LOOPX_SIGN_IDENTITY`) the app is ad-hoc signed, so the first
+  launch may need right-click > Open, and LoopX's Keychain items stay readable by any program
+  running as you. Sign with an identity from `security find-identity -v -p codesigning`
+  (an `Apple Development: ...` certificate is enough on your own Mac) to lock them to LoopX.
+  Keep signing with the same certificate: a build signed with another one, or an unsigned one,
+  gets a Keychain prompt per item.
 - The app is a regular app: a Dock icon, its own menu bar, and the dashboard window on launch. The
   menu bar icon and the notch or HUD stay as shortcuts once the backend is up.
 - If launchd refuses to run the ad-hoc signed bundled agent (a crash report with

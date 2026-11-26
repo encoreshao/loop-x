@@ -3,11 +3,15 @@ set -euo pipefail
 
 # Builds the native LoopX.app (macos/LoopX, Swift) as a universal bundle:
 #
-#   bin/scripts/build_loopx_app.sh <path-to-loopx-binary> [--out dist/LoopX.app] [--arch universal|arm64|x86_64] [--install [DIR]]
+#   bin/scripts/build_loopx_app.sh <path-to-loopx-binary> [--out dist/LoopX.app] [--arch universal|arm64|x86_64] [--sign IDENTITY] [--install [DIR]]
 #
 # The bundle embeds <path-to-loopx-binary> as Contents/Helpers/loopx plus a LaunchAgent plist under
 # Contents/Library/LaunchAgents, which the app registers with SMAppService so the backend outlives
-# the app. It is ad-hoc signed (`codesign -s -`); Developer ID signing and notarization are P5.
+# the app. --sign (default: $LOOPX_SIGN_IDENTITY) signs with a codesigning identity from
+# `security find-identity -v -p codesigning`, e.g. "Apple Development: ..." or "Developer ID
+# Application: ..."; without one the bundle is ad-hoc signed. Only an Apple-issued identity keeps
+# LoopX's Keychain items locked to LoopX across rebuilds (keychain::locked_to_this_app).
+# Notarization is not done here.
 # Nothing here registers a login item or touches ~/Library/LaunchAgents: the app does that itself,
 # on the machine that runs it.
 #
@@ -27,6 +31,7 @@ OUT="$LOOP_DIR/dist/LoopX.app"
 ARCH="universal"
 INSTALL_DIR=""
 LOOPX_BIN=""
+SIGN_IDENTITY="${LOOPX_SIGN_IDENTITY:--}"
 BUNDLE_ID="com.hermes.loopx"
 AGENT_LABEL="com.hermes.loopx.backend"
 
@@ -36,6 +41,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
     --arch) ARCH="$2"; shift 2 ;;
+    --sign) SIGN_IDENTITY="$2"; shift 2 ;;
     --install)
       if [ $# -gt 1 ] && [ "${2#-}" = "$2" ] && [ -d "$2" ]; then INSTALL_DIR="$2"; shift 2; else INSTALL_DIR="/Applications"; shift; fi ;;
     -h|--help) usage 0 ;;
@@ -171,8 +177,12 @@ PLIST
 
 plutil -lint "$OUT/Contents/Info.plist" "$OUT/Contents/Library/LaunchAgents/$AGENT_LABEL.plist" >/dev/null
 
-echo "==> ad-hoc signing"
-codesign --force --deep -s - "$OUT"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  echo "==> ad-hoc signing (LoopX's Keychain items stay readable by /usr/bin/security)"
+else
+  echo "==> signing as $SIGN_IDENTITY"
+fi
+codesign --force --deep --timestamp=none -s "$SIGN_IDENTITY" "$OUT"
 codesign --verify --deep --strict "$OUT"
 
 if [ -n "$INSTALL_DIR" ]; then

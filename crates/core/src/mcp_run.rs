@@ -1,5 +1,12 @@
 //! The MCP servers one agent call gets: resolved from the registry, written to
 //! a private per-run `--mcp-config` file that is removed when the call ends.
+//!
+//! A server with Keychain secrets is written as `loopx mcp-launch <spec> <sig>`:
+//! the file names no secret, and the launcher (this signed binary, see
+//! `keychain::locked_to_this_app`) reads them from the Keychain itself. `sig` is
+//! an HMAC of the spec under a key only this app can read, so the agent cannot
+//! point the launcher at another command; the launcher starts the server with
+//! only the spec's environment plus [`PASSED_THROUGH`].
 
 use crate::keychain::SecretStore;
 use crate::mcp_registry::{self as reg, Launch, Registry};
@@ -23,22 +30,48 @@ pub struct Env {
     pub toolchains: Toolchains,
     pub launch_path: String,
     pub tmp_root: PathBuf,
+    /// The `loopx` binary a server with secrets is started through.
+    pub launcher: PathBuf,
+    /// Holds the key launch specs are signed with.
+    pub launch_keys: Arc<dyn SecretStore>,
 }
+
+/// Keychain service of the launch-spec signing key.
+pub const LAUNCH_KEY_SERVICE: &str = "loop-engineering.mcp-launch";
+const LAUNCH_KEY_ACCOUNT: &str = "key";
+pub const LAUNCH_SUBCOMMAND: &str = "mcp-launch";
+/// The only variables a launched server takes from whoever started it.
+pub const PASSED_THROUGH: &[&str] = &[
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "SHELL",
+    "__CF_USER_TEXT_ENCODING",
+];
 
 impl Env {
     /// An unavailable Keychain leaves every secret missing, so only servers
     /// without secrets attach.
     pub fn real(home: &Path) -> Env {
-        let secrets: Arc<dyn SecretStore> = match crate::keychain::open_store(reg::SERVICE_MCP) {
-            Ok(s) => Arc::from(s),
-            Err(_) => Arc::new(crate::keychain::MemoryStore::new(reg::SERVICE_MCP)),
+        let open = |service: &str| -> Arc<dyn SecretStore> {
+            match crate::keychain::open_store(service) {
+                Ok(s) => Arc::from(s),
+                Err(_) => Arc::new(crate::keychain::MemoryStore::new(service)),
+            }
         };
         Env {
             registry: reg::path(home),
-            secrets,
+            secrets: open(reg::SERVICE_MCP),
             toolchains: Toolchains::from_env(),
             launch_path: crate::runner_util::cli_launch_path(),
             tmp_root: std::env::temp_dir(),
+            launcher: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("loopx")),
+            launch_keys: open(LAUNCH_KEY_SERVICE),
         }
     }
 }
@@ -56,6 +89,8 @@ pub struct Launchable {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub secrets: Vec<String>,
+    /// Which of `env`'s variables are secrets, and the Keychain account of each.
+    pub secret_vars: BTreeMap<String, String>,
     pub deny_tools: Vec<String>,
 }
 
@@ -220,6 +255,7 @@ pub fn resolve_server(
         args,
         env: server_env,
         secrets,
+        secret_vars: spec.env_secrets.clone(),
         deny_tools: spec.deny_tools.clone(),
     })
 }
@@ -322,12 +358,37 @@ fn attach_inner(
     if ready.is_empty() {
         return Err(skipped);
     }
+    let key = if ready.iter().any(|(_, l)| !l.secret_vars.is_empty()) {
+        launch_key(env)
+    } else {
+        None
+    };
     let mut servers_json = Map::new();
-    for (name, l) in &ready {
-        servers_json.insert(
-            name.clone(),
-            json!({"type": "stdio", "command": l.command, "args": l.args, "env": l.env}),
-        );
+    let mut launchable = Vec::new();
+    for (name, l) in ready {
+        let entry = match (&key, l.secret_vars.is_empty()) {
+            (_, true) => {
+                json!({"type": "stdio", "command": l.command, "args": l.args, "env": l.env})
+            }
+            (Some(key), false) => {
+                let (spec, sig) = sign_launch(key, &name, &l, &env.launch_path);
+                json!({"type": "stdio", "command": env.launcher,
+                       "args": [LAUNCH_SUBCOMMAND, spec, sig], "env": {}})
+            }
+            (None, false) => {
+                skipped.push(Skip {
+                    name,
+                    reason: "secret_missing",
+                });
+                continue;
+            }
+        };
+        servers_json.insert(name.clone(), entry);
+        launchable.push((name, l));
+    }
+    let ready = launchable;
+    if ready.is_empty() {
+        return Err(skipped);
     }
     let body = json!({"mcpServers": servers_json}).to_string();
     let dir = env.tmp_root.join(run_dir_name());
@@ -364,6 +425,126 @@ fn attach_inner(
         denied,
         secrets: ready.into_iter().flat_map(|(_, l)| l.secrets).collect(),
     }))
+}
+
+/// The launch-spec signing key, created on first use.
+fn launch_key(env: &Env) -> Option<Vec<u8>> {
+    if let Ok(Some(k)) = env.launch_keys.get(LAUNCH_KEY_ACCOUNT) {
+        return crate::sha256::unhex(&k);
+    }
+    let key = crate::sha256::random_bytes(32);
+    env.launch_keys
+        .set(LAUNCH_KEY_ACCOUNT, &crate::sha256::hex(&key))
+        .ok()?;
+    Some(key)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LaunchSpec {
+    name: String,
+    command: PathBuf,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    secrets: BTreeMap<String, String>,
+}
+
+/// `(spec, sig)`: the server without its secret values, as base64url JSON, and
+/// the hex HMAC of those exact bytes.
+fn sign_launch(key: &[u8], name: &str, l: &Launchable, launch_path: &str) -> (String, String) {
+    use base64::Engine;
+    let mut plain_env: BTreeMap<String, String> = l
+        .env
+        .iter()
+        .filter(|(k, _)| !l.secret_vars.contains_key(*k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    plain_env
+        .entry("PATH".into())
+        .or_insert_with(|| launch_path.to_string());
+    let spec = LaunchSpec {
+        name: name.to_string(),
+        command: l.command.clone(),
+        args: l.args.clone(),
+        env: plain_env,
+        secrets: l.secret_vars.clone(),
+    };
+    let bytes = serde_json::to_vec(&spec).unwrap_or_default();
+    (
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes),
+        crate::sha256::hex(&crate::sha256::hmac_sha256(key, &bytes)),
+    )
+}
+
+/// What `loopx mcp-launch` starts.
+#[derive(Debug)]
+pub struct Prepared {
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    /// The whole environment: nothing else is inherited.
+    pub env: BTreeMap<String, String>,
+}
+
+/// Checks `mcp-launch <spec> <sig>` against the signing key and fills in the
+/// secrets. `inherited` is the caller's environment, of which only
+/// [`PASSED_THROUGH`] is kept.
+pub fn prepare_launch(
+    args: &[String],
+    env: &Env,
+    inherited: &dyn Fn(&str) -> Option<String>,
+) -> Result<Prepared, String> {
+    use base64::Engine;
+    let [sub, spec, sig] = args else {
+        return Err(format!("usage: loopx {LAUNCH_SUBCOMMAND} <spec> <sig>"));
+    };
+    if sub != LAUNCH_SUBCOMMAND {
+        return Err(format!("usage: loopx {LAUNCH_SUBCOMMAND} <spec> <sig>"));
+    }
+    let refused = || "refused: this launch was not prepared by LoopX".to_string();
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(spec)
+        .map_err(|_| refused())?;
+    let key = env
+        .launch_keys
+        .get(LAUNCH_KEY_ACCOUNT)
+        .ok()
+        .flatten()
+        .and_then(|k| crate::sha256::unhex(&k))
+        .ok_or_else(refused)?;
+    let want = crate::sha256::hmac_sha256(&key, &bytes);
+    let got = crate::sha256::unhex(sig).ok_or_else(refused)?;
+    let differs = got.len() != want.len()
+        || got
+            .iter()
+            .zip(want.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            != 0;
+    if differs {
+        return Err(refused());
+    }
+    let spec: LaunchSpec = serde_json::from_slice(&bytes).map_err(|_| refused())?;
+    let mut out: BTreeMap<String, String> = PASSED_THROUGH
+        .iter()
+        .filter_map(|k| inherited(k).map(|v| (k.to_string(), v)))
+        .collect();
+    out.extend(spec.env);
+    for (var, account) in &spec.secrets {
+        match env.secrets.get(account) {
+            Ok(Some(v)) if !v.is_empty() => {
+                out.insert(var.clone(), v);
+            }
+            _ => {
+                return Err(format!(
+                    "{}: Keychain item {account} for {var} is missing",
+                    spec.name
+                ))
+            }
+        }
+    }
+    Ok(Prepared {
+        command: spec.command,
+        args: spec.args,
+        env: out,
+    })
 }
 
 pub fn sweep_stale(tmp_root: &Path, now: SystemTime) {
@@ -410,6 +591,7 @@ pub(crate) mod tests {
         pub root: tempfile::TempDir,
         pub store: Arc<MemoryStore>,
         pub chrome: PathBuf,
+        pub launch_keys: Arc<MemoryStore>,
     }
 
     impl Fixture {
@@ -432,6 +614,7 @@ pub(crate) mod tests {
                 root,
                 store: Arc::new(MemoryStore::new(reg::SERVICE_MCP)),
                 chrome,
+                launch_keys: Arc::new(MemoryStore::new(LAUNCH_KEY_SERVICE)),
             };
             reg::save_entry(
                 &f.registry(),
@@ -467,6 +650,8 @@ pub(crate) mod tests {
                 },
                 launch_path: "/nonexistent".into(),
                 tmp_root: self.tmp(),
+                launcher: PathBuf::from("/opt/loopx/bin/loopx"),
+                launch_keys: self.launch_keys.clone(),
             }
         }
     }
@@ -496,9 +681,9 @@ pub(crate) mod tests {
         let c = config(&a);
         let demo = &c["mcpServers"]["demo"];
         assert_eq!(demo["type"], "stdio");
-        assert_eq!(demo["env"]["DEMO_TOKEN"], "s3cret-value");
-        assert_eq!(demo["env"]["DEMO_MODE"], "on");
-        assert_eq!(demo["args"], json!(["--x"]));
+        assert_eq!(demo["command"], json!(f.env().launcher));
+        assert_eq!(demo["args"][0], "mcp-launch");
+        assert_eq!(demo["env"], json!({}));
         drop(a);
         assert!(!dir.exists());
     }
@@ -511,10 +696,56 @@ pub(crate) mod tests {
         other.set("demo-token", "from-other-store").unwrap();
         env.secrets = other;
         let a = attach(&names(&["demo"]), &env, None).unwrap().unwrap();
-        assert_eq!(
-            config(&a)["mcpServers"]["demo"]["env"]["DEMO_TOKEN"],
-            "from-other-store"
-        );
+        let launch = prepare_launch(&launch_args(&a, "demo"), &env, &|_| None).unwrap();
+        assert_eq!(launch.env["DEMO_TOKEN"], "from-other-store");
+    }
+
+    fn launch_args(a: &McpAttach, name: &str) -> Vec<String> {
+        serde_json::from_value(config(a)["mcpServers"][name]["args"].clone()).unwrap()
+    }
+
+    #[test]
+    fn a_server_with_secrets_gets_them_only_from_the_launcher() {
+        let f = Fixture::new();
+        let a = attach(&names(&["demo"]), &f.env(), None).unwrap().unwrap();
+        let text = std::fs::read_to_string(&a.config).unwrap();
+        assert!(!text.contains("s3cret-value"), "{text}");
+        assert!(!text.contains("demo-token"), "{text}");
+        let inherited = |k: &str| match k {
+            "HOME" => Some("/Users/me".to_string()),
+            "NODE_OPTIONS" => Some("--require /tmp/evil.js".to_string()),
+            "HTTPS_PROXY" => Some("http://evil:8080".to_string()),
+            _ => None,
+        };
+        let launch = prepare_launch(&launch_args(&a, "demo"), &f.env(), &inherited).unwrap();
+        assert_eq!(launch.command, f.root.path().join("demo-mcp"));
+        assert_eq!(launch.args, ["--x"]);
+        assert_eq!(launch.env["DEMO_TOKEN"], "s3cret-value");
+        assert_eq!(launch.env["DEMO_MODE"], "on");
+        assert_eq!(launch.env["HOME"], "/Users/me");
+        assert_eq!(launch.env["PATH"], "/nonexistent");
+        assert!(!launch.env.contains_key("NODE_OPTIONS"));
+        assert!(!launch.env.contains_key("HTTPS_PROXY"));
+    }
+
+    #[test]
+    fn a_launch_spec_changed_after_attach_is_refused() {
+        use base64::Engine;
+        let f = Fixture::new();
+        let a = attach(&names(&["demo"]), &f.env(), None).unwrap().unwrap();
+        let args = launch_args(&a, "demo");
+        let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let mut spec: Value = serde_json::from_slice(&engine.decode(&args[1]).unwrap()).unwrap();
+        spec["command"] = json!("/usr/bin/env");
+        let forged = engine.encode(serde_json::to_vec(&spec).unwrap());
+        let tampered = vec![args[0].clone(), forged, args[2].clone()];
+        assert!(prepare_launch(&tampered, &f.env(), &|_| None).is_err());
+        let bad_sig = vec![args[0].clone(), args[1].clone(), "00".repeat(32)];
+        assert!(prepare_launch(&bad_sig, &f.env(), &|_| None).is_err());
+
+        let mut other = f.env();
+        other.launch_keys = Arc::new(MemoryStore::new(LAUNCH_KEY_SERVICE));
+        assert!(prepare_launch(&args, &other, &|_| None).is_err());
     }
 
     #[test]
@@ -666,8 +897,8 @@ pub(crate) mod tests {
         assert_eq!(args[at + 1], "http://127.0.0.1:9");
         assert!(a.denied.contains(&"Bash(git diff --no-index*)".to_string()));
         let demo = attach(&names(&["demo"]), &f.env(), None).unwrap().unwrap();
-        let demo_args = config(&demo)["mcpServers"]["demo"]["args"].clone();
-        assert_eq!(demo_args, json!(["--x"]));
+        let launch = prepare_launch(&launch_args(&demo, "demo"), &f.env(), &|_| None).unwrap();
+        assert_eq!(launch.args, ["--x"]);
     }
 
     #[test]

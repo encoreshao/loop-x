@@ -1,9 +1,11 @@
-//! Secret storage behind a trait: the macOS Keychain (through `/usr/bin/security`),
-//! a file-backed store for tests and CI, and an in-memory double.
+//! Secret storage behind a trait: the macOS Keychain, a file-backed store for
+//! tests and CI, and an in-memory double.
 //!
 //! Which backend `open_store` picks:
 //! - `LOOPX_KEYCHAIN=file:<dir>` selects the file store (mode 0600 files under `<dir>`).
 //!   Every test and sandbox must set it: nothing below ever reaches the real Keychain then.
+//! - `LOOPX_KEYCHAIN=keychain:<file>` uses a scratch keychain file (`security
+//!   create-keychain`) instead of the login keychain, to check the Keychain backends.
 //! - otherwise the macOS Keychain. The service name gets a `.sandbox-<hash>` suffix whenever
 //!   `LOOP_ENGINEERING_HOME` is set (same policy as `bin/mail_auth.py`), so a sandboxed run
 //!   can never read or overwrite a real secret.
@@ -186,35 +188,53 @@ impl SecretStore for FileStore {
 
 // ----------------------------------------------------------- macOS Keychain
 
-/// Generic passwords through `/usr/bin/security`. Secrets are written through
-/// `security -i` on **stdin**, never on a command line (argv is visible to every
-/// local user via `ps`; OAuth refresh tokens rotate and would be exposed again and again).
-/// Keychain cannot enumerate by service without a dump, so the account names are
-/// also kept in one `__index__` item (names only, never values).
-pub struct KeychainStore {
-    service: String,
-    binary: PathBuf,
+/// Why a backend could not use an item.
+pub(crate) enum RawError {
+    /// The item exists but its access list does not trust this backend.
+    NotOurs,
+    Other(SecretError),
 }
 
-impl KeychainStore {
-    pub fn new(service: &str) -> Self {
-        Self::with_binary(service, Path::new(SECURITY_BIN))
+impl From<SecretError> for RawError {
+    fn from(e: SecretError) -> Self {
+        RawError::Other(e)
     }
+}
 
-    pub fn with_binary(service: &str, binary: &Path) -> Self {
-        Self {
-            service: service.to_string(),
-            binary: binary.to_path_buf(),
+fn plain(e: RawError) -> SecretError {
+    match e {
+        RawError::NotOurs => {
+            SecretError::Failed("the Keychain item belongs to another app".to_string())
         }
+        RawError::Other(e) => e,
     }
+}
 
-    fn security(
-        &self,
-        args: &[&str],
-        stdin: Option<&str>,
-    ) -> Result<proc::ProcOutput, SecretError> {
+/// Generic passwords in the login keychain, addressed by service and account.
+pub(crate) trait RawKeychain: Send + Sync {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, RawError>;
+    fn set(&self, service: &str, account: &str, secret: &str) -> Result<(), RawError>;
+    /// Deleting a missing item is not an error.
+    fn delete(&self, service: &str, account: &str) -> Result<(), RawError>;
+}
+
+/// Through `/usr/bin/security`, which every item it writes trusts. Secrets are
+/// written through `security -i` on **stdin**, never on a command line (argv is
+/// visible to every local user via `ps`; OAuth refresh tokens rotate and would be
+/// exposed again and again).
+struct SecurityCli {
+    binary: PathBuf,
+    /// A keychain file instead of the default search list.
+    keychain: Option<PathBuf>,
+}
+
+impl SecurityCli {
+    fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<proc::ProcOutput, SecretError> {
         let mut cmd = std::process::Command::new(&self.binary);
         cmd.args(args);
+        if let (Some(k), None) = (&self.keychain, stdin) {
+            cmd.arg(k);
+        }
         let out = proc::run(&mut cmd, stdin, Some(TIMEOUT)).map_err(|e| {
             SecretError::Unavailable(format!("cannot run {}: {e}", self.binary.display()))
         })?;
@@ -225,17 +245,12 @@ impl KeychainStore {
         }
         Ok(out)
     }
+}
 
-    fn raw_get(&self, account: &str) -> Result<Option<String>, SecretError> {
-        let out = self.security(
-            &[
-                "find-generic-password",
-                "-s",
-                &self.service,
-                "-a",
-                account,
-                "-w",
-            ],
+impl RawKeychain for SecurityCli {
+    fn get(&self, service: &str, account: &str) -> Result<Option<String>, RawError> {
+        let out = self.run(
+            &["find-generic-password", "-s", service, "-a", account, "-w"],
             None,
         )?;
         match out.code {
@@ -244,16 +259,17 @@ impl KeychainStore {
             c => Err(SecretError::Failed(format!(
                 "Keychain read failed (exit {c:?}): {}",
                 out.stderr.trim()
-            ))),
+            ))
+            .into()),
         }
     }
 
-    fn raw_set(&self, account: &str, secret: &str) -> Result<(), SecretError> {
+    fn set(&self, service: &str, account: &str, secret: &str) -> Result<(), RawError> {
         let command = [
             "add-generic-password",
             "-U",
             "-s",
-            &quote(&self.service)?,
+            &quote(service)?,
             "-a",
             &quote(account)?,
             "-w",
@@ -262,26 +278,25 @@ impl KeychainStore {
             SECURITY_BIN,
         ]
         .join(" ");
-        let out = self.security(&["-i"], Some(&format!("{command}\n")))?;
+        let command = match &self.keychain {
+            Some(k) => format!("{command} {}", quote(&k.to_string_lossy())?),
+            None => command,
+        };
+        let out = self.run(&["-i"], Some(&format!("{command}\n")))?;
         if out.code != Some(0) {
             return Err(SecretError::Failed(format!(
                 "Keychain write failed (exit {:?}): {}",
                 out.code,
                 out.stderr.trim()
-            )));
+            ))
+            .into());
         }
         Ok(())
     }
 
-    fn raw_delete(&self, account: &str) -> Result<(), SecretError> {
-        let out = self.security(
-            &[
-                "delete-generic-password",
-                "-s",
-                &self.service,
-                "-a",
-                account,
-            ],
+    fn delete(&self, service: &str, account: &str) -> Result<(), RawError> {
+        let out = self.run(
+            &["delete-generic-password", "-s", service, "-a", account],
             None,
         )?;
         match out.code {
@@ -289,7 +304,252 @@ impl KeychainStore {
             c => Err(SecretError::Failed(format!(
                 "Keychain delete failed (exit {c:?}): {}",
                 out.stderr.trim()
+            ))
+            .into()),
+        }
+    }
+}
+
+/// Through the Security framework from this process, so a new item trusts only
+/// this signed app: any other program asking for it (`security
+/// find-generic-password` from an agent's shell included) gets a prompt. Never
+/// shows one itself: an item it does not own is [`RawError::NotOurs`].
+#[cfg(target_os = "macos")]
+struct Framework {
+    keychain: Option<PathBuf>,
+}
+
+#[cfg(target_os = "macos")]
+mod framework {
+    use super::{Framework, RawError, RawKeychain, SecretError};
+    use security_framework::os::macos::keychain::SecKeychain;
+    use security_framework::os::macos::keychain_item::SecKeychainItem;
+    use security_framework::os::macos::passwords::{
+        find_generic_password, SecKeychainItemPassword,
+    };
+    use std::sync::Mutex;
+
+    const ITEM_NOT_FOUND: i32 = -25300;
+    const INTERACTION_NOT_ALLOWED: i32 = -25308;
+    const AUTH_FAILED: i32 = -25293;
+
+    /// Turning user interaction off is process-wide: one call at a time.
+    static QUIET: Mutex<()> = Mutex::new(());
+
+    fn raw(e: security_framework::base::Error) -> RawError {
+        match e.code() {
+            INTERACTION_NOT_ALLOWED | AUTH_FAILED => RawError::NotOurs,
+            code => RawError::Other(SecretError::Failed(format!(
+                "Keychain error {code}: {}",
+                e.message().unwrap_or_default()
             ))),
+        }
+    }
+
+    fn quietly<T>(f: impl FnOnce() -> Result<T, RawError>) -> Result<T, RawError> {
+        let _one = QUIET.lock().unwrap_or_else(|p| p.into_inner());
+        let _no_prompt = SecKeychain::disable_user_interaction().map_err(raw)?;
+        f()
+    }
+
+    impl Framework {
+        fn keychain(&self) -> security_framework::base::Result<Option<SecKeychain>> {
+            self.keychain.as_ref().map(SecKeychain::open).transpose()
+        }
+
+        fn find(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> security_framework::base::Result<(SecKeychainItemPassword, SecKeychainItem)> {
+            match self.keychain()? {
+                Some(k) => k.find_generic_password(service, account),
+                None => find_generic_password(None, service, account),
+            }
+        }
+
+        fn add(
+            &self,
+            service: &str,
+            account: &str,
+            secret: &str,
+        ) -> security_framework::base::Result<()> {
+            let keychain = match self.keychain()? {
+                Some(k) => k,
+                None => SecKeychain::default()?,
+            };
+            keychain.add_generic_password(service, account, secret.as_bytes())
+        }
+    }
+
+    impl RawKeychain for Framework {
+        fn get(&self, service: &str, account: &str) -> Result<Option<String>, RawError> {
+            quietly(|| match self.find(service, account) {
+                Ok((password, _)) => String::from_utf8(password.to_vec())
+                    .map(Some)
+                    .map_err(|_| RawError::Other(SecretError::Failed("not UTF-8".into()))),
+                Err(e) if e.code() == ITEM_NOT_FOUND => Ok(None),
+                Err(e) => Err(raw(e)),
+            })
+        }
+
+        fn set(&self, service: &str, account: &str, secret: &str) -> Result<(), RawError> {
+            quietly(|| match self.find(service, account) {
+                Ok((_, mut item)) => item.set_password(secret.as_bytes()).map_err(raw),
+                Err(e) if e.code() == ITEM_NOT_FOUND => {
+                    self.add(service, account, secret).map_err(raw)
+                }
+                Err(e) => Err(raw(e)),
+            })
+        }
+
+        fn delete(&self, service: &str, account: &str) -> Result<(), RawError> {
+            quietly(|| match self.find(service, account) {
+                Ok((_, item)) => {
+                    item.delete();
+                    Ok(())
+                }
+                Err(e) if e.code() == ITEM_NOT_FOUND => Ok(()),
+                Err(e) => Err(raw(e)),
+            })
+        }
+    }
+
+    pub(super) fn signed_by_apple_issued_identity() -> bool {
+        use security_framework::os::macos::code_signing::{Flags, SecCode, SecRequirement};
+        let Ok(requirement) = "anchor apple generic".parse::<SecRequirement>() else {
+            return false;
+        };
+        SecCode::for_self(Flags::NONE)
+            .and_then(|code| code.check_validity(Flags::NONE, &requirement))
+            .is_ok()
+    }
+}
+
+/// Is this binary signed with an Apple-issued identity (Apple Development or
+/// Developer ID)? Only then does a code signature survive a rebuild, so only then
+/// can the Keychain trust this app alone without prompting after every update.
+/// `LOOPX_KEYCHAIN_LOCK=off` turns the lock off.
+pub fn locked_to_this_app() -> bool {
+    static LOCKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LOCKED.get_or_init(|| {
+        if std::env::var("LOOPX_KEYCHAIN_LOCK").is_ok_and(|v| v == "off") {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            framework::signed_by_apple_issued_identity()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    })
+}
+
+/// Generic passwords in the login keychain. Keychain cannot enumerate by service
+/// without a dump, so the account names are also kept in one `__index__` item
+/// (names only, never values).
+///
+/// Locked (see [`locked_to_this_app`]): items live under the Security framework
+/// and trust only this app. An item still written the old way (it trusts
+/// `/usr/bin/security`) is read through `security` once and moved under the lock.
+pub struct KeychainStore {
+    service: String,
+    primary: Box<dyn RawKeychain>,
+    legacy: Option<Box<dyn RawKeychain>>,
+}
+
+impl KeychainStore {
+    pub fn new(service: &str) -> Self {
+        Self::in_file(service, None)
+    }
+
+    /// In the keychain file `keychain` instead of the default search list.
+    pub fn in_file(service: &str, keychain: Option<&Path>) -> Self {
+        let cli = Box::new(SecurityCli {
+            binary: PathBuf::from(SECURITY_BIN),
+            keychain: keychain.map(Path::to_path_buf),
+        });
+        #[cfg(target_os = "macos")]
+        if locked_to_this_app() {
+            let framework = Framework {
+                keychain: keychain.map(Path::to_path_buf),
+            };
+            return Self::with_backends(service, Box::new(framework), Some(cli));
+        }
+        Self::with_backends(service, cli, None)
+    }
+
+    pub fn with_binary(service: &str, binary: &Path) -> Self {
+        Self::with_backends(
+            service,
+            Box::new(SecurityCli {
+                binary: binary.to_path_buf(),
+                keychain: None,
+            }),
+            None,
+        )
+    }
+
+    pub(crate) fn with_backends(
+        service: &str,
+        primary: Box<dyn RawKeychain>,
+        legacy: Option<Box<dyn RawKeychain>>,
+    ) -> Self {
+        Self {
+            service: service.to_string(),
+            primary,
+            legacy,
+        }
+    }
+
+    fn raw_get(&self, account: &str) -> Result<Option<String>, SecretError> {
+        let legacy = match (self.primary.get(&self.service, account), &self.legacy) {
+            (Err(RawError::NotOurs), Some(legacy)) => legacy,
+            (other, _) => return other.map_err(plain),
+        };
+        let found = legacy.get(&self.service, account).map_err(plain)?;
+        if let Some(secret) = &found {
+            self.adopt(legacy.as_ref(), account, secret);
+        }
+        Ok(found)
+    }
+
+    /// Re-writes an old item under the lock; best-effort, and the old item is put
+    /// back if the new one cannot be written.
+    fn adopt(&self, legacy: &dyn RawKeychain, account: &str, secret: &str) {
+        if legacy.delete(&self.service, account).is_err() {
+            return;
+        }
+        if self.primary.set(&self.service, account, secret).is_err() {
+            let _ = legacy.set(&self.service, account, secret);
+        }
+    }
+
+    fn raw_set(&self, account: &str, secret: &str) -> Result<(), SecretError> {
+        match (
+            self.primary.set(&self.service, account, secret),
+            &self.legacy,
+        ) {
+            (Err(RawError::NotOurs), Some(legacy)) => {
+                legacy.delete(&self.service, account).map_err(plain)?;
+                if let Err(e) = self.primary.set(&self.service, account, secret) {
+                    let _ = legacy.set(&self.service, account, secret);
+                    return Err(plain(e));
+                }
+                Ok(())
+            }
+            (other, _) => other.map_err(plain),
+        }
+    }
+
+    fn raw_delete(&self, account: &str) -> Result<(), SecretError> {
+        match (self.primary.delete(&self.service, account), &self.legacy) {
+            (Err(RawError::NotOurs), Some(legacy)) => {
+                legacy.delete(&self.service, account).map_err(plain)
+            }
+            (other, _) => other.map_err(plain),
         }
     }
 
@@ -365,10 +625,16 @@ pub fn open_store(base_service: &str) -> Result<Box<dyn SecretStore>, SecretErro
         .ok()
         .filter(|v| !v.is_empty())
     {
-        Some(spec) => match spec.strip_prefix("file:") {
-            Some(dir) if !dir.is_empty() => Ok(Box::new(FileStore::new(Path::new(dir), &service))),
+        Some(spec) => match (spec.strip_prefix("file:"), spec.strip_prefix("keychain:")) {
+            (Some(dir), _) if !dir.is_empty() => {
+                Ok(Box::new(FileStore::new(Path::new(dir), &service)))
+            }
+            (_, Some(file)) if !file.is_empty() => Ok(Box::new(KeychainStore::in_file(
+                &service,
+                Some(Path::new(file)),
+            ))),
             _ => Err(SecretError::Unavailable(format!(
-                "LOOPX_KEYCHAIN must be file:<dir>, got {spec:?}"
+                "LOOPX_KEYCHAIN must be file:<dir> or keychain:<keychain file>, got {spec:?}"
             ))),
         },
         None => Ok(Box::new(KeychainStore::new(&service))),
@@ -416,6 +682,7 @@ pub fn resolve_value_with(value: &str, open: &StoreOpener) -> Result<String, Sec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn sandbox_suffix_is_stable_and_home_specific() {
@@ -519,6 +786,130 @@ mod tests {
         assert_eq!(parse_ref("keychain:loop-engineering.x/"), None);
         assert_eq!(parse_ref("glpat-plain"), None);
         assert_eq!(resolve_value("glpat-plain").unwrap(), "glpat-plain");
+    }
+
+    /// One login keychain shared by fake backends; each item remembers which
+    /// backend wrote it, and a backend can only use its own items.
+    type Shelf = Arc<Mutex<BTreeMap<(String, String), (&'static str, String)>>>;
+
+    struct Fake {
+        me: &'static str,
+        shelf: Shelf,
+        fail_set: bool,
+    }
+
+    impl RawKeychain for Fake {
+        fn get(&self, service: &str, account: &str) -> Result<Option<String>, RawError> {
+            match self
+                .shelf
+                .lock()
+                .unwrap()
+                .get(&(service.into(), account.into()))
+            {
+                None => Ok(None),
+                Some((owner, _)) if *owner != self.me => Err(RawError::NotOurs),
+                Some((_, v)) => Ok(Some(v.clone())),
+            }
+        }
+        fn set(&self, service: &str, account: &str, secret: &str) -> Result<(), RawError> {
+            if self.fail_set {
+                return Err(RawError::Other(SecretError::Failed("full".into())));
+            }
+            let mut shelf = self.shelf.lock().unwrap();
+            let key = (service.to_string(), account.to_string());
+            if shelf.get(&key).is_some_and(|(o, _)| *o != self.me) {
+                return Err(RawError::NotOurs);
+            }
+            shelf.insert(key, (self.me, secret.to_string()));
+            Ok(())
+        }
+        fn delete(&self, service: &str, account: &str) -> Result<(), RawError> {
+            let mut shelf = self.shelf.lock().unwrap();
+            let key = (service.to_string(), account.to_string());
+            match shelf.get(&key) {
+                Some((o, _)) if *o != self.me => Err(RawError::NotOurs),
+                _ => {
+                    shelf.remove(&key);
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    fn locked(shelf: &Shelf, fail_set: bool) -> KeychainStore {
+        KeychainStore::with_backends(
+            "svc",
+            Box::new(Fake {
+                me: "loopx",
+                shelf: shelf.clone(),
+                fail_set,
+            }),
+            Some(Box::new(Fake {
+                me: "security",
+                shelf: shelf.clone(),
+                fail_set: false,
+            })),
+        )
+    }
+
+    fn owner(shelf: &Shelf, account: &str) -> Option<&'static str> {
+        shelf
+            .lock()
+            .unwrap()
+            .get(&("svc".to_string(), account.to_string()))
+            .map(|(o, _)| *o)
+    }
+
+    fn put_legacy(shelf: &Shelf, account: &str, secret: &str) {
+        shelf
+            .lock()
+            .unwrap()
+            .insert(("svc".into(), account.into()), ("security", secret.into()));
+    }
+
+    #[test]
+    fn a_locked_store_keeps_its_own_items() {
+        let shelf = Shelf::default();
+        exercise(&locked(&shelf, false));
+        assert_eq!(owner(&shelf, "c"), Some("loopx"));
+    }
+
+    #[test]
+    fn an_item_written_the_old_way_is_read_once_and_moved_under_the_lock() {
+        let shelf = Shelf::default();
+        put_legacy(&shelf, "gitlab/token", "glpat-1");
+        let store = locked(&shelf, false);
+        assert_eq!(
+            store.get("gitlab/token").unwrap().as_deref(),
+            Some("glpat-1")
+        );
+        assert_eq!(owner(&shelf, "gitlab/token"), Some("loopx"));
+        assert_eq!(
+            store.get("gitlab/token").unwrap().as_deref(),
+            Some("glpat-1")
+        );
+    }
+
+    #[test]
+    fn writing_over_or_deleting_an_old_item_takes_it_over() {
+        let shelf = Shelf::default();
+        put_legacy(&shelf, "a", "old");
+        put_legacy(&shelf, "b", "old");
+        let store = locked(&shelf, false);
+        store.set("a", "new").unwrap();
+        assert_eq!(owner(&shelf, "a"), Some("loopx"));
+        assert_eq!(store.get("a").unwrap().as_deref(), Some("new"));
+        store.delete("b").unwrap();
+        assert_eq!(owner(&shelf, "b"), None);
+    }
+
+    #[test]
+    fn a_move_that_cannot_write_the_locked_item_puts_the_old_one_back() {
+        let shelf = Shelf::default();
+        put_legacy(&shelf, "a", "keep-me");
+        let store = locked(&shelf, true);
+        assert_eq!(store.get("a").unwrap().as_deref(), Some("keep-me"));
+        assert_eq!(owner(&shelf, "a"), Some("security"));
     }
 
     /// A fake `security` that records argv and stdin and keeps items in a directory.

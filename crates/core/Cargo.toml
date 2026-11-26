@@ -21,3 +21,6 @@ base64 = "0.22"
 tempfile = "3"
 # CDP client (ws://127.0.0.1) and Slack Socket Mode (wss).
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2.11"

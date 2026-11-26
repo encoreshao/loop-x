@@ -24,6 +24,11 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 - Issue loop: the pre-MR review (Opus) now blocks. A blocker, or a major correctness or security finding, sends the fix back to the coder before the merge request opens; a review that cannot run stays advisory. The per-issue budget goes from $3 to $4.
 - Sidebar: lists All loops plus the loops you pin (turning a loop on pins it, up to five) and any other loop that needs you, so it stays short as loops are added. All loops groups active loops into Code, Communication and Research & content, with a pin button on each loop. The Mac app's Loops menu shows the same list.
 
+### Security
+
+- LoopX's Keychain secrets are locked to LoopX when it is signed with an Apple-issued identity (Apple Development or Developer ID): other programs, including an AI CLI's shell running `security find-generic-password`, get a macOS prompt instead of the secret. Existing items move under the lock the first time a signed build reads them. Unsigned and ad-hoc builds work as before, and `loopx doctor` says which applies. `build_loopx_app.sh --sign IDENTITY` (or `LOOPX_SIGN_IDENTITY`) signs local builds.
+- MCP server secrets are no longer written into the run's MCP config file: such a server starts through `loopx mcp-launch`, which reads them from the Keychain, refuses a changed command, and drops inherited variables such as `NODE_OPTIONS` and proxy settings.
+
 ### Fixed
 
 - Agents page: the Up next and Recent headings and the empty-section messages ("Nothing is running", "Nothing is waiting", "No runs yet") are now translated into Japanese, Chinese and French.

@@ -70,6 +70,23 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// HMAC-SHA256 (RFC 2104).
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+    let mut block = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        block[..32].copy_from_slice(&sha256(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let pad = |byte: u8| block.iter().map(|b| b ^ byte).collect::<Vec<u8>>();
+    let mut inner = pad(0x36);
+    inner.extend_from_slice(message);
+    let mut outer = pad(0x5c);
+    outer.extend_from_slice(&sha256(&inner));
+    sha256(&outer)
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -117,6 +134,22 @@ pub fn random_bytes(n: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hmac_matches_rfc_4231_vectors() {
+        assert_eq!(
+            hex(&hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        let long_key = [0xaa_u8; 131];
+        assert_eq!(
+            hex(&hmac_sha256(
+                &long_key,
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+    }
 
     #[test]
     fn sha256_known_vectors() {

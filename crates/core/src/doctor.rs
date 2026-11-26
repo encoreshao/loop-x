@@ -25,6 +25,8 @@ pub struct Env {
     pub loop_home: PathBuf,
     /// A `PATH`-style, colon-separated list of directories.
     pub path: String,
+    /// `keychain::locked_to_this_app()`.
+    pub keychain_locked: bool,
 }
 
 impl Env {
@@ -41,6 +43,7 @@ impl Env {
             home,
             loop_home,
             path,
+            keychain_locked: crate::keychain::locked_to_this_app(),
         }
     }
 }
@@ -248,6 +251,7 @@ pub fn check(env: &Env) -> Value {
         "config": { "projects": projects, "loops": loops, "topics": topics },
         "backend": backend,
         "scheduler": scheduler,
+        "keychain": {"locked": env.keychain_locked},
         "next_steps": steps,
     })
 }
@@ -304,6 +308,11 @@ pub fn render(report: &Value) -> String {
         mark(flag(report, "/gitlab_skill/installed")),
         report["gitlab_skill"]["path"].as_str().unwrap_or_default()
     ));
+    if flag(report, "/keychain/locked") {
+        s.push_str("  [ok     ] Keychain: only LoopX can read its secrets\n");
+    } else {
+        s.push_str("  [OPEN   ] Keychain: any program running as you can read LoopX's secrets (this build is not signed with an Apple-issued identity)\n");
+    }
     s.push_str("\nLoop config\n");
     for (label, key) in [
         ("projects.json", "projects"),
@@ -389,8 +398,29 @@ mod tests {
             loop_home: home.join(".loopx"),
             home,
             path: bin.display().to_string(),
+            keychain_locked: false,
         };
         Fx { _t: t, env, bin }
+    }
+
+    #[test]
+    fn says_whether_the_keychain_is_locked_to_loopx() {
+        let mut f = fx();
+        let open = render(&check(&f.env));
+        assert!(
+            open.contains(
+                "[OPEN   ] Keychain: any program running as you can read LoopX's secrets"
+            ),
+            "{open}"
+        );
+        f.env.keychain_locked = true;
+        let r = check(&f.env);
+        assert_eq!(r["keychain"]["locked"], true);
+        assert!(
+            render(&r).contains("[ok     ] Keychain: only LoopX can read its secrets"),
+            "{}",
+            render(&r)
+        );
     }
 
     #[test]

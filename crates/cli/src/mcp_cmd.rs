@@ -48,6 +48,35 @@ impl Ctx {
             toolchains: self.toolchains.clone(),
             launch_path: self.launch_path.clone(),
             tmp_root: std::env::temp_dir(),
+            launcher: std::env::current_exe().unwrap_or_default(),
+            launch_keys: Arc::new(keychain::MemoryStore::new(mcp_run::LAUNCH_KEY_SERVICE)),
+        }
+    }
+}
+
+/// `loopx mcp-launch <spec> <sig>`: becomes the MCP server the spec names, with
+/// its secrets from the Keychain and no other inherited environment.
+pub fn launch(args: &[String]) -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let mut argv = vec![mcp_run::LAUNCH_SUBCOMMAND.to_string()];
+    argv.extend_from_slice(args);
+    let env = Env::real(&loopx_core::config::home_dir());
+    match mcp_run::prepare_launch(&argv, &env, &|k| std::env::var(k).ok()) {
+        Ok(p) => {
+            let err = std::process::Command::new(&p.command)
+                .args(&p.args)
+                .env_clear()
+                .envs(&p.env)
+                .exec();
+            eprintln!(
+                "loopx mcp-launch: cannot start {}: {err}",
+                p.command.display()
+            );
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("loopx mcp-launch: {e}");
+            ExitCode::from(2)
         }
     }
 }
