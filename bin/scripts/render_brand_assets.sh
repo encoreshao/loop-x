@@ -17,6 +17,7 @@ set -euo pipefail
 #   assets/brand/AppIcon.iconset                every macOS size, 16-1024px (build_loopx_app.sh -> AppIcon.icns)
 #   assets/favicon.ico, crates/server/assets/favicon.ico   16-64px, the icon tile without the icon-grid padding
 #   crates/server/assets/brand/{mark,name,name-light}.png  what the dashboard serves under /brand/
+#   assets/brand/start/{mark,name,name-light}.png  the Mac app's start screen, at 2x its largest on-screen size
 #
 # Needs ImageMagick (`brew install imagemagick`). Rerun it after replacing a master and commit the
 # outputs; the golden favicon snapshot changes with the favicon (copy crates/server/assets/favicon.ico
@@ -86,4 +87,11 @@ for name in name name-light; do
   magick "$BRAND/$name.png" -filter Lanczos -resize x160 -strip "PNG32:$SERVED/$name.png"
 done
 
-echo "==> rendered app-icon.png, AppIcon.iconset ($(ls "$ICONSET" | wc -l | tr -d ' ') sizes), favicon.ico and the dashboard's /brand images"
+START="$BRAND/start"
+mkdir -p "$START"
+magick "$BRAND/mark.png" -background none -filter Lanczos -resize 640x -strip "PNG32:$START/mark.png"
+for name in name name-light; do
+  magick "$BRAND/$name.png" -background none -filter Lanczos -resize 520x -strip "PNG32:$START/$name.png"
+done
+
+echo "==> rendered app-icon.png, AppIcon.iconset ($(ls "$ICONSET" | wc -l | tr -d ' ') sizes), favicon.ico, the dashboard's /brand images and the start screen's images"

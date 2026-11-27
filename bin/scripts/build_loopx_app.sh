@@ -105,10 +105,10 @@ elif [ -f "$ICON_SRC" ]; then
 fi
 
 # The start screen's logo and name images (LogoSVG.swift reads them from Resources).
-BRAND_SERVED="$LOOP_DIR/crates/server/assets/brand"
-[ -f "$ICON_SET_SRC/icon_256x256@2x.png" ] && cp "$ICON_SET_SRC/icon_256x256@2x.png" "$OUT/Contents/Resources/brand-mark.png"
-[ -f "$BRAND_SERVED/name.png" ] && cp "$BRAND_SERVED/name.png" "$OUT/Contents/Resources/brand-name.png"
-[ -f "$BRAND_SERVED/name-light.png" ] && cp "$BRAND_SERVED/name-light.png" "$OUT/Contents/Resources/brand-name-light.png"
+BRAND_START="$LOOP_DIR/assets/brand/start"
+[ -f "$BRAND_START/mark.png" ] && cp "$BRAND_START/mark.png" "$OUT/Contents/Resources/brand-mark.png"
+[ -f "$BRAND_START/name.png" ] && cp "$BRAND_START/name.png" "$OUT/Contents/Resources/brand-name.png"
+[ -f "$BRAND_START/name-light.png" ] && cp "$BRAND_START/name-light.png" "$OUT/Contents/Resources/brand-name-light.png"
 
 SPARKLE_KEYS=""
 if [ -n "${SPARKLE_FEED_URL:-}" ] && [ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]; then

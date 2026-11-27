@@ -29,6 +29,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- Mac app start screen: a larger LoopX logo, the name under it and one line, "Autonomous agents, human in the loop.", in place of the headline and paragraph. It follows the Mac's light or dark appearance, and the images are rendered sharp for Retina displays.
 - The cache hit rate (`loopx cost`, Insights › Cost) now counts tokens written to the cache as input, so it is no longer overstated.
 - Issue loop: a fix waiting for approval before its merge request no longer holds the run. The run parks the fix and ends, and within a minute of your decision a short run of that issue opens the MR, sends your requested changes back to the agent, or escalates. Approvals now wait up to 7 days by default instead of 30 minutes (`approval_timeout_seconds` still overrides it), Telegram buttons keep working with no run alive, and the run report lists the issue under "Waiting for your approval".
 - Harness › Gates explains itself: checks are split into blocking (lint and tests, code review) and advisory (browser, accessibility, dependency audit, secret scan), every number says what it counts, and Verification mode lists only loops that run checks, with the checks they run.

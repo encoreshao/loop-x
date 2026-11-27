@@ -27,7 +27,7 @@ import Testing
         let h = html()
         #expect(h.contains("#f5f5f7") && h.contains("#0a84ff"))
         #expect(h.contains("@media(prefers-color-scheme:dark)"))
-        #expect(h.contains("#1b1530") && h.contains("class='halo'") && h.contains("class='sheen'"))
+        #expect(h.contains("#1d1640") && h.contains("class='halo'") && h.contains("class='sheen'"))
         // The sheen only ever lights the mark itself: it is masked to the mark's own shape.
         #expect(h.contains("url('\(Self.mark)')"))
     }
@@ -85,52 +85,28 @@ import Testing
 
     @Test func theMarkIsLargeAndShrinksOnlyInAShortWindow() {
         let h = html()
-        #expect(h.contains("--mark:min(220px,32vh)"))
+        #expect(h.contains("--mark:min(320px,36vh)"))
         #expect(h.components(separatedBy: "--mark:").count - 1 == 1, "one size for both modes")
     }
 
-    @Test func bothModesShareOneLayoutWithTheTaglines() {
+    @Test func markThenNameThenOneTaglineThenTheLoader() {
         let h = html()
-        #expect(h.contains("<p class='line'>Agents handle the busywork.<br>You do what matters.</p>"))
-        #expect(h.contains("<p class='sub'>LoopX runs scheduled AI loops on your Mac that work through issues, email and meetings, then hand you the result to approve. <b>Nothing ships without you.</b></p>"))
-        // Dark mode keeps the same column: the status is not pinned elsewhere, no extra dot.
-        #expect(!h.contains("position:fixed;bottom:44px") && !h.contains("class='dot'"))
-        // Order: mark, name, the two lines, then the bar and status.
-        let order = ["class='stage'", "<h1>", "class='line'", "class='sub'", "class='bar'"].map { h.range(of: $0)!.lowerBound }
+        #expect(h.contains("<p class='tag'>Autonomous agents, human in the loop.</p>"))
+        for old in ["class='line'", "class='sub'", "busywork", "Nothing ships without you"] {
+            #expect(!h.contains(old), "\(old) is gone")
+        }
+        let order = ["class='stage'", "<h1>", "class='tag'", "class='bar'"].map { h.range(of: $0)!.lowerBound }
         #expect(order == order.sorted())
     }
 
-    @Test func theHeadlineLeadsAndEachGroupHasItsOwnSpace() {
+    @Test func theNameIsAFullWordmarkAndTheTaglineCarriesTheGradient() {
         let h = html()
         let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
-        // The headline is the largest text on the page, well above the 14px subtitle.
-        #expect(rule(".line").contains("font-size:var(--title)"))
-        #expect(h.contains("--title:clamp(30px,6vh,44px)"))
-        // Spacing is set per group (mark, name, headline, loader), not one flat gap.
-        #expect(rule("body").contains("gap:0"))
-        for sel in [".stage", "h1", ".line", ".bar"] {
+        #expect(h.contains("h1 .brand-name{display:block;width:var(--name)"))
+        #expect(rule(".tag").contains("background-clip:text") && rule(".tag").contains("var(--grad)"))
+        for sel in [".stage", "h1", ".bar"] {
             #expect(rule(sel).contains("margin"), "\(sel) sets its own spacing")
         }
-    }
-
-    @Test func theTaglinesHaveRoomToBreathe() {
-        let h = html()
-        let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
-        #expect(rule(".line").contains("line-height:1.3"))
-        #expect(rule(".sub").contains("line-height:1.6"))
-        #expect(rule(".sub").contains("margin:var(--gap-s) auto 0"))
-        #expect(rule(".sub").contains("max-width:"), "the subtitle wraps into even lines")
-    }
-
-    @Test func nameHeadlineAndSubtitleEachHaveTheirOwnStyle() {
-        let h = html()
-        let rule = { (sel: String) in h.components(separatedBy: "\n\(sel){")[1].components(separatedBy: "}")[0] }
-        // The name is a small signature: spaced capitals as text, a short wordmark as images.
-        #expect(rule("h1").contains("text-transform:uppercase") && rule("h1").contains("letter-spacing:.3em"))
-        #expect(h.contains("h1 .brand-name{display:block;height:30px"))
-        // The headline carries the brand gradient; the subtitle stays quiet with its keywords in ink.
-        #expect(rule(".line").contains("background-clip:text") && rule(".line").contains("var(--grad)"))
-        #expect(rule(".sub b").contains("color:var(--fg)"))
     }
 
     @Test func theMarkStandsOutFromTheLightBackground() {
