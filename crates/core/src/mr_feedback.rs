@@ -2132,7 +2132,12 @@ impl RoundDeps {
             invoke,
             pusher: Box::new(crate::issue_runner::real_pusher),
             notifier: Box::new(move |m: &str| {
-                crate::runner_util::notify_slack_best_effort(m, None, bundle.as_deref());
+                crate::runner_util::notify_slack_best_effort(
+                    m,
+                    None,
+                    bundle.as_deref(),
+                    crate::outbox::Urgency::Urgent,
+                );
             }),
             verify,
             workspace: Box::new(GitWorkspace {

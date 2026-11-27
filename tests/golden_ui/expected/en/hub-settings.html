@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:c7d17231c2440ad2--></style>
+<style><!--@blob:8b24be24fe5131f3--></style>
 <script><!--@blob:b706052092fa077c--></script>
 </head>
 <body>
@@ -202,7 +202,10 @@
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <button type='submit' class='btn btn-neutral'>Send a sample report</button>
 </form>
-</div>
+</div><h3>Quiet hours</h3>
+<p class='section-subtitle'>Routine messages sent during these hours wait, then go out together as one message per channel when they end. Anything that needs you, such as an approval or an escalation, still goes out at once.</p>
+<form method='post' action='/notifications/quiet-hours' class='quiet-hours-form'><input type='hidden' name='csrf_token' value="golden-csrf-token"><label class='md-checkbox quiet-hours-switch'><input type='checkbox' name='enabled'> On</label><label class='quiet-hours-time'>From<input type='time' name='start' value='22:00' required></label><label class='quiet-hours-time'>Until<input type='time' name='end' value='08:00' required></label><button type='submit' class='btn btn-neutral'>Save</button></form><h3>Waiting to send</h3>
+<p class='section-subtitle'>Nothing is waiting to be sent.</p>
 </section>
 
 <section class="card block-kit-card">

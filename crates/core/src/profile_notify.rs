@@ -440,8 +440,8 @@ pub fn webhook_configured(config: &Path) -> bool {
 
 /// The production sender: the default webhook in `config`, the selected message
 /// template, posted from a detached thread with a [`POST_TIMEOUT`], so a slow
-/// Slack never holds up the job. Returns `false` at once, sending nothing, when
-/// no webhook is configured.
+/// Slack never holds up the job; what cannot go out now goes to the outbox.
+/// Returns `false` at once, sending nothing, when no webhook is configured.
 pub fn slack_sender(config: PathBuf) -> Notifier {
     Arc::new(move |r: &Report| {
         if !webhook_configured(&config) {
@@ -452,10 +452,17 @@ pub fn slack_sender(config: PathBuf) -> Notifier {
             .name("profile-slack".into())
             .spawn(move || {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::slack_report::send_with(&r, None, &config, &|url, text, blocks| {
+                    let post = |url: &str, text: &str, blocks: Option<&serde_json::Value>| {
                         crate::slack::post_message_bounded(url, text, blocks, POST_TIMEOUT)
                             .map(|_| ())
-                    })
+                    };
+                    let msg = crate::outbox::Outgoing::report(
+                        &r,
+                        crate::slack_report::configured_template_in(&config),
+                        crate::outbox::Target::slack(None),
+                    );
+                    let transport = crate::outbox::webhook_transport(&config, &post);
+                    crate::outbox::Outbox::real().deliver(msg, &transport)
                 }));
             })
             .is_ok()

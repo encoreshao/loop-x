@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Inter:wght@400;500;700&family=Open+Sans:wght@400;500;700&family=Nunito+Sans:wght@400;500;700&family=Source+Sans+3:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-<style><!--@blob:c7d17231c2440ad2--></style>
+<style><!--@blob:8b24be24fe5131f3--></style>
 <script><!--@blob:5fb2fa310a5db417--></script>
 </head>
 <body>
@@ -202,7 +202,10 @@
 <input type='hidden' name='csrf_token' value="golden-csrf-token">
 <button type='submit' class='btn btn-neutral'>发送示例报告</button>
 </form>
-</div>
+</div><h3>免打扰时段</h3>
+<p class='section-subtitle'>在此时段内发送的常规消息会先保留，时段结束时按频道合并为一条发送。需要你处理的消息（如审批或升级）仍会立即发送。</p>
+<form method='post' action='/notifications/quiet-hours' class='quiet-hours-form'><input type='hidden' name='csrf_token' value="golden-csrf-token"><label class='md-checkbox quiet-hours-switch'><input type='checkbox' name='enabled'> 开</label><label class='quiet-hours-time'>开始<input type='time' name='start' value='22:00' required></label><label class='quiet-hours-time'>结束<input type='time' name='end' value='08:00' required></label><button type='submit' class='btn btn-neutral'>保存</button></form><h3>等待发送</h3>
+<p class='section-subtitle'>没有等待发送的消息。</p>
 </section>
 
 <section class="card block-kit-card">

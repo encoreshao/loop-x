@@ -7,8 +7,9 @@
 //! Connectors are injected: a [`ConnectorLoader`] turns an account id into a
 //! [`NotifyConnector`], so the later connectors port plugs in without changes here.
 
+use crate::outbox::Attempt;
 use crate::slack;
-use crate::slack_report::{self, Report, Template};
+use crate::slack_report::{Report, Template};
 use link_flatten::flatten_links;
 use serde_json::Value;
 use std::path::Path;
@@ -28,7 +29,7 @@ pub enum SendError {
 }
 
 impl SendError {
-    fn describe(&self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             SendError::Http(s) => format!("HTTP {s}"),
             SendError::Other(name) => name.clone(),
@@ -143,19 +144,14 @@ pub fn notify(
     loader: ConnectorLoader,
     default_sender: DefaultSender,
 ) -> Vec<NotifyResult> {
-    route(
-        loop_name,
-        loop_lookup,
-        loader,
-        default_sender,
-        &|send, kind| {
-            if kind == "slack" || kind == "webhook" {
-                send(text, blocks)
-            } else {
-                send(&flatten_links(text), blocks)
-            }
-        },
-    )
+    let attempts = [Attempt {
+        text: text.to_string(),
+        blocks: blocks.cloned(),
+    }];
+    targets(loop_name, loop_lookup)
+        .iter()
+        .map(|id| result(id, send_one(id, &attempts, text, loader, default_sender)))
+        .collect()
 }
 
 /// Route a [`Report`] like [`notify`]: Slack and webhook targets get
@@ -169,75 +165,73 @@ pub fn notify_report(
     loader: ConnectorLoader,
     default_sender: DefaultSender,
 ) -> Vec<NotifyResult> {
-    let attempts = slack_report::attempts(report, template);
-    let plain = flatten_links(&slack_report::plain_text(report));
-    route(
-        loop_name,
-        loop_lookup,
-        loader,
-        default_sender,
-        &|send, kind| {
-            if kind != "slack" && kind != "webhook" {
-                return send(&plain, None);
-            }
-            let mut last = Ok(());
-            for attempt in &attempts {
-                last = send(&attempt.text, attempt.blocks.as_ref());
-                if last.is_ok() {
-                    break;
-                }
-            }
-            last
-        },
-    )
+    let msg = crate::outbox::Outgoing::report(report, template, crate::outbox::Target::slack(None));
+    targets(loop_name, loop_lookup)
+        .iter()
+        .map(|id| {
+            result(
+                id,
+                send_one(id, &msg.attempts, &msg.plain, loader, default_sender),
+            )
+        })
+        .collect()
 }
 
-type Send<'a> = &'a dyn Fn(&str, Option<&Value>) -> Result<(), SendError>;
-
-/// Every target of `loop_name` (or the default sender), each handed to
-/// `deliver` with its send function and connector kind.
-fn route(
-    loop_name: &str,
-    loop_lookup: LoopLookup,
-    loader: ConnectorLoader,
-    default_sender: DefaultSender,
-    deliver: &dyn Fn(Send, &str) -> Result<(), SendError>,
-) -> Vec<NotifyResult> {
-    let result = |id: &str, sent: Result<(), SendError>| match sent {
+fn result(id: &str, sent: Result<(), SendError>) -> NotifyResult {
+    match sent {
         Ok(()) => (id.to_string(), true, "sent".to_string()),
         Err(e) => (id.to_string(), false, e.describe()),
-    };
+    }
+}
+
+/// The account ids `loop_name` notifies, or [`DEFAULT_ID`] when its `notify`
+/// field is missing, not a list or empty.
+pub fn targets(loop_name: &str, loop_lookup: LoopLookup) -> Vec<String> {
     let ids: Option<Vec<Value>> = loop_lookup(loop_name)
         .ok()
         .and_then(|l| l.get("notify").and_then(Value::as_array).cloned())
         .filter(|a| !a.is_empty());
-    let Some(ids) = ids else {
-        return vec![result(DEFAULT_ID, deliver(default_sender, "slack"))];
-    };
-    ids.iter()
-        .map(|id| {
-            let account_id = match id {
+    match ids {
+        None => vec![DEFAULT_ID.to_string()],
+        Some(ids) => ids
+            .iter()
+            .map(|id| match id {
                 Value::String(s) => s.clone(),
                 other => crate::pydumps::py_str(other),
-            };
-            let conn = match loader(&account_id) {
-                Ok(c) => c,
-                Err(e) => {
-                    let message = match e {
-                        LoadError::Unknown => "unknown connector".to_string(),
-                        LoadError::Config => "connector config error".to_string(),
-                        LoadError::Other(name) => name,
-                    };
-                    return (account_id, false, message);
-                }
-            };
-            if !conn.capabilities().iter().any(|c| c == "notify") {
-                return (account_id, false, "not a notify connector".to_string());
-            }
-            let send = |t: &str, b: Option<&Value>| conn.send(t, b);
-            result(&account_id, deliver(&send, &conn.kind()))
+            })
+            .collect(),
+    }
+}
+
+/// Send to one target: [`DEFAULT_ID`] through `default_sender`, anything else
+/// through its connector. Slack and webhook targets get `attempts` in order;
+/// other connectors get `plain` with its links flattened.
+pub fn send_one(
+    id: &str,
+    attempts: &[Attempt],
+    plain: &str,
+    loader: ConnectorLoader,
+    default_sender: DefaultSender,
+) -> Result<(), SendError> {
+    if id == DEFAULT_ID {
+        return crate::outbox::send_attempts(attempts, default_sender);
+    }
+    let conn = loader(id).map_err(|e| {
+        SendError::Other(match e {
+            LoadError::Unknown => "unknown connector".to_string(),
+            LoadError::Config => "connector config error".to_string(),
+            LoadError::Other(name) => name,
         })
-        .collect()
+    })?;
+    if !conn.capabilities().iter().any(|c| c == "notify") {
+        return Err(SendError::Other("not a notify connector".to_string()));
+    }
+    let kind = conn.kind();
+    if kind == "slack" || kind == "webhook" {
+        crate::outbox::send_attempts(attempts, &|t, b| conn.send(t, b))
+    } else {
+        conn.send(&flatten_links(plain), None)
+    }
 }
 
 /// The Block Kit blocks for `notification_key` with `{{message}}` substituted,
@@ -272,6 +266,7 @@ pub fn resolve_blocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::slack_report;
     use serde_json::json;
     use std::cell::RefCell;
     use std::collections::HashMap;

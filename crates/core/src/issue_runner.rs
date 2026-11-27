@@ -19,6 +19,7 @@ use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::{build_verifiers, IssueContext};
 use crate::mcp_run::McpAttach;
+use crate::outbox::Urgency;
 use crate::runner_util::{
     append_unified_log, could_not_start, emit_best_effort, failed_call_cost, head,
     notify_slack_best_effort, parse_envelope, resolved_program, tail, unified_log_path,
@@ -2401,12 +2402,13 @@ pub fn finalize_gated_issue(
 
     let mut bundle: Option<String> = None;
     let mut issue_label = slack_issue_link(alias, issue_iid, None);
-    let send = |bundle: &Option<String>, message: String| match deps.notifier {
+    let send_as = |bundle: &Option<String>, urgency: Urgency, message: String| match deps.notifier {
         Some(n) => n(&message),
         None => {
-            notify_slack_best_effort(&message, None, bundle.as_deref());
+            notify_slack_best_effort(&message, None, bundle.as_deref(), urgency);
         }
     };
+    let send = |bundle: &Option<String>, message: String| send_as(bundle, Urgency::Urgent, message);
     let notify = |bundle: &Option<String>, message: String| {
         if !deps.quiet {
             send(bundle, message);
@@ -2881,10 +2883,13 @@ pub fn finalize_gated_issue(
         Some(n) if n > 0 => setup_fixed_note(n),
         _ => String::new(),
     };
-    notify(
-        &bundle,
-        format!("*Finished* {issue_label}: MR opened \u{2192} {link}{setup_note}"),
-    );
+    if !deps.quiet {
+        send_as(
+            &bundle,
+            Urgency::Routine,
+            format!("*Finished* {issue_label}: MR opened \u{2192} {link}{setup_note}"),
+        );
+    }
     "mr_opened".to_string()
 }
 

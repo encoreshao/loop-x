@@ -185,6 +185,7 @@ fn deps_for(provider: Fake, invoke: Invoker) -> Deps {
         instructions: Some("INSTR".into()),
         max_cost_usd: Some(2.0),
         triage: None,
+        outbox: None,
     }
 }
 
@@ -1028,7 +1029,7 @@ fn digests_are_grouped_by_bundle() {
         slack_bundle: Some("team".into()),
         ..outcome_ok()
     };
-    send_digests(&[a, b], now(), &cfg, &recording_post(&posts));
+    send_digests(&[a, b], now(), &cfg, &recording_post(&posts), None);
     let posts = posts.lock().unwrap();
     assert_eq!(posts.len(), 2);
     assert!(posts[0]
@@ -1058,22 +1059,23 @@ fn a_slack_failure_never_raises_and_a_bound_block_template_still_overrides_the_r
     let reject_blocks: SlackPost = Arc::new(move |_, text, blocks| {
         c.lock().unwrap().push((text.to_string(), blocks.cloned()));
         if blocks.is_some() {
-            Err("invalid_blocks".into())
+            Err("HTTP Error 400".into())
         } else {
             Ok(())
         }
     });
-    send_digests(&[outcome_ok()], now(), &cfg, &reject_blocks);
+    send_digests(&[outcome_ok()], now(), &cfg, &reject_blocks, None);
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
     assert!(calls[0].1.is_some() && calls[1].1.is_none());
     let always_fail: SlackPost = Arc::new(|_, _, _| Err("down".into()));
-    send_digests(&[outcome_ok()], now(), &cfg, &always_fail);
+    send_digests(&[outcome_ok()], now(), &cfg, &always_fail, None);
     send_digests(
         &[outcome_ok()],
         now(),
         &d.path().join("missing.json"),
         &always_fail,
+        None,
     );
 }
 

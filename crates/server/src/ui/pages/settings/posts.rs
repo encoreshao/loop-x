@@ -32,6 +32,8 @@ pub fn register(r: &mut Registry) {
     r.post("/notifications/webhook", webhook);
     r.post("/notifications/message-template", message_template);
     r.post("/notifications/message-template/test", message_template_test);
+    r.post("/notifications/quiet-hours", quiet_hours);
+    r.post("/notifications/outbox/clear", outbox_clear);
     r.post("/notifications/block-templates", block_template_save);
     r.post("/notifications/block-templates/:name/delete", block_template_delete);
     r.post("/notifications/block-templates/:name/test", block_template_test);
@@ -378,6 +380,35 @@ fn message_template_test(ctx: &UiCtx) -> UiResponse {
     outcome(ctx, store::send_sample_report(&slack_config(ctx), &post), NOTIFICATIONS)
 }
 
+fn quiet_hours(ctx: &UiCtx) -> UiResponse {
+    use loopx_core::outbox;
+    let form = ctx.form();
+    let path = outbox::settings_path(&ctx.state.home_dir);
+    let quiet = if form.first("enabled").is_some() {
+        let (start, end) = (form.first("start").unwrap_or(""), form.first("end").unwrap_or(""));
+        match outbox::QuietHours::parse(start, end) {
+            Some(q) => Some(q),
+            None => return plain(false, ctx.t("Quiet hours need a start and an end that differ."), NOTIFICATIONS),
+        }
+    } else {
+        None
+    };
+    match outbox::save_quiet_hours(&path, quiet) {
+        Ok(()) if quiet.is_some() => plain(true, ctx.t("Quiet hours saved."), NOTIFICATIONS),
+        Ok(()) => plain(true, ctx.t("Quiet hours are off."), NOTIFICATIONS),
+        Err(e) => plain(false, e.to_string(), NOTIFICATIONS),
+    }
+}
+
+fn outbox_clear(ctx: &UiCtx) -> UiResponse {
+    loopx_core::outbox::Outbox {
+        dir: ctx.state.repo_root.join("outputs").join("outbox"),
+        quiet: None,
+    }
+    .clear_failed();
+    plain(true, ctx.t("Cleared."), NOTIFICATIONS)
+}
+
 fn block_template_save(ctx: &UiCtx) -> UiResponse {
     let form = ctx.form();
     let get = |k: &str| form.first(k).unwrap_or("").to_string();
@@ -622,6 +653,38 @@ mod tests {
         let cfg: Value =
             serde_json::from_str(&std::fs::read_to_string(d.path().join("ai_cli.json")).unwrap()).unwrap();
         assert_eq!(cfg, json!({"cli": "claude"}));
+    }
+
+    #[test]
+    fn the_notifications_tab_sets_quiet_hours_and_shows_what_is_waiting() {
+        use loopx_core::outbox::{Clock, Outbox, Outgoing, QuietHours};
+        let d = tempfile::tempdir().unwrap();
+        let st = UiState::explicit(d.path(), d.path(), d.path(), &d.path().join("update"), "tok", None);
+        let url = "/notifications/quiet-hours";
+        assert_eq!(post(&st, url, "enabled=on&start=22:00&end=08:00").status, 403);
+        assert_eq!(post(&st, url, "csrf_token=tok&enabled=on&start=21:30&end=07:00").status, 303);
+        let path = loopx_core::outbox::settings_path(d.path());
+        assert_eq!(loopx_core::outbox::load_quiet_hours(&path), QuietHours::parse("21:30", "07:00"));
+        let page = || st.registry.dispatch(&st, &UiRequest::get("/settings?tab=notifications")).unwrap().body_text();
+        let p = page();
+        assert!(p.contains("name='enabled' checked") && p.contains("value='21:30'"), "{p}");
+        assert!(p.contains("Nothing is waiting to be sent."), "{p}");
+
+        assert_eq!(post(&st, url, "csrf_token=tok&enabled=on&start=09:00&end=09:00").status, 303);
+        assert_eq!(loopx_core::outbox::load_quiet_hours(&path), QuietHours::parse("21:30", "07:00"));
+        assert_eq!(post(&st, url, "csrf_token=tok&start=21:30&end=07:00").status, 303);
+        assert_eq!(loopx_core::outbox::load_quiet_hours(&path), None);
+
+        let outbox = Outbox { dir: d.path().join("outputs/outbox"), quiet: None };
+        let then = Clock { utc: chrono::Utc::now() - chrono::Duration::days(2), local: chrono::Local::now().naive_local() };
+        let msg = Outgoing::slack_text("hi", None, None).for_loop("inbox-triage-loop");
+        let down = |_: &_, _: &[_], _: &str| Err(loopx_core::loop_notify::SendError::Http(503));
+        outbox.deliver_at(msg, &down, then);
+        outbox.tick_at(&down, Clock::now());
+        let p = page();
+        assert!(p.contains("inbox-triage-loop") && p.contains("not sent after 2 tries (HTTP 503)"), "{p}");
+        assert_eq!(post(&st, "/notifications/outbox/clear", "csrf_token=tok").status, 303);
+        assert!(outbox.records().is_empty());
     }
 
     #[test]

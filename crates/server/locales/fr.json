@@ -2444,5 +2444,17 @@
   "No runs yet": "Aucune exécution pour l'instant",
   "Creating issue": "Création du ticket",
   "Create GitLab issue": "Créer un ticket GitLab",
-  "Creates a GitLab issue, with assignees, labels and @mentions.": "Crée un ticket GitLab, avec responsables, libellés et @mentions."
+  "Creates a GitLab issue, with assignees, labels and @mentions.": "Crée un ticket GitLab, avec responsables, libellés et @mentions.",
+  "Quiet hours": "Heures calmes",
+  "Routine messages sent during these hours wait, then go out together as one message per channel when they end. Anything that needs you, such as an approval or an escalation, still goes out at once.": "Les messages courants envoyés pendant ces heures attendent, puis partent ensemble en un seul message par canal à la fin. Ce qui demande votre intervention, comme une approbation ou une escalade, part tout de suite.",
+  "From": "De",
+  "Until": "À",
+  "Waiting to send": "En attente d'envoi",
+  "Nothing is waiting to be sent.": "Aucun message en attente d'envoi.",
+  "Waiting to be sent: {retrying} to retry, {held} held for quiet hours.": "En attente d'envoi : {retrying} à réessayer, {held} retenus pour les heures calmes.",
+  "not sent after {n} tries ({error})": "non envoyé après {n} tentatives ({error})",
+  "Quiet hours need a start and an end that differ.": "Les heures calmes ont besoin d'un début et d'une fin différents.",
+  "Quiet hours saved.": "Heures calmes enregistrées.",
+  "Quiet hours are off.": "Les heures calmes sont désactivées.",
+  "Cleared.": "Effacé."
 }

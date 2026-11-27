@@ -2444,5 +2444,17 @@
   "No runs yet": "まだ実行はありません",
   "Creating issue": "Issue を作成中",
   "Create GitLab issue": "GitLab Issue を作成",
-  "Creates a GitLab issue, with assignees, labels and @mentions.": "担当者、ラベル、@メンション付きで GitLab Issue を作成します。"
+  "Creates a GitLab issue, with assignees, labels and @mentions.": "担当者、ラベル、@メンション付きで GitLab Issue を作成します。",
+  "Quiet hours": "おやすみ時間",
+  "Routine messages sent during these hours wait, then go out together as one message per channel when they end. Anything that needs you, such as an approval or an escalation, still goes out at once.": "この時間帯に送られる通常のメッセージは保留され、終了時にチャンネルごとに 1 通にまとめて送信されます。承認やエスカレーションなど、あなたの対応が必要なものはすぐに送信されます。",
+  "From": "開始",
+  "Until": "終了",
+  "Waiting to send": "送信待ち",
+  "Nothing is waiting to be sent.": "送信待ちのメッセージはありません。",
+  "Waiting to be sent: {retrying} to retry, {held} held for quiet hours.": "送信待ち: 再試行 {retrying} 件、おやすみ時間で保留 {held} 件。",
+  "not sent after {n} tries ({error})": "{n} 回試しても送信できませんでした ({error})",
+  "Quiet hours need a start and an end that differ.": "おやすみ時間には異なる開始時刻と終了時刻が必要です。",
+  "Quiet hours saved.": "おやすみ時間を保存しました。",
+  "Quiet hours are off.": "おやすみ時間をオフにしました。",
+  "Cleared.": "消去しました。"
 }

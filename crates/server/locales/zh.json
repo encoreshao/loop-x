@@ -2444,5 +2444,17 @@
   "No runs yet": "还没有运行记录",
   "Creating issue": "正在创建议题",
   "Create GitLab issue": "创建 GitLab 议题",
-  "Creates a GitLab issue, with assignees, labels and @mentions.": "创建 GitLab 议题，可设置负责人、标签和 @提及。"
+  "Creates a GitLab issue, with assignees, labels and @mentions.": "创建 GitLab 议题，可设置负责人、标签和 @提及。",
+  "Quiet hours": "免打扰时段",
+  "Routine messages sent during these hours wait, then go out together as one message per channel when they end. Anything that needs you, such as an approval or an escalation, still goes out at once.": "在此时段内发送的常规消息会先保留，时段结束时按频道合并为一条发送。需要你处理的消息（如审批或升级）仍会立即发送。",
+  "From": "开始",
+  "Until": "结束",
+  "Waiting to send": "等待发送",
+  "Nothing is waiting to be sent.": "没有等待发送的消息。",
+  "Waiting to be sent: {retrying} to retry, {held} held for quiet hours.": "等待发送：{retrying} 条待重试，{held} 条因免打扰时段保留。",
+  "not sent after {n} tries ({error})": "尝试 {n} 次后仍未发送（{error}）",
+  "Quiet hours need a start and an end that differ.": "免打扰时段的开始和结束时间必须不同。",
+  "Quiet hours saved.": "免打扰时段已保存。",
+  "Quiet hours are off.": "免打扰时段已关闭。",
+  "Cleared.": "已清除。"
 }

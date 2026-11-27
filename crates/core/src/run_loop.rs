@@ -791,7 +791,10 @@ pub fn run_entry(entry_point: &str, argv: &[String]) -> i32 {
             issue_runner::main(&ctx.clone(), argv, issue_runner::cli_invoker(ctx))
         }
         "bin.topic_monitor_runner" | "topic-loop" => {
-            let ctx = topic_runner::TopicCtx::new(root);
+            let ctx = topic_runner::TopicCtx {
+                outbox: Some(crate::outbox::Outbox::at(&root)),
+                ..topic_runner::TopicCtx::new(root)
+            };
             topic_runner::main(&ctx.clone(), argv, topic_runner::cli_invoker(ctx))
         }
         "bin.inbox_triage_runner" | "inbox-triage-loop" => {

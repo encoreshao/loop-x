@@ -1,11 +1,12 @@
 //! `loopx notify`: post to the loop's Slack incoming webhook.
 
-use loopx_core::{slack, slack_report};
+use loopx_core::outbox::{Delivery, Outbox, Outgoing, Urgency};
+use loopx_core::{connectors_config, slack_report};
 use serde_json::Value;
 use std::process::ExitCode;
 
 const USAGE: &str =
-    "Usage: loopx notify [--bundle=<name>] [--blocks=<json blocks array>] <message text>";
+    "Usage: loopx notify [--bundle=<name>] [--blocks=<json blocks array>] [--urgent] <message text>";
 
 pub fn run(args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -18,9 +19,21 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     match send(args) {
-        Ok(status) => {
-            println!("Slack response status: {status}");
+        Ok(Delivery::Sent) => {
+            println!("Sent.");
             ExitCode::SUCCESS
+        }
+        Ok(Delivery::Held) => {
+            println!("Held for quiet hours: it goes out when they end.");
+            ExitCode::SUCCESS
+        }
+        Ok(Delivery::Retrying(why)) => {
+            println!("Not sent yet ({why}): LoopX retries it, so do not send it again.");
+            ExitCode::SUCCESS
+        }
+        Ok(Delivery::Failed(why)) => {
+            eprintln!("Slack notification failed: {why}");
+            ExitCode::from(1)
         }
         Err(msg) => {
             eprintln!("{msg}");
@@ -29,9 +42,10 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
-fn send(args: &[String]) -> Result<u16, String> {
+fn send(args: &[String]) -> Result<Delivery, String> {
     let mut bundle = None;
     let mut blocks: Option<Value> = None;
+    let mut urgency = Urgency::Routine;
     let mut positional = Vec::new();
     for arg in args {
         if let Some(name) = arg.strip_prefix("--bundle=") {
@@ -40,6 +54,8 @@ fn send(args: &[String]) -> Result<u16, String> {
             blocks = Some(
                 serde_json::from_str(json).map_err(|e| format!("Invalid --blocks JSON: {e}"))?,
             );
+        } else if arg == "--urgent" {
+            urgency = Urgency::Urgent;
         } else {
             positional.push(arg.as_str());
         }
@@ -47,8 +63,11 @@ fn send(args: &[String]) -> Result<u16, String> {
     let Some(text) = positional.first() else {
         return Err(USAGE.to_string());
     };
-    let url = slack::load_webhook_url(&slack::default_config_path(), bundle)?;
-    slack::post_message(&url, text, blocks.as_ref())
+    let msg = Outgoing {
+        urgency,
+        ..Outgoing::slack_text(text, blocks, bundle)
+    };
+    Ok(Outbox::real().deliver(msg, &connectors_config::live_send))
 }
 
 fn held(hold: Option<&str>) -> bool {

@@ -176,6 +176,8 @@ pub struct TopicCtx {
     pub slack_config: PathBuf,
     pub topics_config: PathBuf,
     pub slack_post: fn(&str, &str, Option<&Value>) -> Result<(), String>,
+    /// Takes over a report that cannot go out now; `None` only reports it.
+    pub outbox: Option<crate::outbox::Outbox>,
 }
 
 fn post_to_slack(url: &str, text: &str, blocks: Option<&Value>) -> Result<(), String> {
@@ -197,6 +199,7 @@ impl TopicCtx {
             slack_config: slack::default_config_path(),
             topics_config: topics::default_config_path(),
             slack_post: post_to_slack,
+            outbox: None,
         }
     }
 
@@ -547,7 +550,14 @@ fn send_topic_report(
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let report = topic_report::build(label, &date, briefing, ending, elapsed_seconds);
     let post = ctx.slack_post;
-    if !slack_report::send_with(&report, bundle, &ctx.slack_config, &post) {
+    let msg = crate::outbox::Outgoing::report(
+        &report,
+        slack_report::configured_template_in(&ctx.slack_config),
+        crate::outbox::Target::slack(bundle),
+    )
+    .for_loop("topic-loop");
+    let transport = crate::outbox::webhook_transport(&ctx.slack_config, &post);
+    if !crate::outbox::send(ctx.outbox.as_ref(), msg, &transport).handled() {
         append_unified_log(
             &format!("topic '{name}': its Slack report was not sent"),
             &ctx.unified_log,

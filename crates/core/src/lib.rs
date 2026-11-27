@@ -111,6 +111,7 @@ pub mod needs_you;
 pub mod node_env;
 pub mod oauth;
 pub mod office_stage;
+pub mod outbox;
 pub mod parallel;
 pub mod policy;
 pub mod pre_review;

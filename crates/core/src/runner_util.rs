@@ -171,24 +171,31 @@ pub fn emit_best_effort(
 
 /// A Slack alert nobody is watching for: a bound Block Kit template is used when
 /// `notification_key` has one, and if Slack rejects it the plain text is retried
-/// once so the alert itself still has a chance. Returns whether it was sent.
+/// once. What cannot go out now goes to the outbox. Returns whether it was sent
+/// or will be.
 pub fn notify_slack_best_effort(
     message: &str,
     notification_key: Option<&str>,
     bundle: Option<&str>,
+    urgency: crate::outbox::Urgency,
 ) -> bool {
-    notify_slack_with(
-        message,
-        notification_key,
-        bundle,
-        &slack::default_config_path(),
-        &|url, text, blocks| slack::post_message(url, text, blocks).map(|_| ()),
-    )
+    let blocks =
+        loop_notify::resolve_blocks(notification_key, message, &slack::default_config_path());
+    let msg = crate::outbox::Outgoing {
+        urgency,
+        ..crate::outbox::Outgoing::slack_text(message, blocks, bundle)
+    };
+    let delivery = crate::outbox::Outbox::real().deliver(msg, &crate::connectors_config::live_send);
+    if let crate::outbox::Delivery::Failed(e) = &delivery {
+        eprintln!("loopx: Slack notification failed: {e}");
+    }
+    delivery.handled()
 }
 
 type Poster<'a> = dyn Fn(&str, &str, Option<&Value>) -> Result<(), String> + 'a;
 
-/// [`notify_slack_best_effort`] with the config path and the HTTP post injected.
+/// [`notify_slack_best_effort`] sent once, with the config path and the HTTP
+/// post injected and no outbox.
 pub fn notify_slack_with(
     message: &str,
     notification_key: Option<&str>,
@@ -197,29 +204,9 @@ pub fn notify_slack_with(
     post: &Poster<'_>,
 ) -> bool {
     let blocks = loop_notify::resolve_blocks(notification_key, message, config_path);
-    let url = match slack::load_webhook_url(config_path, bundle) {
-        Ok(url) => url,
-        Err(e) => {
-            eprintln!("loopx: Slack notification failed: {e}");
-            return false;
-        }
-    };
-    match post(&url, message, blocks.as_ref()) {
-        Ok(()) => true,
-        Err(e) if blocks.is_some() => match post(&url, message, None) {
-            Ok(()) => true,
-            Err(retry) => {
-                eprintln!(
-                    "loopx: Slack notification failed even without blocks: {retry} (first: {e})"
-                );
-                false
-            }
-        },
-        Err(e) => {
-            eprintln!("loopx: Slack notification failed: {e}");
-            false
-        }
-    }
+    let msg = crate::outbox::Outgoing::slack_text(message, blocks, bundle);
+    let transport = crate::outbox::webhook_transport(config_path, post);
+    crate::outbox::send(None, msg, &transport).handled()
 }
 
 /// The Claude CLI's JSON result object, or `None` when absent/unparseable.
@@ -359,7 +346,7 @@ mod tests {
         let post = |_: &str, text: &str, blocks: Option<&Value>| {
             calls.borrow_mut().push((text.to_string(), blocks.cloned()));
             if blocks.is_some() {
-                Err("invalid_blocks".to_string())
+                Err("HTTP Error 400".to_string())
             } else {
                 Ok(())
             }

@@ -199,7 +199,12 @@ pub fn attempts(report: &Report, template: Template) -> Vec<Rendered> {
 
 /// The template picked in `~/.slack/config.json`.
 pub fn configured_template() -> Template {
-    let config = std::fs::read_to_string(crate::slack::default_config_path())
+    configured_template_in(&crate::slack::default_config_path())
+}
+
+/// The template picked in the Slack config at `path`.
+pub fn configured_template_in(path: &Path) -> Template {
+    let config = std::fs::read_to_string(path)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .unwrap_or(Value::Null);

@@ -16,6 +16,7 @@ use crate::connectors::{
     NotifyAdapter, UreqClient,
 };
 use crate::loop_notify::{self, LoadError, NotifyResult, SendError};
+use crate::outbox::{Attempt, Outbox, Outgoing, Target, Urgency};
 use crate::{config, keychain, loops_config, pydumps, pyjson, runner_util, slack};
 use chrono::Utc;
 use serde_json::{json, Map, Value};
@@ -793,70 +794,100 @@ pub fn slack_error_class(msg: &str) -> String {
 }
 
 /// `notify.notify(loop_name, text, blocks)` against the real registry,
-/// connectors and default Slack webhook. Never fails.
+/// connectors and default Slack webhook, through the outbox. Never fails.
 pub fn notify_loop(loop_name: &str, text: &str, blocks: Option<&Value>) -> Vec<NotifyResult> {
-    notify_loop_with(loop_name, text, blocks, &ConfigConnectors::real())
+    let msg = Outgoing {
+        loop_name: Some(loop_name.to_string()),
+        target: Target::slack(None),
+        attempts: vec![Attempt {
+            text: text.to_string(),
+            blocks: blocks.cloned(),
+        }],
+        plain: text.to_string(),
+        urgency: Urgency::Routine,
+    };
+    deliver_to_loop(loop_name, msg, &Outbox::real(), &live_send)
 }
 
-/// [`notify_loop`] with the connector source injected.
-pub fn notify_loop_with(
-    loop_name: &str,
-    text: &str,
-    blocks: Option<&Value>,
-    source: &dyn ConnectorSource,
-) -> Vec<NotifyResult> {
-    let lookup = |name: &str| -> Result<Value, String> {
-        loops_config::get_loop(name, &loops_config::default_config_path(), None)
-            .map_err(|e| e.to_string())
-    };
-    let loader = |id: &str| -> Result<Box<dyn loop_notify::NotifyConnector>, LoadError> {
-        source
-            .load(id)
-            .map(|c| Box::new(NotifyAdapter(c)) as Box<dyn loop_notify::NotifyConnector>)
-            .map_err(LoadError::from)
-    };
-    let sender = |text: &str, blocks: Option<&Value>| -> Result<(), SendError> {
-        let url = slack::load_webhook_url(&slack::default_config_path(), None)
-            .map_err(|m| SendError::Other(slack_error_class(&m)))?;
-        slack::post_message(&url, text, blocks)
-            .map(|_| ())
-            .map_err(|m| SendError::Other(slack_error_class(&m)))
-    };
-    loop_notify::notify(loop_name, text, blocks, &lookup, &loader, &sender)
-}
-
-/// [`loop_notify::notify_report`] against the real registry, connectors and
-/// default Slack webhook, in the message template picked in Settings.
+/// [`notify_loop`] for a run report, in the message template picked in Settings.
 pub fn notify_loop_report(
     loop_name: &str,
     report: &crate::slack_report::Report,
 ) -> Vec<NotifyResult> {
-    let source = ConfigConnectors::real();
+    let msg = Outgoing::report(
+        report,
+        crate::slack_report::configured_template(),
+        Target::slack(None),
+    )
+    .for_loop(loop_name);
+    deliver_to_loop(loop_name, msg, &Outbox::real(), &live_send)
+}
+
+/// `msg` to each of `loop_name`'s targets, each one retried on its own.
+pub fn deliver_to_loop(
+    loop_name: &str,
+    msg: Outgoing,
+    outbox: &Outbox,
+    transport: crate::outbox::Transport,
+) -> Vec<NotifyResult> {
     let lookup = |name: &str| -> Result<Value, String> {
         loops_config::get_loop(name, &loops_config::default_config_path(), None)
             .map_err(|e| e.to_string())
     };
+    loop_notify::targets(loop_name, &lookup)
+        .iter()
+        .map(|id| {
+            let target = if id == loop_notify::DEFAULT_ID {
+                Target::slack(None)
+            } else {
+                Target::connector(id)
+            };
+            let one = Outgoing {
+                target,
+                ..msg.clone()
+            };
+            outbox.deliver(one, transport).result(id)
+        })
+        .collect()
+}
+
+/// How long one live send may take before it is given up.
+const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The real transport: the Slack webhooks in `~/.slack/config.json` and the
+/// configured connectors.
+pub fn live_send(target: &Target, attempts: &[Attempt], plain: &str) -> Result<(), SendError> {
+    live_send_with(
+        &ConfigConnectors::real(),
+        &slack::default_config_path(),
+        target,
+        attempts,
+        plain,
+    )
+}
+
+/// [`live_send`] with the connector source and Slack config injected.
+pub fn live_send_with(
+    source: &dyn ConnectorSource,
+    slack_config: &Path,
+    target: &Target,
+    attempts: &[Attempt],
+    plain: &str,
+) -> Result<(), SendError> {
+    let post = |url: &str, text: &str, blocks: Option<&Value>| {
+        slack::post_message_bounded(url, text, blocks, SEND_TIMEOUT).map(|_| ())
+    };
+    if target.account == loop_notify::DEFAULT_ID {
+        return crate::outbox::webhook_transport(slack_config, &post)(target, attempts, plain);
+    }
     let loader = |id: &str| -> Result<Box<dyn loop_notify::NotifyConnector>, LoadError> {
         source
             .load(id)
             .map(|c| Box::new(NotifyAdapter(c)) as Box<dyn loop_notify::NotifyConnector>)
             .map_err(LoadError::from)
     };
-    let sender = |text: &str, blocks: Option<&Value>| -> Result<(), SendError> {
-        let url = slack::load_webhook_url(&slack::default_config_path(), None)
-            .map_err(|m| SendError::Other(slack_error_class(&m)))?;
-        slack::post_message(&url, text, blocks)
-            .map(|_| ())
-            .map_err(|m| SendError::Other(slack_error_class(&m)))
-    };
-    loop_notify::notify_report(
-        loop_name,
-        report,
-        crate::slack_report::configured_template(),
-        &lookup,
-        &loader,
-        &sender,
-    )
+    let no_default = |_: &str, _: Option<&Value>| Err(SendError::Other("unknown connector".into()));
+    loop_notify::send_one(&target.account, attempts, plain, &loader, &no_default)
 }
 
 // ---- connector test results ---------------------------------------------------------

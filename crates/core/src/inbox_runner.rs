@@ -26,7 +26,7 @@ use crate::mail_auth;
 use crate::mail_http::MailError;
 use crate::mail_provider::{self, MailMessage, MailProvider, RefreshFn};
 use crate::mail_time::isoformat_utc;
-use crate::runner_util::{append_unified_log, notify_slack_with, repo_root, unified_log_path};
+use crate::runner_util::{append_unified_log, repo_root, unified_log_path};
 use crate::{ai_cli_config, config, content_archive, cost, slack, slack_report};
 use chrono::{DateTime, Local, Utc};
 use serde_json::{json, Map, Value};
@@ -162,6 +162,8 @@ pub struct Deps {
     pub max_cost_usd: Option<f64>,
     /// Replaces the whole per-inbox triage (tests); `None` is the real thing.
     pub triage: Option<TriageFn>,
+    /// Takes over a digest that cannot go out now; `None` only reports it.
+    pub outbox: Option<crate::outbox::Outbox>,
 }
 
 /// `$LOOPX_GMAIL_BASE_URL` / `$LOOPX_GRAPH_BASE_URL` point the providers at a
@@ -199,6 +201,7 @@ impl Deps {
             instructions: None,
             max_cost_usd,
             triage: None,
+            outbox: Some(crate::outbox::Outbox::at(&ctx.repo_root)),
         }
     }
 }
@@ -948,7 +951,9 @@ pub fn send_digests(
     now: DateTime<Utc>,
     slack_config: &Path,
     post: &SlackPost,
+    outbox: Option<&crate::outbox::Outbox>,
 ) {
+    use crate::outbox::{Outgoing, Target};
     let mut groups: Vec<(Option<String>, Vec<&Outcome>)> = Vec::new();
     for o in outcomes {
         match groups.iter_mut().find(|(b, _)| *b == o.slack_bundle) {
@@ -956,21 +961,22 @@ pub fn send_digests(
             None => groups.push((o.slack_bundle.clone(), vec![o])),
         }
     }
+    let post = |u: &str, t: &str, b: Option<&Value>| post(u, t, b);
+    let transport = crate::outbox::webhook_transport(slack_config, &post);
     for (bundle, group) in groups {
         let report = digest_report(&group, now);
         let text = slack_report::plain_text(&report);
-        if crate::loop_notify::resolve_blocks(Some(DIGEST_KEY), &text, slack_config).is_some() {
-            notify_slack_with(
-                &text,
-                Some(DIGEST_KEY),
-                bundle.as_deref(),
-                slack_config,
-                &|u, t, b| post(u, t, b),
-            );
-        } else {
-            slack_report::send_with(&report, bundle.as_deref(), slack_config, &|u, t, b| {
-                post(u, t, b)
-            });
+        let msg = match crate::loop_notify::resolve_blocks(Some(DIGEST_KEY), &text, slack_config) {
+            Some(blocks) => Outgoing::slack_text(&text, Some(blocks), bundle.as_deref()),
+            None => Outgoing::report(
+                &report,
+                slack_report::configured_template_in(slack_config),
+                Target::slack(bundle.as_deref()),
+            ),
+        };
+        let msg = msg.for_loop("inbox-triage-loop");
+        if let crate::outbox::Delivery::Failed(e) = crate::outbox::send(outbox, msg, &transport) {
+            eprintln!("loopx: inbox digest not sent: {e}");
         }
     }
 }
@@ -1269,7 +1275,13 @@ pub fn run_all_inboxes(
         record_sign_in(ctx, inbox, &outcome);
         outcomes.push(outcome);
     }
-    send_digests(&outcomes, now, &ctx.slack_config, &deps.slack_post);
+    send_digests(
+        &outcomes,
+        now,
+        &ctx.slack_config,
+        &deps.slack_post,
+        deps.outbox.as_ref(),
+    );
     Ok(outcomes)
 }
 

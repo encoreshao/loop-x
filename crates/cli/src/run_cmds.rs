@@ -126,6 +126,13 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         chrono::Utc::now(),
         &|m| eprintln!("loop_scheduler: {m}"),
     );
+    let outbox = loopx_core::outbox::Outbox::real().tick(&loopx_core::connectors_config::live_send);
+    if outbox != loopx_core::outbox::Tick::default() {
+        println!(
+            "loop_scheduler: outbox sent {}, retrying {}, failed {}",
+            outbox.sent, outbox.retrying, outbox.failed
+        );
+    }
     let queued: Vec<String> = queued.into_iter().chain(resumed).collect();
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));

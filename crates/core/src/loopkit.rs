@@ -912,6 +912,7 @@ fn record_notified(last_run_path: &Path, results: &[NotifyResult]) {
         return;
     };
     data.insert("notified".into(), json!(results.iter().any(|r| r.1)));
+    data.insert("delivery".into(), json!(delivery(results)));
     data.insert(
         "notify_targets".into(),
         Value::Array(
@@ -921,6 +922,35 @@ fn record_notified(last_run_path: &Path, results: &[NotifyResult]) {
                 .collect(),
         ),
     );
+    let _ = std::fs::write(
+        last_run_path,
+        pyjson::to_string_pretty(&Value::Object(data)) + "\n",
+    );
+}
+
+/// What a run's notification did: `sent` when every target took it, `queued`
+/// when the rest wait for a retry or quiet hours to end, `partly sent` when some
+/// targets failed, `failed` when all did.
+fn delivery(results: &[NotifyResult]) -> &'static str {
+    if !results.iter().any(|r| r.1) {
+        "failed"
+    } else if results.iter().any(|r| !r.1) {
+        "partly sent"
+    } else if results.iter().all(|r| r.2 == "sent") {
+        "sent"
+    } else {
+        "queued"
+    }
+}
+
+fn record_delivery(last_run_path: &Path, delivery: &str) {
+    let Ok(text) = std::fs::read_to_string(last_run_path) else {
+        return;
+    };
+    let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
+    data.insert("delivery".into(), json!(delivery));
     let _ = std::fs::write(
         last_run_path,
         pyjson::to_string_pretty(&Value::Object(data)) + "\n",
@@ -1153,6 +1183,8 @@ pub fn run_plugin(
         );
         sends = send(&report);
         record_notified(&last_run, &sends);
+    } else {
+        record_delivery(&last_run, "nothing to send");
     }
     let report = RunReport {
         notify_failed: text.is_some() && !sends.iter().any(|r| r.1),
@@ -1278,6 +1310,7 @@ retry: {enabled: true, max_attempts: 2}
         max: usize,
         discover_error: bool,
         labelled: bool,
+        quiet_when_idle: bool,
         /// The loop's status file as seen from inside each model call and after_item.
         seen_status: Mutex<Vec<(&'static str, Value)>>,
     }
@@ -1294,6 +1327,7 @@ retry: {enabled: true, max_attempts: 2}
                 max: 20,
                 discover_error: false,
                 labelled: false,
+                quiet_when_idle: false,
                 seen_status: Mutex::new(Vec::new()),
             }
         }
@@ -1378,7 +1412,8 @@ retry: {enabled: true, max_attempts: 2}
             }
         }
         fn digest(&self, outcomes: &[Outcome], _c: &LoopContext) -> Option<String> {
-            Some(format!("{} done", outcomes.len()))
+            (!outcomes.is_empty() || !self.quiet_when_idle)
+                .then(|| format!("{} done", outcomes.len()))
         }
     }
 
@@ -1833,9 +1868,36 @@ retry: {enabled: true, max_attempts: 2}
             last["notify_targets"],
             json!([{"id": "slack-default", "ok": true}, {"id": "mail", "ok": false}])
         );
+        assert_eq!(last["delivery"], "partly sent");
         assert!(!raw.contains("secret-url"));
         let log = std::fs::read_to_string(w.dir.path().join("logs/loop-engineering.log")).unwrap();
         assert!(log.contains("mail") && !log.contains("secret-url"));
+    }
+
+    #[test]
+    fn a_run_records_whether_its_report_went_out_waits_or_had_nothing_to_say() {
+        let mut w = world();
+        w.opts.notifier = Some(Arc::new(|_, _| {
+            vec![
+                ("slack-default".into(), true, "sent".into()),
+                ("mail".into(), true, "will retry (Unreachable)".into()),
+            ]
+        }));
+        let (_, report) = run_plugin(
+            Arc::new(Demo::new(vec![item("a")], &[OK])),
+            "run_1",
+            w.opts.clone(),
+        )
+        .unwrap();
+        assert!(!report.notify_failed);
+        assert_eq!(last_run(&w)["delivery"], "queued");
+
+        let idle = Demo {
+            quiet_when_idle: true,
+            ..Demo::new(vec![], &[])
+        };
+        run_plugin(Arc::new(idle), "run_2", w.opts.clone()).unwrap();
+        assert_eq!(last_run(&w)["delivery"], "nothing to send");
     }
 
     #[test]
@@ -1855,6 +1917,7 @@ retry: {enabled: true, max_attempts: 2}
         .unwrap();
         assert!(out[0].status == Status::Done && report.notify_failed);
         assert_eq!(last_run(&w)["notified"], false);
+        assert_eq!(last_run(&w)["delivery"], "failed");
         // items stay seen
         assert!(run_plugin(
             Arc::new(Demo::new(vec![item("a")], &[])),

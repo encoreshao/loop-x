@@ -8,7 +8,7 @@ use crate::ui::pyfmt;
 use crate::ui::routes::UiCtx;
 use crate::ui::template::{Scope, Template};
 use loopx_core::settings_store as store;
-use loopx_core::{ai_cli_config, ai_cli_safety, slack_report};
+use loopx_core::{ai_cli_config, ai_cli_safety, outbox, slack_report};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -138,7 +138,10 @@ and Save to make it your own (Delete is disabled until then).",
     );
     let mut scope = Scope::new(ctx.lang);
     scope
-        .var("message_template_html", message_template_html(ctx, csrf, &slack))
+        .var(
+            "message_template_html",
+            message_template_html(ctx, csrf, &slack) + &quiet_hours_html(ctx, csrf) + &outbox_html(ctx, csrf),
+        )
         .var("webhook_display", webhook_display)
         .var("csrf_input", csrf)
         .var("bkb_subtitle", subtitle)
@@ -178,6 +181,80 @@ fn message_template_html(ctx: &UiCtx, csrf: &str, slack: &Value) -> String {
         select = custom_select("message_template", &options, Some(current.id()), None),
         save = pyfmt::escape(&ctx.t("Save")),
         sample = pyfmt::escape(&ctx.t("Send a sample report")),
+    )
+}
+
+/// Quiet hours: when routine messages wait and go out together (`loopx_core::outbox`).
+fn quiet_hours_html(ctx: &UiCtx, csrf: &str) -> String {
+    let saved = outbox::load_quiet_hours(&outbox::settings_path(&ctx.state.home_dir));
+    let time = |t: Option<chrono::NaiveTime>, default: &str| {
+        t.map(|t| t.format("%H:%M").to_string()).unwrap_or_else(|| default.to_string())
+    };
+    format!(
+        "<h3>{heading}</h3>\n<p class='section-subtitle'>{subtitle}</p>\n\
+<form method='post' action='/notifications/quiet-hours' class='quiet-hours-form'>{csrf}\
+<label class='md-checkbox quiet-hours-switch'><input type='checkbox' name='enabled'{checked}> {on}</label>\
+<label class='quiet-hours-time'>{from}<input type='time' name='start' value='{start}' required></label>\
+<label class='quiet-hours-time'>{until}<input type='time' name='end' value='{end}' required></label>\
+<button type='submit' class='btn btn-neutral'>{save}</button></form>",
+        heading = pyfmt::escape(&ctx.t("Quiet hours")),
+        subtitle = pyfmt::escape(&ctx.t("Routine messages sent during these hours wait, then go out together as one message per channel when they end. Anything that needs you, such as an approval or an escalation, still goes out at once.")),
+        checked = if saved.is_some() { " checked" } else { "" },
+        on = pyfmt::escape(&ctx.t("On")),
+        from = pyfmt::escape(&ctx.t("From")),
+        until = pyfmt::escape(&ctx.t("Until")),
+        start = time(saved.map(|q| q.start), "22:00"),
+        end = time(saved.map(|q| q.end), "08:00"),
+        save = pyfmt::escape(&ctx.t("Save")),
+    )
+}
+
+/// What the outbox is still trying to send, and what it gave up on.
+fn outbox_html(ctx: &UiCtx, csrf: &str) -> String {
+    let summary = outbox::Outbox {
+        dir: ctx.state.repo_root.join("outputs").join("outbox"),
+        quiet: None,
+    }
+    .summary();
+    let status = if summary.retrying == 0 && summary.held == 0 {
+        ctx.t("Nothing is waiting to be sent.")
+    } else {
+        ctx.tf(
+            "Waiting to be sent: {retrying} to retry, {held} held for quiet hours.",
+            &[("retrying", &summary.retrying.to_string()), ("held", &summary.held.to_string())],
+        )
+    };
+    let failed = if summary.failed.is_empty() {
+        String::new()
+    } else {
+        let items: String = summary
+            .failed
+            .iter()
+            .rev()
+            .map(|r| {
+                let when = r.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M");
+                let source = r.message.loop_name.as_deref().unwrap_or(&r.message.target.account);
+                format!(
+                    "<li><span class='outbox-when'>{when}</span> {} \u{2014} {}</li>",
+                    pyfmt::escape(source),
+                    pyfmt::escape(&ctx.tf(
+                        "not sent after {n} tries ({error})",
+                        &[("n", &r.tries.to_string()), ("error", r.last_error.as_deref().unwrap_or("?"))]
+                    ))
+                )
+            })
+            .collect();
+        format!(
+            "<ul class='outbox-failed'>{items}</ul>\
+<form method='post' action='/notifications/outbox/clear' class='outbox-clear-form'>{csrf}\
+<button type='submit' class='btn btn-neutral'>{}</button></form>",
+            pyfmt::escape(&ctx.t("Clear"))
+        )
+    };
+    format!(
+        "<h3>{}</h3>\n<p class='section-subtitle'>{}</p>{failed}",
+        pyfmt::escape(&ctx.t("Waiting to send")),
+        pyfmt::escape(&status),
     )
 }
 

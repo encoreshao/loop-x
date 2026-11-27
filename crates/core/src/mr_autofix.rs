@@ -833,7 +833,12 @@ pub fn main(argv: &[String]) -> i32 {
     };
     prune_ci_files(&api.jobs_dir, Utc::now());
     let notify = |line: &str| {
-        crate::runner_util::notify_slack_best_effort(line, None, None);
+        crate::runner_util::notify_slack_best_effort(
+            line,
+            None,
+            None,
+            crate::outbox::Urgency::Urgent,
+        );
     };
     let (ledger, inbox_dir) = (ledger_path(&home), home.join("event_triggers"));
     let report = run_once(&Ctx {
