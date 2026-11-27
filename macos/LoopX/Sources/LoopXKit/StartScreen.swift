@@ -3,7 +3,8 @@ import Foundation
 /// The page shown until a backend answers. Light and dark share one stacked layout: the LoopX mark
 /// large over a soft halo, the name under it, one gradient tagline, then a thin progress bar and the
 /// status line; only the version sits in the footer.
-/// Light is a pale backdrop with a richer mark so its glow does not wash out; dark is the glow
+/// Light is a pale backdrop with its own crisper, deeper-coloured mark, since the glow mark's soft
+/// edges blur on white; dark is the glow
 /// stage, a violet halo breathing and a light sheen passing over the mark only. A failure swaps
 /// the bar for the reason and a Try again button.
 /// Under Reduce Motion the entrance, halo and sheen are off; the bar keeps moving, since its motion
@@ -15,9 +16,10 @@ public enum StartScreen {
 
     public static let tagline = "Autonomous agents, human in the loop."
 
-    /// `mark` is the brand mark image's URL (a data URL); empty shows no mark. `name` is the brand
-    /// name's markup (the name images); empty falls back to the plain text "LoopX".
-    public static func html(_ text: String, failed: Bool, version: String = "", mark: String = "", name: String = "") -> String {
+    /// `mark` is the brand mark image's URL (a data URL); empty shows no mark. `markLight` is the
+    /// light-appearance mark; empty uses `mark` in both. `name` is the brand name's markup (the name
+    /// images); empty falls back to the plain text "LoopX".
+    public static func html(_ text: String, failed: Bool, version: String = "", mark: String = "", markLight: String = "", name: String = "") -> String {
         func escape(_ t: String) -> String {
             t.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: "'", with: "&#39;")
@@ -25,8 +27,11 @@ public enum StartScreen {
         let status = failed
             ? "<div class='fail'><div class='err'>\(escape(text))</div><a class='retry' href='loopx-retry://now'>Try again</a></div>"
             : "<div class='bar'></div><div class='status'>\(escape(text))</div>"
+        let markImages = markLight.isEmpty
+            ? "<img class='mark' src='\(escape(mark))' alt=''>"
+            : "<img class='mark on-light' src='\(escape(markLight))' alt=''><img class='mark on-dark' src='\(escape(mark))' alt=''>"
         let markHTML = mark.isEmpty ? "" : """
-            <div class='stage'><i class='halo'></i><img class='mark' src='\(escape(mark))' alt=''>\
+            <div class='stage'><i class='halo'></i>\(markImages)\
             <i class='sheen' style="--m:url('\(escape(mark))')"></i></div>
             """
         let footer = version.isEmpty ? "" : "<footer>v\(escape(version))</footer>"
@@ -44,8 +49,8 @@ public enum StartScreen {
         html,body{height:100%;margin:0;overflow:hidden}
         body{font:13px -apple-system,system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;text-align:center;padding:0 24px 24px;box-sizing:border-box}
         .stage{position:relative;width:var(--mark);aspect-ratio:1119/930;margin:0 0 var(--gap-l)}
-        .mark{position:relative;width:100%;height:100%;object-fit:contain;display:block;filter:saturate(1.8) contrast(1.25) brightness(.92) drop-shadow(0 8px 24px rgba(124,77,255,.2))}
-        .halo{position:absolute;inset:-18%;border-radius:50%;background:var(--halo);filter:blur(18px);opacity:.7}
+        .mark{position:relative;width:100%;height:100%;object-fit:contain;display:block}.mark.on-dark{display:none}
+        .halo{position:absolute;inset:-18%;border-radius:50%;background:var(--halo);filter:blur(18px);opacity:.45}
         .sheen{display:none}
         h1{margin:0 0 12px;font-size:40px;font-weight:700;letter-spacing:-.02em;color:var(--fg);line-height:1}
         h1 .brand-name{display:block;width:var(--name);height:auto;margin:0 auto}h1 .brand-name.on-dark{display:none}
@@ -59,7 +64,7 @@ public enum StartScreen {
         .retry:hover{filter:brightness(1.08)}
         footer{position:fixed;bottom:16px;left:0;right:0;font-size:11.5px;color:var(--sub);opacity:.7}
         @media(prefers-color-scheme:dark){
-        .mark{filter:drop-shadow(0 8px 24px rgba(124,77,255,.25))}
+        .mark.on-light{display:none}.mark.on-dark{display:block}
         .halo{inset:-30%;opacity:1}
         .sheen{display:block;position:absolute;inset:0;mix-blend-mode:overlay;background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.55) 50%,transparent 65%) no-repeat;background-size:250% 100%;background-position:150% 0;
         -webkit-mask-image:var(--m);mask-image:var(--m);-webkit-mask-size:contain;mask-size:contain;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center}

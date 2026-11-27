@@ -107,6 +107,7 @@ fi
 # The start screen's logo and name images (LogoSVG.swift reads them from Resources).
 BRAND_START="$LOOP_DIR/assets/brand/start"
 [ -f "$BRAND_START/mark.png" ] && cp "$BRAND_START/mark.png" "$OUT/Contents/Resources/brand-mark.png"
+[ -f "$BRAND_START/mark-light.png" ] && cp "$BRAND_START/mark-light.png" "$OUT/Contents/Resources/brand-mark-light.png"
 [ -f "$BRAND_START/name.png" ] && cp "$BRAND_START/name.png" "$OUT/Contents/Resources/brand-name.png"
 [ -f "$BRAND_START/name-light.png" ] && cp "$BRAND_START/name-light.png" "$OUT/Contents/Resources/brand-name-light.png"
 

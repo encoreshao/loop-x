@@ -109,13 +109,23 @@ import Testing
         }
     }
 
-    @Test func theMarkStandsOutFromTheLightBackground() {
-        let h = html()
+    @Test func lightModeShowsItsOwnCrispMarkAndDarkKeepsTheGlowMark() {
+        let light = "data:image/png;base64,LL"
+        let h = StartScreen.html("Starting…", failed: false, mark: Self.mark, markLight: light)
+        #expect(h.contains("<img class='mark on-light' src='\(light)'"))
+        #expect(h.contains("<img class='mark on-dark' src='\(Self.mark)'"))
+        // The sheen is dark-only, so it is masked to the dark mark.
+        #expect(h.contains("--m:url('\(Self.mark)')") && !h.contains("--m:url('\(light)')"))
         let dark = h.components(separatedBy: "@media(prefers-color-scheme:dark){").dropFirst().joined()
-        let light = h.replacingOccurrences(of: dark, with: "")
-        // A coloured halo behind the mark and a richer mark in light mode too, not only in dark.
-        #expect(light.contains(".halo{position:absolute"))
-        #expect(light.contains("saturate("))
+        #expect(dark.contains(".mark.on-light{display:none}") && dark.contains(".mark.on-dark{display:block}"))
+    }
+
+    @Test func neitherMarkIsBlurredByFilters() {
+        let h = html()
+        let rule = h.components(separatedBy: "\n.mark{")[1].components(separatedBy: "}")[0]
+        #expect(!rule.contains("saturate(") && !rule.contains("drop-shadow("), "the light mark is drawn as rendered")
+        let dark = h.components(separatedBy: "@media(prefers-color-scheme:dark){").dropFirst().joined()
+        #expect(!dark.contains(".mark{filter:"), "the dark mark is drawn as rendered")
     }
 
     @Test func declaresUTF8SoTheEllipsisRenders() {

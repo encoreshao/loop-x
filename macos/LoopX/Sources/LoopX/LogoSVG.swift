@@ -8,6 +8,9 @@ enum LogoSVG {
     /// The brand mark as a data URL: the start screen shows it and masks its sheen to its shape.
     static let mark: String = dataURL("brand-mark") ?? ""
 
+    /// The mark redrawn for light backgrounds: tighter glow and deeper colour, so it stays sharp on white.
+    static let markLight: String = dataURL("brand-mark-light") ?? ""
+
     /// The "LoopX" name images: ink lettering for the light appearance, white for the dark one.
     static let name: String = {
         guard let light = dataURL("brand-name-light"), let dark = dataURL("brand-name") else { return "" }

@@ -17,7 +17,7 @@ set -euo pipefail
 #   assets/brand/AppIcon.iconset                every macOS size, 16-1024px (build_loopx_app.sh -> AppIcon.icns)
 #   assets/favicon.ico, crates/server/assets/favicon.ico   16-64px, the icon tile without the icon-grid padding
 #   crates/server/assets/brand/{mark,name,name-light}.png  what the dashboard serves under /brand/
-#   assets/brand/start/{mark,name,name-light}.png  the Mac app's start screen, at 2x its largest on-screen size
+#   assets/brand/start/{mark,mark-light,name,name-light}.png  the Mac app's start screen, at 2x its largest on-screen size
 #
 # Needs ImageMagick (`brew install imagemagick`). Rerun it after replacing a master and commit the
 # outputs; the golden favicon snapshot changes with the favicon (copy crates/server/assets/favicon.ico
@@ -89,9 +89,19 @@ done
 
 START="$BRAND/start"
 mkdir -p "$START"
-magick "$BRAND/mark.png" -background none -filter Lanczos -resize 640x -strip "PNG32:$START/mark.png"
-for name in name name-light; do
-  magick "$BRAND/$name.png" -background none -filter Lanczos -resize 520x -strip "PNG32:$START/$name.png"
-done
+# The masters' faint glow reads as blur once scaled down: trim the faintest alpha and sharpen. On a light
+# background trim harder and deepen the colour, since pale glow on white is only haze.
+crisp_dark() {
+  magick "$1" -background none -filter Lanczos -resize "$2" -channel A -level 15%,90% +channel \
+    -unsharp 0x1.2+1+0 -strip "PNG32:$3"
+}
+crisp_light() {
+  magick "$1" -background none -filter Lanczos -resize "$2" -channel A -level 30%,80% +channel \
+    -channel RGB -level 0%,88% -modulate 95,135 +channel -unsharp 0x1.2+1+0 -strip "PNG32:$3"
+}
+crisp_dark "$BRAND/mark.png" 640x "$START/mark.png"
+crisp_dark "$BRAND/name.png" 520x "$START/name.png"
+crisp_light "$BRAND/mark.png" 640x "$START/mark-light.png"
+crisp_light "$BRAND/name-light.png" 520x "$START/name-light.png"
 
 echo "==> rendered app-icon.png, AppIcon.iconset ($(ls "$ICONSET" | wc -l | tr -d ' ') sizes), favicon.ico, the dashboard's /brand images and the start screen's images"

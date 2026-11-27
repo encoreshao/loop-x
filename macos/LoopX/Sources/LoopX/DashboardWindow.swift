@@ -241,6 +241,6 @@ final class DashboardWindowController: NSObject, WKNavigationDelegate, WKUIDeleg
 
     /// The page shown until a backend answers (see `StartScreen`).
     static func placeholder(_ text: String, failed: Bool, version: String = "") -> String {
-        StartScreen.html(text, failed: failed, version: version, mark: LogoSVG.mark, name: LogoSVG.name)
+        StartScreen.html(text, failed: failed, version: version, mark: LogoSVG.mark, markLight: LogoSVG.markLight, name: LogoSVG.name)
     }
 }
