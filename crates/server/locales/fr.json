@@ -2469,5 +2469,13 @@
   "Learned preferences": "Préférences apprises",
   "Once a week LoopX reads your review notes and proposes lasting preferences under Needs you. The ones you accept are kept in {path} with your projects and a record of past runs, and the loops read it with your instructions.": "Une fois par semaine, LoopX lit vos notes de revue et propose des préférences durables dans « À traiter ». Celles que vous acceptez sont conservées dans {path} avec vos projets et un historique des exécutions, et les boucles le lisent avec vos instructions.",
   "Preference removed. The loops stop following it from their next run.": "Préférence supprimée. Les boucles cessent de la suivre dès leur prochaine exécution.",
-  "That preference was already removed.": "Cette préférence a déjà été supprimée."
+  "That preference was already removed.": "Cette préférence a déjà été supprimée.",
+  "Context": "Contexte",
+  "Context per run": "Contexte par exécution",
+  "Cache hit rate": "Taux de cache",
+  "Written to cache": "Écrit dans le cache",
+  "{n} tokens": "{n} jetons",
+  "Average tokens a run sends to the model: the instructions, files and tool results it reads, fresh or from the cache.": "Jetons envoyés en moyenne au modèle par exécution : les instructions, fichiers et résultats d'outils lus, frais ou depuis le cache.",
+  "Share of input read from the prompt cache, which costs a tenth of fresh input.": "Part de l'entrée lue depuis le cache de prompt, qui coûte un dixième d'une entrée fraîche.",
+  "Average tokens per run written to the prompt cache: context that was new to the cache.": "Jetons écrits en moyenne dans le cache de prompt par exécution : le contexte qui n'y était pas encore."
 }

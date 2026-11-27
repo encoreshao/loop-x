@@ -87,6 +87,11 @@ pub struct CostMetrics {
     pub cache_hit_rate: Option<f64>,
     pub cost_per_issue: Option<f64>,
     pub cost_per_resolution: Option<f64>,
+    /// Priced runs counted.
+    pub priced_runs: i64,
+    /// Average tokens each priced run sent in (fresh, read from cache and
+    /// written to it): how much context a run loads.
+    pub context_per_run: Option<f64>,
 }
 
 impl CostMetrics {
@@ -102,6 +107,8 @@ impl CostMetrics {
             "cache_hit_rate": self.cache_hit_rate,
             "cost_per_issue": self.cost_per_issue,
             "cost_per_resolution": self.cost_per_resolution,
+            "priced_runs": self.priced_runs,
+            "context_per_run": self.context_per_run,
             "wasted_cost": null,
             "wasted_cost_unavailable_reason": RETRY_WASTE_UNAVAILABLE_REASON,
         })
@@ -152,7 +159,8 @@ pub fn compute_cost_metrics(events: &[Value]) -> CostMetrics {
         .cloned()
         .collect();
     let issues = compute_issue_metrics(&priced_events, None);
-    let eligible = cache_read + input;
+    // Writes are input too: leaving them out made every first read look cached.
+    let eligible = cache_read + cache_write + input;
     CostMetrics {
         total_cost_usd,
         total_tokens: input + output + cache_read + cache_write,
@@ -165,6 +173,9 @@ pub fn compute_cost_metrics(events: &[Value]) -> CostMetrics {
             .then(|| total_cost_usd / issues.issues_processed as f64),
         cost_per_resolution: (issues.issues_completed != 0)
             .then(|| total_cost_usd / issues.issues_completed as f64),
+        priced_runs: priced.len() as i64,
+        context_per_run: (!priced.is_empty())
+            .then(|| (input + cache_read + cache_write) as f64 / priced.len() as f64),
     }
 }
 
@@ -278,6 +289,13 @@ pub fn format_cost_report(report: &CostReport) -> String {
             fmt_count(c.total_cache_write_tokens)
         ),
         format!("Cache hit rate        {}", fmt_percent(c.cache_hit_rate)),
+        format!(
+            "Context per run       {}",
+            c.context_per_run.map_or_else(
+                || "N/A".to_string(),
+                |t| format!("{} tokens", fmt_count(t.round() as i64))
+            )
+        ),
         String::new(),
         format!("Cost per issue         {}", fmt_money(c.cost_per_issue)),
         format!(
@@ -413,7 +431,7 @@ mod tests {
         assert_eq!(m.total_output_tokens, 70);
         assert_eq!(m.total_cache_read_tokens, 450);
         assert_eq!(m.total_cache_write_tokens, 5);
-        assert_eq!(m.cache_hit_rate, Some(450.0 / 600.0));
+        assert_eq!(m.cache_hit_rate, Some(450.0 / 605.0));
         assert_eq!(compute_cost_metrics(&[]).cache_hit_rate, None);
     }
 
@@ -483,5 +501,17 @@ mod tests {
         assert_eq!(remaining_budget(Some(5.0), Some(1.5), 0.05), Some(3.5));
         assert_eq!(remaining_budget(Some(5.0), Some(9.0), 0.05), Some(0.05));
         assert_eq!(remaining_budget(Some(5.0), None, 0.05), Some(5.0));
+    }
+
+    #[test]
+    fn context_per_run_averages_every_input_token_over_priced_runs() {
+        let run = |id: &str, input: i64, read: i64, write: i64| {
+            json!({"event_type": "run.completed", "run_id": id, "data": {"cost_usd": 0.5,
+                   "input_tokens": input, "cache_read_tokens": read, "cache_write_tokens": write, "output_tokens": 9}})
+        };
+        let m = compute_cost_metrics(&[run("a", 100, 900, 1000), run("b", 100, 2900, 0)]);
+        assert_eq!(m.priced_runs, 2);
+        assert_eq!(m.context_per_run, Some(2500.0));
+        assert_eq!(compute_cost_metrics(&[]).context_per_run, None);
     }
 }

@@ -695,6 +695,43 @@ fn cost_body(ctx: &UiCtx) -> String {
         icon("_SECTION_ICON_AI_CLI"),
         escape(&ctx.t("Cost"))
     );
+    let tokens = |t: Option<f64>| {
+        t.map_or_else(
+            || ctx.t("N/A"),
+            |t| ctx.tf("{n} tokens", &[("n", &cost::fmt_count(t.round() as i64))]),
+        )
+    };
+    let percent = |r: Option<f64>| r.map_or_else(|| ctx.t("N/A"), |r| format!("{:.0}%", r * 100.0));
+    let context_tiles = [
+        stat_tile(
+            "smart_toy",
+            &ctx.t("Context per run"),
+            &tokens(report.context_per_run),
+            Some(&ctx.t("Average tokens a run sends to the model: the instructions, files and tool results it reads, fresh or from the cache.")),
+            None,
+        ),
+        stat_tile(
+            "smart_toy",
+            &ctx.t("Cache hit rate"),
+            &percent(report.cache_hit_rate),
+            Some(&ctx.t("Share of input read from the prompt cache, which costs a tenth of fresh input.")),
+            None,
+        ),
+        stat_tile(
+            "smart_toy",
+            &ctx.t("Written to cache"),
+            &tokens((report.priced_runs > 0).then(|| report.total_cache_write_tokens as f64 / report.priced_runs as f64)),
+            Some(&ctx.t("Average tokens per run written to the prompt cache: context that was new to the cache.")),
+            None,
+        ),
+    ]
+    .concat();
+    let context_section = format!(
+        "\n<section class=\"card\">\n<div class=\"section-header\">{}<h2>{}</h2></div>\n\
+         <div class=\"dash-stats-grid\">{context_tiles}</div>\n</section>\n",
+        icon("_SECTION_ICON_AI_CLI"),
+        escape(&ctx.t("Context"))
+    );
     let rt_tiles = [
         stat_tile("loop", &ctx.t("Runs"), &summary.total_runs.to_string(), None, None),
         stat_tile(
@@ -714,7 +751,7 @@ fn cost_body(ctx: &UiCtx) -> String {
         escape(&ctx.t("Loop Runtime Cost"))
     );
     format!(
-        "\n{}\n<div class=\"analytics-days-selector\">{}</div>\n\n<div class=\"analytics-sections\">\n{cost_section}\n{runtime_section}\n</div>\n",
+        "\n{}\n<div class=\"analytics-days-selector\">{}</div>\n\n<div class=\"analytics-sections\">\n{cost_section}\n{context_section}\n{runtime_section}\n</div>\n",
         page_title(ctx, "Cost", "What the loop is spending, from both cost sources it tracks."),
         days_selector(ctx, "view=cost&", days)
     )

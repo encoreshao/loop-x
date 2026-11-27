@@ -2469,5 +2469,13 @@
   "Learned preferences": "学習した好み",
   "Once a week LoopX reads your review notes and proposes lasting preferences under Needs you. The ones you accept are kept in {path} with your projects and a record of past runs, and the loops read it with your instructions.": "LoopX は週に一度あなたのレビューコメントを読み、継続的な好みを「対応待ち」で提案します。承認したものは、プロジェクトや過去の実行記録とともに {path} に保存され、ループは指示と一緒にこれを読みます。",
   "Preference removed. The loops stop following it from their next run.": "好みを削除しました。ループは次の実行から従わなくなります。",
-  "That preference was already removed.": "その好みはすでに削除されています。"
+  "That preference was already removed.": "その好みはすでに削除されています。",
+  "Context": "コンテキスト",
+  "Context per run": "1 回あたりのコンテキスト",
+  "Cache hit rate": "キャッシュヒット率",
+  "Written to cache": "キャッシュへの書き込み",
+  "{n} tokens": "{n} トークン",
+  "Average tokens a run sends to the model: the instructions, files and tool results it reads, fresh or from the cache.": "1 回の実行でモデルに送るトークンの平均です。読み込んだ指示、ファイル、ツール結果を含み、新規分とキャッシュ分の両方を数えます。",
+  "Share of input read from the prompt cache, which costs a tenth of fresh input.": "入力のうちプロンプトキャッシュから読んだ割合です。キャッシュ読み込みは新規入力の 10 分の 1 のコストです。",
+  "Average tokens per run written to the prompt cache: context that was new to the cache.": "1 回の実行でプロンプトキャッシュに書き込んだトークンの平均です。キャッシュになかったコンテキストです。"
 }

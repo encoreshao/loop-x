@@ -2469,5 +2469,13 @@
   "Learned preferences": "已学习的偏好",
   "Once a week LoopX reads your review notes and proposes lasting preferences under Needs you. The ones you accept are kept in {path} with your projects and a record of past runs, and the loops read it with your instructions.": "LoopX 每周阅读一次你的评审意见，并在“待你处理”中提出长期偏好。你接受的偏好会与你的项目和过往运行记录一起保存在 {path} 中，循环会连同你的指令一起读取它。",
   "Preference removed. The loops stop following it from their next run.": "偏好已删除。循环会从下次运行起不再遵循它。",
-  "That preference was already removed.": "该偏好已被删除。"
+  "That preference was already removed.": "该偏好已被删除。",
+  "Context": "上下文",
+  "Context per run": "每次运行的上下文",
+  "Cache hit rate": "缓存命中率",
+  "Written to cache": "写入缓存",
+  "{n} tokens": "{n} 个令牌",
+  "Average tokens a run sends to the model: the instructions, files and tool results it reads, fresh or from the cache.": "每次运行发送给模型的平均令牌数：它读取的指令、文件和工具结果，包括新输入和缓存读取。",
+  "Share of input read from the prompt cache, which costs a tenth of fresh input.": "从提示缓存读取的输入占比，缓存读取的费用是新输入的十分之一。",
+  "Average tokens per run written to the prompt cache: context that was new to the cache.": "每次运行写入提示缓存的平均令牌数：缓存中原本没有的上下文。"
 }

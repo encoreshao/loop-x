@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Insights › Cost has a Context card: tokens a run sends to the model on average, the cache hit rate and tokens written to the cache per run. `loopx cost` prints context per run too.
 - Issue loop: a guard checks every tool call a Claude agent makes before it runs, and refuses pushing to a protected branch (main, master, develop, trunk, production, staging) or deleting remote branches, piping a download into a shell, `sudo`, reading stored credentials, deleting a home or root folder, installing LaunchAgents, cron jobs or shell start-up changes, and putting something that looks like a secret into a command, comment or file. The agent is told why and to escalate; each refusal is logged as a `tool.denied` event with the rule, never the command.
 - LoopX remembers what it already told you (`~/.loopx/told.json`). An alert about the same thing (an issue escalated for the same reason, an approval request, a usage limit) is sent at most once a day, whichever loop sends it, and the daily digest gets the list so it counts those alerts instead of repeating them. `loopx notify --about=<key>` tags a message the same way.
 - LoopX keeps a memory of you in `~/.loopx/you/you.md`: preferences you accepted, your projects, and a record of what the loops did (weekly lines, folded into months after 8 weeks and years after a year, so it outlives the event log). Once a week it reads the notes you sent with "Request changes" and the merge-request review comments the loop acted on, and one tool-free model call proposes lasting preferences under Needs you (Remember or Dismiss). Accepted ones are listed under Settings › Instructions › Learned preferences, where you can remove them. The issue loop and inbox triage read `you.md` with your instructions.
@@ -27,6 +28,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- The cache hit rate (`loopx cost`, Insights › Cost) now counts tokens written to the cache as input, so it is no longer overstated.
 - Issue loop: a fix waiting for approval before its merge request no longer holds the run. The run parks the fix and ends, and within a minute of your decision a short run of that issue opens the MR, sends your requested changes back to the agent, or escalates. Approvals now wait up to 7 days by default instead of 30 minutes (`approval_timeout_seconds` still overrides it), Telegram buttons keep working with no run alive, and the run report lists the issue under "Waiting for your approval".
 - Harness › Gates explains itself: checks are split into blocking (lint and tests, code review) and advisory (browser, accessibility, dependency audit, secret scan), every number says what it counts, and Verification mode lists only loops that run checks, with the checks they run.
 - Issue loop: the pre-MR review (Opus) now blocks. A blocker, or a major correctness or security finding, sends the fix back to the coder before the merge request opens; a review that cannot run stays advisory. The per-issue budget goes from $3 to $4.
