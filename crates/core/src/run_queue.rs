@@ -34,6 +34,8 @@ pub enum Reason {
     Event,
     /// A person decided an approval a parked issue was waiting on.
     Approval,
+    /// A timer someone set came due.
+    Timer,
 }
 
 impl Reason {
@@ -44,12 +46,13 @@ impl Reason {
             Reason::CatchUp => "catch-up",
             Reason::Event => "event",
             Reason::Approval => "approval",
+            Reason::Timer => "timer",
         }
     }
 
     fn priority(self) -> i32 {
         match self {
-            Reason::Manual | Reason::Approval => PRIORITY_MANUAL,
+            Reason::Manual | Reason::Approval | Reason::Timer => PRIORITY_MANUAL,
             _ => PRIORITY_SCHEDULED,
         }
     }

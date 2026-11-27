@@ -18,6 +18,7 @@ use crate::loop_runtime::{AgentFailure, AgentFn, AgentSuccess, LoopRuntime};
 use crate::loop_serialize::write_result;
 use crate::loop_state::LoopState;
 use crate::loop_verifiers::{build_verifiers, IssueContext};
+use crate::loops_config::ISSUE_LOOP;
 use crate::mcp_run::McpAttach;
 use crate::outbox::Urgency;
 use crate::runner_util::{
@@ -60,7 +61,7 @@ const USAGE_TOKEN_FIELDS: [&str; 4] = [
 
 /// `loopx` subcommands the agent may run. `mr` (opening the MR) is withheld in
 /// gate mode, where the loop itself opens it after verification.
-const AGENT_SUBCOMMANDS: [&str; 12] = [
+const AGENT_SUBCOMMANDS: [&str; 14] = [
     "config",
     "events",
     "notify",
@@ -73,6 +74,8 @@ const AGENT_SUBCOMMANDS: [&str; 12] = [
     "messages",
     "worktree",
     "screenshot",
+    "timer add",
+    "timer list",
 ];
 /// The helpers an offline (golden eval) run keeps.
 const OFFLINE_SUBCOMMANDS: [&str; 5] = ["config", "events", "risk", "memory-store", "memory get"];
@@ -640,6 +643,27 @@ fn with_feedback(prompt: String, feedback: Option<&str>) -> String {
     }
 }
 
+/// Where timers leave notes for the issue runs they start.
+fn timer_dir(ctx: &RunCtx) -> PathBuf {
+    ctx.repo_root.join("outputs").join("timers")
+}
+
+fn timer_args(req: &InvokeRequest) -> Vec<String> {
+    vec![req.alias.clone(), req.issue_iid.clone()]
+}
+
+/// Drops an issue's timer notes when its run ends: the agent has seen them.
+struct ClearTimerNotes {
+    dir: PathBuf,
+    args: Vec<String>,
+}
+
+impl Drop for ClearTimerNotes {
+    fn drop(&mut self) {
+        crate::timers::clear_notes(&self.dir, ISSUE_LOOP, &self.args);
+    }
+}
+
 /// The real invoker: builds the prompt and runs `claude -p` / `codex exec`.
 pub fn cli_invoker(ctx: RunCtx) -> Invoker {
     Arc::new(move |req| invoke_request(&ctx, req))
@@ -679,6 +703,13 @@ fn invoke_request(ctx: &RunCtx, req: &InvokeRequest) -> Result<AgentOutput, Agen
         base,
         project_instructions(&project_config_path(ctx), &req.alias).as_deref(),
     );
+    let base = match req.mode {
+        InvokeMode::Single | InvokeMode::Batch => prompt::with_timer_notes(
+            base,
+            &crate::timers::notes(&timer_dir(ctx), ISSUE_LOOP, &timer_args(req)),
+        ),
+        InvokeMode::IssueFile(_) => base,
+    };
     let mut text = match phase {
         None => with_feedback(base, req.feedback.as_deref()),
         Some(_) => base,
@@ -3537,6 +3568,10 @@ pub fn run_one_issue(
     } else {
         None
     };
+    let _timer_notes_seen = resumed.is_none().then(|| ClearTimerNotes {
+        dir: timer_dir(ctx),
+        args: vec![alias.to_string(), issue_iid.to_string()],
+    });
 
     // New review feedback on the issue's merge request is handled first, in
     // its own plan/execute/validate calls; it never changes this run's path.

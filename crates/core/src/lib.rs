@@ -157,6 +157,7 @@ pub mod slack_report;
 pub mod slides_store;
 pub mod spec_gate;
 pub mod status;
+pub mod timers;
 pub mod todos;
 pub mod todos_draft;
 pub mod todos_sync;

@@ -25,6 +25,7 @@ pub mod profile;
 pub mod rss;
 pub mod settings;
 pub mod slides;
+pub mod timers;
 pub mod web;
 
 use crate::connectors::http::UreqClient;
@@ -494,6 +495,7 @@ pub fn tools() -> &'static [Tool] {
         all.extend(profile::tools());
         all.extend(rss::tools());
         all.extend(slides::tools());
+        all.extend(timers::tools());
         all.extend(web::tools());
         all
     })
@@ -1367,7 +1369,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 40);
+        assert_eq!(names.len(), 43);
         assert!(text.contains(
             "calendar.create_event (write): Create a Google Calendar event (start/end: ISO date-time WITH a UTC offset; attendees: comma-separated emails who will be invited; needs the user's approval). Args: summary, start, end, attendees (optional), description (optional), location (optional)"
         ));
@@ -1375,6 +1377,7 @@ mod tests {
             "gitlab.read_issue (read): Read one GitLab issue with its description and comments (pass the issue url, or project and iid). Args: url (optional), project (optional), iid (optional)"
         ));
         assert!(text.contains("docs.save (local): Save a markdown document (e.g. a summary) and get a link the user can open. Args: title, content"));
+        assert!(text.contains("timer.remind (local): Send the user a reminder later"));
     }
 
     #[test]

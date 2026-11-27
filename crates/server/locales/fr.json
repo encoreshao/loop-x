@@ -2456,5 +2456,6 @@
   "Quiet hours need a start and an end that differ.": "Les heures calmes ont besoin d'un début et d'une fin différents.",
   "Quiet hours saved.": "Heures calmes enregistrées.",
   "Quiet hours are off.": "Les heures calmes sont désactivées.",
-  "Cleared.": "Effacé."
+  "Cleared.": "Effacé.",
+  "Timer": "Minuteur"
 }

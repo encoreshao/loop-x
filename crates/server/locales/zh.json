@@ -2456,5 +2456,6 @@
   "Quiet hours need a start and an end that differ.": "免打扰时段的开始和结束时间必须不同。",
   "Quiet hours saved.": "免打扰时段已保存。",
   "Quiet hours are off.": "免打扰时段已关闭。",
-  "Cleared.": "已清除。"
+  "Cleared.": "已清除。",
+  "Timer": "定时器"
 }

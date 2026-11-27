@@ -499,7 +499,10 @@ loopx gitlab cache annotate-issue <instance> <project_id> <issue_iid> loop_last_
 loopx issues comments mark-seen <instance> <project_id> <issue_iid>
 loopx notify<bundle_flag> "*Finished* <<issue_url>|#<issue_iid> (<alias>)>: escalated, needs clarification — see comment"
 loopx events emit --type issue.escalated --run-id "$LOOP_RUN_ID" --issue-run-id "${LOOP_RUN_ID}_<alias>_<issue_iid>" --project <alias> --issue-iid <issue_iid> --data "{\"reason\": \"needs_clarification\"}"
+loopx timer add 2d "Check whether anyone answered the clarifying question on #<issue_iid>; if not, post one short follow-up" --run issue-loop --issue <alias>#<issue_iid>
 ```
+The timer runs this issue again in two days with that note. When a run's prompt says it was started by a timer and nobody has answered yet, post one short, polite follow-up that `@mention`s whoever the question was for, and set no new timer: a question gets at most one follow-up. If someone has answered, carry on with the issue as usual.
+
 No worktree is created, no code is touched. Record a learning here too if the ambiguity reflects a recurring pattern (e.g. this project's issues in a certain area are consistently underspecified) rather than something specific to this one issue, using the same `loopx memory-store add` block, including its conditional `memory.created` emit, shown in step 10.
 
 Then return to the loop directory and move to the next issue:

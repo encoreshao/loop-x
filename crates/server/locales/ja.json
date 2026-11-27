@@ -2456,5 +2456,6 @@
   "Quiet hours need a start and an end that differ.": "おやすみ時間には異なる開始時刻と終了時刻が必要です。",
   "Quiet hours saved.": "おやすみ時間を保存しました。",
   "Quiet hours are off.": "おやすみ時間をオフにしました。",
-  "Cleared.": "消去しました。"
+  "Cleared.": "消去しました。",
+  "Timer": "タイマー"
 }

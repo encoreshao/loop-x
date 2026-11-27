@@ -308,6 +308,7 @@ fn reason_label(ctx: &UiCtx, reason: &str) -> String {
         "catch-up" => ctx.t("Catch-up"),
         "event" => ctx.t("Event"),
         "approval" => ctx.t("Approval"),
+        "timer" => ctx.t("Timer"),
         "outside" => ctx.t("Outside the queue"),
         _ => ctx.t("Scheduled"),
     }

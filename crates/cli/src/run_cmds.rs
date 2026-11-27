@@ -126,6 +126,7 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         chrono::Utc::now(),
         &|m| eprintln!("loop_scheduler: {m}"),
     );
+    let timed = fire_timers(&queue);
     let outbox = loopx_core::outbox::Outbox::real().tick(&loopx_core::connectors_config::live_send);
     if outbox != loopx_core::outbox::Tick::default() {
         println!(
@@ -133,7 +134,7 @@ pub fn scheduler(args: &[String]) -> ExitCode {
             outbox.sent, outbox.retrying, outbox.failed
         );
     }
-    let queued: Vec<String> = queued.into_iter().chain(resumed).collect();
+    let queued: Vec<String> = queued.into_iter().chain(resumed).chain(timed).collect();
     if !queued.is_empty() {
         println!("loop_scheduler: queued {}", queued.join(", "));
     }
@@ -145,6 +146,37 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         start_worker_if_idle();
     }
     ExitCode::SUCCESS
+}
+
+/// Due timers: reminders go out through the outbox, wake-ups join the queue.
+fn fire_timers(queue: &run_queue::RunQueue) -> Vec<String> {
+    use loopx_core::outbox::{Outbox, Outgoing, Urgency};
+    use loopx_core::timers::{self, Action};
+    let remind = |t: &timers::Timer| {
+        let urgent = matches!(t.action, Action::Remind { urgent: true });
+        let msg = Outgoing {
+            urgency: if urgent {
+                Urgency::Urgent
+            } else {
+                Urgency::Routine
+            },
+            ..Outgoing::slack_text(&timers::reminder_text(t), None, None)
+        };
+        Outbox::real()
+            .deliver(msg, &loopx_core::connectors_config::live_send)
+            .handled()
+    };
+    let now = chrono::Utc::now();
+    let stamp = loop_scheduler::isoformat(now.with_timezone(&Local).naive_local());
+    let enqueue = |loop_name: &str, args: &[String]| {
+        queue
+            .enqueue_with_args(loop_name, args, run_queue::Reason::Timer, &stamp)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
+    timers::tick(&timers::default_dir(), now, &remind, &enqueue, &|m| {
+        eprintln!("loop_scheduler: {m}")
+    })
 }
 
 /// `loopx scheduler status [--json]`: is the scheduler ticking, what is queued
