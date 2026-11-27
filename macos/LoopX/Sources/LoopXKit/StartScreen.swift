@@ -38,7 +38,7 @@ public enum StartScreen {
         return """
         <html><head><meta charset='utf-8'><meta name='color-scheme' content='light dark'><style>
         .\(TitlebarChrome.dragStripClass){position:fixed;top:0;left:0;right:0;height:28px;z-index:10}
-        :root{--mark:min(320px,36vh);--name:min(260px,30vh);--gap-l:clamp(18px,4vh,36px);--fg:#1d1d1f;--sub:#6e6e73;--accent:#0a84ff;--track:rgba(0,0,0,.08);--err:#c0392b;
+        :root{--mark:min(220px,26vh);--name:min(180px,22vh);--gap-l:clamp(18px,4vh,36px);--fg:#1d1d1f;--sub:#6e6e73;--accent:#0a84ff;--track:rgba(0,0,0,.08);--err:#c0392b;
         --grad:linear-gradient(90deg,#e0457b,#c0569a 45%,#f0954f);
         --halo:radial-gradient(circle,rgba(124,77,255,.22),rgba(224,69,123,.12) 45%,transparent 70%)}
         @media(prefers-color-scheme:dark){:root{--fg:#f5f5f7;--sub:rgba(245,245,247,.55);--accent:#a78bfa;--track:rgba(255,255,255,.1);--err:#ff6b5e;

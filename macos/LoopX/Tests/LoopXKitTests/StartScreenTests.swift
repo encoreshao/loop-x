@@ -83,9 +83,11 @@ import Testing
         #expect(!h.contains("Encore Shao") && !h.contains("mailto:") && !h.contains("daily grind"))
     }
 
-    @Test func theMarkIsLargeAndShrinksOnlyInAShortWindow() {
+    /// The mark's master holds about 450px of real detail, so it stays near 220pt (440px at 2x).
+    @Test func theMarkStaysWithinItsSourceDetailAndShrinksInAShortWindow() {
         let h = html()
-        #expect(h.contains("--mark:min(320px,36vh)"))
+        #expect(h.contains("--mark:min(220px,26vh)"))
+        #expect(h.contains("--name:min(180px,22vh)"))
         #expect(h.components(separatedBy: "--mark:").count - 1 == 1, "one size for both modes")
     }
 

@@ -89,19 +89,19 @@ done
 
 START="$BRAND/start"
 mkdir -p "$START"
-# The masters' faint glow reads as blur once scaled down: trim the faintest alpha and sharpen. On a light
-# background trim harder and deepen the colour, since pale glow on white is only haze.
-crisp_dark() {
-  magick "$1" -background none -filter Lanczos -resize "$2" -channel A -level 15%,90% +channel \
-    -unsharp 0x1.2+1+0 -strip "PNG32:$3"
+# The mark master holds only about 450px of real detail, so the start screen shows it at 220pt (these
+# are 2x) and adds no sharpening, which only turns its blur into jagged halos. On a light background
+# trim the faintest glow and deepen the colour, since pale glow on white is only haze.
+plain() {
+  magick "$1" -background none -filter Lanczos -resize "$2" -strip "PNG32:$3"
 }
-crisp_light() {
-  magick "$1" -background none -filter Lanczos -resize "$2" -channel A -level 30%,80% +channel \
-    -channel RGB -level 0%,88% -modulate 95,135 +channel -unsharp 0x1.2+1+0 -strip "PNG32:$3"
+on_light() {
+  magick "$1" -background none -filter Lanczos -resize "$2" -channel A -level 18%,60% +channel \
+    -channel RGB -level 0%,85% +channel -modulate 95,130 -strip "PNG32:$3"
 }
-crisp_dark "$BRAND/mark.png" 640x "$START/mark.png"
-crisp_dark "$BRAND/name.png" 520x "$START/name.png"
-crisp_light "$BRAND/mark.png" 640x "$START/mark-light.png"
-crisp_light "$BRAND/name-light.png" 520x "$START/name-light.png"
+plain "$BRAND/mark.png" 440x "$START/mark.png"
+plain "$BRAND/name.png" 360x "$START/name.png"
+on_light "$BRAND/mark.png" 440x "$START/mark-light.png"
+on_light "$BRAND/name-light.png" 360x "$START/name-light.png"
 
 echo "==> rendered app-icon.png, AppIcon.iconset ($(ls "$ICONSET" | wc -l | tr -d ' ') sizes), favicon.ico, the dashboard's /brand images and the start screen's images"
