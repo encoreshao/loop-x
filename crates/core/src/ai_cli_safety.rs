@@ -42,16 +42,16 @@ pub fn warning(cli: &str, site: CallSite) -> Option<&'static str> {
             "Codex gives the model a shell and records prompts, including email text, under ~/.codex/sessions."
         }
         "gemini" => {
-            "Gemini CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access."
+            "Gemini CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access. In loops, LoopX runs it in a macOS sandbox: it can write only to its work folders and cannot read credential files such as SSH keys."
         }
         "kimi" => {
-            "Kimi CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access."
+            "Kimi CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access. In loops, LoopX runs it in a macOS sandbox: it can write only to its work folders and cannot read credential files such as SSH keys."
         }
         "cursor" => {
-            "Cursor Agent cannot be limited to a fixed set of tools here, so the model runs with its full tool access."
+            "Cursor Agent cannot be limited to a fixed set of tools here, so the model runs with its full tool access. In loops, LoopX runs it in a macOS sandbox: it can write only to its work folders and cannot read credential files such as SSH keys."
         }
         "grok" => {
-            "Grok CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access."
+            "Grok CLI cannot be limited to a fixed set of tools here, so the model runs with its full tool access. In loops, LoopX runs it in a macOS sandbox: it can write only to its work folders and cannot read credential files such as SSH keys."
         }
         _ => "This AI CLI cannot be limited to a fixed set of tools here.",
     })

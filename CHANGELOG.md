@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Gemini, Kimi, Grok and Cursor Agent, which run loops with every tool call approved, now run inside a macOS sandbox. They can write only to the run's work folders, temp folders, LoopX's own state and the CLIs' and toolchains' folders, and cannot read credential files such as SSH keys, cloud and package-registry tokens, `gh` and `~/.git-credentials` or `~/.netrc`. Network stays open. Set `LOOPX_AGENT_SANDBOX=off` to run them without it.
 - Notifications that fail to send are no longer lost. When Slack, a chat webhook or Telegram is down, rate-limited or your Mac is offline, the message waits in an outbox and is retried for up to a day (after 1, 5, 15 and 60 minutes, then every 3 hours). Settings › Notifications lists what is waiting and what gave up. A timeout is not retried, so nothing is posted twice.
 - Quiet hours (Settings › Notifications, off by default): routine messages sent during them wait and go out as one "While you were away" message per channel when they end. Approvals, escalations and anything else that needs you still go out at once; `loopx notify --urgent` marks a message as such. A LoopKit run's `last-run.json` now records `delivery`: `sent`, `queued`, `partly sent`, `failed` or `nothing to send`.
 - Chat can create GitLab issues (`gitlab.create_issue`) with a title, markdown description, assignees, labels and @mentions. Nothing is created until you click Approve; the follow-up message links the new issue.

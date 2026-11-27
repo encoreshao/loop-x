@@ -205,9 +205,10 @@ pub fn doctor_cli_command(
         let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
         opts.add_dirs = roots.iter().map(PathBuf::from).collect();
         let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
-        return std::iter::once(resolved_program(ai_cli))
+        let argv = std::iter::once(resolved_program(ai_cli))
             .chain(args)
             .collect();
+        return crate::agent_sandbox::wrap_live(argv, &opts.add_dirs);
     }
     if ai_cli == "codex" {
         // Network access: toolchain installs and web research need it.

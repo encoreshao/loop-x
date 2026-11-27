@@ -250,9 +250,10 @@ pub fn cli_command_with_mcp(
         let mut opts = RunOptions::new(Path::new(repo_root), 0.0);
         opts.add_dirs = roots.iter().map(PathBuf::from).collect();
         let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
-        return std::iter::once(resolved_program(ai_cli))
+        let argv = std::iter::once(resolved_program(ai_cli))
             .chain(args)
             .collect();
+        return crate::agent_sandbox::wrap_live(argv, &opts.add_dirs);
     }
     if ai_cli == "codex" {
         // `codex exec` has no --add-dir/--ask-for-approval; the two roots become
@@ -7536,9 +7537,11 @@ mod tests {
             ("cursor", "--force"),
             ("grok", "--yolo"),
         ] {
-            let c = cli_command(cli, "P", "/r", "/wt", "x", false, None, false, &[], None);
+            let wrapped = cli_command(cli, "P", "/r", "/wt", "x", false, None, false, &[], None);
+            let c = crate::agent_sandbox::inner(&wrapped);
+            let program = Path::new(&c[0]).file_name().unwrap().to_str().unwrap();
             assert!(
-                ai_cli_config::binary_candidates(cli).contains(&c[0].as_str()),
+                ai_cli_config::binary_candidates(cli).contains(&program),
                 "{cli}: {}",
                 c[0]
             );

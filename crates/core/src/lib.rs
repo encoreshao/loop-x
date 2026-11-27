@@ -4,6 +4,7 @@ pub mod a11y;
 pub mod account_switch;
 pub mod agent_activity;
 pub mod agent_guard;
+pub mod agent_sandbox;
 pub mod agents;
 pub mod ai_cli_config;
 pub mod ai_cli_health;

@@ -157,8 +157,14 @@ pub(crate) fn run_text_cli(
     opts: &RunOptions,
     extract: &dyn Fn(&str) -> Result<String, String>,
 ) -> AgentResult {
-    let mut cmd = std::process::Command::new(program);
-    cmd.args(args).current_dir(&opts.cwd);
+    let mut roots = vec![opts.cwd.clone()];
+    roots.extend(opts.add_dirs.iter().cloned());
+    let argv = crate::agent_sandbox::wrap_live(
+        std::iter::once(program.to_string()).chain(args).collect(),
+        &roots,
+    );
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]).current_dir(&opts.cwd);
     let start = std::time::Instant::now();
     let ms = |s: std::time::Instant| i64::try_from(s.elapsed().as_millis()).unwrap_or(i64::MAX);
     let out = match crate::proc::run(

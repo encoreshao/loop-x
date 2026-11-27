@@ -93,9 +93,10 @@ pub fn cli_command(
         // cursor's workspace is ".".
         let opts = RunOptions::new(Path::new("."), 0.0);
         let args = new_cli_args(ai_cli, prompt, &opts).expect("a new CLI");
-        return std::iter::once(resolved_program(ai_cli))
+        let argv = std::iter::once(resolved_program(ai_cli))
             .chain(args)
             .collect();
+        return crate::agent_sandbox::wrap_live(argv, &[]);
     }
     if ai_cli == "codex" {
         return vec![
@@ -657,9 +658,11 @@ mod tests {
             ("cursor", "--force"),
             ("grok", "--yolo"),
         ] {
-            let c = cli_command(cli, "P", "x", "/h", None);
+            let wrapped = cli_command(cli, "P", "x", "/h", None);
+            let c = crate::agent_sandbox::inner(&wrapped);
+            let program = Path::new(&c[0]).file_name().unwrap().to_str().unwrap();
             assert!(
-                ai_cli_config::binary_candidates(cli).contains(&c[0].as_str()),
+                ai_cli_config::binary_candidates(cli).contains(&program),
                 "{cli}: {}",
                 c[0]
             );
