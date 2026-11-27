@@ -36,6 +36,7 @@ pub mod file_lock;
 pub mod gate_stats;
 pub mod gitlab;
 pub mod gitlab_cache;
+pub mod gitlab_webhook;
 pub mod golden_eval;
 pub mod guide_build;
 pub mod guide_features;

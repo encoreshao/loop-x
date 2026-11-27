@@ -31,6 +31,7 @@ mod timer_cmd;
 mod topic_cmd;
 mod update_cmd;
 mod watch_cmd;
+mod webhook_cmd;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -121,6 +122,11 @@ enum Command {
     /// File-based per-issue task memory
     MemoryStore {
         /// `add <alias> <iid> <lesson> [tags] [category]`, `get <alias> <iid>` or `list <alias>`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Set up, check or switch off GitLab webhooks
+    Webhook {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -396,6 +402,7 @@ fn main() -> ExitCode {
         Command::MemoryStore { args } => accounting_cmds::memory_store(&args),
         Command::NotifyLoop { args } => accounting_cmds::notify_loop(&args),
         Command::Timer { args } => timer_cmd::run(&args),
+        Command::Webhook { args } => webhook_cmd::run(&args),
         Command::Events { args } => events_cmd::run(&args),
         Command::Ledger { args } => events_cmd::ledger(&args),
         Command::Config { args } => config_cmd::run(&args),

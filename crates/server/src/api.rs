@@ -83,7 +83,8 @@ pub fn router(state: Shared) -> Router {
         .route("/api/events", get(events))
         .route("/static/loopx-notify.js", get(notify_script))
         .route("/api/approvals", get(list_approvals))
-        .route("/api/approvals/:id", post(decide));
+        .route("/api/approvals/:id", post(decide))
+        .route(loopx_core::gitlab_webhook::PATH, post(gitlab_webhook));
     app = app.merge(crate::api_island::routes());
     app = app.merge(crate::api_voice::routes());
     match loopx_core::oauth::OauthContext::from_env() {
@@ -217,6 +218,49 @@ async fn list_approvals(State(s): State<Shared>, headers: HeaderMap) -> Response
         .cloned()
         .collect();
     Json(json!({"pending": pending, "recent": recent, "escalations": escalations})).into_response()
+}
+
+/// A GitLab webhook delivery. It arrives through the user's tunnel, so the
+/// Host is the tunnel's: the secret token is what authorizes it.
+async fn gitlab_webhook(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    use loopx_core::gitlab_webhook::{self as hook, Outcome};
+    let header = |k: &str| {
+        headers
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let (token, uuid) = (header("x-gitlab-token"), header("x-gitlab-event-uuid"));
+    let events_dir = s.paths.events_dir.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let Ok(tokens) = loopx_core::keychain::open_store(hook::TOKEN_SERVICE) else {
+            return Outcome::Unauthorized;
+        };
+        let home = loopx_core::config::home_dir();
+        let queue =
+            loopx_core::run_queue::RunQueue::new(loopx_core::run_queue::default_queue_path());
+        let env = hook::Env {
+            tokens: tokens.as_ref(),
+            seen_path: hook::Env::seen_path_in(&home),
+            projects: home.join("projects.json"),
+            queue: &queue,
+            events_dir: Some(events_dir),
+        };
+        let now = loopx_core::loop_scheduler::isoformat(chrono::Local::now().naive_local());
+        hook::handle(&env, &token, &uuid, &body, &now)
+    })
+    .await
+    .unwrap_or(Outcome::Unauthorized);
+    match outcome {
+        Outcome::Unauthorized => json_error(StatusCode::UNAUTHORIZED, "missing or wrong token"),
+        Outcome::Duplicate => Json(json!({"ok": true, "duplicate": true})).into_response(),
+        Outcome::Accepted(queued) => Json(json!({"ok": true, "queued": queued})).into_response(),
+    }
 }
 
 async fn decide(
