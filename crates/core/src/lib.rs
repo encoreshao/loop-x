@@ -162,6 +162,7 @@ pub mod todos;
 pub mod todos_draft;
 pub mod todos_sync;
 pub mod told;
+pub mod tool_guard;
 pub mod topic_report;
 pub mod topic_runner;
 pub mod topic_seen;

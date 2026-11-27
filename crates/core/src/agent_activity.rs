@@ -145,16 +145,47 @@ pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
-/// `loopx _agent-hook <file> <label>`: record the hook payload on `stdin`.
-/// Never fails and prints nothing, so it can't change what the agent does.
+/// `loopx _agent-hook <file> <label>`: record the hook payload on `stdin`, and
+/// for a `PreToolUse` event print the [`crate::tool_guard`] refusal when the
+/// call is one no loop may make. Never fails; prints nothing for an allowed call.
 pub fn hook_main(args: &[String], mut stdin: impl std::io::Read) {
     let [file, label, ..] = args else {
         return;
     };
     let mut input = String::new();
-    if stdin.read_to_string(&mut input).is_ok() {
-        let _ = record(Path::new(file), &input, label, &now_iso());
+    if stdin.read_to_string(&mut input).is_err() {
+        return;
     }
+    let _ = record(Path::new(file), &input, label, &now_iso());
+    if let Some(answer) = guard_answer(&input, label) {
+        println!("{answer}");
+    }
+}
+
+/// The guard's refusal for a `PreToolUse` payload, recorded as a
+/// `tool.denied` event (the rule only, never the command).
+pub fn guard_answer(input: &str, label: &str) -> Option<Value> {
+    let v: Value = serde_json::from_str(input.trim()).ok()?;
+    if v.get("hook_event_name")?.as_str()? != "PreToolUse" {
+        return None;
+    }
+    let tool = v.get("tool_name")?.as_str()?;
+    let verdict = crate::tool_guard::check(tool, v.get("tool_input").unwrap_or(&Value::Null));
+    let answer = crate::tool_guard::hook_answer(&verdict)?;
+    if let (crate::tool_guard::Verdict::Deny { rule, .. }, Ok(run_id)) =
+        (&verdict, std::env::var("LOOP_RUN_ID"))
+    {
+        let _ = crate::events::emit(
+            "tool.denied",
+            &run_id,
+            crate::events::EventFields {
+                data: Some(json!({"tool": tool, "rule": rule, "label": label})),
+                ..Default::default()
+            },
+            None,
+        );
+    }
+    Some(answer)
 }
 
 /// One task's activity file: issues run in parallel, and each agent's hooks
@@ -443,5 +474,17 @@ mod tests {
         assert_eq!(labels, ["api #2", "web #7", "end of run"]);
         finish(&for_task(&base, "api", "2"));
         assert_eq!(read_all(&base).len(), 2);
+    }
+
+    #[test]
+    fn the_hook_refuses_a_protected_push_and_stays_silent_otherwise() {
+        let push = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main"}}"#;
+        let answer = guard_answer(push, "web #7").unwrap();
+        assert_eq!(answer["hookSpecificOutput"]["permissionDecision"], "deny");
+        let ok = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
+        assert!(guard_answer(ok, "web #7").is_none());
+        let after = r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main"}}"#;
+        assert!(guard_answer(after, "web #7").is_none());
+        assert!(guard_answer("not json", "x").is_none());
     }
 }
