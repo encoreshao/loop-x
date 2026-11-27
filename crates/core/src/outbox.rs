@@ -73,6 +73,10 @@ pub struct Outgoing {
     pub plain: String,
     #[serde(default)]
     pub urgency: Urgency,
+    /// What the alert is about (see `told`): the same `about` is not sent twice
+    /// within `told::REPEAT_HOURS`, whichever loop sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
 }
 
 impl Outgoing {
@@ -96,6 +100,7 @@ impl Outgoing {
             attempts,
             plain: text.to_string(),
             urgency: Urgency::Routine,
+            about: None,
         }
     }
 
@@ -117,12 +122,20 @@ impl Outgoing {
                 .collect(),
             plain: crate::slack_report::plain_text(report),
             urgency: Urgency::Routine,
+            about: None,
         }
     }
 
     pub fn urgent(self) -> Self {
         Self {
             urgency: Urgency::Urgent,
+            ..self
+        }
+    }
+
+    pub fn about(self, about: Option<&str>) -> Self {
+        Self {
+            about: about.map(str::to_string),
             ..self
         }
     }
@@ -147,6 +160,8 @@ pub enum Delivery {
     /// Failed for now; the outbox retries it.
     Retrying(String),
     Failed(String),
+    /// The same alert went out recently, so this one was not sent.
+    AlreadyTold,
 }
 
 impl Delivery {
@@ -162,6 +177,7 @@ impl Delivery {
             Delivery::Held => (true, "held for quiet hours".to_string()),
             Delivery::Retrying(e) => (true, format!("will retry ({e})")),
             Delivery::Failed(e) => (false, e.clone()),
+            Delivery::AlreadyTold => (true, "already told".to_string()),
         };
         (id.to_string(), ok, message)
     }
@@ -385,6 +401,8 @@ pub fn backoff(tries: u32) -> Duration {
 pub struct Outbox {
     pub dir: PathBuf,
     pub quiet: Option<QuietHours>,
+    /// The shared record of alerts already sent (`told`); `None` keeps none.
+    pub told: Option<PathBuf>,
 }
 
 /// What a tick did.
@@ -409,6 +427,7 @@ impl Outbox {
         Self {
             dir: repo_root.join("outputs").join("outbox"),
             quiet: load_quiet_hours(&settings_path(&crate::config::home_dir())),
+            told: Some(crate::told::default_path()),
         }
     }
 
@@ -421,6 +440,10 @@ impl Outbox {
     }
 
     pub fn deliver_at(&self, msg: Outgoing, transport: Transport, now: Clock) -> Delivery {
+        let told = self.told.as_deref().zip(msg.about.as_deref());
+        if told.is_some_and(|(path, about)| crate::told::recently(path, about, now.utc).is_some()) {
+            return Delivery::AlreadyTold;
+        }
         if msg.urgency == Urgency::Routine && now.quiet(self.quiet) {
             let next_at = now.quiet_end(self.quiet.expect("quiet implies hours"));
             return match self.add(msg, State::Held, 0, next_at, None, now) {
@@ -429,7 +452,10 @@ impl Outbox {
             };
         }
         match transport(&msg.target, &msg.attempts, &msg.plain) {
-            Ok(()) => Delivery::Sent,
+            Ok(()) => {
+                self.note_told(&msg, now);
+                Delivery::Sent
+            }
             Err(e) if retryable(&e) => {
                 let why = describe(&e);
                 match self.add(
@@ -445,6 +471,12 @@ impl Outbox {
                 }
             }
             Err(e) => Delivery::Failed(describe(&e)),
+        }
+    }
+
+    fn note_told(&self, msg: &Outgoing, now: Clock) {
+        if let (Some(path), Some(about)) = (&self.told, &msg.about) {
+            crate::told::record(path, about, &msg.plain, msg.loop_name.as_deref(), now.utc);
         }
     }
 
@@ -617,6 +649,7 @@ impl Outbox {
             match &sent {
                 Ok(()) => {
                     self.remove(&r.id);
+                    self.note_told(&r.message, now);
                     tick.sent += 1;
                 }
                 Err(e) => {
@@ -673,6 +706,7 @@ mod tests {
         let o = Outbox {
             dir: d.path().join("outbox"),
             quiet: quiet.and_then(|(s, e)| QuietHours::parse(s, e)),
+            told: Some(d.path().join("told.json")),
         };
         (d, o)
     }
@@ -878,5 +912,27 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("slack-default"), "{text}");
+    }
+
+    #[test]
+    fn the_same_alert_from_any_loop_goes_out_once_a_day() {
+        let (_d, o) = outbox(None);
+        let wire = Wire::new(vec![]);
+        let send = |t: &Target, a: &[Attempt], p: &str| wire.send(t, a, p);
+        let alert = |text: &str| msg(text).about(Some("issue:web#7:escalated"));
+        assert_eq!(
+            o.deliver_at(alert("first"), &send, at("09:00")),
+            Delivery::Sent
+        );
+        assert_eq!(
+            o.deliver_at(alert("again"), &send, at("12:00")),
+            Delivery::AlreadyTold
+        );
+        assert_eq!(
+            o.deliver_at(msg("untagged"), &send, at("12:00")),
+            Delivery::Sent
+        );
+        assert_eq!(*wire.sent.borrow(), ["first", "untagged"]);
+        assert!(Delivery::AlreadyTold.handled());
     }
 }

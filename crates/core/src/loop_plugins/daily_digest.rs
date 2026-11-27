@@ -52,6 +52,7 @@ pub struct DailyDigest {
     inbox_fn: Option<SourceFn>,
     topics_fn: Option<SourceFn>,
     todos_fn: Option<SourceFn>,
+    told_fn: Option<SourceFn>,
     calendar_accounts_fn: Option<CalendarAccountsFn>,
     events_dir: Option<PathBuf>,
 }
@@ -64,6 +65,7 @@ impl DailyDigest {
             inbox_fn: None,
             topics_fn: None,
             todos_fn: None,
+            told_fn: None,
             calendar_accounts_fn: None,
             events_dir: None,
         }
@@ -78,6 +80,10 @@ impl DailyDigest {
     }
     pub fn with_todos_fn(mut self, f: SourceFn) -> Self {
         self.todos_fn = Some(f);
+        self
+    }
+    pub fn with_told_fn(mut self, f: SourceFn) -> Self {
+        self.told_fn = Some(f);
         self
     }
     pub fn with_topics_fn(mut self, f: SourceFn) -> Self {
@@ -156,8 +162,22 @@ impl DailyDigest {
             "gitlab_todos".into(),
             safe(self.todos_fn.clone(), ctx, default_todos_fn),
         );
+        payload.insert(
+            "already_told".into(),
+            safe(self.told_fn.clone(), ctx, default_told_fn),
+        );
         cap(Value::Object(payload))
     }
+}
+
+/// The alerts LoopX sent in the day before this run (`crate::told`).
+fn default_told_fn(ctx: &LoopContext) -> Result<Value, String> {
+    let told = crate::told::since(&crate::told::default_path(), ctx.now - Duration::days(1));
+    Ok(Value::Array(
+        told.iter()
+            .map(|t| json!({"text": t.text, "at": t.at.to_rfc3339()}))
+            .collect(),
+    ))
 }
 
 /// How many cached todos the digest lists.
@@ -973,6 +993,7 @@ mod tests {
             .with_inbox_fn(Arc::new(|_| Ok(json!({}))))
             .with_topics_fn(Arc::new(|_| Ok(json!({}))))
             .with_todos_fn(Arc::new(|_| Ok(json!({}))))
+            .with_told_fn(Arc::new(|_| Ok(json!([]))))
             .with_calendar_accounts_fn(Arc::new(|| Ok(vec![])))
     }
 
@@ -1505,6 +1526,18 @@ mod tests {
                 }))
                 .collect(&ctx());
             assert_eq!(data["gitlab_todos"]["important"][0]["title"], "T");
+        });
+    }
+
+    #[test]
+    fn the_digest_is_told_what_alerts_already_went_out() {
+        with_tz("UTC", || {
+            let data = plugin(Source::default())
+                .with_told_fn(Arc::new(|_| {
+                    Ok(json!([{"text": "*Escalated* web #7", "at": "x"}]))
+                }))
+                .collect(&ctx());
+            assert_eq!(data["already_told"][0]["text"], "*Escalated* web #7");
         });
     }
 }

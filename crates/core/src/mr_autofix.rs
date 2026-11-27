@@ -838,6 +838,7 @@ pub fn main(argv: &[String]) -> i32 {
             None,
             None,
             crate::outbox::Urgency::Urgent,
+            None,
         );
     };
     let (ledger, inbox_dir) = (ledger_path(&home), home.join("event_triggers"));

@@ -405,6 +405,7 @@ fn outbox_clear(ctx: &UiCtx) -> UiResponse {
     loopx_core::outbox::Outbox {
         dir: ctx.state.repo_root.join("outputs").join("outbox"),
         quiet: None,
+        told: None,
     }
     .clear_failed();
     plain(true, ctx.t("Cleared."), NOTIFICATIONS)
@@ -691,7 +692,7 @@ mod tests {
         assert_eq!(post(&st, url, "csrf_token=tok&start=21:30&end=07:00").status, 303);
         assert_eq!(loopx_core::outbox::load_quiet_hours(&path), None);
 
-        let outbox = Outbox { dir: d.path().join("outputs/outbox"), quiet: None };
+        let outbox = Outbox { dir: d.path().join("outputs/outbox"), quiet: None, told: None };
         let then = Clock { utc: chrono::Utc::now() - chrono::Duration::days(2), local: chrono::Local::now().naive_local() };
         let msg = Outgoing::slack_text("hi", None, None).for_loop("inbox-triage-loop");
         let down = |_: &_, _: &[_], _: &str| Err(loopx_core::loop_notify::SendError::Http(503));

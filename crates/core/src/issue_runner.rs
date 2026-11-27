@@ -2434,16 +2434,22 @@ pub fn finalize_gated_issue(
 
     let mut bundle: Option<String> = None;
     let mut issue_label = slack_issue_link(alias, issue_iid, None);
-    let send_as = |bundle: &Option<String>, urgency: Urgency, message: String| match deps.notifier {
-        Some(n) => n(&message),
-        None => {
-            notify_slack_best_effort(&message, None, bundle.as_deref(), urgency);
+    // `what` names the alert for the shared "already told" record.
+    let send_as = |bundle: &Option<String>, urgency: Urgency, what: &str, message: String| {
+        match deps.notifier {
+            Some(n) => n(&message),
+            None => {
+                let about = format!("issue:{alias}#{issue_iid}:{what}");
+                notify_slack_best_effort(&message, None, bundle.as_deref(), urgency, Some(&about));
+            }
         }
     };
-    let send = |bundle: &Option<String>, message: String| send_as(bundle, Urgency::Urgent, message);
-    let notify = |bundle: &Option<String>, message: String| {
+    let send = |bundle: &Option<String>, what: &str, message: String| {
+        send_as(bundle, Urgency::Urgent, what, message)
+    };
+    let notify = |bundle: &Option<String>, what: &str, message: String| {
         if !deps.quiet {
-            send(bundle, message);
+            send(bundle, what, message);
         }
     };
 
@@ -2489,6 +2495,7 @@ pub fn finalize_gated_issue(
                 );
                 notify(
                     &bundle,
+                    "escalated:project_config_error",
                     escalation_slack(&issue_label, "project_config_error", None),
                 );
                 return "escalated:project_config_error".to_string();
@@ -2519,6 +2526,7 @@ pub fn finalize_gated_issue(
                     );
                     notify(
                         &bundle,
+                        "escalated:project_config_error",
                         escalation_slack(&issue_label, "project_config_error", None),
                     );
                     return "escalated:project_config_error".to_string();
@@ -2596,7 +2604,7 @@ pub fn finalize_gated_issue(
             slack.push_str(&agent_failure_lines(failure));
         }
         emit("issue.escalated", data);
-        notify(&bundle, slack);
+        notify(&bundle, &format!("escalated:{reason}"), slack);
         format!("escalated:{reason}")
     };
 
@@ -2611,7 +2619,11 @@ pub fn finalize_gated_issue(
             "issue.deferred",
             json!({"reason": USAGE_LIMIT, "message": said}),
         );
-        notify(&bundle, usage_limit_slack(&issue_label, &said));
+        notify(
+            &bundle,
+            "usage_limit",
+            usage_limit_slack(&issue_label, &said),
+        );
         return DEFERRED_USAGE_LIMIT.to_string();
     }
 
@@ -2667,6 +2679,7 @@ pub fn finalize_gated_issue(
         );
         notify(
             &bundle,
+            "spec_posted",
             format!("*Spec posted* {issue_label}: waiting for approval"),
         );
         return "spec_posted".to_string();
@@ -2781,6 +2794,7 @@ pub fn finalize_gated_issue(
             );
             send(
                 &bundle,
+                "approval",
                 format!(
                     "*Approval needed* {issue_label}: open MR `{branch}` \u{2192} `{target}`? Approve it in LoopX (expires {}).",
                     approval["expires_at"].as_str().unwrap_or("?")
@@ -2919,6 +2933,7 @@ pub fn finalize_gated_issue(
         send_as(
             &bundle,
             Urgency::Routine,
+            "mr_opened",
             format!("*Finished* {issue_label}: MR opened \u{2192} {link}{setup_note}"),
         );
     }

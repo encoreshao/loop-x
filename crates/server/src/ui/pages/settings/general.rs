@@ -214,6 +214,7 @@ fn outbox_html(ctx: &UiCtx, csrf: &str) -> String {
     let summary = outbox::Outbox {
         dir: ctx.state.repo_root.join("outputs").join("outbox"),
         quiet: None,
+        told: None,
     }
     .summary();
     let status = if summary.retrying == 0 && summary.held == 0 {

@@ -178,12 +178,13 @@ pub fn notify_slack_best_effort(
     notification_key: Option<&str>,
     bundle: Option<&str>,
     urgency: crate::outbox::Urgency,
+    about: Option<&str>,
 ) -> bool {
     let blocks =
         loop_notify::resolve_blocks(notification_key, message, &slack::default_config_path());
     let msg = crate::outbox::Outgoing {
         urgency,
-        ..crate::outbox::Outgoing::slack_text(message, blocks, bundle)
+        ..crate::outbox::Outgoing::slack_text(message, blocks, bundle).about(about)
     };
     let delivery = crate::outbox::Outbox::real().deliver(msg, &crate::connectors_config::live_send);
     if let crate::outbox::Delivery::Failed(e) = &delivery {

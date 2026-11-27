@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::process::ExitCode;
 
 const USAGE: &str =
-    "Usage: loopx notify [--bundle=<name>] [--blocks=<json blocks array>] [--urgent] <message text>";
+    "Usage: loopx notify [--bundle=<name>] [--blocks=<json blocks array>] [--urgent] [--about=<key>] <message text>";
 
 pub fn run(args: &[String]) -> ExitCode {
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -31,6 +31,10 @@ pub fn run(args: &[String]) -> ExitCode {
             println!("Not sent yet ({why}): LoopX retries it, so do not send it again.");
             ExitCode::SUCCESS
         }
+        Ok(Delivery::AlreadyTold) => {
+            println!("Not sent: the same alert went out in the last day.");
+            ExitCode::SUCCESS
+        }
         Ok(Delivery::Failed(why)) => {
             eprintln!("Slack notification failed: {why}");
             ExitCode::from(1)
@@ -46,6 +50,7 @@ fn send(args: &[String]) -> Result<Delivery, String> {
     let mut bundle = None;
     let mut blocks: Option<Value> = None;
     let mut urgency = Urgency::Routine;
+    let mut about = None;
     let mut positional = Vec::new();
     for arg in args {
         if let Some(name) = arg.strip_prefix("--bundle=") {
@@ -54,6 +59,8 @@ fn send(args: &[String]) -> Result<Delivery, String> {
             blocks = Some(
                 serde_json::from_str(json).map_err(|e| format!("Invalid --blocks JSON: {e}"))?,
             );
+        } else if let Some(key) = arg.strip_prefix("--about=") {
+            about = Some(key).filter(|k| !k.is_empty());
         } else if arg == "--urgent" {
             urgency = Urgency::Urgent;
         } else {
@@ -65,7 +72,7 @@ fn send(args: &[String]) -> Result<Delivery, String> {
     };
     let msg = Outgoing {
         urgency,
-        ..Outgoing::slack_text(text, blocks, bundle)
+        ..Outgoing::slack_text(text, blocks, bundle).about(about)
     };
     Ok(Outbox::real().deliver(msg, &connectors_config::live_send))
 }

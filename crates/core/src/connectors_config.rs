@@ -805,6 +805,7 @@ pub fn notify_loop(loop_name: &str, text: &str, blocks: Option<&Value>) -> Vec<N
         }],
         plain: text.to_string(),
         urgency: Urgency::Routine,
+        about: None,
     };
     deliver_to_loop(loop_name, msg, &Outbox::real(), &live_send)
 }
