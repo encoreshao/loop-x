@@ -464,6 +464,51 @@ pub fn apply_outcomes(
     Ok(newly_flagged)
 }
 
+/// How often [`tidy_if_due`] retires lessons.
+pub const TIDY_EVERY_DAYS: i64 = 7;
+
+/// Retire every lesson flagged `needs_review` whose score is still at or below
+/// [`NEEDS_REVIEW_THRESHOLD`]: runs stop getting it, and the Memory page lists it
+/// with a Restore button. Returns `alias/lesson_id` per retired lesson.
+pub fn tidy(root: Option<&Path>) -> Vec<String> {
+    let mut retired = Vec::new();
+    for alias in memory_store::all_aliases(root) {
+        for m in memory_store::list_task_memories(&alias, root) {
+            let Some(id) = m.lesson_id.as_deref() else {
+                continue;
+            };
+            if m.flag == "needs_review"
+                && m.score <= NEEDS_REVIEW_THRESHOLD
+                && memory_store::retire(id, &alias, root).unwrap_or(false)
+            {
+                retired.push(format!("{alias}/{id}"));
+            }
+        }
+    }
+    retired
+}
+
+/// [`tidy`] at most once every [`TIDY_EVERY_DAYS`], remembered in
+/// `<memory root>/.tidied_at`.
+pub fn tidy_if_due(root: Option<&Path>, now: chrono::DateTime<chrono::Utc>) -> Vec<String> {
+    let base = root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(memory_store::default_memory_root);
+    let stamp = base.join(".tidied_at");
+    let last = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t.trim()).ok());
+    if last.is_some_and(|t| {
+        now - t.with_timezone(&chrono::Utc) < chrono::Duration::days(TIDY_EVERY_DAYS)
+    }) {
+        return Vec::new();
+    }
+    let retired = tidy(root);
+    let _ = std::fs::create_dir_all(&base);
+    let _ = std::fs::write(&stamp, now.to_rfc3339());
+    retired
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,5 +777,45 @@ mod tests {
                 .score,
             -1
         );
+    }
+
+    #[test]
+    fn a_lesson_that_keeps_failing_is_retired_weekly_and_can_be_restored() {
+        let d = tempfile::tempdir().unwrap();
+        let root = Some(d.path());
+        let bad = memory_store::add_task_memory("web", 1, "always mock the clock", &[], None, root)
+            .unwrap()
+            .lesson_id
+            .unwrap();
+        let good = memory_store::add_task_memory("web", 2, "run the seeds first", &[], None, root)
+            .unwrap()
+            .lesson_id
+            .unwrap();
+        memory_store::set_score(&bad, -2, "needs_review", Some("web"), root).unwrap();
+        let index = || std::fs::read_to_string(d.path().join("web/MEMORY.md")).unwrap();
+        assert!(index().contains("#1 "));
+
+        let now = chrono::Utc::now();
+        assert_eq!(tidy_if_due(root, now), vec![format!("web/{bad}")]);
+        let in_use: Vec<_> = memory_store::list_task_memories("web", root)
+            .into_iter()
+            .filter(memory_store::in_use)
+            .filter_map(|m| m.lesson_id)
+            .collect();
+        assert_eq!(in_use, vec![good.clone()]);
+        assert!(!index().contains("#1 ") && index().contains("#2 "));
+
+        memory_store::set_score(&good, -3, "needs_review", Some("web"), root).unwrap();
+        assert!(tidy_if_due(root, now + chrono::Duration::days(1)).is_empty());
+        assert_eq!(tidy_if_due(root, now + chrono::Duration::days(8)).len(), 1);
+
+        assert!(memory_store::restore(&bad, "web", root).unwrap());
+        assert!(!memory_store::restore(&bad, "web", root).unwrap());
+        let back = memory_store::list_task_memories("web", root)
+            .into_iter()
+            .find(|m| m.lesson_id.as_deref() == Some(bad.as_str()))
+            .unwrap();
+        assert_eq!((back.score, back.flag.as_str()), (0, ""));
+        assert!(index().contains("#1 "));
     }
 }

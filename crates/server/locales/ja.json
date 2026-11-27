@@ -2457,5 +2457,8 @@
   "Quiet hours saved.": "おやすみ時間を保存しました。",
   "Quiet hours are off.": "おやすみ時間をオフにしました。",
   "Cleared.": "消去しました。",
-  "Timer": "タイマー"
+  "Timer": "タイマー",
+  "Retired": "廃止済み",
+  "Reuse of this lesson kept preceding failures, so runs no longer get it.": "このレッスンを再利用した実行で失敗が続いたため、今後の実行には渡されません。",
+  "Lesson restored. Runs get it again, starting from a fresh score.": "レッスンを復元しました。スコアをリセットして、再び実行に渡されます。"
 }

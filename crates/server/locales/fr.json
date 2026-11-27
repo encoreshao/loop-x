@@ -2457,5 +2457,8 @@
   "Quiet hours saved.": "Heures calmes enregistrées.",
   "Quiet hours are off.": "Les heures calmes sont désactivées.",
   "Cleared.": "Effacé.",
-  "Timer": "Minuteur"
+  "Timer": "Minuteur",
+  "Retired": "Retirée",
+  "Reuse of this lesson kept preceding failures, so runs no longer get it.": "La réutilisation de cette leçon a précédé des échecs répétés : les exécutions ne la reçoivent plus.",
+  "Lesson restored. Runs get it again, starting from a fresh score.": "Leçon restaurée. Les exécutions la reçoivent de nouveau, avec un score remis à zéro."
 }

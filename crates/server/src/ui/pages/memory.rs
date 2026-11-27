@@ -75,6 +75,7 @@ pub fn register(r: &mut Registry) {
     r.post("/insights/memory/section/save", save_section);
     r.post("/insights/memory/section/refresh", refresh_section);
     r.post("/insights/memory/proposal/decide", decide);
+    r.post("/insights/memory/lesson/restore", restore_lesson);
     r.post("/insights/memory/sync/settings", sync_settings);
     r.post("/insights/memory/sync/now", sync_now);
     r.post("/insights/memory/sync/slack", slack_settings);
@@ -2160,7 +2161,21 @@ fn lessons_card(ctx: &UiCtx, p: &Project) -> String {
             None => format!("<div class='markdown'>{}</div>", markdown::render_markdown(body, &prefixes)),
         };
         let needs_review = e["flag"].as_str() == Some("needs_review");
-        let badge = if needs_review {
+        let retired = e["flag"].as_str() == Some(memory_store::RETIRED);
+        let badge = if retired {
+            format!(
+                "<span class='pill pill-grey' title='{}'>{}</span>\
+<form method='post' action='/insights/memory/lesson/restore' class='lesson-restore-form'>{}\
+<input type='hidden' name='project' value='{}'><input type='hidden' name='lesson_id' value='{}'>\
+<button type='submit' class='btn btn-neutral'>{}</button></form>",
+                escape(&ctx.t("Reuse of this lesson kept preceding failures, so runs no longer get it.")),
+                escape(&ctx.t("Retired")),
+                ctx.csrf_input(),
+                escape(alias),
+                escape(e["lesson_id"].as_str().unwrap_or("")),
+                escape(&ctx.t("Restore"))
+            )
+        } else if needs_review {
             format!(
                 "<span class='pill pill-red' title='{}'><svg class='icon' aria-hidden='true'><use href='#i-warning'/></svg>{}</span>",
                 escape(&ctx.t("Reuse of this lesson preceded repeated failures; check it is still correct.")),
@@ -2169,7 +2184,13 @@ fn lessons_card(ctx: &UiCtx, p: &Project) -> String {
         } else {
             String::new()
         };
-        let data_attr = if needs_review { " data-needs-review='1'" } else { "" };
+        let data_attr = if retired {
+            " data-retired='1'"
+        } else if needs_review {
+            " data-needs-review='1'"
+        } else {
+            ""
+        };
         format!(
             "<li class='learning-item'{data_attr}>{badge}{description_html}{body_html}{meta}{}</li>",
             reuse_stats(&e["lesson_id"])
@@ -2311,9 +2332,10 @@ enum Notice {
     GuideProposalChanged,
     GuideProposalFailed,
     GuideOwnsFeatures,
+    LessonRestored,
 }
 
-const NOTICES: [(Notice, &str); 53] = [
+const NOTICES: [(Notice, &str); 54] = [
     (Notice::BuildStarted, "build-started"),
     (Notice::BuildAllStarted, "build-all-started"),
     (Notice::Busy, "busy"),
@@ -2367,6 +2389,7 @@ const NOTICES: [(Notice, &str); 53] = [
     (Notice::GuideProposalChanged, "guide-proposal-changed"),
     (Notice::GuideProposalFailed, "guide-proposal-failed"),
     (Notice::GuideOwnsFeatures, "guide-owns-features"),
+    (Notice::LessonRestored, "lesson-restored"),
 ];
 
 impl Notice {
@@ -2433,6 +2456,7 @@ impl Notice {
             Notice::Dismissed => ctx.t("Proposal dismissed. It is not raised again until its sources change."),
             Notice::Changed => ctx.t("This section changed since the proposal was raised, so it was not applied. Refresh the section to get a new proposal."),
             Notice::GuideOwnsFeatures => ctx.t("This section is generated from the Guide, so the proposal was not applied. Dismiss it, or edit this section by hand to take it over."),
+            Notice::LessonRestored => ctx.t("Lesson restored. Runs get it again, starting from a fresh score."),
             Notice::AlreadyDecided => ctx.t("That proposal was already decided."),
             Notice::ApplyFailed => ctx.t("The proposal could not be applied to the profile."),
             Notice::SyncOn => ctx.t("Weekly sync is on."),
@@ -3062,6 +3086,19 @@ fn still_applies(profile: &Profile, key: SectionKey, a: &Value) -> bool {
 /// old text; then the proposal is applied. Should the apply still fail (another
 /// process wrote in between), the approved proposal keeps an Apply button while
 /// it remains applicable.
+fn restore_lesson(ctx: &UiCtx) -> UiResponse {
+    let form = ctx.form();
+    let Some(alias) = known_alias(ctx, form.first("project")) else {
+        return back(Back::Overview, Notice::BadInput);
+    };
+    let to = || Back::Project(&alias, Some("lessons"));
+    let id = form.first("lesson_id").unwrap_or("");
+    match memory_store::restore(id, &alias, Some(&memory_root(ctx))) {
+        Ok(true) => back(to(), Notice::LessonRestored),
+        _ => back(to(), Notice::BadInput),
+    }
+}
+
 fn decide(ctx: &UiCtx) -> UiResponse {
     let form = ctx.form();
     let Some(alias) = known_alias(ctx, form.first("project")) else {
@@ -4618,6 +4655,26 @@ mod tests {
         assert!(sb2.get("/insights?view=memory&project=beta&page=lessons").contains("(no task memory recorded yet)"));
     }
 
+
+    #[test]
+    fn a_retired_lesson_is_shown_with_a_restore_button_that_brings_it_back() {
+        let sb = Sb::new(&[("alpha", true)]);
+        let root = sb.root();
+        let id = loopx_core::memory_store::add_task_memory("alpha", 7, "Always stub the clock.", &[], None, Some(&root))
+            .unwrap()
+            .lesson_id
+            .unwrap();
+        assert!(loopx_core::memory_store::retire(&id, "alpha", Some(&root)).unwrap());
+        let html = sb.get("/insights?view=memory&project=alpha&page=lessons");
+        assert!(html.contains("<li class='learning-item' data-retired='1'>"), "{html}");
+        assert!(html.contains(&format!("name='lesson_id' value='{id}'")), "{html}");
+        let r = sb.post("/insights/memory/lesson/restore", &format!("project=alpha&lesson_id={id}"));
+        assert_eq!(r.status, 303);
+        let html = sb.get("/insights?view=memory&project=alpha&page=lessons");
+        assert!(!html.contains("data-retired='1'"), "{html}");
+        let r = sb.post("/insights/memory/lesson/restore", "project=nope&lesson_id=x");
+        assert_eq!(r.status, 303);
+    }
 
     #[test]
     fn issues_only_alias_with_legacy_learnings_still_shows_them() {

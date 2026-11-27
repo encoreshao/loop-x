@@ -250,6 +250,7 @@ pub fn memory_store(args: &[String]) -> ExitCode {
         ("list", [alias, ..]) => {
             let all: Vec<Value> = memory_store::list_task_memories(alias, None)
                 .iter()
+                .filter(|m| memory_store::in_use(m))
                 .map(|m| m.to_value())
                 .collect();
             println!(

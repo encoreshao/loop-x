@@ -127,6 +127,10 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         &|m| eprintln!("loop_scheduler: {m}"),
     );
     let timed = fire_timers(&queue);
+    let retired = loopx_core::learning::tidy_if_due(None, chrono::Utc::now());
+    if !retired.is_empty() {
+        println!("loop_scheduler: retired lessons {}", retired.join(", "));
+    }
     let outbox = loopx_core::outbox::Outbox::real().tick(&loopx_core::connectors_config::live_send);
     if outbox != loopx_core::outbox::Tick::default() {
         println!(

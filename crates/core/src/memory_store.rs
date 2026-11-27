@@ -507,6 +507,68 @@ pub fn set_score(
     Ok(false)
 }
 
+/// A lesson's flag once it stops being given to runs (see `learning::tidy`).
+pub const RETIRED: &str = "retired";
+
+/// Whether runs are given this lesson.
+pub fn in_use(m: &TaskMemory) -> bool {
+    m.flag != RETIRED
+}
+
+/// Stop giving the lesson `lesson_id` to runs: flag it retired, keeping its
+/// score, and drop it from the project's `MEMORY.md` index.
+pub fn retire(lesson_id: &str, alias: &str, root: Option<&Path>) -> io::Result<bool> {
+    let Some(m) = find_lesson(lesson_id, alias, root) else {
+        return Ok(false);
+    };
+    if !set_score(lesson_id, m.score, RETIRED, Some(alias), root)? {
+        return Ok(false);
+    }
+    if let Some(name) = m.path.as_deref().and_then(|p| Path::new(p).file_name()) {
+        remove_index_line(alias, &name.to_string_lossy(), root)?;
+    }
+    Ok(true)
+}
+
+/// Give a retired lesson to runs again, with a fresh score.
+pub fn restore(lesson_id: &str, alias: &str, root: Option<&Path>) -> io::Result<bool> {
+    let Some(m) = find_lesson(lesson_id, alias, root).filter(|m| !in_use(m)) else {
+        return Ok(false);
+    };
+    if !set_score(lesson_id, 0, "", Some(alias), root)? {
+        return Ok(false);
+    }
+    if let Some(name) = m.path.as_deref().and_then(|p| Path::new(p).file_name()) {
+        rewrite_index_line(
+            alias,
+            &name.to_string_lossy(),
+            &m.description.render(),
+            m.issue_iid,
+            root,
+        )?;
+    }
+    Ok(true)
+}
+
+fn find_lesson(lesson_id: &str, alias: &str, root: Option<&Path>) -> Option<TaskMemory> {
+    list_task_memories(alias, root)
+        .into_iter()
+        .find(|m| m.lesson_id.as_deref() == Some(lesson_id))
+}
+
+fn remove_index_line(alias: &str, filename: &str, root: Option<&Path>) -> io::Result<()> {
+    let index_path = project_dir(alias, root).join("MEMORY.md");
+    let Ok(existing) = std::fs::read_to_string(&index_path) else {
+        return Ok(());
+    };
+    let marker = format!("]({filename})");
+    let kept: String = existing
+        .split_inclusive('\n')
+        .filter(|l| !l.contains(&marker))
+        .collect();
+    std::fs::write(index_path, kept)
+}
+
 fn sorted_subdirs(root: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
         .map(|rd| {

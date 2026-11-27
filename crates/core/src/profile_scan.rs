@@ -887,7 +887,10 @@ pub(crate) fn digest_from(
     }
     let mut lessons = Vec::new();
     // Newest first (list_task_memories sorts by modification time).
-    for m in memory_store::list_task_memories(alias, memory_root) {
+    for m in memory_store::list_task_memories(alias, memory_root)
+        .into_iter()
+        .filter(memory_store::in_use)
+    {
         let v = m.to_value();
         let text = v["description"]
             .as_str()

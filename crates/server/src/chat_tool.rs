@@ -312,6 +312,7 @@ fn project_memory(state: &UiState) -> Value {
             .unwrap_or_default();
             let tasks: Vec<Value> = memory_store::list_task_memories(alias, Some(&root))
                 .iter()
+                .filter(|m| memory_store::in_use(m))
                 .map(memory_store::TaskMemory::to_value)
                 .collect();
             out.insert(alias.clone(), json!({ "legacy": legacy, "tasks": tasks }));

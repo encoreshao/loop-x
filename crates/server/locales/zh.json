@@ -2457,5 +2457,8 @@
   "Quiet hours saved.": "免打扰时段已保存。",
   "Quiet hours are off.": "免打扰时段已关闭。",
   "Cleared.": "已清除。",
-  "Timer": "定时器"
+  "Timer": "定时器",
+  "Retired": "已停用",
+  "Reuse of this lesson kept preceding failures, so runs no longer get it.": "复用这条经验后多次出现失败，因此运行时不再提供它。",
+  "Lesson restored. Runs get it again, starting from a fresh score.": "经验已恢复。运行时会再次提供它，分数从零开始。"
 }
