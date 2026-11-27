@@ -44,6 +44,7 @@ pub fn register(r: &mut Registry) {
     r.post("/ai-cli/accounts/add", ai_cli_account_add);
     r.post("/ai-cli/accounts/remove", ai_cli_account_remove);
     r.post("/instructions", instructions);
+    r.post("/settings/preferences/forget", forget_preference);
     r.post("/topic-monitor/topics", topic_save);
     r.post("/topic-monitor/topics/:name/delete", topic_delete);
     r.post("/topic-monitor/topics/:name/enable", topic_enable);
@@ -532,6 +533,21 @@ fn instructions(ctx: &UiCtx) -> UiResponse {
         store::write_custom_instructions(&text, &ctx.state.home_dir.join("instructions.md")),
         "/settings?tab=instructions",
     )
+}
+
+fn forget_preference(ctx: &UiCtx) -> UiResponse {
+    let id = ctx.form().first("id").unwrap_or("").to_string();
+    let paths = loopx_core::user_memory::Paths {
+        home: ctx.state.home_dir.clone(),
+        memory_root: ctx.state.home_dir.join("memory"),
+        approvals_dir: ctx.state.repo_root.join("outputs").join("approvals"),
+        events_dir: ctx.state.events_dir.clone(),
+    };
+    match loopx_core::user_memory::forget(&paths, &id) {
+        Ok(true) => plain(true, ctx.t("Preference removed. The loops stop following it from their next run."), "/settings?tab=instructions"),
+        Ok(false) => plain(false, ctx.t("That preference was already removed."), "/settings?tab=instructions"),
+        Err(e) => plain(false, e, "/settings?tab=instructions"),
+    }
 }
 
 fn topic_history_dir(ctx: &UiCtx) -> PathBuf {

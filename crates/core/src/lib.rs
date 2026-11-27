@@ -167,6 +167,7 @@ pub mod topic_seen;
 pub mod topics;
 pub mod ui_check;
 pub mod update_check;
+pub mod user_memory;
 pub mod verify_commands;
 pub mod voice;
 pub mod window_capture;

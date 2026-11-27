@@ -93,6 +93,9 @@ pub(crate) fn headline(ctx: &UiCtx, item: &Value) -> String {
             "Review the proposed {section} change to the {project} profile",
             &[("section", &f("section")), ("project", &f("project"))],
         ),
+        Some("approval") if item["approval_kind"] == loopx_core::user_memory::KIND => {
+            ctx.tf("Remember this preference: {text}", &[("text", &f("preference"))])
+        }
         Some("approval") if item["approval_kind"] == loopx_core::guide_proposal::KIND => ctx.tf(
             "Review the proposed change to the {slug} guide page of {project}",
             &[("slug", &f("slug")), ("project", &f("project"))],
@@ -226,6 +229,19 @@ fn actions(ctx: &UiCtx, item: &Value, stale: bool) -> String {
             pyfmt::escape(&ctx.t("Dismiss")),
             pyfmt::escape(&crate::ui::pages::memory::project_url(&text(item, "project"), Some("proposals"))),
             pyfmt::escape(&ctx.t("Open in Memory")),
+        );
+    }
+    if item["kind"] == "approval" && item["approval_kind"] == loopx_core::user_memory::KIND {
+        return format!(
+            "<p class='muted needs-you-note'>{}</p>\
+<form method='post' action='/needs-you/approval' class='needs-you-approval'>{csrf}\
+<input type='hidden' name='id' value='{}'>\
+<button type='submit' name='decision' value='approve' class='btn btn-primary'>{}</button>\
+<button type='submit' name='decision' value='deny' class='btn btn-neutral'>{}</button></form>",
+            pyfmt::escape(&ctx.tf("Learned from {source}", &[("source", &text(item, "source"))])),
+            pyfmt::escape(&text(item, "approval_id")),
+            pyfmt::escape(&ctx.t("Remember")),
+            pyfmt::escape(&ctx.t("Dismiss")),
         );
     }
     if item["kind"] == "approval" {
@@ -578,6 +594,8 @@ fn post_approval(ctx: &UiCtx) -> UiResponse {
         ctx.t("Decision recorded; the loop picks it up within seconds.")
     } else if kind.as_ref().is_some_and(|k| k == loopx_core::guide_proposal::KIND) {
         ctx.t("Proposal approved and applied to the guide page.")
+    } else if kind.as_ref().is_some_and(|k| k == loopx_core::user_memory::KIND) {
+        ctx.t("Preference saved. Every loop follows it from its next run.")
     } else {
         ctx.t("Proposal approved and applied to the profile.")
     };
@@ -1444,6 +1462,34 @@ mod tests {
         assert!(html.contains("Nothing needs you right now."), "{html}");
         assert!(html.contains("id='needs-you-bell'") && !html.contains("<span class='needs-you-count'>"), "{html}");
         assert_eq!(get(&st, "/needs-you/count"), r#"{"count": 0}"#);
+    }
+
+    #[test]
+    fn a_preference_proposal_is_remembered_shown_in_settings_and_removable() {
+        let d = tempfile::tempdir().unwrap();
+        let st = state(d.path());
+        let new = NewApproval {
+            kind: loopx_core::user_memory::KIND.into(),
+            title: "Remember this preference: Keep commits small.".into(),
+            timeout_seconds: 3600,
+            target: Some(serde_json::json!({"text": "Keep commits small.", "source": "your notes on web #7"})),
+            ..Default::default()
+        };
+        let a = approvals::create(&d.path().join("outputs/approvals"), &new, chrono::Utc::now()).unwrap();
+        let id = a["id"].as_str().unwrap();
+        let html = get(&st, "/needs-you");
+        assert!(html.contains("Remember this preference: Keep commits small."), "{html}");
+        assert!(html.contains("Learned from your notes on web #7"), "{html}");
+        assert!(!html.contains("value='request_changes'"), "{html}");
+
+        assert_eq!(post(&st, "/needs-you/approval", &format!("csrf_token=tok&id={id}&decision=approve")).status, 303);
+        assert_eq!(approvals::get(&d.path().join("outputs/approvals"), id).unwrap()["status"], "approved");
+        let you = std::fs::read_to_string(d.path().join("you/you.md")).unwrap();
+        assert!(you.contains("- Keep commits small."), "{you}");
+        let settings = get(&st, "/settings?tab=instructions");
+        assert!(settings.contains("<span>Keep commits small.</span>"), "{settings}");
+        assert_eq!(post(&st, "/settings/preferences/forget", &format!("csrf_token=tok&id={id}")).status, 303);
+        assert!(!get(&st, "/settings?tab=instructions").contains("<span>Keep commits small.</span>"));
     }
 
     #[test]

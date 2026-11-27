@@ -127,6 +127,15 @@ pub fn scheduler(args: &[String]) -> ExitCode {
         &|m| eprintln!("loop_scheduler: {m}"),
     );
     let timed = fire_timers(&queue);
+    let proposed = loopx_core::user_memory::refresh_if_due(
+        &loopx_core::user_memory::Paths::live(),
+        chrono::Utc::now(),
+        &loopx_core::user_memory::sealed_distill,
+        &|m| eprintln!("loop_scheduler: {m}"),
+    );
+    if !proposed.is_empty() {
+        println!("loop_scheduler: proposed {} preference(s)", proposed.len());
+    }
     let retired = loopx_core::learning::tidy_if_due(None, chrono::Utc::now());
     if !retired.is_empty() {
         println!("loop_scheduler: retired lessons {}", retired.join(", "));

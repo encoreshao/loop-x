@@ -2460,5 +2460,14 @@
   "Timer": "定时器",
   "Retired": "已停用",
   "Reuse of this lesson kept preceding failures, so runs no longer get it.": "复用这条经验后多次出现失败，因此运行时不再提供它。",
-  "Lesson restored. Runs get it again, starting from a fresh score.": "经验已恢复。运行时会再次提供它，分数从零开始。"
+  "Lesson restored. Runs get it again, starting from a fresh score.": "经验已恢复。运行时会再次提供它，分数从零开始。",
+  "Remember this preference: {text}": "记住这条偏好：{text}",
+  "Learned from {source}": "学习自 {source}",
+  "Remember": "记住",
+  "Preference saved. Every loop follows it from its next run.": "偏好已保存。每个循环会从下次运行起遵循它。",
+  "None yet.": "暂无。",
+  "Learned preferences": "已学习的偏好",
+  "Once a week LoopX reads your review notes and proposes lasting preferences under Needs you. The ones you accept are kept in {path} with your projects and a record of past runs, and the loops read it with your instructions.": "LoopX 每周阅读一次你的评审意见，并在“待你处理”中提出长期偏好。你接受的偏好会与你的项目和过往运行记录一起保存在 {path} 中，循环会连同你的指令一起读取它。",
+  "Preference removed. The loops stop following it from their next run.": "偏好已删除。循环会从下次运行起不再遵循它。",
+  "That preference was already removed.": "该偏好已被删除。"
 }

@@ -134,6 +134,16 @@ fn approvals(src: &Sources, now: DateTime<Utc>) -> Vec<Value> {
                     json!({"approval_id": a["id"], "project": project, "approval_kind": a["kind"], "section": section}),
                 );
             }
+            if a["kind"] == crate::user_memory::KIND {
+                let text = a["target"]["text"].as_str().unwrap_or("");
+                return item(
+                    format!("approval:{}", a["id"].as_str().unwrap_or("")),
+                    "approval",
+                    format!("Remember this preference: {text}"),
+                    a["created_at"].as_str(),
+                    json!({"approval_id": a["id"], "approval_kind": a["kind"], "preference": text, "source": a["target"]["source"]}),
+                );
+            }
             if a["kind"] == crate::guide_proposal::KIND {
                 // A guide page proposal has no issue, branch or merge request either.
                 let slug = a["target"]["slug"].as_str().unwrap_or("");

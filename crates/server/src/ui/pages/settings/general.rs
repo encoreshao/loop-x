@@ -576,7 +576,45 @@ For one loop only, add a file under {per_loop} (gitlab-issue.md, topic-monitor.m
         .var("instructions_subtitle", subtitle)
         .var("csrf_input", csrf)
         .var("current_text", text);
-    render("settings_instructions_panel", &scope)
+    render("settings_instructions_panel", &scope) + &learned_preferences_card(ctx, csrf)
+}
+
+/// The preferences you accepted from your review notes (`loopx_core::user_memory`).
+fn learned_preferences_card(ctx: &UiCtx, csrf: &str) -> String {
+    let paths = loopx_core::user_memory::Paths {
+        home: ctx.state.home_dir.clone(),
+        memory_root: ctx.state.home_dir.join("memory"),
+        approvals_dir: ctx.state.repo_root.join("outputs").join("approvals"),
+        events_dir: ctx.state.events_dir.clone(),
+    };
+    let accepted = loopx_core::user_memory::preferences(&paths).accepted;
+    let list = if accepted.is_empty() {
+        format!("<p class='muted'>{}</p>", pyfmt::escape(&ctx.t("None yet.")))
+    } else {
+        let items: String = accepted
+            .iter()
+            .map(|p| {
+                format!(
+                    "<li class='preference-item'><span>{}</span>\
+<form method='post' action='/settings/preferences/forget' class='preference-forget-form'>{csrf}\
+<input type='hidden' name='id' value='{}'><button type='submit' class='btn btn-neutral'>{}</button></form></li>",
+                    pyfmt::escape(&p.text),
+                    pyfmt::escape(&p.id),
+                    pyfmt::escape(&ctx.t("Remove")),
+                )
+            })
+            .collect();
+        format!("<ul class='preference-list'>{items}</ul>")
+    };
+    format!(
+        "<section class='card learned-preferences-card'><div class='section-header'><h2>{}</h2></div>\
+<p class='section-subtitle'>{}</p>{list}</section>",
+        pyfmt::escape(&ctx.t("Learned preferences")),
+        ctx.tf(
+            "Once a week LoopX reads your review notes and proposes lasting preferences under Needs you. The ones you accept are kept in {path} with your projects and a record of past runs, and the loops read it with your instructions.",
+            &[("path", "<code>~/.loopx/you/you.md</code>")]
+        ),
+    )
 }
 
 const VOICE_ICON: &str = "<svg class='icon' aria-hidden='true'><use href='#i-mic'/></svg>";

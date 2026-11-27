@@ -2460,5 +2460,14 @@
   "Timer": "タイマー",
   "Retired": "廃止済み",
   "Reuse of this lesson kept preceding failures, so runs no longer get it.": "このレッスンを再利用した実行で失敗が続いたため、今後の実行には渡されません。",
-  "Lesson restored. Runs get it again, starting from a fresh score.": "レッスンを復元しました。スコアをリセットして、再び実行に渡されます。"
+  "Lesson restored. Runs get it again, starting from a fresh score.": "レッスンを復元しました。スコアをリセットして、再び実行に渡されます。",
+  "Remember this preference: {text}": "この好みを記憶する: {text}",
+  "Learned from {source}": "{source} から学習",
+  "Remember": "記憶する",
+  "Preference saved. Every loop follows it from its next run.": "好みを保存しました。各ループは次の実行から従います。",
+  "None yet.": "まだありません。",
+  "Learned preferences": "学習した好み",
+  "Once a week LoopX reads your review notes and proposes lasting preferences under Needs you. The ones you accept are kept in {path} with your projects and a record of past runs, and the loops read it with your instructions.": "LoopX は週に一度あなたのレビューコメントを読み、継続的な好みを「対応待ち」で提案します。承認したものは、プロジェクトや過去の実行記録とともに {path} に保存され、ループは指示と一緒にこれを読みます。",
+  "Preference removed. The loops stop following it from their next run.": "好みを削除しました。ループは次の実行から従わなくなります。",
+  "That preference was already removed.": "その好みはすでに削除されています。"
 }

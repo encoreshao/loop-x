@@ -4,14 +4,14 @@
 //! CLI) asks [`is_kind`] and approves through [`approve_and_apply`], so both kinds are
 //! applied the moment they are approved.
 
-use crate::{approvals, guide_proposal, profile_sync};
+use crate::{approvals, guide_proposal, profile_sync, user_memory};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::path::Path;
 
 /// Whether an approval's `kind` is a proposal kind.
 pub fn is_kind(kind: &Value) -> bool {
-    *kind == profile_sync::KIND || *kind == guide_proposal::KIND
+    *kind == profile_sync::KIND || *kind == guide_proposal::KIND || *kind == user_memory::KIND
 }
 
 /// Approve a proposal and apply it, dispatching on its kind. Returns the approval as
@@ -30,6 +30,19 @@ pub fn approve_and_apply(
         }
         Some(guide_proposal::KIND) => {
             guide_proposal::approve_and_apply(id, by, root, approvals_dir, now)
+        }
+        Some(user_memory::KIND) => {
+            let memory_root =
+                root.map_or_else(crate::memory_store::default_memory_root, Path::to_path_buf);
+            let paths = user_memory::Paths {
+                home: memory_root
+                    .parent()
+                    .map_or_else(crate::config::home_dir, Path::to_path_buf),
+                memory_root,
+                approvals_dir: approvals_dir.to_path_buf(),
+                events_dir: crate::events::default_events_dir(),
+            };
+            user_memory::approve_and_apply(id, by, &paths, now)
         }
         _ => Err(format!("approval {id} is not a proposal")),
     }

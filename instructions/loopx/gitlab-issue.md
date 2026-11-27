@@ -33,7 +33,7 @@ Build daily-review.md's seven sections from those events using the same judgment
 
 The `<alias> <issue_iid>` (no flag) dashboard mode described above is unaffected: it is a run of exactly one issue, so the "End of run" it does itself *is* that run's whole report.
 
-Then read any custom instructions the user has set, if present: `~/.loopx/instructions.md` (global, applies to every loop; saved via the dashboard's **Settings** page's Instructions tab) and `~/.loopx/instructions/gitlab-issue.md` (this loop only). Follow them for the rest of this run, on top of (never in place of) everything in this file, the per-loop file after the global one. It's fine, and expected, for either file to not exist or to be empty; that just means no additional instructions were set.
+Then read any custom instructions the user has set, if present: `~/.loopx/instructions.md` (global, applies to every loop; saved via the dashboard's **Settings** page's Instructions tab), `~/.loopx/you/you.md` (preferences the user accepted from their past review notes, their projects and a record of past runs, kept by LoopX) and `~/.loopx/instructions/gitlab-issue.md` (this loop only). Follow them for the rest of this run, on top of (never in place of) everything in this file, the per-loop file after the global one. It's fine, and expected, for either file to not exist or to be empty; that just means no additional instructions were set.
 
 ## Configuration
 

@@ -422,6 +422,7 @@ pub fn compose_instructions(repo_root: &Path, home: &Path) -> Result<String, Str
     let custom: Vec<String> = [
         home.join("instructions.md"),
         home.join("instructions").join("inbox-triage.md"),
+        home.join("you").join("you.md"),
     ]
     .iter()
     .filter_map(|p| std::fs::read_to_string(p).ok())
