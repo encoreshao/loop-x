@@ -2,7 +2,8 @@
 //! Projects), its lazily loaded fragments `GET /gitlab/live` and
 //! `GET /settings/fragment`, the issue tracking switch
 //! (`POST /gitlab/issues/<alias>/<iid>/enable|disable`), removing an issue's
-//! branch and worktree (`POST /gitlab/worktrees/<alias>/<iid>/remove`) and
+//! branch and worktree (`POST /gitlab/worktrees/<alias>/<iid>/remove`, or
+//! `.../<alias>/mr/<iid>/remove` for a merge request's) and
 //! the GitLab configuration POSTs (`/settings/gitlab/*`, `/settings/access-bundles*`,
 //! `/settings/loop-config`, `/settings/loop-projects*`).
 
@@ -35,6 +36,7 @@ pub fn register(r: &mut Registry) {
     r.get("/settings/fragment", settings_fragment);
     r.post("/gitlab/issues/*rest", issue_tracking_toggle);
     r.post("/gitlab/worktrees/:alias/:iid/remove", remove_worktree);
+    r.post("/gitlab/worktrees/:alias/mr/:iid/remove", remove_mr_worktree);
     r.post("/settings/gitlab/default", |c| {
         flash_post(c, |c, f| set_default_instance(c, f.first("instance").unwrap_or("")))
     });
@@ -710,13 +712,45 @@ fn tracked_checkouts(ctx: &UiCtx) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// The title (from the cached Tasks list) and link of `alias #iid`; without a
-/// cached row, the link is built from the alias's GitLab instance URL.
-fn issue_ref(cached: &[(String, AliasState)], gitlab_config: &Value, alias: &str, iid: &str) -> (String, String) {
+/// Which list a loop branch belongs to on the Worktrees view.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchKind {
+    Issue,
+    MergeRequest,
+}
+
+impl BranchKind {
+    fn cached_rows(self, s: &AliasState) -> &[Value] {
+        match self {
+            BranchKind::Issue => &s.issues,
+            BranchKind::MergeRequest => &s.mrs,
+        }
+    }
+
+    /// The GitLab web path segment and the reference sigil.
+    fn segment_and_sigil(self) -> (&'static str, &'static str) {
+        match self {
+            BranchKind::Issue => ("issues", "#"),
+            BranchKind::MergeRequest => ("merge_requests", "!"),
+        }
+    }
+}
+
+/// The title (from the cached Tasks list) and link of `alias #iid` (or
+/// `alias !iid`); without a cached row, the link is built from the alias's
+/// GitLab instance URL.
+fn branch_ref(
+    cached: &[(String, AliasState)],
+    gitlab_config: &Value,
+    alias: &str,
+    kind: BranchKind,
+    iid: &str,
+) -> (String, String) {
+    let (segment, _) = kind.segment_and_sigil();
     let row = cached
         .iter()
         .filter(|(a, _)| a == alias)
-        .flat_map(|(_, s)| &s.issues)
+        .flat_map(|(_, s)| kind.cached_rows(s))
         .find(|i| item_str(i, "iid", "") == iid);
     let title = row.map(|i| item_str(i, "title", "")).unwrap_or_default();
     let url = row.map(|i| item_str(i, "web_url", "")).filter(|u| is_http(u));
@@ -730,7 +764,7 @@ fn issue_ref(cached: &[(String, AliasState)], gitlab_config: &Value, alias: &str
             .trim_end_matches('/');
         // A numeric project id has no web path to build a link from.
         if is_http(base) && project_id.contains('/') {
-            format!("{base}/{project_id}/-/issues/{iid}")
+            format!("{base}/{project_id}/-/{segment}/{iid}")
         } else {
             String::new()
         }
@@ -837,90 +871,128 @@ fn wt_snippet_card(ctx: &UiCtx) -> String {
 }
 
 fn worktrees_body(ctx: &UiCtx, flash: Option<&str>, flash_ok: bool) -> String {
-    let csrf = ctx.csrf_input();
     let cached = crate::ui::live_cache::read(ctx.state, TASKS_CACHE)
         .and_then(|(data, _)| tasks_cache_from(&data))
         .unwrap_or_default();
     let gitlab_config = read_json_or_empty(&gitlab_config_path(ctx));
-    let mut rows = Vec::new();
+    let mut issue_rows = Vec::new();
+    let mut mr_rows = Vec::new();
     let mut errors = String::new();
     for (alias, local_path) in tracked_checkouts(ctx) {
-        let branches = match worktree::list_issue_branches(&local_path) {
-            Ok(b) => b,
-            Err(e) => {
-                errors.push_str(&error_notice(ctx, &Some(format!("{alias}: {}", e.message))));
-                continue;
+        for (kind, listed, rows) in [
+            (BranchKind::Issue, worktree::list_issue_branches(&local_path), &mut issue_rows),
+            (BranchKind::MergeRequest, worktree::list_mr_branches(&local_path), &mut mr_rows),
+        ] {
+            match listed {
+                Ok(branches) => {
+                    for b in branches {
+                        rows.push(branch_row(ctx, &cached, &gitlab_config, &alias, kind, &b));
+                    }
+                }
+                Err(e) => {
+                    errors.push_str(&error_notice(ctx, &Some(format!("{alias}: {}", e.message))));
+                    break;
+                }
             }
-        };
-        let safe_alias = pyfmt::escape(&alias);
-        for b in branches {
-            let (title, url) = issue_ref(&cached, &gitlab_config, &alias, &b.iid);
-            let number = format!("#{}", b.iid);
-            let number = if url.is_empty() {
-                number
-            } else {
-                format!("<a href='{}' target='_blank' rel='noopener'>{number}</a>", pyfmt::escape(&url))
-            };
-            let issue = if title.is_empty() {
-                number
-            } else {
-                format!("{number} {}", pyfmt::escape(&title))
-            };
-            let place = match (&b.worktree, b.in_checkout) {
-                (Some(path), _) => format!("<code>{}</code>", pyfmt::escape(path)),
-                (None, true) => esc_t(ctx, "In the checkout"),
-                (None, false) => esc_t(ctx, "No worktree"),
-            };
-            let state = if b.dirty {
-                format!("<span class='pill pill-red'>{}</span>", esc_t(ctx, "Uncommitted changes"))
-            } else {
-                format!("<span class='pill pill-grey'>{}</span>", esc_t(ctx, "Clean"))
-            };
-            let remove = if b.in_checkout {
-                String::new()
-            } else {
-                let confirm = ctx.tf(
-                    "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.",
-                    &[("branch", &b.branch), ("alias", &alias), ("iid", &b.iid)],
-                );
-                format!(
-                    "<form method='post' action='/gitlab/worktrees/{}/{}/remove' class='daemon-action-form'>{csrf}<button type='submit' class='btn btn-warning' data-confirm=\"{}\"><svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></form>",
-                    pyfmt::quote(&alias, ""),
-                    b.iid,
-                    pyfmt::escape(&confirm),
-                    esc_t(ctx, "Remove")
-                )
-            };
-            rows.push(format!(
-                "<tr><td>{issue}</td><td>{safe_alias}</td><td><code>{}</code></td><td>{place}</td><td>{state}</td><td>{}</td><td>{remove}</td></tr>",
-                pyfmt::escape(&b.branch),
-                pyfmt::escape(&relative_time(ctx.state.now(), &b.last_commit)),
-            ));
         }
     }
-    let list = if rows.is_empty() {
-        format!(
-            "<p style='color: var(--md-on-surface-variant);'>{}</p>",
-            esc_t(ctx, "No issue branches in progress.")
-        )
-    } else {
-        let headers = [
-            esc_t(ctx, "Issue"),
-            esc_t(ctx, "Project"),
-            esc_t(ctx, "Branch"),
-            esc_t(ctx, "Worktree"),
-            esc_t(ctx, "State"),
-            esc_t(ctx, "Last commit"),
-            String::new(),
-        ];
-        table(&headers, &rows)
-    };
+    let issues = branch_table(ctx, BranchKind::Issue, &issue_rows);
+    let mrs = branch_table(ctx, BranchKind::MergeRequest, &mr_rows);
     format!(
-        "{}{}<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{errors}{list}</section>",
+        "{}{}<section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{errors}{issues}</section><section class='card'><div class='section-header'><h2>{}</h2></div><p class='section-subtitle'>{}</p>{mrs}</section>",
         flash_html(flash, flash_ok),
         wt_snippet_card(ctx),
         esc_t(ctx, "Worktrees"),
-        esc_t(ctx, "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch."),
+        esc_t(ctx, "The branches the loop started for issues, with their worktrees. Each loop run removes the clean ones whose issue is closed or merged. Removing one deletes the worktree folder and the local branch."),
+        esc_t(ctx, "Merge request worktrees"),
+        esc_t(ctx, "Worktrees Fix now made to work on a merge request's branch. Each loop run removes the clean ones whose merge request is merged or closed."),
+    )
+}
+
+fn branch_table(ctx: &UiCtx, kind: BranchKind, rows: &[String]) -> String {
+    if rows.is_empty() {
+        let empty = match kind {
+            BranchKind::Issue => esc_t(ctx, "No issue branches in progress."),
+            BranchKind::MergeRequest => esc_t(ctx, "No merge request worktrees."),
+        };
+        return format!("<p style='color: var(--md-on-surface-variant);'>{empty}</p>");
+    }
+    let headers = [
+        match kind {
+            BranchKind::Issue => esc_t(ctx, "Issue"),
+            BranchKind::MergeRequest => esc_t(ctx, "Merge request"),
+        },
+        esc_t(ctx, "Project"),
+        esc_t(ctx, "Branch"),
+        esc_t(ctx, "Worktree"),
+        esc_t(ctx, "State"),
+        esc_t(ctx, "Last commit"),
+        String::new(),
+    ];
+    table(&headers, rows)
+}
+
+fn branch_row(
+    ctx: &UiCtx,
+    cached: &[(String, AliasState)],
+    gitlab_config: &Value,
+    alias: &str,
+    kind: BranchKind,
+    b: &worktree::LoopBranch,
+) -> String {
+    let (title, url) = branch_ref(cached, gitlab_config, alias, kind, &b.iid);
+    let number = format!("{}{}", kind.segment_and_sigil().1, b.iid);
+    let number = if url.is_empty() {
+        number
+    } else {
+        format!("<a href='{}' target='_blank' rel='noopener'>{number}</a>", pyfmt::escape(&url))
+    };
+    let item = if title.is_empty() {
+        number
+    } else {
+        format!("{number} {}", pyfmt::escape(&title))
+    };
+    let place = match (&b.worktree, b.in_checkout) {
+        (Some(path), _) => format!("<code>{}</code>", pyfmt::escape(path)),
+        (None, true) => esc_t(ctx, "In the checkout"),
+        (None, false) => esc_t(ctx, "No worktree"),
+    };
+    let state = if b.dirty {
+        format!("<span class='pill pill-red'>{}</span>", esc_t(ctx, "Uncommitted changes"))
+    } else {
+        format!("<span class='pill pill-grey'>{}</span>", esc_t(ctx, "Clean"))
+    };
+    let remove = if b.in_checkout {
+        String::new()
+    } else {
+        let (confirm, action) = match kind {
+            BranchKind::Issue => (
+                ctx.tf(
+                    "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.",
+                    &[("branch", &b.branch), ("alias", alias), ("iid", &b.iid)],
+                ),
+                format!("/gitlab/worktrees/{}/{}/remove", pyfmt::quote(alias, ""), b.iid),
+            ),
+            BranchKind::MergeRequest => (
+                ctx.tf(
+                    "Remove {branch} and its worktree for {alias} !{iid}? Uncommitted or unpushed changes in it are lost; the merge request and its branch on GitLab are kept.",
+                    &[("branch", &b.branch), ("alias", alias), ("iid", &b.iid)],
+                ),
+                format!("/gitlab/worktrees/{}/mr/{}/remove", pyfmt::quote(alias, ""), b.iid),
+            ),
+        };
+        format!(
+            "<form method='post' action='{action}' class='daemon-action-form'>{}<button type='submit' class='btn btn-warning' data-confirm=\"{}\"><svg class='icon' aria-hidden='true'><use href='#i-delete'/></svg> {}</button></form>",
+            ctx.csrf_input(),
+            pyfmt::escape(&confirm),
+            esc_t(ctx, "Remove")
+        )
+    };
+    format!(
+        "<tr><td>{item}</td><td>{}</td><td><code>{}</code></td><td>{place}</td><td>{state}</td><td>{}</td><td>{remove}</td></tr>",
+        pyfmt::escape(alias),
+        pyfmt::escape(&b.branch),
+        pyfmt::escape(&relative_time(ctx.state.now(), &b.last_commit)),
     )
 }
 
@@ -942,6 +1014,34 @@ fn remove_worktree(ctx: &UiCtx) -> UiResponse {
                 true,
                 ctx.tf(
                     "Removed {branch} for {alias} #{iid}",
+                    &[("branch", &branch), ("alias", alias), ("iid", &iid)],
+                ),
+            ),
+            Err(e) => (false, e.message),
+        }
+    } else {
+        (false, name_msg(ctx, "{name} is not a tracked project with a checkout", alias))
+    };
+    UiResponse::flash_redirect(ok, &message, WORKTREES_URL)
+}
+
+/// Deletes one merge request's `loop/mr-<iid>` branch and worktree, refused
+/// while a Fix now run for that merge request is going.
+fn remove_mr_worktree(ctx: &UiCtx) -> UiResponse {
+    let alias = ctx.param("alias");
+    let Some(iid) = py_int(ctx.param("iid")).filter(|n| *n > 0).map(|n| n.to_string()) else {
+        return UiResponse::not_found(ctx.lang);
+    };
+    let jobs = loopx_core::mr_fix::jobs::list(&loopx_core::mr_fix::jobs::jobs_dir(&ctx.state.home_dir));
+    let fixing = jobs.iter().any(|j| j.state == "running" && j.mr_ref.ends_with(&format!("!{iid}")));
+    let (ok, message) = if fixing {
+        (false, ctx.t("Fix now is running on this merge request - wait for it to finish or stop it before removing its worktree"))
+    } else if let Some((_, local_path)) = tracked_checkouts(ctx).into_iter().find(|(a, _)| a == alias) {
+        match worktree::remove_mr_branch(&local_path, &iid) {
+            Ok(branch) => (
+                true,
+                ctx.tf(
+                    "Removed {branch} for {alias} !{iid}",
                     &[("branch", &branch), ("alias", alias), ("iid", &iid)],
                 ),
             ),
@@ -4195,6 +4295,64 @@ mod tests {
         assert!(post(state, "/gitlab/worktrees/nope/8/remove").header("Location").unwrap().ends_with("&ok=0"));
         assert!(post(state, "/gitlab/worktrees/app/7/remove").header("Location").unwrap().ends_with("&ok=0"));
         assert_eq!(post(state, "/gitlab/worktrees/app/x/remove").status, 404);
+    }
+
+    /// [`sandbox_with_worktrees`] plus a `loop/mr-12` worktree for merge request 12.
+    fn sandbox_with_mr_worktree() -> (Sandbox, String) {
+        let (sb, _) = sandbox_with_worktrees();
+        let local = sb.dir.path().join("app");
+        git(&local, &["checkout", "-q", "-b", "fix/src", "main"]);
+        git(&local, &["push", "-q", "origin", "fix/src"]);
+        git(&local, &["checkout", "-q", "main"]);
+        let wt = worktree::new_mr_worktree(&local.display().to_string(), "12", "fix/src", &sb.path("wt")).unwrap();
+        (sb, wt)
+    }
+
+    #[test]
+    fn the_worktrees_view_lists_merge_request_worktrees_apart() {
+        let (sb, wt) = sandbox_with_mr_worktree();
+        let mr = json!({"iid": 12, "title": "Speed up <search>", "web_url": "https://g.example/g/app/-/merge_requests/12"});
+        let mut cached = state(vec![], None);
+        cached.mrs = vec![mr];
+        crate::ui::live_cache::write(&sb.state, TASKS_CACHE, tasks_cache_json(&[("app".into(), cached)]));
+        let body = worktrees_body(&sb.ctx(), None, true);
+        let mr_section = body.find("Merge request worktrees").expect(&body);
+        let row = body.find("<code>loop/mr-12</code>").expect(&body);
+        assert!(row > mr_section && body.find("<code>feature#7</code>").unwrap() < mr_section, "{body}");
+        assert!(body.contains("href='https://g.example/g/app/-/merge_requests/12' target='_blank' rel='noopener'>!12</a> Speed up &lt;search&gt;"), "{body}");
+        assert!(body.contains(&pyfmt::escape(&wt)) || body.contains("app-mr-12"), "{body}");
+        assert!(body.contains("<form method='post' action='/gitlab/worktrees/app/mr/12/remove'"), "{body}");
+        assert!(!body.contains("No merge request worktrees."), "{body}");
+    }
+
+    #[test]
+    fn the_worktrees_view_says_when_there_are_no_merge_request_worktrees() {
+        let sb = Sandbox::new();
+        let body = worktrees_body(&sb.ctx(), None, true);
+        assert!(body.contains("No merge request worktrees."), "{body}");
+    }
+
+    #[test]
+    fn remove_deletes_an_mr_worktree_unless_fix_now_is_running_on_it() {
+        let (sb, wt) = sandbox_with_mr_worktree();
+        let state = &sb.state;
+        let dir = loopx_core::mr_fix::jobs::jobs_dir(&state.home_dir);
+        let job = loopx_core::mr_fix::jobs::start(&dir, "gitlab:g/app!12", "t", &|_| Ok(1)).unwrap();
+        let resp = post(state, "/gitlab/worktrees/app/mr/12/remove");
+        assert!(resp.header("Location").unwrap().ends_with("&ok=0"));
+        assert!(Path::new(&wt).exists());
+
+        loopx_core::mr_fix::jobs::finish(&dir, &job.id, "done", "").unwrap();
+        let resp = post(state, "/gitlab/worktrees/app/mr/12/remove");
+        let location = resp.header("Location").unwrap();
+        assert!(location.starts_with("/loops/issue-loop?view=worktrees&flash="), "{location}");
+        assert!(location.ends_with("&ok=1"), "{location}");
+        assert!(!Path::new(&wt).exists());
+        let body = worktrees_body(&sb.ctx(), None, true);
+        assert!(!body.contains("loop/mr-12") && body.contains("<code>feature#7</code>"), "{body}");
+
+        assert!(post(state, "/gitlab/worktrees/app/mr/12/remove").header("Location").unwrap().ends_with("&ok=0"));
+        assert_eq!(post(state, "/gitlab/worktrees/app/mr/x/remove").status, 404);
     }
 
     fn state(issues: Vec<Value>, issues_error: Option<&str>) -> AliasState {

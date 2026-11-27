@@ -245,6 +245,11 @@ pub fn issue_finished(r: &Resolved, n: u64, branch: &str) -> PResult<bool> {
         .is_some())
 }
 
+/// Is change request `n` merged or closed?
+pub fn change_request_finished(r: &Resolved, n: u64) -> PResult<bool> {
+    Ok(r.code.change_request(n)?.state != CrState::Open)
+}
+
 /// Open change requests the user authored, is assigned to or reviews,
 /// de-duplicated, as GitLab merge request JSON.
 pub fn my_change_requests(code: &dyn CodeHost, user: &str) -> PResult<Vec<Value>> {

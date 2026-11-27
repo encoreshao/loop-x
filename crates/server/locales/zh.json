@@ -1255,7 +1255,7 @@
   "Uncommitted changes": "未提交的更改",
   "Clean": "干净",
   "No issue branches in progress.": "没有进行中的议题分支。",
-  "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch.": "循环为议题创建的分支及其工作树。移除后会删除工作树文件夹和本地分支。",
+  "The branches the loop started for issues, with their worktrees. Each loop run removes the clean ones whose issue is closed or merged. Removing one deletes the worktree folder and the local branch.": "循环为议题创建的分支及其工作树。每次循环运行都会自动移除议题已关闭或已合并且没有未提交更改的分支。移除后会删除工作树文件夹和本地分支。",
   "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "移除 {alias} #{iid} 的 {branch} 及其工作树？其中未提交的更改将丢失；已推送到 GitLab 的分支会保留。",
   "Removed {branch} for {alias} #{iid}": "已移除 {alias} #{iid} 的 {branch}",
   "{name} is not a tracked project with a checkout": "{name} 不是带有检出目录的已跟踪项目",
@@ -2477,5 +2477,11 @@
   "{n} tokens": "{n} 个令牌",
   "Average tokens a run sends to the model: the instructions, files and tool results it reads, fresh or from the cache.": "每次运行发送给模型的平均令牌数：它读取的指令、文件和工具结果，包括新输入和缓存读取。",
   "Share of input read from the prompt cache, which costs a tenth of fresh input.": "从提示缓存读取的输入占比，缓存读取的费用是新输入的十分之一。",
-  "Average tokens per run written to the prompt cache: context that was new to the cache.": "每次运行写入提示缓存的平均令牌数：缓存中原本没有的上下文。"
+  "Average tokens per run written to the prompt cache: context that was new to the cache.": "每次运行写入提示缓存的平均令牌数：缓存中原本没有的上下文。",
+  "Merge request worktrees": "合并请求工作树",
+  "Worktrees Fix now made to work on a merge request's branch. Each loop run removes the clean ones whose merge request is merged or closed.": "「立即修复」为处理合并请求分支而创建的工作树。每次循环运行都会自动移除合并请求已合并或已关闭且没有未提交更改的工作树。",
+  "No merge request worktrees.": "没有合并请求工作树。",
+  "Remove {branch} and its worktree for {alias} !{iid}? Uncommitted or unpushed changes in it are lost; the merge request and its branch on GitLab are kept.": "移除 {alias} !{iid} 的 {branch} 及其工作树？其中未提交或未推送的更改将丢失；合并请求及其在 GitLab 上的分支会保留。",
+  "Fix now is running on this merge request - wait for it to finish or stop it before removing its worktree": "「立即修复」正在处理此合并请求 - 请等待其完成或先停止它，再移除其工作树",
+  "Removed {branch} for {alias} !{iid}": "已移除 {alias} !{iid} 的 {branch}"
 }

@@ -4371,15 +4371,19 @@ fn restore_in_place_checkout(
 
 // ---- whole runs -------------------------------------------------------------
 
-/// Deletes each tracked checkout's `loop/issue-<iid>` branch (and worktree) once
-/// GitLab says the issue is done. Best-effort: anything it cannot check or
-/// remove is logged and kept for the next run.
 /// "Is the loop done with issue `iid` (local branch `branch`) for good?" for one project.
 type FinishedCheck = Box<dyn Fn(&str, &str) -> Result<bool, String>>;
+
+/// "Is merge request `iid` merged or closed?" for one project.
+type MrFinishedCheck = Box<dyn Fn(&str) -> Result<bool, String>>;
 
 /// Each GitLab alias's open assigned issues, in alias order.
 type LegacyLister<'a> = dyn Fn(&[String]) -> Result<Vec<(String, Vec<Value>)>, String> + 'a;
 
+/// Deletes each tracked checkout's issue branches and `loop/mr-<iid>` branches
+/// (and their worktrees) once the issue is done or the merge request merged or
+/// closed. Best-effort: anything it cannot check or remove is logged and kept
+/// for the next run.
 fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
     let gitlab_config = gitlab::load_config();
     for alias in aliases {
@@ -4391,14 +4395,26 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
             continue;
         };
         let hosted = cfg.project(alias).ok().filter(crate::hosted::is_hosted);
-        let check: FinishedCheck = match hosted {
+        let (check, mr_check): (FinishedCheck, MrFinishedCheck) = match hosted {
             Some(project) => {
                 let src = crate::connectors_config::ConfigConnectors::real();
                 match crate::hosted::resolve_project(&src, &project) {
-                    Ok(r) => Box::new(move |iid: &str, branch: &str| {
-                        let n = iid.parse().map_err(|_| "not a number".to_string())?;
-                        crate::hosted::issue_finished(&r, n, branch).map_err(|e| e.to_string())
-                    }),
+                    Ok(r) => {
+                        let r = std::rc::Rc::new(r);
+                        let r2 = r.clone();
+                        (
+                            Box::new(move |iid: &str, branch: &str| {
+                                let n = iid.parse().map_err(|_| "not a number".to_string())?;
+                                crate::hosted::issue_finished(&r, n, branch)
+                                    .map_err(|e| e.to_string())
+                            }),
+                            Box::new(move |iid: &str| {
+                                let n = iid.parse().map_err(|_| "not a number".to_string())?;
+                                crate::hosted::change_request_finished(&r2, n)
+                                    .map_err(|e| e.to_string())
+                            }),
+                        )
+                    }
                     Err(e) => {
                         ctx.log(&format!("branch cleanup skipped for {alias}: {e}"));
                         continue;
@@ -4419,12 +4435,23 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
                         continue;
                     }
                 };
-                Box::new(move |iid: &str, branch: &str| {
-                    let n = iid.parse().map_err(|_| "not a number".to_string())?;
-                    client
-                        .issue_finished(&project_id, n, branch)
-                        .map_err(|e| e.to_string())
-                })
+                let client = std::rc::Rc::new(client);
+                let (client2, project_id2) = (client.clone(), project_id.clone());
+                (
+                    Box::new(move |iid: &str, branch: &str| {
+                        let n = iid.parse().map_err(|_| "not a number".to_string())?;
+                        client
+                            .issue_finished(&project_id, n, branch)
+                            .map_err(|e| e.to_string())
+                    }),
+                    Box::new(move |iid: &str| {
+                        let n = iid.parse().map_err(|_| "not a number".to_string())?;
+                        client2
+                            .mr_state(&project_id2, n)
+                            .map(|state| matches!(state.as_str(), "merged" | "closed"))
+                            .map_err(|e| e.to_string())
+                    }),
+                )
             }
         };
         let mut is_finished = |iid: &str, branch: &str| match check(iid, branch) {
@@ -4450,6 +4477,31 @@ fn sweep_finished_branches(ctx: &RunCtx, cfg: &Config, aliases: &[String]) {
             }
             Err(e) => ctx.log(&format!(
                 "branch cleanup skipped for {alias}: {}",
+                e.message
+            )),
+        }
+        let mut mr_finished = |iid: &str| match mr_check(iid) {
+            Ok(done) => done,
+            Err(e) => {
+                ctx.log(&format!(
+                    "worktree cleanup: could not check {alias} !{iid}: {e}"
+                ));
+                false
+            }
+        };
+        match worktree::sweep_finished_mr_branches(&local_path, &mut mr_finished) {
+            Ok(sweep) => {
+                for branch in &sweep.removed {
+                    ctx.log(&format!(
+                        "worktree cleanup: deleted {branch} ({alias}: its merge request is merged or closed)"
+                    ));
+                }
+                for (branch, why) in &sweep.skipped {
+                    ctx.log(&format!("worktree cleanup: kept {branch} ({alias}): {why}"));
+                }
+            }
+            Err(e) => ctx.log(&format!(
+                "worktree cleanup skipped for {alias}: {}",
                 e.message
             )),
         }

@@ -39,12 +39,19 @@ fn issue_number(issue_iid: &str) -> Result<u64, Failure> {
 
 /// Every local loop branch of `repo_path` with its issue number.
 fn local_issue_branches(repo_path: &str) -> Result<Vec<(u64, String)>, Failure> {
+    local_branches(repo_path, crate::providers::branch::issue_of_branch)
+}
+
+fn local_branches(
+    repo_path: &str,
+    number_of: fn(&str) -> Option<u64>,
+) -> Result<Vec<(u64, String)>, Failure> {
     Ok(git_stdout(
         repo_path,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
     )?
     .lines()
-    .filter_map(|b| Some((crate::providers::branch::issue_of_branch(b)?, b.to_string())))
+    .filter_map(|b| Some((number_of(b)?, b.to_string())))
     .collect())
 }
 
@@ -670,6 +677,25 @@ pub fn sweep_finished_issue_branches(
         .filter(|(n, branch)| is_finished(&n.to_string(), branch))
         .map(|(_, branch)| branch)
         .collect();
+    remove_clean_branches(repo_path, &finished)
+}
+
+/// Delete each local `loop/mr-<iid>` branch and its worktree once
+/// `is_finished(iid)` says the merge request is merged or closed, keeping
+/// worktrees with uncommitted changes.
+pub fn sweep_finished_mr_branches(
+    repo_path: &str,
+    is_finished: &mut dyn FnMut(&str) -> bool,
+) -> Result<Sweep, Failure> {
+    let finished: Vec<String> = local_branches(repo_path, mr_of_branch)?
+        .into_iter()
+        .filter(|(n, _)| is_finished(&n.to_string()))
+        .map(|(_, branch)| branch)
+        .collect();
+    remove_clean_branches(repo_path, &finished)
+}
+
+fn remove_clean_branches(repo_path: &str, finished: &[String]) -> Result<Sweep, Failure> {
     let mut sweep = Sweep::default();
     if finished.is_empty() {
         return Ok(sweep);
@@ -678,7 +704,7 @@ pub fn sweep_finished_issue_branches(
     // Forget worktrees whose directory was deleted by hand.
     git(repo_path, &["worktree", "prune"])?;
     let trees = worktrees(repo_path)?;
-    for branch in &finished {
+    for branch in finished {
         let branch = branch.as_str();
         let tree = trees.iter().position(|(_, b)| b == branch);
         if tree == Some(0) {
@@ -689,10 +715,7 @@ pub fn sweep_finished_issue_branches(
             continue;
         }
         if let Some(path) = tree.map(|i| trees[i].0.as_str()) {
-            if !git_stdout(path, &["status", "--porcelain"])?
-                .trim()
-                .is_empty()
-            {
+            if is_dirty(path)? {
                 sweep.skipped.push((
                     branch.to_string(),
                     format!("{path} has uncommitted changes"),
@@ -720,9 +743,11 @@ pub fn sweep_finished_issue_branches(
     Ok(sweep)
 }
 
-/// One local issue branch, as the dashboard's Worktrees view lists it.
+/// One local loop branch (an issue's or a merge request's), as the
+/// dashboard's Worktrees view lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IssueBranch {
+pub struct LoopBranch {
+    /// The issue or merge request number.
     pub iid: String,
     pub branch: String,
     /// The worktree it is checked out in, if any (never the checkout itself).
@@ -742,7 +767,19 @@ fn is_dirty(dir: &str) -> Result<bool, Failure> {
 }
 
 /// Every local issue branch of `repo_path`, by issue number.
-pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure> {
+pub fn list_issue_branches(repo_path: &str) -> Result<Vec<LoopBranch>, Failure> {
+    list_branches(repo_path, crate::providers::branch::issue_of_branch)
+}
+
+/// Every local `loop/mr-<iid>` branch of `repo_path`, by merge request number.
+pub fn list_mr_branches(repo_path: &str) -> Result<Vec<LoopBranch>, Failure> {
+    list_branches(repo_path, mr_of_branch)
+}
+
+fn list_branches(
+    repo_path: &str,
+    number_of: fn(&str) -> Option<u64>,
+) -> Result<Vec<LoopBranch>, Failure> {
     // Forget worktrees whose directory was deleted by hand.
     git(repo_path, &["worktree", "prune"])?;
     let trees = worktrees(repo_path)?;
@@ -757,8 +794,7 @@ pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure>
     let mut out = Vec::new();
     for line in refs.lines() {
         let (branch, date) = line.split_once(' ').unwrap_or((line, ""));
-        let Some(iid) = crate::providers::branch::issue_of_branch(branch).map(|n| n.to_string())
-        else {
+        let Some(n) = number_of(branch) else {
             continue;
         };
         let tree = trees.iter().position(|(_, b)| b == branch);
@@ -766,8 +802,8 @@ pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure>
             Some(i) => is_dirty(&trees[i].0)?,
             None => false,
         };
-        out.push(IssueBranch {
-            iid: iid.to_string(),
+        out.push(LoopBranch {
+            iid: n.to_string(),
             branch: branch.to_string(),
             worktree: tree.filter(|&i| i > 0).map(|i| trees[i].0.clone()),
             in_checkout: tree == Some(0),
@@ -785,12 +821,30 @@ pub fn list_issue_branches(repo_path: &str) -> Result<Vec<IssueBranch>, Failure>
 pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<String, Failure> {
     issue_number(iid)?;
     let _lock = checkout_lock(repo_path)?;
-    let Some(found) = list_issue_branches(repo_path)?
+    let found = list_issue_branches(repo_path)?
         .into_iter()
-        .find(|b| b.iid == iid)
-    else {
+        .find(|b| b.iid == iid);
+    force_remove_branch(repo_path, found, &format!("issue #{iid}"))
+}
+
+/// [`remove_issue_branch`] for a merge request's `loop/mr-<iid>` branch.
+pub fn remove_mr_branch(repo_path: &str, mr_iid: &str) -> Result<String, Failure> {
+    check_mr_iid(mr_iid)?;
+    let _lock = checkout_lock(repo_path)?;
+    let found = list_mr_branches(repo_path)?
+        .into_iter()
+        .find(|b| b.iid == mr_iid);
+    force_remove_branch(repo_path, found, &format!("merge request !{mr_iid}"))
+}
+
+fn force_remove_branch(
+    repo_path: &str,
+    found: Option<LoopBranch>,
+    what: &str,
+) -> Result<String, Failure> {
+    let Some(found) = found else {
         return Err(Failure::new(format!(
-            "no local branch for issue #{iid} in {repo_path}"
+            "no local branch for {what} in {repo_path}"
         )));
     };
     let branch = found.branch.clone();
@@ -817,6 +871,15 @@ pub fn remove_issue_branch(repo_path: &str, iid: &str) -> Result<String, Failure
 /// Local branch an MR's worktree works on; tracks `origin/<source_branch>`.
 fn mr_branch_name(mr_iid: &str) -> String {
     format!("loop/mr-{mr_iid}")
+}
+
+/// The merge request number of a `loop/mr-<iid>` branch.
+fn mr_of_branch(branch: &str) -> Option<u64> {
+    let digits = branch.strip_prefix("loop/mr-")?;
+    if digits.is_empty() || digits.starts_with('0') || !digits.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// `<worktree_root>/<repo>-mr-<iid>`.
@@ -1686,6 +1749,75 @@ mod tests {
         assert!(!branches(&repo).contains("loop/mr-9"));
         // Removing again is fine.
         remove_mr_worktree(&repo, "9", &root).unwrap();
+    }
+
+    #[test]
+    fn mr_branches_are_listed_apart_from_issue_branches() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt9 = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        std::fs::write(Path::new(&wt9).join("wip.txt"), "x").unwrap();
+        sh(Path::new(&repo), &["branch", "loop/mr-12"]);
+        sh(Path::new(&repo), &["branch", "loop/mr-x"]);
+        new_worktree(&repo, "main", "3", &root, None).unwrap();
+        let list = list_mr_branches(&repo).unwrap();
+        let iids: Vec<_> = list.iter().map(|b| b.iid.as_str()).collect();
+        assert_eq!(iids, ["9", "12"]);
+        let canon = |p: &str| std::fs::canonicalize(p).unwrap();
+        assert_eq!(list[0].branch, "loop/mr-9");
+        assert_eq!(canon(list[0].worktree.as_deref().unwrap()), canon(&wt9));
+        assert!(list[0].dirty);
+        assert_eq!(list[1].worktree, None);
+        let issues: Vec<_> = list_issue_branches(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.iid)
+            .collect();
+        assert_eq!(issues, ["3"]);
+    }
+
+    #[test]
+    fn removing_an_mr_branch_takes_its_worktree_and_uncommitted_work() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        std::fs::write(Path::new(&wt).join("wip.txt"), "x").unwrap();
+        assert_eq!(remove_mr_branch(&repo, "9").unwrap(), "loop/mr-9");
+        assert!(!Path::new(&wt).exists());
+        assert!(!branches(&repo).contains("loop/mr-9"));
+        let err = remove_mr_branch(&repo, "9").unwrap_err();
+        assert!(err.message.contains("!9"), "{}", err.message);
+    }
+
+    #[test]
+    fn finished_mr_branches_are_swept_but_dirty_ones_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = repo_with_mr_branch(d.path());
+        let root = d.path().join("wt").display().to_string();
+        let wt9 = new_mr_worktree(&repo, "9", "fix/mr-src", &root).unwrap();
+        let wt10 = new_mr_worktree(&repo, "10", "fix/mr-src", &root).unwrap();
+        let wt11 = new_mr_worktree(&repo, "11", "fix/mr-src", &root).unwrap();
+        std::fs::write(Path::new(&wt11).join("wip.txt"), "x").unwrap();
+        let wt3 = new_worktree(&repo, "main", "3", &root, None).unwrap();
+        let mut asked = Vec::new();
+        let sweep = sweep_finished_mr_branches(&repo, &mut |iid| {
+            asked.push(iid.to_string());
+            iid != "10"
+        })
+        .unwrap();
+        asked.sort_by_key(|n| n.parse::<u64>().unwrap());
+        assert_eq!(asked, ["9", "10", "11"]);
+        assert_eq!(sweep.removed, ["loop/mr-9"]);
+        assert_eq!(sweep.skipped.len(), 1);
+        assert!(
+            sweep.skipped[0].1.contains("uncommitted"),
+            "{:?}",
+            sweep.skipped
+        );
+        assert!(!Path::new(&wt9).exists());
+        assert!(Path::new(&wt10).exists() && Path::new(&wt11).exists() && Path::new(&wt3).exists());
     }
 
     #[test]

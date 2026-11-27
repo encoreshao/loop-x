@@ -1255,7 +1255,7 @@
   "Uncommitted changes": "未コミットの変更",
   "Clean": "クリーン",
   "No issue branches in progress.": "進行中の Issue ブランチはありません。",
-  "The branches the loop started for issues, with their worktrees. Removing one deletes the worktree folder and the local branch.": "ループが Issue 用に作成したブランチとそのワークツリーです。削除するとワークツリーのフォルダーとローカルブランチが削除されます。",
+  "The branches the loop started for issues, with their worktrees. Each loop run removes the clean ones whose issue is closed or merged. Removing one deletes the worktree folder and the local branch.": "ループが Issue 用に作成したブランチとそのワークツリーです。ループの実行ごとに、Issue がクローズまたはマージされた変更のないものは自動で削除されます。削除するとワークツリーのフォルダーとローカルブランチが削除されます。",
   "Remove {branch} and its worktree for {alias} #{iid}? Uncommitted changes in it are lost; a branch already pushed to GitLab is kept.": "{alias} #{iid} の {branch} とそのワークツリーを削除しますか？未コミットの変更は失われます。GitLab にプッシュ済みのブランチは残ります。",
   "Removed {branch} for {alias} #{iid}": "{alias} #{iid} の {branch} を削除しました",
   "{name} is not a tracked project with a checkout": "{name} はチェックアウトのある追跡中のプロジェクトではありません",
@@ -2477,5 +2477,11 @@
   "{n} tokens": "{n} トークン",
   "Average tokens a run sends to the model: the instructions, files and tool results it reads, fresh or from the cache.": "1 回の実行でモデルに送るトークンの平均です。読み込んだ指示、ファイル、ツール結果を含み、新規分とキャッシュ分の両方を数えます。",
   "Share of input read from the prompt cache, which costs a tenth of fresh input.": "入力のうちプロンプトキャッシュから読んだ割合です。キャッシュ読み込みは新規入力の 10 分の 1 のコストです。",
-  "Average tokens per run written to the prompt cache: context that was new to the cache.": "1 回の実行でプロンプトキャッシュに書き込んだトークンの平均です。キャッシュになかったコンテキストです。"
+  "Average tokens per run written to the prompt cache: context that was new to the cache.": "1 回の実行でプロンプトキャッシュに書き込んだトークンの平均です。キャッシュになかったコンテキストです。",
+  "Merge request worktrees": "マージリクエストのワークツリー",
+  "Worktrees Fix now made to work on a merge request's branch. Each loop run removes the clean ones whose merge request is merged or closed.": "「今すぐ修正」がマージリクエストのブランチで作業するために作成したワークツリーです。ループの実行ごとに、マージリクエストがマージまたはクローズされた変更のないものは自動で削除されます。",
+  "No merge request worktrees.": "マージリクエストのワークツリーはありません。",
+  "Remove {branch} and its worktree for {alias} !{iid}? Uncommitted or unpushed changes in it are lost; the merge request and its branch on GitLab are kept.": "{alias} !{iid} の {branch} とそのワークツリーを削除しますか？未コミットまたは未プッシュの変更は失われます。マージリクエストと GitLab 上のブランチは残ります。",
+  "Fix now is running on this merge request - wait for it to finish or stop it before removing its worktree": "このマージリクエストで「今すぐ修正」が実行中です。ワークツリーを削除する前に、終了を待つか停止してください",
+  "Removed {branch} for {alias} !{iid}": "{alias} !{iid} の {branch} を削除しました"
 }
