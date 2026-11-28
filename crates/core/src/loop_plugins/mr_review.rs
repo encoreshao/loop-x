@@ -67,6 +67,25 @@ pub type Poster =
     Box<dyn Fn(&dyn Connector, &Value, &Value) -> Result<Value, PostError> + Send + Sync>;
 /// Has this item key been reviewed already? (read-only)
 pub type SeenFn = Box<dyn Fn(&str) -> bool + Send + Sync>;
+/// `(prompt, model, budget_usd, ctx)` -> `(reply, cost_usd)` for the verification pass.
+pub type VerifyFn = Box<
+    dyn Fn(&str, &str, f64, &LoopContext) -> Result<(String, Option<f64>), String> + Send + Sync,
+>;
+
+/// The production verification call: sealed, tool-less, on `model`.
+pub fn sealed_verifier() -> VerifyFn {
+    Box::new(|prompt, model, budget, ctx| {
+        let log = ctx.log.clone();
+        let mut sink = move |m: &str| log(m);
+        let hooks = crate::agents::sealed::SealedHooks {
+            model: Some(model),
+            ..Default::default()
+        };
+        crate::agents::sealed::sealed_call(prompt, 240.0, &mut sink, Some(budget), &hooks)
+            .map(|r| (r.text, r.cost_usd))
+            .map_err(|e| e.0)
+    })
+}
 
 pub fn item_key(account_id: &str, project_id: &str, iid: &str, head_sha: &str) -> String {
     format!("mr:{account_id}:{project_id}!{iid}@{head_sha}")
@@ -963,6 +982,7 @@ pub struct MrReview {
     auditor: Option<Arc<dyn AuditRunner>>,
     audit_spent: Mutex<Duration>,
     projects_path: Option<PathBuf>,
+    verifier: Option<VerifyFn>,
     /// `.loopx/review.yaml` per `account:project@base_sha`, for one run.
     repo_cfg: Mutex<BTreeMap<String, Option<Result<review::config::ReviewLayer, String>>>>,
 }
@@ -977,8 +997,15 @@ impl MrReview {
             auditor: None,
             audit_spent: Mutex::new(Duration::ZERO),
             projects_path: None,
+            verifier: None,
             repo_cfg: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Re-check findings with a second, cheaper call before drafting them.
+    pub fn with_verifier(mut self, verifier: VerifyFn) -> Self {
+        self.verifier = Some(verifier);
+        self
     }
 
     /// Read each project's personal `review` block from this `projects.json`.
@@ -1294,6 +1321,52 @@ impl MrReview {
 }
 
 impl MrReview {
+    /// The verification pass; `None` when off, not wired, or nothing to check.
+    fn verify(
+        &self,
+        findings: Vec<Value>,
+        payload: &Value,
+        min_severity: &str,
+        ctx: &LoopContext,
+    ) -> (Vec<Value>, Option<review::verify::Verified>) {
+        let model = ctx
+            .settings
+            .get("verify_model")
+            .and_then(Value::as_str)
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(review::verify::DEFAULT_MODEL)
+            .to_string();
+        let Some(verifier) = self.verifier.as_ref() else {
+            return (findings, None);
+        };
+        if findings.is_empty() || model == "off" {
+            return (findings, None);
+        }
+        let diff = payload.get("diff").and_then(Value::as_str).unwrap_or("");
+        let prompt = review::verify::prompt(&findings, diff);
+        match verifier(&prompt, &model, review::verify::BUDGET_USD, ctx) {
+            Ok((reply, cost)) => {
+                let v = review::verify::apply(findings, &reply, min_severity);
+                ctx.log(&format!(
+                    "mr-review: verification kept {}, dropped {}, downgraded {}{}{}",
+                    v.findings.len(),
+                    v.dropped,
+                    v.downgraded,
+                    cost.map_or(String::new(), |c| format!(" (${c:.3})")),
+                    v.error
+                        .as_ref()
+                        .map_or(String::new(), |_| "; reply unusable, kept all".into())
+                ));
+                (v.findings.clone(), Some(v))
+            }
+            Err(e) => {
+                let short: String = e.chars().take(120).collect();
+                ctx.log(&format!("mr-review: verification skipped: {short}"));
+                (findings, None)
+            }
+        }
+    }
+
     fn dependency_check(&self, conn: &dyn Connector, payload: &Value) -> DependencyCheck {
         let changed: Vec<String> = payload
             .get("changed_paths")
@@ -1706,6 +1779,7 @@ impl LoopPlugin for MrReview {
             risks,
             findings: kept,
         } = review::findings::clean(answer, &allowed, &min);
+        let (kept, verified) = self.verify(kept, payload, &min, ctx);
         let security_meta = item
             .meta
             .pointer("/gates/security")
@@ -1731,13 +1805,21 @@ impl LoopPlugin for MrReview {
             "security_blocking": security.as_ref().map_or(0, |s| s.evidence.get("blocking").and_then(Value::as_array).map_or(0, Vec::len)),
             "dependency_blocking": dependency.blocking(),
         });
-        let scope: Vec<String> = review_meta
+        let mut scope: Vec<String> = review_meta
             .and_then(|r| r["notes"].as_array())
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
             .map(str::to_string)
             .collect();
+        if let Some(v) = &verified {
+            if v.dropped > 0 {
+                scope.push(format!(
+                    "{} candidate finding(s) dropped on verification",
+                    v.dropped
+                ));
+            }
+        }
         let cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
                              "risks": risks, "findings": kept, "checks": checks, "scope": scope});
         let url = payload.get("web_url").map_or(String::new(), py_str);
@@ -3033,6 +3115,62 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
             .unwrap();
         assert_eq!(items[0].meta["review"]["profile"], "assertive");
         assert_eq!(items[0].meta["review"]["finding_cap"], 25);
+    }
+
+    #[test]
+    fn verification_drops_findings_and_says_so_and_fails_open() {
+        let findings = json!([
+            finding("app/a.rb", 2, "major", "real"),
+            finding("app/a.rb", 2, "major", "bogus")
+        ]);
+        let run = |verifier: VerifyFn, settings: Value| {
+            let posted = Arc::new(Mutex::new(vec![]));
+            let mut ctx = c();
+            ctx.settings = settings;
+            with_poster(posted.clone())
+                .with_verifier(verifier)
+                .after_item(
+                    &item(),
+                    &json!({"summary": "s", "findings": findings}),
+                    &ctx,
+                )
+                .unwrap();
+            let p = posted.lock().unwrap();
+            p[0].clone()
+        };
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = calls.clone();
+        let cleaned = run(
+            Box::new(move |prompt, model, budget, _| {
+                seen.lock().unwrap().push(model.to_string());
+                assert!(prompt.contains("bogus") && budget <= 0.25);
+                let bogus = review::findings::finding_id("app/a.rb", "correctness", "bogus");
+                Ok((
+                    json!({"decisions": [{"id": bogus, "decision": "drop"}]}).to_string(),
+                    Some(0.01),
+                ))
+            }),
+            json!({}),
+        );
+        assert_eq!(calls.lock().unwrap().as_slice(), ["sonnet"]);
+        let titles: Vec<&str> = cleaned["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["body"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, ["real"]);
+        assert!(summary_note(&cleaned)
+            .unwrap()
+            .contains("1 candidate finding(s) dropped on verification"));
+
+        let off = run(
+            Box::new(|_, _, _, _| panic!("verification is off")),
+            json!({"verify_model": "off"}),
+        );
+        assert_eq!(off["findings"].as_array().unwrap().len(), 2);
+        let failed = run(Box::new(|_, _, _, _| Err("budget".into())), json!({}));
+        assert_eq!(failed["findings"].as_array().unwrap().len(), 2);
     }
 
     #[test]

@@ -69,7 +69,8 @@ pub fn build(module: &str, connectors: Arc<dyn ConnectorSource>) -> Option<Arc<d
         "daily_digest" => Arc::new(daily_digest::DailyDigest::new(connectors)),
         "mr_review" => Arc::new(
             mr_review::MrReview::new(connectors)
-                .with_projects_path(crate::config::default_config_path()),
+                .with_projects_path(crate::config::default_config_path())
+                .with_verifier(mr_review::sealed_verifier()),
         ),
         "pipeline_doctor" => Arc::new(pipeline_doctor::PipelineDoctor::new(connectors)),
         "release_notes" => Arc::new(release_notes::ReleaseNotes::new(connectors)),

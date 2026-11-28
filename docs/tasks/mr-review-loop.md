@@ -29,6 +29,28 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Verification pass
+
+Before anything is drafted, a second sealed, tool-less call re-checks every
+candidate finding against the diff. It runs on the cheaper `sonnet` by default
+(loop setting `verify_model`; `off` disables it) with a $0.25 cap. For each
+finding it answers:
+
+- **keep**: the problem is real;
+- **drop**: wrong, already handled, speculative, or not in the change;
+- **downgrade**: real but less serious.
+
+A downgrade below the severity floor counts as a drop. Secret-scan findings are
+never sent to it.
+
+It fails open: an unusable reply, an error or an exhausted budget keeps every
+finding. The summary counts dropped findings under **Review scope**, and the run
+log records kept, dropped, downgraded and the cost. The verdict still comes from
+the main review.
+
+`loopx loop eval --review` runs the same pass, and `--no-verify` measures
+without it.
+
 ## Automated checks
 
 Every reviewed MR also passes the same model-free gates LoopX's own fixes pass

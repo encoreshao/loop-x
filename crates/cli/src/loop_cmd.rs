@@ -748,7 +748,10 @@ fn run_paid_suite(argv: &[String], label: &str, default_budget: &str) -> ExitCod
         match review_eval::default_cases(filter) {
             Err(e) => return err(&format!("eval --{label}: {e}"), 2),
             Ok(c) if c.is_empty() => return no_cases(),
-            Ok(c) => (c.len(), review_eval::run_suite_real(&c, budget)),
+            Ok(c) => (
+                c.len(),
+                review_eval::run_suite_real(&c, budget, argv.iter().any(|a| a == "--no-verify")),
+            ),
         }
     } else {
         match chat_eval::default_cases(filter) {

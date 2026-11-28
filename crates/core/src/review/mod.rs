@@ -7,3 +7,4 @@ pub mod findings;
 pub mod glob;
 pub mod render;
 pub mod taxonomy;
+pub mod verify;

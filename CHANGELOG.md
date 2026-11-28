@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- MR Review double-checks its findings before drafting them. A second, cheaper model call (`sonnet` by default, loop setting `verify_model`, `off` to disable) keeps, drops or downgrades each finding against the diff, and the summary says how many were dropped. If the check fails, every finding is kept.
 - MR Review reviews against the team's own conventions. Along with the diff, it reads `path_instructions` from `.loopx/review.yaml`, the `CLAUDE.md`/`AGENTS.md` files at the root and near the changed files, `.cursorrules`, Copilot instructions, and the project's `custom_instructions`, all at the merge request's base commit. A risky violation becomes a finding, and something the guidance allows is not flagged.
 - MR Review reads a project's `.loopx/review.yaml` at the merge request's base commit. It can set a review profile (quiet, chill or assertive: the lowest severity posted and the number of findings), path filters, and auto-review rules (title keywords, labels, ignored authors, target branches, or off). A project's `review` block in `projects.json` overrides it on your Mac. `loopx review config` validates the file and shows where each value comes from. GitLab only for now.
 - MR Review: each inline draft now ends with a collapsed "🤖 Prompt for AI agents", one instruction a coding agent can follow to fix the finding. It also carries a hidden marker with the finding's stable id, which Fix now reads to get the thread's severity.

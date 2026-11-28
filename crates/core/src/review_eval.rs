@@ -13,7 +13,7 @@ use crate::golden_eval::{
 };
 use crate::loopkit::{self, WorkItem};
 use crate::review::config::{self as review_config, ReviewConfig, Sources};
-use crate::review::{context, diff::build_diff_text, findings, taxonomy};
+use crate::review::{context, diff::build_diff_text, findings, taxonomy, verify};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -442,24 +442,53 @@ pub fn write_last_run(
 pub type ModelFn<'a> = &'a dyn Fn(&str, f64) -> Result<(String, Option<f64>), CaseCrash>;
 
 /// One case through the loop's prompt template, `model` and the loop's cleaning.
+/// One case through the loop's prompt template, `model`, the loop's cleaning and, when
+/// given, the loop's verification pass on `verify`.
 pub fn run_case(
     case: &ReviewCase,
     template: &str,
     remaining_usd: f64,
     model: ModelFn<'_>,
+    verify: Option<ModelFn<'_>>,
 ) -> Result<CaseOutcome, CaseCrash> {
-    let prompt = loopkit::render_prompt(template, &work_item(case), &json!({}));
+    let item = work_item(case);
+    let prompt = loopkit::render_prompt(template, &item, &json!({}));
     let (text, cost_usd) = model(&prompt, remaining_usd)?;
     let answer = loopkit::parse_answer(Some(&text), &OUTPUT_KEYS).map_err(|e| CaseCrash {
         message: format!("unusable answer: {e}"),
         cost_usd,
     })?;
-    let (found, verdict) = clean_answer(case, &answer);
-    let (passed, reasons) = grade(&case.expect, &found, &verdict);
+    let (mut found, verdict) = clean_answer(case, &answer);
+    let mut cost = cost_usd;
+    let mut note = None;
+    if let (Some(verify), false) = (verify, found.is_empty()) {
+        let diff = item.payload["diff"].as_str().unwrap_or("");
+        let left = (remaining_usd - cost.unwrap_or(0.0)).max(0.0);
+        let budget = verify::BUDGET_USD.min(left);
+        if let Ok((reply, vcost)) = verify(&verify::prompt(&found, diff), budget) {
+            let v = verify::apply(found, &reply, &case_config(case).min_severity);
+            note = Some(format!(
+                "verification dropped {}, downgraded {}{}",
+                v.dropped,
+                v.downgraded,
+                if v.error.is_some() {
+                    " (reply unusable)"
+                } else {
+                    ""
+                }
+            ));
+            found = v.findings;
+            cost = Some(cost.unwrap_or(0.0) + vcost.unwrap_or(0.0));
+        }
+    }
+    let (passed, mut reasons) = grade(&case.expect, &found, &verdict);
+    if let Some(n) = note {
+        reasons.insert(1, n);
+    }
     Ok(CaseOutcome {
         passed,
         reasons,
-        cost_usd,
+        cost_usd: cost,
     })
 }
 
@@ -488,7 +517,8 @@ fn real_model(
 }
 
 /// The paid path: the real `loops/mr-review` prompt and model.
-pub fn run_suite_real(cases: &[ReviewCase], budget_usd: f64) -> Summary {
+/// `no_verify` skips the verification pass (to measure it).
+pub fn run_suite_real(cases: &[ReviewCase], budget_usd: f64, no_verify: bool) -> Summary {
     let root = checkout_root("review").unwrap_or_else(|| PathBuf::from("."));
     let dir = root.join("loops").join("mr-review");
     let template = std::fs::read_to_string(dir.join("prompt.md")).unwrap_or_default();
@@ -503,7 +533,9 @@ pub fn run_suite_real(cases: &[ReviewCase], budget_usd: f64) -> Summary {
             });
         }
         let call = |p: &str, r: f64| real_model(p, r, model.as_deref());
-        run_case(case, &template, remaining, &call)
+        let check = |p: &str, r: f64| real_model(p, r, Some(verify::DEFAULT_MODEL));
+        let verify: Option<ModelFn<'_>> = (!no_verify).then_some(&check);
+        run_case(case, &template, remaining, &call, verify)
     })
 }
 
@@ -639,14 +671,14 @@ mod tests {
                 Some(0.1),
             ))
         };
-        let out = run_case(&c, "Data:\n{{item_json}}", 1.0, &model).unwrap();
+        let out = run_case(&c, "Data:\n{{item_json}}", 1.0, &model, None).unwrap();
         assert!(out.passed, "{:?}", out.reasons);
         assert_eq!(out.cost_usd, Some(0.1));
         assert!(seen.borrow().contains("+++ b/app/a.rb"));
         assert!(seen.borrow().contains("\"changed_paths\""));
 
         let bad = |_: &str, _: f64| Ok(("not json".to_string(), Some(0.05)));
-        let crash = run_case(&c, "{{item_json}}", 1.0, &bad).unwrap_err();
+        let crash = run_case(&c, "{{item_json}}", 1.0, &bad, None).unwrap_err();
         assert!(crash.message.starts_with("unusable answer"));
         assert_eq!(crash.cost_usd, Some(0.05));
     }
@@ -672,6 +704,35 @@ mod tests {
             &json!({"findings": [finding("app/a.rb", 2, "minor", "tests")]}),
         );
         assert!(found.is_empty(), "quiet profile drops minor findings");
+    }
+
+    #[test]
+    fn run_case_applies_the_verification_pass() {
+        let c = parse_case(&case_yaml("  max_findings: 1\n"), PATCH, "c").unwrap();
+        let model = |_: &str, _: f64| {
+            Ok((
+                json!({"summary": "s", "verdict": "comment", "overview": [], "risks": [],
+                       "findings": [finding("app/a.rb", 2, "major", "correctness"),
+                                    finding("new.rb", 1, "major", "tests")]})
+                .to_string(),
+                Some(0.1),
+            ))
+        };
+        let drop_tests = |p: &str, budget: f64| {
+            assert!(budget <= verify::BUDGET_USD);
+            let id = findings::finding_id("new.rb", "tests", "t");
+            assert!(p.contains(&id));
+            Ok((
+                json!({"decisions": [{"id": id, "decision": "drop"}]}).to_string(),
+                Some(0.02),
+            ))
+        };
+        let out = run_case(&c, "{{item_json}}", 1.0, &model, Some(&drop_tests)).unwrap();
+        assert!(out.passed, "{:?}", out.reasons);
+        assert_eq!(out.reasons[1], "verification dropped 1, downgraded 0");
+        assert!((out.cost_usd.unwrap() - 0.12).abs() < 1e-9);
+        let without = run_case(&c, "{{item_json}}", 1.0, &model, None).unwrap();
+        assert!(!without.passed);
     }
 
     #[test]
