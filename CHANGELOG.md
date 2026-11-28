@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- MR Review learns from replies to its findings. Replies in threads opened by its published findings feed the weekly preferences pass, which proposes lasting preferences under Needs you, such as "Don't flag missing timeouts on tiny tables". Preferences you accept are given to later reviews.
 - MR Review checks your team's merge rules. Write them in plain language as `.loopx/checks/<id>.md` (optional `paths` and `mode`), and the review evaluates them in the same model call, adding a Checks table to its summary: passed, failed or inconclusive, with the evidence. Built-in title, description and linked-issue checks can be turned on with `checks:` in `.loopx/review.yaml`.
 - MR Review can add a walkthrough to its summary (`walkthrough: true` in `.loopx/review.yaml`). It shows the change grouped by purpose, a sequence diagram when the change alters how components call each other, a review effort from 1 to 5, and the merge risk for the reviewed commit.
 - MR comments can steer the review. A comment whose first line is `loopx review`, `loopx pause`, `loopx resume` or `loopx fix` reviews the MR now, turns automatic review off or on, or starts Fix now. Commands are accepted from you or any project member with Developer access (`"command_authors": "me"` in the project's `review` block limits this to you). With the GitLab webhook, a push to an MR you're assigned to or reviewing is reviewed within a minute. `loopx webhook setup` now asks for Merge request events too.

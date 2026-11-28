@@ -15,9 +15,11 @@ pub struct Entry {
     pub title: String,
     /// Head SHA of the review that first raised it.
     pub sha: String,
-    /// `open` | `addressed`.
+    /// `open` | `addressed` | `closed` (kept after a full review for its replies).
     pub status: String,
     pub addressed_sha: Option<String>,
+    /// Replies people wrote in the finding's thread, once it was published.
+    pub replies: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -65,13 +67,14 @@ impl Entry {
                 s("status")
             },
             addressed_sha: v["addressed_sha"].as_str().map(str::to_string),
+            replies: v["replies"].as_array().cloned().unwrap_or_default(),
         })
     }
 
     fn to_json(&self) -> Value {
         json!({"id": self.id, "path": self.path, "line": self.line, "severity": self.severity,
                "title": self.title, "sha": self.sha, "status": self.status,
-               "addressed_sha": self.addressed_sha})
+               "addressed_sha": self.addressed_sha, "replies": self.replies})
     }
 
     /// What the model sees of an earlier finding.
@@ -122,7 +125,11 @@ impl Ledger {
     /// A full review starts the list over.
     pub fn record(&mut self, head: &str, full: bool, addressed: &[String], posted: &[Value]) {
         if full {
-            self.findings.clear();
+            // Replies are kept for the weekly learning pass; the rest starts over.
+            self.findings.retain(|e| !e.replies.is_empty());
+            for e in &mut self.findings {
+                e.status = "closed".into();
+            }
             self.delta_reviews = 0;
         } else {
             self.delta_reviews += 1;
@@ -152,9 +159,48 @@ impl Ledger {
                 sha: head.to_string(),
                 status: "open".into(),
                 addressed_sha: None,
+                replies: Vec::new(),
             });
         }
         self.last_sha = Some(head.to_string());
+    }
+}
+
+pub const MAX_REPLY_CHARS: usize = 1000;
+
+impl Ledger {
+    /// Record replies from the MR's discussions: every later, human note in a thread
+    /// opened by one of our findings (`is_ours` tells LoopX's own notes apart).
+    pub fn add_replies(&mut self, discussions: &[Value], is_ours: &dyn Fn(&str) -> bool) -> usize {
+        let mut added = 0;
+        for d in discussions {
+            let notes = d["notes"].as_array().cloned().unwrap_or_default();
+            let Some(first) = notes.first() else { continue };
+            let Some(marker) =
+                super::render::parse_finding_marker(first["body"].as_str().unwrap_or(""))
+            else {
+                continue;
+            };
+            let Some(entry) = self.findings.iter_mut().find(|e| e.id == marker.id) else {
+                continue;
+            };
+            for n in notes.iter().skip(1) {
+                let body = n["body"].as_str().unwrap_or("");
+                let id = n["id"].clone();
+                if n["system"].as_bool().unwrap_or(false)
+                    || body.trim().is_empty()
+                    || is_ours(body)
+                    || entry.replies.iter().any(|r| r["note_id"] == id)
+                {
+                    continue;
+                }
+                entry.replies.push(json!({"note_id": id,
+                    "author": n["author"]["username"].as_str().unwrap_or(""),
+                    "text": body.chars().take(MAX_REPLY_CHARS).collect::<String>()}));
+                added += 1;
+            }
+        }
+        added
     }
 }
 
@@ -203,6 +249,35 @@ mod tests {
         assert_eq!(ids, ["b", "c"], "b is not duplicated");
         l.record("h3", true, &[], &[f("z")]);
         assert_eq!((l.findings.len(), l.delta_reviews), (1, 0));
+    }
+
+    #[test]
+    fn replies_to_our_findings_are_recorded_once() {
+        let mut l = Ledger::default();
+        l.record("h1", true, &[], &[f("a1b2c3d4e5")]);
+        let ours = super::super::render::finding_note(
+            &json!({"id": "a1b2c3d4e5", "path": "a.rb", "line": 3,
+            "severity": "major", "category": "data", "body": "b"}),
+        );
+        let discussions = json!([
+            {"id": "d1", "notes": [{"id": 1, "body": ours},
+                                   {"id": 2, "body": "Small table, lock_timeout is not needed here.", "author": {"username": "ana"}},
+                                   {"id": 3, "body": "Looks addressed in `h`.\n\n_LOOPX_", "author": {"username": "me"}},
+                                   {"id": 4, "body": "assigned", "system": true}]},
+            {"id": "d2", "notes": [{"id": 5, "body": "plain thread"}, {"id": 6, "body": "reply"}]}
+        ]);
+        let is_ours = |b: &str| b.ends_with("_LOOPX_");
+        assert_eq!(l.add_replies(discussions.as_array().unwrap(), &is_ours), 1);
+        assert_eq!(
+            l.add_replies(discussions.as_array().unwrap(), &is_ours),
+            0,
+            "deduped"
+        );
+        let r = &l.findings[0].replies[0];
+        assert_eq!(
+            (r["note_id"].as_i64(), r["author"].as_str()),
+            (Some(2), Some("ana"))
+        );
     }
 
     #[test]

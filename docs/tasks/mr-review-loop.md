@@ -29,6 +29,22 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Learning from replies
+
+1. **Recording replies.** Each GitLab review lists the MR's discussions once.
+   Every human reply in a thread opened by a published LoopX finding goes into
+   that finding's ledger entry (note id, author, text capped at 1,000
+   characters, recorded once). LoopX's own notes are skipped. A full review
+   closes earlier findings but keeps the ones with replies.
+2. **Proposing preferences.** The weekly preferences pass (`user_memory`, the
+   same pass that reads "Request changes" notes) reads these replies as review
+   notes. One tool-free call proposes lasting preferences ("Don't flag missing
+   timeouts on tiny tables"). You accept or dismiss them under Needs you, and
+   accepted ones are listed under Settings › Instructions › Learned preferences.
+3. **Using them.** The MR Review loop passes your accepted preferences to the
+   model as a "reviewer's learned preferences" guidance entry, so a reply you
+   wrote once shapes later reviews.
+
 ## Pre-merge checks
 
 **Custom checks.** A project can commit plain-language merge rules as

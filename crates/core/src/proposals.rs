@@ -41,6 +41,7 @@ pub fn approve_and_apply(
                 memory_root,
                 approvals_dir: approvals_dir.to_path_buf(),
                 events_dir: crate::events::default_events_dir(),
+                loops_root: crate::seen_store::default_state_root(),
             };
             user_memory::approve_and_apply(id, by, &paths, now)
         }

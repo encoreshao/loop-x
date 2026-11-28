@@ -73,7 +73,8 @@ pub fn build(module: &str, connectors: Arc<dyn ConnectorSource>) -> Option<Arc<d
                 .with_verifier(mr_review::sealed_verifier())
                 .with_linters(Arc::new(crate::review::tools::SystemLintRunner))
                 .with_semgrep(mr_review::SemgrepCache::live())
-                .with_fix_starter(mr_review::live_fix_starter()),
+                .with_fix_starter(mr_review::live_fix_starter())
+                .with_you(crate::user_memory::Paths::live()),
         ),
         "pipeline_doctor" => Arc::new(pipeline_doctor::PipelineDoctor::new(connectors)),
         "release_notes" => Arc::new(release_notes::ReleaseNotes::new(connectors)),

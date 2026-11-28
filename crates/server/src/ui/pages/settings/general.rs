@@ -587,6 +587,7 @@ fn learned_preferences_card(ctx: &UiCtx, csrf: &str) -> String {
         memory_root: ctx.state.home_dir.join("memory"),
         approvals_dir: ctx.state.repo_root.join("outputs").join("approvals"),
         events_dir: ctx.state.events_dir.clone(),
+        loops_root: ctx.state.repo_root.join("outputs").join("loops"),
     };
     let accepted = loopx_core::user_memory::preferences(&paths).accepted;
     let list = if accepted.is_empty() {

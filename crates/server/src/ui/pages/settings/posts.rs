@@ -543,6 +543,7 @@ fn forget_preference(ctx: &UiCtx) -> UiResponse {
         memory_root: ctx.state.home_dir.join("memory"),
         approvals_dir: ctx.state.repo_root.join("outputs").join("approvals"),
         events_dir: ctx.state.events_dir.clone(),
+        loops_root: ctx.state.repo_root.join("outputs").join("loops"),
     };
     match loopx_core::user_memory::forget(&paths, &id) {
         Ok(true) => plain(true, ctx.t("Preference removed. The loops stop following it from their next run."), "/settings?tab=instructions"),

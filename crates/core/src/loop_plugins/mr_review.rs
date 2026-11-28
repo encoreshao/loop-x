@@ -446,9 +446,9 @@ fn repo_checks(
     (checks, notes)
 }
 
-/// `(finding id, discussion id)` for published LoopX findings among `ids`.
-fn finding_discussions(conn: &dyn Connector, mr: &Value, ids: &[String]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+/// The MR's discussions (at most 5 pages); empty on any error.
+fn mr_discussions(conn: &dyn Connector, mr: &Value) -> Vec<Value> {
+    let mut all = Vec::new();
     for page in 1..=5u32 {
         let Ok(rows) = conn.api(
             "GET",
@@ -462,19 +462,27 @@ fn finding_discussions(conn: &dyn Connector, mr: &Value, ids: &[String]) -> Vec<
             break;
         };
         let rows = rows.as_array().cloned().unwrap_or_default();
-        for d in &rows {
-            let first = d["notes"][0]["body"].as_str().unwrap_or("");
-            if let (Some(f), Some(did)) = (
-                review::render::parse_finding_marker(first),
-                d["id"].as_str(),
-            ) {
-                if ids.contains(&f.id) && !out.iter().any(|(i, _): &(String, String)| *i == f.id) {
-                    out.push((f.id, did.to_string()));
-                }
-            }
-        }
-        if rows.len() < 100 {
+        let full = rows.len() == 100;
+        all.extend(rows);
+        if !full {
             break;
+        }
+    }
+    all
+}
+
+/// `(finding id, discussion id)` for published LoopX findings among `ids`.
+fn finding_discussions(discussions: &[Value], ids: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for d in discussions {
+        let first = d["notes"][0]["body"].as_str().unwrap_or("");
+        if let (Some(f), Some(did)) = (
+            review::render::parse_finding_marker(first),
+            d["id"].as_str(),
+        ) {
+            if ids.contains(&f.id) && !out.iter().any(|(i, _)| *i == f.id) {
+                out.push((f.id, did.to_string()));
+            }
         }
     }
     out
@@ -1166,6 +1174,7 @@ pub struct MrReview {
     verifier: Option<VerifyFn>,
     linters: Option<Arc<dyn review::tools::LintRunner>>,
     fix_starter: Option<FixStarter>,
+    you: Option<crate::user_memory::Paths>,
     semgrep: Option<SemgrepCache>,
     tool_budget: Mutex<Duration>,
     /// Tool results per item key, from `build_prompt` to `after_item`.
@@ -1187,6 +1196,7 @@ impl MrReview {
             verifier: None,
             linters: None,
             fix_starter: None,
+            you: None,
             semgrep: None,
             tool_budget: Mutex::new(review::tools::RUN_BUDGET),
             tool_reports: Mutex::new(BTreeMap::new()),
@@ -1197,6 +1207,13 @@ impl MrReview {
     /// Run allow-listed linters on the changed files and give their hints to the model.
     pub fn with_linters(mut self, runner: Arc<dyn review::tools::LintRunner>) -> Self {
         self.linters = Some(runner);
+        self
+    }
+
+    /// Give the review the preferences you accepted (`you.md`), learned partly from
+    /// replies to its own findings.
+    pub fn with_you(mut self, paths: crate::user_memory::Paths) -> Self {
+        self.you = Some(paths);
         self
     }
 
@@ -1666,7 +1683,7 @@ impl MrReview {
             .as_ref()
             .and_then(|p| p["custom_instructions"].as_str())
             .unwrap_or("");
-        let guidance = review::context::gather(
+        let mut guidance = review::context::gather(
             &reviewed_paths,
             &cfg.path_instructions,
             custom,
@@ -1726,6 +1743,22 @@ impl MrReview {
             .or_else(|| row.get("author"))
             .cloned()
             .unwrap_or(Value::Null);
+        if let Some(paths) = &self.you {
+            let learned: Vec<String> = crate::user_memory::preferences(paths)
+                .accepted
+                .iter()
+                .map(|p| format!("- {}", p.text))
+                .collect();
+            if !learned.is_empty() {
+                let text: String = learned
+                    .join("\n")
+                    .chars()
+                    .take(review::context::MAX_ITEM_CHARS)
+                    .collect();
+                guidance.push(json!({"source": "reviewer's learned preferences",
+                                     "applies_to": ["*"], "text": text}));
+            }
+        }
         let mr_key = mr_ref(account_id, &pid_s, &iid_s);
         let ledger = review::ledger::Ledger::load(state_root, &mr_key);
         let delta = match ledger.last_sha.as_deref() {
@@ -2379,6 +2412,19 @@ impl LoopPlugin for MrReview {
             .and_then(|r| r["delta_from"].as_str())
             .map(str::to_string);
         let mut ledger = review::ledger::Ledger::load(&state_root, &mr_key);
+        let discussions = match self.connectors.load(&py_str(&payload["account"])) {
+            Ok(c) if gitlab && !ledger.findings.is_empty() => mr_discussions(c.as_ref(), payload),
+            _ => Vec::new(),
+        };
+        let sig = SIGNATURE.trim();
+        let new_replies = ledger.add_replies(&discussions, &|b: &str| {
+            b.trim_end().ends_with(sig) || review::render::parse_finding_marker(b).is_some()
+        });
+        if new_replies > 0 {
+            ctx.log(&format!(
+                "mr-review: {new_replies} new repl(ies) to earlier findings recorded"
+            ));
+        }
         let addressed = if delta_from.is_some() {
             review::ledger::addressed_ids(answer, &ledger)
         } else {
@@ -2470,7 +2516,7 @@ impl LoopPlugin for MrReview {
             }
             scope.insert(0, line);
             if !addressed.is_empty() && gitlab {
-                for (_, discussion) in finding_discussions(conn.as_ref(), payload, &addressed) {
+                for (_, discussion) in finding_discussions(&discussions, &addressed) {
                     replies.push(json!({"discussion_id": discussion,
                         "body": format!("Looks addressed in `{}`.", short(&head))}));
                 }
@@ -3339,6 +3385,94 @@ mod tests {
                 ("secure", "failed"),
                 ("issue_assessment", "inconclusive")
             ]
+        );
+    }
+
+    #[test]
+    fn replies_to_published_findings_are_recorded_and_learned_preferences_reach_the_prompt() {
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = c();
+        ctx.state_dir = Some(d.path().to_path_buf());
+        let mut l = review::ledger::Ledger::default();
+        l.record(
+            "old",
+            true,
+            &[],
+            &[json!({"id": "prev000001", "path": "app/a.rb", "line": 2,
+                                             "severity": "major", "title": "Old"})],
+        );
+        l.save(d.path(), "work:9!7").unwrap();
+        let ours = finding_note(&json!({"id": "prev000001", "path": "app/a.rb", "line": 2,
+                                        "severity": "major", "category": "data", "body": "b"}));
+        let conn = Conn::new(move |_m, p, _| {
+            if p.contains("/discussions") {
+                return Ok(
+                    json!([{"id": "d1", "notes": [{"id": 1, "body": ours.clone()},
+                    {"id": 2, "body": "We never add timeouts to tiny tables.", "author": {"username": "ana"}}]}]),
+                );
+            }
+            Ok(json!({}))
+        });
+        let posted = Arc::new(Mutex::new(vec![]));
+        let sink = posted.clone();
+        plugin_with(conn)
+            .with_poster(Box::new(move |_c, _m, a| {
+                sink.lock().unwrap().push(a.clone());
+                Ok(json!({"drafts": 0, "fallback_general": 0}))
+            }))
+            .after_item(&item(), &json!({"summary": "s", "findings": []}), &ctx)
+            .unwrap();
+        let l = review::ledger::Ledger::load(d.path(), "work:9!7");
+        let kept = l.findings.iter().find(|e| e.id == "prev000001").unwrap();
+        assert_eq!(
+            kept.status, "closed",
+            "a full review closes earlier findings"
+        );
+        assert_eq!(
+            kept.replies[0]["text"], "We never add timeouts to tiny tables.",
+            "but keeps replies"
+        );
+        assert!(l.open().is_empty());
+
+        let mut l = review::ledger::Ledger::default();
+        l.record(
+            "old",
+            true,
+            &[],
+            &[json!({"id": "prev000001", "path": "app/a.rb", "line": 2,
+                                             "severity": "major", "title": "Old"})],
+        );
+        let added = l.add_replies(
+            &[json!({"id": "d1", "notes": [{"id": 1, "body": finding_note(&json!({"id": "prev000001", "path": "a",
+                "line": 1, "severity": "major", "category": "data", "body": "b"}))},
+                {"id": 2, "body": "We never add timeouts to tiny tables.", "author": {"username": "ana"}}]})],
+            &|b: &str| review::render::parse_finding_marker(b).is_some(),
+        );
+        assert_eq!(added, 1);
+
+        let you = crate::user_memory::Paths {
+            home: d.path().join("home"),
+            memory_root: d.path().join("home/memory"),
+            approvals_dir: d.path().join("approvals"),
+            events_dir: d.path().join("events"),
+            loops_root: d.path().to_path_buf(),
+        };
+        std::fs::create_dir_all(d.path().join("home/you")).unwrap();
+        std::fs::write(
+            d.path().join("home/you/preferences.json"),
+            r#"{"accepted": [{"id": "p1", "text": "Do not flag missing timeouts on tiny tables.",
+                "accepted_at": "2026-11-20T10:00:00Z", "source": "review"}]}"#,
+        )
+        .unwrap();
+        let items = plugin_with(d_conn()).with_you(you).discover(&c()).unwrap();
+        let g = items[0].payload["repo_guidance"].as_array().unwrap();
+        let learned = g
+            .iter()
+            .find(|x| x["source"] == "reviewer's learned preferences")
+            .unwrap();
+        assert_eq!(
+            learned["text"],
+            "- Do not flag missing timeouts on tiny tables."
         );
     }
 
