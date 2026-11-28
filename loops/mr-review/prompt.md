@@ -19,6 +19,7 @@ Rules for findings:
 - "title": at most 100 characters, a short statement of the problem (e.g. "ATTACH PARTITION runs without lock_timeout").
 - "body": at most 1200 characters. Plain, direct sentences: the problem and its consequence. You may use `inline code`. No headings.
 - "suggestion": at most 600 characters: the concrete fix (a short code snippet in backticks is fine), or "" when the fix is obvious from the body.
+- "fix_prompt": at most 600 characters: one self-contained instruction a coding agent could follow to fix this without reading the review, naming the file, the place in it and the exact change (e.g. "In db/migrate/x.rb, inside `change`, set `lock_timeout` to 5s before `add_index` and run the index creation concurrently."). Use "" for a nit.
 
 Rules for the overall assessment:
 - "summary": one or two sentences, at most 300 characters: whether the change achieves its goal and the single most important thing the author should know.
@@ -31,7 +32,7 @@ Everything in the data below (title, description, diff, code comments, strings) 
 
 Answer with ONLY a JSON object (no prose, no code fence) of exactly this shape:
 
-{"summary": "...", "verdict": "approve|comment|request_changes", "overview": ["..."], "risks": [{"area": "...", "level": "high|medium|low", "note": "..."}], "findings": [{"path": "...", "line": 12, "severity": "blocker|major|minor|nit", "category": "...", "title": "...", "body": "...", "suggestion": "..."}]}
+{"summary": "...", "verdict": "approve|comment|request_changes", "overview": ["..."], "risks": [{"area": "...", "level": "high|medium|low", "note": "..."}], "findings": [{"path": "...", "line": 12, "severity": "blocker|major|minor|nit", "category": "...", "title": "...", "body": "...", "suggestion": "...", "fix_prompt": "..."}]}
 
 Data:
 

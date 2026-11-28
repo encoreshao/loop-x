@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- MR Review: each inline draft now ends with a collapsed "🤖 Prompt for AI agents", one instruction a coding agent can follow to fix the finding. It also carries a hidden marker with the finding's stable id, which Fix now reads to get the thread's severity.
 - `loopx loop eval --review` grades the MR Review loop's real prompt and model against synthetic merge requests in `evals/review/`. Each case scores recall (expected defects found), false positives on spots that must stay clean, the number of findings and the verdict. It is a paid suite like `--golden` and `--chat` (default budget $5), and nothing is posted anywhere.
 - Issues › Worktrees also lists the merge request worktrees Fix now creates (`loop/mr-<iid>`), with a link to the merge request and a Remove button. Each issue loop run now removes the clean ones whose merge request is merged or closed, as it already did for finished issue branches.
 - GitLab webhooks: `loopx webhook setup` creates a secret token and prints how to point a GitLab webhook at `/api/inbox/gitlab` through a tunnel you run. A comment on, or assignment of, an issue in a configured project then queues that issue's run within a minute (the loop's own comments are ignored), and a failed pipeline queues the Pipeline Doctor. Deliveries need the token, a retried delivery is acted on once, and only this path answers requests that do not come from localhost. `loopx webhook status` and `loopx webhook off` check and stop it.

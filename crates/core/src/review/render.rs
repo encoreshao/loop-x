@@ -81,7 +81,64 @@ pub fn finding_note(f: &Value) -> String {
     if !fix.is_empty() {
         note.push_str(&format!("\n\n**Suggested fix:** {}", defuse(&fix)));
     }
+    let agent = text_of(f, "fix_prompt");
+    if !agent.is_empty() {
+        note.push_str(&format!(
+            "\n\n<details><summary>\u{1f916} Prompt for AI agents</summary>\n\n{}\n\n</details>",
+            defuse(&agent)
+        ));
+    }
+    if let Some(marker) = finding_marker(f) {
+        note.push_str(&format!("\n\n{marker}"));
+    }
     note
+}
+
+const MARKER_OPEN: &str = "<!-- loopx-finding ";
+
+/// A LoopX review finding as recorded in its note's hidden marker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FindingRef {
+    pub id: String,
+    pub severity: String,
+    pub category: String,
+    pub path: String,
+    pub line: i64,
+    pub fix_prompt: String,
+}
+
+/// The hidden `<!-- loopx-finding {json} -->` line; `None` without an id. `-`, `>` and
+/// `@` are JSON escapes, so no field can close the comment early or mention anyone.
+pub fn finding_marker(f: &Value) -> Option<String> {
+    let id = text_of(f, "id");
+    if id.is_empty() {
+        return None;
+    }
+    let data = serde_json::json!({"v": 1, "id": id, "sev": text_of(f, "severity"),
+        "cat": text_of(f, "category"), "path": py_str(&f["path"]), "line": f["line"],
+        "fix": text_of(f, "fix_prompt")});
+    let json = data
+        .to_string()
+        .replace('-', "\\u002d")
+        .replace('>', "\\u003e")
+        .replace('@', "\\u0040");
+    Some(format!("{MARKER_OPEN}{json} -->"))
+}
+
+/// The finding marker in a note body, if any (the first one wins).
+pub fn parse_finding_marker(body: &str) -> Option<FindingRef> {
+    let start = body.find(MARKER_OPEN)? + MARKER_OPEN.len();
+    let end = start + body[start..].find(" -->")?;
+    let v: Value = serde_json::from_str(&body[start..end]).ok()?;
+    let id = v["id"].as_str().filter(|s| !s.is_empty())?;
+    Some(FindingRef {
+        id: id.to_string(),
+        severity: text_of(&v, "sev"),
+        category: text_of(&v, "cat"),
+        path: text_of(&v, "path"),
+        line: v["line"].as_i64().unwrap_or(0),
+        fix_prompt: text_of(&v, "fix"),
+    })
 }
 
 /// The overall review note: verdict, what the MR does, a risk table by area
@@ -192,4 +249,42 @@ pub fn summary_note(answer: &Value) -> Option<String> {
         out.push(lines.join("\n"));
     }
     Some(out.join("\n\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn finding_note_carries_the_agent_prompt_and_a_parseable_marker() {
+        let f = json!({"id": "a1b2c3d4e5", "path": "db/m-1.rb", "line": 3, "severity": "major",
+                       "category": "data", "title": "t", "body": "b",
+                       "fix_prompt": "Add `lock_timeout` --> then @all /close"});
+        let note = finding_note(&f);
+        assert!(note.contains("<summary>\u{1f916} Prompt for AI agents</summary>"));
+        let marker_line = note.lines().last().unwrap();
+        assert!(marker_line.starts_with("<!-- loopx-finding "));
+        assert_eq!(marker_line.matches("-->").count(), 1, "{marker_line}");
+        let parsed = parse_finding_marker(&note).unwrap();
+        assert_eq!(parsed.id, "a1b2c3d4e5");
+        assert_eq!(parsed.path, "db/m-1.rb");
+        assert_eq!(parsed.line, 3);
+        assert_eq!(parsed.severity, "major");
+        assert_eq!(parsed.fix_prompt, "Add `lock_timeout` --> then @all /close");
+        assert!(!note.contains("then @all"), "the visible prompt is defused");
+    }
+
+    #[test]
+    fn no_id_means_no_marker_and_garbage_markers_are_ignored() {
+        let f =
+            json!({"path": "a", "line": 1, "severity": "minor", "category": "tests", "body": "b"});
+        assert!(!finding_note(&f).contains("loopx-finding"));
+        assert!(!finding_note(&f).contains("<details>"));
+        assert_eq!(parse_finding_marker("<!-- loopx-finding {nope -->"), None);
+        assert_eq!(
+            parse_finding_marker(r#"<!-- loopx-finding {"id": ""} -->"#),
+            None
+        );
+    }
 }

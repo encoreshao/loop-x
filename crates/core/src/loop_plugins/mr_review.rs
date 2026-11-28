@@ -96,9 +96,11 @@ pub(crate) fn gate_findings(security: &Value) -> Vec<Value> {
                 .and_then(Value::as_i64)
                 .filter(|l| *l >= 1)
                 .unwrap_or(1);
+            let title = format!("Possible secret: `{rule}` (secret scan)");
             Some(
-                json!({"path": path, "line": line, "severity": "blocker", "category": "security",
-                        "title": format!("Possible secret: `{rule}` (secret scan)"),
+                json!({"id": review::findings::finding_id(path, "security", &title),
+                        "path": path, "line": line, "severity": "blocker", "category": "security",
+                        "title": title,
                         "body": GATE_NOTE_BODY, "suggestion": "", "source": "secret_scan"}),
             )
         })

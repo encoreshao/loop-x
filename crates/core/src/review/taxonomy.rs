@@ -8,6 +8,7 @@ pub const MAX_TITLE: usize = 120;
 pub const MAX_OVERVIEW: usize = 4;
 pub const MAX_RISKS: usize = 8;
 pub const MAX_NOTE: usize = 300;
+pub const MAX_FIX_PROMPT: usize = 600;
 pub const SEVERITIES: [&str; 4] = ["nit", "minor", "major", "blocker"];
 pub const VERDICTS: [&str; 3] = ["approve", "comment", "request_changes"];
 pub const LEVELS: [&str; 3] = ["low", "medium", "high"];

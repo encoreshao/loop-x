@@ -17,7 +17,14 @@ loop renders it as:
 
 - one inline draft per finding: severity and area up front
   (`🟠 **Major** · Data & migrations — title`), then the problem and an
-  optional **Suggested fix**;
+  optional **Suggested fix**. Then comes a collapsed **🤖 Prompt for AI agents**:
+  one self-contained instruction a coding agent can follow. Last is a hidden
+  `<!-- loopx-finding {...} -->` marker holding the finding's stable id
+  (path, area and normalised title, so it survives line shifts), severity,
+  area, path, line and that instruction. In the marker, `-`, `>` and `@` are
+  JSON-escaped, so it can't close the comment early or mention anyone. When
+  the draft is published, Fix now reads the marker for the thread's severity
+  instead of parsing the heading;
 - one overall draft: the verdict (looks good / mergeable after comments /
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.

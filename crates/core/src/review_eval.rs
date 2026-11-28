@@ -346,9 +346,14 @@ pub fn grade(expect: &ReviewExpect, found: &[Value], verdict: &str) -> (bool, Ve
             expect.verdict.join(" or ")
         ));
     }
+    let prompted = found
+        .iter()
+        .filter(|f| f["fix_prompt"].as_str().is_some_and(|p| !p.is_empty()))
+        .count();
     let mut reasons = vec![format!(
-        "recall {matched}/{}, {unexpected} other finding(s), verdict {verdict}",
-        expect.findings.len()
+        "recall {matched}/{}, {unexpected} other finding(s), verdict {verdict}, agent prompt on {prompted}/{}",
+        expect.findings.len(),
+        found.len()
     )];
     let passed = fails.is_empty();
     reasons.extend(fails);
@@ -531,7 +536,7 @@ mod tests {
         assert!(ok, "{reasons:?}");
         assert_eq!(
             reasons[0],
-            "recall 1/1, 0 other finding(s), verdict request_changes"
+            "recall 1/1, 0 other finding(s), verdict request_changes, agent prompt on 0/1"
         );
 
         let (ok, reasons) = grade(

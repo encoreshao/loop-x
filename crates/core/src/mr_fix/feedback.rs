@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use super::notes::is_agent_note;
+use crate::review::render::{parse_finding_marker, FindingRef};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -23,6 +24,8 @@ pub struct Item {
     pub notes: Vec<Value>,
     pub position: Option<Value>,
     pub severity: Option<Severity>,
+    /// The LoopX review finding that opened this thread, from its hidden marker.
+    pub finding: Option<FindingRef>,
     pub last_note_id: i64,
 }
 
@@ -81,8 +84,11 @@ fn severity_of(body: &str) -> Option<Severity> {
     // LoopX review prefix: `<emoji> **Major** · Area — title`.
     let head = body.trim_start().lines().next()?;
     let start = head.find("**")? + 2;
-    let word = head[start..].split("**").next()?.trim().to_lowercase();
-    match word.as_str() {
+    severity_word(head[start..].split("**").next()?)
+}
+
+fn severity_word(word: &str) -> Option<Severity> {
+    match word.trim().to_lowercase().as_str() {
         "blocker" | "major" => Some(Severity::Major),
         "medium" => Some(Severity::Medium),
         "minor" | "nit" | "low" => Some(Severity::Low),
@@ -124,13 +130,19 @@ pub fn pending(discussions: &[Value], handled: &Handled) -> Vec<Item> {
         if handled.0.get(id).is_some_and(|h| last_note_id <= *h) {
             continue;
         }
+        let first_body = first.and_then(|n| n["body"].as_str());
+        let finding = first_body.and_then(parse_finding_marker);
         out.push(Item {
             discussion_id: id.to_string(),
             position: first
                 .and_then(|n| n.get("position"))
                 .filter(|p| !p.is_null())
                 .cloned(),
-            severity: first.and_then(|n| severity_of(n["body"].as_str().unwrap_or(""))),
+            severity: finding
+                .as_ref()
+                .and_then(|f| severity_word(&f.severity))
+                .or_else(|| first_body.and_then(severity_of)),
+            finding,
             notes,
             last_note_id,
         });
@@ -219,6 +231,26 @@ mod tests {
             );
             assert_eq!(p[0].severity, want, "{body}");
         }
+    }
+
+    #[test]
+    fn a_loopx_finding_thread_carries_its_marker_and_severity() {
+        let body = crate::review::render::finding_note(&json!({
+            "id": "a1b2c3d4e5", "path": "db/m.rb", "line": 9, "severity": "minor",
+            "category": "data", "title": "t", "body": "b", "fix_prompt": "Set lock_timeout."}));
+        let p = pending(
+            &[disc("a", vec![note(1, &body, false)])],
+            &Handled::default(),
+        );
+        let f = p[0].finding.as_ref().unwrap();
+        assert_eq!((f.id.as_str(), f.line), ("a1b2c3d4e5", 9));
+        assert_eq!(f.fix_prompt, "Set lock_timeout.");
+        assert_eq!(p[0].severity, Some(Severity::Low));
+        let plain = pending(
+            &[disc("b", vec![note(1, "rename", false)])],
+            &Handled::default(),
+        );
+        assert!(plain[0].finding.is_none());
     }
 
     fn authored(id: i64, user: &str, body: &str) -> Value {

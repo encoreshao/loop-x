@@ -106,6 +106,7 @@ pub fn ci_failure_item(f: &CiFailure) -> Item {
         })],
         position: None,
         severity: Some(Severity::Major),
+        finding: None,
         last_note_id: f.pipeline_id,
     }
 }
