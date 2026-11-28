@@ -19,6 +19,7 @@ mod metrics_cmd;
 mod mr_fix_cmd;
 mod notify_cmd;
 mod release_mr_cmd;
+mod review_cmd;
 mod run_cmds;
 mod screenshot_check;
 mod screenshot_cmd;
@@ -122,6 +123,11 @@ enum Command {
     /// File-based per-issue task memory
     MemoryStore {
         /// `add <alias> <iid> <lesson> [tags] [category]`, `get <alias> <iid>` or `list <alias>`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Check the MR review configuration (`config [--file <path>] [--project <alias>]`)
+    Review {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -402,6 +408,7 @@ fn main() -> ExitCode {
         Command::MemoryStore { args } => accounting_cmds::memory_store(&args),
         Command::NotifyLoop { args } => accounting_cmds::notify_loop(&args),
         Command::Timer { args } => timer_cmd::run(&args),
+        Command::Review { args } => review_cmd::run(&args),
         Command::Webhook { args } => webhook_cmd::run(&args),
         Command::Events { args } => events_cmd::run(&args),
         Command::Ledger { args } => events_cmd::ledger(&args),

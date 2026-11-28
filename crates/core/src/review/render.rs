@@ -193,6 +193,18 @@ pub fn summary_note(answer: &Value) -> Option<String> {
     if !summary.is_empty() {
         out.push(defuse(&summary));
     }
+    let scope: Vec<String> = answer
+        .get("scope")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|l| defuse(&crate::pre_review::one_line(l)))
+        .filter(|l| !l.is_empty())
+        .collect();
+    if !scope.is_empty() {
+        out.push(format!("**Review scope:** {}", scope.join("; ")));
+    }
     if !checks.is_empty() {
         out.push(format!(
             "**Automated checks** (the same model-free gates LoopX runs on its own fixes; advisory)\n{}",

@@ -122,6 +122,32 @@ fn fetch_file(
     path: &str,
     sha: &str,
 ) -> Result<Result<Option<Vec<u8>>, ()>, ConnectorError> {
+    fetch_bytes(conn, project_id, path, sha, MAX_LOCKFILE_BYTES)
+}
+
+/// A text file at `sha`: `Ok(None)` when absent, `Some(Err(why))` when over `max`
+/// bytes or not UTF-8.
+pub fn fetch_text(
+    conn: &dyn Connector,
+    project_id: &str,
+    path: &str,
+    sha: &str,
+    max: usize,
+) -> Result<Option<Result<String, String>>, ConnectorError> {
+    Ok(match fetch_bytes(conn, project_id, path, sha, max)? {
+        Ok(None) => None,
+        Err(()) => Some(Err(format!("larger than {} KB", max / 1024))),
+        Ok(Some(b)) => Some(String::from_utf8(b).map_err(|_| "not UTF-8 text".to_string())),
+    })
+}
+
+fn fetch_bytes(
+    conn: &dyn Connector,
+    project_id: &str,
+    path: &str,
+    sha: &str,
+    max: usize,
+) -> Result<Result<Option<Vec<u8>>, ()>, ConnectorError> {
     use base64::Engine;
     let url = format!(
         "/projects/{}/repository/files/{}?ref={}",
@@ -139,7 +165,7 @@ fn fetch_file(
         Err(e) => return Err(e),
     };
     let size = file.get("size").and_then(Value::as_u64).unwrap_or(0);
-    if size > MAX_LOCKFILE_BYTES as u64 {
+    if size > max as u64 {
         return Ok(Err(()));
     }
     let content: String = file
@@ -155,7 +181,7 @@ fn fetch_file(
             class: "ValueError".into(),
             detail: e.to_string(),
         })?;
-    if bytes.len() > MAX_LOCKFILE_BYTES {
+    if bytes.len() > max {
         return Ok(Err(()));
     }
     Ok(Ok(Some(bytes)))

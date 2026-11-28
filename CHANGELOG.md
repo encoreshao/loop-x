@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- MR Review reads a project's `.loopx/review.yaml` at the merge request's base commit. It can set a review profile (quiet, chill or assertive: the lowest severity posted and the number of findings), path filters, and auto-review rules (title keywords, labels, ignored authors, target branches, or off). A project's `review` block in `projects.json` overrides it on your Mac. `loopx review config` validates the file and shows where each value comes from. GitLab only for now.
 - MR Review: each inline draft now ends with a collapsed "🤖 Prompt for AI agents", one instruction a coding agent can follow to fix the finding. It also carries a hidden marker with the finding's stable id, which Fix now reads to get the thread's severity.
 - `loopx loop eval --review` grades the MR Review loop's real prompt and model against synthetic merge requests in `evals/review/`. Each case scores recall (expected defects found), false positives on spots that must stay clean, the number of findings and the verdict. It is a paid suite like `--golden` and `--chat` (default budget $5), and nothing is posted anywhere.
 - Issues › Worktrees also lists the merge request worktrees Fix now creates (`loop/mr-<iid>`), with a link to the merge request and a Remove button. Each issue loop run now removes the clean ones whose merge request is merged or closed, as it already did for finished issue branches.
@@ -32,6 +33,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Changed
 
+- MR Review no longer sends lockfiles, vendored and generated code, build output, minified files, source maps, snapshots or binary assets to the model. The secret scan and dependency audit still check every file, and an MR that only changes such files is not reviewed. A plain pattern in `path_filters` brings a file type back.
 - Mac app start screen: a larger LoopX logo, the name under it and one line, "Autonomous agents, human in the loop.", in place of the headline and paragraph. It follows the Mac's light or dark appearance, and the images are rendered sharp for Retina displays.
 - The cache hit rate (`loopx cost`, Insights › Cost) now counts tokens written to the cache as input, so it is no longer overstated.
 - Issue loop: a fix waiting for approval before its merge request no longer holds the run. The run parks the fix and ends, and within a minute of your decision a short run of that issue opens the MR, sends your requested changes back to the agent, or escalates. Approvals now wait up to 7 days by default instead of 30 minutes (`approval_timeout_seconds` still overrides it), Telegram buttons keep working with no run alive, and the run report lists the issue under "Waiting for your approval".

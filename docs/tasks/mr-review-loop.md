@@ -72,6 +72,61 @@ before their merge request opens (`crates/core/src/mr_gates.rs`):
   `work_in_progress` flag or a `Draft:`/`WIP:` title prefix is skipped too
   (older GitLab ignores `draft=no`).
 
+## Repository configuration (`.loopx/review.yaml`)
+
+A project can commit `.loopx/review.yaml` (at most 64 KB) to tune its reviews.
+The file is read through the files API at the MR's **base** commit, never its
+head. So an MR cannot change the rules that review it, and a config change
+applies to MRs opened after it merges. GitLab only for now: GitHub pull requests
+use the defaults.
+
+```yaml
+version: 1
+profile: chill          # quiet (major+, at most 8 findings) | chill (minor+, 15) | assertive (nit+, 25)
+path_filters:           # globs: * and ? within a segment, ** across segments,
+  - "!docs/**"          #   no "/" = any depth; "!" excludes
+auto_review:
+  enabled: true         # false: only "Review now" reviews
+  ignore_title_keywords: [WIP]
+  labels: [review-me, "!no-review"]   # any plain label = required; "!label" excludes
+  ignore_authors: [renovate-bot]
+  base_branches: [main, "release/.*"] # regexes matched against the whole target branch
+```
+
+**Layers.** Each layer below overrides the ones before it:
+
+1. built-in defaults;
+2. the loop's `min_severity` setting;
+3. the repo file;
+4. the matching project's `review` block in `projects.json` (same keys,
+   matched by `project_id`).
+
+Your Mac has the last word. `path_filters` from the repo file and
+`projects.json` are combined.
+
+**Errors.** Unknown keys, a bad profile, an unsupported `version` or an invalid
+branch regex make that layer ignored. The review still runs, and its summary
+says why under **Review scope**.
+
+**Path filters.**
+- A built-in deny-list is always on: lockfiles, `node_modules/`, `vendor/`,
+  `dist/`, generated folders, minified files, source maps, snapshots, protobuf
+  output, images, fonts and archives.
+- A plain pattern brings back a file the deny-list would drop.
+- Any plain pattern turns the list into an allowlist.
+- A `!` exclude always wins.
+- Filtered files leave the model's diff only. The secret scan, the dependency
+  audit and `changed_paths` still see every file.
+- An MR whose files are all filtered out is not reviewed. The summary counts the
+  filtered files.
+
+**Auto review.** The rules are checked right after the MR detail is read, before
+any diff is fetched. **Review now** bypasses them.
+
+**Checking a file.** `loopx review config [--file <path>] [--project <alias>]`
+validates a file and prints the effective configuration with the source of each
+value. It reads local files only.
+
 ## The Merge requests tab
 
 The loop page lists your open MRs live from GitLab: those assigned to you

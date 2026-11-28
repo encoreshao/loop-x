@@ -230,6 +230,24 @@ fn emit_gates_event(
     );
 }
 
+/// What `after_item` needs from the review config (kept in meta, never in the prompt),
+/// plus the lines the summary note shows under "Review scope".
+fn review_meta(cfg: &review::config::ReviewConfig, filtered: usize) -> Value {
+    let mut notes = cfg.notes.clone();
+    if filtered > 0 {
+        notes.push(format!("{filtered} file(s) not reviewed (path filters)"));
+    }
+    if cfg
+        .provenance
+        .get("profile")
+        .is_some_and(|s| s != "default")
+    {
+        notes.push(format!("Profile: {}", cfg.profile));
+    }
+    json!({"min_severity": cfg.min_severity, "finding_cap": cfg.finding_cap,
+           "profile": cfg.profile, "notes": notes})
+}
+
 /// The "Automated checks" lines, rendered by the same functions as the
 /// agent MR description's Pre-review section.
 pub(crate) fn gate_checks(
@@ -941,6 +959,9 @@ pub struct MrReview {
     seen: Mutex<Option<SeenStore>>,
     auditor: Option<Arc<dyn AuditRunner>>,
     audit_spent: Mutex<Duration>,
+    projects_path: Option<PathBuf>,
+    /// `.loopx/review.yaml` per `account:project@base_sha`, for one run.
+    repo_cfg: Mutex<BTreeMap<String, Option<Result<review::config::ReviewLayer, String>>>>,
 }
 
 impl MrReview {
@@ -952,7 +973,63 @@ impl MrReview {
             seen: Mutex::new(None),
             auditor: None,
             audit_spent: Mutex::new(Duration::ZERO),
+            projects_path: None,
+            repo_cfg: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Read each project's personal `review` block from this `projects.json`.
+    pub fn with_projects_path(mut self, path: PathBuf) -> Self {
+        self.projects_path = Some(path);
+        self
+    }
+
+    /// The repo layer at `base_sha`, fetched once per run. A files API error other
+    /// than 404 is a note, never a failed review.
+    fn repo_layer(
+        &self,
+        conn: &dyn Connector,
+        account_id: &str,
+        pid: &str,
+        base_sha: &str,
+    ) -> Option<Result<review::config::ReviewLayer, String>> {
+        let key = format!("{account_id}:{pid}@{base_sha}");
+        let mut cache = self.repo_cfg.lock().unwrap_or_else(|e| e.into_inner());
+        cache
+            .entry(key)
+            .or_insert_with(|| {
+                match mr_gates::fetch_text(
+                    conn,
+                    pid,
+                    review::config::REPO_FILE,
+                    base_sha,
+                    review::config::MAX_FILE_BYTES,
+                ) {
+                    Ok(None) => None,
+                    Ok(Some(Ok(text))) => Some(review::config::parse_repo_file(&text)),
+                    Ok(Some(Err(e))) => Some(Err(e)),
+                    Err(e) => Some(Err(format!("could not read it: {}", e.class_name()))),
+                }
+            })
+            .clone()
+    }
+
+    /// The personal `review` block of the `projects.json` project matching this MR.
+    fn personal_layer(
+        &self,
+        project_id: &str,
+        project_path: &str,
+    ) -> Option<Result<review::config::ReviewLayer, String>> {
+        let config = crate::config::Config::load(self.projects_path.as_deref()?).ok()?;
+        let project = config.aliases().ok()?.into_iter().find_map(|alias| {
+            let p = config.project(&alias).ok()?;
+            let pid = p["project_id"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| p["project_id"].as_i64().map(|i| i.to_string()))?;
+            (pid == project_id || (!project_path.is_empty() && pid == project_path)).then_some(p)
+        })?;
+        project.get("review").map(review::config::parse_personal)
     }
 
     pub fn with_auditor(mut self, auditor: Arc<dyn AuditRunner>) -> Self {
@@ -994,6 +1071,8 @@ impl MrReview {
         account_id: &str,
         me: &Value,
         row: &Value,
+        wanted: bool,
+        loop_min_severity: Option<&str>,
     ) -> Result<Option<WorkItem>, ConnectorError> {
         let author_id = row
             .get("author")
@@ -1034,6 +1113,43 @@ impl MrReview {
         {
             return Ok(None);
         }
+        let project_path = detail
+            .pointer("/references/full")
+            .or_else(|| row.pointer("/references/full"))
+            .and_then(Value::as_str)
+            .and_then(|r| r.rsplit_once('!'))
+            .map_or(String::new(), |(p, _)| p.to_string());
+        let cfg = review::config::resolve(review::config::Sources {
+            loop_min_severity,
+            repo: self.repo_layer(conn, account_id, &pid_s, &py_str(&refs["base_sha"])),
+            personal: self.personal_layer(&pid_s, &project_path),
+        });
+        if !wanted {
+            let labels: Vec<String> = detail
+                .get("labels")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l.as_str().or_else(|| l["name"].as_str()))
+                .map(str::to_string)
+                .collect();
+            let author = detail
+                .pointer("/author/username")
+                .or_else(|| row.pointer("/author/username"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let target = detail
+                .get("target_branch")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let title = detail.get("title").and_then(Value::as_str).unwrap_or("");
+            if cfg
+                .auto_review_skip(title, &labels, author, target)
+                .is_some()
+            {
+                return Ok(None);
+            }
+        }
         let mut changes: Vec<Value> = Vec::new();
         let mut size = 0usize;
         for page in 1..=MAX_DIFF_PAGES {
@@ -1059,7 +1175,19 @@ impl MrReview {
                 break;
             }
         }
-        let (diff, truncated) = build_diff_text(&changes, DIFF_CAP_BYTES);
+        let (reviewed, filtered): (Vec<&Value>, Vec<&Value>) = changes.iter().partition(|c| {
+            let path = c
+                .get("new_path")
+                .filter(|v| py_truthy(v))
+                .or_else(|| c.get("old_path"))
+                .map_or(String::new(), py_str);
+            cfg.reviews_path(&path)
+        });
+        if reviewed.is_empty() {
+            return Ok(None);
+        }
+        let reviewed: Vec<Value> = reviewed.into_iter().cloned().collect();
+        let (diff, truncated) = build_diff_text(&reviewed, DIFF_CAP_BYTES);
         let pick = |k: &str| {
             detail
                 .get(k)
@@ -1110,6 +1238,7 @@ impl MrReview {
             "author_username": author.get("username").map_or(String::new(), py_str),
             "created_at": pick("created_at"),
             "gates": {"security": mr_gates::gate_meta(&mr_gates::secret_scan(&changes, truncated))},
+            "review": review_meta(&cfg, filtered.len()),
         });
         Ok(Some(
             WorkItem::new(
@@ -1480,7 +1609,8 @@ impl LoopPlugin for MrReview {
                 if !project_active(conn.as_ref(), &mut active, row) {
                     continue;
                 }
-                match self.item(conn.as_ref(), &account.id, &me, row) {
+                let loop_min = ctx.settings.get("min_severity").and_then(Value::as_str);
+                match self.item(conn.as_ref(), &account.id, &me, row, wanted, loop_min) {
                     Ok(Some(item)) if wanted => requested.push(item.with_force()),
                     Ok(Some(item)) => items.push(item),
                     Ok(None) => {}
@@ -1522,11 +1652,19 @@ impl LoopPlugin for MrReview {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        let min = ctx
-            .settings
-            .get("min_severity")
-            .filter(|v| py_truthy(v))
-            .map_or("minor".to_string(), py_str);
+        let review_meta = item.meta.get("review");
+        let min = review_meta
+            .and_then(|r| r["min_severity"].as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                ctx.settings
+                    .get("min_severity")
+                    .filter(|v| py_truthy(v))
+                    .map_or("minor".to_string(), py_str)
+            });
+        let cap = review_meta
+            .and_then(|r| r["finding_cap"].as_u64())
+            .map_or(MAX_FINDINGS, |c| c as usize);
         let review::findings::Cleaned {
             summary,
             verdict,
@@ -1545,7 +1683,7 @@ impl LoopPlugin for MrReview {
             .unwrap_or_default()
             .into_iter()
             .chain(kept)
-            .take(MAX_FINDINGS)
+            .take(cap)
             .collect();
         let account = py_str(&payload["account"]);
         let conn = self
@@ -1559,8 +1697,15 @@ impl LoopPlugin for MrReview {
             "security_blocking": security.as_ref().map_or(0, |s| s.evidence.get("blocking").and_then(Value::as_array).map_or(0, Vec::len)),
             "dependency_blocking": dependency.blocking(),
         });
+        let scope: Vec<String> = review_meta
+            .and_then(|r| r["notes"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
         let cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
-                             "risks": risks, "findings": kept, "checks": checks});
+                             "risks": risks, "findings": kept, "checks": checks, "scope": scope});
         let url = payload.get("web_url").map_or(String::new(), py_str);
         let posted = match &self.poster {
             Some(p) => p(conn.as_ref(), payload, &cleaned),
@@ -2158,6 +2303,9 @@ mod tests {
 
     fn d_handler(m: &str, path: &str, extra: Option<Value>) -> Result<Value, ConnectorError> {
         let _ = m;
+        if path.contains("/repository/files/.loopx") {
+            return Err(http_err(Some(404)));
+        }
         if path == "/user" {
             return Ok(json!({"id": 1, "username": "me"}));
         }
@@ -2648,6 +2796,169 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         })
     }
 
+    fn cfg_conn(repo_yaml: Option<&'static str>, detail: Value, files: Vec<Value>) -> Arc<Conn> {
+        use base64::Engine;
+        Conn::new(move |m, p, _| {
+            if p.contains("/repository/files/.loopx") {
+                assert!(p.contains("ref=b"), "read at the base sha: {p}");
+                return match repo_yaml {
+                    Some(y) => Ok(json!({"size": y.len(),
+                        "content": base64::engine::general_purpose::STANDARD.encode(y)})),
+                    None => Err(http_err(Some(404))),
+                };
+            }
+            if p.ends_with("/merge_requests/7") {
+                let mut d = detail.clone();
+                d["sha"] = json!("h");
+                d["diff_refs"] = mr()["diff_refs"].clone();
+                return Ok(d);
+            }
+            if p.contains("/diffs") {
+                return Ok(if p.ends_with("&page=1") {
+                    json!(files.clone())
+                } else {
+                    json!([])
+                });
+            }
+            d_handler(m, p, None)
+        })
+    }
+
+    fn two_files() -> Vec<Value> {
+        vec![
+            json!({"new_path": "app/a.rb", "diff": "@@ -1 +1,2 @@\n a\n+b\n"}),
+            json!({"new_path": "yarn.lock", "diff": "@@ -1 +1,2 @@\n a\n+b\n"}),
+            json!({"new_path": "docs/x.md", "diff": "@@ -1 +1,2 @@\n a\n+b\n"}),
+        ]
+    }
+
+    #[test]
+    fn repo_config_filters_paths_and_sets_the_profile() {
+        let conn = cfg_conn(
+            Some("profile: quiet\npath_filters: ['!docs/**']\n"),
+            json!({"title": "T"}),
+            two_files(),
+        );
+        let items = plugin_with(conn).discover(&c()).unwrap();
+        let diff = items[0].payload["diff"].as_str().unwrap();
+        assert!(diff.contains("+++ b/app/a.rb"));
+        assert!(
+            !diff.contains("yarn.lock") && !diff.contains("docs/x.md"),
+            "{diff}"
+        );
+        assert_eq!(
+            items[0].payload["changed_paths"],
+            json!(["app/a.rb", "docs/x.md", "yarn.lock"]),
+            "changed_paths stays complete for the gates"
+        );
+        let review = &items[0].meta["review"];
+        assert_eq!(
+            (
+                review["min_severity"].as_str(),
+                review["finding_cap"].as_u64()
+            ),
+            (Some("major"), Some(8))
+        );
+        assert_eq!(
+            review["notes"],
+            json!(["2 file(s) not reviewed (path filters)", "Profile: quiet"])
+        );
+    }
+
+    #[test]
+    fn auto_review_rules_skip_unless_review_now() {
+        let conn = cfg_conn(
+            Some("auto_review: {labels: ['!no-review']}\n"),
+            json!({"title": "T", "labels": ["no-review"]}),
+            diff(),
+        );
+        assert!(plugin_with(conn.clone()).discover(&c()).unwrap().is_empty());
+        assert!(
+            !conn.calls().iter().any(|c| c.1.contains("/diffs")),
+            "no diff fetched for a skipped MR"
+        );
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = c();
+        ctx.state_dir = Some(d.path().to_path_buf());
+        MrPrefs::update(d.path(), |p| {
+            p.requested.insert("work:9!7".into());
+        })
+        .unwrap();
+        assert_eq!(
+            plugin_with(conn).discover(&ctx).unwrap().len(),
+            1,
+            "Review now bypasses auto review"
+        );
+    }
+
+    #[test]
+    fn only_filtered_files_means_no_review_and_a_bad_file_is_a_note() {
+        let lock_only = vec![json!({"new_path": "yarn.lock", "diff": "@@ -1 +1,2 @@\n a\n+b\n"})];
+        assert!(
+            plugin_with(cfg_conn(None, json!({"title": "T"}), lock_only))
+                .discover(&c())
+                .unwrap()
+                .is_empty()
+        );
+        let items = plugin_with(cfg_conn(
+            Some("profile: loud\n"),
+            json!({"title": "T"}),
+            diff(),
+        ))
+        .discover(&c())
+        .unwrap();
+        let notes = items[0].meta["review"]["notes"].as_array().unwrap();
+        assert!(
+            notes[0]
+                .as_str()
+                .unwrap()
+                .starts_with("`.loopx/review.yaml` ignored:"),
+            "{notes:?}"
+        );
+        assert_eq!(items[0].meta["review"]["profile"], "chill");
+    }
+
+    #[test]
+    fn personal_projects_json_block_wins_over_the_repo() {
+        let d = tempfile::tempdir().unwrap();
+        let projects = d.path().join("projects.json");
+        std::fs::write(
+            &projects,
+            r#"{"projects": {"web": {"project_id": "9", "review": {"profile": "assertive"}}}}"#,
+        )
+        .unwrap();
+        let conn = cfg_conn(Some("profile: quiet\n"), json!({"title": "T"}), diff());
+        let items = plugin_with(conn)
+            .with_projects_path(projects)
+            .discover(&c())
+            .unwrap();
+        assert_eq!(items[0].meta["review"]["profile"], "assertive");
+        assert_eq!(items[0].meta["review"]["finding_cap"], 25);
+    }
+
+    #[test]
+    fn after_item_uses_the_profile_floor_and_cap_and_shows_the_scope() {
+        let mut it = item();
+        it.meta = json!({"review": {"min_severity": "major", "finding_cap": 2, "profile": "quiet",
+                                    "notes": ["Profile: quiet"]}});
+        let findings: Vec<Value> = ["minor", "major", "major", "blocker"]
+            .iter()
+            .enumerate()
+            .map(|(i, s)| finding("app/a.rb", 2, s, &i.to_string()))
+            .collect();
+        let posted = Arc::new(Mutex::new(vec![]));
+        with_poster(posted.clone())
+            .after_item(&it, &json!({"summary": "s", "findings": findings}), &c())
+            .unwrap();
+        let p = posted.lock().unwrap();
+        let kept = p[0]["findings"].as_array().unwrap();
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|f| f["severity"] != "minor"));
+        assert!(summary_note(&p[0])
+            .unwrap()
+            .contains("**Review scope:** Profile: quiet"));
+    }
+
     #[test]
     fn discover_asks_for_reviewer_and_assignee_mrs_once_each_and_skips_drafts() {
         let conn = rows_handler(json!([
@@ -2696,6 +3007,13 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         let mut items = plugin_with(conn).discover(&c()).unwrap();
         let gates = items[0].meta.as_object_mut().unwrap().remove("gates");
         assert!(gates.is_some_and(|g| g["security"]["passed"] == true));
+        let review = items[0].meta.as_object_mut().unwrap().remove("review");
+        assert_eq!(
+            review,
+            Some(
+                json!({"min_severity": "minor", "finding_cap": 15, "profile": "chill", "notes": []})
+            )
+        );
         assert_eq!(
             items[0].meta,
             json!({"label": "Fix login (web/app!7)", "title": "Fix login", "ref": "web/app!7", "author": "Ana Lee",
