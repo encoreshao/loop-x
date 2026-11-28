@@ -1,0 +1,9 @@
+diff --git a/db/migrate/20261120000000_remove_coupon_code_from_orders.rb b/db/migrate/20261120000000_remove_coupon_code_from_orders.rb
+--- /dev/null
++++ b/db/migrate/20261120000000_remove_coupon_code_from_orders.rb
+@@ -0,0 +1,5 @@
++class RemoveCouponCodeFromOrders < ActiveRecord::Migration[7.1]
++  def change
++    remove_column :orders, :coupon_code
++  end
++end

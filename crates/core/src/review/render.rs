@@ -281,6 +281,34 @@ pub fn summary_note(answer: &Value) -> Option<String> {
         let bullets: Vec<String> = overview.iter().map(|b| format!("- {b}")).collect();
         out.push(format!("**What this MR does**\n{}", bullets.join("\n")));
     }
+    let check_rows: Vec<&Value> = answer
+        .get("check_results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    if !check_rows.is_empty() {
+        let mut table = vec![
+            "**Checks** (advisory)".to_string(),
+            String::new(),
+            "| Check | Result | Why |".to_string(),
+            "| --- | --- | --- |".to_string(),
+        ];
+        for c in check_rows {
+            let result = match (text_of(c, "result").as_str(), text_of(c, "mode").as_str()) {
+                ("passed", _) => "\u{2705} Passed",
+                ("failed", "error") => "\u{26d4} Failed",
+                ("failed", _) => "\u{26a0}\u{fe0f} Failed",
+                _ => "\u{2754} Inconclusive",
+            };
+            table.push(format!(
+                "| {} | {result} | {} |",
+                cell(&defuse(&text_of(c, "name"))),
+                cell(&defuse(&text_of(c, "reason")))
+            ));
+        }
+        out.push(table.join("\n"));
+    }
     if let Some(w) = answer.get("walkthrough").filter(|w| w.is_object()) {
         out.push(walkthrough_section(w));
     }
@@ -370,6 +398,21 @@ mod tests {
         assert!(!summary_note(&json!({"summary": "s", "findings": []}))
             .unwrap()
             .contains("Walkthrough"));
+    }
+
+    #[test]
+    fn check_results_render_as_a_table() {
+        let answer = json!({"summary": "s", "findings": [], "check_results": [
+            {"name": "Migrations are reversible", "mode": "error", "result": "failed", "reason": "no down | method"},
+            {"name": "Title says what changes", "mode": "warning", "result": "passed", "reason": ""},
+            {"name": "Docs", "mode": "warning", "result": "inconclusive", "reason": "not answered"}]});
+        let note = summary_note(&answer).unwrap();
+        assert!(
+            note.contains("| Migrations are reversible | \u{26d4} Failed | no down \\| method |"),
+            "{note}"
+        );
+        assert!(note.contains("| Title says what changes | \u{2705} Passed |  |"));
+        assert!(note.contains("| Docs | \u{2754} Inconclusive | not answered |"));
     }
 
     #[test]

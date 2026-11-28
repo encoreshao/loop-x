@@ -29,6 +29,42 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Pre-merge checks
+
+**Custom checks.** A project can commit plain-language merge rules as
+`.loopx/checks/<id>.md`. At most 20 files of 10 KB each are listed through the
+repository tree API and read at the MR's **base** commit:
+
+```markdown
+---
+name: Migrations are reversible
+paths: ["db/migrate/**"]   # optional: applies only when a changed file matches
+mode: error                # off | warning (default) | error
+---
+Every migration can be rolled back ...
+```
+
+The applicable checks go to the model in the same review call as
+`pre_merge_checks`, so there is no extra model cost. It answers `check_results`:
+passed, failed or inconclusive, with the evidence. A check it doesn't answer is
+inconclusive. A file with bad front matter is ignored and named under **Review
+scope**.
+
+**Built-ins.** All built-ins are off until enabled with
+`checks: {title: warning, description: warning, issue_assessment: warning}` in
+`.loopx/review.yaml` or `projects.json`:
+
+- `title`: model-free; at least 10 and at most 100 characters, and not just
+  "fix", "wip" or similar;
+- `description`: model-free; more than a template or a couple of words;
+- `issue_assessment`: the issues the description closes (`Closes #12`, issue
+  URLs, at most 3) are fetched and sent as `linked_issues`. The model judges
+  whether the change does what they ask, without unrelated changes.
+
+The summary draft shows a **Checks** table: ✅ passed, ⚠️ failed (warning),
+⛔ failed (error), ❔ inconclusive. On others' merge requests checks are
+advisory: they never change findings, the verdict or approval.
+
 ## Walkthrough (opt-in)
 
 `walkthrough: true` in `.loopx/review.yaml` (or the project's `review` block in

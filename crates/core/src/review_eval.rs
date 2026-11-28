@@ -43,6 +43,8 @@ pub struct ReviewExpect {
     /// Earlier finding ids the model must call addressed / open (incremental cases).
     pub addressed: Vec<String>,
     pub still_open: Vec<String>,
+    /// Check id -> expected result.
+    pub checks: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -235,6 +237,15 @@ pub fn parse_case(yaml: &str, patch: &str, name: &str) -> Result<ReviewCase, Str
             forbidden_hints: strings(expect.get("forbidden_hints")),
             addressed: strings(expect.get("addressed")),
             still_open: strings(expect.get("still_open")),
+            checks: expect
+                .get("checks")
+                .and_then(Value::as_object)
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
         },
     };
     let paths: BTreeSet<String> = case
@@ -304,6 +315,23 @@ pub fn case_config(case: &ReviewCase) -> ReviewConfig {
     })
 }
 
+/// The case's `.loopx/checks/*.md` that apply to its changes.
+pub fn case_checks(case: &ReviewCase) -> Vec<crate::review::checks::Check> {
+    let changed: Vec<String> = case
+        .changes
+        .iter()
+        .filter_map(|c| c["new_path"].as_str().map(str::to_string))
+        .collect();
+    case.repo_files
+        .iter()
+        .filter_map(|(k, v)| {
+            let name = k.strip_prefix(".loopx/checks/")?;
+            crate::review::checks::parse(name, v).ok()
+        })
+        .filter(|c| c.applies(&changed))
+        .collect()
+}
+
 pub fn work_item(case: &ReviewCase) -> WorkItem {
     let cfg = case_config(case);
     let reviewed: Vec<Value> = case
@@ -347,6 +375,11 @@ pub fn work_item(case: &ReviewCase) -> WorkItem {
     }
     if cfg.walkthrough {
         payload["walkthrough_requested"] = json!(true);
+    }
+    let checks = case_checks(case);
+    if !checks.is_empty() {
+        payload["pre_merge_checks"] =
+            json!(checks.iter().map(|c| c.prompt_json()).collect::<Vec<_>>());
     }
     if let Some(delta) = &case.delta_diff {
         payload["delta_from"] = json!("2".repeat(40));
@@ -558,6 +591,20 @@ pub fn run_case(
             ),
         }
     }
+    if !case.expect.checks.is_empty() {
+        let results = crate::review::checks::model_results(&answer, &case_checks(case));
+        for (id, want) in &case.expect.checks {
+            let got = results
+                .iter()
+                .find(|r| r["id"] == id.as_str())
+                .and_then(|r| r["result"].as_str())
+                .unwrap_or("not asked");
+            if got != want {
+                passed = false;
+                reasons.push(format!("check {id}: {got}, expected {want}"));
+            }
+        }
+    }
     for (ids, want) in [
         (&case.expect.addressed, "addressed"),
         (&case.expect.still_open, "open"),
@@ -709,6 +756,7 @@ mod tests {
             forbidden_hints: vec![],
             addressed: vec![],
             still_open: vec![],
+            checks: BTreeMap::new(),
         };
         let (ok, reasons) = grade(
             &expect,

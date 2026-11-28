@@ -1,0 +1,20 @@
+title: Drop the legacy coupon codes column
+description: Coupons moved to the promotions table last release, so the old column goes.
+repo_files:
+  .loopx/checks/migrations-reversible.md: |
+    ---
+    name: Migrations are reversible
+    paths: ["db/migrate/**"]
+    mode: error
+    ---
+    Every migration can be rolled back: it uses only reversible operations inside
+    `change`, or defines both `up` and `down`. Removing a column inside `change`
+    needs the column type so Rails can re-add it.
+  .loopx/checks/api-docs.md: |
+    ---
+    paths: ["app/controllers/api/**"]
+    ---
+    Public API changes update docs/api.md.
+expect:
+  checks:
+    migrations-reversible: failed

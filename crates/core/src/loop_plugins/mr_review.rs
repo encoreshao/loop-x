@@ -402,6 +402,50 @@ fn delta_changes(
     Ok(Some(cmp["diffs"].as_array().cloned().unwrap_or_default()))
 }
 
+/// The repository's `.loopx/checks/*.md` at `sha`, with a note per ignored file.
+fn repo_checks(
+    conn: &dyn Connector,
+    pid: &str,
+    sha: &str,
+) -> (Vec<review::checks::Check>, Vec<String>) {
+    let Ok(tree) = conn.api(
+        "GET",
+        &format!("/projects/{pid}/repository/tree?path=.loopx%2Fchecks&ref={sha}&per_page=50"),
+        &ApiOpts::default(),
+    ) else {
+        return (Vec::new(), Vec::new());
+    };
+    let (mut checks, mut notes) = (Vec::new(), Vec::new());
+    let names: Vec<String> = tree
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["type"] == "blob")
+        .filter_map(|e| {
+            e["name"]
+                .as_str()
+                .filter(|n| n.ends_with(".md"))
+                .map(str::to_string)
+        })
+        .take(review::checks::MAX_FILES)
+        .collect();
+    for name in names {
+        let path = format!("{}/{name}", review::checks::DIR);
+        let parsed =
+            match mr_gates::fetch_text(conn, pid, &path, sha, review::checks::MAX_FILE_BYTES) {
+                Ok(Some(Ok(text))) => review::checks::parse(&name, &text),
+                Ok(Some(Err(e))) => Err(e),
+                Ok(None) => continue,
+                Err(e) => Err(format!("could not read it: {}", e.class_name())),
+            };
+        match parsed {
+            Ok(c) => checks.push(c),
+            Err(e) => notes.push(format!("`{path}` ignored: {e}")),
+        }
+    }
+    (checks, notes)
+}
+
 /// `(finding id, discussion id)` for published LoopX findings among `ids`.
 fn finding_discussions(conn: &dyn Connector, mr: &Value, ids: &[String]) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -1710,6 +1754,33 @@ impl MrReview {
             }
             None => None,
         };
+        let (checks, check_notes) = repo_checks(conn, &pid_s, &base_sha);
+        let mut checks: Vec<review::checks::Check> = checks
+            .into_iter()
+            .filter(|c| c.applies(&reviewed_paths))
+            .collect();
+        let mut linked: Vec<Value> = Vec::new();
+        if let Some(mode) = cfg.checks.get("issue_assessment").filter(|m| *m != "off") {
+            for n in review::checks::linked_issue_numbers(&description) {
+                if let Ok(issue) = conn.api(
+                    "GET",
+                    &format!("/projects/{pid_s}/issues/{n}"),
+                    &ApiOpts::default(),
+                ) {
+                    let text: String = issue["description"]
+                        .as_str()
+                        .unwrap_or("")
+                        .chars()
+                        .take(2000)
+                        .collect();
+                    linked.push(json!({"iid": n, "title": issue["title"], "description": text}));
+                }
+            }
+            if !linked.is_empty() {
+                checks.push(review::checks::issue_assessment(mode));
+            }
+        }
+        let builtin = review::checks::builtin_results(&cfg.checks, &title, &description);
         let guidance_count = guidance.len();
         let meta = json!({
             "label": format!("{title} ({reference})"),
@@ -1731,6 +1802,16 @@ impl MrReview {
         if cfg.walkthrough {
             meta["review"]["walkthrough"] = json!(true);
         }
+        if let Some(notes) = meta["review"]["notes"].as_array_mut() {
+            notes.extend(check_notes.into_iter().map(Value::from));
+        }
+        if !checks.is_empty() || !builtin.is_empty() {
+            meta["review"]["checks"] = json!(checks
+                .iter()
+                .map(|c| json!({"id": c.id, "name": c.name, "mode": c.mode}))
+                .collect::<Vec<_>>());
+            meta["review"]["builtin_checks"] = json!(builtin);
+        }
         let mut payload = json!({
             "account": account_id, "project_id": pid, "iid": iid, "title": title,
             "description": description, "web_url": url,
@@ -1744,6 +1825,13 @@ impl MrReview {
         }
         if cfg.walkthrough {
             payload["walkthrough_requested"] = json!(true);
+        }
+        if !checks.is_empty() {
+            payload["pre_merge_checks"] =
+                json!(checks.iter().map(|c| c.prompt_json()).collect::<Vec<_>>());
+        }
+        if !linked.is_empty() {
+            payload["linked_issues"] = json!(linked);
         }
         if let Some((last, text)) = delta {
             payload["delta_from"] = json!(last);
@@ -2399,6 +2487,24 @@ impl LoopPlugin for MrReview {
         }
         let mut cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
                                  "risks": risks, "findings": kept, "checks": checks, "scope": scope});
+        if let Some(r) = review_meta.filter(|r| r.get("builtin_checks").is_some()) {
+            let asked: Vec<review::checks::Check> = r["checks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| review::checks::Check {
+                    id: py_str(&c["id"]),
+                    name: py_str(&c["name"]),
+                    paths: Vec::new(),
+                    mode: py_str(&c["mode"]),
+                    instructions: String::new(),
+                })
+                .collect();
+            let mut results: Vec<Value> =
+                r["builtin_checks"].as_array().cloned().unwrap_or_default();
+            results.extend(review::checks::model_results(answer, &asked));
+            cleaned["check_results"] = json!(results);
+        }
         if review_meta.is_some_and(|r| r["walkthrough"] == true) {
             let paths: Vec<&str> = allowed.iter().copied().collect();
             if let Some(mut w) = review::walkthrough::clean(answer, &paths) {
@@ -3153,6 +3259,90 @@ mod tests {
     }
 
     #[test]
+    fn repo_checks_and_linked_issues_reach_the_prompt_and_results_the_summary() {
+        use base64::Engine;
+        let enc = |t: &str| json!({"size": t.len(), "content": base64::engine::general_purpose::STANDARD.encode(t)});
+        let conn = Conn::new(move |m, p, _| {
+            if p.contains("/repository/tree") {
+                assert!(p.contains("ref=b"), "{p}");
+                return Ok(
+                    json!([{"name": "secure.md", "type": "blob"}, {"name": "docs-only.md", "type": "blob"},
+                                 {"name": "broken.md", "type": "blob"}, {"name": "sub", "type": "tree"}]),
+                );
+            }
+            if p.contains("files/.loopx%2Fchecks%2Fsecure.md") {
+                return Ok(enc(
+                    "---\nname: No eval on input\nmode: error\n---\nNever eval request params.",
+                ));
+            }
+            if p.contains("files/.loopx%2Fchecks%2Fdocs-only.md") {
+                return Ok(enc("---\npaths: ['docs/**']\n---\nDocs are spell-checked."));
+            }
+            if p.contains("files/.loopx%2Fchecks%2Fbroken.md") {
+                return Ok(enc("---\nmode: loud\n---\nx"));
+            }
+            if p.contains("files/.loopx%2Freview.yaml") {
+                return Ok(enc("checks: {issue_assessment: warning, title: warning}\n"));
+            }
+            if p.ends_with("/issues/12") {
+                return Ok(
+                    json!({"title": "Support formulas", "description": "Admins enter a formula."}),
+                );
+            }
+            if p.ends_with("/merge_requests/7") {
+                return Ok(
+                    json!({"sha": "h", "diff_refs": mr()["diff_refs"], "title": "Add formula support to exports",
+                                 "description": "Closes #12"}),
+                );
+            }
+            d_handler(m, p, None)
+        });
+        let items = plugin_with(conn).discover(&c()).unwrap();
+        let it = &items[0];
+        let ids: Vec<&str> = it.payload["pre_merge_checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            ["secure", "issue_assessment"],
+            "docs-only does not apply"
+        );
+        assert_eq!(it.payload["linked_issues"][0]["title"], "Support formulas");
+        let notes = it.meta["review"]["notes"].as_array().unwrap();
+        assert!(
+            notes.iter().any(|n| n
+                .as_str()
+                .unwrap()
+                .starts_with("`.loopx/checks/broken.md` ignored")),
+            "{notes:?}"
+        );
+
+        let posted = Arc::new(Mutex::new(vec![]));
+        let answer = json!({"summary": "s", "findings": [], "check_results": [{"id": "secure", "result": "failed", "reason": "eval(params)"}]});
+        with_poster(posted.clone())
+            .after_item(it, &answer, &c())
+            .unwrap();
+        let results = posted.lock().unwrap()[0]["check_results"].clone();
+        let got: Vec<(&str, &str)> = results
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["id"].as_str().unwrap(), r["result"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("title", "passed"),
+                ("secure", "failed"),
+                ("issue_assessment", "inconclusive")
+            ]
+        );
+    }
+
+    #[test]
     fn draft_writes_never_retry() {
         let conn = fake2(
             json!([{"id": 11, "note": "_\u{2014} LoopX pre-review_"}]),
@@ -3342,7 +3532,9 @@ mod tests {
 
     fn d_handler(m: &str, path: &str, extra: Option<Value>) -> Result<Value, ConnectorError> {
         let _ = m;
-        if path.contains("/repository/files/") && is_guide_or_config(path) {
+        if (path.contains("/repository/files/") && is_guide_or_config(path))
+            || path.contains("/repository/tree")
+        {
             return Err(http_err(Some(404)));
         }
         if path == "/user" {

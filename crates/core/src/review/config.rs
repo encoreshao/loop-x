@@ -112,6 +112,8 @@ pub struct ReviewLayer {
     /// Who may write `loopx <verb>` commands: `developers` (default) or `me`.
     pub command_authors: Option<String>,
     pub walkthrough: Option<bool>,
+    /// Built-in checks: `title`, `description`, `issue_assessment` -> off|warning|error.
+    pub checks: Option<BTreeMap<String, String>>,
 }
 
 impl ReviewLayer {
@@ -127,6 +129,14 @@ impl ReviewLayer {
             return Err(format!(
                 "command_authors must be me or developers, got {c:?}"
             ));
+        }
+        for (k, v) in self.checks.iter().flatten() {
+            if !["title", "description", "issue_assessment"].contains(&k.as_str()) {
+                return Err(format!("checks: unknown built-in check {k:?}"));
+            }
+            if !super::checks::MODES.contains(&v.as_str()) {
+                return Err(format!("checks.{k} must be off, warning or error"));
+            }
         }
         if let Some(bad) = self
             .tools
@@ -190,6 +200,8 @@ pub struct ReviewConfig {
     /// Tool name -> on/off; a tool not listed is on.
     pub tools: BTreeMap<String, bool>,
     pub walkthrough: bool,
+    /// Built-in check modes (absent = off).
+    pub checks: BTreeMap<String, String>,
     /// key -> `default` | `loop settings` | `repo` | `projects.json`.
     pub provenance: BTreeMap<String, String>,
     /// Layers that were ignored, with why (shown in the review).
@@ -211,6 +223,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         path_instructions: Vec::new(),
         tools: BTreeMap::new(),
         walkthrough: false,
+        checks: BTreeMap::new(),
         auto_review: AutoReview {
             enabled: true,
             ..AutoReview::default()
@@ -227,6 +240,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         "auto_review",
         "tools",
         "walkthrough",
+        "checks",
     ] {
         cfg.provenance.insert(k.into(), "default".into());
     }
@@ -268,6 +282,10 @@ fn apply(cfg: &mut ReviewConfig, layer: ReviewLayer, source: &str) {
     if let Some(f) = layer.path_filters {
         cfg.path_filters.extend(f);
         mark(cfg, "path_filters");
+    }
+    if let Some(c) = layer.checks {
+        cfg.checks.extend(c);
+        mark(cfg, "checks");
     }
     if let Some(w) = layer.walkthrough {
         cfg.walkthrough = w;
@@ -389,6 +407,7 @@ impl ReviewConfig {
             }, "from": src("auto_review")},
             "tools": {"value": self.tools, "from": src("tools")},
             "walkthrough": {"value": self.walkthrough, "from": src("walkthrough")},
+            "checks": {"value": self.checks, "from": src("checks")},
             "notes": self.notes,
         })
     }
