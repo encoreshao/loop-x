@@ -1,0 +1,12 @@
+title: Show recently active users on the admin dashboard
+description: Lists users who signed in during the last week.
+repo_files:
+  CLAUDE.md: |
+    # Conventions
+    - Controllers never build ActiveRecord queries themselves (no `.where`, `.joins`,
+      `.order` in app/controllers). Every query lives in a query object under
+      app/queries and is called from the controller, e.g. `Users::RecentlyActive.call`.
+    - Run `bin/rspec` before pushing.
+expect:
+  findings:
+    - {path: app/controllers/admin/dashboard_controller.rb, lines: "3-4", category: [maintainability, correctness]}

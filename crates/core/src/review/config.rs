@@ -3,6 +3,7 @@
 //! change the rules that review it) and the personal `review` block of a project in
 //! `projects.json`, which wins. Every effective value records where it came from.
 
+use super::context::PathInstruction;
 use super::glob;
 use super::taxonomy::{MAX_FINDINGS, SEVERITIES};
 use regex::Regex;
@@ -104,6 +105,7 @@ pub struct ReviewLayer {
     pub version: Option<u32>,
     pub profile: Option<Profile>,
     pub path_filters: Option<Vec<String>>,
+    pub path_instructions: Option<Vec<PathInstruction>>,
     pub auto_review: Option<AutoReviewLayer>,
 }
 
@@ -159,6 +161,7 @@ pub struct ReviewConfig {
     pub min_severity: String,
     pub finding_cap: usize,
     pub path_filters: Vec<String>,
+    pub path_instructions: Vec<PathInstruction>,
     pub auto_review: AutoReview,
     /// key -> `default` | `loop settings` | `repo` | `projects.json`.
     pub provenance: BTreeMap<String, String>,
@@ -178,6 +181,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         min_severity: Profile::Chill.min_severity().into(),
         finding_cap: Profile::Chill.finding_cap(),
         path_filters: Vec::new(),
+        path_instructions: Vec::new(),
         auto_review: AutoReview {
             enabled: true,
             ..AutoReview::default()
@@ -190,6 +194,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         "min_severity",
         "finding_cap",
         "path_filters",
+        "path_instructions",
         "auto_review",
     ] {
         cfg.provenance.insert(k.into(), "default".into());
@@ -232,6 +237,10 @@ fn apply(cfg: &mut ReviewConfig, layer: ReviewLayer, source: &str) {
     if let Some(f) = layer.path_filters {
         cfg.path_filters.extend(f);
         mark(cfg, "path_filters");
+    }
+    if let Some(p) = layer.path_instructions {
+        cfg.path_instructions.extend(p);
+        mark(cfg, "path_instructions");
     }
     if let Some(a) = layer.auto_review {
         let ar = &mut cfg.auto_review;
@@ -321,6 +330,9 @@ impl ReviewConfig {
             "min_severity": {"value": self.min_severity, "from": src("min_severity")},
             "finding_cap": {"value": self.finding_cap, "from": src("finding_cap")},
             "path_filters": {"value": self.path_filters, "from": src("path_filters")},
+            "path_instructions": {"value": self.path_instructions.iter()
+                .map(|p| json!({"path": p.path, "instructions": p.instructions}))
+                .collect::<Vec<_>>(), "from": src("path_instructions")},
             "auto_review": {"value": {
                 "enabled": self.auto_review.enabled,
                 "ignore_title_keywords": self.auto_review.ignore_title_keywords,
@@ -473,6 +485,25 @@ mod tests {
         assert_eq!(
             off.auto_review_skip("t", &[], "a", "main").unwrap(),
             "auto review is off"
+        );
+    }
+
+    #[test]
+    fn path_instructions_from_both_layers_add_up() {
+        let c = cfg(
+            "path_instructions:\n  - {path: 'db/**', instructions: 'Set lock_timeout.'}\n",
+            Some(json!({"path_instructions": [{"path": "app/**", "instructions": "Mine."}]})),
+            None,
+        );
+        let paths: Vec<&str> = c
+            .path_instructions
+            .iter()
+            .map(|p| p.path.as_str())
+            .collect();
+        assert_eq!(paths, ["db/**", "app/**"]);
+        assert_eq!(c.provenance["path_instructions"], "projects.json");
+        assert!(
+            cfg("path_instructions: [{path: a}]\n", None, None).notes[0].contains("instructions")
         );
     }
 

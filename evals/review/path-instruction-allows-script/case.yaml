@@ -1,0 +1,13 @@
+title: Add a one-off script to report orphaned uploads
+description: Prints the ids of user uploads whose user no longer exists. Run once by hand.
+repo_files:
+  .loopx/review.yaml: |
+    path_instructions:
+      - path: "scripts/**"
+        instructions: >
+          One-off maintenance scripts run by hand. Printing to stdout, missing tests,
+          missing logging and a full table scan are expected here; do not flag them.
+expect:
+  forbidden:
+    - {path: scripts/orphaned_uploads.rb, lines: "1-6"}
+  verdict: [approve, comment]

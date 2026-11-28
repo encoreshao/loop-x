@@ -85,6 +85,9 @@ version: 1
 profile: chill          # quiet (major+, at most 8 findings) | chill (minor+, 15) | assertive (nit+, 25)
 path_filters:           # globs: * and ? within a segment, ** across segments,
   - "!docs/**"          #   no "/" = any depth; "!" excludes
+path_instructions:      # guidance for matching files, sent with the diff
+  - path: "db/migrate/**"
+    instructions: "Every migration sets lock_timeout; backfills run in batches."
 auto_review:
   enabled: true         # false: only "Review now" reviews
   ignore_title_keywords: [WIP]
@@ -122,6 +125,25 @@ says why under **Review scope**.
 
 **Auto review.** The rules are checked right after the MR detail is read, before
 any diff is fetched. **Review now** bypasses them.
+
+**Repository guidance.** The model gets a `repo_guidance` list next to the diff.
+Each entry has a `source`, the files it `applies_to` and a `text`, most specific
+first:
+
+1. `path_instructions` (from both layers) whose glob matches a reviewed file;
+2. `CLAUDE.md` / `AGENTS.md` in the five deepest folders holding reviewed files;
+3. root `CLAUDE.md`, `AGENTS.md`, `.cursorrules`,
+   `.github/copilot-instructions.md`;
+4. the project's `custom_instructions` from `projects.json`.
+
+All files are read at the base commit. Each entry is capped at 8,000 characters
+and the list at 40,000.
+
+The prompt treats guidance as the team's conventions: a risky violation is a
+finding, and something the guidance allows is not. Guidance is untrusted data,
+like the diff. It never changes the answer format, severities or verdict rules.
+Without guidance the key is absent and the prompt is unchanged. The summary
+counts the sources used under **Review scope**.
 
 **Checking a file.** `loopx review config [--file <path>] [--project <alias>]`
 validates a file and prints the effective configuration with the source of each

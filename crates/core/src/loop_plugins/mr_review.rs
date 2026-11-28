@@ -232,8 +232,11 @@ fn emit_gates_event(
 
 /// What `after_item` needs from the review config (kept in meta, never in the prompt),
 /// plus the lines the summary note shows under "Review scope".
-fn review_meta(cfg: &review::config::ReviewConfig, filtered: usize) -> Value {
+fn review_meta(cfg: &review::config::ReviewConfig, filtered: usize, guidance: usize) -> Value {
     let mut notes = cfg.notes.clone();
+    if guidance > 0 {
+        notes.push(format!("{guidance} repository guidance source(s) used"));
+    }
     if filtered > 0 {
         notes.push(format!("{filtered} file(s) not reviewed (path filters)"));
     }
@@ -1014,12 +1017,8 @@ impl MrReview {
             .clone()
     }
 
-    /// The personal `review` block of the `projects.json` project matching this MR.
-    fn personal_layer(
-        &self,
-        project_id: &str,
-        project_path: &str,
-    ) -> Option<Result<review::config::ReviewLayer, String>> {
+    /// The `projects.json` project matching this MR.
+    fn personal_project(&self, project_id: &str, project_path: &str) -> Option<Value> {
         let config = crate::config::Config::load(self.projects_path.as_deref()?).ok()?;
         let project = config.aliases().ok()?.into_iter().find_map(|alias| {
             let p = config.project(&alias).ok()?;
@@ -1029,7 +1028,7 @@ impl MrReview {
                 .or_else(|| p["project_id"].as_i64().map(|i| i.to_string()))?;
             (pid == project_id || (!project_path.is_empty() && pid == project_path)).then_some(p)
         })?;
-        project.get("review").map(review::config::parse_personal)
+        Some(project)
     }
 
     pub fn with_auditor(mut self, auditor: Arc<dyn AuditRunner>) -> Self {
@@ -1119,10 +1118,15 @@ impl MrReview {
             .and_then(Value::as_str)
             .and_then(|r| r.rsplit_once('!'))
             .map_or(String::new(), |(p, _)| p.to_string());
+        let base_sha = py_str(&refs["base_sha"]);
+        let project = self.personal_project(&pid_s, &project_path);
         let cfg = review::config::resolve(review::config::Sources {
             loop_min_severity,
-            repo: self.repo_layer(conn, account_id, &pid_s, &py_str(&refs["base_sha"])),
-            personal: self.personal_layer(&pid_s, &project_path),
+            repo: self.repo_layer(conn, account_id, &pid_s, &base_sha),
+            personal: project
+                .as_ref()
+                .and_then(|p| p.get("review"))
+                .map(review::config::parse_personal),
         });
         if !wanted {
             let labels: Vec<String> = detail
@@ -1188,6 +1192,31 @@ impl MrReview {
         }
         let reviewed: Vec<Value> = reviewed.into_iter().cloned().collect();
         let (diff, truncated) = build_diff_text(&reviewed, DIFF_CAP_BYTES);
+        let reviewed_paths: Vec<String> = reviewed
+            .iter()
+            .filter_map(|c| c.get("new_path").filter(|v| py_truthy(v)).map(py_str))
+            .collect();
+        let custom = project
+            .as_ref()
+            .and_then(|p| p["custom_instructions"].as_str())
+            .unwrap_or("");
+        let guidance = review::context::gather(
+            &reviewed_paths,
+            &cfg.path_instructions,
+            custom,
+            &mut |path| {
+                mr_gates::fetch_text(
+                    conn,
+                    &pid_s,
+                    path,
+                    &base_sha,
+                    review::config::MAX_FILE_BYTES,
+                )
+                .ok()
+                .flatten()
+                .and_then(Result::ok)
+            },
+        );
         let pick = |k: &str| {
             detail
                 .get(k)
@@ -1231,6 +1260,7 @@ impl MrReview {
             .or_else(|| row.get("author"))
             .cloned()
             .unwrap_or(Value::Null);
+        let guidance_count = guidance.len();
         let meta = json!({
             "label": format!("{title} ({reference})"),
             "title": title, "ref": reference,
@@ -1238,20 +1268,24 @@ impl MrReview {
             "author_username": author.get("username").map_or(String::new(), py_str),
             "created_at": pick("created_at"),
             "gates": {"security": mr_gates::gate_meta(&mr_gates::secret_scan(&changes, truncated))},
-            "review": review_meta(&cfg, filtered.len()),
+            "review": review_meta(&cfg, filtered.len(), guidance_count),
         });
+        let mut payload = json!({
+            "account": account_id, "project_id": pid, "iid": iid, "title": title,
+            "description": description, "web_url": url,
+            "diff_refs": {"base_sha": refs["base_sha"], "start_sha": refs["start_sha"], "head_sha": refs["head_sha"]},
+            "diff": diff, "truncated": truncated,
+            "changed_paths": changed.into_iter().collect::<Vec<_>>(),
+            "old_paths": old_paths,
+        });
+        if !guidance.is_empty() {
+            payload["repo_guidance"] = json!(guidance);
+        }
         Ok(Some(
             WorkItem::new(
                 item_key(account_id, &pid_s, &iid_s, &head_s),
                 title.clone(),
-                json!({
-                    "account": account_id, "project_id": pid, "iid": iid, "title": title,
-                    "description": description, "web_url": url,
-                    "diff_refs": {"base_sha": refs["base_sha"], "start_sha": refs["start_sha"], "head_sha": refs["head_sha"]},
-                    "diff": diff, "truncated": truncated,
-                    "changed_paths": changed.into_iter().collect::<Vec<_>>(),
-                    "old_paths": old_paths,
-                }),
+                payload,
             )
             .with_url(url)
             .with_meta(meta),
@@ -2301,9 +2335,21 @@ mod tests {
         assert!(p.digest(&[], &c()).is_none());
     }
 
+    fn is_guide_or_config(path: &str) -> bool {
+        [
+            ".loopx",
+            "CLAUDE.md",
+            "AGENTS.md",
+            "cursorrules",
+            "copilot-instructions",
+        ]
+        .iter()
+        .any(|n| path.contains(n))
+    }
+
     fn d_handler(m: &str, path: &str, extra: Option<Value>) -> Result<Value, ConnectorError> {
         let _ = m;
-        if path.contains("/repository/files/.loopx") {
+        if path.contains("/repository/files/") && is_guide_or_config(path) {
             return Err(http_err(Some(404)));
         }
         if path == "/user" {
@@ -2916,6 +2962,59 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
             "{notes:?}"
         );
         assert_eq!(items[0].meta["review"]["profile"], "chill");
+    }
+
+    #[test]
+    fn repo_guidance_read_at_the_base_commit_goes_into_the_payload() {
+        use base64::Engine;
+        let enc = |t: &str| json!({"size": t.len(), "content": base64::engine::general_purpose::STANDARD.encode(t)});
+        let conn = Conn::new(move |m, p, _| {
+            if p.contains("/repository/files/") {
+                assert!(p.ends_with("ref=b"), "base sha: {p}");
+                if p.contains(".loopx%2Freview.yaml") {
+                    return Ok(enc("path_instructions:\n  - {path: 'app/**', instructions: 'Never eval params.'}\n"));
+                }
+                if p.contains("/files/CLAUDE.md") {
+                    return Ok(enc("Use Result, never panic."));
+                }
+                if p.contains("app%2FAGENTS.md") {
+                    return Ok(enc("App rules."));
+                }
+                return Err(http_err(Some(404)));
+            }
+            d_handler(m, p, None)
+        });
+        let d = tempfile::tempdir().unwrap();
+        let projects = d.path().join("projects.json");
+        std::fs::write(
+            &projects,
+            r#"{"projects": {"web": {"project_id": "9", "custom_instructions": "Mine."}}}"#,
+        )
+        .unwrap();
+        let items = plugin_with(conn)
+            .with_projects_path(projects)
+            .discover(&c())
+            .unwrap();
+        let g = items[0].payload["repo_guidance"].as_array().unwrap();
+        let sources: Vec<&str> = g.iter().map(|x| x["source"].as_str().unwrap()).collect();
+        assert_eq!(
+            sources,
+            [
+                "path_instructions: app/**",
+                "app/AGENTS.md",
+                "CLAUDE.md",
+                "reviewer's project instructions"
+            ]
+        );
+        assert_eq!(
+            items[0].meta["review"]["notes"],
+            json!(["4 repository guidance source(s) used"])
+        );
+        let plain = plugin_with(d_conn()).discover(&c()).unwrap();
+        assert!(
+            plain[0].payload.get("repo_guidance").is_none(),
+            "no key without guidance"
+        );
     }
 
     #[test]

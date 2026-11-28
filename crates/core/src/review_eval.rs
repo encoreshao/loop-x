@@ -12,9 +12,10 @@ use crate::golden_eval::{
     Summary,
 };
 use crate::loopkit::{self, WorkItem};
-use crate::review::{diff::build_diff_text, findings, taxonomy};
+use crate::review::config::{self as review_config, ReviewConfig, Sources};
+use crate::review::{context, diff::build_diff_text, findings, taxonomy};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_TIMEOUT_SECONDS: f64 = 480.0;
@@ -47,6 +48,10 @@ pub struct ReviewCase {
     pub min_severity: String,
     /// GitLab-shaped `changes` rows: `{old_path, new_path, diff, new_file, deleted_file}`.
     pub changes: Vec<Value>,
+    /// Files at the base commit (`CLAUDE.md`, `.loopx/review.yaml`, ...).
+    pub repo_files: BTreeMap<String, String>,
+    /// The reviewer's `custom_instructions` for the project.
+    pub custom_instructions: String,
     pub expect: ReviewExpect,
 }
 
@@ -183,6 +188,20 @@ pub fn parse_case(yaml: &str, patch: &str, name: &str) -> Result<ReviewCase, Str
             .unwrap_or("minor")
             .to_string(),
         changes: parse_patch(patch).map_err(|e| format!("{name}: {e}"))?,
+        repo_files: v
+            .get("repo_files")
+            .and_then(Value::as_object)
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        custom_instructions: v
+            .get("custom_instructions")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         expect: ReviewExpect {
             findings: spots("findings")?,
             forbidden: spots("forbidden")?,
@@ -246,27 +265,60 @@ pub fn default_cases(names: Option<&[String]>) -> Result<Vec<ReviewCase>, String
 }
 
 /// The work item the MR Review loop would build for this MR (same payload keys).
+/// The case's effective review config, from its `.loopx/review.yaml` if any.
+pub fn case_config(case: &ReviewCase) -> ReviewConfig {
+    review_config::resolve(Sources {
+        loop_min_severity: Some(&case.min_severity),
+        repo: case
+            .repo_files
+            .get(review_config::REPO_FILE)
+            .map(|t| review_config::parse_repo_file(t)),
+        personal: None,
+    })
+}
+
 pub fn work_item(case: &ReviewCase) -> WorkItem {
-    let (diff, truncated) = build_diff_text(&case.changes, taxonomy::DIFF_CAP_BYTES);
+    let cfg = case_config(case);
+    let reviewed: Vec<Value> = case
+        .changes
+        .iter()
+        .filter(|c| cfg.reviews_path(c["new_path"].as_str().unwrap_or("")))
+        .cloned()
+        .collect();
+    let (diff, truncated) = build_diff_text(&reviewed, taxonomy::DIFF_CAP_BYTES);
     let changed: Vec<&str> = case
         .changes
         .iter()
         .filter_map(|c| c["new_path"].as_str())
         .collect();
+    let reviewed_paths: Vec<String> = reviewed
+        .iter()
+        .filter_map(|c| c["new_path"].as_str().map(str::to_string))
+        .collect();
+    let guidance = context::gather(
+        &reviewed_paths,
+        &cfg.path_instructions,
+        &case.custom_instructions,
+        &mut |p| case.repo_files.get(p).cloned(),
+    );
     let url = format!(
         "https://gitlab.example.com/eval/{}/-/merge_requests/1",
         case.name
     );
+    let mut payload = json!({
+        "account": "eval", "project_id": 1, "iid": 1, "title": case.title,
+        "description": case.description, "web_url": url,
+        "diff_refs": {"base_sha": "1".repeat(40), "start_sha": "1".repeat(40), "head_sha": "0".repeat(40)},
+        "diff": diff, "truncated": truncated,
+        "changed_paths": changed, "old_paths": {},
+    });
+    if !guidance.is_empty() {
+        payload["repo_guidance"] = json!(guidance);
+    }
     WorkItem::new(
         format!("mr:eval:1!1@{}", "0".repeat(40)),
         case.title.clone(),
-        json!({
-            "account": "eval", "project_id": 1, "iid": 1, "title": case.title,
-            "description": case.description, "web_url": url,
-            "diff_refs": {"base_sha": "1".repeat(40), "start_sha": "1".repeat(40), "head_sha": "0".repeat(40)},
-            "diff": diff, "truncated": truncated,
-            "changed_paths": changed, "old_paths": {},
-        }),
+        payload,
     )
     .with_url(url)
 }
@@ -278,8 +330,9 @@ pub fn clean_answer(case: &ReviewCase, answer: &Value) -> (Vec<Value>, String) {
         .iter()
         .filter_map(|c| c["new_path"].as_str())
         .collect();
-    let mut cleaned = findings::clean(answer, &allowed, &case.min_severity);
-    cleaned.findings.truncate(taxonomy::MAX_FINDINGS);
+    let cfg = case_config(case);
+    let mut cleaned = findings::clean(answer, &allowed, &cfg.min_severity);
+    cleaned.findings.truncate(cfg.finding_cap);
     (cleaned.findings, cleaned.verdict.to_string())
 }
 
@@ -596,6 +649,29 @@ mod tests {
         let crash = run_case(&c, "{{item_json}}", 1.0, &bad).unwrap_err();
         assert!(crash.message.starts_with("unusable answer"));
         assert_eq!(crash.cost_usd, Some(0.05));
+    }
+
+    #[test]
+    fn repo_files_drive_config_filters_and_guidance() {
+        let yaml = format!(
+            "{}repo_files:\n  CLAUDE.md: Use cents.\n  .loopx/review.yaml: \"profile: quiet\\npath_filters: ['!new.rb']\\n\"\ncustom_instructions: Mine.\n",
+            case_yaml("  max_findings: 3\n")
+        );
+        let c = parse_case(&yaml, PATCH, "c").unwrap();
+        let item = work_item(&c);
+        assert!(!item.payload["diff"].as_str().unwrap().contains("new.rb"));
+        let sources: Vec<&str> = item.payload["repo_guidance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["source"].as_str().unwrap())
+            .collect();
+        assert_eq!(sources, ["CLAUDE.md", "reviewer's project instructions"]);
+        let (found, _) = clean_answer(
+            &c,
+            &json!({"findings": [finding("app/a.rb", 2, "minor", "tests")]}),
+        );
+        assert!(found.is_empty(), "quiet profile drops minor findings");
     }
 
     #[test]

@@ -1,0 +1,10 @@
+diff --git a/scripts/orphaned_uploads.rb b/scripts/orphaned_uploads.rb
+--- /dev/null
++++ b/scripts/orphaned_uploads.rb
+@@ -0,0 +1,6 @@
++# Usage: bin/rails runner scripts/orphaned_uploads.rb
++Upload.where(owner_type: "User").find_each do |upload|
++  next if User.exists?(upload.owner_id)
++
++  puts upload.id
++end
