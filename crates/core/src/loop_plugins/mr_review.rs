@@ -21,6 +21,16 @@ use crate::loops_config::{py_str, py_truthy};
 use crate::mr_gates;
 use crate::providers::binding::{Binding, Endpoint};
 use crate::providers::{ChangeRequest, CrFilter, DiffPosition, DraftNote, ProviderError};
+use crate::review;
+pub use crate::review::diff::{build_diff_text, diff_line_map};
+pub(crate) use crate::review::render::defuse;
+use crate::review::render::flat_path;
+pub use crate::review::render::{finding_note, summary_note};
+use crate::review::taxonomy::verdict_label;
+pub use crate::review::taxonomy::{
+    DIFF_CAP_BYTES, MAX_BODY, MAX_FINDINGS, MAX_NOTE, MAX_OVERVIEW, MAX_RISKS, MAX_SUMMARY,
+    MAX_TITLE,
+};
 use crate::seen_store::SeenStore;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,31 +38,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-pub const DIFF_CAP_BYTES: usize = 150_000;
-pub const MAX_FINDINGS: usize = 15;
 pub const MAX_DESCRIPTION: usize = 4096;
-pub const MAX_BODY: usize = 2000;
-pub const MAX_SUMMARY: usize = 600;
 const MAX_DIFF_PAGES: u32 = 20;
 const MAX_DRAFT_PAGES: u32 = 20;
-pub const MAX_TITLE: usize = 120;
-pub const MAX_OVERVIEW: usize = 4;
-pub const MAX_RISKS: usize = 8;
-pub const MAX_NOTE: usize = 300;
-const SEVERITIES: [&str; 4] = ["nit", "minor", "major", "blocker"];
-const VERDICTS: [&str; 3] = ["approve", "comment", "request_changes"];
-const LEVELS: [&str; 3] = ["low", "medium", "high"];
-/// `(key, label)`; the model answers with the key.
-const AREAS: [(&str, &str); 8] = [
-    ("correctness", "Correctness"),
-    ("security", "Security"),
-    ("performance", "Performance"),
-    ("data", "Data & migrations"),
-    ("reliability", "Reliability"),
-    ("compatibility", "Compatibility"),
-    ("tests", "Tests"),
-    ("maintainability", "Maintainability"),
-];
 const SIGNATURE: &str = "\n\n_\u{2014} LoopX pre-review_";
 const PREFS_FILE: &str = "mr-prefs.json";
 pub const DENIED_MESSAGE: &str = "token needs the api scope to write draft notes";
@@ -82,67 +70,6 @@ pub type SeenFn = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
 pub fn item_key(account_id: &str, project_id: &str, iid: &str, head_sha: &str) -> String {
     format!("mr:{account_id}:{project_id}!{iid}@{head_sha}")
-}
-
-/// `(text, truncated)`; `cap` counts characters.
-pub fn build_diff_text(changes: &[Value], cap: usize) -> (String, bool) {
-    let mut parts = String::new();
-    let (mut size, mut truncated) = (0usize, false);
-    for ch in changes {
-        let path = ["new_path", "old_path"]
-            .iter()
-            .filter_map(|k| ch.get(*k))
-            .find(|v| py_truthy(v))
-            .map(py_str)
-            .unwrap_or_default();
-        let diff = ch
-            .get("diff")
-            .filter(|v| py_truthy(v))
-            .map(py_str)
-            .unwrap_or_default();
-        let chunk = format!("--- a/{path}\n+++ b/{path}\n{diff}\n");
-        let len = chunk.chars().count();
-        if size + len > cap {
-            parts.extend(chunk.chars().take(cap.saturating_sub(size)));
-            truncated = true;
-            break;
-        }
-        parts.push_str(&chunk);
-        size += len;
-    }
-    if truncated {
-        parts.push_str(&format!("\n[diff truncated at {cap} characters]"));
-    }
-    (parts, truncated)
-}
-
-fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Draft notes are Markdown on GitLab: break word-start @mentions so a
-/// model-echoed @all / @group cannot notify anyone, and a line-start `/`
-/// so it cannot run as a quick action once the user publishes the note.
-pub(crate) fn defuse(text: &str) -> String {
-    let mut out = String::new();
-    let mut prev: Option<char> = None;
-    let mut line_start = true;
-    for c in text.chars() {
-        if c == '/' && line_start {
-            out.push('\u{200b}');
-        }
-        out.push(c);
-        if c == '@' && !prev.is_some_and(is_word) {
-            out.push('\u{200b}');
-        }
-        line_start = matches!(c, '\n' | '\r') || (line_start && c.is_whitespace());
-        prev = Some(c);
-    }
-    out.replace("![", "!\u{200b}[")
-}
-
-fn flat_path(path: &str) -> String {
-    crate::pre_review::one_line(path).replace('`', "'")
 }
 
 pub const MAX_GATE_INLINE: usize = 5;
@@ -436,116 +363,6 @@ fn clear_old_drafts(conn: &dyn Connector, mr: &Value) -> Result<(), ConnectorErr
     Ok(())
 }
 
-/// Python `str.splitlines()` line boundaries.
-fn splitlines(text: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        let brk = matches!(
-            c,
-            '\n' | '\r'
-                | '\u{b}'
-                | '\u{c}'
-                | '\u{1c}'
-                | '\u{1d}'
-                | '\u{1e}'
-                | '\u{85}'
-                | '\u{2028}'
-                | '\u{2029}'
-        );
-        if brk {
-            out.push(&text[start..i]);
-            let mut end = i + c.len_utf8();
-            if c == '\r' {
-                if let Some(&(_, '\n')) = chars.peek() {
-                    chars.next();
-                    end += 1;
-                }
-            }
-            start = end;
-        }
-    }
-    if start < text.len() {
-        out.push(&text[start..]);
-    }
-    out
-}
-
-/// `@@ -a[,n] +b[,m] @@` -> `(a, b)`.
-fn parse_hunk(line: &str) -> Option<(i64, i64)> {
-    let rest = line.strip_prefix("@@ -")?;
-    let (old, rest) = take_num(rest)?;
-    let rest = skip_count(rest);
-    let rest = rest.strip_prefix(" +")?;
-    let (new, rest) = take_num(rest)?;
-    let rest = skip_count(rest);
-    rest.starts_with(" @@").then_some((old, new))
-}
-
-fn take_num(s: &str) -> Option<(i64, &str)> {
-    let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-    if end == 0 {
-        return None;
-    }
-    Some((s[..end].parse().ok()?, &s[end..]))
-}
-
-fn skip_count(s: &str) -> &str {
-    match s.strip_prefix(',') {
-        Some(r) => {
-            let end = r.find(|c: char| !c.is_ascii_digit()).unwrap_or(r.len());
-            if end == 0 {
-                s
-            } else {
-                &r[end..]
-            }
-        }
-        None => s,
-    }
-}
-
-/// `{path: {new_line: old_line}}` for the unchanged context lines of each file
-/// in [`build_diff_text`]'s output. Added lines are absent (they have no old
-/// line); GitLab needs `old_line` as well as `new_line` to anchor a note on a
-/// context line.
-pub fn diff_line_map(
-    diff_text: &str,
-) -> std::collections::BTreeMap<String, std::collections::BTreeMap<i64, i64>> {
-    let mut out: std::collections::BTreeMap<String, std::collections::BTreeMap<i64, i64>> =
-        Default::default();
-    let (mut path, mut old, mut new): (Option<String>, i64, i64) = (None, 0, 0);
-    for line in splitlines(diff_text) {
-        if let Some(p) = line.strip_prefix("+++ b/") {
-            out.entry(p.to_string()).or_default();
-            path = Some(p.to_string());
-            continue;
-        }
-        if line.starts_with("--- a/") {
-            continue;
-        }
-        if let Some((o, n)) = parse_hunk(line) {
-            old = o;
-            new = n;
-            continue;
-        }
-        let Some(p) = &path else { continue };
-        if old == 0 && new == 0 {
-            continue;
-        }
-        if line.starts_with('+') {
-            new += 1;
-        } else if line.starts_with('-') {
-            old += 1;
-        } else if line.starts_with(' ') {
-            out.entry(p.clone()).or_default().insert(new, old);
-            old += 1;
-            new += 1;
-        }
-    }
-    out
-}
-
 fn post_all(
     conn: &dyn Connector,
     mr: &Value,
@@ -602,168 +419,6 @@ fn post_all(
     Ok(())
 }
 
-fn text_of(v: &Value, key: &str) -> String {
-    v.get(key)
-        .and_then(Value::as_str)
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
-}
-
-fn severity_badge(sev: &str) -> &'static str {
-    match sev {
-        "blocker" => "\u{1f534} **Blocker**",
-        "major" => "\u{1f7e0} **Major**",
-        "minor" => "\u{1f7e1} **Minor**",
-        _ => "\u{26aa} **Nit**",
-    }
-}
-
-fn area_label(key: &str) -> &'static str {
-    AREAS
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map_or("Correctness", |(_, l)| l)
-}
-
-/// One line for a Markdown table cell.
-fn cell(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('|', "\\|")
-}
-
-/// An inline draft note: severity and area up front, then the problem and
-/// (when given) the fix, so it reads at a glance in the MR.
-pub fn finding_note(f: &Value) -> String {
-    let sev = text_of(f, "severity");
-    let title = text_of(f, "title");
-    let mut head = format!(
-        "{} \u{b7} {}",
-        severity_badge(&sev),
-        area_label(&text_of(f, "category"))
-    );
-    if !title.is_empty() {
-        head.push_str(&format!(" \u{2014} {}", defuse(&title)));
-    }
-    let mut note = format!("{head}\n\n{}", defuse(&text_of(f, "body")));
-    let fix = text_of(f, "suggestion");
-    if !fix.is_empty() {
-        note.push_str(&format!("\n\n**Suggested fix:** {}", defuse(&fix)));
-    }
-    note
-}
-
-/// The overall review note: verdict, what the MR does, a risk table by area
-/// and the findings index. `None` when the answer has nothing to say.
-pub fn summary_note(answer: &Value) -> Option<String> {
-    let summary = text_of(answer, "summary");
-    let overview: Vec<String> = answer
-        .get("overview")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(defuse)
-        .collect();
-    let risks: Vec<&Value> = answer
-        .get("risks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .collect();
-    let findings: Vec<&Value> = answer
-        .get("findings")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .collect();
-    let checks: Vec<String> = answer
-        .get("checks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(|l| defuse(&crate::pre_review::one_line(l)))
-        .filter(|l| !l.is_empty())
-        .collect();
-    if summary.is_empty()
-        && overview.is_empty()
-        && risks.is_empty()
-        && findings.is_empty()
-        && checks.is_empty()
-    {
-        return None;
-    }
-    let verdict = match answer.get("verdict").and_then(Value::as_str) {
-        Some("request_changes") => "\u{26d4} Changes requested",
-        Some("approve") => "\u{2705} Looks good to merge",
-        _ => "\u{1f4ac} Mergeable after comments",
-    };
-    let mut out = vec![format!("### LoopX pre-review \u{2014} {verdict}")];
-    if !summary.is_empty() {
-        out.push(defuse(&summary));
-    }
-    if !checks.is_empty() {
-        out.push(format!(
-            "**Automated checks** (the same model-free gates LoopX runs on its own fixes; advisory)\n{}",
-            checks.join("\n")
-        ));
-    }
-    if !overview.is_empty() {
-        let bullets: Vec<String> = overview.iter().map(|b| format!("- {b}")).collect();
-        out.push(format!("**What this MR does**\n{}", bullets.join("\n")));
-    }
-    if risks.is_empty() {
-        out.push("**Risk assessment:** no notable risks found.".to_string());
-    } else {
-        let mut table = vec![
-            "**Risk assessment**".to_string(),
-            String::new(),
-            "| Area | Level | Notes |".to_string(),
-            "| --- | --- | --- |".to_string(),
-        ];
-        for r in risks {
-            let level = match text_of(r, "level").as_str() {
-                "high" => "\u{1f534} High",
-                "medium" => "\u{1f7e0} Medium",
-                _ => "\u{1f7e2} Low",
-            };
-            table.push(format!(
-                "| {} | {level} | {} |",
-                area_label(&text_of(r, "area")),
-                cell(&defuse(&text_of(r, "note")))
-            ));
-        }
-        out.push(table.join("\n"));
-    }
-    if findings.is_empty() {
-        out.push("**Findings:** none worth raising.".to_string());
-    } else {
-        let mut lines = vec!["**Findings** (posted as inline notes)".to_string()];
-        for f in findings {
-            let title = text_of(f, "title");
-            let title = if title.is_empty() {
-                text_of(f, "body").chars().take(MAX_TITLE).collect()
-            } else {
-                title
-            };
-            lines.push(format!(
-                "- {} \u{b7} {} \u{2014} `{}:{}` {}",
-                severity_badge(&text_of(f, "severity")),
-                area_label(&text_of(f, "category")),
-                flat_path(&py_str(&f["path"])),
-                py_str(&f["line"]),
-                cell(&defuse(&title))
-            ));
-        }
-        out.push(lines.join("\n"));
-    }
-    Some(out.join("\n\n"))
-}
-
 /// Returns `{"drafts", "fallback_general"}` (+ `"partial": ClassName` when a
 /// failure hit after at least one draft was posted). `Denied` on 401/403, and
 /// the original error when nothing was posted.
@@ -782,14 +437,6 @@ pub fn post_review(conn: &dyn Connector, mr: &Value, answer: &Value) -> Result<V
             }
             Err(PostError::Other(e))
         }
-    }
-}
-
-fn verdict_label(verdict: &str) -> &'static str {
-    match verdict {
-        "approve" => "Looks good",
-        "request_changes" => "Changes requested",
-        _ => "Comments",
     }
 }
 
@@ -1283,10 +930,6 @@ fn remember_failures(outcomes: &[Outcome], ctx: &LoopContext) {
     }) {
         ctx.log(&format!("mr-review: could not save failed reviews: {e}"));
     }
-}
-
-fn sev_rank(name: &str) -> usize {
-    SEVERITIES.iter().position(|s| *s == name).unwrap_or(1)
 }
 
 pub struct MrReview {
@@ -1882,52 +1525,13 @@ impl LoopPlugin for MrReview {
             .get("min_severity")
             .filter(|v| py_truthy(v))
             .map_or("minor".to_string(), py_str);
-        let floor = sev_rank(&min);
-        let mut kept: Vec<Value> = Vec::new();
-        for f in answer
-            .get("findings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let Some(obj) = f.as_object() else { continue };
-            let line = obj
-                .get("line")
-                .and_then(|v| if v.is_boolean() { None } else { v.as_i64() });
-            let sev = obj.get("severity").and_then(Value::as_str);
-            let body = obj.get("body").and_then(Value::as_str);
-            let path = obj.get("path").and_then(Value::as_str);
-            let (Some(path), Some(line), Some(sev), Some(body)) = (path, line, sev, body) else {
-                continue;
-            };
-            if !allowed.contains(path)
-                || line < 1
-                || !SEVERITIES.contains(&sev)
-                || sev_rank(sev) < floor
-                || body.trim().is_empty()
-            {
-                continue;
-            }
-            let short = |k: &str, cap: usize| {
-                obj.get(k)
-                    .and_then(Value::as_str)
-                    .map(|t| t.trim().chars().take(cap).collect::<String>())
-                    .unwrap_or_default()
-            };
-            let category = obj
-                .get("category")
-                .and_then(Value::as_str)
-                .filter(|c| AREAS.iter().any(|(k, _)| k == c))
-                .unwrap_or("correctness");
-            kept.push(json!({
-                "path": path, "line": line, "severity": sev, "category": category,
-                "title": short("title", MAX_TITLE),
-                "body": body.trim().chars().take(MAX_BODY).collect::<String>(),
-                "suggestion": short("suggestion", MAX_BODY),
-            }));
-        }
-        // Most severe first, so the cap keeps what matters.
-        kept.sort_by_key(|f| std::cmp::Reverse(sev_rank(f["severity"].as_str().unwrap_or(""))));
+        let review::findings::Cleaned {
+            summary,
+            verdict,
+            overview,
+            risks,
+            findings: kept,
+        } = review::findings::clean(answer, &allowed, &min);
         let security_meta = item
             .meta
             .pointer("/gates/security")
@@ -1941,43 +1545,6 @@ impl LoopPlugin for MrReview {
             .chain(kept)
             .take(MAX_FINDINGS)
             .collect();
-        let summary = answer
-            .get("summary")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().chars().take(MAX_SUMMARY).collect::<String>())
-            .unwrap_or_default();
-        let verdict = answer
-            .get("verdict")
-            .and_then(Value::as_str)
-            .filter(|v| VERDICTS.contains(v))
-            .unwrap_or("comment");
-        let overview: Vec<String> = answer
-            .get("overview")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(|b| b.trim().chars().take(MAX_NOTE).collect::<String>())
-            .filter(|b| !b.is_empty())
-            .take(MAX_OVERVIEW)
-            .collect();
-        let mut risks: Vec<Value> = answer
-            .get("risks")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|r| {
-                let area = r.get("area")?.as_str()?;
-                let level = r.get("level")?.as_str()?;
-                let note = r.get("note")?.as_str()?.trim();
-                (AREAS.iter().any(|(k, _)| *k == area) && LEVELS.contains(&level) && !note.is_empty())
-                    .then(|| json!({"area": area, "level": level, "note": note.chars().take(MAX_NOTE).collect::<String>()}))
-            })
-            .collect();
-        risks.sort_by_key(|r| {
-            std::cmp::Reverse(LEVELS.iter().position(|l| r["level"] == *l).unwrap_or(0))
-        });
-        risks.truncate(MAX_RISKS);
         let account = py_str(&payload["account"]);
         let conn = self
             .connectors
@@ -2834,7 +2401,7 @@ mod tests {
         {
             assert!(prompt.contains(&format!("\"{key}\"")), "{key}");
         }
-        for (area, _) in AREAS {
+        for (area, _) in crate::review::taxonomy::AREAS {
             assert!(prompt.contains(area), "{area}");
         }
     }
@@ -2974,16 +2541,6 @@ mod tests {
         });
         let items = plugin_with(conn).discover(&c()).unwrap();
         assert_eq!(items[0].payload["old_paths"], json!({"new.rb": "old.rb"}));
-    }
-
-    #[test]
-    fn diff_line_map_and_splitlines_helpers() {
-        assert_eq!(splitlines("a\r\nb\rc\n"), ["a", "b", "c"]);
-        assert_eq!(parse_hunk("@@ -3,4 +5 @@ foo"), Some((3, 5)));
-        assert_eq!(parse_hunk("@@ nope"), None);
-        let map = diff_line_map("--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n");
-        assert_eq!(map["x"].get(&2), Some(&2));
-        assert!(!map["x"].contains_key(&1));
     }
 
     #[test]
