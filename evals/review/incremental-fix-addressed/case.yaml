@@ -1,0 +1,9 @@
+title: Paginate the audit log export
+description: Export the audit log in pages of `per_page` entries. Pages are 1-based.
+previous_findings:
+  - {id: p1off00001, path: src/export.py, line: 5, severity: major, title: "Page 1 skips the first per_page entries (offset uses page instead of page - 1)"}
+  - {id: p2cap00001, path: src/export.py, line: 4, severity: minor, title: "per_page is unbounded, so one request can export the whole log"}
+expect:
+  addressed: [p1off00001]
+  still_open: [p2cap00001]
+  max_findings: 1

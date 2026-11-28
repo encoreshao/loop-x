@@ -96,6 +96,7 @@ pub struct AutoReviewLayer {
     pub labels: Option<Vec<String>>,
     pub ignore_authors: Option<Vec<String>>,
     pub base_branches: Option<Vec<String>>,
+    pub pause_after: Option<u32>,
 }
 
 /// One layer as written by a person: the repo file or the `projects.json` block.
@@ -162,6 +163,8 @@ pub struct AutoReview {
     pub labels: Vec<String>,
     pub ignore_authors: Vec<String>,
     pub base_branches: Vec<String>,
+    /// Stop auto review after this many incremental reviews (None = never).
+    pub pause_after: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -276,6 +279,9 @@ fn apply(cfg: &mut ReviewConfig, layer: ReviewLayer, source: &str) {
         if let Some(v) = a.base_branches {
             ar.base_branches = v;
         }
+        if let Some(v) = a.pause_after {
+            ar.pause_after = Some(v);
+        }
         mark(cfg, "auto_review");
     }
 }
@@ -360,6 +366,7 @@ impl ReviewConfig {
                 "labels": self.auto_review.labels,
                 "ignore_authors": self.auto_review.ignore_authors,
                 "base_branches": self.auto_review.base_branches,
+                "pause_after": self.auto_review.pause_after,
             }, "from": src("auto_review")},
             "tools": {"value": self.tools, "from": src("tools")},
             "notes": self.notes,

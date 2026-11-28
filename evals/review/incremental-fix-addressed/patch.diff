@@ -1,0 +1,11 @@
+diff --git a/src/export.py b/src/export.py
+--- a/src/export.py
++++ b/src/export.py
+@@ -1,2 +1,7 @@
+ def export(entries):
+     return [e.to_row() for e in entries]
++
++def page(entries, page, per_page):
++    start = (page - 1) * per_page
++    end = start + per_page
++    return [e.to_row() for e in entries[start:end]]

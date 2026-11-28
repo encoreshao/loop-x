@@ -29,6 +29,41 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Incremental reviews
+
+After posting, the loop records what it posted in a per-MR ledger,
+`<state>/mr-review-loop/findings/<mr>.json` (GitLab MRs). The ledger keeps the
+last reviewed SHA plus every finding's id, location, severity, title and status
+(`open` or `addressed`).
+
+On a new head commit, GitLab's merge base tells whether the last reviewed SHA
+is an ancestor (a plain push):
+
+- **Yes:** the loop fetches `compare?from=<last>&to=<head>&straight=true`,
+  applies the path filters, and sends it as `delta_diff` next to the whole
+  `diff`. It also sends the still-open earlier findings as `previous_findings`.
+  The model reports only new problems and answers `previous`: each earlier id
+  `addressed`, `open` or `unclear`.
+- **No** (force-push or rebase), or the user asked with **Review now**: a full
+  review, which starts the ledger over.
+- **Delta only touches filtered files:** no review.
+
+**After an incremental review:**
+
+- **Not repeated:** a new finding with the id of a still-open one is dropped.
+- **Kept:** draft notes of still-open findings stay, and only stale drafts
+  (addressed findings, the old summary) are deleted. Reply drafts are never
+  deleted.
+- **Published and addressed:** a published finding the model says is addressed
+  gets a *draft reply* in its thread, "Looks addressed in `<sha>`.". The thread
+  is never resolved.
+- **Summary:** it starts "Reviewed the changes since `<sha>`; N earlier
+  finding(s) look addressed; M still open".
+
+`auto_review.pause_after: N` in `.loopx/review.yaml` turns Auto review off for
+the MR after N incremental reviews. The summary says so, and the Merge requests
+tab's toggle or Review now resumes it.
+
 ## Linter hints
 
 Just before the model call (in `build_prompt`, so only for MRs this run

@@ -353,6 +353,67 @@ pub(crate) fn gate_checks(
     lines
 }
 
+/// The changes from `last` to `head` when `last` is an ancestor of `head` (a plain
+/// push); `None` after a force-push or rebase, so the MR gets a full review.
+fn delta_changes(
+    conn: &dyn Connector,
+    pid: &str,
+    last: &str,
+    head: &str,
+) -> Result<Option<Vec<Value>>, ConnectorError> {
+    let base = conn.api(
+        "GET",
+        &format!("/projects/{pid}/repository/merge_base?refs[]={last}&refs[]={head}"),
+        &ApiOpts::default(),
+    );
+    match base {
+        Ok(b) if b["id"].as_str() == Some(last) => {}
+        Ok(_) => return Ok(None),
+        Err(e) if matches!(e.status(), Some(400 | 404)) => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let cmp = conn.api(
+        "GET",
+        &format!("/projects/{pid}/repository/compare?from={last}&to={head}&straight=true"),
+        &ApiOpts::default(),
+    )?;
+    Ok(Some(cmp["diffs"].as_array().cloned().unwrap_or_default()))
+}
+
+/// `(finding id, discussion id)` for published LoopX findings among `ids`.
+fn finding_discussions(conn: &dyn Connector, mr: &Value, ids: &[String]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for page in 1..=5u32 {
+        let Ok(rows) = conn.api(
+            "GET",
+            &format!(
+                "/projects/{}/merge_requests/{}/discussions?per_page=100&page={page}",
+                py_str(&mr["project_id"]),
+                py_str(&mr["iid"])
+            ),
+            &ApiOpts::default(),
+        ) else {
+            break;
+        };
+        let rows = rows.as_array().cloned().unwrap_or_default();
+        for d in &rows {
+            let first = d["notes"][0]["body"].as_str().unwrap_or("");
+            if let (Some(f), Some(did)) = (
+                review::render::parse_finding_marker(first),
+                d["id"].as_str(),
+            ) {
+                if ids.contains(&f.id) && !out.iter().any(|(i, _): &(String, String)| *i == f.id) {
+                    out.push((f.id, did.to_string()));
+                }
+            }
+        }
+        if rows.len() < 100 {
+            break;
+        }
+    }
+    out
+}
+
 fn drafts_path(mr: &Value) -> String {
     format!(
         "/projects/{}/merge_requests/{}/draft_notes",
@@ -383,7 +444,11 @@ fn post_draft(
 /// Delete this loop's own earlier drafts (partial runs, older SHAs), across
 /// every page. Drafts without the LoopX signature are never touched. All pages
 /// are listed before deleting, so a deletion never shifts a later page.
-fn clear_old_drafts(conn: &dyn Connector, mr: &Value) -> Result<(), ConnectorError> {
+fn clear_old_drafts(
+    conn: &dyn Connector,
+    mr: &Value,
+    keep: &BTreeSet<String>,
+) -> Result<(), ConnectorError> {
     let mut ours: Vec<i64> = Vec::new();
     let sig = SIGNATURE.trim();
     for page in 1..=MAX_DRAFT_PAGES {
@@ -403,7 +468,10 @@ fn clear_old_drafts(conn: &dyn Connector, mr: &Value) -> Result<(), ConnectorErr
                 .filter(|v| py_truthy(v))
                 .map(py_str)
                 .unwrap_or_default();
-            if note.trim_end().ends_with(sig) {
+            let reply = obj.get("discussion_id").is_some_and(py_truthy);
+            let kept =
+                review::render::parse_finding_marker(&note).is_some_and(|f| keep.contains(&f.id));
+            if note.trim_end().ends_with(sig) && !reply && !kept {
                 if let Some(n) = id
                     .as_i64()
                     .or_else(|| id.as_str().and_then(|s| s.parse().ok()))
@@ -436,7 +504,33 @@ fn post_all(
     let refs = &mr["diff_refs"];
     let context_lines = diff_line_map(mr.get("diff").and_then(Value::as_str).unwrap_or(""));
     let old_paths = mr.get("old_paths").cloned().unwrap_or(Value::Null);
-    clear_old_drafts(conn, mr)?;
+    let keep: BTreeSet<String> = answer
+        .get("keep_draft_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    clear_old_drafts(conn, mr, &keep)?;
+    for r in answer
+        .get("replies")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let (Some(discussion), Some(body)) = (r["discussion_id"].as_str(), r["body"].as_str())
+        else {
+            continue;
+        };
+        conn.api(
+            "POST",
+            &drafts_path(mr),
+            &ApiOpts::json(json!({"note": format!("{body}{SIGNATURE}"), "in_reply_to_discussion_id": discussion}))
+                .once(),
+        )?;
+        *drafts += 1;
+    }
     for f in answer
         .get("findings")
         .and_then(Value::as_array)
@@ -1228,6 +1322,7 @@ impl MrReview {
         guard.as_ref().is_some_and(|s| s.has(key))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn item(
         &self,
         conn: &dyn Connector,
@@ -1236,6 +1331,7 @@ impl MrReview {
         row: &Value,
         wanted: bool,
         loop_min_severity: Option<&str>,
+        state_root: &Path,
     ) -> Result<Option<WorkItem>, ConnectorError> {
         let author_id = row
             .get("author")
@@ -1424,6 +1520,34 @@ impl MrReview {
             .or_else(|| row.get("author"))
             .cloned()
             .unwrap_or(Value::Null);
+        let mr_key = mr_ref(account_id, &pid_s, &iid_s);
+        let ledger = review::ledger::Ledger::load(state_root, &mr_key);
+        let delta = match ledger.last_sha.as_deref() {
+            Some(last) if !wanted && last != head_s => {
+                delta_changes(conn, &pid_s, last, &head_s)?.map(|d| (last.to_string(), d))
+            }
+            _ => None,
+        };
+        let delta = match delta {
+            Some((last, rows)) => {
+                let rows: Vec<Value> = rows
+                    .into_iter()
+                    .filter(|c| {
+                        cfg.reviews_path(
+                            &c.get("new_path")
+                                .filter(|v| py_truthy(v))
+                                .or_else(|| c.get("old_path"))
+                                .map_or(String::new(), py_str),
+                        )
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    return Ok(None);
+                }
+                Some((last, build_diff_text(&rows, DIFF_CAP_BYTES).0))
+            }
+            None => None,
+        };
         let guidance_count = guidance.len();
         let meta = json!({
             "label": format!("{title} ({reference})"),
@@ -1434,6 +1558,14 @@ impl MrReview {
             "gates": {"security": mr_gates::gate_meta(&mr_gates::secret_scan(&changes, truncated))},
             "review": review_meta(&cfg, filtered.len(), guidance_count),
         });
+        let mut meta = meta;
+        meta["review"]["mode"] = json!(if delta.is_some() { "delta" } else { "full" });
+        if let Some((last, _)) = &delta {
+            meta["review"]["delta_from"] = json!(last);
+        }
+        if let Some(n) = cfg.auto_review.pause_after.filter(|n| *n > 0) {
+            meta["review"]["pause_after"] = json!(n);
+        }
         let mut payload = json!({
             "account": account_id, "project_id": pid, "iid": iid, "title": title,
             "description": description, "web_url": url,
@@ -1444,6 +1576,14 @@ impl MrReview {
         });
         if !guidance.is_empty() {
             payload["repo_guidance"] = json!(guidance);
+        }
+        if let Some((last, text)) = delta {
+            payload["delta_from"] = json!(last);
+            payload["delta_diff"] = json!(text);
+            let open: Vec<Value> = ledger.open().iter().map(|e| e.prompt_json()).collect();
+            if !open.is_empty() {
+                payload["previous_findings"] = json!(open);
+            }
         }
         Ok(Some(
             WorkItem::new(
@@ -1871,7 +2011,15 @@ impl LoopPlugin for MrReview {
                     continue;
                 }
                 let loop_min = ctx.settings.get("min_severity").and_then(Value::as_str);
-                match self.item(conn.as_ref(), &account.id, &me, row, wanted, loop_min) {
+                match self.item(
+                    conn.as_ref(),
+                    &account.id,
+                    &me,
+                    row,
+                    wanted,
+                    loop_min,
+                    &state_root,
+                ) {
                     Ok(Some(item)) if wanted => requested.push(item.with_force()),
                     Ok(Some(item)) => items.push(item),
                     Ok(None) => {}
@@ -1957,6 +2105,41 @@ impl LoopPlugin for MrReview {
             })
             .collect();
         let (kept, verified) = self.verify(kept, payload, &min, ctx);
+        let state_root = ctx
+            .state_dir
+            .clone()
+            .unwrap_or_else(crate::seen_store::default_state_root);
+        let gitlab = payload.get("provider").is_none();
+        let mr_key = mr_ref(
+            &py_str(&payload["account"]),
+            &py_str(&payload["project_id"]),
+            &py_str(&payload["iid"]),
+        );
+        let delta_from = review_meta
+            .filter(|r| r["mode"] == "delta")
+            .and_then(|r| r["delta_from"].as_str())
+            .map(str::to_string);
+        let mut ledger = review::ledger::Ledger::load(&state_root, &mr_key);
+        let addressed = if delta_from.is_some() {
+            review::ledger::addressed_ids(answer, &ledger)
+        } else {
+            Vec::new()
+        };
+        let still_open: BTreeSet<String> = if delta_from.is_some() {
+            ledger
+                .open()
+                .iter()
+                .map(|e| e.id.clone())
+                .filter(|id| !addressed.contains(id))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        // An earlier finding that is still open keeps its draft or thread; never post it twice.
+        let kept: Vec<Value> = kept
+            .into_iter()
+            .filter(|f| !f["id"].as_str().is_some_and(|id| still_open.contains(id)))
+            .collect();
         let security_meta = item
             .meta
             .pointer("/gates/security")
@@ -2009,8 +2192,46 @@ impl LoopPlugin for MrReview {
                 ));
             }
         }
-        let cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
-                             "risks": risks, "findings": kept, "checks": checks, "scope": scope});
+        let head = py_str(&payload["diff_refs"]["head_sha"]);
+        let short = |s: &str| s.chars().take(8).collect::<String>();
+        let mut replies: Vec<Value> = Vec::new();
+        if let Some(from) = &delta_from {
+            let mut line = format!("Reviewed the changes since `{}`", short(from));
+            if !addressed.is_empty() {
+                line.push_str(&format!(
+                    "; {} earlier finding(s) look addressed",
+                    addressed.len()
+                ));
+            }
+            if !still_open.is_empty() {
+                line.push_str(&format!(
+                    "; {} earlier finding(s) still open",
+                    still_open.len()
+                ));
+            }
+            scope.insert(0, line);
+            if !addressed.is_empty() && gitlab {
+                for (_, discussion) in finding_discussions(conn.as_ref(), payload, &addressed) {
+                    replies.push(json!({"discussion_id": discussion,
+                        "body": format!("Looks addressed in `{}`.", short(&head))}));
+                }
+            }
+        }
+        let pause_after = review_meta.and_then(|r| r["pause_after"].as_u64());
+        let pausing = delta_from.is_some()
+            && pause_after.is_some_and(|n| u64::from(ledger.delta_reviews) + 1 >= n);
+        if pausing {
+            scope.push(format!(
+                "Auto review paused after {} incremental review(s); turn Auto review back on in the Merge requests tab or use Review now",
+                pause_after.unwrap_or(0)
+            ));
+        }
+        let mut cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
+                                 "risks": risks, "findings": kept, "checks": checks, "scope": scope});
+        if delta_from.is_some() {
+            cleaned["keep_draft_ids"] = json!(still_open);
+            cleaned["replies"] = json!(replies);
+        }
         let url = payload.get("web_url").map_or(String::new(), py_str);
         let posted = match &self.poster {
             Some(p) => p(conn.as_ref(), payload, &cleaned),
@@ -2036,6 +2257,19 @@ impl LoopPlugin for MrReview {
             Err(e) => return Err(e.into_plugin()),
         };
         emit(true);
+        if gitlab {
+            ledger.record(&head, delta_from.is_none(), &addressed, &kept);
+            if let Err(e) = ledger.save(&state_root, &mr_key) {
+                ctx.log(&format!(
+                    "mr-review: could not save the findings ledger: {e}"
+                ));
+            }
+            if pausing {
+                let _ = MrPrefs::update(&state_root, |p| {
+                    p.skip.insert(mr_key.clone());
+                });
+            }
+        }
         let blockers = kept.iter().filter(|f| f["severity"] == "blocker").count();
         let drafts = result.get("drafts").and_then(Value::as_u64).unwrap_or(0);
         let mut summary_text = match result.get("partial").filter(|v| py_truthy(v)) {
@@ -2428,6 +2662,190 @@ mod tests {
         assert_eq!(calls[0].0, "GET");
         let del = calls.iter().position(|c| c.0 == "DELETE").unwrap();
         assert!(del < calls.iter().position(|c| c.0 == "POST").unwrap());
+    }
+
+    #[test]
+    fn incremental_cleanup_keeps_open_findings_and_replies() {
+        let marked = |id: &str| {
+            let note = finding_note(
+                &json!({"id": id, "path": "a", "line": 1, "severity": "major",
+                                            "category": "data", "body": "b"}),
+            );
+            format!("{note}{SIGNATURE}")
+        };
+        let conn = fake2(
+            json!([
+                {"id": 1, "note": marked("keepme0001")},
+                {"id": 2, "note": marked("fixed00001")},
+                {"id": 3, "note": SIG_NOTE, "discussion_id": "d9"},
+                {"id": 4, "note": SIG_NOTE}
+            ]),
+            None,
+            502,
+        );
+        post_review(
+            &Shared(conn.clone()),
+            &mr(),
+            &json!({"summary": "s", "findings": [], "keep_draft_ids": ["keepme0001"],
+                    "replies": [{"discussion_id": "d7", "body": "Looks addressed in `h`."}]}),
+        )
+        .unwrap();
+        let calls = conn.calls();
+        let deletes: Vec<&str> = calls
+            .iter()
+            .filter(|c| c.0 == "DELETE")
+            .map(|c| c.1.as_str())
+            .collect();
+        assert_eq!(
+            deletes,
+            [
+                "/projects/9/merge_requests/7/draft_notes/2",
+                "/projects/9/merge_requests/7/draft_notes/4"
+            ]
+        );
+        let reply = calls
+            .iter()
+            .find(|c| c.0 == "POST")
+            .unwrap()
+            .2
+            .clone()
+            .unwrap();
+        assert_eq!(reply["in_reply_to_discussion_id"], "d7");
+        assert!(reply["note"]
+            .as_str()
+            .unwrap()
+            .starts_with("Looks addressed in `h`."));
+    }
+
+    fn delta_conn(base: &'static str) -> Arc<Conn> {
+        Conn::new(move |m, p, _| {
+            if p.contains("/repository/merge_base") {
+                assert!(p.contains("refs[]=old") && p.contains("refs[]=h"), "{p}");
+                return Ok(json!({"id": base}));
+            }
+            if p.contains("/repository/compare") {
+                assert!(p.contains("from=old&to=h&straight=true"), "{p}");
+                return Ok(
+                    json!({"diffs": [{"new_path": "app/a.rb", "diff": "@@ -3 +3,2 @@\n c\n+d\n"},
+                                           {"new_path": "yarn.lock", "diff": "@@ -1 +1 @@\n-a\n+b\n"}]}),
+                );
+            }
+            d_handler(m, p, None)
+        })
+    }
+
+    fn ledger_ctx(d: &tempfile::TempDir) -> LoopContext {
+        let mut l = review::ledger::Ledger::default();
+        l.record(
+            "old",
+            true,
+            &[],
+            &[json!({"id": "prev000001", "path": "app/a.rb", "line": 2,
+                                             "severity": "major", "title": "Old"})],
+        );
+        l.save(d.path(), "work:9!7").unwrap();
+        let mut ctx = c();
+        ctx.state_dir = Some(d.path().to_path_buf());
+        ctx
+    }
+
+    #[test]
+    fn a_push_on_top_of_a_reviewed_sha_is_reviewed_incrementally() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = ledger_ctx(&d);
+        let items = plugin_with(delta_conn("old")).discover(&ctx).unwrap();
+        let p = &items[0].payload;
+        assert_eq!(p["delta_from"], "old");
+        let delta = p["delta_diff"].as_str().unwrap();
+        assert!(
+            delta.contains("+d") && !delta.contains("yarn.lock"),
+            "{delta}"
+        );
+        assert_eq!(
+            p["previous_findings"],
+            json!([{"id": "prev000001", "path": "app/a.rb", "line": 2,
+                                                   "severity": "major", "title": "Old"}])
+        );
+        assert_eq!(items[0].meta["review"]["mode"], "delta");
+
+        let rebased = plugin_with(delta_conn("other")).discover(&ctx).unwrap();
+        assert!(
+            rebased[0].payload.get("delta_diff").is_none(),
+            "force-push: full review"
+        );
+        assert_eq!(rebased[0].meta["review"]["mode"], "full");
+
+        MrPrefs::update(d.path(), |p| {
+            p.requested.insert("work:9!7".into());
+        })
+        .unwrap();
+        let asked = plugin_with(delta_conn("old")).discover(&ctx).unwrap();
+        assert!(
+            asked[0].payload.get("delta_diff").is_none(),
+            "Review now is a full review"
+        );
+    }
+
+    #[test]
+    fn after_an_incremental_review_findings_are_deduped_replied_recorded_and_paused() {
+        let d = tempfile::tempdir().unwrap();
+        let ctx = ledger_ctx(&d);
+        let mut l = review::ledger::Ledger::load(d.path(), "work:9!7");
+        l.record(
+            "old",
+            false,
+            &[],
+            &[json!({"id": "open000002", "path": "app/a.rb", "line": 2,
+                                              "severity": "minor", "title": "Still"})],
+        );
+        l.save(d.path(), "work:9!7").unwrap();
+        let prev_note = finding_note(&json!({"id": "prev000001", "path": "app/a.rb", "line": 2,
+                                             "severity": "major", "category": "data", "body": "b"}));
+        let conn = Conn::new(move |_m, p, _| {
+            if p.contains("/discussions") {
+                return Ok(json!([{"id": "disc-1", "notes": [{"body": prev_note.clone()}]}]));
+            }
+            Ok(json!({}))
+        });
+        let posted = Arc::new(Mutex::new(vec![]));
+        let sink = posted.clone();
+        let plugin = plugin_with(conn).with_poster(Box::new(move |_c, _m, a| {
+            sink.lock().unwrap().push(a.clone());
+            Ok(json!({"drafts": 1, "fallback_general": 0}))
+        }));
+        let mut it = item();
+        it.payload["diff_refs"]["head_sha"] = json!("h");
+        it.meta = json!({"review": {"mode": "delta", "delta_from": "old", "pause_after": 2,
+                                    "min_severity": "minor", "finding_cap": 15, "notes": []}});
+        let still = review::findings::finding_id("app/a.rb", "correctness", "Still");
+        assert_eq!(still.len(), 10);
+        let answer = json!({"summary": "s", "previous": [{"id": "prev000001", "status": "addressed"},
+                                                          {"id": "open000002", "status": "open"}],
+                            "findings": [
+                                {"path": "app/a.rb", "line": 2, "severity": "major", "title": "New one", "body": "b"}]});
+        plugin.after_item(&it, &answer, &ctx).unwrap();
+        let p = posted.lock().unwrap();
+        assert_eq!(p[0]["keep_draft_ids"], json!(["open000002"]));
+        assert_eq!(
+            p[0]["replies"],
+            json!([{"discussion_id": "disc-1", "body": "Looks addressed in `h`."}])
+        );
+        let note = summary_note(&p[0]).unwrap();
+        assert!(note.contains("Reviewed the changes since `old`; 1 earlier finding(s) look addressed; 1 earlier finding(s) still open"), "{note}");
+        assert!(note.contains("Auto review paused after 2 incremental review(s)"));
+        let l = review::ledger::Ledger::load(d.path(), "work:9!7");
+        assert_eq!(l.last_sha.as_deref(), Some("h"));
+        assert_eq!(l.delta_reviews, 2);
+        let status = |id: &str| {
+            l.findings
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.status.clone())
+        };
+        assert_eq!(status("prev000001").as_deref(), Some("addressed"));
+        assert_eq!(status("open000002").as_deref(), Some("open"));
+        assert_eq!(l.open().len(), 2, "the new finding is recorded");
+        assert!(MrPrefs::load(d.path()).skip.contains("work:9!7"));
     }
 
     #[test]
@@ -3437,7 +3855,7 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
         assert_eq!(
             review,
             Some(
-                json!({"min_severity": "minor", "finding_cap": 15, "profile": "chill", "notes": []})
+                json!({"min_severity": "minor", "finding_cap": 15, "profile": "chill", "notes": [], "mode": "full"})
             )
         );
         assert_eq!(

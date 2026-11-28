@@ -40,6 +40,9 @@ pub struct ReviewExpect {
     pub verdict: Vec<String>,
     /// `tool:rule` hints no finding may confirm.
     pub forbidden_hints: Vec<String>,
+    /// Earlier finding ids the model must call addressed / open (incremental cases).
+    pub addressed: Vec<String>,
+    pub still_open: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +59,10 @@ pub struct ReviewCase {
     pub custom_instructions: String,
     /// Linter results to hand the model, as the loop's `tool_hints`.
     pub tool_hints: Vec<Value>,
+    /// Incremental case: the changes since the last review (`delta.diff`) and the
+    /// earlier findings still open.
+    pub delta_diff: Option<String>,
+    pub previous_findings: Vec<Value>,
     pub expect: ReviewExpect,
 }
 
@@ -211,6 +218,12 @@ pub fn parse_case(yaml: &str, patch: &str, name: &str) -> Result<ReviewCase, Str
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default(),
+        delta_diff: None,
+        previous_findings: v
+            .get("previous_findings")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
         expect: ReviewExpect {
             findings: spots("findings")?,
             forbidden: spots("forbidden")?,
@@ -220,6 +233,8 @@ pub fn parse_case(yaml: &str, patch: &str, name: &str) -> Result<ReviewCase, Str
                 .map(|n| n as usize),
             verdict,
             forbidden_hints: strings(expect.get("forbidden_hints")),
+            addressed: strings(expect.get("addressed")),
+            still_open: strings(expect.get("still_open")),
         },
     };
     let paths: BTreeSet<String> = case
@@ -255,11 +270,13 @@ pub fn load_cases(dir: &Path, names: Option<&[String]>) -> Result<Vec<ReviewCase
         }
         let read =
             |f: &str| std::fs::read_to_string(d.join(f)).map_err(|e| format!("{name}/{f}: {e}"));
-        out.push(parse_case(
-            &read("case.yaml")?,
-            &read("patch.diff")?,
-            &name,
-        )?);
+        let mut case = parse_case(&read("case.yaml")?, &read("patch.diff")?, &name)?;
+        if d.join("delta.diff").is_file() {
+            let rows =
+                parse_patch(&read("delta.diff")?).map_err(|e| format!("{name}/delta.diff: {e}"))?;
+            case.delta_diff = Some(build_diff_text(&rows, taxonomy::DIFF_CAP_BYTES).0);
+        }
+        out.push(case);
     }
     if let Some(wanted) = names {
         if let Some(missing) = wanted.iter().find(|w| !out.iter().any(|c| &c.name == *w)) {
@@ -327,6 +344,13 @@ pub fn work_item(case: &ReviewCase) -> WorkItem {
     }
     if !case.tool_hints.is_empty() {
         payload["tool_hints"] = json!(case.tool_hints);
+    }
+    if let Some(delta) = &case.delta_diff {
+        payload["delta_from"] = json!("2".repeat(40));
+        payload["delta_diff"] = json!(delta);
+        if !case.previous_findings.is_empty() {
+            payload["previous_findings"] = json!(case.previous_findings);
+        }
     }
     WorkItem::new(
         format!("mr:eval:1!1@{}", "0".repeat(40)),
@@ -503,7 +527,25 @@ pub fn run_case(
             cost = Some(cost.unwrap_or(0.0) + vcost.unwrap_or(0.0));
         }
     }
-    let (passed, mut reasons) = grade(&case.expect, &found, &verdict);
+    let (mut passed, mut reasons) = grade(&case.expect, &found, &verdict);
+    for (ids, want) in [
+        (&case.expect.addressed, "addressed"),
+        (&case.expect.still_open, "open"),
+    ] {
+        for id in ids {
+            let got = answer["previous"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|p| p["id"] == id.as_str())
+                .and_then(|p| p["status"].as_str())
+                .unwrap_or("missing");
+            if got != want {
+                passed = false;
+                reasons.push(format!("earlier finding {id}: {got}, expected {want}"));
+            }
+        }
+    }
     if let Some(n) = note {
         reasons.insert(1, n);
     }
@@ -635,6 +677,8 @@ mod tests {
             max_findings: Some(1),
             verdict: vec!["request_changes".into()],
             forbidden_hints: vec![],
+            addressed: vec![],
+            still_open: vec![],
         };
         let (ok, reasons) = grade(
             &expect,
