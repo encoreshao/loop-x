@@ -8,6 +8,7 @@ pub mod diff;
 pub mod findings;
 pub mod glob;
 pub mod ledger;
+pub mod local;
 pub mod render;
 pub mod semgrep_rules;
 pub mod taxonomy;

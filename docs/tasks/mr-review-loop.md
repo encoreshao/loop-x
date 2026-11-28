@@ -29,6 +29,36 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Local review (`loopx review`)
+
+```
+loopx review [--base <branch> | --uncommitted] [--dir <path>]
+             [--format text|ndjson] [--gate nit|minor|major|blocker]
+             [--no-tools] [--no-verify] [--budget-usd N]
+```
+
+This reviews a working tree with the same review engine: the loop's prompt (a
+built-in copy), `.loopx/review.yaml`, guidance files, `.loopx/checks`, installed
+linters, and the `sonnet` verification pass. Nothing is posted.
+
+- **Scope.** The default is everything on the current branch since it left
+  `--base` (`git diff --merge-base`, so committed and uncommitted work).
+  `--uncommitted` limits it to `git diff HEAD`. Binary files are skipped.
+- **Trust.** The checkout is yours, so config, guidance and checks come from the
+  working tree, and the linters run in it.
+- **Output.**
+  - `text`: for people.
+  - `ndjson`: one JSON object per line: `context`, then one `finding` each
+    (with `fix_prompt` and `hints`), one `check` each, then `complete` with
+    `verdict`, `blocked` and `cost_usd`.
+- **Exit code.** 0 done, 1 failed, 2 when a finding reaches `--gate`.
+- **Budget.** `--budget-usd` caps the main call (default $1). The verification
+  pass takes at most $0.25 of it.
+
+A coding agent can loop on it: implement, run
+`loopx review --format ndjson --gate major`, fix each finding's `fix_prompt`,
+and run again, at most twice.
+
 ## Learning from replies
 
 1. **Recording replies.** Each GitLab review lists the MR's discussions once.

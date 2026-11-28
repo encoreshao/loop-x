@@ -329,7 +329,7 @@ pub fn run_all(
     let mut report = ToolReport::default();
     for tool in ALL {
         let mine: Vec<String> = files.iter().filter(|f| tool.wants(f)).cloned().collect();
-        if mine.is_empty() || !enabled(tool) {
+        if mine.is_empty() || !enabled(tool) || !runner.installed(tool.name()) {
             continue;
         }
         if tool == Tool::Semgrep && semgrep_rules.is_empty() {

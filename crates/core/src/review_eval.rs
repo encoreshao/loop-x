@@ -68,46 +68,9 @@ pub struct ReviewCase {
     pub expect: ReviewExpect,
 }
 
-/// Split a `diff --git` patch into GitLab `/diffs` rows (`diff` starts at the first `@@`).
+/// Split a `diff --git` patch into GitLab `/diffs` rows; every file must have a hunk.
 pub fn parse_patch(text: &str) -> Result<Vec<Value>, String> {
-    let mut out = Vec::new();
-    for block in text
-        .split("\ndiff --git ")
-        .map(|b| b.trim_start_matches("diff --git "))
-    {
-        if block.trim().is_empty() {
-            continue;
-        }
-        let (mut old, mut new) = (None, None);
-        let mut hunks: Vec<&str> = Vec::new();
-        for line in block.lines() {
-            if !hunks.is_empty() {
-                hunks.push(line);
-            } else if let Some(p) = line.strip_prefix("--- ") {
-                old = Some(p.trim_start_matches("a/").to_string());
-            } else if let Some(p) = line.strip_prefix("+++ ") {
-                new = Some(p.trim_start_matches("b/").to_string());
-            } else if line.starts_with("@@") {
-                hunks.push(line);
-            }
-        }
-        let (Some(old), Some(new)) = (old, new) else {
-            return Err("every file in patch.diff needs --- and +++ lines".into());
-        };
-        if hunks.is_empty() {
-            return Err(format!("{new}: no @@ hunk"));
-        }
-        let (new_file, deleted) = (old == "/dev/null", new == "/dev/null");
-        let new_path = if deleted { old.clone() } else { new };
-        let old_path = if new_file { new_path.clone() } else { old };
-        out.push(json!({"old_path": old_path, "new_path": new_path,
-                        "diff": format!("{}\n", hunks.join("\n")),
-                        "new_file": new_file, "deleted_file": deleted}));
-    }
-    if out.is_empty() {
-        return Err("patch.diff has no files".into());
-    }
-    Ok(out)
+    crate::review::diff::parse_patch(text, false)
 }
 
 fn parse_spot(v: &Value, path: &str) -> Result<Spot, String> {

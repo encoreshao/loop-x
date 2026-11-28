@@ -1,6 +1,6 @@
 //! Diff text for the review prompt and the line map GitLab needs to anchor notes.
 use crate::loops_config::{py_str, py_truthy};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// `(text, truncated)`; `cap` counts characters.
 pub fn build_diff_text(changes: &[Value], cap: usize) -> (String, bool) {
@@ -142,6 +142,56 @@ pub fn diff_line_map(
         }
     }
     out
+}
+
+/// Split a `diff --git` patch into GitLab `/diffs` rows (`diff` starts at the first
+/// `@@`). `lenient` skips files without a text hunk (binary, mode-only) instead of
+/// failing, as real `git diff` output has them.
+pub fn parse_patch(text: &str, lenient: bool) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    for block in text
+        .split("\ndiff --git ")
+        .map(|b| b.trim_start_matches("diff --git "))
+    {
+        if block.trim().is_empty() {
+            continue;
+        }
+        let (mut old, mut new) = (None, None);
+        let mut hunks: Vec<&str> = Vec::new();
+        for line in block.lines() {
+            if !hunks.is_empty() {
+                hunks.push(line);
+            } else if let Some(p) = line.strip_prefix("--- ") {
+                old = Some(p.trim_start_matches("a/").to_string());
+            } else if let Some(p) = line.strip_prefix("+++ ") {
+                new = Some(p.trim_start_matches("b/").to_string());
+            } else if line.starts_with("@@") {
+                hunks.push(line);
+            }
+        }
+        let (Some(old), Some(new)) = (old, new) else {
+            if lenient {
+                continue;
+            }
+            return Err("every file in patch.diff needs --- and +++ lines".into());
+        };
+        if hunks.is_empty() {
+            if lenient {
+                continue;
+            }
+            return Err(format!("{new}: no @@ hunk"));
+        }
+        let (new_file, deleted) = (old == "/dev/null", new == "/dev/null");
+        let new_path = if deleted { old.clone() } else { new };
+        let old_path = if new_file { new_path.clone() } else { old };
+        out.push(json!({"old_path": old_path, "new_path": new_path,
+                        "diff": format!("{}\n", hunks.join("\n")),
+                        "new_file": new_file, "deleted_file": deleted}));
+    }
+    if out.is_empty() && !lenient {
+        return Err("patch.diff has no files".into());
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
