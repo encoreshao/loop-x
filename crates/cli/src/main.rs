@@ -126,7 +126,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Check the MR review configuration (`config [--file <path>] [--project <alias>]`)
+    /// Check the MR review configuration and linters (`config [--file <path>] [--project <alias>]`, `tools [refresh]`)
     Review {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,

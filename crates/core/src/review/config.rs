@@ -107,12 +107,21 @@ pub struct ReviewLayer {
     pub path_filters: Option<Vec<String>>,
     pub path_instructions: Option<Vec<PathInstruction>>,
     pub auto_review: Option<AutoReviewLayer>,
+    pub tools: Option<BTreeMap<String, bool>>,
 }
 
 impl ReviewLayer {
     fn validate(self) -> Result<Self, String> {
         if let Some(v) = self.version.filter(|v| *v != 1) {
             return Err(format!("version {v} is not supported (use 1)"));
+        }
+        if let Some(bad) = self
+            .tools
+            .iter()
+            .flat_map(|t| t.keys())
+            .find(|k| !super::tools::ALL.iter().any(|t| t.name() == k.as_str()))
+        {
+            return Err(format!("tools: unknown tool {bad:?}"));
         }
         for re in self
             .auto_review
@@ -163,6 +172,8 @@ pub struct ReviewConfig {
     pub path_filters: Vec<String>,
     pub path_instructions: Vec<PathInstruction>,
     pub auto_review: AutoReview,
+    /// Tool name -> on/off; a tool not listed is on.
+    pub tools: BTreeMap<String, bool>,
     /// key -> `default` | `loop settings` | `repo` | `projects.json`.
     pub provenance: BTreeMap<String, String>,
     /// Layers that were ignored, with why (shown in the review).
@@ -182,6 +193,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         finding_cap: Profile::Chill.finding_cap(),
         path_filters: Vec::new(),
         path_instructions: Vec::new(),
+        tools: BTreeMap::new(),
         auto_review: AutoReview {
             enabled: true,
             ..AutoReview::default()
@@ -196,6 +208,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         "path_filters",
         "path_instructions",
         "auto_review",
+        "tools",
     ] {
         cfg.provenance.insert(k.into(), "default".into());
     }
@@ -238,6 +251,10 @@ fn apply(cfg: &mut ReviewConfig, layer: ReviewLayer, source: &str) {
         cfg.path_filters.extend(f);
         mark(cfg, "path_filters");
     }
+    if let Some(t) = layer.tools {
+        cfg.tools.extend(t);
+        mark(cfg, "tools");
+    }
     if let Some(p) = layer.path_instructions {
         cfg.path_instructions.extend(p);
         mark(cfg, "path_instructions");
@@ -264,6 +281,10 @@ fn apply(cfg: &mut ReviewConfig, layer: ReviewLayer, source: &str) {
 }
 
 impl ReviewConfig {
+    pub fn tool_enabled(&self, name: &str) -> bool {
+        self.tools.get(name).copied().unwrap_or(true)
+    }
+
     /// Is `path` reviewed? A user `!` exclude always wins; a user include brings back a
     /// default-denied file; any include turns the list into an allowlist.
     pub fn reviews_path(&self, path: &str) -> bool {
@@ -340,6 +361,7 @@ impl ReviewConfig {
                 "ignore_authors": self.auto_review.ignore_authors,
                 "base_branches": self.auto_review.base_branches,
             }, "from": src("auto_review")},
+            "tools": {"value": self.tools, "from": src("tools")},
             "notes": self.notes,
         })
     }
@@ -505,6 +527,19 @@ mod tests {
         assert!(
             cfg("path_instructions: [{path: a}]\n", None, None).notes[0].contains("instructions")
         );
+    }
+
+    #[test]
+    fn tools_can_be_switched_off_per_layer() {
+        let c = cfg(
+            "tools: {semgrep: false}\n",
+            Some(json!({"tools": {"ruff": false}})),
+            None,
+        );
+        assert!(
+            !c.tool_enabled("semgrep") && !c.tool_enabled("ruff") && c.tool_enabled("shellcheck")
+        );
+        assert!(cfg("tools: {eslint: true}\n", None, None).notes[0].contains("unknown tool"));
     }
 
     #[test]

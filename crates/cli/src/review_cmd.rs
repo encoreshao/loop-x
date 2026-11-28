@@ -9,11 +9,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "Usage: loopx review config [--file <path>] [--project <alias>]
+       loopx review tools [refresh]
 
 Prints the MR review configuration the MR Review loop would use, with where each
 value comes from (default, loop settings, repo, projects.json). --file defaults to
 .loopx/review.yaml in the current directory; --project adds that project's
-personal `review` block from projects.json.";
+personal `review` block from projects.json.
+
+`tools` lists the linters MR reviews can run as hints and the age of the cached
+semgrep rules; `tools refresh` downloads the semgrep rule packs now.";
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter()
@@ -22,7 +26,49 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+fn tools(args: &[String]) -> ExitCode {
+    use loopx_core::review::{semgrep_rules, tools};
+    let runner = tools::SystemLintRunner;
+    let dir = semgrep_rules::cache_dir();
+    if args.get(1).map(String::as_str) == Some("refresh") {
+        let mut failed = false;
+        for pack in semgrep_rules::DEFAULT_PACKS {
+            println!("Downloading {} ...", semgrep_rules::url_for(pack));
+            match semgrep_rules::refresh(&dir, pack, &semgrep_rules::http_fetch) {
+                Ok(()) => println!("Saved {}", semgrep_rules::path_for(&dir, pack).display()),
+                Err(e) => {
+                    failed = true;
+                    eprintln!("{pack}: {e}");
+                }
+            }
+        }
+        return ExitCode::from(u8::from(failed));
+    }
+    for tool in tools::ALL {
+        let state = if tools::LintRunner::installed(&runner, tool.name()) {
+            "installed"
+        } else {
+            "not installed"
+        };
+        println!("{:<11} {state}", tool.name());
+    }
+    for pack in semgrep_rules::DEFAULT_PACKS {
+        match semgrep_rules::age(&dir, pack) {
+            Some(a) => println!(
+                "semgrep {pack}: cached {} day(s) ago ({})",
+                a.as_secs() / 86_400,
+                semgrep_rules::path_for(&dir, pack).display()
+            ),
+            None => println!("semgrep {pack}: not cached yet (`loopx review tools refresh`)"),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 pub fn run(args: &[String]) -> ExitCode {
+    if args.first().map(String::as_str) == Some("tools") {
+        return tools(args);
+    }
     if args.first().map(String::as_str) != Some("config") || args.iter().any(|a| a == "--help") {
         println!("{USAGE}");
         return ExitCode::from(if args.iter().any(|a| a == "--help") {

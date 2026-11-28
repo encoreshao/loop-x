@@ -38,6 +38,8 @@ pub struct ReviewExpect {
     pub forbidden: Vec<Spot>,
     pub max_findings: Option<usize>,
     pub verdict: Vec<String>,
+    /// `tool:rule` hints no finding may confirm.
+    pub forbidden_hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +54,8 @@ pub struct ReviewCase {
     pub repo_files: BTreeMap<String, String>,
     /// The reviewer's `custom_instructions` for the project.
     pub custom_instructions: String,
+    /// Linter results to hand the model, as the loop's `tool_hints`.
+    pub tool_hints: Vec<Value>,
     pub expect: ReviewExpect,
 }
 
@@ -202,6 +206,11 @@ pub fn parse_case(yaml: &str, patch: &str, name: &str) -> Result<ReviewCase, Str
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        tool_hints: v
+            .get("tool_hints")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
         expect: ReviewExpect {
             findings: spots("findings")?,
             forbidden: spots("forbidden")?,
@@ -210,6 +219,7 @@ pub fn parse_case(yaml: &str, patch: &str, name: &str) -> Result<ReviewCase, Str
                 .and_then(Value::as_u64)
                 .map(|n| n as usize),
             verdict,
+            forbidden_hints: strings(expect.get("forbidden_hints")),
         },
     };
     let paths: BTreeSet<String> = case
@@ -315,6 +325,9 @@ pub fn work_item(case: &ReviewCase) -> WorkItem {
     if !guidance.is_empty() {
         payload["repo_guidance"] = json!(guidance);
     }
+    if !case.tool_hints.is_empty() {
+        payload["tool_hints"] = json!(case.tool_hints);
+    }
     WorkItem::new(
         format!("mr:eval:1!1@{}", "0".repeat(40)),
         case.title.clone(),
@@ -388,6 +401,15 @@ pub fn grade(expect: &ReviewExpect, found: &[Value], verdict: &str) -> (bool, Ve
         .iter()
         .filter(|f| !expect.findings.iter().any(|s| hits(s, f, true)))
         .count();
+    for h in &expect.forbidden_hints {
+        if found.iter().any(|f| {
+            f["hints"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == h))
+        }) {
+            fails.push(format!("a finding confirms the noise hint {h}"));
+        }
+    }
     if let Some(max) = expect.max_findings {
         if found.len() > max {
             fails.push(format!("{} findings, at most {max} expected", found.len()));
@@ -612,11 +634,24 @@ mod tests {
             }],
             max_findings: Some(1),
             verdict: vec!["request_changes".into()],
+            forbidden_hints: vec![],
         };
         let (ok, reasons) = grade(
             &expect,
             &[finding("app/a.rb", 2, "blocker", "security")],
             "request_changes",
+        );
+        let noisy = ReviewExpect {
+            forbidden_hints: vec!["ruff:S101".into()],
+            ..expect.clone()
+        };
+        let mut hinted = finding("app/a.rb", 2, "blocker", "security");
+        hinted["hints"] = json!(["ruff:S101"]);
+        let (bad, why) = grade(&noisy, &[hinted], "request_changes");
+        assert!(
+            !bad && why
+                .iter()
+                .any(|r| r == "a finding confirms the noise hint ruff:S101")
         );
         assert!(ok, "{reasons:?}");
         assert_eq!(

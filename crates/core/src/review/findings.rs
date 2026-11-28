@@ -74,6 +74,12 @@ pub fn clean(answer: &Value, allowed: &BTreeSet<&str>, min_severity: &str) -> Cl
             "body": body,
             "suggestion": short("suggestion", MAX_BODY),
             "fix_prompt": short("fix_prompt", MAX_FIX_PROMPT),
+            "hints": obj.get("hints").and_then(Value::as_array).into_iter().flatten()
+                .filter_map(Value::as_str)
+                .filter(|h| h.split_once(':').is_some_and(|(t, r)| !r.is_empty()
+                    && super::tools::ALL.iter().any(|x| x.name() == t)))
+                .take(5)
+                .collect::<Vec<_>>(),
         }));
     }
     // Most severe first, so the cap keeps what matters.

@@ -1,0 +1,9 @@
+title: Let admins run saved report formulas
+description: Admins can save a formula string on a report; the export evaluates it per row.
+tool_hints:
+  - {tool: ruff, rule: S307, path: app/reports/export.py, line: 9, severity: error, message: "Use of possibly insecure function; consider using `ast.literal_eval`"}
+  - {tool: ruff, rule: S101, path: tests/test_export.py, line: 6, severity: error, message: "Use of `assert` detected"}
+expect:
+  findings:
+    - {path: app/reports/export.py, lines: "8-10", min_severity: major, category: security}
+  forbidden_hints: ["ruff:S101"]

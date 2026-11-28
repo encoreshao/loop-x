@@ -29,6 +29,50 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Linter hints
+
+Just before the model call (in `build_prompt`, so only for MRs this run
+reviews), the loop gets ready:
+
+1. It fetches each reviewed file with added lines at the MR's head commit
+   (files API; at most 60 files, 512 KB each) into a fresh temp dir. The temp
+   dir holds only those files: no repo tool config, nothing that can load code.
+2. It runs every installed tool from a fixed allow-list, with fixed arguments:
+   - `shellcheck` (`*.sh`)
+   - `hadolint` (`Dockerfile*`)
+   - `actionlint` (`.github/workflows/*.yml`)
+   - `ruff --isolated --select E9,F,B,S` (`*.py`)
+   - `yamllint -d relaxed`
+   - `semgrep` (offline, see below)
+
+Each tool gets at most 60 s and all of them share 180 s per run. A missing tool
+is skipped silently. ESLint, RuboCop and similar never run here, because their
+configs can execute code.
+
+Results on added lines (at most 60, errors first) go to the model as
+`tool_hints`. The prompt treats them as hints: a finding only when the problem is
+real, with the confirmed `tool:rule` in the finding's `hints`. Unknown keys are
+stripped. A finding with hints shows a small "🧰 Tools: ruff `S608`" line, and
+the summary's Automated checks lists each tool's count and how many hints
+findings used.
+
+A project can switch tools off in `.loopx/review.yaml` or `projects.json`:
+`tools: {semgrep: false}`. GitHub pull requests get no linter hints yet.
+
+**Semgrep rules** are never fetched during a review:
+
+- **Where:** the `p/default` pack is downloaded from `https://semgrep.dev/c/p/default`
+  into `~/.loopx/cache/semgrep/p-default.yml`.
+- **When:** at most weekly, on the first review run after the cache goes stale,
+  and only when `semgrep` is installed.
+- **Checks:** the download must parse as a rules file and is written atomically.
+  A failed refresh keeps the old file, and with no file semgrep is skipped with
+  "rules not cached yet".
+- **Licence:** rules are downloaded on your machine, never bundled.
+
+`loopx review tools` lists installed tools and the cache age, and
+`loopx review tools refresh` downloads now.
+
 ## Verification pass
 
 Before anything is drafted, a second sealed, tool-less call re-checks every

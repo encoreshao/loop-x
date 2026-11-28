@@ -72,6 +72,23 @@ pub type VerifyFn = Box<
     dyn Fn(&str, &str, f64, &LoopContext) -> Result<(String, Option<f64>), String> + Send + Sync,
 >;
 
+/// Where semgrep rule packs are cached and how they are downloaded.
+pub struct SemgrepCache {
+    pub dir: PathBuf,
+    pub fetch: Box<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
+    pub refreshed: Mutex<bool>,
+}
+
+impl SemgrepCache {
+    pub fn live() -> Self {
+        Self {
+            dir: review::semgrep_rules::cache_dir(),
+            fetch: Box::new(review::semgrep_rules::http_fetch),
+            refreshed: Mutex::new(false),
+        }
+    }
+}
+
 /// The production verification call: sealed, tool-less, on `model`.
 pub fn sealed_verifier() -> VerifyFn {
     Box::new(|prompt, model, budget, ctx| {
@@ -266,8 +283,12 @@ fn review_meta(cfg: &review::config::ReviewConfig, filtered: usize, guidance: us
     {
         notes.push(format!("Profile: {}", cfg.profile));
     }
-    json!({"min_severity": cfg.min_severity, "finding_cap": cfg.finding_cap,
-           "profile": cfg.profile, "notes": notes})
+    let mut meta = json!({"min_severity": cfg.min_severity, "finding_cap": cfg.finding_cap,
+                          "profile": cfg.profile, "notes": notes});
+    if !cfg.tools.is_empty() {
+        meta["tools"] = json!(cfg.tools);
+    }
+    meta
 }
 
 /// The "Automated checks" lines, rendered by the same functions as the
@@ -983,6 +1004,11 @@ pub struct MrReview {
     audit_spent: Mutex<Duration>,
     projects_path: Option<PathBuf>,
     verifier: Option<VerifyFn>,
+    linters: Option<Arc<dyn review::tools::LintRunner>>,
+    semgrep: Option<SemgrepCache>,
+    tool_budget: Mutex<Duration>,
+    /// Tool results per item key, from `build_prompt` to `after_item`.
+    tool_reports: Mutex<BTreeMap<String, review::tools::ToolReport>>,
     /// `.loopx/review.yaml` per `account:project@base_sha`, for one run.
     repo_cfg: Mutex<BTreeMap<String, Option<Result<review::config::ReviewLayer, String>>>>,
 }
@@ -998,8 +1024,119 @@ impl MrReview {
             audit_spent: Mutex::new(Duration::ZERO),
             projects_path: None,
             verifier: None,
+            linters: None,
+            semgrep: None,
+            tool_budget: Mutex::new(review::tools::RUN_BUDGET),
+            tool_reports: Mutex::new(BTreeMap::new()),
             repo_cfg: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Run allow-listed linters on the changed files and give their hints to the model.
+    pub fn with_linters(mut self, runner: Arc<dyn review::tools::LintRunner>) -> Self {
+        self.linters = Some(runner);
+        self
+    }
+
+    pub fn with_semgrep(mut self, cache: SemgrepCache) -> Self {
+        self.semgrep = Some(cache);
+        self
+    }
+
+    /// Semgrep `--config` files, refreshing stale packs once per run.
+    fn semgrep_rules(
+        &self,
+        runner: &dyn review::tools::LintRunner,
+        ctx: &LoopContext,
+    ) -> Vec<PathBuf> {
+        let Some(cache) = &self.semgrep else {
+            return Vec::new();
+        };
+        if !runner.installed("semgrep") {
+            return Vec::new();
+        }
+        let packs = review::semgrep_rules::DEFAULT_PACKS;
+        let mut done = cache.refreshed.lock().unwrap_or_else(|e| e.into_inner());
+        if !*done {
+            *done = true;
+            for note in review::semgrep_rules::refresh_stale(&cache.dir, packs, &*cache.fetch) {
+                ctx.log(&format!("mr-review: {note}"));
+            }
+        }
+        review::semgrep_rules::cached(&cache.dir, packs)
+    }
+
+    /// Fetch the changed files at the head commit into a temp dir and run the tools.
+    fn tool_report(&self, item: &WorkItem, ctx: &LoopContext) -> Option<review::tools::ToolReport> {
+        let runner = self.linters.as_ref()?;
+        let payload = &item.payload;
+        if payload.get("provider").is_some() {
+            return None;
+        }
+        let added =
+            review::tools::added_lines(payload.get("diff").and_then(Value::as_str).unwrap_or(""));
+        if added.is_empty() {
+            return None;
+        }
+        let enabled: BTreeMap<String, bool> = item
+            .meta
+            .pointer("/review/tools")
+            .and_then(Value::as_object)
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_bool().unwrap_or(true)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let conn = self.connectors.load(&py_str(&payload["account"])).ok()?;
+        let (pid, head) = (
+            py_str(&payload["project_id"]),
+            py_str(&payload["diff_refs"]["head_sha"]),
+        );
+        let dir = tempfile::tempdir().ok()?;
+        let mut files = Vec::new();
+        for path in added.keys().take(review::tools::MAX_FILES) {
+            if !mr_gates::safe_rel_path(path) {
+                continue;
+            }
+            let Ok(Some(Ok(text))) = mr_gates::fetch_text(
+                conn.as_ref(),
+                &pid,
+                path,
+                &head,
+                review::tools::MAX_FILE_BYTES,
+            ) else {
+                continue;
+            };
+            let target = dir.path().join(path);
+            if target
+                .parent()
+                .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
+                && std::fs::write(&target, text).is_ok()
+            {
+                files.push(path.clone());
+            }
+        }
+        if files.is_empty() {
+            return None;
+        }
+        let rules = if enabled.get("semgrep").copied().unwrap_or(true) {
+            self.semgrep_rules(runner.as_ref(), ctx)
+        } else {
+            Vec::new()
+        };
+        let mut budget = self.tool_budget.lock().unwrap_or_else(|e| e.into_inner());
+        let report = review::tools::run_all(
+            runner.as_ref(),
+            dir.path(),
+            &files,
+            &added,
+            &|t| enabled.get(t.name()).copied().unwrap_or(true),
+            &rules,
+            &mut budget,
+        );
+        ctx.log(&format!("mr-review: tools: {}", report.lines.join("; ")));
+        Some(report)
     }
 
     /// Re-check findings with a second, cheaper call before drafting them.
@@ -1590,6 +1727,22 @@ impl LoopPlugin for MrReview {
         &["summary", "verdict", "overview", "risks", "findings"]
     }
 
+    fn build_prompt(&self, item: &WorkItem, ctx: &LoopContext) -> Result<String, PluginError> {
+        let Some(report) = self.tool_report(item, ctx) else {
+            return loopkit::default_build_prompt(self.definition_dir(), item, ctx);
+        };
+        let mut with_hints = item.clone();
+        if !report.hints.is_empty() {
+            with_hints.payload["tool_hints"] =
+                json!(report.hints.iter().map(|h| h.to_json()).collect::<Vec<_>>());
+        }
+        self.tool_reports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(item.key.clone(), report);
+        loopkit::default_build_prompt(self.definition_dir(), &with_hints, ctx)
+    }
+
     /// "<reference> — <title>" (title on one line, at most 80 characters) for
     /// the dashboard's "Processing ..." line; the item's own meta carries both.
     fn item_label(&self, item: &WorkItem) -> Option<String> {
@@ -1619,6 +1772,7 @@ impl LoopPlugin for MrReview {
 
     fn discover(&self, ctx: &LoopContext) -> Result<Vec<WorkItem>, PluginError> {
         *self.audit_spent.lock().unwrap_or_else(|e| e.into_inner()) = Duration::ZERO;
+        *self.tool_budget.lock().unwrap_or_else(|e| e.into_inner()) = review::tools::RUN_BUDGET;
         let state_root = ctx
             .state_dir
             .clone()
@@ -1779,6 +1933,29 @@ impl LoopPlugin for MrReview {
             risks,
             findings: kept,
         } = review::findings::clean(answer, &allowed, &min);
+        let report = self
+            .tool_reports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&item.key);
+        let known: BTreeSet<String> = report
+            .iter()
+            .flat_map(|r| r.hints.iter().map(|h| h.key()))
+            .collect();
+        let kept: Vec<Value> = kept
+            .into_iter()
+            .map(|mut f| {
+                let hints: Vec<Value> = f["hints"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|h| h.as_str().is_some_and(|h| known.contains(h)))
+                    .cloned()
+                    .collect();
+                f["hints"] = json!(hints);
+                f
+            })
+            .collect();
         let (kept, verified) = self.verify(kept, payload, &min, ctx);
         let security_meta = item
             .meta
@@ -1799,7 +1976,19 @@ impl LoopPlugin for MrReview {
             .load(&account)
             .map_err(|_| PluginError::new("KeyError", account.clone()))?;
         let dependency = self.dependency_check(conn.as_ref(), payload);
-        let checks = gate_checks(security.as_ref(), &dependency);
+        let mut checks = gate_checks(security.as_ref(), &dependency);
+        if let Some(r) = report.as_ref().filter(|r| !r.lines.is_empty()) {
+            let used: BTreeSet<&str> = kept
+                .iter()
+                .flat_map(|f| f["hints"].as_array().into_iter().flatten())
+                .filter_map(Value::as_str)
+                .collect();
+            checks.push(format!(
+                "\u{1f9f0} Linters (hints for the review, {} used): {}",
+                used.len(),
+                r.lines.join("; ")
+            ));
+        }
         let would_block = security.as_ref().is_some_and(|s| !s.passed) || dependency.blocks();
         let gates = json!({
             "security_blocking": security.as_ref().map_or(0, |s| s.evidence.get("blocking").and_then(Value::as_array).map_or(0, Vec::len)),
@@ -3318,6 +3507,81 @@ ATTACH can stall traffic.\n\n**Suggested fix:** Set `lock_timeout` first."
             ])
         );
         assert!(!it.meta.to_string().contains(&aws_key()));
+    }
+
+    struct FakeLint;
+    impl review::tools::LintRunner for FakeLint {
+        fn run(
+            &self,
+            program: &str,
+            args: &[String],
+            dir: &Path,
+            _t: Duration,
+        ) -> crate::dependency_audit::Outcome {
+            let file = args.last().unwrap();
+            assert!(dir.join(file).is_file(), "the changed file is materialised");
+            let stdout = match program {
+                "ruff" => {
+                    r#"[{"code":"S307","message":"Use of eval","filename":"app/q.py","location":{"row":2}}]"#
+                }
+                _ => "[]",
+            };
+            crate::dependency_audit::Outcome::Finished {
+                code: Some(1),
+                stdout: stdout.into(),
+                stderr: String::new(),
+            }
+        }
+        fn installed(&self, program: &str) -> bool {
+            program != "semgrep"
+        }
+    }
+
+    #[test]
+    fn linter_hints_reach_the_prompt_and_only_known_ones_stay_on_findings() {
+        use base64::Engine;
+        let conn = Conn::new(|_m, p, _| {
+            if p.contains("/repository/files/app%2Fq.py") {
+                assert!(p.ends_with("ref=h"), "head sha: {p}");
+                let t = "import os\neval(x)\n";
+                return Ok(
+                    json!({"size": t.len(), "content": base64::engine::general_purpose::STANDARD.encode(t)}),
+                );
+            }
+            panic!("unexpected {p}")
+        });
+        let plugin = plugin_with(conn).with_linters(Arc::new(FakeLint));
+        let mut it = item();
+        it.key = "mr:work:9!7@h".into();
+        it.payload["diff_refs"]["head_sha"] = json!("h");
+        it.payload["diff"] =
+            json!("--- a/app/q.py\n+++ b/app/q.py\n@@ -1,1 +1,2 @@\n import os\n+eval(x)\n");
+        it.payload["changed_paths"] = json!(["app/q.py"]);
+        let mut ctx = c();
+        ctx.repo_root = repo();
+        let prompt = plugin.build_prompt(&it, &ctx).unwrap();
+        assert!(prompt.contains("\"tool_hints\"") && prompt.contains("S307"));
+
+        let posted = Arc::new(Mutex::new(vec![]));
+        let sink = posted.clone();
+        let plugin = plugin.with_poster(Box::new(move |_c, _m, a| {
+            sink.lock().unwrap().push(a.clone());
+            Ok(json!({"drafts": 1, "fallback_general": 0}))
+        }));
+        let f = json!({"path": "app/q.py", "line": 2, "severity": "major", "category": "security",
+                       "title": "eval on input", "body": "b", "hints": ["ruff:S307", "ruff:B001", "eslint:x"]});
+        plugin
+            .after_item(&it, &json!({"summary": "s", "findings": [f]}), &ctx)
+            .unwrap();
+        let p = posted.lock().unwrap();
+        assert_eq!(p[0]["findings"][0]["hints"], json!(["ruff:S307"]));
+        assert!(finding_note(&p[0]["findings"][0]).contains("\u{1f9f0} Tools: ruff `S307`"));
+        let summary = summary_note(&p[0]).unwrap();
+        assert!(
+            summary
+                .contains("Linters (hints for the review, 1 used): ruff: 1 hint(s) on added lines"),
+            "{summary}"
+        );
     }
 
     #[test]

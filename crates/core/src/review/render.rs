@@ -81,6 +81,21 @@ pub fn finding_note(f: &Value) -> String {
     if !fix.is_empty() {
         note.push_str(&format!("\n\n**Suggested fix:** {}", defuse(&fix)));
     }
+    let tools: Vec<String> = f
+        .get("hints")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|h| h.split_once(':'))
+        .map(|(t, r)| format!("{t} `{}`", r.replace('`', "'")))
+        .collect();
+    if !tools.is_empty() {
+        note.push_str(&format!(
+            "\n\n<sub>\u{1f9f0} Tools: {}</sub>",
+            defuse(&tools.join(", "))
+        ));
+    }
     let agent = text_of(f, "fix_prompt");
     if !agent.is_empty() {
         note.push_str(&format!(

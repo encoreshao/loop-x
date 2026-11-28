@@ -1,0 +1,28 @@
+diff --git a/app/reports/export.py b/app/reports/export.py
+--- a/app/reports/export.py
++++ b/app/reports/export.py
+@@ -1,6 +1,10 @@
+ import csv
+ 
+ 
+-def export(report, rows, out):
++def export(report, rows, out, formula=None):
+     writer = csv.writer(out)
+     for row in rows:
+-        writer.writerow(row.values())
++        values = list(row.values())
++        if formula:
++            values.append(eval(formula, {}, dict(row)))
++        writer.writerow(values)
+diff --git a/tests/test_export.py b/tests/test_export.py
+--- /dev/null
++++ b/tests/test_export.py
+@@ -0,0 +1,8 @@
++import io
++from app.reports.export import export
++
++def test_export_writes_rows():
++    out = io.StringIO()
++    assert export(None, [{"a": 1}], out) is None
++    assert out.getvalue().strip() == "1"
++

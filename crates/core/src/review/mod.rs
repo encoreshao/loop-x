@@ -6,5 +6,7 @@ pub mod diff;
 pub mod findings;
 pub mod glob;
 pub mod render;
+pub mod semgrep_rules;
 pub mod taxonomy;
+pub mod tools;
 pub mod verify;
