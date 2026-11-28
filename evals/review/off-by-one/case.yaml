@@ -1,0 +1,5 @@
+title: Paginate the audit log export
+description: Export the audit log in pages of `per_page` entries. Pages are 1-based.
+expect:
+  findings:
+    - {path: src/export.py, lines: "4-7", min_severity: minor, category: correctness}

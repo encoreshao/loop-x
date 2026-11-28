@@ -1,0 +1,6 @@
+title: Search invoices by customer name
+description: Adds a name filter to the invoice search endpoint.
+expect:
+  findings:
+    - {path: app/models/invoice.rb, lines: "4-6", min_severity: major, category: security}
+  verdict: [request_changes]

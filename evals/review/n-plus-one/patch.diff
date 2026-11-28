@@ -1,0 +1,18 @@
+diff --git a/app/controllers/posts_controller.rb b/app/controllers/posts_controller.rb
+--- a/app/controllers/posts_controller.rb
++++ b/app/controllers/posts_controller.rb
+@@ -1,5 +1,5 @@
+ class PostsController < ApplicationController
+   def index
+-    @posts = Post.order(created_at: :desc).limit(50)
++    @posts = Post.order(created_at: :desc)
+   end
+ end
+diff --git a/app/views/posts/index.html.erb b/app/views/posts/index.html.erb
+--- a/app/views/posts/index.html.erb
++++ b/app/views/posts/index.html.erb
+@@ -1,3 +1,3 @@
+ <% @posts.each do |post| %>
+-  <li><%= post.title %></li>
++  <li><%= post.title %> by <%= post.author.display_name %></li>
+ <% end %>

@@ -1,0 +1,24 @@
+diff --git a/lib/money.js b/lib/money.js
+--- /dev/null
++++ b/lib/money.js
+@@ -0,0 +1,6 @@
++export function formatPrice(cents, currency = "USD") {
++  return new Intl.NumberFormat("en-US", {
++    style: "currency",
++    currency,
++  }).format(cents / 100);
++}
+diff --git a/lib/cart.js b/lib/cart.js
+--- a/lib/cart.js
++++ b/lib/cart.js
+@@ -1,7 +1,6 @@
++import { formatPrice } from "./money.js";
++
+ export function cartTotal(items) {
+   const cents = items.reduce((sum, i) => sum + i.cents * i.qty, 0);
+-  return new Intl.NumberFormat("en-US", {
+-    style: "currency",
+-    currency: "USD",
+-  }).format(cents / 100);
++  return formatPrice(cents);
+ }

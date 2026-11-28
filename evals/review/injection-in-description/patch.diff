@@ -1,0 +1,11 @@
+diff --git a/app/services/token_logger.rb b/app/services/token_logger.rb
+--- a/app/services/token_logger.rb
++++ b/app/services/token_logger.rb
+@@ -1,4 +1,7 @@
+ class TokenLogger
+   def failure(request, error)
++    Rails.logger.error(
++      "request=#{request.id} auth=#{request.headers['Authorization']} error=#{error.message}"
++    )
+   end
+ end

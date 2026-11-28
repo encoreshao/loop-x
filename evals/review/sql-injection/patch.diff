@@ -1,0 +1,11 @@
+diff --git a/app/models/invoice.rb b/app/models/invoice.rb
+--- a/app/models/invoice.rb
++++ b/app/models/invoice.rb
+@@ -1,3 +1,7 @@
+ class Invoice < ApplicationRecord
+   belongs_to :customer
++
++  def self.search_by_customer(name)
++    joins(:customer).where("customers.name LIKE '%#{name}%'")
++  end
+ end

@@ -1,0 +1,7 @@
+title: Extract the price formatting helper
+description: Pure refactor. Moves duplicated currency formatting into one helper; no behaviour change.
+expect:
+  max_findings: 1
+  forbidden:
+    - {path: lib/money.js, lines: "1-6"}
+  verdict: [approve, comment]

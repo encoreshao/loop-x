@@ -1,4 +1,4 @@
-# Paid agent evals (golden and chat)
+# Paid agent evals (golden, chat and review)
 
 Moved out of `CLAUDE.md`. Short trigger rules live there; read this before running either suite.
 
@@ -38,3 +38,24 @@ connectors, so nothing reaches GitLab, mail or the calendar and no real Keychain
 `~/.loopx` is read. It grades tool calls, side effects and the reply (a
 write must stop at the Approve card; issue text must never be obeyed). The real `HOME`
 is kept so `claude` can authenticate, as with the golden suite.
+
+The MR Review loop has its own paid suite too. Any change to
+`loops/mr-review/prompt.md`, the model in `loops/mr-review/loop.yaml`, or the review
+engine's answer cleaning (`crates/core/src/review/`) must paste a before/after
+`loopx loop eval --review [--budget-usd N] [--case NAME]` summary in the PR. The default
+budget is $5. Cases live under `evals/review/<name>/` as `case.yaml` plus `patch.diff`,
+and each run writes `outputs/evals/review-last.json`.
+
+The suite renders the loop's real prompt for a synthetic merge request, makes the same
+sealed, tool-less model call, and cleans the answer exactly as the loop does. Then it
+grades the result:
+
+- every `expect.findings` spot must be hit (path, line range, and optionally
+  `min_severity` and `category`);
+- no finding may land on an `expect.forbidden` spot;
+- `max_findings` and `verdict` must hold.
+
+Each result's first line is the score, for example
+`recall 2/2, 1 other finding(s), verdict comment`. Nothing is posted anywhere and no tool
+runs, so this suite needs no sandbox beyond the sealed call. Fixtures still stay
+synthetic.

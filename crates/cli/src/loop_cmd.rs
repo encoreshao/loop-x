@@ -1,7 +1,7 @@
 //! `loopx loop <subcommand>`: the loop-definition CLI (replaces
 //! `bin/loop_cli.py`): `init`, `validate`, `audit`, `run`, `status`,
 //! `inspect`, `replay`, `cost`, `doctor`, `eval` (scripted, `--golden`,
-//! `--chat`) and `ledger backfill` (also available as `loopx ledger`).
+//! `--chat`, `--review`) and `ledger backfill` (also available as `loopx ledger`).
 //!
 //! Manual argv handling, like the Python: flags are looked up anywhere in the
 //! argument list and the first non-flag shape of each subcommand is kept.
@@ -17,7 +17,7 @@ use loopx_core::loop_state::LoopState;
 use loopx_core::loop_templates;
 use loopx_core::loop_verifiers::build_verifiers;
 use loopx_core::pydumps::{py_repr_str, py_str};
-use loopx_core::{chat_eval, golden_eval, ledger, loop_eval, pyjson};
+use loopx_core::{chat_eval, golden_eval, ledger, loop_eval, pyjson, review_eval};
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
@@ -661,6 +661,10 @@ fn cmd_eval(argv: &[String]) -> ExitCode {
         let rest: Vec<String> = argv.iter().filter(|a| *a != "--golden").cloned().collect();
         return run_paid_suite(&rest, "golden", "10");
     }
+    if argv.iter().any(|a| a == "--review") {
+        let rest: Vec<String> = argv.iter().filter(|a| *a != "--review").cloned().collect();
+        return run_paid_suite(&rest, "review", "5");
+    }
     if argv.iter().any(|a| a == "--chat") {
         let rest: Vec<String> = argv.iter().filter(|a| *a != "--chat").cloned().collect();
         return run_paid_suite(&rest, "chat", "3");
@@ -712,7 +716,7 @@ fn cmd_eval(argv: &[String]) -> ExitCode {
     code(u8::from(passed != outcomes.len()))
 }
 
-/// `eval --golden|--chat [--budget-usd N] [--case NAME]...`: the paid suites.
+/// `eval --golden|--chat|--review [--budget-usd N] [--case NAME]...`: the paid suites.
 fn run_paid_suite(argv: &[String], label: &str, default_budget: &str) -> ExitCode {
     let raw = parse_flag(argv, "--budget-usd").unwrap_or(default_budget);
     let budget = raw.trim().parse::<f64>().unwrap_or(0.0);
@@ -740,6 +744,12 @@ fn run_paid_suite(argv: &[String], label: &str, default_budget: &str) -> ExitCod
             Ok(c) if c.is_empty() => return no_cases(),
             Ok(c) => (c.len(), golden_eval::run_suite_real(&c, budget)),
         }
+    } else if label == "review" {
+        match review_eval::default_cases(filter) {
+            Err(e) => return err(&format!("eval --{label}: {e}"), 2),
+            Ok(c) if c.is_empty() => return no_cases(),
+            Ok(c) => (c.len(), review_eval::run_suite_real(&c, budget)),
+        }
     } else {
         match chat_eval::default_cases(filter) {
             Err(e) => return err(&format!("eval --{label}: {e}"), 2),
@@ -751,6 +761,8 @@ fn run_paid_suite(argv: &[String], label: &str, default_budget: &str) -> ExitCod
     let path = if names.is_empty() {
         let written = if label == "golden" {
             golden_eval::write_last_run(&summary, budget, None)
+        } else if label == "review" {
+            review_eval::write_last_run(&summary, budget, None)
         } else {
             chat_eval::write_last_run(&summary, budget, None)
         };

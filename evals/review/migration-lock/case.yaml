@@ -1,0 +1,6 @@
+title: Add a NOT NULL status column to orders
+description: Orders get a status column. The orders table has about 200 million rows in production.
+expect:
+  findings:
+    - {path: db/migrate/20261101000000_add_status_to_orders.rb, lines: "1-6", min_severity: major, category: [data, reliability, performance]}
+  verdict: [request_changes, comment]

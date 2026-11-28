@@ -285,12 +285,16 @@ pub fn default_build_prompt(
         .join("prompt.md");
     let template = std::fs::read_to_string(&path)
         .map_err(|e| PluginError::new("FileNotFoundError", format!("{}: {e}", path.display())))?;
+    Ok(render_prompt(&template, item, &ctx.settings))
+}
+
+/// Fill a loop's `prompt.md` template with the item and the loop settings.
+pub fn render_prompt(template: &str, item: &WorkItem, settings: &Value) -> String {
     let item_json = pyjson::to_string_pretty(&json!({
         "key": item.key, "title": item.title, "url": item.url, "payload": item.payload}));
-    Ok(template.replace("{{item_json}}", &item_json).replace(
-        "{{settings_json}}",
-        &pyjson::to_string_pretty(&ctx.settings),
-    ))
+    template
+        .replace("{{item_json}}", &item_json)
+        .replace("{{settings_json}}", &pyjson::to_string_pretty(settings))
 }
 
 pub fn default_call_model(prompt: &str, ctx: &LoopContext) -> Result<ModelAnswer, ModelError> {

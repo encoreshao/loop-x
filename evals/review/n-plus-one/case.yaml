@@ -1,0 +1,6 @@
+title: Show the author name on the posts index
+description: Lists every post with its author's display name.
+expect:
+  findings:
+    - {path: app/controllers/posts_controller.rb, lines: "3-6", min_severity: minor, category: performance}
+    - {path: app/views/posts/index.html.erb, lines: "1-3", min_severity: minor, category: performance}

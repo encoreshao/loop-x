@@ -54,6 +54,7 @@ sleep 1; curl -s -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:18420/<p
 
 - Changing `instructions/loopx/*.md`, `loops/*/prompt.md`, `crates/core/src/prompt.rs`, or any `allowed_tools()`/`disallowed_tools()`: paste before/after `loopx loop eval --golden [--budget-usd N] [--case NAME]` (default $10).
 - Changing `crates/core/src/chat_prompts/*.txt`, `ChatCommand::build_command` flags, or a `crates/core/src/chat_tools/` description or write behavior: paste before/after `loopx loop eval --chat` (default $3).
+- Changing `loops/mr-review/prompt.md` or the answer cleaning in `crates/core/src/review/`: paste before/after `loopx loop eval --review` (default $5).
 - Run by hand, once on the base commit and once on your change; never in `cargo test`. The golden suite is not a hard sandbox (real `HOME`, unscoped Edit/Write): run only on a checkout you'll expose, check `git status` after, keep fixtures synthetic (no real issue text or project names). Details: [`docs/evals.md`](docs/evals.md).
 
 ## Server rules

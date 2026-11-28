@@ -138,6 +138,7 @@ pub mod pyjson;
 pub mod quota;
 pub mod release_mr;
 pub mod review;
+pub mod review_eval;
 pub mod risk;
 pub mod run_control;
 pub mod run_history;
