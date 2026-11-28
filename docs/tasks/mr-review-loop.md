@@ -29,6 +29,43 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Commands on merge requests and push triggers
+
+With the GitLab webhook set up (`loopx webhook setup`, triggers including
+**Comments** and **Merge request events**), two things change:
+
+- **Pushes.** A push to an MR where you are an assignee or reviewer (also open
+  and reopen) queues the MR Review loop. New commits are reviewed within a
+  minute instead of within two hours. All the usual rules still apply in
+  discovery.
+- **Commands.** A comment whose whole first line is one of these is a command:
+
+  | Command | Effect |
+  |---|---|
+  | `loopx review` (or `loopx full review`) | Review now: a full review on this run |
+  | `loopx pause` | Auto review off for this MR |
+  | `loopx resume` | Auto review on (and clears a recorded failure) |
+  | `loopx fix` | Starts Fix now; the runner applies its usual eligibility rules |
+
+  Anything else, or a command later in the comment, is ignored. There is no `@`
+  mention, so nobody is notified.
+
+**How a command is applied.**
+
+1. The webhook stores only the verb, project, MR, author and time in
+   `outputs/loops/mr-review-loop/commands/<uuid>.json`, never the comment text,
+   and queues the loop.
+2. The loop applies it with an account that can see the MR. An account that
+   can't see it leaves the file for another account; unapplied files are
+   dropped after a day.
+3. Authors: you, or any project member with **Developer** access or higher
+   (`/members/all/<id>`). Setting `"review": {"command_authors": "me"}` on the
+   project in `projects.json` limits commands to you.
+4. A command only picks a fixed action, run with your token. No text from the
+   comment reaches an agent.
+5. Each command is logged in the run log, and a `mr_review.command` event
+   records the verb, MR, whether it was you and the outcome.
+
 ## Incremental reviews
 
 After posting, the loop records what it posted in a per-MR ledger,

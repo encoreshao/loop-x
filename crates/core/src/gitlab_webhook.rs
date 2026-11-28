@@ -19,6 +19,7 @@ pub const PATH: &str = "/api/inbox/gitlab";
 /// Delivery ids remembered for de-duplication.
 const SEEN_CAP: usize = 1000;
 pub const PIPELINE_LOOP: &str = "pipeline-doctor-loop";
+pub const MR_REVIEW_LOOP: &str = "mr-review-loop";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -36,6 +37,8 @@ pub struct Env<'a> {
     pub projects: PathBuf,
     pub queue: &'a RunQueue,
     pub events_dir: Option<PathBuf>,
+    /// Where `loopx <verb>` merge request commands are queued for the MR Review loop.
+    pub commands_dir: PathBuf,
 }
 
 impl Env<'_> {
@@ -97,6 +100,34 @@ fn me(projects: &Path) -> Option<String> {
         .ok()
 }
 
+/// A `loopx <verb>` command on a merge request, to queue for the MR Review loop.
+fn mr_command(payload: &Value, now: &str) -> Option<crate::review::commands::Queued> {
+    let attrs = &payload["object_attributes"];
+    let verb = crate::review::commands::parse(attrs["note"].as_str()?)?;
+    let pid = &payload["project"]["id"];
+    Some(crate::review::commands::Queued {
+        verb,
+        project_id: pid
+            .as_i64()
+            .map(|i| i.to_string())
+            .or_else(|| pid.as_str().map(str::to_string))?,
+        iid: payload["merge_request"]["iid"].as_i64()?.to_string(),
+        author: payload["user"]["username"].as_str()?.to_string(),
+        author_id: payload["user"]["id"].as_i64().unwrap_or(0),
+        received_at: now.to_string(),
+    })
+}
+
+/// Is `me` an assignee or a reviewer of the merge request in this payload?
+fn mine(payload: &Value, me: Option<&str>) -> bool {
+    let Some(me) = me else { return false };
+    ["assignees", "reviewers"].iter().any(|k| {
+        payload[*k]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|u| u["username"].as_str() == Some(me)))
+    })
+}
+
 /// What a delivery asks for: `(loop, args)` to queue, and a summary for the event log.
 fn wanted(payload: &Value, projects: &Path) -> (Option<(String, Vec<String>)>, Value) {
     let kind = payload["object_kind"].as_str().unwrap_or("");
@@ -136,6 +167,27 @@ fn wanted(payload: &Value, projects: &Path) -> (Option<(String, Vec<String>)>, V
                 None
             }
         }
+        "note" if payload["object_attributes"]["noteable_type"] == "MergeRequest" => {
+            summary["mr_iid"] = payload["merge_request"]["iid"].clone();
+            crate::review::commands::parse(
+                payload["object_attributes"]["note"].as_str().unwrap_or(""),
+            )
+            .map(|v| {
+                summary["command"] = json!(v.name());
+                (MR_REVIEW_LOOP.to_string(), Vec::new())
+            })
+        }
+        "merge_request" => {
+            let attrs = &payload["object_attributes"];
+            let action = attrs["action"].as_str().unwrap_or("");
+            summary["mr_iid"] = attrs["iid"].clone();
+            summary["action"] = json!(action);
+            let pushed =
+                action == "update" && attrs["oldrev"].as_str().is_some_and(|r| !r.is_empty());
+            let opened = matches!(action, "open" | "reopen");
+            ((pushed || opened) && mine(payload, me.as_deref()))
+                .then(|| (MR_REVIEW_LOOP.to_string(), Vec::new()))
+        }
         "pipeline" => {
             let status = payload["object_attributes"]["status"]
                 .as_str()
@@ -165,7 +217,23 @@ pub fn handle(env: &Env<'_>, token: &str, uuid: &str, body: &[u8], now: &str) ->
     let Ok(payload) = serde_json::from_slice::<Value>(body) else {
         return Outcome::Accepted(Vec::new());
     };
-    let (queued, summary) = wanted(&payload, &env.projects);
+    let (queued, mut summary) = wanted(&payload, &env.projects);
+    if queued.is_some() && summary.get("command").is_some() {
+        let saved = mr_command(&payload, now).map(|q| q.save(&env.commands_dir));
+        if !matches!(saved, Some(Ok(_))) {
+            summary["skipped"] = json!("command not queued");
+            let _ = crate::events::emit(
+                "gitlab.webhook",
+                "webhook",
+                crate::events::EventFields {
+                    data: Some(json!({"summary": summary, "queued": []})),
+                    ..Default::default()
+                },
+                env.events_dir.as_deref(),
+            );
+            return Outcome::Accepted(Vec::new());
+        }
+    }
     let mut done = Vec::new();
     if let Some((loop_name, args)) = queued {
         if env
@@ -221,6 +289,7 @@ mod tests {
                 projects: self.d.path().join("projects.json"),
                 queue: &self.queue,
                 events_dir: Some(self.d.path().join("events")),
+                commands_dir: self.d.path().join("commands"),
             };
             handle(
                 &env,
@@ -230,6 +299,76 @@ mod tests {
                 "2026-11-27T10:00:00",
             )
         }
+    }
+
+    #[test]
+    fn mr_comment_commands_are_queued_for_the_review_loop_and_other_comments_ignored() {
+        let fx = Fx::new();
+        let note = |text: &str| {
+            json!({"object_kind": "note", "user": {"username": "ana", "id": 42},
+                   "project": {"id": 9, "path_with_namespace": "group/other"},
+                   "object_attributes": {"noteable_type": "MergeRequest", "note": text},
+                   "merge_request": {"iid": 7}})
+        };
+        assert_eq!(
+            fx.send("s3cret", "a", note("loopx fix\nthanks")),
+            Outcome::Accepted(vec!["mr-review-loop".into()])
+        );
+        let queued = crate::review::commands::pending(&fx.d.path().join("commands"));
+        assert_eq!(queued.len(), 1);
+        let q = &queued[0].1;
+        assert_eq!(
+            (
+                q.verb,
+                q.project_id.as_str(),
+                q.iid.as_str(),
+                q.author.as_str(),
+                q.author_id
+            ),
+            (crate::review::commands::Verb::Fix, "9", "7", "ana", 42)
+        );
+        assert!(
+            !std::fs::read_to_string(&queued[0].0)
+                .unwrap()
+                .contains("thanks"),
+            "no comment text kept"
+        );
+        assert_eq!(
+            fx.send("s3cret", "b", note("looks good, loopx review later")),
+            Outcome::Accepted(vec![])
+        );
+        assert_eq!(
+            crate::review::commands::pending(&fx.d.path().join("commands")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_push_to_my_merge_request_queues_a_review() {
+        let fx = Fx::new();
+        let mr = |action: &str, oldrev: Option<&str>, reviewer: &str| {
+            json!({"object_kind": "merge_request", "project": {"id": 9},
+                   "object_attributes": {"iid": 7, "action": action, "oldrev": oldrev},
+                   "assignees": [{"username": "bob"}], "reviewers": [{"username": reviewer}]})
+        };
+        assert_eq!(
+            fx.send("s3cret", "1", mr("update", Some("abc"), "me")),
+            Outcome::Accepted(vec!["mr-review-loop".into()])
+        );
+        assert_eq!(
+            fx.send("s3cret", "2", mr("update", None, "me")),
+            Outcome::Accepted(vec![]),
+            "label change, no push"
+        );
+        assert_eq!(
+            fx.send("s3cret", "3", mr("update", Some("abc"), "zed")),
+            Outcome::Accepted(vec![]),
+            "not mine"
+        );
+        assert_eq!(
+            fx.send("s3cret", "4", mr("open", None, "me")),
+            Outcome::Accepted(vec!["mr-review-loop".into()])
+        );
     }
 
     fn comment(author: &str, project: Value) -> Value {

@@ -72,6 +72,28 @@ pub type VerifyFn = Box<
     dyn Fn(&str, &str, f64, &LoopContext) -> Result<(String, Option<f64>), String> + Send + Sync,
 >;
 
+/// `(mr_ref, title)` -> job id: starts Fix now for a `loopx fix` command.
+pub type FixStarter = Box<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+
+/// The production Fix now launcher (the runner re-checks eligibility itself).
+pub fn live_fix_starter() -> FixStarter {
+    Box::new(|mr_ref, title| {
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "loopx".to_string());
+        let dir = crate::mr_fix::jobs::jobs_dir(&crate::config::home_dir());
+        crate::mr_fix::jobs::start(&dir, mr_ref, title, &|log| {
+            crate::mr_fix::jobs::spawn_runner(log, &exe, mr_ref, &[])
+        })
+        .map(|j| j.id)
+    })
+}
+
+/// Commands nobody could apply are dropped after a day.
+const COMMAND_TTL: Duration = Duration::from_secs(24 * 3600);
+/// GitLab's Developer access level.
+const DEVELOPER: i64 = 30;
+
 /// Where semgrep rule packs are cached and how they are downloaded.
 pub struct SemgrepCache {
     pub dir: PathBuf,
@@ -1099,6 +1121,7 @@ pub struct MrReview {
     projects_path: Option<PathBuf>,
     verifier: Option<VerifyFn>,
     linters: Option<Arc<dyn review::tools::LintRunner>>,
+    fix_starter: Option<FixStarter>,
     semgrep: Option<SemgrepCache>,
     tool_budget: Mutex<Duration>,
     /// Tool results per item key, from `build_prompt` to `after_item`.
@@ -1119,6 +1142,7 @@ impl MrReview {
             projects_path: None,
             verifier: None,
             linters: None,
+            fix_starter: None,
             semgrep: None,
             tool_budget: Mutex::new(review::tools::RUN_BUDGET),
             tool_reports: Mutex::new(BTreeMap::new()),
@@ -1130,6 +1154,144 @@ impl MrReview {
     pub fn with_linters(mut self, runner: Arc<dyn review::tools::LintRunner>) -> Self {
         self.linters = Some(runner);
         self
+    }
+
+    pub fn with_fix_starter(mut self, starter: FixStarter) -> Self {
+        self.fix_starter = Some(starter);
+        self
+    }
+
+    /// May `q.author` command this MR? You always; otherwise a project member with
+    /// Developer access, unless the project's `review.command_authors` is `me`.
+    fn command_allowed(
+        &self,
+        conn: &dyn Connector,
+        q: &review::commands::Queued,
+        me: &str,
+        project_path: &str,
+    ) -> bool {
+        if !me.is_empty() && q.author == me {
+            return true;
+        }
+        let only_me = self
+            .personal_project(&q.project_id, project_path)
+            .and_then(|p| p["review"]["command_authors"].as_str().map(str::to_string))
+            .is_some_and(|c| c == "me");
+        if only_me || q.author_id <= 0 {
+            return false;
+        }
+        conn.api(
+            "GET",
+            &format!("/projects/{}/members/all/{}", q.project_id, q.author_id),
+            &ApiOpts::default(),
+        )
+        .ok()
+        .and_then(|m| m["access_level"].as_i64())
+        .is_some_and(|l| l >= DEVELOPER)
+    }
+
+    /// Apply queued `loopx <verb>` commands for MRs this account can see. Returns
+    /// whether the per-MR preferences changed.
+    fn apply_commands(
+        &self,
+        conn: &dyn Connector,
+        account_id: &str,
+        me: &Value,
+        state_root: &Path,
+        ctx: &LoopContext,
+    ) -> bool {
+        use review::commands::Verb;
+        let me_name = me["username"].as_str().unwrap_or("");
+        let mut changed = false;
+        for (path, q) in review::commands::pending(&review::commands::dir(state_root)) {
+            let detail = conn.api(
+                "GET",
+                &format!("/projects/{}/merge_requests/{}", q.project_id, q.iid),
+                &ApiOpts::default(),
+            );
+            let detail = match detail {
+                Ok(d) => d,
+                Err(_) => {
+                    let old = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > COMMAND_TTL);
+                    if old {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    continue;
+                }
+            };
+            let _ = std::fs::remove_file(&path);
+            let project_path = detail
+                .pointer("/references/full")
+                .and_then(Value::as_str)
+                .and_then(|r| r.rsplit_once('!'))
+                .map_or(String::new(), |(p, _)| p.to_string());
+            let r = mr_ref(account_id, &q.project_id, &q.iid);
+            let allowed = self.command_allowed(conn, &q, me_name, &project_path);
+            let outcome = if !allowed {
+                "refused".to_string()
+            } else {
+                match q.verb {
+                    Verb::Review | Verb::Pause | Verb::Resume => {
+                        let saved = MrPrefs::update(state_root, |p| match q.verb {
+                            Verb::Review => {
+                                p.requested.insert(r.clone());
+                                p.failed.remove(&r);
+                            }
+                            Verb::Pause => {
+                                p.skip.insert(r.clone());
+                            }
+                            _ => {
+                                p.skip.remove(&r);
+                                p.failed.remove(&r);
+                            }
+                        });
+                        changed |= saved.is_ok();
+                        if saved.is_ok() {
+                            "applied".into()
+                        } else {
+                            "not saved".into()
+                        }
+                    }
+                    Verb::Fix => match &self.fix_starter {
+                        None => "fix not available".into(),
+                        Some(start) => {
+                            let title = detail["title"].as_str().unwrap_or("");
+                            match start(&r, title) {
+                                Ok(_) => "fix started".into(),
+                                Err(e) => format!(
+                                    "fix not started: {}",
+                                    e.chars().take(120).collect::<String>()
+                                ),
+                            }
+                        }
+                    },
+                }
+            };
+            ctx.log(&format!(
+                "mr-review: `loopx {}` on {r} by {}: {outcome}",
+                q.verb.name(),
+                q.author
+            ));
+            crate::runner_util::emit_best_effort(
+                "mr_review.command",
+                Some(&ctx.run_id),
+                crate::events::EventFields {
+                    issue_run_id: None,
+                    project: Some(project_path),
+                    issue_iid: None,
+                    data: Some(
+                        json!({"verb": q.verb.name(), "mr": r, "by_me": q.author == me_name,
+                                      "outcome": outcome}),
+                    ),
+                },
+                ctx.events_dir.as_deref(),
+            );
+        }
+        changed
     }
 
     pub fn with_semgrep(mut self, cache: SemgrepCache) -> Self {
@@ -1917,7 +2079,7 @@ impl LoopPlugin for MrReview {
             .state_dir
             .clone()
             .unwrap_or_else(crate::seen_store::default_state_root);
-        let prefs = MrPrefs::load(&state_root);
+        let mut prefs = MrPrefs::load(&state_root);
         let (mut requested, mut items) = (Vec::new(), Vec::new());
         let mut load_failures: Vec<(String, String)> = Vec::new();
         for account in self
@@ -1982,6 +2144,9 @@ impl LoopPlugin for MrReview {
                     continue;
                 }
             };
+            if self.apply_commands(conn.as_ref(), &account.id, &me, &state_root, ctx) {
+                prefs = MrPrefs::load(&state_root);
+            }
             let mut active = BTreeMap::new();
             for row in &rows {
                 // Older GitLab ignores `draft=no`; never review a draft.
@@ -2846,6 +3011,106 @@ mod tests {
         assert_eq!(status("open000002").as_deref(), Some("open"));
         assert_eq!(l.open().len(), 2, "the new finding is recorded");
         assert!(MrPrefs::load(d.path()).skip.contains("work:9!7"));
+    }
+
+    fn queue_cmd(
+        root: &Path,
+        verb: review::commands::Verb,
+        author: &str,
+        author_id: i64,
+        iid: &str,
+    ) {
+        review::commands::Queued {
+            verb,
+            project_id: "9".into(),
+            iid: iid.into(),
+            author: author.into(),
+            author_id,
+            received_at: "2026-11-28T10:00:00".into(),
+        }
+        .save(&review::commands::dir(root))
+        .unwrap();
+    }
+
+    fn cmd_conn(level: i64) -> Arc<Conn> {
+        Conn::new(move |m, p, _| {
+            if p.contains("/members/all/") {
+                return Ok(json!({"access_level": level}));
+            }
+            if p.ends_with("/merge_requests/99") {
+                return Err(http_err(Some(404)));
+            }
+            d_handler(m, p, None)
+        })
+    }
+
+    #[test]
+    fn mr_commands_from_me_or_developers_change_the_review_and_start_fixes() {
+        use review::commands::Verb;
+        let d = tempfile::tempdir().unwrap();
+        let mut ctx = c();
+        ctx.state_dir = Some(d.path().to_path_buf());
+        queue_cmd(d.path(), Verb::Review, "me", 1, "7");
+        let items = plugin_with(cmd_conn(30)).discover(&ctx).unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(review::commands::pending(&review::commands::dir(d.path())).is_empty());
+
+        queue_cmd(d.path(), Verb::Pause, "ana", 42, "7");
+        plugin_with(cmd_conn(30)).discover(&ctx).unwrap();
+        assert!(
+            MrPrefs::load(d.path()).skip.contains("work:9!7"),
+            "a Developer may pause"
+        );
+        queue_cmd(d.path(), Verb::Resume, "guest", 43, "7");
+        plugin_with(cmd_conn(20)).discover(&ctx).unwrap();
+        assert!(
+            MrPrefs::load(d.path()).skip.contains("work:9!7"),
+            "a Reporter is refused"
+        );
+
+        let projects = d.path().join("projects.json");
+        std::fs::write(
+            &projects,
+            r#"{"projects": {"web": {"project_id": "9", "review": {"command_authors": "me"}}}}"#,
+        )
+        .unwrap();
+        queue_cmd(d.path(), Verb::Resume, "ana", 42, "7");
+        let conn = cmd_conn(50);
+        plugin_with(conn.clone())
+            .with_projects_path(projects)
+            .discover(&ctx)
+            .unwrap();
+        assert!(
+            MrPrefs::load(d.path()).skip.contains("work:9!7"),
+            "command_authors: me"
+        );
+        assert!(
+            !conn.calls().iter().any(|c| c.1.contains("/members/")),
+            "no membership lookup needed"
+        );
+
+        let started = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let sink = started.clone();
+        queue_cmd(d.path(), Verb::Fix, "me", 1, "7");
+        plugin_with(cmd_conn(30))
+            .with_fix_starter(Box::new(move |r, t| {
+                sink.lock().unwrap().push((r.to_string(), t.to_string()));
+                Ok("job1".into())
+            }))
+            .discover(&ctx)
+            .unwrap();
+        assert_eq!(
+            started.lock().unwrap().as_slice(),
+            [("work:9!7".to_string(), String::new())]
+        );
+
+        queue_cmd(d.path(), Verb::Review, "me", 1, "99");
+        plugin_with(cmd_conn(30)).discover(&ctx).unwrap();
+        assert_eq!(
+            review::commands::pending(&review::commands::dir(d.path())).len(),
+            1,
+            "unknown here: kept for another account"
+        );
     }
 
     #[test]

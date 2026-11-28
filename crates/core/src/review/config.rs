@@ -109,12 +109,23 @@ pub struct ReviewLayer {
     pub path_instructions: Option<Vec<PathInstruction>>,
     pub auto_review: Option<AutoReviewLayer>,
     pub tools: Option<BTreeMap<String, bool>>,
+    /// Who may write `loopx <verb>` commands: `developers` (default) or `me`.
+    pub command_authors: Option<String>,
 }
 
 impl ReviewLayer {
     fn validate(self) -> Result<Self, String> {
         if let Some(v) = self.version.filter(|v| *v != 1) {
             return Err(format!("version {v} is not supported (use 1)"));
+        }
+        if let Some(c) = self
+            .command_authors
+            .as_deref()
+            .filter(|c| !matches!(*c, "me" | "developers"))
+        {
+            return Err(format!(
+                "command_authors must be me or developers, got {c:?}"
+            ));
         }
         if let Some(bad) = self
             .tools

@@ -24,8 +24,8 @@ pub fn run(args: &[String]) -> ExitCode {
             println!(
                 "GitLab webhook ready.\n\n\
 1. LoopX listens on 127.0.0.1 only, so expose it with a tunnel you run, e.g.\n   cloudflared tunnel --url http://127.0.0.1:8420\n   (only {PATH} answers requests from outside; every other page refuses them).\n\
-2. In each GitLab project: Settings > Webhooks > Add new webhook\n   URL:          <your tunnel URL>{PATH}\n   Secret token: {token}\n   Triggers:     Comments, Issues events, Pipeline events\n\n\
-A comment on, or assignment of, an issue then queues that issue within a minute;\na failed pipeline queues the Pipeline Doctor. Run `loopx webhook setup` again to\nreplace the token, `loopx webhook off` to stop accepting deliveries."
+2. In each GitLab project: Settings > Webhooks > Add new webhook\n   URL:          <your tunnel URL>{PATH}\n   Secret token: {token}\n   Triggers:     Comments, Issues events, Merge request events, Pipeline events\n\n\
+A comment on, or assignment of, an issue then queues that issue within a minute;\na failed pipeline queues the Pipeline Doctor; a push to a merge request you are\nassigned to or reviewing queues the MR Review loop, and a comment whose first line\nis `loopx review`, `loopx pause`, `loopx resume` or `loopx fix` is applied by it. Run `loopx webhook setup` again to\nreplace the token, `loopx webhook off` to stop accepting deliveries."
             );
             ExitCode::SUCCESS
         }

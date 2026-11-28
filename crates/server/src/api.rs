@@ -237,6 +237,7 @@ async fn gitlab_webhook(
     };
     let (token, uuid) = (header("x-gitlab-token"), header("x-gitlab-event-uuid"));
     let events_dir = s.paths.events_dir.clone();
+    let loops_root = s.paths.outputs.join("loops");
     let outcome = tokio::task::spawn_blocking(move || {
         let Ok(tokens) = loopx_core::keychain::open_store(hook::TOKEN_SERVICE) else {
             return Outcome::Unauthorized;
@@ -250,6 +251,7 @@ async fn gitlab_webhook(
             projects: home.join("projects.json"),
             queue: &queue,
             events_dir: Some(events_dir),
+            commands_dir: loopx_core::review::commands::dir(&loops_root),
         };
         let now = loopx_core::loop_scheduler::isoformat(chrono::Local::now().naive_local());
         hook::handle(&env, &token, &uuid, &body, &now)
