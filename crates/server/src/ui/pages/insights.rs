@@ -1103,6 +1103,36 @@ fn gates_body(ctx: &UiCtx) -> String {
         ),
     ]
     .concat();
+    let quality = loopx_core::review::stats::compute(&ctx.state.repo_root.join("outputs").join("loops"));
+    let addressed_detail = match quality.addressed_rate() {
+        Some(r) => ctx.tf(
+            "{pct}% of findings looked fixed by a later commit.",
+            &[("pct", &format!("{:.0}", r * 100.0))],
+        ),
+        None => ctx.t("No findings recorded yet."),
+    };
+    let quality_tiles = [
+        gate_tile(
+            "git_pull_request",
+            &quality.mrs.to_string(),
+            &ctx.t("MRs reviewed"),
+            &ctx.t("Merge requests with findings in the review ledger."),
+        ),
+        gate_tile(
+            "fact_check",
+            &quality.findings.to_string(),
+            &ctx.t("Findings posted"),
+            &ctx.t("Drafted as inline notes on those merge requests."),
+        ),
+        gate_tile("check_circle", &quality.addressed.to_string(), &ctx.t("Looked addressed"), &addressed_detail),
+        gate_tile(
+            "forum",
+            &quality.replied.to_string(),
+            &ctx.t("Findings with replies"),
+            &ctx.t("Replies feed the weekly learned preferences."),
+        ),
+    ]
+    .concat();
     let rows: String = stats
         .by_project
         .iter()
@@ -1189,6 +1219,11 @@ fn gates_body(ctx: &UiCtx) -> String {
             &ctx.t("The same model-free gates as LoopX fixes, run by MR Review on MRs assigned to you. Advisory: nothing is blocked."),
             "gates-grid gates-grid-wide",
             &human_tiles
+        ) + &gate_card(
+            &ctx.t("Review quality"),
+            &ctx.t("From MR Review's findings ledger, all time: what it raised, what later commits addressed, and what people replied to."),
+            "gates-grid",
+            &quality_tiles
         ),
         escape(&ctx.t("By project")),
         escape(&ctx.t("The same counts for each project.")),
@@ -1298,6 +1333,28 @@ mod tests {
             r#"{"observed_passed":false}"#,
         ]);
         assert!(html.contains("2 could not run"), "{html}");
+    }
+
+    #[test]
+    fn gates_page_shows_review_quality_from_the_findings_ledgers() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 11, 22, 12, 0, 0).unwrap();
+        let state = UiState::explicit(dir.path(), &dir.path().join("loopx"), dir.path(), dir.path(), "tok", Some(now));
+        let ledgers = state.repo_root.join("outputs/loops/mr-review-loop/findings");
+        std::fs::create_dir_all(&ledgers).unwrap();
+        std::fs::write(
+            ledgers.join("work_9_7.json"),
+            r#"{"findings": [{"id": "a", "severity": "major", "status": "addressed"},
+                             {"id": "b", "severity": "minor", "status": "open", "replies": [{"note_id": 3}]}]}"#,
+        )
+        .unwrap();
+        let r = state.registry.dispatch(&state, &UiRequest::get("/harness")).unwrap();
+        let html = String::from_utf8(r.body).unwrap();
+        let card = &html[html.find("<h2>Review quality</h2>").expect("review quality card")..];
+        let card = &card[..card.find("</section>").unwrap()];
+        for want in ["MRs reviewed", "Findings posted", "Looked addressed", "50% of findings looked fixed by a later commit.", "Findings with replies"] {
+            assert!(card.contains(want), "{want}: {card}");
+        }
     }
 
     #[test]

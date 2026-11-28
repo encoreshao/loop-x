@@ -13,6 +13,7 @@ or PR. To cut a release, see "Changelog and releases" in `CLAUDE.md`.
 
 ### Added
 
+- Harness › Gates has a Review quality card built from MR Review's findings: how many merge requests it reviewed and findings it posted, how many later looked fixed, and how many people replied to.
 - `loopx review` reviews your local branch, or only uncommitted changes with `--uncommitted`, before you open a merge request. It uses the same prompt, `.loopx/review.yaml`, guidance, checks, linters and double-check as MR Review, and nothing is posted. `--format ndjson` gives coding agents one finding per line with a fix prompt, and `--gate major` exits with code 2 when a finding is that serious.
 - MR Review learns from replies to its findings. Replies in threads opened by its published findings feed the weekly preferences pass, which proposes lasting preferences under Needs you, such as "Don't flag missing timeouts on tiny tables". Preferences you accept are given to later reviews.
 - MR Review checks your team's merge rules. Write them in plain language as `.loopx/checks/<id>.md` (optional `paths` and `mode`), and the review evaluates them in the same model call, adding a Checks table to its summary: passed, failed or inconclusive, with the evidence. Built-in title, description and linked-issue checks can be turned on with `checks:` in `.loopx/review.yaml`.

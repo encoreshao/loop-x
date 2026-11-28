@@ -2483,5 +2483,16 @@
   "No merge request worktrees.": "マージリクエストのワークツリーはありません。",
   "Remove {branch} and its worktree for {alias} !{iid}? Uncommitted or unpushed changes in it are lost; the merge request and its branch on GitLab are kept.": "{alias} !{iid} の {branch} とそのワークツリーを削除しますか？未コミットまたは未プッシュの変更は失われます。マージリクエストと GitLab 上のブランチは残ります。",
   "Fix now is running on this merge request - wait for it to finish or stop it before removing its worktree": "このマージリクエストで「今すぐ修正」が実行中です。ワークツリーを削除する前に、終了を待つか停止してください",
-  "Removed {branch} for {alias} !{iid}": "{alias} !{iid} の {branch} を削除しました"
+  "Removed {branch} for {alias} !{iid}": "{alias} !{iid} の {branch} を削除しました",
+  "{pct}% of findings looked fixed by a later commit.": "指摘の{pct}%が後続のコミットで修正されたようです。",
+  "No findings recorded yet.": "まだ指摘は記録されていません。",
+  "MRs reviewed": "レビューしたMR",
+  "Merge requests with findings in the review ledger.": "レビュー記録に指摘があるマージリクエスト。",
+  "Findings posted": "投稿した指摘",
+  "Drafted as inline notes on those merge requests.": "それらのマージリクエストにインラインの下書きコメントとして作成。",
+  "Looked addressed": "対応済みと判断",
+  "Findings with replies": "返信のある指摘",
+  "Replies feed the weekly learned preferences.": "返信は毎週の学習済み設定に反映されます。",
+  "Review quality": "レビューの質",
+  "From MR Review's findings ledger, all time: what it raised, what later commits addressed, and what people replied to.": "MR Reviewの指摘記録（全期間）から：指摘した内容、後続のコミットで対応された内容、返信があった内容。"
 }

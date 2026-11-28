@@ -2483,5 +2483,16 @@
   "No merge request worktrees.": "没有合并请求工作树。",
   "Remove {branch} and its worktree for {alias} !{iid}? Uncommitted or unpushed changes in it are lost; the merge request and its branch on GitLab are kept.": "移除 {alias} !{iid} 的 {branch} 及其工作树？其中未提交或未推送的更改将丢失；合并请求及其在 GitLab 上的分支会保留。",
   "Fix now is running on this merge request - wait for it to finish or stop it before removing its worktree": "「立即修复」正在处理此合并请求 - 请等待其完成或先停止它，再移除其工作树",
-  "Removed {branch} for {alias} !{iid}": "已移除 {alias} !{iid} 的 {branch}"
+  "Removed {branch} for {alias} !{iid}": "已移除 {alias} !{iid} 的 {branch}",
+  "{pct}% of findings looked fixed by a later commit.": "{pct}% 的问题看起来已被后续提交修复。",
+  "No findings recorded yet.": "尚未记录任何问题。",
+  "MRs reviewed": "已审查的 MR",
+  "Merge requests with findings in the review ledger.": "审查记录中有问题的合并请求。",
+  "Findings posted": "已发布的问题",
+  "Drafted as inline notes on those merge requests.": "以行内草稿评论的形式写在这些合并请求上。",
+  "Looked addressed": "看起来已处理",
+  "Findings with replies": "有回复的问题",
+  "Replies feed the weekly learned preferences.": "回复会用于每周学习的偏好。",
+  "Review quality": "审查质量",
+  "From MR Review's findings ledger, all time: what it raised, what later commits addressed, and what people replied to.": "来自 MR Review 的问题记录（全部时间）：提出了什么、后续提交处理了什么、有人回复了什么。"
 }

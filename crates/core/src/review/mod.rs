@@ -11,6 +11,7 @@ pub mod ledger;
 pub mod local;
 pub mod render;
 pub mod semgrep_rules;
+pub mod stats;
 pub mod taxonomy;
 pub mod tools;
 pub mod verify;

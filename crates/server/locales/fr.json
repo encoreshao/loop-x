@@ -2483,5 +2483,16 @@
   "No merge request worktrees.": "Aucun worktree de merge request.",
   "Remove {branch} and its worktree for {alias} !{iid}? Uncommitted or unpushed changes in it are lost; the merge request and its branch on GitLab are kept.": "Supprimer {branch} et son worktree pour {alias} !{iid} ? Les modifications non commitées ou non poussées seront perdues ; la merge request et sa branche sur GitLab sont conservées.",
   "Fix now is running on this merge request - wait for it to finish or stop it before removing its worktree": "« Corriger maintenant » est en cours sur cette merge request - attendez qu’il se termine ou arrêtez-le avant de supprimer son worktree",
-  "Removed {branch} for {alias} !{iid}": "{branch} supprimée pour {alias} !{iid}"
+  "Removed {branch} for {alias} !{iid}": "{branch} supprimée pour {alias} !{iid}",
+  "{pct}% of findings looked fixed by a later commit.": "{pct} % des remarques semblent corrigées par un commit ultérieur.",
+  "No findings recorded yet.": "Aucune remarque enregistrée pour l'instant.",
+  "MRs reviewed": "MR revues",
+  "Merge requests with findings in the review ledger.": "Merge requests ayant des remarques dans le registre de revue.",
+  "Findings posted": "Remarques publiées",
+  "Drafted as inline notes on those merge requests.": "Rédigées en notes brouillon dans ces merge requests.",
+  "Looked addressed": "Semblent traitées",
+  "Findings with replies": "Remarques avec réponses",
+  "Replies feed the weekly learned preferences.": "Les réponses alimentent les préférences apprises chaque semaine.",
+  "Review quality": "Qualité des revues",
+  "From MR Review's findings ledger, all time: what it raised, what later commits addressed, and what people replied to.": "D'après le registre de remarques de MR Review, depuis le début : ce qu'il a signalé, ce que les commits suivants ont traité et ce à quoi on a répondu."
 }
