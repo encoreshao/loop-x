@@ -1728,6 +1728,9 @@ impl MrReview {
         if let Some(n) = cfg.auto_review.pause_after.filter(|n| *n > 0) {
             meta["review"]["pause_after"] = json!(n);
         }
+        if cfg.walkthrough {
+            meta["review"]["walkthrough"] = json!(true);
+        }
         let mut payload = json!({
             "account": account_id, "project_id": pid, "iid": iid, "title": title,
             "description": description, "web_url": url,
@@ -1738,6 +1741,9 @@ impl MrReview {
         });
         if !guidance.is_empty() {
             payload["repo_guidance"] = json!(guidance);
+        }
+        if cfg.walkthrough {
+            payload["walkthrough_requested"] = json!(true);
         }
         if let Some((last, text)) = delta {
             payload["delta_from"] = json!(last);
@@ -2393,6 +2399,13 @@ impl LoopPlugin for MrReview {
         }
         let mut cleaned = json!({"summary": summary, "verdict": verdict, "overview": overview,
                                  "risks": risks, "findings": kept, "checks": checks, "scope": scope});
+        if review_meta.is_some_and(|r| r["walkthrough"] == true) {
+            let paths: Vec<&str> = allowed.iter().copied().collect();
+            if let Some(mut w) = review::walkthrough::clean(answer, &paths) {
+                w["sha"] = json!(short(&head));
+                cleaned["walkthrough"] = w;
+            }
+        }
         if delta_from.is_some() {
             cleaned["keep_draft_ids"] = json!(still_open);
             cleaned["replies"] = json!(replies);
@@ -3110,6 +3123,32 @@ mod tests {
             review::commands::pending(&review::commands::dir(d.path())).len(),
             1,
             "unknown here: kept for another account"
+        );
+    }
+
+    #[test]
+    fn the_walkthrough_is_cleaned_and_stamped_with_the_head_sha_when_asked_for() {
+        let mut it = item();
+        it.payload["diff_refs"]["head_sha"] = json!("abcdef1234567890");
+        it.meta = json!({"review": {"walkthrough": true, "min_severity": "minor", "finding_cap": 15, "notes": []}});
+        let answer = json!({"summary": "s", "findings": [], "walkthrough": {
+            "groups": [{"title": "Eval", "paths": ["app/a.rb"], "summary": "x"}], "effort": 2, "merge_risk": "high"}});
+        let posted = Arc::new(Mutex::new(vec![]));
+        with_poster(posted.clone())
+            .after_item(&it, &answer, &c())
+            .unwrap();
+        let w = posted.lock().unwrap()[0]["walkthrough"].clone();
+        assert_eq!(
+            (w["sha"].as_str(), w["merge_risk"].as_str()),
+            (Some("abcdef12"), Some("high"))
+        );
+        let posted = Arc::new(Mutex::new(vec![]));
+        with_poster(posted.clone())
+            .after_item(&item(), &answer, &c())
+            .unwrap();
+        assert!(
+            posted.lock().unwrap()[0].get("walkthrough").is_none(),
+            "not asked for"
         );
     }
 

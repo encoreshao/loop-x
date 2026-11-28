@@ -29,6 +29,24 @@ loop renders it as:
   changes requested), a "What this MR does" list, a risk table by area and
   level, and an index of the findings.
 
+## Walkthrough (opt-in)
+
+`walkthrough: true` in `.loopx/review.yaml` (or the project's `review` block in
+`projects.json`) asks the model for a walkthrough, which the summary draft shows
+as a collapsed **Walkthrough** section:
+
+- the change in 1–8 groups (title, files, one line), as a table;
+- a Mermaid `sequenceDiagram`, only when the change alters how components call
+  each other;
+- review effort 1–5;
+- merge risk (minimal → critical) with its reason, stamped with the reviewed
+  head SHA.
+
+Paths outside the change are dropped. The diagram is kept only when it is a
+plain sequence diagram: participants, arrows, notes and blocks. A `click`, a
+link, HTML or an init directive drops the whole diagram. It is off by default
+until the review eval shows it doesn't dilute findings.
+
 ## Commands on merge requests and push triggers
 
 With the GitLab webhook set up (`loopx webhook setup`, triggers including

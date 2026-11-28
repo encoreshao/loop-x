@@ -1,0 +1,26 @@
+diff --git a/app/controllers/admin/refunds_controller.rb b/app/controllers/admin/refunds_controller.rb
+--- /dev/null
++++ b/app/controllers/admin/refunds_controller.rb
+@@ -0,0 +1,7 @@
++class Admin::RefundsController < Admin::BaseController
++  def create
++    order = Order.find(params[:order_id])
++    RefundService.new(order).call
++    redirect_to admin_order_path(order), notice: "Refunded"
++  end
++end
+diff --git a/app/services/refund_service.rb b/app/services/refund_service.rb
+--- /dev/null
++++ b/app/services/refund_service.rb
+@@ -0,0 +1,11 @@
++class RefundService
++  def initialize(order) = @order = order
++
++  def call
++    @order.update!(status: "refunded")
++    PaymentGateway.refund(@order.charge_id, @order.total_cents)
++    Refund.create!(order: @order, amount_cents: @order.total_cents)
++  rescue PaymentGateway::Error => e
++    Rails.logger.error("refund failed: #{e.message}")
++  end
++end

@@ -111,6 +111,7 @@ pub struct ReviewLayer {
     pub tools: Option<BTreeMap<String, bool>>,
     /// Who may write `loopx <verb>` commands: `developers` (default) or `me`.
     pub command_authors: Option<String>,
+    pub walkthrough: Option<bool>,
 }
 
 impl ReviewLayer {
@@ -188,6 +189,7 @@ pub struct ReviewConfig {
     pub auto_review: AutoReview,
     /// Tool name -> on/off; a tool not listed is on.
     pub tools: BTreeMap<String, bool>,
+    pub walkthrough: bool,
     /// key -> `default` | `loop settings` | `repo` | `projects.json`.
     pub provenance: BTreeMap<String, String>,
     /// Layers that were ignored, with why (shown in the review).
@@ -208,6 +210,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         path_filters: Vec::new(),
         path_instructions: Vec::new(),
         tools: BTreeMap::new(),
+        walkthrough: false,
         auto_review: AutoReview {
             enabled: true,
             ..AutoReview::default()
@@ -223,6 +226,7 @@ pub fn resolve(src: Sources<'_>) -> ReviewConfig {
         "path_instructions",
         "auto_review",
         "tools",
+        "walkthrough",
     ] {
         cfg.provenance.insert(k.into(), "default".into());
     }
@@ -264,6 +268,10 @@ fn apply(cfg: &mut ReviewConfig, layer: ReviewLayer, source: &str) {
     if let Some(f) = layer.path_filters {
         cfg.path_filters.extend(f);
         mark(cfg, "path_filters");
+    }
+    if let Some(w) = layer.walkthrough {
+        cfg.walkthrough = w;
+        mark(cfg, "walkthrough");
     }
     if let Some(t) = layer.tools {
         cfg.tools.extend(t);
@@ -380,6 +388,7 @@ impl ReviewConfig {
                 "pause_after": self.auto_review.pause_after,
             }, "from": src("auto_review")},
             "tools": {"value": self.tools, "from": src("tools")},
+            "walkthrough": {"value": self.walkthrough, "from": src("walkthrough")},
             "notes": self.notes,
         })
     }
@@ -452,7 +461,7 @@ mod tests {
             "{:?}",
             c.notes
         );
-        assert!(cfg("walkthrough: true\n", None, None).notes[0].contains("unknown field"));
+        assert!(cfg("poem: true\n", None, None).notes[0].contains("unknown field"));
         assert!(cfg("version: 2\n", None, None).notes[0].contains("version 2"));
         assert!(
             cfg("auto_review: {base_branches: ['(']}\n", None, None).notes[0]

@@ -12,3 +12,4 @@ pub mod semgrep_rules;
 pub mod taxonomy;
 pub mod tools;
 pub mod verify;
+pub mod walkthrough;

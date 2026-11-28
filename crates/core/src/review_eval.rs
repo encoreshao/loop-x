@@ -345,6 +345,9 @@ pub fn work_item(case: &ReviewCase) -> WorkItem {
     if !case.tool_hints.is_empty() {
         payload["tool_hints"] = json!(case.tool_hints);
     }
+    if cfg.walkthrough {
+        payload["walkthrough_requested"] = json!(true);
+    }
     if let Some(delta) = &case.delta_diff {
         payload["delta_from"] = json!("2".repeat(40));
         payload["delta_diff"] = json!(delta);
@@ -528,6 +531,33 @@ pub fn run_case(
         }
     }
     let (mut passed, mut reasons) = grade(&case.expect, &found, &verdict);
+    if case_config(case).walkthrough {
+        let paths: Vec<&str> = case
+            .changes
+            .iter()
+            .filter_map(|c| c["new_path"].as_str())
+            .collect();
+        match crate::review::walkthrough::clean(&answer, &paths) {
+            None => {
+                passed = false;
+                reasons.push("no usable walkthrough".into());
+            }
+            Some(w) => reasons.insert(
+                1,
+                format!(
+                    "walkthrough: {} group(s), effort {}, risk {}, diagram {}",
+                    w["groups"].as_array().map_or(0, Vec::len),
+                    w["effort"],
+                    w["merge_risk"],
+                    if w["sequence"].is_string() {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                ),
+            ),
+        }
+    }
     for (ids, want) in [
         (&case.expect.addressed, "addressed"),
         (&case.expect.still_open, "open"),

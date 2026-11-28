@@ -109,6 +109,57 @@ pub fn finding_note(f: &Value) -> String {
     note
 }
 
+fn walkthrough_section(w: &Value) -> String {
+    let mut head = vec!["<b>Walkthrough</b>".to_string()];
+    if let Some(e) = w["effort"].as_u64() {
+        head.push(format!("Review effort {e}/5"));
+    }
+    if let Some(r) = w["merge_risk"].as_str() {
+        let mut cap = r.to_string();
+        if let Some(f) = cap.get_mut(0..1) {
+            f.make_ascii_uppercase();
+        }
+        head.push(format!("Merge risk: {cap} @ {}", cell(&text_of(w, "sha"))));
+    }
+    let mut body = vec![format!(
+        "<details><summary>{}</summary>",
+        head.join(" \u{b7} ")
+    )];
+    let groups: Vec<&Value> = w["groups"].as_array().into_iter().flatten().collect();
+    if !groups.is_empty() {
+        body.push(String::new());
+        body.push("| Change | Files | What |".into());
+        body.push("| --- | --- | --- |".into());
+        for g in groups {
+            let files: Vec<String> = g["paths"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|p| format!("`{}`", flat_path(p)))
+                .collect();
+            body.push(format!(
+                "| {} | {} | {} |",
+                cell(&defuse(&text_of(g, "title"))),
+                files.join(" "),
+                cell(&defuse(&text_of(g, "summary")))
+            ));
+        }
+    }
+    if let Some(seq) = w["sequence"].as_str() {
+        body.push(String::new());
+        body.push(format!("```mermaid\n{seq}\n```"));
+    }
+    let reason = text_of(w, "merge_risk_reason");
+    if !reason.is_empty() {
+        body.push(String::new());
+        body.push(format!("Merge risk: {}", defuse(&reason)));
+    }
+    body.push(String::new());
+    body.push("</details>".into());
+    body.join("\n")
+}
+
 const MARKER_OPEN: &str = "<!-- loopx-finding ";
 
 /// A LoopX review finding as recorded in its note's hidden marker.
@@ -230,6 +281,9 @@ pub fn summary_note(answer: &Value) -> Option<String> {
         let bullets: Vec<String> = overview.iter().map(|b| format!("- {b}")).collect();
         out.push(format!("**What this MR does**\n{}", bullets.join("\n")));
     }
+    if let Some(w) = answer.get("walkthrough").filter(|w| w.is_object()) {
+        out.push(walkthrough_section(w));
+    }
     if risks.is_empty() {
         out.push("**Risk assessment:** no notable risks found.".to_string());
     } else {
@@ -300,6 +354,22 @@ mod tests {
         assert_eq!(parsed.severity, "major");
         assert_eq!(parsed.fix_prompt, "Add `lock_timeout` --> then @all /close");
         assert!(!note.contains("then @all"), "the visible prompt is defused");
+    }
+
+    #[test]
+    fn the_walkthrough_renders_as_a_collapsed_section() {
+        let answer = json!({"summary": "s", "findings": [], "walkthrough": {
+            "groups": [{"title": "Billing | API", "paths": ["app/a.rb"], "summary": "Adds refunds"}],
+            "effort": 3, "merge_risk": "moderate", "merge_risk_reason": "touches payments",
+            "sequence": "sequenceDiagram\nA->>B: refund", "sha": "abc12345"}});
+        let note = summary_note(&answer).unwrap();
+        assert!(note.contains("<summary><b>Walkthrough</b> \u{b7} Review effort 3/5 \u{b7} Merge risk: Moderate @ abc12345</summary>"), "{note}");
+        assert!(note.contains("| Billing \\| API | `app/a.rb` | Adds refunds |"));
+        assert!(note.contains("```mermaid\nsequenceDiagram\nA->>B: refund\n```"));
+        assert!(note.contains("Merge risk: touches payments"));
+        assert!(!summary_note(&json!({"summary": "s", "findings": []}))
+            .unwrap()
+            .contains("Walkthrough"));
     }
 
     #[test]
